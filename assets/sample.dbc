@@ -1,0 +1,17 @@
+VERSION "roxy-can sample database"
+
+NS_ :
+
+BU_: Sim
+
+BO_ 256 EngineStatus: 8 Sim
+ SG_ EngineSpeed : 0|16@1+ (0.25,0) [0|8000] "rpm" Vector__XXX
+ SG_ EngineTemp : 16|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
+ SG_ ThrottlePos : 24|8@1+ (0.4,0) [0|100] "%" Vector__XXX
+
+BO_ 512 VehicleState: 8 Sim
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|300] "km/h" Vector__XXX
+ SG_ GearPosition : 16|3@1+ (1,0) [0|6] "" Vector__XXX
+
+BO_ 800 BrakeInfo: 8 Sim
+ SG_ BrakePressure : 0|16@1+ (0.1,0) [0|100] "bar" Vector__XXX

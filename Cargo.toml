@@ -1,0 +1,15 @@
+[package]
+name = "roxy-can"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+imgui = { version = "0.12", features = ["tables-api", "docking"] }
+imgui-winit-support = "0.13"
+imgui-wgpu = "0.28"
+wgpu = "29"
+winit = "0.30"
+pollster = "0.4"
+can-dbc = "10.0"
+chrono = "0.4"
+rfd = "0.15"
