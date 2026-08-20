@@ -68,7 +68,7 @@ impl State {
         );
         window.set_ime_allowed(true);
         let size = window.inner_size();
-        let hidpi = window.scale_factor();
+        let dpi = window.scale_factor();
         let surface = instance.create_surface(window.clone()).unwrap();
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -99,36 +99,22 @@ impl State {
         context.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().config_windows_move_from_title_bar_only = true;
         context.io_mut().set_platform_ime_data_fn = Some(ime_data_callback);
-        let font_size = (13.0 * hidpi) as f32;
-        context.io_mut().font_global_scale = (1.0 / hidpi) as f32;
-        let mut sources = Vec::new();
-        let mut mono_loaded = false;
-        for path in [
-            "C:\\Windows\\Fonts\\consola.ttf",
-            "C:\\Windows\\Fonts\\cour.ttf",
-        ] {
-            if let Ok(bytes) = std::fs::read(path) {
-                let data: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-                sources.push(imgui::FontSource::TtfData {
-                    data,
-                    size_pixels: font_size,
-                    config: Some(imgui::FontConfig {
-                        size_pixels: font_size,
-                        ..Default::default()
-                    }),
-                });
-                mono_loaded = true;
-                break;
-            }
-        }
-        if !mono_loaded {
-            sources.push(imgui::FontSource::DefaultFontData {
-                config: Some(imgui::FontConfig {
-                    size_pixels: font_size,
-                    ..Default::default()
-                }),
-            });
-        }
+        let font_size = 13.0 * dpi as f32;
+        let font_config = imgui::FontConfig {
+            oversample_h: 1,
+            pixel_snap_h: true,
+            size_pixels: font_size,
+            ..Default::default()
+        };
+        const INCONSOLATA_FONT: &[u8] = include_bytes!("../fonts/Inconsolata-Regular.ttf");
+        let mut sources = vec![imgui::FontSource::TtfData {
+            data: INCONSOLATA_FONT,
+            size_pixels: font_size,
+            config: Some(font_config.clone()),
+        }];
+        // Merge Chinese glyphs into the same font (base glyphs come from
+        // Inconsolata). GlyphOffset nudges CJK glyphs down: their fonts have
+        // tall ascents and otherwise render too high inside widgets.
         for path in [
             "C:\\Windows\\Fonts\\msyh.ttc",
             "C:\\Windows\\Fonts\\msyh.ttf",
@@ -141,15 +127,15 @@ impl State {
                     data,
                     size_pixels: font_size,
                     config: Some(imgui::FontConfig {
-                        size_pixels: font_size,
                         glyph_ranges: imgui::FontGlyphRanges::chinese_simplified_common(),
-                        ..Default::default()
+                        ..font_config.clone()
                     }),
                 });
                 break;
             }
         }
         context.fonts().add_font(&sources);
+        context.io_mut().font_global_scale = (1.0 / dpi) as f32;
 
         let renderer = Renderer::new(
             &mut context,

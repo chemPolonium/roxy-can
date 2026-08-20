@@ -22,7 +22,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             unsafe { imgui::sys::igSetNextWindowFocus() };
             app.focus_title = None;
         }
-        ui.window(title)
+        ui.window(format!("{title}###msgs{i}"))
             .opened(&mut open)
             .position(
                 [
@@ -129,7 +129,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 70.0,
+        init_width_or_weight: 72.0,
         ..TableColumnSetup::new("Cycle (ms)")
     });
     ui.table_setup_column_with(TableColumnSetup {

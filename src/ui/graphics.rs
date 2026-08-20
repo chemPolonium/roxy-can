@@ -22,7 +22,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             unsafe { imgui::sys::igSetNextWindowFocus() };
             app.focus_title = None;
         }
-        ui.window(&name)
+        ui.window(format!("{name}###gfx{i}"))
             .opened(&mut open)
             .position(
                 [16.0 + i as f32 * 36.0, disp_h * 0.55 + i as f32 * 28.0],

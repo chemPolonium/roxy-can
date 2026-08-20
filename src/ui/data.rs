@@ -21,7 +21,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             unsafe { imgui::sys::igSetNextWindowFocus() };
             app.focus_title = None;
         }
-        ui.window(&name)
+        ui.window(format!("{name}###data{i}"))
             .opened(&mut open)
             .position(
                 [io.display_size[0] - 480.0, TOOLBAR_H + i as f32 * 28.0],

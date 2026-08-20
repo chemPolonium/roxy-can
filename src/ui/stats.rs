@@ -25,7 +25,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             unsafe { imgui::sys::igSetNextWindowFocus() };
             app.focus_title = None;
         }
-        ui.window(title)
+        ui.window(format!("{title}###stats{i}"))
             .opened(&mut open)
             .position(
                 [
@@ -95,32 +95,25 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 70.0,
+        init_width_or_weight: 55.0,
         ..TableColumnSetup::new("Count")
     });
+    // "{:.2}" milliseconds: ~7 chars
+    for label in ["Min(ms)", "Avg(ms)", "Max(ms)"] {
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 62.0,
+            ..TableColumnSetup::new(label)
+        });
+    }
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 62.0,
-        ..TableColumnSetup::new("Min(ms)")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 62.0,
-        ..TableColumnSetup::new("Avg(ms)")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 62.0,
-        ..TableColumnSetup::new("Max(ms)")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 35.0,
+        init_width_or_weight: 32.0,
         ..TableColumnSetup::new("DLC")
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 55.0,
+        init_width_or_weight: 52.0,
         ..TableColumnSetup::new("Share")
     });
     ui.table_headers_row();

@@ -30,7 +30,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             unsafe { imgui::sys::igSetNextWindowFocus() };
             app.focus_title = None;
         }
-        ui.window(title)
+        ui.window(format!("{title}###trace{i}"))
             .opened(&mut open)
             .position([off, TOOLBAR_H + off], Condition::FirstUseEver)
             .size(
@@ -101,9 +101,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let Some(_table) = ui.begin_table_with_flags(format!("trace_table{i}"), 7, tbl_flags) else {
         return;
     };
+    // "{:.6}" timestamp: up to ~10 chars
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 80.0,
+        init_width_or_weight: 76.0,
         ..TableColumnSetup::new("Time")
     });
     ui.table_setup_column_with(TableColumnSetup {
@@ -111,24 +112,25 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         init_width_or_weight: 60.0,
         ..TableColumnSetup::new("Bus")
     });
+    // extended IDs render as "1FFFFFFFx" (9 chars)
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 60.0,
+        init_width_or_weight: 68.0,
         ..TableColumnSetup::new("ID")
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.6,
+        init_width_or_weight: 1.0,
         ..TableColumnSetup::new("Name")
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 35.0,
+        init_width_or_weight: 32.0,
         ..TableColumnSetup::new("DLC")
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 2.0,
+        init_width_or_weight: 1.6,
         ..TableColumnSetup::new("Data")
     });
     ui.table_setup_column_with(TableColumnSetup {

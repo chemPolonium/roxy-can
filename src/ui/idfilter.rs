@@ -241,7 +241,10 @@ fn message_content(app: &mut App, ui: &Ui) {
             }
             let key = (ch as u8, e.id);
             let mut on = app.win_manual(target).is_some_and(|m| m.contains(&key));
-            if ui.checkbox(format!("{:03X}  {}", e.id, e.name), &mut on) {
+            // ID includes the bus: the same DBC on two buses would otherwise
+            // produce identical labels and colliding widget IDs.
+            let label = format!("{:03X}  {}##msgsel{ch}_{:X}", e.id, e.name, e.id);
+            if ui.checkbox(label, &mut on) {
                 if let Some(m) = app.win_manual_mut(target) {
                     if on {
                         m.insert(key);

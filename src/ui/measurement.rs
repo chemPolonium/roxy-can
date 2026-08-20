@@ -9,11 +9,11 @@ fn tip(ui: &Ui, text: &str) {
     }
 }
 
-/// Square "go to" button: opens the window if hidden and always brings it to
-/// the front. There is no close action — windows close via their own title
+/// "Go to" button: opens the window if hidden and always brings it to the
+/// front. There is no close action — windows close via their own title
 /// bar. `###` keeps the widget ID stable.
 fn goto_button(ui: &Ui, id: &str) -> bool {
-    let clicked = ui.button_with_size(format!("->###goto_{id}"), [22.0, 22.0]);
+    let clicked = ui.button(format!("->###goto_{id}"));
     if ui.is_item_hovered() {
         ui.tooltip_text("Open and jump to this window");
     }
@@ -81,14 +81,16 @@ fn content(app: &mut App, ui: &Ui) {
         let Some(_table) = ui.begin_table_with_flags("meas_table", 6, flags) else {
             return;
         };
+        // default-size "->" button
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 30.0,
+            init_width_or_weight: 32.0,
             ..TableColumnSetup::new("Open")
         });
+        // longest type label is "Statistics"
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 72.0,
+            init_width_or_weight: 74.0,
             ..TableColumnSetup::new("Type")
         });
         ui.table_setup_column_with(TableColumnSetup {
@@ -103,7 +105,7 @@ fn content(app: &mut App, ui: &Ui) {
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 52.0,
+            init_width_or_weight: 44.0,
             ..TableColumnSetup::new("Save")
         });
         ui.table_setup_column_with(TableColumnSetup {
