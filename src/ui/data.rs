@@ -17,6 +17,10 @@ pub fn render(app: &mut App, ui: &Ui) {
         } else {
             raw
         };
+        if app.focus_title.as_deref() == Some(name.as_str()) {
+            unsafe { imgui::sys::igSetNextWindowFocus() };
+            app.focus_title = None;
+        }
         ui.window(&name)
             .opened(&mut open)
             .position(

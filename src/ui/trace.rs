@@ -26,6 +26,10 @@ pub fn render(app: &mut App, ui: &Ui) {
             raw
         };
         let off = i as f32 * 30.0;
+        if app.focus_title.as_deref() == Some(title.as_str()) {
+            unsafe { imgui::sys::igSetNextWindowFocus() };
+            app.focus_title = None;
+        }
         ui.window(title)
             .opened(&mut open)
             .position([off, TOOLBAR_H + off], Condition::FirstUseEver)

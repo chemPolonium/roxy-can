@@ -95,7 +95,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     app.show_id_filter = open;
 }
 
-fn target_name(app: &App, t: PopupTarget) -> String {
+pub fn target_name(app: &App, t: PopupTarget) -> String {
     fn or_fallback(name: Option<&str>, fallback: String) -> String {
         match name {
             Some(n) if !n.trim().is_empty() => n.to_string(),

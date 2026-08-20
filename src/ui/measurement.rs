@@ -1,7 +1,7 @@
 use crate::app::{App, PopupTarget};
-use crate::ui::idfilter::scope_combo;
+use crate::ui::idfilter::{scope_combo, target_name};
 use crate::ui::siglist::ListKind;
-use imgui::{Condition, StyleColor, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
 fn tip(ui: &Ui, text: &str) {
     if ui.is_item_hovered() {
@@ -9,29 +9,15 @@ fn tip(ui: &Ui, text: &str) {
     }
 }
 
-/// Square open/close toggle: down-arrow when the window is visible,
-/// right-arrow when hidden. `###` keeps the widget ID stable across the
-/// glyph change so ImGui does not lose button state.
-fn open_button(ui: &Ui, id: &str, opened: &mut bool) {
-    let label = if *opened { "\u{25BC}" } else { "\u{25B6}" };
-    let _color = ui.push_style_color(
-        StyleColor::Button,
-        if *opened {
-            [0.20, 0.42, 0.62, 1.0]
-        } else {
-            [0.16, 0.16, 0.20, 1.0]
-        },
-    );
-    if ui.button_with_size(format!("{label}###open_{id}"), [22.0, 22.0]) {
-        *opened = !*opened;
-    }
+/// Square "go to" button: opens the window if hidden and always brings it to
+/// the front. There is no close action — windows close via their own title
+/// bar. `###` keeps the widget ID stable.
+fn goto_button(ui: &Ui, id: &str) -> bool {
+    let clicked = ui.button_with_size(format!("->###goto_{id}"), [22.0, 22.0]);
     if ui.is_item_hovered() {
-        ui.tooltip_text(if *opened {
-            "Hide this window"
-        } else {
-            "Show this window"
-        });
+        ui.tooltip_text("Open and jump to this window");
     }
+    clicked
 }
 
 /// Single-table overview of every observer (Trace, Messages, Statistics,
@@ -97,7 +83,7 @@ fn content(app: &mut App, ui: &Ui) {
         };
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 40.0,
+            init_width_or_weight: 30.0,
             ..TableColumnSetup::new("Open")
         });
         ui.table_setup_column_with(TableColumnSetup {
@@ -224,7 +210,10 @@ fn trace_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if !ui.table_next_column() {
         return;
     }
-    open_button(ui, &format!("t{i}"), &mut app.trace_windows[i].opened);
+    if goto_button(ui, &format!("t{i}")) {
+        app.trace_windows[i].opened = true;
+        app.focus_title = Some(target_name(app, PopupTarget::Trace(i)));
+    }
     ui.table_next_column();
     ui.text("Trace");
     ui.table_next_column();
@@ -257,7 +246,10 @@ fn messages_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if !ui.table_next_column() {
         return;
     }
-    open_button(ui, &format!("m{i}"), &mut app.msg_windows[i].opened);
+    if goto_button(ui, &format!("m{i}")) {
+        app.msg_windows[i].opened = true;
+        app.focus_title = Some(target_name(app, PopupTarget::Messages(i)));
+    }
     ui.table_next_column();
     ui.text("Messages");
     ui.table_next_column();
@@ -290,7 +282,10 @@ fn stats_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if !ui.table_next_column() {
         return;
     }
-    open_button(ui, &format!("s{i}"), &mut app.stats_windows[i].opened);
+    if goto_button(ui, &format!("s{i}")) {
+        app.stats_windows[i].opened = true;
+        app.focus_title = Some(target_name(app, PopupTarget::Stats(i)));
+    }
     ui.table_next_column();
     ui.text("Statistics");
     ui.table_next_column();
@@ -358,7 +353,10 @@ fn graphics_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if !ui.table_next_column() {
         return;
     }
-    open_button(ui, &format!("g{i}"), &mut app.graphics[i].opened);
+    if goto_button(ui, &format!("g{i}")) {
+        app.graphics[i].opened = true;
+        app.focus_title = Some(target_name(app, PopupTarget::Graphics(i)));
+    }
     ui.table_next_column();
     ui.text("Graphics");
     ui.table_next_column();
@@ -384,7 +382,10 @@ fn data_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if !ui.table_next_column() {
         return;
     }
-    open_button(ui, &format!("d{i}"), &mut app.data_windows[i].opened);
+    if goto_button(ui, &format!("d{i}")) {
+        app.data_windows[i].opened = true;
+        app.focus_title = Some(target_name(app, PopupTarget::Data(i)));
+    }
     ui.table_next_column();
     ui.text("Data");
     ui.table_next_column();
