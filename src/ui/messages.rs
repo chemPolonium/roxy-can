@@ -1,50 +1,84 @@
-use crate::app::{App, MessageAgg};
+use crate::app::{App, MessageAgg, PopupTarget, SigScope};
 use crate::can::frame::{CanFrame, Direction};
+use crate::ui::idfilter::scope_combo;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TreeNodeFlags, Ui};
 
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
-    let mut open = app.show_messages;
-    if open {
-        ui.window("Messages")
+    let n = app.msg_windows.len();
+    for i in 0..n {
+        if !app.msg_windows[i].opened {
+            continue;
+        }
+        let mut open = true;
+        let raw = app.msg_windows[i].name.clone();
+        let title = if raw.trim().is_empty() {
+            format!("Messages {}", i + 1)
+        } else {
+            raw
+        };
+        let off = i as f32 * 30.0;
+        ui.window(title)
             .opened(&mut open)
             .position(
-                [io.display_size[0] * 0.25, io.display_size[1] * 0.45],
+                [
+                    io.display_size[0] * 0.25 + off,
+                    io.display_size[1] * 0.45 + off,
+                ],
                 Condition::FirstUseEver,
             )
-            .size(
-                [700.0, io.display_size[1] * 0.42],
-                Condition::FirstUseEver,
-            )
+            .size([700.0, io.display_size[1] * 0.42], Condition::FirstUseEver)
             .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
-            .build(|| window_content(app, ui));
+            .build(|| window_content(app, ui, i));
+        app.msg_windows[i].opened = open;
     }
-    app.show_messages = open;
 }
 
-fn window_content(app: &mut App, ui: &Ui) {
-    ui.set_next_item_width(200.0);
-    ui.input_text("Filter", &mut app.msg_filter).build();
+fn window_content(app: &mut App, ui: &Ui, i: usize) {
+    let new_scope = scope_combo(
+        app,
+        ui,
+        &format!("##mscope{i}"),
+        app.msg_windows[i].scope,
+        PopupTarget::Messages(i),
+    );
+    app.msg_windows[i].scope = new_scope;
     ui.same_line();
-    ui.checkbox("DBC only", &mut app.dbc_only);
+    ui.set_next_item_width(150.0);
+    ui.input_text(format!("##mfilter{i}"), &mut app.msg_windows[i].filter)
+        .build();
     ui.same_line();
-    if ui.button("Clear") {
-        app.aggs.clear();
+    ui.checkbox(
+        format!("DBC only##mbc{i}"),
+        &mut app.msg_windows[i].dbc_only,
+    );
+    ui.same_line();
+    if ui.small_button(format!("Clear##mf{i}")) {
+        let w = &mut app.msg_windows[i];
+        w.filter.clear();
+        w.dbc_only = false;
+        w.scope = SigScope::All;
+    }
+    ui.same_line();
+    if ui.small_button(format!("Export##mx{i}")) {
+        app.export_messages_dialog(i);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Export this view as CSV");
     }
 
-    let filter = app.msg_filter.trim().to_lowercase();
-    let dbc_only = app.dbc_only;
+    let w = app.msg_windows[i].clone();
+    let filter = w.filter.trim().to_lowercase();
     let mut rows: Vec<MessageAgg> = app
         .aggs
         .values()
         .copied()
         .filter(|a| {
-            let name = app
-                .dbc
-                .as_ref()
-                .and_then(|db| db.message_name(a.id))
-                .unwrap_or("-");
-            if dbc_only && name == "-" {
+            if !App::scope_match(w.scope, &w.manual, a.channel, a.id) {
+                return false;
+            }
+            let name = app.message_name(a.channel, a.id).unwrap_or("-");
+            if w.dbc_only && name == "-" {
                 return false;
             }
             if filter.is_empty() {
@@ -54,7 +88,7 @@ fn window_content(app: &mut App, ui: &Ui) {
             name.to_lowercase().contains(&filter) || id_str.contains(&filter)
         })
         .collect();
-    rows.sort_by_key(|a| a.id);
+    rows.sort_by_key(|a| (a.channel, a.id));
 
     ui.same_line();
     ui.text(format!("{} messages", rows.len()));
@@ -66,7 +100,7 @@ fn window_content(app: &mut App, ui: &Ui) {
         | TableFlags::SCROLL_Y
         | TableFlags::SIZING_STRETCH_PROP
         | TableFlags::NO_CLIP;
-    let Some(_table) = ui.begin_table_with_flags("msg_table", 6, tbl_flags) else {
+    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 6, tbl_flags) else {
         return;
     };
     ui.table_setup_column_with(TableColumnSetup {
@@ -76,8 +110,8 @@ fn window_content(app: &mut App, ui: &Ui) {
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 30.0,
-        ..TableColumnSetup::new("Ch")
+        init_width_or_weight: 60.0,
+        ..TableColumnSetup::new("Bus")
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
@@ -102,11 +136,7 @@ fn window_content(app: &mut App, ui: &Ui) {
     ui.table_headers_row();
 
     for agg in &rows {
-        let name = app
-            .dbc
-            .as_ref()
-            .and_then(|db| db.message_name(agg.id))
-            .unwrap_or("-");
+        let name = app.message_name(agg.channel, agg.id).unwrap_or("-");
         ui.table_next_row();
         if !ui.table_next_column() {
             continue;
@@ -122,7 +152,7 @@ fn window_content(app: &mut App, ui: &Ui) {
             .push();
 
         ui.table_next_column();
-        ui.text(format!("{}", agg.channel + 1));
+        ui.text(app.channel_name(agg.channel));
         ui.table_next_column();
         ui.text(match agg.dir {
             Direction::Rx => "Rx",
@@ -154,8 +184,7 @@ fn window_content(app: &mut App, ui: &Ui) {
                 dir: agg.dir,
             };
             let sigs = app
-                .dbc
-                .as_ref()
+                .channel_dbc(agg.channel)
                 .map(|db| db.decode_signals(&frame))
                 .unwrap_or_default();
             if sigs.is_empty() {

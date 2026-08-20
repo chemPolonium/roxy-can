@@ -1,12 +1,12 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use crate::can::frame::{CanFrame, Direction};
 use crate::dbc::SymbolTable;
 use crate::log::asc::{AscWriter, parse_asc};
+use crate::source::FrameSource;
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
-use crate::source::FrameSource;
 
 pub const TRACE_LIMIT: usize = 50_000;
 pub const TOOLBAR_H: f32 = 68.0;
@@ -37,7 +37,7 @@ pub struct Subscription {
 }
 
 pub struct GfxSignal {
-    pub key: (u32, String),
+    pub key: (u8, u32, String),
     pub visible: bool,
 }
 
@@ -55,6 +55,60 @@ pub struct DataWindow {
     pub opened: bool,
 }
 
+/// One CAN bus: user-defined name, a DBC database, and the path it came from.
+pub struct Channel {
+    pub name: String,
+    pub dbc: Option<SymbolTable>,
+    pub dbc_path: String,
+}
+
+/// Which buses/messages an analysis window looks at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SigScope {
+    All,
+    Bus(u8),
+    Manual,
+}
+
+/// Which analysis window the Filter Selection popup edits.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PopupTarget {
+    Trace(usize),
+    Messages(usize),
+    Stats(usize),
+    Graphics(usize),
+    Data(usize),
+}
+
+#[derive(Clone)]
+pub struct TraceWin {
+    pub name: String,
+    pub opened: bool,
+    pub scope: SigScope,
+    pub manual: HashSet<(u8, u32)>,
+    pub filter: String,
+    pub dir: usize,
+    pub dbc_only: bool,
+}
+
+#[derive(Clone)]
+pub struct MsgWin {
+    pub name: String,
+    pub opened: bool,
+    pub scope: SigScope,
+    pub manual: HashSet<(u8, u32)>,
+    pub filter: String,
+    pub dbc_only: bool,
+}
+
+#[derive(Clone)]
+pub struct StatsWin {
+    pub name: String,
+    pub opened: bool,
+    pub scope: SigScope,
+    pub manual: HashSet<(u8, u32)>,
+}
+
 #[derive(Clone, Copy)]
 pub struct MessageAgg {
     pub id: u32,
@@ -64,8 +118,23 @@ pub struct MessageAgg {
     pub count: u64,
     pub last_t_us: u64,
     pub cycle_us: f64,
+    pub min_us: f64,
+    pub max_us: f64,
     pub dlc: u8,
     pub data: [u8; 8],
+}
+
+pub struct TxMsg {
+    pub channel: u8,
+    pub id: u32,
+    pub extended: bool,
+    pub name: String,
+    pub dlc: u8,
+    pub data: [u8; 8],
+    pub data_text: String,
+    pub cycle_us: u64,
+    pub active: bool,
+    pub next_t_us: u64,
 }
 
 pub enum Mode {
@@ -81,23 +150,39 @@ pub struct App {
     pub frame_counter: u64,
     pub trace: VecDeque<CanFrame>,
     pub trace_paused: bool,
-    pub dbc: Option<SymbolTable>,
-    pub dbc_path: String,
+    pub channels: Vec<Channel>,
+    pub dbc_pick: usize,
     pub status: String,
     pub asc_path: String,
     pub record_path: String,
     pub last_record: String,
-    pub subs: HashMap<(u32, String), Subscription>,
-    pub show_trace: bool,
-    pub show_messages: bool,
-    pub aggs: HashMap<u32, MessageAgg>,
-    pub msg_filter: String,
-    pub dbc_only: bool,
+    pub subs: HashMap<(u8, u32, String), Subscription>,
+    pub aggs: HashMap<(u8, u32), MessageAgg>,
+    pub symbol_search: String,
+    pub show_tx: bool,
+    pub show_network: bool,
+    pub show_measurement: bool,
+    pub show_buses: bool,
+    pub show_id_filter: bool,
+    pub id_filter_search: String,
+    pub popup_target: Option<PopupTarget>,
+    pub net_selected: usize,
+    pub tx_list: Vec<TxMsg>,
+    pub tx_pick: usize,
     pub last_tick_us: u64,
+    pub frame_rate: f64,
+    pub bus_load: f64,
+    pub trace_windows: Vec<TraceWin>,
+    pub msg_windows: Vec<MsgWin>,
+    pub stats_windows: Vec<StatsWin>,
     pub graphics: Vec<GraphicsWindow>,
     pub data_windows: Vec<DataWindow>,
+    trace_counter: usize,
+    msg_counter: usize,
+    stats_counter: usize,
     graphics_counter: usize,
     data_counter: usize,
+    bus_counter: usize,
     color_counter: usize,
     source: Box<dyn FrameSource>,
     writer: Option<AscWriter>,
@@ -114,48 +199,209 @@ impl App {
             frame_counter: 0,
             trace: VecDeque::new(),
             trace_paused: false,
-            dbc: None,
-            dbc_path: "assets/sample.dbc".to_string(),
+            channels: vec![
+                Channel {
+                    name: "CAN1".to_string(),
+                    dbc: None,
+                    dbc_path: "assets/sample.dbc".to_string(),
+                },
+                Channel {
+                    name: "CAN2".to_string(),
+                    dbc: None,
+                    dbc_path: "assets/sample.dbc".to_string(),
+                },
+            ],
+            dbc_pick: 0,
             status: "stopped".to_string(),
             asc_path: String::new(),
             record_path: String::new(),
             last_record: String::new(),
             subs: HashMap::new(),
-            show_trace: true,
-            show_messages: true,
             aggs: HashMap::new(),
-            msg_filter: String::new(),
-            dbc_only: false,
+            symbol_search: String::new(),
+            show_tx: true,
+            show_network: true,
+            show_measurement: true,
+            show_buses: false,
+            show_id_filter: false,
+            id_filter_search: String::new(),
+            popup_target: None,
+            net_selected: 0,
+            tx_list: Vec::new(),
+            tx_pick: 0,
             last_tick_us: 0,
+            frame_rate: 0.0,
+            bus_load: 0.0,
+            trace_windows: Vec::new(),
+            msg_windows: Vec::new(),
+            stats_windows: Vec::new(),
             graphics: Vec::new(),
             data_windows: Vec::new(),
+            trace_counter: 0,
+            msg_counter: 0,
+            stats_counter: 0,
             graphics_counter: 0,
             data_counter: 0,
+            bus_counter: 2,
             color_counter: 0,
             source: Box::new(VirtualSource::new()),
             writer: None,
             buf: Vec::new(),
         };
-        app.load_dbc();
+        app.load_dbcs();
+        app.new_trace_window();
+        app.new_msg_window();
+        app.new_stats_window();
         app.new_graphics_window();
         app.new_data_window();
-        let keys: Vec<_> = app.all_signal_keys().into_iter().take(2).collect();
-        for key in &keys {
-            app.subscribe(key.clone());
-        }
-        if let Some(g) = app.graphics.first_mut() {
-            g.signals.extend(keys.clone().into_iter().map(|key| GfxSignal {
-                key,
-                visible: true,
-            }));
-        }
-        if let Some(d) = app.data_windows.first_mut() {
-            d.signals.extend(keys.into_iter().map(|key| GfxSignal {
-                key,
-                visible: true,
-            }));
+        let msgs: Vec<(u8, u32)> = app
+            .channels
+            .iter()
+            .enumerate()
+            .flat_map(|(ch, c)| {
+                c.dbc
+                    .as_ref()
+                    .map(|db| db.order.iter().map(move |&id| (ch as u8, id)))
+                    .into_iter()
+                    .flatten()
+            })
+            .collect();
+        for (ch, id) in msgs {
+            app.add_tx(ch, id);
         }
         app
+    }
+
+    pub fn channel_dbc(&self, ch: u8) -> Option<&SymbolTable> {
+        self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
+    }
+
+    pub fn message_name(&self, ch: u8, id: u32) -> Option<&str> {
+        self.channel_dbc(ch).and_then(|db| db.message_name(id))
+    }
+
+    pub fn channel_name(&self, ch: u8) -> String {
+        self.channels
+            .get(ch as usize)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", ch + 1))
+    }
+
+    /// Adds a new bus, loads its default DBC, and pre-populates the generator.
+    pub fn add_channel(&mut self) {
+        self.bus_counter += 1;
+        self.channels.push(Channel {
+            name: format!("CAN{}", self.bus_counter),
+            dbc: None,
+            dbc_path: "assets/sample.dbc".to_string(),
+        });
+        let ch = self.channels.len() - 1;
+        self.load_channel(ch);
+        let ids: Vec<u32> = self.channels[ch]
+            .dbc
+            .as_ref()
+            .map(|db| db.order.clone())
+            .unwrap_or_default();
+        for id in ids {
+            self.add_tx(ch as u8, id);
+        }
+    }
+
+    /// Removes a bus and remaps every channel-indexed reference one step down.
+    pub fn remove_channel(&mut self, ch: usize) {
+        if self.channels.len() <= 1 {
+            self.status = "at least one bus is required".to_string();
+            return;
+        }
+        if ch >= self.channels.len() {
+            return;
+        }
+        let name = self.channels[ch].name.clone();
+        self.channels.remove(ch);
+        let remap = |c: u8| -> Option<u8> {
+            if (c as usize) < ch {
+                Some(c)
+            } else if (c as usize) == ch {
+                None
+            } else {
+                Some(c - 1)
+            }
+        };
+        self.aggs = self
+            .aggs
+            .drain()
+            .filter_map(|((c, id), mut a)| {
+                remap(c).map(|nc| {
+                    a.channel = nc;
+                    ((nc, id), a)
+                })
+            })
+            .collect();
+        self.subs = self
+            .subs
+            .drain()
+            .filter_map(|((c, id, sig), s)| remap(c).map(|nc| ((nc, id, sig), s)))
+            .collect();
+        let remap_set = |set: &mut HashSet<(u8, u32)>| {
+            *set = set
+                .drain()
+                .filter_map(|(c, id)| remap(c).map(|nc| (nc, id)))
+                .collect();
+        };
+        for w in &mut self.trace_windows {
+            remap_set(&mut w.manual);
+        }
+        for w in &mut self.msg_windows {
+            remap_set(&mut w.manual);
+        }
+        for w in &mut self.stats_windows {
+            remap_set(&mut w.manual);
+        }
+        self.tx_list.retain(|t| t.channel as usize != ch);
+        for t in &mut self.tx_list {
+            if t.channel as usize > ch {
+                t.channel -= 1;
+            }
+        }
+        self.trace.retain(|f| f.channel as usize != ch);
+        for f in self.trace.iter_mut() {
+            if f.channel as usize > ch {
+                f.channel -= 1;
+            }
+        }
+        let remap_keys = |signals: &mut Vec<GfxSignal>| {
+            signals.retain(|s| remap(s.key.0).is_some());
+            for s in signals.iter_mut() {
+                s.key.0 = remap(s.key.0).unwrap();
+            }
+        };
+        for g in &mut self.graphics {
+            remap_keys(&mut g.signals);
+        }
+        for d in &mut self.data_windows {
+            remap_keys(&mut d.signals);
+        }
+        let fix_scope = |s: &mut SigScope| {
+            if let SigScope::Bus(b) = *s {
+                *s = match (b as usize).cmp(&ch) {
+                    std::cmp::Ordering::Equal => SigScope::All,
+                    std::cmp::Ordering::Greater => SigScope::Bus(b - 1),
+                    std::cmp::Ordering::Less => *s,
+                };
+            }
+        };
+        for w in &mut self.trace_windows {
+            fix_scope(&mut w.scope);
+        }
+        for w in &mut self.msg_windows {
+            fix_scope(&mut w.scope);
+        }
+        for w in &mut self.stats_windows {
+            fix_scope(&mut w.scope);
+        }
+        self.net_selected = 0;
+        self.dbc_pick = self.dbc_pick.min(self.channels.len() - 1);
+        self.status = format!("bus {name} removed");
     }
 
     pub fn now_us(&self) -> u64 {
@@ -217,6 +463,9 @@ impl App {
         self.frame_counter = 0;
         self.trace.clear();
         self.aggs.clear();
+        for tx in &mut self.tx_list {
+            tx.next_t_us = 0;
+        }
         for sub in self.subs.values_mut() {
             sub.history.clear();
         }
@@ -231,27 +480,56 @@ impl App {
         }
     }
 
-    pub fn load_dbc(&mut self) {
-        match std::fs::read_to_string(self.dbc_path.trim()) {
+    pub fn load_channel(&mut self, ch: usize) {
+        let Some(channel) = self.channels.get_mut(ch) else {
+            return;
+        };
+        let name = channel.name.clone();
+        match std::fs::read_to_string(channel.dbc_path.trim()) {
             Ok(content) => match crate::dbc::load_dbc_str(&content) {
                 Ok(table) => {
-                    self.status = format!("DBC loaded: {} messages", table.order.len());
-                    self.dbc = Some(table);
+                    self.status = format!("{name} DBC loaded: {} messages", table.order.len());
+                    channel.dbc = Some(table);
                 }
-                Err(e) => self.status = format!("DBC error: {e}"),
+                Err(e) => self.status = format!("{name} DBC error: {e}"),
             },
-            Err(e) => self.status = format!("DBC read failed: {e}"),
+            Err(e) => self.status = format!("{name} DBC read failed: {e}"),
+        }
+    }
+
+    pub fn load_dbcs(&mut self) {
+        for ch in 0..self.channels.len() {
+            self.load_channel(ch);
         }
     }
 
     pub fn pick_dbc(&mut self) {
+        let ch = self.dbc_pick.min(self.channels.len().saturating_sub(1));
+        let name = self.channel_name(ch as u8);
         if let Some(p) = rfd::FileDialog::new()
-            .set_title("Open DBC")
+            .set_title(format!("Open DBC for {name}"))
             .add_filter("DBC files", &["dbc"])
             .pick_file()
         {
-            self.dbc_path = p.to_string_lossy().to_string();
-            self.load_dbc();
+            if let Some(channel) = self.channels.get_mut(ch) {
+                channel.dbc_path = p.to_string_lossy().to_string();
+            }
+            self.load_channel(ch);
+        }
+    }
+
+    /// Open a DBC directly for a given channel (used by the Buses window).
+    pub fn pick_dbc_for(&mut self, ch: usize) {
+        let name = self.channel_name(ch as u8);
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title(format!("Open DBC for {name}"))
+            .add_filter("DBC files", &["dbc"])
+            .pick_file()
+        {
+            if let Some(channel) = self.channels.get_mut(ch) {
+                channel.dbc_path = p.to_string_lossy().to_string();
+            }
+            self.load_channel(ch);
         }
     }
 
@@ -264,6 +542,241 @@ impl App {
             self.asc_path = p.to_string_lossy().to_string();
             self.replay();
         }
+    }
+
+    /// Exports the frames that pass the given Trace window's filter as ASC.
+    pub fn export_trace(&mut self, win: usize, path: &str) {
+        if self.trace.is_empty() {
+            self.status = "export: trace is empty".to_string();
+            return;
+        }
+        let Some(w) = self.trace_windows.get(win) else {
+            return;
+        };
+        let frames: Vec<CanFrame> = self
+            .trace
+            .iter()
+            .copied()
+            .filter(|f| self.trace_match(w, f))
+            .collect();
+        if frames.is_empty() {
+            self.status = "export: no frames pass the trace filter".to_string();
+            return;
+        }
+        match AscWriter::new(path) {
+            Ok(mut w) => {
+                for f in &frames {
+                    w.write(f).ok();
+                }
+                w.finish().ok();
+                self.status = format!(
+                    "exported {} of {} frames to {path}",
+                    frames.len(),
+                    self.trace.len()
+                );
+            }
+            Err(e) => self.status = format!("export failed: {e}"),
+        }
+    }
+
+    pub fn export_trace_dialog(&mut self, win: usize) {
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title("Export Trace as ASC")
+            .set_file_name("trace_export.asc")
+            .add_filter("ASC files", &["asc"])
+            .save_file()
+        {
+            let path = p.to_string_lossy().to_string();
+            self.export_trace(win, &path);
+        }
+    }
+
+    fn csv_save_dialog(title: &str, name: &str) -> Option<std::path::PathBuf> {
+        rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(name)
+            .add_filter("CSV files", &["csv"])
+            .save_file()
+    }
+
+    fn write_export(&mut self, path: &str, content: String) {
+        match std::fs::write(path, content) {
+            Ok(()) => self.status = format!("exported to {path}"),
+            Err(e) => self.status = format!("export failed: {e}"),
+        }
+    }
+
+    pub fn export_stats_dialog(&mut self, win: usize) {
+        if let Some(p) = Self::csv_save_dialog("Export Statistics as CSV", "statistics.csv") {
+            self.export_stats_csv(win, &p.to_string_lossy());
+        }
+    }
+
+    pub fn export_stats_csv(&mut self, win: usize, path: &str) {
+        let Some(w) = self.stats_windows.get(win) else {
+            return;
+        };
+        let scope = w.scope;
+        let manual = &w.manual;
+        let mut rows: Vec<&MessageAgg> = self
+            .aggs
+            .values()
+            .filter(|a| Self::scope_match(scope, manual, a.channel, a.id))
+            .collect();
+        rows.sort_by_key(|a| (a.channel, a.id));
+        let mut s = String::from("bus,id,name,count,cycle_min_ms,cycle_avg_ms,cycle_max_ms,dlc\n");
+        for a in &rows {
+            let name = self.message_name(a.channel, a.id).unwrap_or("-");
+            let bus = self.channel_name(a.channel);
+            let (cmin, cavg, cmax) = if a.count > 1 {
+                (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            s.push_str(&format!(
+                "{bus},{},{},{},{cmin:.3},{cavg:.3},{cmax:.3},{}\n",
+                a.id, name, a.count, a.dlc
+            ));
+        }
+        self.write_export(path, s);
+    }
+
+    pub fn export_messages_dialog(&mut self, win: usize) {
+        if let Some(p) = Self::csv_save_dialog("Export Messages as CSV", "messages.csv") {
+            self.export_messages_csv(win, &p.to_string_lossy());
+        }
+    }
+
+    /// Exports the aggregation rows currently visible in the given Messages window.
+    pub fn export_messages_csv(&mut self, win: usize, path: &str) {
+        let Some(w) = self.msg_windows.get(win) else {
+            return;
+        };
+        let scope = w.scope;
+        let filter = w.filter.trim().to_lowercase();
+        let dbc_only = w.dbc_only;
+        let manual = &w.manual;
+        let mut rows: Vec<MessageAgg> = self
+            .aggs
+            .values()
+            .copied()
+            .filter(|a| {
+                if !Self::scope_match(scope, manual, a.channel, a.id) {
+                    return false;
+                }
+                let name = self.message_name(a.channel, a.id).unwrap_or("-");
+                if dbc_only && name == "-" {
+                    return false;
+                }
+                if filter.is_empty() {
+                    return true;
+                }
+                let id_str = format!("{:x}", a.id);
+                name.to_lowercase().contains(&filter) || id_str.contains(&filter)
+            })
+            .collect();
+        rows.sort_by_key(|a| (a.channel, a.id));
+        let mut s = String::from("bus,id,name,dir,count,cycle_ms,dlc,data\n");
+        for a in &rows {
+            let name = self.message_name(a.channel, a.id).unwrap_or("-");
+            let bus = self.channel_name(a.channel);
+            let dir = match a.dir {
+                Direction::Rx => "Rx",
+                Direction::Tx => "Tx",
+            };
+            let cycle = if a.count > 1 {
+                a.cycle_us / 1000.0
+            } else {
+                0.0
+            };
+            let data: String = a.data[..a.dlc.min(8) as usize]
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            s.push_str(&format!(
+                "{bus},{},{},{},{},{cycle:.3},{},{}\n",
+                a.id, name, dir, a.count, a.dlc, data
+            ));
+        }
+        self.write_export(path, s);
+    }
+
+    pub fn export_graphics_dialog(&mut self, i: usize) {
+        let name = self
+            .graphics
+            .get(i)
+            .map(|g| g.name.to_lowercase().replace(' ', "_"))
+            .unwrap_or_else(|| "graphics".to_string());
+        if let Some(p) =
+            Self::csv_save_dialog("Export Graphics history as CSV", &format!("{name}.csv"))
+        {
+            self.export_graphics_csv(i, &p.to_string_lossy());
+        }
+    }
+
+    /// Snapshot of the plotted signal history, long format: one row per sample.
+    pub fn export_graphics_csv(&mut self, i: usize, path: &str) {
+        let Some(g) = self.graphics.get(i) else {
+            return;
+        };
+        let keys: Vec<(u8, u32, String)> = g
+            .signals
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.key.clone())
+            .collect();
+        let mut s = String::from("time_us,bus,signal,value\n");
+        let mut n = 0usize;
+        for key in &keys {
+            let Some(sub) = self.subs.get(key) else {
+                continue;
+            };
+            let bus = self.channel_name(key.0);
+            for (t, v) in &sub.history {
+                s.push_str(&format!("{t},{bus},{},{v}\n", key.2));
+                n += 1;
+            }
+        }
+        if n == 0 {
+            self.status = "export: no signal history yet".to_string();
+            return;
+        }
+        self.write_export(path, s);
+    }
+
+    pub fn export_data_dialog(&mut self, i: usize) {
+        let name = self
+            .data_windows
+            .get(i)
+            .map(|d| d.name.to_lowercase().replace(' ', "_"))
+            .unwrap_or_else(|| "data".to_string());
+        if let Some(p) = Self::csv_save_dialog("Export Data values as CSV", &format!("{name}.csv"))
+        {
+            self.export_data_csv(i, &p.to_string_lossy());
+        }
+    }
+
+    /// Snapshot of the latest signal values shown in a Data window.
+    pub fn export_data_csv(&mut self, i: usize, path: &str) {
+        let Some(d) = self.data_windows.get(i) else {
+            return;
+        };
+        let keys: Vec<(u8, u32, String)> = d
+            .signals
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.key.clone())
+            .collect();
+        let mut s = String::from("bus,signal,value,unit\n");
+        for key in &keys {
+            let Some(sub) = self.subs.get(key) else {
+                continue;
+            };
+            let bus = self.channel_name(key.0);
+            s.push_str(&format!("{bus},{},{},{}\n", key.2, sub.latest, sub.unit));
+        }
+        self.write_export(path, s);
     }
 
     pub fn replay(&mut self) {
@@ -304,11 +817,51 @@ impl App {
             return;
         }
         let now = self.now_us();
+        if self.last_tick_us > 0 && now > self.last_tick_us {
+            let dt_s = (now - self.last_tick_us) as f64 / 1e6;
+            let inst = (self.buf.len() as f64) / dt_s;
+            self.frame_rate = if self.frame_rate == 0.0 {
+                inst
+            } else {
+                self.frame_rate * 0.9 + inst * 0.1
+            };
+            // Rough CAN 2.0A/B bit count per frame, referenced to 500 kbit/s.
+            let bits: f64 = self
+                .buf
+                .iter()
+                .map(|f| (if f.extended { 67.0 } else { 47.0 }) + f.dlc as f64 * 8.0)
+                .sum();
+            let load = bits / dt_s / 500_000.0 * 100.0;
+            self.bus_load = if self.bus_load == 0.0 {
+                load
+            } else {
+                self.bus_load * 0.9 + load * 0.1
+            };
+        }
         self.last_tick_us = now;
         self.buf.clear();
         self.source.poll(now, &mut self.buf);
+        let source_empty = self.buf.is_empty();
 
-        let replay_done = matches!(self.mode, Mode::Replay) && self.buf.is_empty() && self.source.is_done();
+        for tx in &mut self.tx_list {
+            if tx.active && tx.cycle_us > 0 && tx.next_t_us <= now {
+                while tx.next_t_us <= now {
+                    tx.next_t_us += tx.cycle_us;
+                }
+                self.buf.push(CanFrame {
+                    t_us: now,
+                    channel: tx.channel,
+                    id: tx.id,
+                    extended: tx.extended,
+                    dlc: tx.dlc,
+                    data: tx.data,
+                    dir: Direction::Tx,
+                });
+            }
+        }
+
+        let replay_done =
+            matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
 
         for &f in &self.buf {
             if let Some(w) = &mut self.writer {
@@ -319,7 +872,7 @@ impl App {
             }
             self.trace.push_back(f);
             self.frame_counter += 1;
-            let agg = self.aggs.entry(f.id).or_insert(MessageAgg {
+            let agg = self.aggs.entry((f.channel, f.id)).or_insert(MessageAgg {
                 id: f.id,
                 extended: f.extended,
                 channel: f.channel,
@@ -327,12 +880,24 @@ impl App {
                 count: 0,
                 last_t_us: 0,
                 cycle_us: 0.0,
+                min_us: f64::MAX,
+                max_us: 0.0,
                 dlc: f.dlc,
                 data: f.data,
             });
             if agg.count > 0 {
                 let dt = f.t_us.saturating_sub(agg.last_t_us) as f64;
-                agg.cycle_us = if agg.count == 1 { dt } else { agg.cycle_us * 0.9 + dt * 0.1 };
+                agg.cycle_us = if agg.count == 1 {
+                    dt
+                } else {
+                    agg.cycle_us * 0.9 + dt * 0.1
+                };
+                if dt < agg.min_us {
+                    agg.min_us = dt;
+                }
+                if dt > agg.max_us {
+                    agg.max_us = dt;
+                }
             }
             agg.count += 1;
             agg.last_t_us = f.t_us;
@@ -340,9 +905,13 @@ impl App {
             agg.dir = f.dir;
             agg.dlc = f.dlc;
             agg.data = f.data;
-            if let Some(db) = &self.dbc {
+            let db = self
+                .channels
+                .get(f.channel as usize)
+                .and_then(|c| c.dbc.as_ref());
+            if let Some(db) = db {
                 for (name, phys, unit) in db.decode_signals(&f) {
-                    let key = (f.id, name.clone());
+                    let key = (f.channel, f.id, name.clone());
                     let Some(entry) = self.subs.get_mut(&key) else {
                         continue;
                     };
@@ -375,25 +944,28 @@ impl App {
         }
     }
 
-    pub fn subscribe(&mut self, key: (u32, String)) {
+    pub fn subscribe(&mut self, key: (u8, u32, String)) {
         if !self.subs.contains_key(&key) {
             let color = self.color_counter;
             self.color_counter += 1;
-            self.subs.insert(key, Subscription {
-                latest: 0.0,
-                unit: String::new(),
-                min: f64::INFINITY,
-                max: f64::NEG_INFINITY,
-                last_update_us: 0,
-                last_sample_us: 0,
-                history: VecDeque::new(),
-                color,
-            });
+            self.subs.insert(
+                key,
+                Subscription {
+                    latest: 0.0,
+                    unit: String::new(),
+                    min: f64::INFINITY,
+                    max: f64::NEG_INFINITY,
+                    last_update_us: 0,
+                    last_sample_us: 0,
+                    history: VecDeque::new(),
+                    color,
+                },
+            );
         }
     }
 
     /// Drops the subscription if no Data/Graphics window references the signal anymore.
-    pub fn prune_signal(&mut self, key: &(u32, String)) {
+    pub fn prune_signal(&mut self, key: &(u8, u32, String)) {
         let in_use = self
             .graphics
             .iter()
@@ -405,6 +977,71 @@ impl App {
         if !in_use {
             self.subs.remove(key);
         }
+    }
+
+    /// Adds or removes a signal in a Graphics/Data window's signal list
+    /// (used by the Signal Selection popup).
+    pub fn set_win_signal(&mut self, target: PopupTarget, key: (u8, u32, String), on: bool) {
+        let signals: Option<&mut Vec<GfxSignal>> = match target {
+            PopupTarget::Graphics(i) => self.graphics.get_mut(i).map(|w| &mut w.signals),
+            PopupTarget::Data(i) => self.data_windows.get_mut(i).map(|w| &mut w.signals),
+            _ => None,
+        };
+        let Some(signals) = signals else {
+            return;
+        };
+        let present = signals.iter().any(|s| s.key == key);
+        if on == present {
+            return;
+        }
+        if on {
+            signals.push(GfxSignal {
+                key: key.clone(),
+                visible: true,
+            });
+        } else {
+            signals.retain(|s| s.key != key);
+        }
+        if on {
+            self.subscribe(key);
+        } else {
+            self.prune_signal(&key);
+        }
+    }
+
+    pub fn new_trace_window(&mut self) {
+        self.trace_counter += 1;
+        self.trace_windows.push(TraceWin {
+            name: format!("Trace {}", self.trace_counter),
+            opened: true,
+            scope: SigScope::All,
+            manual: HashSet::new(),
+            filter: String::new(),
+            dir: 0,
+            dbc_only: false,
+        });
+    }
+
+    pub fn new_msg_window(&mut self) {
+        self.msg_counter += 1;
+        self.msg_windows.push(MsgWin {
+            name: format!("Messages {}", self.msg_counter),
+            opened: true,
+            scope: SigScope::All,
+            manual: HashSet::new(),
+            filter: String::new(),
+            dbc_only: false,
+        });
+    }
+
+    pub fn new_stats_window(&mut self) {
+        self.stats_counter += 1;
+        self.stats_windows.push(StatsWin {
+            name: format!("Statistics {}", self.stats_counter),
+            opened: true,
+            scope: SigScope::All,
+            manual: HashSet::new(),
+        });
     }
 
     pub fn new_graphics_window(&mut self) {
@@ -427,19 +1064,97 @@ impl App {
         });
     }
 
-    pub fn all_signal_keys(&self) -> Vec<(u32, String)> {
-        let Some(db) = &self.dbc else {
-            return Vec::new();
-        };
-        let mut keys = Vec::new();
-        for &id in &db.order {
-            if let Some(m) = db.messages.get(&id) {
-                for s in &m.signals {
-                    keys.push((id, s.name.clone()));
+    /// Scope check shared by all analysis windows: All passes everything,
+    /// Bus passes one channel, Manual uses that window's own selection set.
+    pub fn scope_match(scope: SigScope, manual: &HashSet<(u8, u32)>, channel: u8, id: u32) -> bool {
+        match scope {
+            SigScope::All => true,
+            SigScope::Bus(ch) => channel == ch,
+            SigScope::Manual => manual.contains(&(channel, id)),
+        }
+    }
+
+    /// Manual selection set of the window named by `t` (None for
+    /// Graphics/Data, which filter at the signal level).
+    pub fn win_manual(&self, t: PopupTarget) -> Option<&HashSet<(u8, u32)>> {
+        match t {
+            PopupTarget::Trace(i) => self.trace_windows.get(i).map(|w| &w.manual),
+            PopupTarget::Messages(i) => self.msg_windows.get(i).map(|w| &w.manual),
+            PopupTarget::Stats(i) => self.stats_windows.get(i).map(|w| &w.manual),
+            _ => None,
+        }
+    }
+
+    pub fn win_manual_mut(&mut self, t: PopupTarget) -> Option<&mut HashSet<(u8, u32)>> {
+        match t {
+            PopupTarget::Trace(i) => self.trace_windows.get_mut(i).map(|w| &mut w.manual),
+            PopupTarget::Messages(i) => self.msg_windows.get_mut(i).map(|w| &mut w.manual),
+            PopupTarget::Stats(i) => self.stats_windows.get_mut(i).map(|w| &mut w.manual),
+            _ => None,
+        }
+    }
+
+    /// Applies one Trace window's filter: scope, direction, DBC-only,
+    /// and ID/name substring.
+    pub fn trace_match(&self, w: &TraceWin, f: &CanFrame) -> bool {
+        if !Self::scope_match(w.scope, &w.manual, f.channel, f.id) {
+            return false;
+        }
+        match w.dir {
+            1 => {
+                if !matches!(f.dir, Direction::Rx) {
+                    return false;
                 }
             }
+            2 => {
+                if !matches!(f.dir, Direction::Tx) {
+                    return false;
+                }
+            }
+            _ => {}
         }
-        keys
+        let name = self.message_name(f.channel, f.id);
+        if w.dbc_only && name.is_none() {
+            return false;
+        }
+        let q = w.filter.trim();
+        if !q.is_empty() {
+            let q = q.to_ascii_uppercase();
+            let hex = format!("{:X}", f.id);
+            let in_name = name.is_some_and(|n| n.to_ascii_uppercase().contains(&q));
+            if !hex.contains(&q) && !in_name {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn add_tx(&mut self, channel: u8, id: u32) {
+        if self
+            .tx_list
+            .iter()
+            .any(|t| t.channel == channel && t.id == id)
+        {
+            return;
+        }
+        let (name, dlc) = self
+            .channel_dbc(channel)
+            .and_then(|db| db.messages.get(&id))
+            .map(|m| (m.name.clone(), m.dlc.min(8) as u8))
+            .unwrap_or_else(|| (format!("{id:X}"), 8));
+        let data_text = vec!["00"; dlc as usize].join(" ");
+        self.tx_list.push(TxMsg {
+            channel,
+            id,
+            extended: id > 0x7FF,
+            name,
+            dlc,
+            data: [0; 8],
+            data_text,
+            cycle_us: 100_000,
+            active: false,
+            next_t_us: 0,
+        });
     }
 }
 
@@ -460,10 +1175,20 @@ mod tests {
         app.record_path = path.to_string_lossy().to_string();
         app.toggle_record();
         assert!(app.recording);
+        assert!(
+            !app.tx_list.is_empty(),
+            "DBC messages pre-populate the generator"
+        );
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
         app.start_virtual();
         assert!(app.recording, "Start must not clear the Record checkbox");
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        app.update();
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
         app.stop();
         let actual = app.last_record.clone();
         assert!(actual.ends_with(".asc"), "no record file: {actual}");
@@ -489,16 +1214,279 @@ mod tests {
     #[test]
     fn aggregates_frames_per_message_id() {
         let mut app = App::new();
+        let tx = app
+            .tx_list
+            .iter_mut()
+            .find(|t| t.id == 0x100)
+            .expect("EngineStatus pre-populated in generator");
+        tx.active = true;
+        tx.cycle_us = 10_000;
         app.start_virtual();
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        app.update();
-        let agg = app.aggs.get(&0x100).expect("EngineStatus aggregated");
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_millis(12));
+            app.update();
+        }
+        let agg = app
+            .aggs
+            .get(&(0, 0x100))
+            .expect("EngineStatus aggregated on CAN1");
         assert!(agg.count >= 5, "expected several frames, got {}", agg.count);
         assert!(
-            (agg.cycle_us / 1000.0 - 10.0).abs() < 5.0,
-            "cycle should be ~10ms, got {}ms",
+            (agg.cycle_us / 1000.0 - 12.0).abs() < 8.0,
+            "cycle should track the update cadence, got {}ms",
             agg.cycle_us / 1000.0
         );
+        assert!(agg.min_us > 0.0, "min cycle should be recorded");
+        assert!(agg.max_us >= agg.min_us, "max cycle >= min cycle");
         app.stop();
+    }
+
+    #[test]
+    fn tx_generator_emits_frames() {
+        let mut app = App::new();
+        app.add_tx(0, 0x777);
+        let tx = app.tx_list.last_mut().expect("tx entry added");
+        assert_eq!(tx.id, 0x777);
+        assert_eq!(tx.channel, 0);
+        assert!(!tx.active, "new entries start inactive");
+        tx.cycle_us = 20_000;
+        tx.active = true;
+        app.start_virtual();
+        app.update();
+        assert!(
+            app.trace
+                .iter()
+                .any(|f| f.id == 0x777 && matches!(f.dir, Direction::Tx)),
+            "expected a Tx frame from the generator"
+        );
+        assert!(
+            app.aggs.get(&(0, 0x777)).is_some(),
+            "generator frames aggregate"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn export_trace_writes_parseable_asc() {
+        let mut app = App::new();
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..6 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let n = app.trace.len();
+        assert!(n > 0, "expected captured frames");
+        let path = std::env::temp_dir().join("roxy_can_export_test.asc");
+        let path_str = path.to_string_lossy().to_string();
+        app.export_trace(0, &path_str);
+        let content = std::fs::read_to_string(&path).unwrap();
+        let frames = crate::log::asc::parse_asc(&content);
+        assert_eq!(frames.len(), n, "exported frame count mismatch");
+        std::fs::remove_file(&path).ok();
+        app.stop();
+    }
+
+    #[test]
+    fn two_channels_aggregate_separately() {
+        let mut app = App::new();
+        assert_eq!(app.channels.len(), 2);
+        for (ch, c) in app.channels.iter().enumerate() {
+            assert!(c.dbc.is_some(), "CAN{} should load the sample DBC", ch + 1);
+        }
+        assert!(
+            app.tx_list.iter().any(|t| t.channel == 0 && t.id == 0x100)
+                && app.tx_list.iter().any(|t| t.channel == 1 && t.id == 0x100),
+            "generator pre-populated on both buses"
+        );
+        for tx in &mut app.tx_list {
+            if tx.id == 0x100 {
+                tx.active = true;
+                tx.cycle_us = 10_000;
+            }
+        }
+        app.start_virtual();
+        for _ in 0..6 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let a = app.aggs.get(&(0, 0x100)).expect("CAN1 aggregate");
+        let b = app.aggs.get(&(1, 0x100)).expect("CAN2 aggregate");
+        assert!(a.count >= 3, "CAN1 frames: {}", a.count);
+        assert!(b.count >= 3, "CAN2 frames: {}", b.count);
+        assert!(app.trace.iter().any(|f| f.channel == 1 && f.id == 0x100));
+        app.stop();
+    }
+
+    #[test]
+    fn csv_exports_match_window_state() {
+        let mut app = App::new();
+        let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
+        let id = db.order[0];
+        let sig = db.messages[&id].signals[0].name.clone();
+        let key = (0u8, id, sig);
+        app.subscribe(key.clone());
+        app.graphics[0].signals.push(GfxSignal {
+            key: key.clone(),
+            visible: true,
+        });
+        app.data_windows[0].signals.push(GfxSignal {
+            key: key.clone(),
+            visible: true,
+        });
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let dir = std::env::temp_dir();
+        let stats = dir.join("roxy_stats_test.csv");
+        app.export_stats_csv(0, &stats.to_string_lossy());
+        let s = std::fs::read_to_string(&stats).unwrap();
+        assert!(s.lines().count() > 1, "stats should have data rows");
+
+        let msgs = dir.join("roxy_msgs_test.csv");
+        app.export_messages_csv(0, &msgs.to_string_lossy());
+        let m = std::fs::read_to_string(&msgs).unwrap();
+        assert!(m.lines().count() > 1, "messages should have data rows");
+
+        let gfx = dir.join("roxy_gfx_test.csv");
+        app.export_graphics_csv(0, &gfx.to_string_lossy());
+        let g = std::fs::read_to_string(&gfx).unwrap();
+        assert!(g.contains(&key.2), "graphics history names the signal");
+
+        let data = dir.join("roxy_data_test.csv");
+        app.export_data_csv(0, &data.to_string_lossy());
+        let d = std::fs::read_to_string(&data).unwrap();
+        assert!(d.contains(&key.2), "data snapshot names the signal");
+
+        for p in [&stats, &msgs, &gfx, &data] {
+            std::fs::remove_file(p).ok();
+        }
+        app.stop();
+    }
+
+    #[test]
+    fn trace_filter_matches_by_name_id_and_direction() {
+        let mut app = App::new();
+        let rx = CanFrame {
+            t_us: 0,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            dlc: 8,
+            data: [0; 8],
+            dir: Direction::Rx,
+        };
+        let tx = CanFrame {
+            id: 0x320,
+            dir: Direction::Tx,
+            ..rx
+        };
+        let rx_ch1 = CanFrame { channel: 1, ..rx };
+        let unknown = CanFrame { id: 0x777, ..rx };
+        let mut w = app.trace_windows[0].clone();
+        assert!(app.trace_match(&w, &rx));
+        assert!(app.trace_match(&w, &unknown));
+
+        w.filter = "eng".to_string();
+        assert!(app.trace_match(&w, &rx), "name match is case-insensitive");
+        assert!(!app.trace_match(&w, &unknown));
+
+        w.filter = "77".to_string();
+        assert!(app.trace_match(&w, &unknown), "hex id substring");
+        assert!(!app.trace_match(&w, &rx));
+
+        w.filter.clear();
+        w.dir = 1;
+        assert!(app.trace_match(&w, &rx));
+        assert!(!app.trace_match(&w, &tx), "Rx-only filter drops Tx frames");
+
+        w.dir = 0;
+        w.dbc_only = true;
+        assert!(app.trace_match(&w, &rx));
+        assert!(!app.trace_match(&w, &unknown), "DBC-only drops unknown IDs");
+
+        w.dbc_only = false;
+        w.scope = SigScope::Bus(0);
+        assert!(app.trace_match(&w, &rx), "Bus scope passes its own bus");
+        assert!(!app.trace_match(&w, &rx_ch1), "Bus scope drops other buses");
+
+        w.scope = SigScope::Manual;
+        w.manual.insert((0, 0x320));
+        assert!(
+            !app.trace_match(&w, &rx),
+            "Manual selection drops unselected IDs"
+        );
+        assert!(
+            app.trace_match(&w, &tx),
+            "Manual selection passes the chosen ID"
+        );
+        w.manual.clear();
+        assert!(
+            !app.trace_match(&w, &tx),
+            "empty Manual selection passes nothing"
+        );
+        w.scope = SigScope::All;
+        assert!(app.trace_match(&w, &rx), "All scope passes everything");
+    }
+
+    #[test]
+    fn channels_can_be_added_removed_and_renamed() {
+        let mut app = App::new();
+        assert_eq!(app.channels.len(), 2);
+        app.channels[0].name = "Powertrain".to_string();
+        assert_eq!(app.channel_name(0), "Powertrain");
+
+        app.add_channel();
+        assert_eq!(app.channels.len(), 3);
+        assert_eq!(app.channel_name(2), "CAN3");
+
+        app.aggs.insert(
+            (1, 0x100),
+            MessageAgg {
+                id: 0x100,
+                channel: 1,
+                extended: false,
+                dir: Direction::Rx,
+                count: 1,
+                last_t_us: 0,
+                cycle_us: 0.0,
+                min_us: 0.0,
+                max_us: 0.0,
+                dlc: 8,
+                data: [0; 8],
+            },
+        );
+        app.trace_windows[0].manual.insert((2, 0x200));
+        app.trace_windows[0].scope = SigScope::Bus(2);
+        let w = app.trace_windows[0].clone();
+
+        app.remove_channel(0);
+        assert_eq!(app.channels.len(), 2);
+        assert_eq!(app.channel_name(0), "CAN2", "remaining buses shift down");
+        assert!(app.aggs.contains_key(&(0, 0x100)), "agg remapped 1 -> 0");
+        assert!(
+            app.trace_windows[0].manual.contains(&(1, 0x200)),
+            "filter remapped 2 -> 1"
+        );
+        assert_eq!(w.scope, SigScope::Bus(2), "cloned window is untouched");
+        assert_eq!(
+            app.trace_windows[0].scope,
+            SigScope::Bus(1),
+            "Bus scope indices shift with the channels"
+        );
+
+        while app.channels.len() > 1 {
+            app.remove_channel(0);
+        }
+        assert_eq!(app.channels.len(), 1, "last bus cannot be removed");
     }
 }

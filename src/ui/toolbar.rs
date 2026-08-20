@@ -19,7 +19,39 @@ fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
+fn tip(ui: &Ui, text: &str) {
+    if ui.is_item_hovered() {
+        ui.tooltip_text(text);
+    }
+}
+
+/// Global shortcuts dispatched from winit key events (see `crate::CMD`):
+/// F9 start/stop, Ctrl+R record, Ctrl+E export, Ctrl+O open DBC.
+fn shortcuts(app: &mut App, ui: &Ui) {
+    let cmd = crate::CMD.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if cmd == 0 {
+        return;
+    }
+    if cmd != 1 && ui.io().want_text_input {
+        return;
+    }
+    match cmd {
+        1 => {
+            if app.measuring {
+                app.stop();
+            } else {
+                app.start_virtual();
+            }
+        }
+        2 => app.toggle_record(),
+        3 => app.export_trace_dialog(0),
+        4 => app.pick_dbc(),
+        _ => {}
+    }
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
+    shortcuts(app, ui);
     let io = ui.io();
     let flags = WindowFlags::NO_TITLE_BAR
         | WindowFlags::MENU_BAR
@@ -35,38 +67,34 @@ pub fn render(app: &mut App, ui: &Ui) {
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu("View", || {
-                    if ui.menu_item_config("Trace").selected(app.show_trace).build() {
-                        app.show_trace = !app.show_trace;
+                    if ui
+                        .menu_item_config("Buses")
+                        .selected(app.show_buses)
+                        .build()
+                    {
+                        app.show_buses = !app.show_buses;
                     }
-                    if ui.menu_item_config("Messages").selected(app.show_messages).build() {
-                        app.show_messages = !app.show_messages;
+                    if ui
+                        .menu_item_config("Interactive Generator")
+                        .selected(app.show_tx)
+                        .build()
+                    {
+                        app.show_tx = !app.show_tx;
                     }
-                    ui.menu("Data", || {
-                        if ui.menu_item("New Data Window") {
-                            app.new_data_window();
-                        }
-                        ui.separator();
-                        for i in 0..app.data_windows.len() {
-                            let name = app.data_windows[i].name.clone();
-                            let sel = app.data_windows[i].opened;
-                            if ui.menu_item_config(&name).selected(sel).build() {
-                                app.data_windows[i].opened = !app.data_windows[i].opened;
-                            }
-                        }
-                    });
-                    ui.menu("Graphics", || {
-                        if ui.menu_item("New Graphics Window") {
-                            app.new_graphics_window();
-                        }
-                        ui.separator();
-                        for i in 0..app.graphics.len() {
-                            let name = app.graphics[i].name.clone();
-                            let sel = app.graphics[i].opened;
-                            if ui.menu_item_config(&name).selected(sel).build() {
-                                app.graphics[i].opened = !app.graphics[i].opened;
-                            }
-                        }
-                    });
+                    if ui
+                        .menu_item_config("Network")
+                        .selected(app.show_network)
+                        .build()
+                    {
+                        app.show_network = !app.show_network;
+                    }
+                    if ui
+                        .menu_item_config("Measurement Setup")
+                        .selected(app.show_measurement)
+                        .build()
+                    {
+                        app.show_measurement = !app.show_measurement;
+                    }
                 });
             });
 
@@ -74,16 +102,22 @@ pub fn render(app: &mut App, ui: &Ui) {
                 if ui.button("Stop") {
                     app.stop();
                 }
+                tip(ui, "Stop measurement (F9)");
             } else if ui.button("Start") {
                 app.start_virtual();
             }
+            if !app.measuring {
+                tip(ui, "Start measurement (F9)");
+            }
             ui.same_line();
             ui.checkbox("Pause", &mut app.trace_paused);
+            tip(ui, "Freeze the trace (frames keep aggregating)");
             vsep(ui);
             let mut rec = app.recording;
             if ui.checkbox("Record", &mut rec) {
                 app.toggle_record();
             }
+            tip(ui, "Record ASC (Ctrl+R)");
             ui.same_line();
             ui.align_text_to_frame_padding();
             ui.text("to");
@@ -96,18 +130,35 @@ pub fn render(app: &mut App, ui: &Ui) {
             ui.align_text_to_frame_padding();
             ui.text("_<date>.asc");
             vsep(ui);
+            if app.dbc_pick >= app.channels.len() {
+                app.dbc_pick = 0;
+            }
+            let ch_names: Vec<String> = (0..app.channels.len())
+                .map(|i| app.channel_name(i as u8))
+                .collect();
+            ui.set_next_item_width(64.0);
+            ui.combo_simple_string("##dbcch", &mut app.dbc_pick, &ch_names);
+            tip(ui, "Bus to load the next DBC into");
+            ui.same_line();
             if ui.button("Open DBC...") {
                 app.pick_dbc();
             }
-            if !app.dbc_path.trim().is_empty() {
+            tip(ui, "Open a DBC for the selected bus (Ctrl+O)");
+            let path = app
+                .channels
+                .get(app.dbc_pick)
+                .map(|c| c.dbc_path.clone())
+                .unwrap_or_default();
+            if !path.trim().is_empty() {
                 ui.same_line();
                 ui.align_text_to_frame_padding();
-                ui.text(file_name(&app.dbc_path));
+                ui.text(file_name(&path));
             }
             vsep(ui);
             if ui.button("Open ASC...") {
                 app.pick_asc();
             }
+            tip(ui, "Open an ASC log and replay it");
             if !app.asc_path.trim().is_empty() {
                 ui.same_line();
                 ui.align_text_to_frame_padding();

@@ -1,18 +1,32 @@
 # roxy-can
 
-一个基于 Rust + Dear ImGui 的 CAN 总线分析工具，界面与交互参考 CANoe。内置虚拟仿真数据源，开箱即可演示；支持 DBC 解码、ASC 录制与回放。
+一个基于 Rust + Dear ImGui 的 CAN 总线分析工具，界面与交互参考 CANoe。总线数量不固定，可在 **Buses** 窗口中增删并自定义名称，每条总线各挂一个 DBC；Data/Graphics 窗口是纯信号观测器，可跨总线混合选择信号。虚拟模式下总线默认空闲，报文由内置信号生成器（Interactive Generator）产生；支持 DBC 解码、ASC 录制与回放。
 
 ## 功能
 
-- **虚拟数据源**：按 DBC 定义的周期自动生成报文，无需硬件即可运行
-- **Trace 视图**：逐帧滚动显示，含时间、通道、ID、报文名、数据、方向，支持暂停与过滤
-- **Messages 聚合视图**：按报文 ID 聚合，显示计数、实测周期、最新数据，展开可查看 DBC 解码后的信号值
-- **DBC 支持**：加载 `.dbc` 文件，Signals 树展示所有报文与信号，可订阅绘制
-- **Graphics 窗口**：信号曲线实时绘制，带时间/数值坐标轴，可调整时间窗与 Y 轴范围，支持多窗口
-- **Data 窗口**：信号数值列表实时刷新，支持多窗口
-- **信号列表**：支持拖拽排序、全选、批量显示
+- **动态总线**：Buses 窗口（View → Buses）中可添加/删除总线、自定义总线名、为每条总线单独加载 DBC；删除总线时所有观测器、过滤器、生成器自动重映射
+- **Interactive Generator（信号生成器）**：所有总线的 DBC 报文即开即用，支持按周期发送、按信号拖拽编辑物理值（自动编码为数据字节）或按 hex 编辑
+- **Trace / Messages / Statistics 均可多开**：在 Measurement Setup 中用 +Trace / +Messages / +Statistics 新建，每个窗口有独立的过滤设置
+- **Signals 选项**：每个观测器一个 Signals 下拉框，三档可选——所有总线、某一条总线、Manual（手动勾选，各窗口的勾选项互相独立）；选 "…" 打开 Message Selection 弹窗，按报文勾选（鼠标悬停浮窗显示该报文的信号），勾选即切换为 Manual，Clear 恢复为所有总线
+- **Trace 视图**：逐帧滚动显示，含时间、总线、ID、报文名、数据、方向（Tx 高亮），支持 Signals 范围 + 文本/方向/DBC-only 过滤，右键行可快速过滤该 ID、清除过滤或加入生成器，可按当前过滤导出 ASC
+- **Messages 聚合视图**：按（总线, ID）聚合，显示计数、实测周期、最新数据，展开可查看 DBC 解码后的信号值
+- **Statistics 视图**：每报文计数、周期 Min/Avg/Max、DLC、总线占比
+- **Data/Graphics 窗口即信号观测器**：不绑定具体总线，信号选择全部在 Measurement Setup 的 Filter 列完成；窗口本体只保留已选信号列表（可逐个开关显示/绘制、拖拽排序）；支持多窗口
+- **Measurement Setup**：所有观测器（Trace/Messages/Statistics/Graphics/Data）一张表总览——顶部按钮新增任意观测器；每行一个方形箭头按钮开关窗口（▼ 已打开 / ▶ 已隐藏），可重命名、逐个导出（Trace 按当前过滤器导出 ASC，其余导出 CSV），并可删除任意观测器；Trace/Messages/Statistics 行内选择 Signals 范围，Graphics/Data 行的 "…" 打开 Signal Selection 弹窗——报文 → 信号两级复选树（总线仅作分组标题，可跨总线任意勾选），报文级可整体勾选/取消，标签带（已选/总数）计数，支持搜索
+- **Network 视图**：每条总线一段拓扑（DBC 节点框 + CAN 总线）；绿点表示实时活动，点击节点查看收发详情（详情在独立滚动面板中）
+- **信号列表**：支持拖拽排序、全部显示；批量添加信号在 Signal Selection 弹窗中完成（报文级复选框整体勾选）
 - **ASC 录制 / 回放**：录制文件名自动带日期时间戳；ASC 路径留空可直接回放最近一次录制
+- **状态栏**：测量状态、帧率 (f/s)、总线负载估算（@500 kbit/s）、帧计数、录制指示
 - **Docking 布局**：窗口可停靠、可拖动，支持多显示器缩放与中文输入法（IME）
+
+## 快捷键
+
+| 按键 | 功能 |
+| --- | --- |
+| F9 | 启动 / 停止测量 |
+| Ctrl+R | 切换 ASC 录制 |
+| Ctrl+E | 导出第一个 Trace 窗口为 ASC |
+| Ctrl+O | 打开 DBC |
 
 ## 构建与运行
 
@@ -30,10 +44,12 @@ cargo test
 
 ## 使用
 
-1. 点击工具栏 **Start** 启动虚拟测量（默认加载 `assets/sample.dbc`）
-2. 通过 **Open DBC...** / **Open ASC...** 选择自己的文件
-3. 勾选 **Record** 录制 ASC；View 菜单中可新建/切换 Data、Graphics 窗口
-4. 在 Symbols 树中订阅信号，即可在 Graphics/Data 窗口中查看
+1. 点击工具栏 **Start** 启动虚拟测量（默认两条总线 CAN1/CAN2，各加载 `assets/sample.dbc`；可在 Buses 窗口增删改名）
+2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分
+3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；工具栏的下拉框 + **Open DBC...** 也可加载；**Open ASC...** 用于回放
+4. 勾选 **Record** 录制 ASC；**Measurement Setup** 表里可总览/开关/导出所有观测器，并在此新增/删除各类窗口
+5. 每个观测器行内选择 **Signals** 范围（所有总线 / 单条总线 / Manual），Manual 时点 "…" 在 Message Selection 弹窗中勾选报文（悬停可看信号）
+6. Data/Graphics 的信号选择在 Measurement Setup 行内点 "…" 打开 Signal Selection 弹窗勾选（按总线分组，可跨总线选择）；窗口本体只显示已选信号列表，可逐个开关
 
 ## 主要依赖
 

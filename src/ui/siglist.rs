@@ -18,24 +18,11 @@ fn signals_mut(app: &mut App, kind: ListKind) -> &mut Vec<GfxSignal> {
     }
 }
 
-/// Shared signal list used below the Symbols tree in Graphics/Data windows.
-/// Supports visibility toggles, "select all" / "show all", and drag reordering
-/// with an insertion line indicator.
+/// Shared selected-signal list of Graphics/Data windows. Supports
+/// visibility toggles, "show all", and drag reordering with an insertion
+/// line indicator. Adding/removing signals happens in the Signal Selection
+/// popup (Measurement Setup).
 pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
-    if ui.small_button("Select all") {
-        let keys = app.all_signal_keys();
-        let missing: Vec<_> = {
-            let sigs = signals_mut(app, kind);
-            keys.into_iter()
-                .filter(|k| !sigs.iter().any(|s| &s.key == k))
-                .collect()
-        };
-        for key in missing {
-            app.subscribe(key.clone());
-            signals_mut(app, kind).push(GfxSignal { key, visible: true });
-        }
-    }
-    ui.same_line();
     if ui.small_button("Show all") {
         for s in signals_mut(app, kind).iter_mut() {
             s.visible = true;
@@ -64,7 +51,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         ui.dummy([14.0, 0.0]);
         ui.same_line();
         let mut vis = signals_mut(app, kind)[j].visible;
-        if ui.checkbox(format!("{}##sig{j}", key.1), &mut vis) {
+        if ui.checkbox(format!("{}##sig{j}", key.2), &mut vis) {
             signals_mut(app, kind)[j].visible = vis;
         }
         if ui.is_item_active() && ui.is_mouse_dragging(MouseButton::Left) {
@@ -81,7 +68,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         // the state; any other window must leave DRAG untouched, otherwise
         // an earlier-rendered window would cancel the drag on mouse release.
         if dk == kind && from < tops.len() {
-            let label = signals_mut(app, kind)[from].key.1.clone();
+            let label = signals_mut(app, kind)[from].key.2.clone();
             dl.add_text(
                 [mouse[0] + 12.0, mouse[1] + 12.0],
                 [0.9, 0.9, 0.95, 1.0],

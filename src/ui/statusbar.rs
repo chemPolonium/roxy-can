@@ -28,8 +28,10 @@ pub fn render(app: &App, ui: &Ui) {
             ui.text_colored(color, state);
             ui.same_line();
             ui.text(format!(
-                "| frames: {}  | trace: {}  | signals: {}",
+                "| frames: {}  | {:.0} f/s  | load: {:.1}% @500k  | trace: {}  | signals: {}",
                 app.frame_counter,
+                app.frame_rate,
+                app.bus_load,
                 app.trace.len(),
                 app.subs.len()
             ));

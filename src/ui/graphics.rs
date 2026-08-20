@@ -1,5 +1,4 @@
-use crate::app::{App, GfxSignal, PALETTE};
-use crate::ui::symbols;
+use crate::app::{App, PALETTE};
 use imgui::{Condition, Ui};
 
 const TIME_PRESETS: [f64; 4] = [5.0, 10.0, 30.0, 60.0];
@@ -13,10 +12,18 @@ pub fn render(app: &mut App, ui: &Ui) {
         if !open {
             continue;
         }
-        let name = app.graphics[i].name.clone();
+        let raw = app.graphics[i].name.clone();
+        let name = if raw.trim().is_empty() {
+            format!("Graphics {}", i + 1)
+        } else {
+            raw
+        };
         ui.window(&name)
             .opened(&mut open)
-            .position([16.0 + i as f32 * 36.0, disp_h * 0.55 + i as f32 * 28.0], Condition::FirstUseEver)
+            .position(
+                [16.0 + i as f32 * 36.0, disp_h * 0.55 + i as f32 * 28.0],
+                Condition::FirstUseEver,
+            )
             .size([760.0, (disp_h * 0.40).max(240.0)], Condition::FirstUseEver)
             .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
             .build(|| {
@@ -59,33 +66,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         .build(|| plot_area(app, ui, i));
 }
 
-/// Left panel: Symbols tree (select signals for this window) plus a
-/// "Curves" list where each selected signal can be toggled for drawing.
+/// Left panel: the window's selected signal list; each signal can be
+/// toggled for drawing. Bus, node identity, and signal selection live in
+/// Measurement Setup.
 fn left_panel(app: &mut App, ui: &Ui, i: usize) {
-    if let Some(_node) = ui
-        .tree_node_config("Symbols")
-        .flags(imgui::TreeNodeFlags::DEFAULT_OPEN)
-        .push()
-    {
-        let selected: Vec<(u32, String)> = app.graphics[i]
-            .signals
-            .iter()
-            .map(|s| s.key.clone())
-            .collect();
-        let toggles = symbols::signal_tree(app, ui, &selected);
-        for (key, on) in toggles {
-            let present = app.graphics[i].signals.iter().any(|s| s.key == key);
-            if on && !present {
-                app.subscribe(key.clone());
-                app.graphics[i].signals.push(GfxSignal { key, visible: true });
-            } else if !on && present {
-                app.graphics[i].signals.retain(|s| s.key != key);
-                app.prune_signal(&key);
-            }
-        }
-    }
-
-    ui.separator();
     ui.text("Curves");
     crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(i));
 }
@@ -103,7 +87,7 @@ fn plot_area(app: &App, ui: &Ui, i: usize) {
     let stacked = app.graphics[i].stacked;
     let tw = app.graphics[i].time_window_s;
     let t_now = app.last_tick_us as f64 / 1e6;
-    let keys: Vec<(u32, String)> = app.graphics[i]
+    let keys: Vec<(u8, u32, String)> = app.graphics[i]
         .signals
         .iter()
         .filter(|s| s.visible)
@@ -115,12 +99,22 @@ fn plot_area(app: &App, ui: &Ui, i: usize) {
         dl.add_text(
             [x0 + 8.0, y0 + 8.0],
             [0.5, 0.5, 0.6, 1.0],
-            "select signals in the left panel".to_string(),
+            "add signals via Measurement Setup (…)".to_string(),
         );
     } else if stacked {
         let ph = h / keys.len() as f32;
         for (k, key) in keys.iter().enumerate() {
-            draw_plot(&dl, app, x0, y0 + k as f32 * ph, w, ph, &[key.clone()], t_now, tw);
+            draw_plot(
+                &dl,
+                app,
+                x0,
+                y0 + k as f32 * ph,
+                w,
+                ph,
+                &[key.clone()],
+                t_now,
+                tw,
+            );
         }
     } else {
         draw_plot(&dl, app, x0, y0, w, h, &keys, t_now, tw);
@@ -155,7 +149,7 @@ fn draw_plot(
     y0: f32,
     w: f32,
     h: f32,
-    keys: &[(u32, String)],
+    keys: &[(u8, u32, String)],
     t_now: f64,
     tw: f64,
 ) {
@@ -190,7 +184,8 @@ fn draw_plot(
 
     for g in 0..=10 {
         let x = x0 + w * g as f32 / 10.0;
-        dl.add_line([x, y0], [x, y0 + h], [0.18, 0.18, 0.22, 1.0]).build();
+        dl.add_line([x, y0], [x, y0 + h], [0.18, 0.18, 0.22, 1.0])
+            .build();
         if g % 2 == 0 && g < 10 && h > 20.0 {
             let t = t_min + tw * g as f64 / 10.0;
             dl.add_text(
@@ -202,7 +197,8 @@ fn draw_plot(
     }
     for g in 0..=4 {
         let y = y0 + h * g as f32 / 4.0;
-        dl.add_line([x0, y], [x0 + w, y], [0.18, 0.18, 0.22, 1.0]).build();
+        dl.add_line([x0, y], [x0 + w, y], [0.18, 0.18, 0.22, 1.0])
+            .build();
         let v = vmax - (vmax - vmin) * g as f64 / 4.0;
         let ly = if g == 0 { y + 2.0 } else { y - 13.0 };
         dl.add_text([x0 + 3.0, ly], [0.55, 0.55, 0.65, 1.0], fmt_val(v));
@@ -235,7 +231,7 @@ fn draw_plot(
             app.subs.get(key).map(|sub| {
                 (
                     PALETTE[sub.color % PALETTE.len()],
-                    format!("{} = {:.3} {}", key.1, sub.latest, sub.unit),
+                    format!("{} = {:.3} {}", key.2, sub.latest, sub.unit),
                 )
             })
         })

@@ -13,12 +13,16 @@ use imgui_wgpu::{Renderer, RendererConfig};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{Event, Ime, WindowEvent};
+use winit::event::{ElementState, Event, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 static IME_REQ: std::sync::Mutex<(bool, f32, f32, f32)> =
     std::sync::Mutex::new((false, 0.0, 0.0, 0.0));
+
+/// Pending global shortcut: 1=start/stop, 2=record, 3=export, 4=open DBC.
+pub static CMD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 unsafe extern "C" fn ime_data_callback(
     _viewport: *mut imgui::sys::ImGuiViewport,
@@ -41,6 +45,7 @@ struct State {
     last_frame: Instant,
     last_cursor: Option<imgui::MouseCursor>,
     ime_pos: Option<(bool, f32, f32, f32)>,
+    ctrl: bool,
 }
 
 impl State {
@@ -73,8 +78,7 @@ impl State {
         }))
         .unwrap();
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .unwrap();
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
         let surface_desc = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -170,12 +174,15 @@ impl State {
             last_frame: Instant::now(),
             last_cursor: None,
             ime_pos: None,
+            ctrl: false,
         }
     }
 
     fn frame(&mut self) {
         let now = Instant::now();
-        self.context.io_mut().update_delta_time(now - self.last_frame);
+        self.context
+            .io_mut()
+            .update_delta_time(now - self.last_frame);
         self.last_frame = now;
 
         let frame = match self.surface.get_current_texture() {
@@ -274,6 +281,26 @@ impl ApplicationHandler for Program {
                     st.context.io_mut().add_input_character(ch);
                 }
             }
+            WindowEvent::ModifiersChanged(m) => {
+                st.ctrl = m.state().control_key();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    let code = match (&event.logical_key, st.ctrl) {
+                        (Key::Named(NamedKey::F9), _) => 1,
+                        (Key::Character(c), true) => match c.to_ascii_lowercase().as_str() {
+                            "r" => 2,
+                            "e" => 3,
+                            "o" => 4,
+                            _ => 0,
+                        },
+                        _ => 0,
+                    };
+                    if code != 0 {
+                        CMD.store(code, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
             _ => {}
         }
         st.platform.handle_event::<()>(
@@ -286,11 +313,8 @@ impl ApplicationHandler for Program {
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
         if let Some(st) = &mut self.state {
             st.window.request_redraw();
-            st.platform.handle_event::<()>(
-                st.context.io_mut(),
-                &st.window,
-                &Event::AboutToWait,
-            );
+            st.platform
+                .handle_event::<()>(st.context.io_mut(), &st.window, &Event::AboutToWait);
         }
     }
 }
