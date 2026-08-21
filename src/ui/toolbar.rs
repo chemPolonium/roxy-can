@@ -166,7 +166,10 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             ui.same_line();
             ui.checkbox("Pause", &mut app.trace_paused);
-            tip(ui, "Freeze the trace (frames keep aggregating)");
+            tip(
+                ui,
+                "Freeze the trace; replay playback stops and resumes in place",
+            );
             vsep(ui);
             let mut rec = app.recording;
             if ui.checkbox("Record", &mut rec) {

@@ -156,6 +156,7 @@ pub struct App {
     pub frame_counter: u64,
     pub trace: VecDeque<CanFrame>,
     pub trace_paused: bool,
+    paused_at_us: Option<u64>,
     pub channels: Vec<Channel>,
     pub dbc_pick: usize,
     pub status: String,
@@ -208,6 +209,7 @@ impl App {
             frame_counter: 0,
             trace: VecDeque::new(),
             trace_paused: false,
+            paused_at_us: None,
             channels: vec![
                 Channel {
                     name: "CAN1".to_string(),
@@ -487,6 +489,7 @@ impl App {
     fn reset_time(&mut self) {
         self.t0 = Instant::now();
         self.frame_counter = 0;
+        self.paused_at_us = None;
         self.trace.clear();
         self.aggs.clear();
         for tx in &mut self.tx_list {
@@ -846,7 +849,15 @@ impl App {
             return;
         }
         if self.trace_paused {
+            if self.paused_at_us.is_none() {
+                self.paused_at_us = Some(self.now_us());
+            }
             return;
+        }
+        if let Some(t) = self.paused_at_us.take() {
+            // Skip the paused interval so replay resumes in place
+            // instead of fast-forwarding through it.
+            self.source.shift_time(self.now_us().saturating_sub(t));
         }
         let now = self.now_us();
         if self.last_tick_us > 0 && now > self.last_tick_us {

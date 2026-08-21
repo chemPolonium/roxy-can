@@ -9,4 +9,8 @@ pub trait FrameSource {
     fn is_done(&self) -> bool {
         false
     }
+
+    /// Advances the source's internal clock by `us`, used to skip over
+    /// time spent paused so playback resumes where it stopped.
+    fn shift_time(&mut self, _us: u64) {}
 }
