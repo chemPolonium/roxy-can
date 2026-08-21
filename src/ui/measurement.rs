@@ -67,9 +67,11 @@ fn content(app: &mut App, ui: &Ui) {
     tip(ui, "Add a Data observer (signal values)");
     ui.separator();
 
+    // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
     let flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
+        | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y
         | TableFlags::SIZING_STRETCH_PROP;
     let mut rm_trace: Option<usize> = None;

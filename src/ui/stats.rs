@@ -75,9 +75,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.text(format!("{} messages, {} frames", keys.len(), total));
     ui.separator();
 
+    // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
     let tbl_flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
+        | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y
         | TableFlags::SIZING_STRETCH_PROP;
     let Some(_table) = ui.begin_table_with_flags(format!("stats_table{i}"), 8, tbl_flags) else {
