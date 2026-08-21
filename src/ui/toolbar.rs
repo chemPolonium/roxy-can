@@ -40,7 +40,7 @@ fn shortcuts(app: &mut App, ui: &Ui) {
             if app.measuring {
                 app.stop();
             } else {
-                app.start_virtual();
+                app.start_selected();
             }
         }
         2 => app.toggle_record(),
@@ -66,6 +66,45 @@ pub fn render(app: &mut App, ui: &Ui) {
         .size([io.display_size[0], TOOLBAR_H], Condition::Always)
         .build(|| {
             ui.menu_bar(|| {
+                ui.menu("File", || {
+                    if ui.menu_item("Open DBC...\tCtrl+O") {
+                        app.pick_dbc();
+                    }
+                    if ui.menu_item("Open ASC (Replay)...") {
+                        app.pick_asc();
+                    }
+                    ui.separator();
+                    if ui.menu_item("Export Trace ASC...\tCtrl+E") {
+                        app.export_trace_dialog(0);
+                    }
+                    ui.separator();
+                    if ui.menu_item("Exit") {
+                        app.quit = true;
+                    }
+                });
+                ui.menu("Measurement", || {
+                    if ui
+                        .menu_item_config("Start\tF9")
+                        .enabled(!app.measuring)
+                        .build()
+                    {
+                        app.start_selected();
+                    }
+                    if ui
+                        .menu_item_config("Stop\tF9")
+                        .enabled(app.measuring)
+                        .build()
+                    {
+                        app.stop();
+                    }
+                    if ui
+                        .menu_item_config("Pause Trace")
+                        .selected(app.trace_paused)
+                        .build()
+                    {
+                        app.trace_paused = !app.trace_paused;
+                    }
+                });
                 ui.menu("View", || {
                     if ui
                         .menu_item_config("Buses")
@@ -98,16 +137,32 @@ pub fn render(app: &mut App, ui: &Ui) {
                 });
             });
 
+            ui.radio_button("Simulation", &mut app.run_mode, Mode::Virtual);
+            tip(
+                ui,
+                "Start runs the virtual buses driven by the Interactive Generator",
+            );
+            ui.same_line();
+            ui.radio_button("Replay", &mut app.run_mode, Mode::Replay);
+            tip(
+                ui,
+                "Start replays the loaded ASC log (opens a picker if none is loaded)",
+            );
+            vsep(ui);
             if app.measuring {
                 if ui.button("Stop") {
                     app.stop();
                 }
                 tip(ui, "Stop measurement (F9)");
             } else if ui.button("Start") {
-                app.start_virtual();
+                app.start_selected();
             }
             if !app.measuring {
-                tip(ui, "Start measurement (F9)");
+                let what = match app.run_mode {
+                    Mode::Virtual => "simulation",
+                    Mode::Replay => "replay",
+                };
+                tip(ui, &format!("Start {what} (F9)"));
             }
             ui.same_line();
             ui.checkbox("Pause", &mut app.trace_paused);

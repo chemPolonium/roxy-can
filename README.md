@@ -23,7 +23,7 @@
 
 | 按键 | 功能 |
 | --- | --- |
-| F9 | 启动 / 停止测量 |
+| F9 | 启动 / 停止测量（按工具栏 Simulation/Replay 开关选择的模式启动） |
 | Ctrl+R | 切换 ASC 录制 |
 | Ctrl+E | 导出第一个 Trace 窗口为 ASC |
 | Ctrl+O | 打开 DBC |
@@ -44,7 +44,7 @@ cargo test
 
 ## 使用
 
-1. 点击工具栏 **Start** 启动虚拟测量（默认两条总线：CAN1 挂 `assets/sample.dbc`、CAN2 挂 `assets/motbus.dbc`；可在 Buses 窗口增删改名）
+1. 用工具栏的 **Simulation / Replay** 开关选择模式，点 **Start** 启动：仿真模式跑虚拟总线，回放模式回放已加载的 ASC（未加载时弹出文件选择）；菜单栏 **File** 可打开 DBC/ASC、导出与退出，**Measurement** 可启停/暂停，**View** 开关各面板（默认两条总线：CAN1 挂 `assets/sample.dbc`、CAN2 挂 `assets/motbus.dbc`）
 2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分
 3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；工具栏的下拉框 + **Open DBC...** 也可加载；**Open ASC...** 用于回放
 4. 勾选 **Record** 录制 ASC；**Measurement Setup** 表里可总览所有观测器，点 "->" 打开并跳转到对应窗口，并在此新增/删除各类窗口、逐个导出

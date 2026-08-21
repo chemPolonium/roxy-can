@@ -261,7 +261,12 @@ impl ApplicationHandler for Program {
                 st.surface_desc.height = size.height.max(1);
                 st.surface.configure(&st.device, &st.surface_desc);
             }
-            WindowEvent::RedrawRequested => st.frame(),
+            WindowEvent::RedrawRequested => {
+                st.frame();
+                if st.app.quit {
+                    el.exit();
+                }
+            }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 for ch in text.chars() {
                     st.context.io_mut().add_input_character(ch);

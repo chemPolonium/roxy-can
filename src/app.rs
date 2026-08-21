@@ -47,6 +47,9 @@ pub struct GraphicsWindow {
     pub time_window_s: f64,
     pub stacked: bool,
     pub opened: bool,
+    pub t_offset_s: f64,
+    pub show_cursor: bool,
+    pub zoom_enabled: bool,
 }
 
 pub struct DataWindow {
@@ -137,6 +140,7 @@ pub struct TxMsg {
     pub next_t_us: u64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Virtual,
     Replay,
@@ -146,6 +150,8 @@ pub struct App {
     pub measuring: bool,
     pub recording: bool,
     pub mode: Mode,
+    pub run_mode: Mode,
+    pub quit: bool,
     pub t0: Instant,
     pub frame_counter: u64,
     pub trace: VecDeque<CanFrame>,
@@ -196,6 +202,8 @@ impl App {
             measuring: false,
             recording: false,
             mode: Mode::Virtual,
+            run_mode: Mode::Virtual,
+            quit: false,
             t0: Instant::now(),
             frame_counter: 0,
             trace: VecDeque::new(),
@@ -414,11 +422,27 @@ impl App {
         self.close_writer();
         self.source = Box::new(VirtualSource::new());
         self.mode = Mode::Virtual;
+        self.run_mode = Mode::Virtual;
         self.reset_time();
         self.measuring = true;
         self.status = "measuring (virtual)".to_string();
         if self.recording {
             self.open_writer();
+        }
+    }
+
+    /// Starts measurement in the mode selected by the Simulation/Replay
+    /// switch; replay falls back to a file picker when no ASC is loaded.
+    pub fn start_selected(&mut self) {
+        match self.run_mode {
+            Mode::Virtual => self.start_virtual(),
+            Mode::Replay => {
+                if self.asc_path.trim().is_empty() && self.last_record.trim().is_empty() {
+                    self.pick_asc();
+                } else {
+                    self.replay();
+                }
+            }
         }
     }
 
@@ -478,7 +502,12 @@ impl App {
             self.close_writer();
             self.recording = false;
         } else {
-            self.recording = self.open_writer();
+            self.recording = true;
+            // While stopped, the file is created by the next start_virtual;
+            // checking Record must not leave an empty record file behind.
+            if self.measuring {
+                self.recording = self.open_writer();
+            }
         }
     }
 
@@ -798,14 +827,15 @@ impl App {
                     return;
                 }
                 self.close_writer();
+                // Replay just re-emits an existing log; recording it would
+                // only duplicate the file, so drop the Record state.
+                self.recording = false;
                 self.source = Box::new(ReplaySource::new(frames.clone()));
                 self.mode = Mode::Replay;
+                self.run_mode = Mode::Replay;
                 self.reset_time();
                 self.measuring = true;
                 self.status = format!("replaying {} frames", frames.len());
-                if self.recording {
-                    self.open_writer();
-                }
             }
             Err(e) => self.status = format!("ASC read failed [{path}]: {e}"),
         }
@@ -1054,6 +1084,9 @@ impl App {
             time_window_s: 10.0,
             stacked: false,
             opened: true,
+            t_offset_s: 0.0,
+            show_cursor: true,
+            zoom_enabled: true,
         });
     }
 
@@ -1211,6 +1244,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn replay_after_recorded_simulation_creates_no_second_file() {
+        let mut app = App::new();
+        let path = std::env::temp_dir().join("roxy_can_replay_rec_test.asc");
+        app.record_path = path.to_string_lossy().to_string();
+        app.toggle_record();
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        app.stop();
+        let first = app.last_record.clone();
+        assert!(!first.is_empty(), "simulation should have recorded a file");
+        app.asc_path = first.clone();
+        app.replay();
+        assert!(!app.recording, "replay must drop the Record state");
+        assert_eq!(
+            app.last_record, first,
+            "replay must not open a second record file"
+        );
+        app.stop();
+        std::fs::remove_file(&first).ok();
     }
 
     #[test]
