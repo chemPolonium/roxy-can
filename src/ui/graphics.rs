@@ -1,8 +1,39 @@
 use crate::app::{App, PALETTE};
 use imgui::{Condition, Ui};
 
-const TIME_PRESETS: [f64; 4] = [5.0, 10.0, 30.0, 60.0];
+/// Zoom ladder: 1-2-5 steps from a close-up up to one hour, so every
+/// zoom level is a round, analysis-friendly window instead of an
+/// arbitrary ratio.
+const TIME_STEPS: [f64; 15] = [
+    0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
+];
 const PANEL_W: f32 = 190.0;
+
+/// Moves the current window along TIME_STEPS: wheel up zooms in (smaller
+/// window), wheel down zooms out. Snaps to the nearest step first when
+/// `tw` sits between steps.
+fn zoom_step(tw: f64, notches: f32) -> f64 {
+    let mut idx = 0;
+    let mut best = f64::INFINITY;
+    for (n, s) in TIME_STEPS.iter().enumerate() {
+        let d = (*s - tw).abs();
+        if d < best {
+            best = d;
+            idx = n;
+        }
+    }
+    let delta = -(notches.round() as i32);
+    let next = (idx as i32 + delta).clamp(0, TIME_STEPS.len() as i32 - 1);
+    TIME_STEPS[next as usize]
+}
+
+fn fmt_tw(tw: f64) -> String {
+    if tw == tw.round() {
+        format!("{:.0}", tw)
+    } else {
+        format!("{:.1}", tw)
+    }
+}
 
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.graphics.len();
@@ -39,22 +70,38 @@ pub fn render(app: &mut App, ui: &Ui) {
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let tw = app.graphics[i].time_window_s;
-    for &preset in &TIME_PRESETS {
-        let label = if (tw - preset).abs() < 1e-9 {
-            format!("[{}s]", preset as i32)
-        } else {
-            format!("{}s", preset as i32)
-        };
-        if ui.button(&label) {
-            app.graphics[i].time_window_s = preset;
-        }
-        ui.same_line();
+    let offset = app.graphics[i].t_offset_s;
+    let range = if offset > 0.0 {
+        format!("{}s window, {:.1}s behind live", fmt_tw(tw), offset)
+    } else {
+        format!("{}s window", fmt_tw(tw))
+    };
+    ui.text(&range);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Current time range (mouse wheel to zoom)");
     }
     let mut stacked = app.graphics[i].stacked;
     ui.radio_button("Overlay", &mut stacked, false);
     ui.same_line();
     ui.radio_button("One plot per signal", &mut stacked, true);
     app.graphics[i].stacked = stacked;
+    ui.same_line();
+    ui.checkbox("Cursor", &mut app.graphics[i].show_cursor);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Show a measurement cursor that follows the mouse");
+    }
+    ui.same_line();
+    ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Mouse wheel zooms the time axis, left-drag pans");
+    }
+    ui.same_line();
+    if ui.button("Live") {
+        app.graphics[i].t_offset_s = 0.0;
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Jump back to the live edge");
+    }
 
     ui.separator();
     let avail = ui.content_region_avail();
@@ -79,8 +126,9 @@ fn left_panel(app: &mut App, ui: &Ui, i: usize) {
 }
 
 /// Right area: draws plots directly on the draw list and reserves exactly
-/// the available space, so no scrollbar appears.
-fn plot_area(app: &App, ui: &Ui, i: usize) {
+/// the available space, so no scrollbar appears. Also handles mouse-wheel
+/// zoom, left-drag pan, and the measurement cursor.
+fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     let avail = ui.content_region_avail();
     let w = avail[0].max(40.0);
     let h = avail[1].max(40.0);
@@ -97,6 +145,52 @@ fn plot_area(app: &App, ui: &Ui, i: usize) {
         .filter(|s| s.visible)
         .map(|s| s.key.clone())
         .collect();
+
+    // Never pan or zoom further back than the oldest stored sample.
+    let mut oldest = f64::INFINITY;
+    for key in &keys {
+        if let Some(sub) = app.subs.get(key)
+            && let Some(&(t, _)) = sub.history.front()
+        {
+            oldest = oldest.min(t as f64 / 1e6);
+        }
+    }
+    let max_off = if oldest.is_finite() {
+        (t_now - oldest).max(0.0)
+    } else {
+        0.0
+    };
+
+    let io = ui.io();
+    let mx = io.mouse_pos[0];
+    let my = io.mouse_pos[1];
+    let hover = mx >= x0 && mx <= x0 + w && my >= y0 && my <= y0 + h;
+    if hover && app.graphics[i].zoom_enabled {
+        if io.mouse_down[0] && io.mouse_delta[0] != 0.0 {
+            let dt = tw as f32 * io.mouse_delta[0] / w;
+            let off = &mut app.graphics[i].t_offset_s;
+            *off = (*off + dt as f64).clamp(0.0, max_off);
+        }
+        if io.mouse_wheel != 0.0 {
+            let new_tw = zoom_step(tw, io.mouse_wheel);
+            if (new_tw - tw).abs() > 1e-9 {
+                let frac = ((mx - x0) / w) as f64;
+                let right = t_now - app.graphics[i].t_offset_s;
+                let t_mouse = right - tw * frac;
+                app.graphics[i].time_window_s = new_tw;
+                let new_right = t_mouse + new_tw * frac;
+                app.graphics[i].t_offset_s = (t_now - new_right).clamp(0.0, max_off);
+            }
+        }
+    }
+
+    let t_right = t_now - app.graphics[i].t_offset_s;
+    let cursor = if hover && app.graphics[i].show_cursor {
+        let frac = ((mx - x0) / w) as f64;
+        Some((mx, t_right - tw * (1.0 - frac)))
+    } else {
+        None
+    };
 
     if keys.is_empty() {
         draw_plot_frame(&dl, x0, y0, w, h);
@@ -116,12 +210,13 @@ fn plot_area(app: &App, ui: &Ui, i: usize) {
                 w,
                 ph,
                 &[key.clone()],
-                t_now,
+                t_right,
                 tw,
+                cursor,
             );
         }
     } else {
-        draw_plot(&dl, app, x0, y0, w, h, &keys, t_now, tw);
+        draw_plot(&dl, app, x0, y0, w, h, &keys, t_right, tw, cursor);
     }
 
     ui.dummy([w, h]);
@@ -154,11 +249,12 @@ fn draw_plot(
     w: f32,
     h: f32,
     keys: &[(u8, u32, String)],
-    t_now: f64,
+    t_right: f64,
     tw: f64,
+    cursor: Option<(f32, f64)>,
 ) {
     draw_plot_frame(dl, x0, y0, w, h);
-    let t_min = t_now - tw;
+    let t_min = t_right - tw;
 
     let mut vmin = f64::INFINITY;
     let mut vmax = f64::NEG_INFINITY;
@@ -262,11 +358,68 @@ fn draw_plot(
         }
     }
 
-    if h > 34.0 {
-        dl.add_text(
-            [x0 + w - 90.0, y0 + 4.0],
-            [0.5, 0.5, 0.6, 1.0],
-            format!("{} s window", tw),
-        );
+    if let Some((cx, ct)) = cursor {
+        dl.add_line([cx, y0], [cx, y0 + h], [0.95, 0.85, 0.4, 0.9])
+            .build();
+        let left_side = cx > x0 + w - 120.0;
+        let time_txt = format!("{:.3}s", ct);
+        let tx = if left_side {
+            cx - 8.0 - time_txt.len() as f32 * 6.5
+        } else {
+            cx + 6.0
+        };
+        dl.add_text([tx, y0 + h - 13.0], [0.95, 0.85, 0.4, 1.0], time_txt);
+        let t_us = ct * 1e6;
+        let mut row = 0;
+        for key in keys {
+            let Some(sub) = app.subs.get(key) else {
+                continue;
+            };
+            let txt = match value_at(&sub.history, t_us) {
+                Some(v) => format!("{} = {}", key.2, fmt_val(v)),
+                None => format!("{} = -", key.2),
+            };
+            let lx = if left_side {
+                cx - 8.0 - txt.len() as f32 * 6.5
+            } else {
+                cx + 6.0
+            };
+            dl.add_text(
+                [lx, y0 + 4.0 + row as f32 * 12.0],
+                PALETTE[sub.color % PALETTE.len()],
+                txt,
+            );
+            row += 1;
+        }
+    }
+}
+
+/// Last sample at or before the given time (step-signal semantics).
+fn value_at(history: &std::collections::VecDeque<(u64, f64)>, t_us: f64) -> Option<f64> {
+    if !t_us.is_finite() || t_us < 0.0 {
+        return None;
+    }
+    let t = t_us as u64;
+    let idx = history.partition_point(|&(ts, _)| ts <= t);
+    if idx == 0 {
+        None
+    } else {
+        history.get(idx - 1).map(|&(_, v)| v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zoom_step;
+
+    #[test]
+    fn zoom_walks_the_step_ladder() {
+        assert_eq!(zoom_step(10.0, 1.0), 5.0, "wheel up zooms in");
+        assert_eq!(zoom_step(10.0, -1.0), 20.0, "wheel down zooms out");
+        assert_eq!(zoom_step(0.2, 1.0), 0.1, "zooms down to the 0.1s step");
+        assert_eq!(zoom_step(0.1, 1.0), 0.1, "clamped at the close-up end");
+        assert_eq!(zoom_step(3600.0, -1.0), 3600.0, "clamped at 1 h");
+        assert_eq!(zoom_step(12.0, -1.0), 20.0, "snaps to nearest step first");
+        assert_eq!(zoom_step(10.0, 0.3), 10.0, "sub-notch deltas are ignored");
     }
 }
