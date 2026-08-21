@@ -44,7 +44,7 @@ cargo test
 
 ## 使用
 
-1. 点击工具栏 **Start** 启动虚拟测量（默认两条总线 CAN1/CAN2，各加载 `assets/sample.dbc`；可在 Buses 窗口增删改名）
+1. 点击工具栏 **Start** 启动虚拟测量（默认两条总线：CAN1 挂 `assets/sample.dbc`、CAN2 挂 `assets/motbus.dbc`；可在 Buses 窗口增删改名）
 2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分
 3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；工具栏的下拉框 + **Open DBC...** 也可加载；**Open ASC...** 用于回放
 4. 勾选 **Record** 录制 ASC；**Measurement Setup** 表里可总览所有观测器，点 "->" 打开并跳转到对应窗口，并在此新增/删除各类窗口、逐个导出

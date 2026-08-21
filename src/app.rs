@@ -209,7 +209,7 @@ impl App {
                 Channel {
                     name: "CAN2".to_string(),
                     dbc: None,
-                    dbc_path: "assets/sample.dbc".to_string(),
+                    dbc_path: "assets/motbus.dbc".to_string(),
                 },
             ],
             dbc_pick: 0,
@@ -1297,15 +1297,15 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.channels.len(), 2);
         for (ch, c) in app.channels.iter().enumerate() {
-            assert!(c.dbc.is_some(), "CAN{} should load the sample DBC", ch + 1);
+            assert!(c.dbc.is_some(), "CAN{} should load its DBC", ch + 1);
         }
         assert!(
             app.tx_list.iter().any(|t| t.channel == 0 && t.id == 0x100)
-                && app.tx_list.iter().any(|t| t.channel == 1 && t.id == 0x100),
+                && app.tx_list.iter().any(|t| t.channel == 1 && t.id == 0xC8),
             "generator pre-populated on both buses"
         );
         for tx in &mut app.tx_list {
-            if tx.id == 0x100 {
+            if (tx.channel == 0 && tx.id == 0x100) || (tx.channel == 1 && tx.id == 0xC8) {
                 tx.active = true;
                 tx.cycle_us = 10_000;
             }
@@ -1316,10 +1316,10 @@ mod tests {
             app.update();
         }
         let a = app.aggs.get(&(0, 0x100)).expect("CAN1 aggregate");
-        let b = app.aggs.get(&(1, 0x100)).expect("CAN2 aggregate");
+        let b = app.aggs.get(&(1, 0xC8)).expect("CAN2 aggregate");
         assert!(a.count >= 3, "CAN1 frames: {}", a.count);
         assert!(b.count >= 3, "CAN2 frames: {}", b.count);
-        assert!(app.trace.iter().any(|f| f.channel == 1 && f.id == 0x100));
+        assert!(app.trace.iter().any(|f| f.channel == 1 && f.id == 0xC8));
         app.stop();
     }
 
