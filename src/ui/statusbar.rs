@@ -28,16 +28,23 @@ pub fn render(app: &App, ui: &Ui) {
             ui.text_colored(color, state);
             ui.same_line();
             ui.text(format!(
-                "| frames: {}  | {:.0} f/s  | load: {:.1}% @500k  | trace: {}  | signals: {}",
+                "| frames: {:>8}  | {:7.0} f/s  | trace: {:>6}  | signals: {:>4}",
                 app.frame_counter,
                 app.frame_rate,
-                app.bus_load,
                 app.trace.len(),
                 app.subs.len()
             ));
             if app.recording {
                 ui.same_line();
                 ui.text_colored([1.0, 0.4, 0.4, 1.0], "| REC");
+            }
+            if app.measuring
+                && matches!(app.mode, Mode::Replay)
+                && let Some((pos_s, dur_s)) = app.replay_position()
+            {
+                ui.same_line();
+                ui.align_text_to_frame_padding();
+                ui.text(format!("| {:.2} / {:.2}s", pos_s.min(dur_s), dur_s));
             }
 
             let p = ui.cursor_screen_pos();

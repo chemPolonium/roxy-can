@@ -1,0 +1,474 @@
+//! Workspace persistence: buses, analysis windows, signals, filters and the
+//! generator are saved as JSON on exit and restored at startup. Window
+//! positions and docking live in imgui's own `roxy-can.ini`.
+use serde::{Deserialize, Serialize};
+
+use crate::app::{
+    App, Channel, DataWindow, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin,
+};
+
+pub const CONFIG_PATH: &str = "roxy-can.json";
+
+fn true_default() -> bool {
+    true
+}
+fn one_default() -> f64 {
+    1.0
+}
+fn sixty_default() -> f64 {
+    60.0
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ChannelCfg {
+    pub name: String,
+    pub dbc_path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TraceCfg {
+    pub name: String,
+    pub opened: bool,
+    pub scope: SigScope,
+    #[serde(default)]
+    pub manual: Vec<(u8, u32)>,
+    #[serde(default)]
+    pub filter: String,
+    #[serde(default)]
+    pub dir: usize,
+    #[serde(default)]
+    pub dbc_only: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MsgCfg {
+    pub name: String,
+    pub opened: bool,
+    pub scope: SigScope,
+    #[serde(default)]
+    pub manual: Vec<(u8, u32)>,
+    #[serde(default)]
+    pub filter: String,
+    #[serde(default)]
+    pub dbc_only: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StatsCfg {
+    pub name: String,
+    pub opened: bool,
+    pub scope: SigScope,
+    #[serde(default)]
+    pub manual: Vec<(u8, u32)>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignalCfg {
+    pub ch: u8,
+    pub id: u32,
+    pub signal: String,
+    #[serde(default = "true_default")]
+    pub visible: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GfxCfg {
+    pub name: String,
+    pub opened: bool,
+    #[serde(default)]
+    pub signals: Vec<SignalCfg>,
+    #[serde(default = "sixty_default")]
+    pub time_window_s: f64,
+    #[serde(default)]
+    pub stacked: bool,
+    #[serde(default)]
+    pub show_cursor: bool,
+    #[serde(default = "true_default")]
+    pub zoom_enabled: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DataCfg {
+    pub name: String,
+    pub opened: bool,
+    #[serde(default)]
+    pub signals: Vec<SignalCfg>,
+    #[serde(default = "true_default")]
+    pub viz_bar: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TxCfg {
+    pub channel: u8,
+    pub id: u32,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub data_text: String,
+    #[serde(default)]
+    pub data: Vec<u8>,
+    #[serde(default = "cycle_default")]
+    pub cycle_us: u64,
+}
+
+fn cycle_default() -> u64 {
+    100_000
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Counters {
+    #[serde(default)]
+    pub trace: usize,
+    #[serde(default)]
+    pub msg: usize,
+    #[serde(default)]
+    pub stats: usize,
+    #[serde(default)]
+    pub graphics: usize,
+    #[serde(default)]
+    pub data: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub channels: Vec<ChannelCfg>,
+    #[serde(default)]
+    pub bus_counter: usize,
+    #[serde(default = "true_default")]
+    pub show_tx: bool,
+    #[serde(default = "true_default")]
+    pub show_network: bool,
+    #[serde(default = "true_default")]
+    pub show_measurement: bool,
+    #[serde(default)]
+    pub show_buses: bool,
+    #[serde(default)]
+    pub show_id_filter: bool,
+    #[serde(default = "one_default")]
+    pub replay_speed: f64,
+    #[serde(default)]
+    pub trace_windows: Vec<TraceCfg>,
+    #[serde(default)]
+    pub msg_windows: Vec<MsgCfg>,
+    #[serde(default)]
+    pub stats_windows: Vec<StatsCfg>,
+    #[serde(default)]
+    pub graphics: Vec<GfxCfg>,
+    #[serde(default)]
+    pub data_windows: Vec<DataCfg>,
+    #[serde(default)]
+    pub tx: Vec<TxCfg>,
+    #[serde(default)]
+    pub counters: Counters,
+    #[serde(default)]
+    pub recent_dbc: Vec<String>,
+    #[serde(default)]
+    pub recent_asc: Vec<String>,
+}
+
+fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
+    signals
+        .iter()
+        .map(|s| SignalCfg {
+            ch: s.key.0,
+            id: s.key.1,
+            signal: s.key.2.clone(),
+            visible: s.visible,
+        })
+        .collect()
+}
+
+fn sig_keys(signals: Vec<SignalCfg>) -> Vec<GfxSignal> {
+    signals
+        .into_iter()
+        .map(|s| GfxSignal {
+            key: (s.ch, s.id, s.signal),
+            visible: s.visible,
+        })
+        .collect()
+}
+
+impl Config {
+    pub fn from_app(app: &App) -> Self {
+        Config {
+            channels: app
+                .channels
+                .iter()
+                .map(|c| ChannelCfg {
+                    name: c.name.clone(),
+                    dbc_path: c.dbc_path.clone(),
+                })
+                .collect(),
+            bus_counter: app.bus_counter(),
+            show_tx: app.show_tx,
+            show_network: app.show_network,
+            show_measurement: app.show_measurement,
+            show_buses: app.show_buses,
+            show_id_filter: app.show_id_filter,
+            replay_speed: app.replay_speed,
+            trace_windows: app
+                .trace_windows
+                .iter()
+                .map(|w| TraceCfg {
+                    name: w.name.clone(),
+                    opened: w.opened,
+                    scope: w.scope,
+                    manual: w.manual.iter().copied().collect(),
+                    filter: w.filter.clone(),
+                    dir: w.dir,
+                    dbc_only: w.dbc_only,
+                })
+                .collect(),
+            msg_windows: app
+                .msg_windows
+                .iter()
+                .map(|w| MsgCfg {
+                    name: w.name.clone(),
+                    opened: w.opened,
+                    scope: w.scope,
+                    manual: w.manual.iter().copied().collect(),
+                    filter: w.filter.clone(),
+                    dbc_only: w.dbc_only,
+                })
+                .collect(),
+            stats_windows: app
+                .stats_windows
+                .iter()
+                .map(|w| StatsCfg {
+                    name: w.name.clone(),
+                    opened: w.opened,
+                    scope: w.scope,
+                    manual: w.manual.iter().copied().collect(),
+                })
+                .collect(),
+            graphics: app
+                .graphics
+                .iter()
+                .map(|g| GfxCfg {
+                    name: g.name.clone(),
+                    opened: g.opened,
+                    signals: sig_cfgs(&g.signals),
+                    time_window_s: g.time_window_s,
+                    stacked: g.stacked,
+                    show_cursor: g.show_cursor,
+                    zoom_enabled: g.zoom_enabled,
+                })
+                .collect(),
+            data_windows: app
+                .data_windows
+                .iter()
+                .map(|d| DataCfg {
+                    name: d.name.clone(),
+                    opened: d.opened,
+                    signals: sig_cfgs(&d.signals),
+                    viz_bar: d.viz_bar,
+                })
+                .collect(),
+            tx: app
+                .tx_list
+                .iter()
+                .map(|t| TxCfg {
+                    channel: t.channel,
+                    id: t.id,
+                    active: t.active,
+                    data_text: t.data_text.clone(),
+                    data: t.data[..t.dlc.min(8) as usize].to_vec(),
+                    cycle_us: t.cycle_us,
+                })
+                .collect(),
+            counters: app.window_counters(),
+            recent_dbc: app.recent_dbc.clone(),
+            recent_asc: app.recent_asc.clone(),
+        }
+    }
+
+    /// Overwrites the freshly built defaults with the saved workspace.
+    pub fn apply(self, app: &mut App) {
+        if !self.channels.is_empty() {
+            app.channels = self
+                .channels
+                .into_iter()
+                .map(|c| Channel {
+                    name: c.name,
+                    dbc: None,
+                    dbc_path: c.dbc_path,
+                })
+                .collect();
+            app.set_bus_counter(self.bus_counter.max(app.channels.len()));
+            app.load_dbcs();
+        }
+        // The generator is rebuilt from the (possibly new) DBCs, then the
+        // saved per-message state is overlaid.
+        app.tx_list.clear();
+        let ids: Vec<(u8, u32)> = app
+            .channels
+            .iter()
+            .enumerate()
+            .flat_map(|(ch, c)| {
+                c.dbc
+                    .as_ref()
+                    .map(|db| db.order.iter().map(move |&id| (ch as u8, id)))
+                    .into_iter()
+                    .flatten()
+            })
+            .collect();
+        for (ch, id) in ids {
+            app.add_tx(ch, id);
+        }
+        for t in self.tx {
+            if let Some(m) = app
+                .tx_list
+                .iter_mut()
+                .find(|m| m.channel == t.channel && m.id == t.id)
+            {
+                m.active = t.active;
+                m.cycle_us = t.cycle_us.max(1_000);
+                if !t.data_text.is_empty() {
+                    m.data_text = t.data_text;
+                    let mut data = [0u8; 8];
+                    data[..t.data.len().min(8)].copy_from_slice(&t.data[..t.data.len().min(8)]);
+                    m.data = data;
+                }
+            }
+        }
+        if !self.trace_windows.is_empty() {
+            app.trace_windows = self
+                .trace_windows
+                .into_iter()
+                .map(|w| TraceWin {
+                    name: w.name,
+                    opened: w.opened,
+                    scope: w.scope,
+                    manual: w.manual.into_iter().collect(),
+                    filter: w.filter,
+                    dir: w.dir.min(2),
+                    dbc_only: w.dbc_only,
+                })
+                .collect();
+        }
+        if !self.msg_windows.is_empty() {
+            app.msg_windows = self
+                .msg_windows
+                .into_iter()
+                .map(|w| MsgWin {
+                    name: w.name,
+                    opened: w.opened,
+                    scope: w.scope,
+                    manual: w.manual.into_iter().collect(),
+                    filter: w.filter,
+                    dbc_only: w.dbc_only,
+                })
+                .collect();
+        }
+        if !self.stats_windows.is_empty() {
+            app.stats_windows = self
+                .stats_windows
+                .into_iter()
+                .map(|w| StatsWin {
+                    name: w.name,
+                    opened: w.opened,
+                    scope: w.scope,
+                    manual: w.manual.into_iter().collect(),
+                })
+                .collect();
+        }
+        if !self.graphics.is_empty() {
+            app.graphics = self
+                .graphics
+                .into_iter()
+                .map(|g| GraphicsWindow {
+                    name: g.name,
+                    signals: sig_keys(g.signals),
+                    time_window_s: g.time_window_s.clamp(1.0, 3600.0),
+                    stacked: g.stacked,
+                    opened: g.opened,
+                    t_offset_s: 0.0,
+                    show_cursor: g.show_cursor,
+                    zoom_enabled: g.zoom_enabled,
+                })
+                .collect();
+        }
+        if !self.data_windows.is_empty() {
+            app.data_windows = self
+                .data_windows
+                .into_iter()
+                .map(|d| DataWindow {
+                    name: d.name,
+                    signals: sig_keys(d.signals),
+                    opened: d.opened,
+                    viz_bar: d.viz_bar,
+                })
+                .collect();
+        }
+        app.show_tx = self.show_tx;
+        app.show_network = self.show_network;
+        app.show_measurement = self.show_measurement;
+        app.show_buses = self.show_buses;
+        app.show_id_filter = self.show_id_filter;
+        app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
+        app.set_window_counters(self.counters);
+        app.recent_dbc = self.recent_dbc;
+        app.recent_asc = self.recent_asc;
+    }
+}
+
+impl App {
+    pub fn save_config(&self) {
+        if let Ok(json) = serde_json::to_string_pretty(&Config::from_app(self)) {
+            let _ = std::fs::write(CONFIG_PATH, json);
+        }
+    }
+
+    /// Restores the saved workspace if one exists; silently keeps the
+    /// defaults otherwise.
+    pub fn load_config(&mut self) {
+        let Ok(text) = std::fs::read_to_string(CONFIG_PATH) else {
+            return;
+        };
+        match serde_json::from_str::<Config>(&text) {
+            Ok(cfg) => cfg.apply(self),
+            Err(e) => self.status = format!("config ignored: {e}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_round_trips_through_json() {
+        let mut app = App::new();
+        app.show_id_filter = true;
+        app.replay_speed = 2.0;
+        app.trace_windows[0].filter = "Motor".to_string();
+        app.trace_windows[0].scope = SigScope::Bus(1);
+        app.trace_windows[0].manual.insert((1, 0x123));
+        app.tx_list[0].active = true;
+        app.tx_list[0].cycle_us = 50_000;
+
+        let json = serde_json::to_string(&Config::from_app(&app)).unwrap();
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+
+        assert!(restored.show_id_filter);
+        assert_eq!(restored.replay_speed, 2.0);
+        assert_eq!(restored.trace_windows[0].filter, "Motor");
+        assert_eq!(restored.trace_windows[0].scope, SigScope::Bus(1));
+        assert!(restored.trace_windows[0].manual.contains(&(1, 0x123)));
+        assert!(restored.tx_list[0].active);
+        assert_eq!(restored.tx_list[0].cycle_us, 50_000);
+        assert_eq!(restored.channels.len(), app.channels.len());
+    }
+
+    #[test]
+    fn missing_fields_fall_back_to_defaults() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.show_tx);
+        assert_eq!(cfg.replay_speed, 1.0);
+        assert!(cfg.channels.is_empty());
+    }
+}

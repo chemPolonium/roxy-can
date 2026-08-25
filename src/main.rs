@@ -2,6 +2,7 @@
 
 mod app;
 mod can;
+mod config;
 mod dbc;
 mod decode;
 mod log;
@@ -23,7 +24,8 @@ use winit::window::{Window, WindowId};
 static IME_REQ: std::sync::Mutex<(bool, f32, f32, f32)> =
     std::sync::Mutex::new((false, 0.0, 0.0, 0.0));
 
-/// Pending global shortcut: 1=start/stop, 2=record, 3=export, 4=open DBC.
+/// Pending global shortcut: 1=start/stop, 2=record, 3=export, 4=open DBC,
+/// 5=play/pause, 6=slower, 7=faster, 8=jump to the live edge.
 pub static CMD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 unsafe extern "C" fn ime_data_callback(
@@ -97,7 +99,7 @@ impl State {
         let mut context = imgui::Context::create();
         let mut platform = WinitPlatform::new(&mut context);
         platform.attach_window(context.io_mut(), &window, HiDpiMode::Default);
-        context.set_ini_filename(None);
+        context.set_ini_filename(Some(std::path::PathBuf::from("roxy-can.ini")));
         context.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().config_windows_move_from_title_bar_only = true;
         context.io_mut().set_platform_ime_data_fn = Some(ime_data_callback);
@@ -149,6 +151,9 @@ impl State {
             },
         );
 
+        let mut app = app::App::new();
+        app.load_config();
+
         State {
             context,
             platform,
@@ -158,7 +163,7 @@ impl State {
             window,
             surface,
             surface_desc,
-            app: app::App::new(),
+            app,
             last_frame: Instant::now(),
             last_cursor: None,
             ime_pos: None,
@@ -258,6 +263,7 @@ impl ApplicationHandler for Program {
         let st = self.state.as_mut().unwrap();
         match &event {
             WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::DroppedFile(path) => st.app.open_dropped(path),
             WindowEvent::Resized(size) => {
                 st.surface_desc.width = size.width.max(1);
                 st.surface_desc.height = size.height.max(1);
@@ -287,6 +293,13 @@ impl ApplicationHandler for Program {
                             "o" => 4,
                             _ => 0,
                         },
+                        (Key::Named(NamedKey::Space), false) => 5,
+                        (Key::Character(c), false) => match c.as_str() {
+                            "-" => 6,
+                            "+" | "=" => 7,
+                            _ => 0,
+                        },
+                        (Key::Named(NamedKey::Home), _) => 8,
                         _ => 0,
                     };
                     if code != 0 {
@@ -308,6 +321,12 @@ impl ApplicationHandler for Program {
             st.window.request_redraw();
             st.platform
                 .handle_event::<()>(st.context.io_mut(), &st.window, &Event::AboutToWait);
+        }
+    }
+
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        if let Some(st) = &mut self.state {
+            st.app.save_config();
         }
     }
 }

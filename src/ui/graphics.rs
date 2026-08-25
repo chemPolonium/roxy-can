@@ -12,7 +12,7 @@ const PANEL_W: f32 = 190.0;
 /// Moves the current window along TIME_STEPS: wheel up zooms in (smaller
 /// window), wheel down zooms out. Snaps to the nearest step first when
 /// `tw` sits between steps.
-fn zoom_step(tw: f64, notches: f32) -> f64 {
+pub(crate) fn zoom_step(tw: f64, notches: f32) -> f64 {
     let mut idx = 0;
     let mut best = f64::INFINITY;
     for (n, s) in TIME_STEPS.iter().enumerate() {
@@ -27,7 +27,7 @@ fn zoom_step(tw: f64, notches: f32) -> f64 {
     TIME_STEPS[next as usize]
 }
 
-fn fmt_tw(tw: f64) -> String {
+pub(crate) fn fmt_tw(tw: f64) -> String {
     if tw == tw.round() {
         format!("{:.0}", tw)
     } else {
@@ -60,7 +60,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 Condition::FirstUseEver,
             )
             .size([760.0, (disp_h * 0.40).max(240.0)], Condition::FirstUseEver)
-            .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
             .build(|| {
                 window_content(app, ui, i);
             });
@@ -222,7 +221,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     ui.dummy([w, h]);
 }
 
-fn draw_plot_frame(dl: &imgui::DrawListMut<'_>, x0: f32, y0: f32, w: f32, h: f32) {
+pub(crate) fn draw_plot_frame(dl: &imgui::DrawListMut<'_>, x0: f32, y0: f32, w: f32, h: f32) {
     dl.add_rect([x0, y0], [x0 + w, y0 + h], [0.08, 0.08, 0.10, 1.0])
         .filled(true)
         .build();

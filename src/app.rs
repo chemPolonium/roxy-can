@@ -13,6 +13,8 @@ pub const TOOLBAR_H: f32 = 68.0;
 pub const STATUSBAR_H: f32 = 26.0;
 const HISTORY_LIMIT: usize = 4_000;
 const SAMPLE_INTERVAL_US: u64 = 50_000;
+/// Speed ladder shared by the toolbar combo and the slower/faster buttons.
+pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 
 pub const PALETTE: [[f32; 4]; 8] = [
     [0.30, 0.80, 1.00, 1.0],
@@ -30,6 +32,10 @@ pub struct Subscription {
     pub unit: String,
     pub min: f64,
     pub max: f64,
+    /// Running average over the sampled values.
+    pub avg: f64,
+    sum: f64,
+    n: u64,
     pub last_update_us: u64,
     pub last_sample_us: u64,
     pub history: VecDeque<(u64, f64)>,
@@ -56,6 +62,9 @@ pub struct DataWindow {
     pub name: String,
     pub signals: Vec<GfxSignal>,
     pub opened: bool,
+    /// Visualization column style: true = value bar, false = sparkline;
+    /// clicking the column toggles it.
+    pub viz_bar: bool,
 }
 
 /// One CAN bus: user-defined name, a DBC database, and the path it came from.
@@ -66,7 +75,7 @@ pub struct Channel {
 }
 
 /// Which buses/messages an analysis window looks at.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SigScope {
     All,
     Bus(u8),
@@ -162,6 +171,8 @@ pub struct App {
     pub status: String,
     pub asc_path: String,
     asc_frames: Vec<CanFrame>,
+    pub recent_dbc: Vec<String>,
+    pub recent_asc: Vec<String>,
     pub replay_speed: f64,
     pub record_path: String,
     pub last_record: String,
@@ -174,6 +185,7 @@ pub struct App {
     pub show_buses: bool,
     pub show_id_filter: bool,
     pub id_filter_search: String,
+    pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
     pub net_selected: usize,
@@ -181,7 +193,6 @@ pub struct App {
     pub tx_pick: usize,
     pub last_tick_us: u64,
     pub frame_rate: f64,
-    pub bus_load: f64,
     pub trace_windows: Vec<TraceWin>,
     pub msg_windows: Vec<MsgWin>,
     pub stats_windows: Vec<StatsWin>,
@@ -197,6 +208,13 @@ pub struct App {
     source: Box<dyn FrameSource>,
     writer: Option<AscWriter>,
     buf: Vec<CanFrame>,
+}
+
+/// Newest-first recent list: dedups and caps at 8 entries.
+fn push_recent(list: &mut Vec<String>, path: String) {
+    list.retain(|p| p != &path);
+    list.insert(0, path);
+    list.truncate(8);
 }
 
 impl App {
@@ -228,6 +246,8 @@ impl App {
             status: "stopped".to_string(),
             asc_path: String::new(),
             asc_frames: Vec::new(),
+            recent_dbc: Vec::new(),
+            recent_asc: Vec::new(),
             replay_speed: 1.0,
             record_path: String::new(),
             last_record: String::new(),
@@ -240,6 +260,7 @@ impl App {
             show_buses: false,
             show_id_filter: false,
             id_filter_search: String::new(),
+            gen_search: String::new(),
             popup_target: None,
             focus_title: None,
             net_selected: 0,
@@ -247,7 +268,6 @@ impl App {
             tx_pick: 0,
             last_tick_us: 0,
             frame_rate: 0.0,
-            bus_load: 0.0,
             trace_windows: Vec::new(),
             msg_windows: Vec::new(),
             stats_windows: Vec::new(),
@@ -438,7 +458,7 @@ impl App {
     }
 
     /// Starts measurement in the mode selected by the Simulation/Replay
-    /// switch; replay falls back to a file picker when no ASC is loaded.
+    /// dropdown; replay falls back to a file picker when no ASC is loaded.
     pub fn start_selected(&mut self) {
         match self.run_mode {
             Mode::Virtual => self.start_virtual(),
@@ -453,6 +473,18 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Switches between simulation and replay; a running measurement is
+    /// stopped first so the transport never outlives its source.
+    pub fn switch_run_mode(&mut self, mode: Mode) {
+        if mode == self.run_mode {
+            return;
+        }
+        if self.measuring {
+            self.stop();
+        }
+        self.run_mode = mode;
     }
 
     fn can_replay(&self) -> bool {
@@ -502,6 +534,8 @@ impl App {
     fn reset_time(&mut self) {
         self.t0 = Instant::now();
         self.frame_counter = 0;
+        // A fresh start must not inherit the previous run's pause state.
+        self.trace_paused = false;
         self.paused_at_us = None;
         self.trace.clear();
         self.aggs.clear();
@@ -527,9 +561,9 @@ impl App {
         }
     }
 
-    pub fn load_channel(&mut self, ch: usize) {
+    pub fn load_channel(&mut self, ch: usize) -> bool {
         let Some(channel) = self.channels.get_mut(ch) else {
-            return;
+            return false;
         };
         let name = channel.name.clone();
         match std::fs::read_to_string(channel.dbc_path.trim()) {
@@ -537,10 +571,17 @@ impl App {
                 Ok(table) => {
                     self.status = format!("{name} DBC loaded: {} messages", table.order.len());
                     channel.dbc = Some(table);
+                    true
                 }
-                Err(e) => self.status = format!("{name} DBC error: {e}"),
+                Err(e) => {
+                    self.status = format!("{name} DBC error: {e}");
+                    false
+                }
             },
-            Err(e) => self.status = format!("{name} DBC read failed: {e}"),
+            Err(e) => {
+                self.status = format!("{name} DBC read failed: {e}");
+                false
+            }
         }
     }
 
@@ -558,10 +599,7 @@ impl App {
             .add_filter("DBC files", &["dbc"])
             .pick_file()
         {
-            if let Some(channel) = self.channels.get_mut(ch) {
-                channel.dbc_path = p.to_string_lossy().to_string();
-            }
-            self.load_channel(ch);
+            self.open_dbc_for(ch, p.to_string_lossy().into_owned());
         }
     }
 
@@ -573,11 +611,50 @@ impl App {
             .add_filter("DBC files", &["dbc"])
             .pick_file()
         {
-            if let Some(channel) = self.channels.get_mut(ch) {
-                channel.dbc_path = p.to_string_lossy().to_string();
-            }
-            self.load_channel(ch);
+            self.open_dbc_for(ch, p.to_string_lossy().into_owned());
         }
+    }
+
+    /// Sets a bus's DBC path and loads it; successful parses are recorded
+    /// in the recent list.
+    pub fn open_dbc_for(&mut self, ch: usize, path: String) {
+        if let Some(channel) = self.channels.get_mut(ch) {
+            channel.dbc_path = path.clone();
+        }
+        if self.load_channel(ch) {
+            self.push_recent_dbc(path);
+        }
+    }
+
+    /// Opens a file dropped onto the window: a DBC goes into the bus
+    /// selected in the toolbar, an ASC becomes the replay log.
+    pub fn open_dropped(&mut self, path: &std::path::Path) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        match ext.as_deref() {
+            Some("dbc") => {
+                let ch = self.dbc_pick.min(self.channels.len().saturating_sub(1));
+                self.open_dbc_for(ch, path.to_string_lossy().into_owned());
+            }
+            Some("asc") => self.load_asc(&path.to_string_lossy()),
+            _ => {
+                let name = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.status = format!("unsupported file: {name}");
+            }
+        }
+    }
+
+    pub fn push_recent_dbc(&mut self, path: String) {
+        push_recent(&mut self.recent_dbc, path);
+    }
+
+    pub fn push_recent_asc(&mut self, path: String) {
+        push_recent(&mut self.recent_asc, path);
     }
 
     pub fn pick_asc(&mut self) {
@@ -607,6 +684,7 @@ impl App {
                 self.asc_path = path.to_string();
                 self.status = format!("loaded {} frames: {name}", frames.len());
                 self.asc_frames = frames;
+                self.push_recent_asc(path.to_string());
             }
             Err(e) => self.status = format!("ASC read failed [{path}]: {e}"),
         }
@@ -896,6 +974,32 @@ impl App {
         self.source.set_speed(speed);
     }
 
+    /// Moves one notch along REPLAY_SPEEDS; negative slows down, positive
+    /// speeds up, the ends clamp.
+    pub fn step_replay_speed(&mut self, delta: i32) {
+        let idx = REPLAY_SPEEDS
+            .iter()
+            .position(|s| (*s - self.replay_speed).abs() < 1e-9)
+            .unwrap_or(1);
+        let next = (idx as i32 + delta).clamp(0, REPLAY_SPEEDS.len() as i32 - 1) as usize;
+        self.set_replay_speed(REPLAY_SPEEDS[next]);
+    }
+
+    /// Current replay position and total duration in seconds (None when
+    /// the active source has no timeline).
+    pub fn replay_position(&self) -> Option<(f64, f64)> {
+        let pos = self.source.position()? as f64 / 1e6;
+        let dur = self.source.duration()? as f64 / 1e6;
+        Some((pos, dur))
+    }
+
+    /// Resets the pan offsets of all plot windows back to the live edge.
+    pub fn jump_to_live(&mut self) {
+        for g in &mut self.graphics {
+            g.t_offset_s = 0.0;
+        }
+    }
+
     pub fn update(&mut self) {
         if !self.measuring {
             return;
@@ -919,18 +1023,6 @@ impl App {
                 inst
             } else {
                 self.frame_rate * 0.9 + inst * 0.1
-            };
-            // Rough CAN 2.0A/B bit count per frame, referenced to 500 kbit/s.
-            let bits: f64 = self
-                .buf
-                .iter()
-                .map(|f| (if f.extended { 67.0 } else { 47.0 }) + f.dlc as f64 * 8.0)
-                .sum();
-            let load = bits / dt_s / 500_000.0 * 100.0;
-            self.bus_load = if self.bus_load == 0.0 {
-                load
-            } else {
-                self.bus_load * 0.9 + load * 0.1
             };
         }
         self.last_tick_us = now;
@@ -1027,6 +1119,9 @@ impl App {
                         if phys > entry.max {
                             entry.max = phys;
                         }
+                        entry.sum += phys;
+                        entry.n += 1;
+                        entry.avg = entry.sum / entry.n as f64;
                     }
                 }
             }
@@ -1035,7 +1130,8 @@ impl App {
         if replay_done {
             self.measuring = false;
             self.close_writer();
-            self.status = "replay finished".to_string();
+            let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
+            self.status = format!("replay finished at {dur:.2}s");
         }
     }
 
@@ -1050,6 +1146,9 @@ impl App {
                     unit: String::new(),
                     min: f64::INFINITY,
                     max: f64::NEG_INFINITY,
+                    avg: 0.0,
+                    sum: 0.0,
+                    n: 0,
                     last_update_us: 0,
                     last_sample_us: 0,
                     history: VecDeque::new(),
@@ -1159,6 +1258,7 @@ impl App {
             name: format!("Data {}", self.data_counter),
             signals: Vec::new(),
             opened: true,
+            viz_bar: true,
         });
     }
 
@@ -1227,6 +1327,19 @@ impl App {
         true
     }
 
+    /// Enables or disables every generator message of one bus; freshly
+    /// enabled messages restart their cycle immediately.
+    pub fn set_bus_tx(&mut self, ch: u8, on: bool) {
+        for t in &mut self.tx_list {
+            if t.channel == ch && t.active != on {
+                t.active = on;
+                if on {
+                    t.next_t_us = 0;
+                }
+            }
+        }
+    }
+
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         if self
             .tx_list
@@ -1253,6 +1366,32 @@ impl App {
             active: false,
             next_t_us: 0,
         });
+    }
+
+    pub fn bus_counter(&self) -> usize {
+        self.bus_counter
+    }
+
+    pub fn set_bus_counter(&mut self, n: usize) {
+        self.bus_counter = n;
+    }
+
+    pub fn window_counters(&self) -> crate::config::Counters {
+        crate::config::Counters {
+            trace: self.trace_counter,
+            msg: self.msg_counter,
+            stats: self.stats_counter,
+            graphics: self.graphics_counter,
+            data: self.data_counter,
+        }
+    }
+
+    pub fn set_window_counters(&mut self, c: crate::config::Counters) {
+        self.trace_counter = c.trace.max(self.trace_windows.len());
+        self.msg_counter = c.msg.max(self.msg_windows.len());
+        self.stats_counter = c.stats.max(self.stats_windows.len());
+        self.graphics_counter = c.graphics.max(self.graphics.len());
+        self.data_counter = c.data.max(self.data_windows.len());
     }
 }
 
@@ -1529,7 +1668,7 @@ mod tests {
 
     #[test]
     fn trace_filter_matches_by_name_id_and_direction() {
-        let mut app = App::new();
+        let app = App::new();
         let rx = CanFrame {
             t_us: 0,
             channel: 0,
@@ -1642,5 +1781,167 @@ mod tests {
             app.remove_channel(0);
         }
         assert_eq!(app.channels.len(), 1, "last bus cannot be removed");
+    }
+
+    #[test]
+    fn replay_position_tracks_playback() {
+        let mut app = App::new();
+        let path = std::env::temp_dir().join("roxy_can_seek_test.asc");
+        app.record_path = path.to_string_lossy().to_string();
+        app.toggle_record();
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        app.stop();
+        let file = app.last_record.clone();
+        app.load_asc(&file);
+        app.replay();
+        let (pos0, dur) = app.replay_position().expect("replay has a timeline");
+        assert!(dur > 0.0, "timeline covers the whole log");
+        assert!(pos0 < 0.01, "playback starts at the beginning");
+        // The first poll only anchors the replay clock, so a second
+        // cycle is needed before the position actually advances.
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        app.update();
+        let (pos1, _) = app.replay_position().unwrap();
+        assert!(pos1 > pos0, "position advances while replaying");
+        app.stop();
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn replay_speed_steps_along_the_ladder() {
+        let mut app = App::new();
+        assert_eq!(app.replay_speed, 1.0);
+        app.step_replay_speed(1);
+        assert_eq!(app.replay_speed, 2.0, "one notch faster");
+        app.step_replay_speed(-1);
+        app.step_replay_speed(-1);
+        assert_eq!(app.replay_speed, 0.5, "two notches slower");
+        app.step_replay_speed(-1);
+        assert_eq!(app.replay_speed, 0.5, "clamped at the slow end");
+        app.step_replay_speed(99);
+        assert_eq!(app.replay_speed, 4.0, "clamped at the fast end");
+    }
+
+    #[test]
+    fn starting_clears_the_previous_pause() {
+        let mut app = App::new();
+        app.start_virtual();
+        app.trace_paused = true;
+        app.stop();
+        app.start_virtual();
+        assert!(!app.trace_paused, "a new start must not stay paused");
+        app.update();
+        app.stop();
+    }
+
+    #[test]
+    fn switching_run_mode_stops_a_running_measurement() {
+        let mut app = App::new();
+        app.start_virtual();
+        assert!(app.measuring);
+        app.switch_run_mode(Mode::Replay);
+        assert!(!app.measuring, "switching mode stops the run");
+        assert!(matches!(app.run_mode, Mode::Replay));
+        app.switch_run_mode(Mode::Replay);
+        assert!(matches!(app.run_mode, Mode::Replay), "no-op keeps the mode");
+    }
+
+    #[test]
+    fn recent_lists_dedup_and_cap() {
+        let mut app = App::new();
+        for i in 0..10 {
+            app.push_recent_dbc(format!("f{i}.dbc"));
+        }
+        assert_eq!(app.recent_dbc.len(), 8, "recent list is capped");
+        assert_eq!(app.recent_dbc[0], "f9.dbc", "newest first");
+        app.push_recent_dbc("f3.dbc".to_string());
+        assert_eq!(app.recent_dbc[0], "f3.dbc", "reopen moves to the front");
+        assert_eq!(
+            app.recent_dbc.iter().filter(|p| *p == "f3.dbc").count(),
+            1,
+            "no duplicates"
+        );
+    }
+
+    #[test]
+    fn dropping_a_dbc_loads_it_into_the_selected_bus() {
+        let mut app = App::new();
+        app.dbc_pick = 1;
+        app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
+        assert_eq!(app.channels[1].dbc_path, "assets/motbus.dbc");
+        assert!(
+            app.channels[1].dbc.is_some(),
+            "dropped DBC is parsed into the selected bus"
+        );
+        assert_eq!(app.recent_dbc[0], "assets/motbus.dbc");
+    }
+
+    #[test]
+    fn jump_to_live_resets_plot_offsets() {
+        let mut app = App::new();
+        app.graphics[0].t_offset_s = -42.0;
+        app.jump_to_live();
+        assert_eq!(app.graphics[0].t_offset_s, 0.0);
+    }
+
+    #[test]
+    fn signal_stats_track_min_avg_max() {
+        let mut app = App::new();
+        let key = {
+            let db = app.channel_dbc(0).expect("sample DBC loaded");
+            let id = db.order[0];
+            (0u8, id, db.messages[&id].signals[0].name.clone())
+        };
+        app.subscribe(key.clone());
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        app.stop();
+        let sub = app.subs.get(&key).expect("signal subscribed");
+        assert!(
+            sub.min.is_finite() && sub.max.is_finite(),
+            "samples update min/max"
+        );
+        assert!(sub.min <= sub.avg && sub.avg <= sub.max, "avg within range");
+        assert!(!sub.history.is_empty(), "history sampled");
+    }
+
+    #[test]
+    fn set_bus_tx_toggles_a_whole_bus() {
+        let mut app = App::new();
+        assert!(app.tx_list.iter().all(|t| !t.active));
+        app.set_bus_tx(0, true);
+        assert!(
+            app.tx_list
+                .iter()
+                .filter(|t| t.channel == 0)
+                .all(|t| t.active),
+            "bus 0 fully enabled"
+        );
+        assert!(
+            app.tx_list
+                .iter()
+                .filter(|t| t.channel == 1)
+                .all(|t| !t.active),
+            "other buses untouched"
+        );
+        app.set_bus_tx(0, false);
+        assert!(app.tx_list.iter().all(|t| !t.active));
     }
 }

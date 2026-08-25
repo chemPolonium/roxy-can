@@ -1,5 +1,5 @@
 use crate::app::App;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui, WindowFlags};
+use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
 /// Bus management: rename buses, load a DBC per bus, add/remove buses.
 pub fn render(app: &mut App, ui: &Ui) {
@@ -15,7 +15,6 @@ pub fn render(app: &mut App, ui: &Ui) {
             Condition::FirstUseEver,
         )
         .size([480.0, 240.0], Condition::FirstUseEver)
-        .flags(WindowFlags::NO_SAVED_SETTINGS)
         .build(|| content(app, ui));
     app.show_buses = open;
 }

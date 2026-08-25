@@ -1,9 +1,10 @@
+use std::cmp::Ordering;
 use std::sync::Mutex;
 
 use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::idfilter::scope_combo;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TableSortDirection, Ui};
 
 const MAX_VISIBLE: usize = 1_000;
 
@@ -40,10 +41,41 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ],
                 Condition::FirstUseEver,
             )
-            .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
             .build(|| window_content(app, ui, i));
         app.trace_windows[i].opened = open;
     }
+}
+
+fn fmt_id(f: &CanFrame) -> String {
+    if f.extended {
+        format!("{:08X}x", f.id)
+    } else {
+        format!("{:03X}", f.id)
+    }
+}
+
+fn fmt_data(f: &CanFrame) -> String {
+    f.data[..f.dlc.min(8) as usize]
+        .iter()
+        .map(|b| format!("{b:02X} "))
+        .collect()
+}
+
+/// One trace row as plain text, used for "Copy row".
+fn fmt_row(app: &App, f: &CanFrame) -> String {
+    format!(
+        "{:.6}  {}  {}  {}  {}  {}  {}",
+        f.t_us as f64 / 1e6,
+        app.channel_name(f.channel),
+        fmt_id(f),
+        app.message_name(f.channel, f.id).unwrap_or("-"),
+        f.dlc,
+        fmt_data(f).trim_end(),
+        match f.dir {
+            Direction::Rx => "Rx",
+            Direction::Tx => "Tx",
+        }
+    )
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
@@ -99,6 +131,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y
+        | TableFlags::SORTABLE
+        | TableFlags::SORT_TRISTATE
         | TableFlags::SIZING_STRETCH_PROP;
     let Some(_table) = ui.begin_table_with_flags(format!("trace_table{i}"), 7, tbl_flags) else {
         return;
@@ -142,12 +176,41 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_headers_row();
 
+    // Frozen while rendering so row drawing and the right-click popup can
+    // share one copy of the window settings.
     let w = app.trace_windows[i].clone();
-    let mut shown = 0usize;
-    for f in app.trace.iter().rev() {
-        if !app.trace_match(&w, f) {
-            continue;
+
+    // Newest first (the default order); sorted when a column header is
+    // clicked, back to default on the third click (tri-state).
+    let mut rows: Vec<CanFrame> = app
+        .trace
+        .iter()
+        .rev()
+        .filter(|f| app.trace_match(&w, f))
+        .take(MAX_VISIBLE)
+        .copied()
+        .collect();
+
+    // imgui-rs builds the specs slice unconditionally; with no active sort
+    // the pointer is NULL, so only read it when SpecsCount > 0.
+    let specs_active = unsafe {
+        let raw = imgui::sys::igTableGetSortSpecs();
+        !raw.is_null() && (*raw).SpecsCount > 0
+    };
+    if specs_active {
+        if let Some(mut specs) = ui.table_sort_specs_mut() {
+            let spec = specs.specs().iter().next();
+            if let Some(s) = spec {
+                let col = s.column_idx();
+                let asc = s.sort_direction() == Some(TableSortDirection::Ascending);
+                rows.sort_by(|a, b| sort_frame(app, col, a, b, asc));
+            }
+            specs.set_sorted();
         }
+    }
+
+    let mut shown = 0usize;
+    for f in &rows {
         if shown >= MAX_VISIBLE {
             break;
         }
@@ -163,11 +226,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         ui.text(app.channel_name(f.channel));
         hovered |= ui.is_item_hovered();
         ui.table_next_column();
-        if f.extended {
-            ui.text(format!("{:08X}x", f.id));
-        } else {
-            ui.text(format!("{:03X}", f.id));
-        }
+        ui.text(fmt_id(f));
         hovered |= ui.is_item_hovered();
         ui.table_next_column();
         match app.message_name(f.channel, f.id) {
@@ -179,11 +238,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         ui.text(format!("{}", f.dlc));
         hovered |= ui.is_item_hovered();
         ui.table_next_column();
-        let data_str: String = f.data[..f.dlc.min(8) as usize]
-            .iter()
-            .map(|b| format!("{b:02X} "))
-            .collect();
-        ui.text(data_str);
+        ui.text(fmt_data(f));
         hovered |= ui.is_item_hovered();
         ui.table_next_column();
         match f.dir {
@@ -196,17 +251,18 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             ui.open_popup(format!("trace_row_ctx{i}"));
         }
     }
+
     if let Some(_p) = ui.begin_popup(format!("trace_row_ctx{i}")) {
         if let Some((pi, f)) = *CTX.lock().unwrap() {
             if pi == i {
                 let name = app.message_name(f.channel, f.id).unwrap_or("-");
                 ui.text(format!(
-                    "{}  {:03X}  {name}",
+                    "{}  {}  {name}",
                     app.channel_name(f.channel),
-                    f.id
+                    fmt_id(&f)
                 ));
                 ui.separator();
-                if ui.menu_item(format!("Filter this ID ({:03X})", f.id)) {
+                if ui.menu_item(format!("Filter this ID ({})", fmt_id(&f))) {
                     app.trace_windows[i].filter = format!("{:03X}", f.id);
                 }
                 if ui.menu_item("Clear filter") {
@@ -219,7 +275,31 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 if ui.menu_item("Add to Interactive Generator") {
                     app.add_tx(f.channel, f.id);
                 }
+                ui.separator();
+                if ui.menu_item("Copy row") {
+                    ui.set_clipboard_text(fmt_row(app, &f));
+                }
+                if ui.menu_item("Copy ID") {
+                    ui.set_clipboard_text(fmt_id(&f));
+                }
             }
         }
     }
+}
+
+fn sort_frame(app: &App, col: usize, a: &CanFrame, b: &CanFrame, asc: bool) -> Ordering {
+    let ord = match col {
+        0 => a.t_us.cmp(&b.t_us),
+        1 => a.channel.cmp(&b.channel),
+        2 => a.id.cmp(&b.id),
+        3 => {
+            let na = app.message_name(a.channel, a.id).unwrap_or("");
+            let nb = app.message_name(b.channel, b.id).unwrap_or("");
+            na.cmp(nb)
+        }
+        4 => a.dlc.cmp(&b.dlc),
+        5 => a.data[..a.dlc.min(8) as usize].cmp(&b.data[..b.dlc.min(8) as usize]),
+        _ => a.dir.cmp(&b.dir),
+    };
+    if asc { ord } else { ord.reverse() }
 }

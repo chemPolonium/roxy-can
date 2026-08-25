@@ -1,5 +1,5 @@
 use crate::app::App;
-use imgui::{Condition, Ui, WindowFlags};
+use imgui::{Condition, Ui};
 
 const BOX_W: f32 = 118.0;
 const BOX_H: f32 = 36.0;
@@ -166,7 +166,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 Condition::FirstUseEver,
             )
             .size([720.0, 520.0], Condition::FirstUseEver)
-            .flags(WindowFlags::NO_SAVED_SETTINGS)
             .build(|| {
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();

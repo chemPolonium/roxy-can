@@ -1,5 +1,5 @@
 use crate::app::{App, PopupTarget, SigScope};
-use imgui::{Condition, TreeNodeFlags, Ui, WindowFlags};
+use imgui::{Condition, TreeNodeFlags, Ui};
 use std::collections::HashSet;
 
 struct MsgEntry {
@@ -84,7 +84,6 @@ pub fn render(app: &mut App, ui: &Ui) {
             Condition::FirstUseEver,
         )
         .size([460.0, 480.0], Condition::FirstUseEver)
-        .flags(WindowFlags::NO_SAVED_SETTINGS)
         .build(|| {
             if signal_level {
                 signal_content(app, ui);

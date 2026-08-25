@@ -34,7 +34,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 Condition::FirstUseEver,
             )
             .size([620.0, 320.0], Condition::FirstUseEver)
-            .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
             .build(|| content(app, ui));
     }
     app.show_measurement = open;

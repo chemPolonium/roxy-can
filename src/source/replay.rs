@@ -22,6 +22,10 @@ impl ReplaySource {
             speed: 1.0,
         }
     }
+
+    fn duration_us(&self) -> Option<u64> {
+        self.frames.last().map(|f| f.t_us)
+    }
 }
 
 impl FrameSource for ReplaySource {
@@ -48,6 +52,14 @@ impl FrameSource for ReplaySource {
 
     fn set_speed(&mut self, s: f64) {
         self.speed = s.max(0.01);
+    }
+
+    fn position(&self) -> Option<u64> {
+        Some(self.pos_us as u64)
+    }
+
+    fn duration(&self) -> Option<u64> {
+        self.duration_us()
     }
 }
 
@@ -103,5 +115,19 @@ mod tests {
         assert!(out.is_empty(), "slowing down mid-replay is continuous");
         src.poll(1_250_000, &mut out);
         assert_eq!(out.len(), 1, "final frame once pos reaches 200ms");
+    }
+
+    #[test]
+    fn exposes_position_and_duration() {
+        let mut src = ReplaySource::new(vec![frame(0), frame(100_000), frame(200_000)]);
+        assert_eq!(src.duration(), Some(200_000));
+        assert_eq!(src.position(), Some(0));
+        src.poll(1_000_000, &mut Vec::new());
+        src.poll(1_050_000, &mut Vec::new());
+        assert_eq!(
+            src.position(),
+            Some(50_000),
+            "position tracks the virtual clock"
+        );
     }
 }

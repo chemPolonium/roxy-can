@@ -17,4 +17,14 @@ pub trait FrameSource {
     /// Playback speed multiplier (1.0 = real time); only sources with a
     /// replay clock honor this.
     fn set_speed(&mut self, _speed: f64) {}
+
+    /// Current position on the source's clock, in microseconds.
+    fn position(&self) -> Option<u64> {
+        None
+    }
+
+    /// Total length of the source's timeline, in microseconds.
+    fn duration(&self) -> Option<u64> {
+        None
+    }
 }

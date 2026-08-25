@@ -52,7 +52,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 Condition::FirstUseEver,
             )
             .size([560.0, 340.0], Condition::FirstUseEver)
-            .flags(imgui::WindowFlags::NO_SAVED_SETTINGS)
             .build(|| {
                 let (ids, names): (Vec<(u8, u32)>, Vec<String>) = {
                     let mut ids = Vec::new();
@@ -96,12 +95,53 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ));
                 ui.separator();
 
+                ui.set_next_item_width(200.0);
+                ui.input_text("##gsearch", &mut app.gen_search)
+                    .hint("search name / ID")
+                    .build();
+                ui.same_line();
+                if ui.small_button("Clear##gsc") {
+                    app.gen_search.clear();
+                }
+
+                // Per-bus bulk switches: one click enables or disables
+                // every message of that bus.
+                let mut first_bus = true;
+                for ch in 0..app.channels.len() {
+                    let ch8 = ch as u8;
+                    if !app.tx_list.iter().any(|t| t.channel == ch8) {
+                        continue;
+                    }
+                    if !first_bus {
+                        ui.same_line();
+                    }
+                    first_bus = false;
+                    if ui.small_button(format!("All On##gon{ch}")) {
+                        app.set_bus_tx(ch8, true);
+                    }
+                    ui.same_line();
+                    if ui.small_button(format!("All Off##goff{ch}")) {
+                        app.set_bus_tx(ch8, false);
+                    }
+                    ui.same_line();
+                    ui.align_text_to_frame_padding();
+                    ui.text(app.channel_name(ch8));
+                }
+
+                let query = app.gen_search.trim().to_ascii_lowercase();
                 let n = app.tx_list.len();
                 let mut remove_idx: Option<usize> = None;
                 for i in 0..n {
                     let id = app.tx_list[i].id;
                     let ch = app.tx_list[i].channel;
                     let name = app.tx_list[i].name.clone();
+                    if !query.is_empty() {
+                        let hay = format!("{} {} {:X}", app.channel_name(ch), name, id)
+                            .to_ascii_lowercase();
+                        if !hay.contains(&query) {
+                            continue;
+                        }
+                    }
                     let sigs: Vec<SignalInfo> = app
                         .channel_dbc(ch)
                         .and_then(|db| db.messages.get(&id))
