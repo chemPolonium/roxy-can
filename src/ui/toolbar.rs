@@ -70,7 +70,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item("Open DBC...\tCtrl+O") {
                         app.pick_dbc();
                     }
-                    if ui.menu_item("Open ASC (Replay)...") {
+                    if ui.menu_item("Open ASC...") {
                         app.pick_asc();
                     }
                     ui.separator();
@@ -216,12 +216,30 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.button("Open ASC...") {
                 app.pick_asc();
             }
-            tip(ui, "Open an ASC log and replay it");
+            tip(
+                ui,
+                "Load an ASC log for replay (Start in Replay mode plays it)",
+            );
             if !app.asc_path.trim().is_empty() {
                 ui.same_line();
                 ui.align_text_to_frame_padding();
                 ui.text(file_name(&app.asc_path));
             }
+            vsep(ui);
+            ui.align_text_to_frame_padding();
+            ui.text("Speed");
+            ui.same_line();
+            const SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
+            let labels = ["0.5x", "1x", "2x", "4x"];
+            let mut pick = SPEEDS
+                .iter()
+                .position(|s| (*s - app.replay_speed).abs() < 1e-9)
+                .unwrap_or(1);
+            ui.set_next_item_width(64.0);
+            if ui.combo_simple_string("##speed", &mut pick, &labels) {
+                app.set_replay_speed(SPEEDS[pick]);
+            }
+            tip(ui, "Replay playback speed (applies immediately)");
             vsep(ui);
             ui.align_text_to_frame_padding();
             let mode = match app.mode {

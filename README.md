@@ -15,9 +15,9 @@
 - **Measurement Setup**：所有观测器（Trace/Messages/Statistics/Graphics/Data）一张表总览——顶部按钮新增任意观测器；每行一个方形 "->" 按钮，点击即打开并跳转到对应窗口（无关闭功能，关闭窗口用窗口自身的 X）；可重命名、逐个导出（Trace 按当前过滤器导出 ASC，其余导出 CSV），并可删除任意观测器；Trace/Messages/Statistics 行内选择 Signals 范围，Graphics/Data 行的 "…" 打开 Signal Selection 弹窗——报文 → 信号两级复选树（总线仅作分组标题，可跨总线任意勾选），报文级可整体勾选/取消，标签带（已选/总数）计数，支持搜索
 - **Network 视图**：每条总线一段拓扑（DBC 节点框 + CAN 总线）；绿点表示实时活动，点击节点查看收发详情（详情在独立滚动面板中）
 - **信号列表**：支持拖拽排序、全部显示；批量添加信号在 Signal Selection 弹窗中完成（报文级复选框整体勾选）
-- **ASC 录制 / 回放**：录制文件名自动带日期时间戳；ASC 路径留空可直接回放最近一次录制
+- **ASC 录制 / 回放**：录制文件名自动带日期时间戳；加载 ASC（Open ASC...）与开始回放分开——加载只解析就绪，Start（Replay 模式）才开始播放；工具栏 Speed 下拉（0.5x / 1x / 2x / 4x）控制倍速，回放中切换立即生效；ASC 路径留空可直接回放最近一次录制
 - **状态栏**：测量状态、帧率 (f/s)、总线负载估算（@500 kbit/s）、帧计数、录制指示
-- **Docking 布局**：窗口可停靠、可拖动；HiDPI 由平台层按 framebuffer scale 自动换算；字体沿用 roxy-dbc 的方案——内嵌 Inconsolata（13px、像素对齐）并合并系统中文字体字形，GlyphOffset 修正 CJK 字形垂直偏移，支持中文输入法（IME）
+- **Docking 布局**：窗口可停靠、可拖动；HiDPI 由平台层按 framebuffer scale 自动换算；字体沿用 roxy-dbc 的方案——内嵌 Inconsolata（13px、像素对齐）并合并系统中文字体字形，按基线自然对齐，支持中文输入法（IME）
 
 ## 快捷键
 
@@ -46,7 +46,7 @@ cargo test
 
 1. 用工具栏的 **Simulation / Replay** 开关选择模式，点 **Start** 启动：仿真模式跑虚拟总线，回放模式回放已加载的 ASC（未加载时弹出文件选择）；菜单栏 **File** 可打开 DBC/ASC、导出与退出，**Measurement** 可启停/暂停，**View** 开关各面板（默认两条总线：CAN1 挂 `assets/sample.dbc`、CAN2 挂 `assets/motbus.dbc`）
 2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分
-3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；工具栏的下拉框 + **Open DBC...** 也可加载；**Open ASC...** 用于回放
+3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；工具栏的下拉框 + **Open DBC...** 也可加载；**Open ASC...** 只加载日志，回放由 Replay 模式的 **Start** 启动，**Speed** 下拉切换倍速（0.5x/1x/2x/4x）
 4. 勾选 **Record** 录制 ASC；**Measurement Setup** 表里可总览所有观测器，点 "->" 打开并跳转到对应窗口，并在此新增/删除各类窗口、逐个导出
 5. 每个观测器行内选择 **Signals** 范围（所有总线 / 单条总线 / Manual），Manual 时点 "…" 在 Message Selection 弹窗中勾选报文（悬停可看信号）
 6. Data/Graphics 的信号选择在 Measurement Setup 行内点 "…" 打开 Signal Selection 弹窗勾选（按总线分组，可跨总线选择）；窗口本体只显示已选信号列表，可逐个开关

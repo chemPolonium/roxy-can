@@ -161,6 +161,8 @@ pub struct App {
     pub dbc_pick: usize,
     pub status: String,
     pub asc_path: String,
+    asc_frames: Vec<CanFrame>,
+    pub replay_speed: f64,
     pub record_path: String,
     pub last_record: String,
     pub subs: HashMap<(u8, u32, String), Subscription>,
@@ -225,6 +227,8 @@ impl App {
             dbc_pick: 0,
             status: "stopped".to_string(),
             asc_path: String::new(),
+            asc_frames: Vec::new(),
+            replay_speed: 1.0,
             record_path: String::new(),
             last_record: String::new(),
             subs: HashMap::new(),
@@ -439,13 +443,22 @@ impl App {
         match self.run_mode {
             Mode::Virtual => self.start_virtual(),
             Mode::Replay => {
-                if self.asc_path.trim().is_empty() && self.last_record.trim().is_empty() {
+                if !self.can_replay() {
                     self.pick_asc();
-                } else {
+                }
+                // Start expressed the intent to run, so begin playback as
+                // soon as a log is actually available.
+                if self.can_replay() {
                     self.replay();
                 }
             }
         }
+    }
+
+    fn can_replay(&self) -> bool {
+        !self.asc_frames.is_empty()
+            || !self.asc_path.trim().is_empty()
+            || !self.last_record.trim().is_empty()
     }
 
     pub fn stop(&mut self) {
@@ -573,8 +586,29 @@ impl App {
             .add_filter("ASC files", &["asc"])
             .pick_file()
         {
-            self.asc_path = p.to_string_lossy().to_string();
-            self.replay();
+            self.load_asc(&p.to_string_lossy());
+        }
+    }
+
+    /// Parses an ASC log and keeps it ready for replay without starting
+    /// playback; Start (in Replay mode) begins it.
+    pub fn load_asc(&mut self, path: &str) {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let frames = parse_asc(&content);
+                if frames.is_empty() {
+                    self.status = "ASC: no frames parsed".to_string();
+                    return;
+                }
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string());
+                self.asc_path = path.to_string();
+                self.status = format!("loaded {} frames: {name}", frames.len());
+                self.asc_frames = frames;
+            }
+            Err(e) => self.status = format!("ASC read failed [{path}]: {e}"),
         }
     }
 
@@ -814,6 +848,10 @@ impl App {
     }
 
     pub fn replay(&mut self) {
+        if !self.asc_frames.is_empty() {
+            self.start_replay(self.asc_frames.clone());
+            return;
+        }
         let path = {
             let p = self.asc_path.trim();
             if p.is_empty() {
@@ -829,19 +867,33 @@ impl App {
                     self.status = "ASC: no frames parsed".to_string();
                     return;
                 }
-                self.close_writer();
-                // Replay just re-emits an existing log; recording it would
-                // only duplicate the file, so drop the Record state.
-                self.recording = false;
-                self.source = Box::new(ReplaySource::new(frames.clone()));
-                self.mode = Mode::Replay;
-                self.run_mode = Mode::Replay;
-                self.reset_time();
-                self.measuring = true;
-                self.status = format!("replaying {} frames", frames.len());
+                self.start_replay(frames);
             }
             Err(e) => self.status = format!("ASC read failed [{path}]: {e}"),
         }
+    }
+
+    fn start_replay(&mut self, frames: Vec<CanFrame>) {
+        let n = frames.len();
+        self.close_writer();
+        // Replay just re-emits an existing log; recording it would
+        // only duplicate the file, so drop the Record state.
+        self.recording = false;
+        let mut source = ReplaySource::new(frames);
+        source.set_speed(self.replay_speed);
+        self.source = Box::new(source);
+        self.mode = Mode::Replay;
+        self.run_mode = Mode::Replay;
+        self.reset_time();
+        self.measuring = true;
+        self.status = format!("replaying {n} frames at {}x", self.replay_speed);
+    }
+
+    /// Changes replay speed; takes effect immediately if a replay is
+    /// running.
+    pub fn set_replay_speed(&mut self, speed: f64) {
+        self.replay_speed = speed;
+        self.source.set_speed(speed);
     }
 
     pub fn update(&mut self) {
@@ -1282,6 +1334,33 @@ mod tests {
             app.last_record, first,
             "replay must not open a second record file"
         );
+        app.stop();
+        std::fs::remove_file(&first).ok();
+    }
+
+    #[test]
+    fn loading_asc_does_not_start_replay() {
+        let mut app = App::new();
+        let path = std::env::temp_dir().join("roxy_can_load_asc_test.asc");
+        app.record_path = path.to_string_lossy().to_string();
+        app.toggle_record();
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        app.stop();
+        let first = app.last_record.clone();
+        app.load_asc(&first);
+        assert!(!app.measuring, "loading must not start playback");
+        assert!(!app.asc_frames.is_empty(), "frames should be cached");
+        app.replay();
+        assert!(app.measuring, "replay starts on demand");
+        assert!(matches!(app.mode, Mode::Replay));
         app.stop();
         std::fs::remove_file(&first).ok();
     }

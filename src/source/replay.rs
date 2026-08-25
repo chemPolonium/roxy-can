@@ -4,7 +4,12 @@ use crate::source::FrameSource;
 pub struct ReplaySource {
     frames: Vec<CanFrame>,
     idx: usize,
-    start: Option<u64>,
+    /// Wall-clock time of the last poll; gaps (pauses) are skipped via
+    /// `shift_time` so they never advance the virtual clock.
+    last: Option<u64>,
+    /// Accumulated virtual (log) time in microseconds.
+    pos_us: f64,
+    speed: f64,
 }
 
 impl ReplaySource {
@@ -12,15 +17,19 @@ impl ReplaySource {
         ReplaySource {
             frames,
             idx: 0,
-            start: None,
+            last: None,
+            pos_us: 0.0,
+            speed: 1.0,
         }
     }
 }
 
 impl FrameSource for ReplaySource {
     fn poll(&mut self, now_us: u64, out: &mut Vec<CanFrame>) {
-        let start = *self.start.get_or_insert(now_us);
-        let target = now_us.saturating_sub(start);
+        let prev = self.last.unwrap_or(now_us);
+        self.pos_us += now_us.saturating_sub(prev) as f64 * self.speed;
+        self.last = Some(now_us);
+        let target = self.pos_us as u64;
         while self.idx < self.frames.len() && self.frames[self.idx].t_us <= target {
             out.push(self.frames[self.idx]);
             self.idx += 1;
@@ -32,9 +41,13 @@ impl FrameSource for ReplaySource {
     }
 
     fn shift_time(&mut self, us: u64) {
-        if let Some(s) = self.start.as_mut() {
-            *s += us;
+        if let Some(l) = self.last.as_mut() {
+            *l += us;
         }
+    }
+
+    fn set_speed(&mut self, s: f64) {
+        self.speed = s.max(0.01);
     }
 }
 
@@ -66,5 +79,29 @@ mod tests {
         assert!(out.is_empty(), "paused time must not emit frames");
         src.poll(1_600_000, &mut out);
         assert_eq!(out.len(), 1, "resumes exactly where it stopped");
+    }
+
+    #[test]
+    fn speed_scales_the_virtual_clock() {
+        let mut src = ReplaySource::new(vec![frame(0), frame(100_000), frame(200_000)]);
+        src.set_speed(2.0);
+        let mut out = Vec::new();
+        src.poll(1_000_000, &mut out);
+        assert_eq!(out.len(), 1, "first frame at t=0");
+        out.clear();
+        // 50 ms of wall time at 2x covers 100 ms of log time.
+        src.poll(1_050_000, &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "2x speed emits the 100ms frame twice as early"
+        );
+        out.clear();
+        src.set_speed(0.5);
+        src.poll(1_150_000, &mut out);
+        // 100ms wall at 0.5x adds 50ms: pos=150ms, nothing new.
+        assert!(out.is_empty(), "slowing down mid-replay is continuous");
+        src.poll(1_250_000, &mut out);
+        assert_eq!(out.len(), 1, "final frame once pos reaches 200ms");
     }
 }

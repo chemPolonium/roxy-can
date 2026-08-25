@@ -13,4 +13,8 @@ pub trait FrameSource {
     /// Advances the source's internal clock by `us`, used to skip over
     /// time spent paused so playback resumes where it stopped.
     fn shift_time(&mut self, _us: u64) {}
+
+    /// Playback speed multiplier (1.0 = real time); only sources with a
+    /// replay clock honor this.
+    fn set_speed(&mut self, _speed: f64) {}
 }
