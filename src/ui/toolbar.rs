@@ -75,33 +75,26 @@ pub fn render(app: &mut App, ui: &Ui) {
             ui.menu_bar(|| {
                 ui.menu("File", || {
                     if ui.menu_item("New Project") {
-                        if app.project_path.is_some() {
-                            let p = app.project_path.clone().unwrap();
-                            app.save_project(Some(p));
-                            app.new_project();
-                        } else {
-                            app.pending_action = Some(crate::app::PendingAction::NewProject);
-                        }
+                        app.guarded_action(crate::app::PendingAction::NewProject);
                     }
                     if ui.menu_item("Open Project...") {
-                        if app.project_path.is_some() {
-                            let p = app.project_path.clone().unwrap();
-                            app.save_project(Some(p));
-                            app.open_project_dialog();
-                        } else {
-                            app.pending_action = Some(crate::app::PendingAction::OpenProject);
-                        }
+                        app.guarded_action(crate::app::PendingAction::OpenProject);
                     }
                     if !app.recent_projects.is_empty() {
                         ui.menu("Recent Projects", || {
                             let paths = app.recent_projects.clone();
                             for p in paths {
                                 if ui.menu_item(&file_name(&p)) {
-                                    if app.project_path.is_some() {
-                                        let cur = app.project_path.clone().unwrap();
+                                    let path = std::path::PathBuf::from(&p);
+                                    if let Some(cur) = app.project_path.clone() {
                                         app.save_project(Some(cur));
+                                        app.open_project_path(&path);
+                                    } else if app.is_dirty() {
+                                        app.pending_action =
+                                            Some(crate::app::PendingAction::OpenPath(path));
+                                    } else {
+                                        app.open_project_path(&path);
                                     }
-                                    app.open_project_path(std::path::Path::new(&p));
                                 }
                             }
                         });

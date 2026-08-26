@@ -507,7 +507,10 @@ impl App {
             return;
         };
         match serde_json::from_str::<Config>(&text) {
-            Ok(cfg) => cfg.apply(self),
+            Ok(cfg) => {
+                cfg.apply(self);
+                self.mark_clean();
+            }
             Err(e) => self.status = format!("config ignored: {e}"),
         }
     }

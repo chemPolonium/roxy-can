@@ -100,7 +100,8 @@ impl State {
         let mut context = imgui::Context::create();
         let mut platform = WinitPlatform::new(&mut context);
         platform.attach_window(context.io_mut(), &window, HiDpiMode::Default);
-        context.set_ini_filename(Some(std::path::PathBuf::from("roxy-can.ini")));
+        // Layouts live inside .rxproj files; no standalone ini file.
+        context.set_ini_filename(None);
         context.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().config_windows_move_from_title_bar_only = true;
         context.io_mut().set_platform_ime_data_fn = Some(ime_data_callback);
@@ -206,11 +207,7 @@ impl State {
         self.app.layout_cache.clear();
         self.context.save_ini_settings(&mut self.app.layout_cache);
 
-        let title = if self.app.project_path.is_none() {
-            "Untitled * - roxy-can".to_string()
-        } else {
-            format!("{} - roxy-can", self.app.project_name())
-        };
+        let title = format!("{} - roxy-can", self.app.display_name());
         if self.last_title != title {
             self.window.set_title(&title);
             self.last_title = title.clone();

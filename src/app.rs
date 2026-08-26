@@ -158,11 +158,12 @@ pub enum Mode {
 }
 
 /// Deferred action waiting behind the "unsaved project" confirmation modal.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingAction {
     Quit,
     NewProject,
     OpenProject,
+    OpenPath(PathBuf),
 }
 
 pub struct App {
@@ -193,6 +194,9 @@ pub struct App {
     pub pending_layout: Option<String>,
     /// Set when a destructive action must first pass the unsaved-project modal.
     pub pending_action: Option<PendingAction>,
+    /// Config JSON snapshot of the last clean state (loaded/saved/reset);
+    /// compared against the live config to decide if anything changed.
+    baseline: String,
     pub replay_speed: f64,
     pub record_path: String,
     pub last_record: String,
@@ -273,6 +277,7 @@ impl App {
             default_layout: String::new(),
             pending_layout: None,
             pending_action: None,
+            baseline: String::new(),
             replay_speed: 1.0,
             record_path: String::new(),
             last_record: String::new(),
@@ -330,6 +335,7 @@ impl App {
         for (ch, id) in msgs {
             app.add_tx(ch, id);
         }
+        app.baseline = app.config_snapshot();
         app
     }
 
@@ -1047,8 +1053,56 @@ impl App {
             .unwrap_or_else(|| "Untitled".to_string())
     }
 
+    /// Project name with a `*` suffix when there are unsaved changes.
+    pub fn display_name(&self) -> String {
+        let name = self.project_name();
+        if self.is_dirty() {
+            format!("{name} *")
+        } else {
+            name
+        }
+    }
+
     pub fn push_recent_project(&mut self, path: String) {
         push_recent(&mut self.recent_projects, path);
+    }
+
+    /// Serializable snapshot of the workspace configuration, used to tell
+    /// whether anything changed since the last load/save/reset.
+    fn config_snapshot(&self) -> String {
+        serde_json::to_string(&Config::from_app(self, None)).unwrap_or_default()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.config_snapshot() != self.baseline
+    }
+
+    /// Marks the current workspace as the clean baseline (after load/save).
+    pub fn mark_clean(&mut self) {
+        self.baseline = self.config_snapshot();
+    }
+
+    pub fn run_action(&mut self, action: PendingAction) {
+        match action {
+            PendingAction::Quit => self.quit = true,
+            PendingAction::NewProject => self.new_project(),
+            PendingAction::OpenProject => self.open_project_dialog(),
+            PendingAction::OpenPath(p) => self.open_project_path(&p),
+        }
+    }
+
+    /// Saved projects auto-save and proceed; untouched untitled workspaces
+    /// have nothing to lose and proceed directly; only a modified untitled
+    /// workspace is routed through the confirmation modal.
+    pub fn guarded_action(&mut self, action: PendingAction) {
+        if let Some(p) = self.project_path.clone() {
+            self.save_project(Some(p));
+            self.run_action(action);
+        } else if self.is_dirty() {
+            self.pending_action = Some(action);
+        } else {
+            self.run_action(action);
+        }
     }
 
     /// Saves the workspace as a .rxproj file. `None` opens a picker.
@@ -1081,6 +1135,7 @@ impl App {
             Ok(()) => {
                 self.push_recent_project(path.to_string_lossy().to_string());
                 self.project_path = Some(path.clone());
+                self.baseline = self.config_snapshot();
                 self.status = format!("project saved: {}", path.display());
                 true
             }
@@ -1110,6 +1165,7 @@ impl App {
                 if !proj.layout.is_empty() {
                     self.pending_layout = Some(proj.layout);
                 }
+                self.baseline = self.config_snapshot();
                 self.push_recent_project(path.to_string_lossy().to_string());
                 self.status = format!("project loaded: {}", path.display());
             }
@@ -1126,23 +1182,32 @@ impl App {
         }
     }
 
-    /// Starts a fresh untitled workspace with the default window layout.
+    /// Starts a fresh, completely empty untitled workspace: no DBCs, no
+    /// observer windows, no generator entries, default layout.
     pub fn new_project(&mut self) {
         self.reset_to_defaults();
+        for c in &mut self.channels {
+            c.dbc_path.clear();
+            c.dbc = None;
+        }
+        self.trace_windows.clear();
+        self.msg_windows.clear();
+        self.stats_windows.clear();
+        self.graphics.clear();
+        self.data_windows.clear();
+        self.tx_list.clear();
+        self.subs.clear();
+        self.baseline = self.config_snapshot();
         if !self.default_layout.is_empty() {
             self.pending_layout = Some(self.default_layout.clone());
         }
         self.status = "new project".to_string();
     }
 
-    /// Saved projects quit silently (auto-save on exit); untitled ones go
-    /// through the confirmation modal first.
+    /// Saved projects quit silently (auto-save on exit); untitled ones
+    /// only go through the confirmation modal when actually modified.
     pub fn request_quit(&mut self) {
-        if self.project_path.is_some() {
-            self.quit = true;
-        } else {
-            self.pending_action = Some(PendingAction::Quit);
-        }
+        self.guarded_action(PendingAction::Quit);
     }
 
     /// Writes the startup driver (last project + recent projects).
@@ -2115,6 +2180,40 @@ mod tests {
         assert_eq!(app.trace_windows.len(), 1, "default has one trace window");
         assert!(app.project_path.is_none());
         assert_eq!(app.recent_dbc[0], "keep.dbc", "recents survive the reset");
+    }
+
+    #[test]
+    fn new_project_starts_completely_empty() {
+        let mut app = App::new();
+        app.new_project();
+        assert!(
+            app.channels
+                .iter()
+                .all(|c| c.dbc.is_none() && c.dbc_path.is_empty()),
+            "no DBCs on any bus"
+        );
+        assert!(app.trace_windows.is_empty());
+        assert!(app.msg_windows.is_empty());
+        assert!(app.stats_windows.is_empty());
+        assert!(app.graphics.is_empty());
+        assert!(app.data_windows.is_empty());
+        assert!(app.tx_list.is_empty());
+        assert!(app.project_path.is_none());
+        assert!(!app.is_dirty(), "a fresh project has nothing to save");
+    }
+
+    #[test]
+    fn untouched_workspace_quits_without_prompting() {
+        let mut app = App::new();
+        app.request_quit();
+        assert!(app.quit, "clean untitled workspace quits silently");
+        assert!(app.pending_action.is_none());
+
+        let mut app = App::new();
+        app.new_trace_window();
+        app.request_quit();
+        assert!(!app.quit, "modified workspace must confirm first");
+        assert_eq!(app.pending_action, Some(crate::app::PendingAction::Quit));
     }
 
     #[test]

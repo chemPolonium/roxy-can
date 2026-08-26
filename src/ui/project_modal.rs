@@ -1,18 +1,10 @@
-use crate::app::{App, PendingAction};
+use crate::app::App;
 use imgui::Ui;
 
 enum Choice {
     Save,
     Discard,
     Cancel,
-}
-
-fn perform(app: &mut App, action: PendingAction) {
-    match action {
-        PendingAction::Quit => app.quit = true,
-        PendingAction::NewProject => app.new_project(),
-        PendingAction::OpenProject => app.open_project_dialog(),
-    }
 }
 
 /// Confirmation shown before anything discards an untitled workspace.
@@ -54,10 +46,10 @@ pub fn render(app: &mut App, ui: &Ui) {
         match c {
             Choice::Save => {
                 if app.save_project(None) {
-                    perform(app, action);
+                    app.run_action(action);
                 }
             }
-            Choice::Discard => perform(app, action),
+            Choice::Discard => app.run_action(action),
             Choice::Cancel => {}
         }
     }
