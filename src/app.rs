@@ -1209,20 +1209,24 @@ impl App {
         self.source.poll(now, &mut self.buf);
         let source_empty = self.buf.is_empty();
 
-        for tx in &mut self.tx_list {
-            if tx.active && tx.cycle_us > 0 && tx.next_t_us <= now {
-                while tx.next_t_us <= now {
-                    tx.next_t_us += tx.cycle_us;
+        // Generators only transmit in live simulation; replaying an ASC must
+        // not mix in synthetic frames from active generator entries.
+        if matches!(self.mode, Mode::Virtual) {
+            for tx in &mut self.tx_list {
+                if tx.active && tx.cycle_us > 0 && tx.next_t_us <= now {
+                    while tx.next_t_us <= now {
+                        tx.next_t_us += tx.cycle_us;
+                    }
+                    self.buf.push(CanFrame {
+                        t_us: now,
+                        channel: tx.channel,
+                        id: tx.id,
+                        extended: tx.extended,
+                        dlc: tx.dlc,
+                        data: tx.data,
+                        dir: Direction::Tx,
+                    });
                 }
-                self.buf.push(CanFrame {
-                    t_us: now,
-                    channel: tx.channel,
-                    id: tx.id,
-                    extended: tx.extended,
-                    dlc: tx.dlc,
-                    data: tx.data,
-                    dir: Direction::Tx,
-                });
             }
         }
 
@@ -1427,7 +1431,7 @@ impl App {
             opened: true,
             t_offset_s: 0.0,
             show_cursor: true,
-            zoom_enabled: true,
+            zoom_enabled: false,
         });
     }
 
@@ -1997,6 +2001,34 @@ mod tests {
     }
 
     #[test]
+    fn replay_does_not_inject_generator_frames() {
+        let mut app = App::new();
+        let path = std::env::temp_dir().join("roxy_can_replay_pure.asc");
+        std::fs::write(
+            &path,
+            "date Thu Jan 01\nbase hex  timestamps hex\ninternal events logged\n\
+             0.000000 Start of measurement\n\
+             0.001000  1  100  Tx  8  00 00 00 00 00 00 00 00\n",
+        )
+        .unwrap();
+        app.load_asc(&path.to_string_lossy());
+        app.tx_list[0].active = true;
+        app.tx_list[0].cycle_us = 1_000;
+        app.tx_list[0].data = [0xDE; 8];
+        app.replay();
+        for _ in 0..6 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        assert!(
+            !app.trace.iter().any(|f| f.data == [0xDE; 8]),
+            "replay must not mix in generator frames"
+        );
+        app.stop();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn replay_speed_steps_along_the_ladder() {
         let mut app = App::new();
         assert_eq!(app.replay_speed, 1.0);
@@ -2150,6 +2182,37 @@ mod tests {
         assert!(
             restored.subs.contains_key(&key),
             "restored signal is resubscribed so it is not grey"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn recording_captures_generator_data_faithfully() {
+        let mut app = App::new();
+        app.tx_list[0].active = true;
+        app.tx_list[0].cycle_us = 10_000;
+        app.tx_list[0].data = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        app.record_path = "target/test_record".to_string();
+        app.toggle_record();
+        app.start_virtual();
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        app.stop();
+        let path = app.last_record.clone();
+        assert!(!path.is_empty(), "recording produced a file");
+        let content = std::fs::read_to_string(&path).expect("record file readable");
+        let parsed = crate::log::asc::parse_asc(&content);
+        let (id, ch) = (app.tx_list[0].id, app.tx_list[0].channel);
+        let hit = parsed
+            .iter()
+            .find(|f| f.id == id && f.channel == ch)
+            .expect("recorded frames parsed back");
+        assert_eq!(
+            hit.data,
+            [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+            "recorded data matches what the generator sent"
         );
         std::fs::remove_file(&path).ok();
     }

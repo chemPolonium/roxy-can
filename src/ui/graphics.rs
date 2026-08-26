@@ -9,6 +9,18 @@ const TIME_STEPS: [f64; 15] = [
 ];
 const PANEL_W: f32 = 190.0;
 
+/// Direct-select window lengths, a subset of TIME_STEPS shown as a
+/// button row in each Graphics window.
+const TW_PRESETS: [(f64, &str); 7] = [
+    (1.0, "1s"),
+    (5.0, "5s"),
+    (10.0, "10s"),
+    (30.0, "30s"),
+    (60.0, "1m"),
+    (300.0, "5m"),
+    (1800.0, "30m"),
+];
+
 /// Moves the current window along TIME_STEPS: wheel up zooms in (smaller
 /// window), wheel down zooms out. Snaps to the nearest step first when
 /// `tw` sits between steps.
@@ -25,14 +37,6 @@ pub(crate) fn zoom_step(tw: f64, notches: f32) -> f64 {
     let delta = -(notches.round() as i32);
     let next = (idx as i32 + delta).clamp(0, TIME_STEPS.len() as i32 - 1);
     TIME_STEPS[next as usize]
-}
-
-pub(crate) fn fmt_tw(tw: f64) -> String {
-    if tw == tw.round() {
-        format!("{:.0}", tw)
-    } else {
-        format!("{:.1}", tw)
-    }
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
@@ -68,14 +72,29 @@ pub fn render(app: &mut App, ui: &Ui) {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
-    let tw = app.graphics[i].time_window_s;
-    let offset = app.graphics[i].t_offset_s;
-    let range = if offset > 0.0 {
-        format!("{}s window, {:.1}s behind live", fmt_tw(tw), offset)
-    } else {
-        format!("{}s window", fmt_tw(tw))
-    };
-    ui.text(&range);
+    for (k, (val, label)) in TW_PRESETS.iter().enumerate() {
+        let selected = (app.graphics[i].time_window_s - val).abs() < 1e-9;
+        let colors = selected.then(|| {
+            (
+                ui.push_style_color(imgui::StyleColor::Button, [0.2, 0.45, 0.75, 1.0]),
+                ui.push_style_color(imgui::StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]),
+                ui.push_style_color(imgui::StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]),
+            )
+        });
+        if ui.small_button(format!("{label}##tw{i}")) {
+            app.graphics[i].time_window_s = *val;
+        }
+        drop(colors);
+        if k + 1 < TW_PRESETS.len() || app.graphics[i].t_offset_s > 0.0 {
+            ui.same_line();
+        }
+    }
+    if app.graphics[i].t_offset_s > 0.0 {
+        ui.text_colored(
+            [1.0, 0.8, 0.4, 1.0],
+            format!("{:.1}s behind live", app.graphics[i].t_offset_s),
+        );
+    }
     let mut stacked = app.graphics[i].stacked;
     ui.radio_button("Overlay", &mut stacked, false);
     ui.same_line();
