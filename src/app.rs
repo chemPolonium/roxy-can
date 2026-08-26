@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::can::frame::{CanFrame, Direction};
-use crate::config::{Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
+use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 use crate::dbc::SymbolTable;
 use crate::log::asc::{AscWriter, parse_asc};
 use crate::source::FrameSource;
@@ -1126,6 +1126,7 @@ impl App {
         let proj = ProjectFile {
             version: 1,
             layout: self.layout_cache.clone(),
+            project: None,
             config: Config::from_app(self, base.as_deref()),
         };
         let written = serde_json::to_string_pretty(&proj)
@@ -1182,6 +1183,53 @@ impl App {
         }
     }
 
+    /// Periodic crash cache; the real project file is never touched.
+    pub fn write_autosave(&self) {
+        let base = self
+            .project_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.to_path_buf());
+        let proj = ProjectFile {
+            version: 1,
+            layout: self.layout_cache.clone(),
+            project: self
+                .project_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            config: Config::from_app(self, base.as_deref()),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&proj) {
+            let _ = std::fs::write(AUTOSAVE_PATH, json);
+        }
+    }
+
+    /// Restores the crash cache left behind by an abnormal exit.
+    pub fn load_autosave(&mut self) -> bool {
+        let Ok(text) = std::fs::read_to_string(AUTOSAVE_PATH) else {
+            return false;
+        };
+        let Ok(proj) = serde_json::from_str::<ProjectFile>(&text) else {
+            return false;
+        };
+        self.reset_to_defaults();
+        let base = proj
+            .project
+            .as_deref()
+            .map(Path::new)
+            .and_then(|p| p.parent());
+        let mut cfg = proj.config;
+        cfg.resolve_paths(base);
+        cfg.apply(self);
+        self.project_path = proj.project.map(PathBuf::from);
+        if !proj.layout.is_empty() {
+            self.pending_layout = Some(proj.layout);
+        }
+        self.mark_clean();
+        self.status = "restored autosave".to_string();
+        true
+    }
+
     /// Starts a fresh, completely empty untitled workspace: no DBCs, no
     /// observer windows, no generator entries, default layout.
     pub fn new_project(&mut self) {
@@ -1224,9 +1272,16 @@ impl App {
         }
     }
 
-    /// Startup restore: reopen the last project when one is known, import
-    /// the legacy `roxy-can.json` on a very first launch, else defaults.
+    /// Startup restore: an autosave left by a crash comes first, then the
+    /// last project when one is known, then the legacy `roxy-can.json`
+    /// import on a very first launch, else defaults.
     pub fn startup_workspace(&mut self) {
+        if Path::new(AUTOSAVE_PATH).exists() {
+            if self.load_autosave() {
+                return;
+            }
+            let _ = std::fs::remove_file(AUTOSAVE_PATH);
+        }
         if let Ok(text) = std::fs::read_to_string(META_PATH) {
             if let Ok(meta) = serde_json::from_str::<Meta>(&text) {
                 self.recent_projects = meta.recent_projects;
@@ -2214,6 +2269,28 @@ mod tests {
         app.request_quit();
         assert!(!app.quit, "modified workspace must confirm first");
         assert_eq!(app.pending_action, Some(crate::app::PendingAction::Quit));
+    }
+
+    #[test]
+    fn autosave_round_trips_the_workspace() {
+        let mut app = App::new();
+        let path = std::env::temp_dir().join("roxy_can_autosave.rxproj");
+        assert!(app.save_project(Some(path.clone())));
+        app.trace_windows[0].filter = "Motor".to_string();
+        app.layout_cache = "[Window][Dockspace]\n".to_string();
+        app.write_autosave();
+
+        let mut restored = App::new();
+        assert!(restored.load_autosave());
+        assert_eq!(restored.project_path.as_deref(), Some(path.as_path()));
+        assert_eq!(restored.trace_windows[0].filter, "Motor");
+        assert_eq!(
+            restored.pending_layout.as_deref(),
+            Some("[Window][Dockspace]\n")
+        );
+        assert!(!restored.is_dirty(), "restored autosave starts clean");
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(crate::config::AUTOSAVE_PATH).ok();
     }
 
     #[test]

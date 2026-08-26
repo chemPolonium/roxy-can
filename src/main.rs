@@ -51,6 +51,7 @@ struct State {
     ime_pos: Option<(bool, f32, f32, f32)>,
     ctrl: bool,
     last_title: String,
+    last_autosave: Instant,
 }
 
 impl State {
@@ -174,6 +175,7 @@ impl State {
             ime_pos: None,
             ctrl: false,
             last_title: String::new(),
+            last_autosave: Instant::now(),
         }
     }
 
@@ -206,6 +208,10 @@ impl State {
         }
         self.app.layout_cache.clear();
         self.context.save_ini_settings(&mut self.app.layout_cache);
+        if self.last_autosave.elapsed() >= std::time::Duration::from_secs(30) {
+            self.app.write_autosave();
+            self.last_autosave = Instant::now();
+        }
 
         let title = format!("{} - roxy-can", self.app.display_name());
         if self.last_title != title {
@@ -356,6 +362,8 @@ impl ApplicationHandler for Program {
                 st.app.save_project(Some(p));
             }
             st.app.write_meta();
+            // Clean exit: the crash cache is no longer needed.
+            let _ = std::fs::remove_file(config::AUTOSAVE_PATH);
         }
     }
 }

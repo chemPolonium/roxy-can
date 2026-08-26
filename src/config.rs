@@ -13,6 +13,7 @@ use crate::app::{
 
 pub const CONFIG_PATH: &str = "roxy-can.json";
 pub const META_PATH: &str = "roxy-can.meta.json";
+pub const AUTOSAVE_PATH: &str = "roxy-can.autosave.rxproj";
 pub const PROJECT_EXT: &str = "rxproj";
 
 /// Stores a DBC path relative to the project directory when possible, so a
@@ -53,6 +54,9 @@ pub struct ProjectFile {
     pub version: u32,
     #[serde(default)]
     pub layout: String,
+    /// Only set in autosaves: the project the workspace belonged to.
+    #[serde(default)]
+    pub project: Option<String>,
     pub config: Config,
 }
 
@@ -603,12 +607,14 @@ mod tests {
         let proj = ProjectFile {
             version: 1,
             layout: "[Window][Trace 1]\nPos=10,20\n[Docking][Data]\n".to_string(),
+            project: None,
             config: Config::from_app(&app, None),
         };
         let text = serde_json::to_string(&proj).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();
         assert_eq!(back.version, 1);
         assert!(back.layout.contains("[Docking][Data]"));
+        assert_eq!(back.project, None);
         assert_eq!(back.config.channels.len(), app.channels.len());
     }
 }
