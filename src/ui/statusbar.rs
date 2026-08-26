@@ -17,6 +17,14 @@ pub fn render(app: &App, ui: &Ui) {
         .position([0.0, io.display_size[1] - STATUSBAR_H], Condition::Always)
         .size([io.display_size[0], STATUSBAR_H], Condition::Always)
         .build(|| {
+            let pname = app.project_name();
+            let plabel = if app.project_path.is_none() {
+                format!("{pname} *")
+            } else {
+                pname
+            };
+            ui.text_colored([0.8, 0.85, 1.0, 1.0], plabel);
+            ui.same_line();
             let (state, color): (&str, [f32; 4]) = if app.measuring {
                 match app.mode {
                     Mode::Virtual => ("MEASURING (virtual)", [0.4, 0.95, 0.5, 1.0]),

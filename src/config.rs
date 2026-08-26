@@ -1,6 +1,10 @@
-//! Workspace persistence: buses, analysis windows, signals, filters and the
-//! generator are saved as JSON on exit and restored at startup. Window
-//! positions and docking live in imgui's own `roxy-can.ini`.
+//! Workspace persistence as CANoe-style project files (.rxproj): buses,
+//! analysis windows, signals, filters, the generator and the imgui window
+//! layout are bundled in one JSON file. A small `roxy-can.meta.json`
+//! remembers the last opened project. The legacy `roxy-can.json` (no
+//! project path) is still read once as a migration fallback.
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::app::{
@@ -8,6 +12,62 @@ use crate::app::{
 };
 
 pub const CONFIG_PATH: &str = "roxy-can.json";
+pub const META_PATH: &str = "roxy-can.meta.json";
+pub const PROJECT_EXT: &str = "rxproj";
+
+/// Stores a DBC path relative to the project directory when possible, so a
+/// project folder can be moved or shared; paths outside the project are
+/// stored absolute.
+pub fn relativize(p: &str, base: &Path) -> String {
+    let path = Path::new(p);
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+    };
+    if let Ok(rel) = abs.strip_prefix(base) {
+        return rel.to_string_lossy().to_string();
+    }
+    abs.to_string_lossy().to_string()
+}
+
+/// Resolves a possibly-relative DBC path against the project directory,
+/// but only when the file really exists there; otherwise the path is kept
+/// as-is (it may be relative to the working directory).
+pub fn resolve_dbc(p: &str, base: Option<&Path>) -> String {
+    if Path::new(p).is_relative()
+        && let Some(b) = base
+    {
+        let joined = b.join(p);
+        if joined.exists() {
+            return joined.to_string_lossy().to_string();
+        }
+    }
+    p.to_string()
+}
+
+/// One project file: semantic workspace state plus the imgui layout text.
+#[derive(Serialize, Deserialize)]
+pub struct ProjectFile {
+    #[serde(default = "one_default_u32")]
+    pub version: u32,
+    #[serde(default)]
+    pub layout: String,
+    pub config: Config,
+}
+
+fn one_default_u32() -> u32 {
+    1
+}
+
+/// Startup driver written on every exit.
+#[derive(Serialize, Deserialize, Default)]
+pub struct Meta {
+    #[serde(default)]
+    pub last_project: Option<String>,
+    #[serde(default)]
+    pub recent_projects: Vec<String>,
+}
 
 fn true_default() -> bool {
     true
@@ -190,14 +250,17 @@ fn sig_keys(signals: Vec<SignalCfg>) -> Vec<GfxSignal> {
 }
 
 impl Config {
-    pub fn from_app(app: &App) -> Self {
+    pub fn from_app(app: &App, base: Option<&Path>) -> Self {
         Config {
             channels: app
                 .channels
                 .iter()
                 .map(|c| ChannelCfg {
                     name: c.name.clone(),
-                    dbc_path: c.dbc_path.clone(),
+                    dbc_path: match base {
+                        Some(b) => relativize(&c.dbc_path, b),
+                        None => c.dbc_path.clone(),
+                    },
                 })
                 .collect(),
             bus_counter: app.bus_counter(),
@@ -280,6 +343,14 @@ impl Config {
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
             recent_asc: app.recent_asc.clone(),
+        }
+    }
+
+    /// Resolves relative DBC paths against the project directory they were
+    /// saved relative to; call before `apply`.
+    pub fn resolve_paths(&mut self, base: Option<&Path>) {
+        for c in &mut self.channels {
+            c.dbc_path = resolve_dbc(&c.dbc_path, base);
         }
     }
 
@@ -410,18 +481,27 @@ impl Config {
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
         app.recent_asc = self.recent_asc;
+        // Restored signal lists need their subscriptions recreated,
+        // otherwise they render grey and never receive values.
+        let keys: Vec<(u8, u32, String)> = app
+            .graphics
+            .iter()
+            .flat_map(|g| g.signals.iter().map(|s| s.key.clone()))
+            .chain(
+                app.data_windows
+                    .iter()
+                    .flat_map(|d| d.signals.iter().map(|s| s.key.clone())),
+            )
+            .collect();
+        for key in keys {
+            app.subscribe(key);
+        }
     }
 }
 
 impl App {
-    pub fn save_config(&self) {
-        if let Ok(json) = serde_json::to_string_pretty(&Config::from_app(self)) {
-            let _ = std::fs::write(CONFIG_PATH, json);
-        }
-    }
-
-    /// Restores the saved workspace if one exists; silently keeps the
-    /// defaults otherwise.
+    /// Restores the legacy `roxy-can.json` workspace if one exists; used
+    /// only as a one-time migration when no project meta file is found.
     pub fn load_config(&mut self) {
         let Ok(text) = std::fs::read_to_string(CONFIG_PATH) else {
             return;
@@ -448,7 +528,7 @@ mod tests {
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 50_000;
 
-        let json = serde_json::to_string(&Config::from_app(&app)).unwrap();
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::new();
         serde_json::from_str::<Config>(&json)
             .unwrap()
@@ -470,5 +550,62 @@ mod tests {
         assert!(cfg.show_tx);
         assert_eq!(cfg.replay_speed, 1.0);
         assert!(cfg.channels.is_empty());
+    }
+
+    #[test]
+    fn dbc_paths_relativize_and_resolve_round_the_project_dir() {
+        let base = Path::new("C:/work/myproj");
+        let inside = "C:/work/myproj/dbc/motor.dbc";
+        assert_eq!(relativize(inside, base), "dbc/motor.dbc");
+        assert_eq!(
+            relativize("C:/elsewhere/other.dbc", base),
+            "C:/elsewhere/other.dbc",
+            "paths outside the project stay absolute"
+        );
+        let rel = relativize("assets/sample.dbc", base);
+        assert!(
+            Path::new(&rel).is_absolute(),
+            "CWD-relative paths are stored absolute when outside the project"
+        );
+        assert!(
+            Path::new(&rel).ends_with("assets/sample.dbc"),
+            "absolutized path keeps its tail"
+        );
+
+        assert_eq!(
+            resolve_dbc("missing.dbc", Some(base)),
+            "missing.dbc",
+            "project-relative path without a real file falls back to the CWD form"
+        );
+        assert_eq!(
+            resolve_dbc("C:/abs/x.dbc", Some(base)),
+            "C:/abs/x.dbc",
+            "absolute paths are untouched"
+        );
+        // A file that really exists next to the project resolves there.
+        let tmp = std::env::temp_dir().join("roxy_can_resolve_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = tmp.join("motor.dbc");
+        std::fs::write(&f, "x").unwrap();
+        assert_eq!(
+            resolve_dbc("motor.dbc", Some(tmp.as_path())),
+            f.to_string_lossy()
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn project_file_round_trips_layout_and_config() {
+        let app = App::new();
+        let proj = ProjectFile {
+            version: 1,
+            layout: "[Window][Trace 1]\nPos=10,20\n[Docking][Data]\n".to_string(),
+            config: Config::from_app(&app, None),
+        };
+        let text = serde_json::to_string(&proj).unwrap();
+        let back: ProjectFile = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.version, 1);
+        assert!(back.layout.contains("[Docking][Data]"));
+        assert_eq!(back.config.channels.len(), app.channels.len());
     }
 }

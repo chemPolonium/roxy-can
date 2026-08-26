@@ -30,9 +30,6 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.small_button("+ Add bus") {
         app.add_channel();
     }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Add a new CAN bus (loads the sample DBC)");
-    }
     ui.same_line();
     ui.text(format!("{} bus(es)", app.channels.len()));
     ui.separator();
@@ -90,9 +87,6 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             if ui.small_button(format!("x##busrm{i}")) {
                 remove = Some(i);
-            }
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Remove this bus (the last one cannot be removed)");
             }
         }
     }

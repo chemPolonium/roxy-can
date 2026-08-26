@@ -6,6 +6,7 @@ pub mod idfilter;
 pub mod measurement;
 pub mod messages;
 pub mod network;
+pub mod project_modal;
 pub mod siglist;
 pub mod stats;
 pub mod statusbar;
@@ -30,4 +31,5 @@ pub fn render(app: &mut App, ui: &Ui) {
     data::render(app, ui);
     graphics::render(app, ui);
     statusbar::render(app, ui);
+    project_modal::render(app, ui);
 }

@@ -50,6 +50,7 @@ struct State {
     last_cursor: Option<imgui::MouseCursor>,
     ime_pos: Option<(bool, f32, f32, f32)>,
     ctrl: bool,
+    last_title: String,
 }
 
 impl State {
@@ -152,7 +153,10 @@ impl State {
         );
 
         let mut app = app::App::new();
-        app.load_config();
+        app.startup_workspace();
+        // The default layout for New Project is whatever imgui persisted
+        // last; empty when there is no ini yet.
+        app.default_layout = std::fs::read_to_string("roxy-can.ini").unwrap_or_default();
 
         State {
             context,
@@ -168,6 +172,7 @@ impl State {
             last_cursor: None,
             ime_pos: None,
             ctrl: false,
+            last_title: String::new(),
         }
     }
 
@@ -192,6 +197,25 @@ impl State {
         self.platform
             .prepare_frame(self.context.io_mut(), &self.window)
             .expect("prepare_frame failed");
+
+        // Project layouts are applied between imgui frames; the captured
+        // text is embedded when the project is saved.
+        if let Some(l) = self.app.pending_layout.take() {
+            self.context.load_ini_settings(&l);
+        }
+        self.app.layout_cache.clear();
+        self.context.save_ini_settings(&mut self.app.layout_cache);
+
+        let title = if self.app.project_path.is_none() {
+            "Untitled * - roxy-can".to_string()
+        } else {
+            format!("{} - roxy-can", self.app.project_name())
+        };
+        if self.last_title != title {
+            self.window.set_title(&title);
+            self.last_title = title.clone();
+        }
+
         let ui = self.context.frame();
 
         self.app.update();
@@ -262,7 +286,12 @@ impl ApplicationHandler for Program {
     fn window_event(&mut self, el: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
         let st = self.state.as_mut().unwrap();
         match &event {
-            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::CloseRequested => {
+                st.app.request_quit();
+                if st.app.quit {
+                    el.exit();
+                }
+            }
             WindowEvent::DroppedFile(path) => st.app.open_dropped(path),
             WindowEvent::Resized(size) => {
                 st.surface_desc.width = size.width.max(1);
@@ -326,7 +355,10 @@ impl ApplicationHandler for Program {
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
         if let Some(st) = &mut self.state {
-            st.app.save_config();
+            if let Some(p) = st.app.project_path.clone() {
+                st.app.save_project(Some(p));
+            }
+            st.app.write_meta();
         }
     }
 }

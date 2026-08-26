@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::can::frame::{CanFrame, Direction};
+use crate::config::{Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 use crate::dbc::SymbolTable;
 use crate::log::asc::{AscWriter, parse_asc};
 use crate::source::FrameSource;
@@ -155,6 +157,14 @@ pub enum Mode {
     Replay,
 }
 
+/// Deferred action waiting behind the "unsaved project" confirmation modal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PendingAction {
+    Quit,
+    NewProject,
+    OpenProject,
+}
+
 pub struct App {
     pub measuring: bool,
     pub recording: bool,
@@ -167,12 +177,22 @@ pub struct App {
     pub trace_paused: bool,
     paused_at_us: Option<u64>,
     pub channels: Vec<Channel>,
-    pub dbc_pick: usize,
     pub status: String,
     pub asc_path: String,
     asc_frames: Vec<CanFrame>,
     pub recent_dbc: Vec<String>,
     pub recent_asc: Vec<String>,
+    /// Path of the currently open .rxproj project; None = untitled workspace.
+    pub project_path: Option<PathBuf>,
+    pub recent_projects: Vec<String>,
+    /// imgui layout text captured every frame by main; embedded on save.
+    pub layout_cache: String,
+    /// Layout captured on the very first frame, restored by New Project.
+    pub default_layout: String,
+    /// Layout queued to be applied by main before the next imgui frame.
+    pub pending_layout: Option<String>,
+    /// Set when a destructive action must first pass the unsaved-project modal.
+    pub pending_action: Option<PendingAction>,
     pub replay_speed: f64,
     pub record_path: String,
     pub last_record: String,
@@ -242,12 +262,17 @@ impl App {
                     dbc_path: "assets/motbus.dbc".to_string(),
                 },
             ],
-            dbc_pick: 0,
             status: "stopped".to_string(),
             asc_path: String::new(),
             asc_frames: Vec::new(),
             recent_dbc: Vec::new(),
             recent_asc: Vec::new(),
+            project_path: None,
+            recent_projects: Vec::new(),
+            layout_cache: String::new(),
+            default_layout: String::new(),
+            pending_layout: None,
+            pending_action: None,
             replay_speed: 1.0,
             record_path: String::new(),
             last_record: String::new(),
@@ -436,7 +461,6 @@ impl App {
             fix_scope(&mut w.scope);
         }
         self.net_selected = 0;
-        self.dbc_pick = self.dbc_pick.min(self.channels.len() - 1);
         self.status = format!("bus {name} removed");
     }
 
@@ -592,7 +616,7 @@ impl App {
     }
 
     pub fn pick_dbc(&mut self) {
-        let ch = self.dbc_pick.min(self.channels.len().saturating_sub(1));
+        let ch = 0;
         let name = self.channel_name(ch as u8);
         if let Some(p) = rfd::FileDialog::new()
             .set_title(format!("Open DBC for {name}"))
@@ -626,8 +650,8 @@ impl App {
         }
     }
 
-    /// Opens a file dropped onto the window: a DBC goes into the bus
-    /// selected in the toolbar, an ASC becomes the replay log.
+    /// Opens a file dropped onto the window: a DBC goes into the first
+    /// bus, an ASC becomes the replay log.
     pub fn open_dropped(&mut self, path: &std::path::Path) {
         let ext = path
             .extension()
@@ -635,8 +659,7 @@ impl App {
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
             Some("dbc") => {
-                let ch = self.dbc_pick.min(self.channels.len().saturating_sub(1));
-                self.open_dbc_for(ch, path.to_string_lossy().into_owned());
+                self.open_dbc_for(0, path.to_string_lossy().into_owned());
             }
             Some("asc") => self.load_asc(&path.to_string_lossy()),
             _ => {
@@ -998,6 +1021,162 @@ impl App {
         for g in &mut self.graphics {
             g.t_offset_s = 0.0;
         }
+    }
+
+    /// Rebuilds the whole workspace back to factory defaults, keeping only
+    /// the machine-local recents and the captured default layout.
+    pub fn reset_to_defaults(&mut self) {
+        self.stop();
+        let recent_dbc = std::mem::take(&mut self.recent_dbc);
+        let recent_asc = std::mem::take(&mut self.recent_asc);
+        let recent_projects = std::mem::take(&mut self.recent_projects);
+        let default_layout = std::mem::take(&mut self.default_layout);
+        *self = App::new();
+        self.recent_dbc = recent_dbc;
+        self.recent_asc = recent_asc;
+        self.recent_projects = recent_projects;
+        self.default_layout = default_layout;
+    }
+
+    /// Display name of the current project: the file stem, or "Untitled".
+    pub fn project_name(&self) -> String {
+        self.project_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    pub fn push_recent_project(&mut self, path: String) {
+        push_recent(&mut self.recent_projects, path);
+    }
+
+    /// Saves the workspace as a .rxproj file. `None` opens a picker.
+    /// Returns true when a file was written.
+    pub fn save_project(&mut self, path: Option<PathBuf>) -> bool {
+        let path = match path {
+            Some(p) => p,
+            None => {
+                let mut dlg = rfd::FileDialog::new().add_filter("roxy-can project", &[PROJECT_EXT]);
+                if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
+                    dlg = dlg.set_directory(dir);
+                }
+                dlg = dlg.set_file_name(format!("{}.rxproj", self.project_name()));
+                match dlg.save_file() {
+                    Some(p) => p,
+                    None => return false,
+                }
+            }
+        };
+        let base = path.parent().map(|d| d.to_path_buf());
+        let proj = ProjectFile {
+            version: 1,
+            layout: self.layout_cache.clone(),
+            config: Config::from_app(self, base.as_deref()),
+        };
+        let written = serde_json::to_string_pretty(&proj)
+            .map_err(|e| e.to_string())
+            .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => {
+                self.push_recent_project(path.to_string_lossy().to_string());
+                self.project_path = Some(path.clone());
+                self.status = format!("project saved: {}", path.display());
+                true
+            }
+            Err(e) => {
+                self.status = format!("project save failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Loads a .rxproj file, replacing the current workspace.
+    pub fn open_project_path(&mut self, path: &Path) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = format!("project read failed: {e}");
+                return;
+            }
+        };
+        match serde_json::from_str::<ProjectFile>(&text) {
+            Ok(proj) => {
+                self.reset_to_defaults();
+                let mut cfg = proj.config;
+                cfg.resolve_paths(path.parent());
+                cfg.apply(self);
+                self.project_path = Some(path.to_path_buf());
+                if !proj.layout.is_empty() {
+                    self.pending_layout = Some(proj.layout);
+                }
+                self.push_recent_project(path.to_string_lossy().to_string());
+                self.status = format!("project loaded: {}", path.display());
+            }
+            Err(e) => self.status = format!("project ignored: {e}"),
+        }
+    }
+
+    pub fn open_project_dialog(&mut self) {
+        let pick = rfd::FileDialog::new()
+            .add_filter("roxy-can project", &[PROJECT_EXT])
+            .pick_file();
+        if let Some(p) = pick {
+            self.open_project_path(&p);
+        }
+    }
+
+    /// Starts a fresh untitled workspace with the default window layout.
+    pub fn new_project(&mut self) {
+        self.reset_to_defaults();
+        if !self.default_layout.is_empty() {
+            self.pending_layout = Some(self.default_layout.clone());
+        }
+        self.status = "new project".to_string();
+    }
+
+    /// Saved projects quit silently (auto-save on exit); untitled ones go
+    /// through the confirmation modal first.
+    pub fn request_quit(&mut self) {
+        if self.project_path.is_some() {
+            self.quit = true;
+        } else {
+            self.pending_action = Some(PendingAction::Quit);
+        }
+    }
+
+    /// Writes the startup driver (last project + recent projects).
+    pub fn write_meta(&self) {
+        let meta = Meta {
+            last_project: self
+                .project_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            recent_projects: self.recent_projects.clone(),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = std::fs::write(META_PATH, json);
+        }
+    }
+
+    /// Startup restore: reopen the last project when one is known, import
+    /// the legacy `roxy-can.json` on a very first launch, else defaults.
+    pub fn startup_workspace(&mut self) {
+        if let Ok(text) = std::fs::read_to_string(META_PATH) {
+            if let Ok(meta) = serde_json::from_str::<Meta>(&text) {
+                self.recent_projects = meta.recent_projects;
+                if let Some(last) = meta.last_project {
+                    let path = PathBuf::from(last);
+                    if path.exists() {
+                        self.open_project_path(&path);
+                    } else {
+                        self.status = "last project missing, started empty".to_string();
+                    }
+                }
+                return;
+            }
+        }
+        self.load_config();
     }
 
     pub fn update(&mut self) {
@@ -1874,14 +2053,13 @@ mod tests {
     }
 
     #[test]
-    fn dropping_a_dbc_loads_it_into_the_selected_bus() {
+    fn dropping_a_dbc_loads_it_into_the_first_bus() {
         let mut app = App::new();
-        app.dbc_pick = 1;
         app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
-        assert_eq!(app.channels[1].dbc_path, "assets/motbus.dbc");
+        assert_eq!(app.channels[0].dbc_path, "assets/motbus.dbc");
         assert!(
-            app.channels[1].dbc.is_some(),
-            "dropped DBC is parsed into the selected bus"
+            app.channels[0].dbc.is_some(),
+            "dropped DBC is parsed into the first bus"
         );
         assert_eq!(app.recent_dbc[0], "assets/motbus.dbc");
     }
@@ -1892,6 +2070,36 @@ mod tests {
         app.graphics[0].t_offset_s = -42.0;
         app.jump_to_live();
         assert_eq!(app.graphics[0].t_offset_s, 0.0);
+    }
+
+    #[test]
+    fn reset_restores_the_default_workspace() {
+        let mut app = App::new();
+        app.new_trace_window();
+        app.push_recent_dbc("keep.dbc".to_string());
+        app.start_virtual();
+        app.reset_to_defaults();
+        assert!(!app.measuring, "reset stops a running measurement");
+        assert_eq!(app.trace_windows.len(), 1, "default has one trace window");
+        assert!(app.project_path.is_none());
+        assert_eq!(app.recent_dbc[0], "keep.dbc", "recents survive the reset");
+    }
+
+    #[test]
+    fn project_round_trips_through_an_rxproj_file() {
+        let mut app = App::new();
+        app.trace_windows[0].filter = "Motor".to_string();
+        let path = std::env::temp_dir().join("roxy_can_test.rxproj");
+        assert!(app.save_project(Some(path.clone())), "save writes the file");
+        assert_eq!(app.project_path.as_deref(), Some(path.as_path()));
+
+        let mut restored = App::new();
+        restored.open_project_path(&path);
+        assert_eq!(restored.project_path.as_deref(), Some(path.as_path()));
+        assert_eq!(restored.trace_windows[0].filter, "Motor");
+        assert_eq!(restored.channels.len(), app.channels.len());
+        assert_eq!(restored.tx_list.len(), app.tx_list.len());
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
@@ -1920,6 +2128,30 @@ mod tests {
         );
         assert!(sub.min <= sub.avg && sub.avg <= sub.max, "avg within range");
         assert!(!sub.history.is_empty(), "history sampled");
+    }
+
+    #[test]
+    fn restored_signals_are_resubscribed() {
+        let mut app = App::new();
+        let key = {
+            let db = app.channel_dbc(0).expect("sample DBC loaded");
+            let id = db.order[0];
+            (0u8, id, db.messages[&id].signals[0].name.clone())
+        };
+        app.subscribe(key.clone());
+        app.graphics[0].signals.push(GfxSignal {
+            key: key.clone(),
+            visible: true,
+        });
+        let path = std::env::temp_dir().join("roxy_can_resub.rxproj");
+        assert!(app.save_project(Some(path.clone())));
+        let mut restored = App::new();
+        restored.open_project_path(&path);
+        assert!(
+            restored.subs.contains_key(&key),
+            "restored signal is resubscribed so it is not grey"
+        );
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

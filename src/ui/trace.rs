@@ -120,9 +120,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     if ui.small_button(format!("Export##tx{i}")) {
         app.export_trace_dialog(i);
     }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Export this trace as ASC");
-    }
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -164,9 +161,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         init_width_or_weight: 32.0,
         ..TableColumnSetup::new("DLC")
     });
+    // 8 bytes of hex fit in ~165px; keep it fixed so the column stops
+    // stretching with the window.
     ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.6,
+        flags: TableColumnFlags::WIDTH_FIXED,
+        init_width_or_weight: 165.0,
         ..TableColumnSetup::new("Data")
     });
     ui.table_setup_column_with(TableColumnSetup {

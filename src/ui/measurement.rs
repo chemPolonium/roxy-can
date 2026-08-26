@@ -3,21 +3,11 @@ use crate::ui::idfilter::{scope_combo, target_name};
 use crate::ui::siglist::ListKind;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
-fn tip(ui: &Ui, text: &str) {
-    if ui.is_item_hovered() {
-        ui.tooltip_text(text);
-    }
-}
-
 /// "Go to" button: opens the window if hidden and always brings it to the
 /// front. There is no close action — windows close via their own title
 /// bar. `###` keeps the widget ID stable.
 fn goto_button(ui: &Ui, id: &str) -> bool {
-    let clicked = ui.button(format!("->###goto_{id}"));
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Open and jump to this window");
-    }
-    clicked
+    ui.button(format!("->###goto_{id}"))
 }
 
 /// Single-table overview of every observer (Trace, Messages, Statistics,
@@ -43,27 +33,22 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.small_button("+ Trace") {
         app.new_trace_window();
     }
-    tip(ui, "Add a Trace observer (frame list)");
     ui.same_line();
     if ui.small_button("+ Messages") {
         app.new_msg_window();
     }
-    tip(ui, "Add a Messages observer (aggregated by ID)");
     ui.same_line();
     if ui.small_button("+ Statistics") {
         app.new_stats_window();
     }
-    tip(ui, "Add a Statistics observer");
     ui.same_line();
     if ui.small_button("+ Graphics") {
         app.new_graphics_window();
     }
-    tip(ui, "Add a Graphics observer (signal plots)");
     ui.same_line();
     if ui.small_button("+ Data") {
         app.new_data_window();
     }
-    tip(ui, "Add a Data observer (signal values)");
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -100,8 +85,8 @@ fn content(app: &mut App, ui: &Ui) {
             ..TableColumnSetup::new("Name")
         });
         ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.6,
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 160.0,
             ..TableColumnSetup::new("Filter")
         });
         ui.table_setup_column_with(TableColumnSetup {
@@ -236,12 +221,10 @@ fn trace_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if ui.small_button(format!("ASC##save_t{i}")) {
         app.export_trace_dialog(i);
     }
-    tip(ui, "Export filtered frames as ASC");
     ui.table_next_column();
     if ui.small_button(format!("x##t{i}")) {
         *rm = Some(i);
     }
-    tip(ui, "Remove this observer");
 }
 
 fn messages_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
@@ -272,12 +255,10 @@ fn messages_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if ui.small_button(format!("CSV##save_m{i}")) {
         app.export_messages_dialog(i);
     }
-    tip(ui, "Export the visible aggregation rows as CSV");
     ui.table_next_column();
     if ui.small_button(format!("x##m{i}")) {
         *rm = Some(i);
     }
-    tip(ui, "Remove this observer");
 }
 
 fn stats_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
@@ -308,12 +289,10 @@ fn stats_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if ui.small_button(format!("CSV##save_s{i}")) {
         app.export_stats_dialog(i);
     }
-    tip(ui, "Export per-message statistics as CSV");
     ui.table_next_column();
     if ui.small_button(format!("x##s{i}")) {
         *rm = Some(i);
     }
-    tip(ui, "Remove this observer");
 }
 
 /// Filter cell of a Graphics/Data row: a "…" button opening the Signal
@@ -346,7 +325,6 @@ fn signal_cell(app: &mut App, ui: &Ui, kind: ListKind) {
         });
         app.show_id_filter = true;
     }
-    tip(ui, "Select signals for this window");
     ui.same_line();
     ui.text(format!("{vis}/{total}"));
 }
@@ -372,12 +350,10 @@ fn graphics_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if ui.small_button(format!("CSV##save_g{i}")) {
         app.export_graphics_dialog(i);
     }
-    tip(ui, "Export the plotted signal history as CSV");
     ui.table_next_column();
     if ui.small_button(format!("x##g{i}")) {
         *rm = Some(i);
     }
-    tip(ui, "Remove this observer");
 }
 
 fn data_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
@@ -401,10 +377,8 @@ fn data_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     if ui.small_button(format!("CSV##save_d{i}")) {
         app.export_data_dialog(i);
     }
-    tip(ui, "Export the latest signal values as CSV");
     ui.table_next_column();
     if ui.small_button(format!("x##d{i}")) {
         *rm = Some(i);
     }
-    tip(ui, "Remove this observer");
 }

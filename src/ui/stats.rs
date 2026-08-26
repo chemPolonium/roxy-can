@@ -53,9 +53,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     if ui.small_button(format!("Export##sx{i}")) {
         app.export_stats_dialog(i);
     }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Export this view as CSV");
-    }
 
     let w = app.stats_windows[i].clone();
     let mut keys: Vec<(u8, u32)> = app

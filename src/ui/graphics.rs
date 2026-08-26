@@ -76,9 +76,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         format!("{}s window", fmt_tw(tw))
     };
     ui.text(&range);
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Current time range (mouse wheel to zoom)");
-    }
     let mut stacked = app.graphics[i].stacked;
     ui.radio_button("Overlay", &mut stacked, false);
     ui.same_line();
@@ -86,20 +83,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     app.graphics[i].stacked = stacked;
     ui.same_line();
     ui.checkbox("Cursor", &mut app.graphics[i].show_cursor);
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Show a measurement cursor that follows the mouse");
-    }
     ui.same_line();
     ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Mouse wheel zooms the time axis, left-drag pans");
-    }
     ui.same_line();
     if ui.button("Live") {
         app.graphics[i].t_offset_s = 0.0;
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Jump back to the live edge");
     }
 
     ui.separator();

@@ -66,9 +66,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     if ui.small_button(format!("Export##mx{i}")) {
         app.export_messages_dialog(i);
     }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("Export this view as CSV");
-    }
 
     let w = app.msg_windows[i].clone();
     let filter = w.filter.trim().to_lowercase();
@@ -134,8 +131,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         ..TableColumnSetup::new("Cycle (ms)")
     });
     ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.6,
+        flags: TableColumnFlags::WIDTH_FIXED,
+        init_width_or_weight: 165.0,
         ..TableColumnSetup::new("Data")
     });
     ui.table_headers_row();

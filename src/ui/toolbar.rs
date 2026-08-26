@@ -19,12 +19,6 @@ fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
-fn tip(ui: &Ui, text: &str) {
-    if ui.is_item_hovered() {
-        ui.tooltip_text(text);
-    }
-}
-
 /// Global shortcuts dispatched from winit key events (see `crate::CMD`):
 /// F9 start/stop, Ctrl+R record, Ctrl+E export, Ctrl+O open DBC,
 /// Space play/pause, -/+ replay speed, Home jump to the live edge.
@@ -80,6 +74,52 @@ pub fn render(app: &mut App, ui: &Ui) {
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu("File", || {
+                    if ui.menu_item("New Project") {
+                        if app.project_path.is_some() {
+                            let p = app.project_path.clone().unwrap();
+                            app.save_project(Some(p));
+                            app.new_project();
+                        } else {
+                            app.pending_action = Some(crate::app::PendingAction::NewProject);
+                        }
+                    }
+                    if ui.menu_item("Open Project...") {
+                        if app.project_path.is_some() {
+                            let p = app.project_path.clone().unwrap();
+                            app.save_project(Some(p));
+                            app.open_project_dialog();
+                        } else {
+                            app.pending_action = Some(crate::app::PendingAction::OpenProject);
+                        }
+                    }
+                    if !app.recent_projects.is_empty() {
+                        ui.menu("Recent Projects", || {
+                            let paths = app.recent_projects.clone();
+                            for p in paths {
+                                if ui.menu_item(&file_name(&p)) {
+                                    if app.project_path.is_some() {
+                                        let cur = app.project_path.clone().unwrap();
+                                        app.save_project(Some(cur));
+                                    }
+                                    app.open_project_path(std::path::Path::new(&p));
+                                }
+                            }
+                        });
+                    }
+                    if ui.menu_item("Save Project") {
+                        match app.project_path.clone() {
+                            Some(p) => {
+                                app.save_project(Some(p));
+                            }
+                            None => {
+                                app.save_project(None);
+                            }
+                        }
+                    }
+                    if ui.menu_item("Save Project As...") {
+                        app.save_project(None);
+                    }
+                    ui.separator();
                     if ui.menu_item("Open DBC...\tCtrl+O") {
                         app.pick_dbc();
                     }
@@ -91,10 +131,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             let paths = app.recent_dbc.clone();
                             for p in paths {
                                 if ui.menu_item(&file_name(&p)) {
-                                    let ch = app
-                                        .dbc_pick
-                                        .min(app.channels.len().saturating_sub(1));
-                                    app.open_dbc_for(ch, p);
+                                    app.open_dbc_for(0, p);
                                 }
                             }
                         });
@@ -115,7 +152,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     ui.separator();
                     if ui.menu_item("Exit") {
-                        app.quit = true;
+                        app.request_quit();
                     }
                 });
                 ui.menu("Measurement", || {
@@ -184,10 +221,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                     _ => Mode::Replay,
                 });
             }
-            tip(
-                ui,
-                "Mode used by Play; switching stops the current run (replay needs a loaded ASC, a picker opens otherwise)",
-            );
             vsep(ui);
             // Player-style transport: slower | play/pause | faster | stop.
             let slower = ui.begin_disabled(!matches!(app.mode, Mode::Replay));
@@ -195,7 +228,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 app.step_replay_speed(-1);
             }
             slower.end();
-            tip(ui, "Slow the replay down one step");
             ui.same_line();
             // Fixed width so toggling Play/Pause never shifts the buttons
             // behind it.
@@ -203,21 +235,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                 if ui.button_with_size("Play", [60.0, 0.0]) {
                     app.start_selected();
                 }
-                let what = match app.run_mode {
-                    Mode::Virtual => "simulation",
-                    Mode::Replay => "replay",
-                };
-                tip(ui, &format!("Start {what} (F9)"));
             } else if app.trace_paused {
                 if ui.button_with_size("Play", [60.0, 0.0]) {
                     app.trace_paused = false;
                 }
-                tip(ui, "Resume measurement");
             } else {
                 if ui.button_with_size("Pause", [60.0, 0.0]) {
                     app.trace_paused = true;
                 }
-                tip(ui, "Freeze the trace; replay playback stops in place");
             }
             ui.same_line();
             let faster = ui.begin_disabled(!matches!(app.mode, Mode::Replay));
@@ -225,14 +250,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                 app.step_replay_speed(1);
             }
             faster.end();
-            tip(ui, "Speed the replay up one step");
             ui.same_line();
             let stop = ui.begin_disabled(!app.measuring);
             if ui.button("Stop") {
                 app.stop();
             }
             stop.end();
-            tip(ui, "Stop measurement (F9)");
             ui.same_line();
             let labels = ["0.5x", "1x", "2x", "4x"];
             let mut pick = REPLAY_SPEEDS
@@ -243,61 +266,34 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.combo_simple_string("##speed", &mut pick, &labels) {
                 app.set_replay_speed(REPLAY_SPEEDS[pick]);
             }
-            tip(ui, "Replay playback speed (applies immediately)");
-            vsep(ui);
-            let mut rec = app.recording;
-            if ui.checkbox("Record", &mut rec) {
-                app.toggle_record();
-            }
-            tip(ui, "Record ASC (Ctrl+R)");
-            ui.same_line();
-            ui.align_text_to_frame_padding();
-            ui.text("to");
-            ui.same_line();
-            ui.set_next_item_width(130.0);
-            ui.input_text("##record", &mut app.record_path)
-                .hint("record")
-                .build();
-            ui.same_line();
-            ui.align_text_to_frame_padding();
-            ui.text("_<date>.asc");
-            vsep(ui);
-            if app.dbc_pick >= app.channels.len() {
-                app.dbc_pick = 0;
-            }
-            let ch_names: Vec<String> = (0..app.channels.len())
-                .map(|i| app.channel_name(i as u8))
-                .collect();
-            ui.set_next_item_width(64.0);
-            ui.combo_simple_string("##dbcch", &mut app.dbc_pick, &ch_names);
-            tip(ui, "Bus to load the next DBC into");
-            ui.same_line();
-            if ui.button("Open DBC...") {
-                app.pick_dbc();
-            }
-            tip(ui, "Open a DBC for the selected bus (Ctrl+O)");
-            let path = app
-                .channels
-                .get(app.dbc_pick)
-                .map(|c| c.dbc_path.clone())
-                .unwrap_or_default();
-            if !path.trim().is_empty() {
+            if matches!(app.run_mode, Mode::Virtual) {
+                vsep(ui);
+                let mut rec = app.recording;
+                if ui.checkbox("Record", &mut rec) {
+                    app.toggle_record();
+                }
                 ui.same_line();
                 ui.align_text_to_frame_padding();
-                ui.text(file_name(&path));
-            }
-            vsep(ui);
-            if ui.button("Open ASC...") {
-                app.pick_asc();
-            }
-            tip(
-                ui,
-                "Load an ASC log for replay (Play in Replay mode plays it)",
-            );
-            if !app.asc_path.trim().is_empty() {
+                ui.text("to");
+                ui.same_line();
+                ui.set_next_item_width(130.0);
+                ui.input_text("##record", &mut app.record_path)
+                    .hint("record")
+                    .build();
                 ui.same_line();
                 ui.align_text_to_frame_padding();
-                ui.text(file_name(&app.asc_path));
+                ui.text("_<date>.asc");
+            }
+            if matches!(app.run_mode, Mode::Replay) {
+                vsep(ui);
+                if ui.button("Open ASC...") {
+                    app.pick_asc();
+                }
+                if !app.asc_path.trim().is_empty() {
+                    ui.same_line();
+                    ui.align_text_to_frame_padding();
+                    ui.text(file_name(&app.asc_path));
+                }
             }
         });
 }

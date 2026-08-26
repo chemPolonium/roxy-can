@@ -149,7 +149,7 @@ fn set_target_scope(app: &mut App, scope: SigScope) {
 }
 
 /// Message-level selection for Trace/Messages/Statistics: one checkbox per
-/// message; hovering a row shows its signals in a tooltip.
+/// message.
 fn message_content(app: &mut App, ui: &Ui) {
     let Some(target) = app.popup_target else {
         return;
@@ -253,15 +253,6 @@ fn message_content(app: &mut App, ui: &Ui) {
                 }
                 set_target_scope(app, SigScope::Manual);
             }
-            if ui.is_item_hovered() && !e.signals.is_empty() {
-                let signals = e.signals.clone();
-                ui.tooltip(|| {
-                    ui.text(format!("{} signal(s):", signals.len()));
-                    for s in &signals {
-                        ui.text(s);
-                    }
-                });
-            }
         }
     }
 }
@@ -301,7 +292,6 @@ fn signal_content(app: &mut App, ui: &Ui) {
             app.set_win_signal(target, key, false);
         }
     }
-    tip_signals(ui, "Remove all signals from this window");
     ui.same_line();
     ui.text(format!("{} signal(s) selected", selected.len()));
     ui.separator();
@@ -388,7 +378,6 @@ fn signal_content(app: &mut App, ui: &Ui) {
                     actions.push((k.clone(), msg_on));
                 }
             }
-            tip_signals(ui, "Select or deselect every signal of this message");
             ui.same_line();
             let mtoken = ui
                 .tree_node_config(format!(
@@ -411,12 +400,6 @@ fn signal_content(app: &mut App, ui: &Ui) {
 
     for (key, on) in actions {
         app.set_win_signal(target, key, on);
-    }
-}
-
-fn tip_signals(ui: &Ui, text: &str) {
-    if ui.is_item_hovered() {
-        ui.tooltip_text(text);
     }
 }
 

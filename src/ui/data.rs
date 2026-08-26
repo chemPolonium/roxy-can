@@ -115,9 +115,6 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             if ui.is_item_clicked() {
                 new_mode = Some(!viz_bar);
             }
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Click to switch between bar and sparkline");
-            }
         }
     }
     if let Some(mode) = new_mode {
