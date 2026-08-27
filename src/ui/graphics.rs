@@ -1,24 +1,30 @@
 use crate::app::{App, PALETTE};
 use imgui::{Condition, Ui};
 
-/// Zoom ladder: 1-2-5 steps from a close-up up to one hour, so every
-/// zoom level is a round, analysis-friendly window instead of an
-/// arbitrary ratio.
-const TIME_STEPS: [f64; 15] = [
-    0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
+/// Zoom ladder: round, analysis-friendly window lengths from a close-up up
+/// to one hour; wheel zoom and the preset button row share this ladder.
+const TIME_STEPS: [f64; 14] = [
+    0.1, 0.2, 0.5, 1.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
 ];
 const PANEL_W: f32 = 190.0;
 
-/// Direct-select window lengths, a subset of TIME_STEPS shown as a
-/// button row in each Graphics window.
-const TW_PRESETS: [(f64, &str); 7] = [
+/// Direct-select window lengths: the whole TIME_STEPS ladder as a button
+/// row in each Graphics window.
+const TW_PRESETS: [(f64, &str); 14] = [
+    (0.1, "0.1s"),
+    (0.2, "0.2s"),
+    (0.5, "0.5s"),
     (1.0, "1s"),
     (5.0, "5s"),
     (10.0, "10s"),
+    (20.0, "20s"),
     (30.0, "30s"),
     (60.0, "1m"),
+    (120.0, "2m"),
     (300.0, "5m"),
+    (600.0, "10m"),
     (1800.0, "30m"),
+    (3600.0, "1h"),
 ];
 
 /// Moves the current window along TIME_STEPS: wheel up zooms in (smaller
@@ -81,7 +87,12 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 ui.push_style_color(imgui::StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]),
             )
         });
-        if ui.small_button(format!("{label}##tw{i}")) {
+        let text = if selected {
+            format!("[{label}]##tw{i}")
+        } else {
+            format!("{label}##tw{i}")
+        };
+        if ui.small_button(text) {
             app.graphics[i].time_window_s = *val;
         }
         drop(colors);
