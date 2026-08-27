@@ -1,12 +1,12 @@
-use crate::app::{STATUSBAR_H, TOOLBAR_H};
+use crate::app::{STATUSBAR_H, TABSTRIP_H, TOOLBAR_H};
 use imgui::{Condition, Ui, WindowFlags};
 
 /// Invisible host window providing a dock space between the toolbar and the
-/// status bar; other windows can be dragged onto its edges to snap/dock.
+/// desktop tab strip; other windows can be dragged onto its edges to dock.
 pub fn render(ui: &Ui) {
     let io = ui.io();
     let w = io.display_size[0];
-    let h = (io.display_size[1] - TOOLBAR_H - STATUSBAR_H).max(50.0);
+    let h = (io.display_size[1] - TOOLBAR_H - STATUSBAR_H - TABSTRIP_H).max(50.0);
     let flags = WindowFlags::NO_TITLE_BAR
         | WindowFlags::NO_RESIZE
         | WindowFlags::NO_MOVE

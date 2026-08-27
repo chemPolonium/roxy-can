@@ -1,5 +1,6 @@
 pub mod buses;
 pub mod data;
+pub mod desktops;
 pub mod dockspace;
 pub mod graphics;
 pub mod idfilter;
@@ -31,5 +32,6 @@ pub fn render(app: &mut App, ui: &Ui) {
     data::render(app, ui);
     graphics::render(app, ui);
     statusbar::render(app, ui);
+    desktops::render(app, ui);
     project_modal::render(app, ui);
 }

@@ -8,7 +8,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::app::{
-    App, Channel, DataWindow, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin,
+    App, Channel, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin,
+    TraceWin, WindowKind,
 };
 
 pub const CONFIG_PATH: &str = "roxy-can.json";
@@ -175,6 +176,26 @@ pub struct TxCfg {
     pub cycle_us: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct DesktopCfg {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub layout: String,
+    #[serde(default)]
+    pub open: Vec<(u8, String)>,
+    #[serde(default = "true_default")]
+    pub show_tx: bool,
+    #[serde(default = "true_default")]
+    pub show_network: bool,
+    #[serde(default = "true_default")]
+    pub show_measurement: bool,
+    #[serde(default)]
+    pub show_buses: bool,
+    #[serde(default)]
+    pub show_id_filter: bool,
+}
+
 fn cycle_default() -> u64 {
     100_000
 }
@@ -229,6 +250,10 @@ pub struct Config {
     pub recent_dbc: Vec<String>,
     #[serde(default)]
     pub recent_asc: Vec<String>,
+    #[serde(default)]
+    pub desktops: Vec<DesktopCfg>,
+    #[serde(default)]
+    pub active_desktop: usize,
 }
 
 fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
@@ -241,6 +266,23 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
             visible: s.visible,
         })
         .collect()
+}
+
+fn desktop_cfg(d: &Desktop) -> DesktopCfg {
+    DesktopCfg {
+        name: d.name.clone(),
+        layout: d.layout.clone(),
+        open: d
+            .open_windows
+            .iter()
+            .map(|(k, n)| (k.to_u8(), n.clone()))
+            .collect(),
+        show_tx: d.show_tx,
+        show_network: d.show_network,
+        show_measurement: d.show_measurement,
+        show_buses: d.show_buses,
+        show_id_filter: d.show_id_filter,
+    }
 }
 
 fn sig_keys(signals: Vec<SignalCfg>) -> Vec<GfxSignal> {
@@ -347,6 +389,18 @@ impl Config {
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
             recent_asc: app.recent_asc.clone(),
+            desktops: {
+                let mut ds: Vec<DesktopCfg> = app.desktops.iter().map(desktop_cfg).collect();
+                // The active desktop's stored state can lag behind the live
+                // windows; persist the live snapshot instead.
+                if let Some(d) = ds.get_mut(app.active_desktop) {
+                    let mut live = desktop_cfg(&app.desktop_snapshot());
+                    live.name = d.name.clone();
+                    *d = live;
+                }
+                ds
+            },
+            active_desktop: app.active_desktop,
         }
     }
 
@@ -455,7 +509,7 @@ impl Config {
                 .map(|g| GraphicsWindow {
                     name: g.name,
                     signals: sig_keys(g.signals),
-                    time_window_s: g.time_window_s.clamp(1.0, 3600.0),
+                    time_window_s: g.time_window_s.clamp(0.1, 3600.0),
                     stacked: g.stacked,
                     opened: g.opened,
                     t_offset_s: 0.0,
@@ -500,6 +554,41 @@ impl Config {
         for key in keys {
             app.subscribe(key);
         }
+        if !self.desktops.is_empty() {
+            app.desktops = self
+                .desktops
+                .into_iter()
+                .enumerate()
+                .map(|(i, d)| Desktop {
+                    name: if d.name.trim().is_empty() {
+                        format!("Desktop {}", i + 1)
+                    } else {
+                        d.name
+                    },
+                    layout: d.layout,
+                    open_windows: d
+                        .open
+                        .into_iter()
+                        .filter_map(|(k, n)| WindowKind::from_u8(k).map(|k| (k, n)))
+                        .collect(),
+                    show_tx: d.show_tx,
+                    show_network: d.show_network,
+                    show_measurement: d.show_measurement,
+                    show_buses: d.show_buses,
+                    show_id_filter: d.show_id_filter,
+                })
+                .collect();
+            app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);
+        } else {
+            // Legacy config without desktops: fold the restored window state
+            // into a single default desktop.
+            let mut snap = app.desktop_snapshot();
+            snap.name = "Desktop 1".to_string();
+            app.desktops = vec![snap];
+            app.active_desktop = 0;
+        }
+        let target = app.desktops[app.active_desktop].clone();
+        app.apply_desktop(&target);
     }
 }
 

@@ -13,6 +13,7 @@ use crate::source::virtual_source::VirtualSource;
 pub const TRACE_LIMIT: usize = 50_000;
 pub const TOOLBAR_H: f32 = 68.0;
 pub const STATUSBAR_H: f32 = 26.0;
+pub const TABSTRIP_H: f32 = 26.0;
 const HISTORY_LIMIT: usize = 4_000;
 const SAMPLE_INTERVAL_US: u64 = 50_000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
@@ -157,6 +158,53 @@ pub enum Mode {
     Replay,
 }
 
+/// Observer window categories a desktop tracks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WindowKind {
+    Trace,
+    Messages,
+    Statistics,
+    Graphics,
+    Data,
+}
+
+impl WindowKind {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            WindowKind::Trace => 0,
+            WindowKind::Messages => 1,
+            WindowKind::Statistics => 2,
+            WindowKind::Graphics => 3,
+            WindowKind::Data => 4,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(WindowKind::Trace),
+            1 => Some(WindowKind::Messages),
+            2 => Some(WindowKind::Statistics),
+            3 => Some(WindowKind::Graphics),
+            4 => Some(WindowKind::Data),
+            _ => None,
+        }
+    }
+}
+
+/// A named workspace arrangement: which windows/panels are open and where.
+#[derive(Clone)]
+pub struct Desktop {
+    pub name: String,
+    /// imgui ini text captured when the desktop was last active.
+    pub layout: String,
+    pub open_windows: Vec<(WindowKind, String)>,
+    pub show_tx: bool,
+    pub show_network: bool,
+    pub show_measurement: bool,
+    pub show_buses: bool,
+    pub show_id_filter: bool,
+}
+
 /// Deferred action waiting behind the "unsaved project" confirmation modal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingAction {
@@ -197,6 +245,12 @@ pub struct App {
     /// Config JSON snapshot of the last clean state (loaded/saved/reset);
     /// compared against the live config to decide if anything changed.
     baseline: String,
+    /// Named workspace arrangements; always holds at least one desktop.
+    pub desktops: Vec<Desktop>,
+    pub active_desktop: usize,
+    /// Target index of the rename popup; buffer holds the edited name.
+    pub desktop_rename_target: Option<usize>,
+    pub desktop_rename_buf: String,
     pub replay_speed: f64,
     pub record_path: String,
     pub last_record: String,
@@ -278,6 +332,10 @@ impl App {
             pending_layout: None,
             pending_action: None,
             baseline: String::new(),
+            desktops: Vec::new(),
+            active_desktop: 0,
+            desktop_rename_target: None,
+            desktop_rename_buf: String::new(),
             replay_speed: 1.0,
             record_path: String::new(),
             last_record: String::new(),
@@ -335,6 +393,10 @@ impl App {
         for (ch, id) in msgs {
             app.add_tx(ch, id);
         }
+        let mut first = app.desktop_snapshot();
+        first.name = "Desktop 1".to_string();
+        app.desktops = vec![first];
+        app.active_desktop = 0;
         app.baseline = app.config_snapshot();
         app
     }
@@ -1080,6 +1142,135 @@ impl App {
     /// Marks the current workspace as the clean baseline (after load/save).
     pub fn mark_clean(&mut self) {
         self.baseline = self.config_snapshot();
+    }
+
+    /// Live snapshot of the current window/panel arrangement.
+    pub fn desktop_snapshot(&self) -> Desktop {
+        let mut open_windows = Vec::new();
+        for w in &self.trace_windows {
+            if w.opened {
+                open_windows.push((WindowKind::Trace, w.name.clone()));
+            }
+        }
+        for w in &self.msg_windows {
+            if w.opened {
+                open_windows.push((WindowKind::Messages, w.name.clone()));
+            }
+        }
+        for w in &self.stats_windows {
+            if w.opened {
+                open_windows.push((WindowKind::Statistics, w.name.clone()));
+            }
+        }
+        for w in &self.graphics {
+            if w.opened {
+                open_windows.push((WindowKind::Graphics, w.name.clone()));
+            }
+        }
+        for w in &self.data_windows {
+            if w.opened {
+                open_windows.push((WindowKind::Data, w.name.clone()));
+            }
+        }
+        Desktop {
+            name: String::new(),
+            layout: self.layout_cache.clone(),
+            open_windows,
+            show_tx: self.show_tx,
+            show_network: self.show_network,
+            show_measurement: self.show_measurement,
+            show_buses: self.show_buses,
+            show_id_filter: self.show_id_filter,
+        }
+    }
+
+    /// Opens/closes windows and panels to match the given desktop.
+    pub fn apply_desktop(&mut self, d: &Desktop) {
+        let has = |kind: WindowKind, name: &str| {
+            d.open_windows.iter().any(|(k, n)| *k == kind && n == name)
+        };
+        for w in &mut self.trace_windows {
+            w.opened = has(WindowKind::Trace, &w.name);
+        }
+        for w in &mut self.msg_windows {
+            w.opened = has(WindowKind::Messages, &w.name);
+        }
+        for w in &mut self.stats_windows {
+            w.opened = has(WindowKind::Statistics, &w.name);
+        }
+        for w in &mut self.graphics {
+            w.opened = has(WindowKind::Graphics, &w.name);
+        }
+        for w in &mut self.data_windows {
+            w.opened = has(WindowKind::Data, &w.name);
+        }
+        self.show_tx = d.show_tx;
+        self.show_network = d.show_network;
+        self.show_measurement = d.show_measurement;
+        self.show_buses = d.show_buses;
+        self.show_id_filter = d.show_id_filter;
+        let layout = if d.layout.is_empty() {
+            self.default_layout.clone()
+        } else {
+            d.layout.clone()
+        };
+        if !layout.is_empty() {
+            self.pending_layout = Some(layout);
+        }
+    }
+
+    /// Refreshes the stored state of the active desktop from live state.
+    pub fn sync_active_desktop(&mut self) {
+        let mut snap = self.desktop_snapshot();
+        if let Some(d) = self.desktops.get_mut(self.active_desktop) {
+            snap.name = d.name.clone();
+            *d = snap;
+        }
+    }
+
+    pub fn switch_desktop(&mut self, idx: usize) {
+        if idx >= self.desktops.len() || idx == self.active_desktop {
+            return;
+        }
+        self.sync_active_desktop();
+        self.active_desktop = idx;
+        let target = self.desktops[idx].clone();
+        self.apply_desktop(&target);
+    }
+
+    /// Adds a desktop capturing the current arrangement and switches to it.
+    pub fn add_desktop(&mut self) {
+        let mut snap = self.desktop_snapshot();
+        snap.name = format!("Desktop {}", self.desktops.len() + 1);
+        self.desktops.push(snap);
+        self.active_desktop = self.desktops.len() - 1;
+    }
+
+    pub fn delete_desktop(&mut self, idx: usize) {
+        if self.desktops.len() <= 1 || idx >= self.desktops.len() {
+            return;
+        }
+        let was_active = idx == self.active_desktop;
+        self.desktops.remove(idx);
+        if idx < self.active_desktop {
+            self.active_desktop -= 1;
+        } else if self.active_desktop >= self.desktops.len() {
+            self.active_desktop = self.desktops.len() - 1;
+        }
+        if was_active {
+            let target = self.desktops[self.active_desktop].clone();
+            self.apply_desktop(&target);
+        }
+    }
+
+    pub fn rename_desktop(&mut self, idx: usize, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        if let Some(d) = self.desktops.get_mut(idx) {
+            d.name = name;
+        }
     }
 
     pub fn run_action(&mut self, action: PendingAction) {
@@ -2291,6 +2482,68 @@ mod tests {
         assert!(!restored.is_dirty(), "restored autosave starts clean");
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(crate::config::AUTOSAVE_PATH).ok();
+    }
+
+    #[test]
+    fn desktop_switching_restores_window_visibility() {
+        let mut app = App::new();
+        assert!(app.trace_windows[0].opened);
+        assert!(app.show_network);
+        app.add_desktop();
+        app.trace_windows[0].opened = false;
+        app.show_network = false;
+        app.switch_desktop(0);
+        assert_eq!(app.active_desktop, 0);
+        assert!(app.trace_windows[0].opened, "desktop 1 reopens its windows");
+        assert!(app.show_network, "desktop 1 restores the panel state");
+        app.switch_desktop(1);
+        assert!(!app.trace_windows[0].opened, "desktop 2 keeps it closed");
+        assert!(!app.show_network);
+    }
+
+    #[test]
+    fn desktops_round_trip_through_config() {
+        let mut app = App::new();
+        app.add_desktop();
+        app.switch_desktop(0);
+        let cfg = Config::from_app(&app, None);
+        let mut restored = App::new();
+        cfg.apply(&mut restored);
+        assert_eq!(restored.desktops.len(), 2);
+        assert_eq!(restored.desktops[0].name, "Desktop 1");
+        assert_eq!(restored.desktops[1].name, "Desktop 2");
+        assert_eq!(restored.active_desktop, 0);
+        assert_eq!(
+            restored.desktops[0].open_windows.len(),
+            app.desktops[0].open_windows.len()
+        );
+    }
+
+    #[test]
+    fn delete_desktop_keeps_at_least_one() {
+        let mut app = App::new();
+        app.delete_desktop(0);
+        assert_eq!(app.desktops.len(), 1, "the last desktop cannot be deleted");
+        app.add_desktop();
+        app.add_desktop();
+        assert_eq!(app.active_desktop, 2);
+        app.delete_desktop(2);
+        assert_eq!(app.desktops.len(), 2);
+        assert_eq!(app.active_desktop, 1, "deleting the active one falls back");
+        app.delete_desktop(0);
+        assert_eq!(app.active_desktop, 0, "indices shift when deleting below");
+        assert_eq!(app.desktops.len(), 1);
+    }
+
+    #[test]
+    fn new_project_resets_to_single_desktop() {
+        let mut app = App::new();
+        app.add_desktop();
+        app.rename_desktop(1, "Analysis".to_string());
+        app.new_project();
+        assert_eq!(app.desktops.len(), 1);
+        assert_eq!(app.active_desktop, 0);
+        assert_eq!(app.desktops[0].name, "Desktop 1");
     }
 
     #[test]
