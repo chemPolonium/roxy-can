@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::can::frame::{CanFrame, Direction};
+use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 use crate::dbc::SymbolTable;
 use crate::log::asc::{AscWriter, parse_asc};
@@ -135,8 +135,20 @@ pub struct MessageAgg {
     pub cycle_us: f64,
     pub min_us: f64,
     pub max_us: f64,
-    pub dlc: u8,
-    pub data: [u8; 8],
+    pub len: u8,
+    pub data: [u8; MAX_CAN_FD_LEN],
+    pub flags: FrameFlags,
+}
+
+impl MessageAgg {
+    /// The most recent frame's payload slice; empty for error / remote frames
+    /// so callers can render it without a separate kind check.
+    pub fn payload(&self) -> &[u8] {
+        if self.flags.contains(FrameFlags::ERROR) || self.flags.contains(FrameFlags::RTR) {
+            return &[];
+        }
+        &self.data[..self.len as usize]
+    }
 }
 
 pub struct TxMsg {
@@ -144,8 +156,9 @@ pub struct TxMsg {
     pub id: u32,
     pub extended: bool,
     pub name: String,
-    pub dlc: u8,
-    pub data: [u8; 8],
+    pub len: u8,
+    pub data: [u8; MAX_CAN_FD_LEN],
+    pub flags: FrameFlags,
     pub data_text: String,
     pub cycle_us: u64,
     pub active: bool,
@@ -865,7 +878,8 @@ impl App {
             .filter(|a| Self::scope_match(scope, manual, a.channel, a.id))
             .collect();
         rows.sort_by_key(|a| (a.channel, a.id));
-        let mut s = String::from("bus,id,name,count,cycle_min_ms,cycle_avg_ms,cycle_max_ms,dlc\n");
+        let mut s =
+            String::from("bus,id,name,count,cycle_min_ms,cycle_avg_ms,cycle_max_ms,len,flags\n");
         for a in &rows {
             let name = self.message_name(a.channel, a.id).unwrap_or("-");
             let bus = self.channel_name(a.channel);
@@ -875,8 +889,12 @@ impl App {
                 (0.0, 0.0, 0.0)
             };
             s.push_str(&format!(
-                "{bus},{},{},{},{cmin:.3},{cavg:.3},{cmax:.3},{}\n",
-                a.id, name, a.count, a.dlc
+                "{bus},{},{},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{}\n",
+                a.id,
+                name,
+                a.count,
+                a.len,
+                a.flags.tag()
             ));
         }
         self.write_export(path, s);
@@ -917,7 +935,7 @@ impl App {
             })
             .collect();
         rows.sort_by_key(|a| (a.channel, a.id));
-        let mut s = String::from("bus,id,name,dir,count,cycle_ms,dlc,data\n");
+        let mut s = String::from("bus,id,name,dir,count,cycle_ms,len,flags,data\n");
         for a in &rows {
             let name = self.message_name(a.channel, a.id).unwrap_or("-");
             let bus = self.channel_name(a.channel);
@@ -930,14 +948,21 @@ impl App {
             } else {
                 0.0
             };
-            let data: String = a.data[..a.dlc.min(8) as usize]
+            let data: String = a
+                .payload()
                 .iter()
                 .map(|b| format!("{b:02X}"))
                 .collect::<Vec<_>>()
                 .join(" ");
             s.push_str(&format!(
-                "{bus},{},{},{},{},{cycle:.3},{},{}\n",
-                a.id, name, dir, a.count, a.dlc, data
+                "{bus},{},{},{},{},{cycle:.3},{},{},{}\n",
+                a.id,
+                name,
+                dir,
+                a.count,
+                a.len,
+                a.flags.tag(),
+                data
             ));
         }
         self.write_export(path, s);
@@ -1562,9 +1587,10 @@ impl App {
                         channel: tx.channel,
                         id: tx.id,
                         extended: tx.extended,
-                        dlc: tx.dlc,
+                        len: tx.len,
                         data: tx.data,
                         dir: Direction::Tx,
+                        flags: tx.flags,
                     });
                 }
             }
@@ -1582,6 +1608,11 @@ impl App {
             }
             self.trace.push_back(f);
             self.frame_counter += 1;
+            if f.is_error() {
+                // Error frames carry no identifier and no payload; they are
+                // intentionally kept out of per-message aggregation.
+                continue;
+            }
             let agg = self.aggs.entry((f.channel, f.id)).or_insert(MessageAgg {
                 id: f.id,
                 extended: f.extended,
@@ -1592,8 +1623,9 @@ impl App {
                 cycle_us: 0.0,
                 min_us: f64::MAX,
                 max_us: 0.0,
-                dlc: f.dlc,
+                len: f.len,
                 data: f.data,
+                flags: f.flags,
             });
             if agg.count > 0 {
                 let dt = f.t_us.saturating_sub(agg.last_t_us) as f64;
@@ -1613,8 +1645,9 @@ impl App {
             agg.last_t_us = f.t_us;
             agg.channel = f.channel;
             agg.dir = f.dir;
-            agg.dlc = f.dlc;
+            agg.len = f.len;
             agg.data = f.data;
+            agg.flags = f.flags;
             let db = self
                 .channels
                 .get(f.channel as usize)
@@ -1871,19 +1904,20 @@ impl App {
         {
             return;
         }
-        let (name, dlc) = self
+        let (name, len) = self
             .channel_dbc(channel)
             .and_then(|db| db.messages.get(&id))
-            .map(|m| (m.name.clone(), m.dlc.min(8) as u8))
+            .map(|m| (m.name.clone(), m.dlc.min(MAX_CAN_FD_LEN as u64) as u8))
             .unwrap_or_else(|| (format!("{id:X}"), 8));
-        let data_text = vec!["00"; dlc as usize].join(" ");
+        let data_text = vec!["00"; len as usize].join(" ");
         self.tx_list.push(TxMsg {
             channel,
             id,
             extended: id > 0x7FF,
             name,
-            dlc,
-            data: [0; 8],
+            len,
+            data: [0; MAX_CAN_FD_LEN],
+            flags: if len > 8 { FrameFlags::FD } else { FrameFlags::NONE },
             data_text,
             cycle_us: 100_000,
             active: false,
@@ -2197,9 +2231,10 @@ mod tests {
             channel: 0,
             id: 0x100,
             extended: false,
-            dlc: 8,
-            data: [0; 8],
+            len: 8,
+            data: [0; MAX_CAN_FD_LEN],
             dir: Direction::Rx,
+            flags: FrameFlags::NONE,
         };
         let tx = CanFrame {
             id: 0x320,
@@ -2277,8 +2312,9 @@ mod tests {
                 cycle_us: 0.0,
                 min_us: 0.0,
                 max_us: 0.0,
-                dlc: 8,
-                data: [0; 8],
+                len: 8,
+                data: [0; MAX_CAN_FD_LEN],
+                flags: FrameFlags::NONE,
             },
         );
         app.trace_windows[0].manual.insert((2, 0x200));
@@ -2354,14 +2390,14 @@ mod tests {
         app.load_asc(&path.to_string_lossy());
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 1_000;
-        app.tx_list[0].data = [0xDE; 8];
+        app.tx_list[0].data = [0xDE; MAX_CAN_FD_LEN];
         app.replay();
         for _ in 0..6 {
             std::thread::sleep(std::time::Duration::from_millis(11));
             app.update();
         }
         assert!(
-            !app.trace.iter().any(|f| f.data == [0xDE; 8]),
+            !app.trace.iter().any(|f| f.data == [0xDE; MAX_CAN_FD_LEN]),
             "replay must not mix in generator frames"
         );
         app.stop();
@@ -2649,7 +2685,9 @@ mod tests {
         let mut app = App::new();
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 10_000;
-        app.tx_list[0].data = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        let mut payload = [0u8; MAX_CAN_FD_LEN];
+        payload[..8].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+        app.tx_list[0].data = payload;
         app.record_path = "target/test_record".to_string();
         app.toggle_record();
         app.start_virtual();
@@ -2668,8 +2706,8 @@ mod tests {
             .find(|f| f.id == id && f.channel == ch)
             .expect("recorded frames parsed back");
         assert_eq!(
-            hit.data,
-            [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+            hit.payload(),
+            &[0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88][..],
             "recorded data matches what the generator sent"
         );
         std::fs::remove_file(&path).ok();

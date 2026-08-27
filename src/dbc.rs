@@ -129,7 +129,7 @@ impl SymbolTable {
 
     /// Packs a physical signal value into the frame data bytes.
     /// Returns false if the message or signal is unknown.
-    pub fn encode_signal(&self, id: u32, name: &str, phys: f64, data: &mut [u8; 8]) -> bool {
+    pub fn encode_signal(&self, id: u32, name: &str, phys: f64, data: &mut [u8]) -> bool {
         let Some(msg) = self.messages.get(&id) else {
             return false;
         };
@@ -148,7 +148,7 @@ impl SymbolTable {
         msg.signals
             .iter()
             .map(|s| {
-                let raw = decode::extract_raw(&frame.data, s.start_bit, s.size, s.big_endian);
+                let raw = decode::extract_raw(frame.payload(), s.start_bit, s.size, s.big_endian);
                 let phys = decode::to_physical(raw, s.size, s.signed, s.factor, s.offset);
                 (s.name.clone(), phys, s.unit.clone())
             })
@@ -164,7 +164,22 @@ pub fn load_dbc_str(content: &str) -> Result<SymbolTable, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::can::frame::{CanFrame, Direction};
+    use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+
+    fn frame_with(id: u32, bytes: &[u8]) -> CanFrame {
+        let mut data = [0u8; MAX_CAN_FD_LEN];
+        data[..bytes.len()].copy_from_slice(bytes);
+        CanFrame {
+            t_us: 0,
+            channel: 0,
+            id,
+            extended: false,
+            len: bytes.len() as u8,
+            data,
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        }
+    }
 
     #[test]
     fn sample_dbc_parses() {
@@ -217,15 +232,7 @@ mod tests {
         let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
         let table = load_dbc_str(&content).unwrap();
         // raw 12000 * 0.25 = 3000 rpm, little-endian 16 bit at bit 0
-        let frame = CanFrame {
-            t_us: 0,
-            channel: 0,
-            id: 0x100,
-            extended: false,
-            dlc: 8,
-            data: [0xE0, 0x2E, 0, 0, 0, 0, 0, 0],
-            dir: Direction::Rx,
-        };
+        let frame = frame_with(0x100, &[0xE0, 0x2E]);
         let sigs = table.decode_signals(&frame);
         assert_eq!(sigs[0].0, "EngineSpeed");
         assert!((sigs[0].1 - 3000.0).abs() < 1e-9);
@@ -235,17 +242,9 @@ mod tests {
     fn encode_signal_roundtrip() {
         let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
         let table = load_dbc_str(&content).unwrap();
-        let mut data = [0u8; 8];
+        let mut data = [0u8; MAX_CAN_FD_LEN];
         assert!(table.encode_signal(0x100, "EngineSpeed", 3000.0, &mut data));
-        let frame = CanFrame {
-            t_us: 0,
-            channel: 0,
-            id: 0x100,
-            extended: false,
-            dlc: 8,
-            data,
-            dir: Direction::Rx,
-        };
+        let frame = frame_with(0x100, &data[..8]);
         let sigs = table.decode_signals(&frame);
         let (_, speed, _) = sigs.iter().find(|(n, _, _)| n == "EngineSpeed").unwrap();
         assert!((*speed - 3000.0).abs() < 0.5, "decoded {speed}");

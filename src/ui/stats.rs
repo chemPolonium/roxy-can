@@ -1,4 +1,5 @@
 use crate::app::{App, PopupTarget};
+use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
@@ -78,7 +79,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y
         | TableFlags::SIZING_STRETCH_PROP;
-    let Some(_table) = ui.begin_table_with_flags(format!("stats_table{i}"), 8, tbl_flags) else {
+    let Some(_table) = ui.begin_table_with_flags(format!("stats_table{i}"), 9, tbl_flags) else {
         return;
     };
     ui.table_setup_column_with(TableColumnSetup {
@@ -106,8 +107,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     }
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 32.0,
-        ..TableColumnSetup::new("DLC")
+        init_width_or_weight: 36.0,
+        ..TableColumnSetup::new("Len")
+    });
+    ui.table_setup_column_with(TableColumnSetup {
+        flags: TableColumnFlags::WIDTH_FIXED,
+        init_width_or_weight: 44.0,
+        ..TableColumnSetup::new("Flags")
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
@@ -155,7 +161,9 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             "-".to_string()
         });
         ui.table_next_column();
-        ui.text(format!("{}", agg.dlc));
+        ui.text(format!("{}", agg.len));
+        ui.table_next_column();
+        ui.text_colored(flags_color(agg.flags), agg.flags.tag());
         ui.table_next_column();
         let share = if total > 0 {
             agg.count as f64 / total as f64 * 100.0

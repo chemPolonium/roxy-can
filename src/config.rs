@@ -11,6 +11,7 @@ use crate::app::{
     App, Channel, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin,
     TraceWin, WindowKind,
 };
+use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 
 pub const CONFIG_PATH: &str = "roxy-can.json";
 pub const META_PATH: &str = "roxy-can.meta.json";
@@ -174,6 +175,8 @@ pub struct TxCfg {
     pub data: Vec<u8>,
     #[serde(default = "cycle_default")]
     pub cycle_us: u64,
+    #[serde(default)]
+    pub fd: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -382,8 +385,9 @@ impl Config {
                     id: t.id,
                     active: t.active,
                     data_text: t.data_text.clone(),
-                    data: t.data[..t.dlc.min(8) as usize].to_vec(),
+                    data: t.data[..t.len as usize].to_vec(),
                     cycle_us: t.cycle_us,
+                    fd: t.flags.contains(FrameFlags::FD),
                 })
                 .collect(),
             counters: app.window_counters(),
@@ -453,11 +457,18 @@ impl Config {
             {
                 m.active = t.active;
                 m.cycle_us = t.cycle_us.max(1_000);
+                m.flags = if t.fd {
+                    FrameFlags::FD
+                } else {
+                    FrameFlags::NONE
+                };
                 if !t.data_text.is_empty() {
                     m.data_text = t.data_text;
-                    let mut data = [0u8; 8];
-                    data[..t.data.len().min(8)].copy_from_slice(&t.data[..t.data.len().min(8)]);
+                    let n = t.data.len().min(MAX_CAN_FD_LEN);
+                    let mut data = [0u8; MAX_CAN_FD_LEN];
+                    data[..n].copy_from_slice(&t.data[..n]);
                     m.data = data;
+                    m.len = n as u8;
                 }
             }
         }

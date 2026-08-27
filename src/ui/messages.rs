@@ -1,5 +1,6 @@
 use crate::app::{App, MessageAgg, PopupTarget, SigScope};
 use crate::can::frame::{CanFrame, Direction};
+use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TreeNodeFlags, Ui};
 
@@ -102,7 +103,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::SCROLL_Y
         | TableFlags::SIZING_STRETCH_PROP
         | TableFlags::NO_CLIP;
-    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 6, tbl_flags) else {
+    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, tbl_flags) else {
         return;
     };
     ui.table_setup_column_with(TableColumnSetup {
@@ -132,7 +133,12 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 165.0,
+        init_width_or_weight: 44.0,
+        ..TableColumnSetup::new("Flags")
+    });
+    ui.table_setup_column_with(TableColumnSetup {
+        flags: TableColumnFlags::WIDTH_STRETCH,
+        init_width_or_weight: 2.0,
         ..TableColumnSetup::new("Data")
     });
     ui.table_headers_row();
@@ -169,7 +175,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             ui.text("-");
         }
         ui.table_next_column();
-        let data_str: String = agg.data[..agg.dlc.min(8) as usize]
+        ui.text_colored(flags_color(agg.flags), agg.flags.tag());
+        ui.table_next_column();
+        let data_str: String = agg
+            .payload()
             .iter()
             .map(|b| format!("{b:02X} "))
             .collect();
@@ -181,9 +190,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 channel: agg.channel,
                 id: agg.id,
                 extended: agg.extended,
-                dlc: agg.dlc,
+                len: agg.len,
                 data: agg.data,
                 dir: agg.dir,
+                flags: agg.flags,
             };
             let sigs = app
                 .channel_dbc(agg.channel)

@@ -66,6 +66,7 @@ impl FrameSource for ReplaySource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 
     fn frame(t_us: u64) -> CanFrame {
         CanFrame {
@@ -73,9 +74,10 @@ mod tests {
             channel: 0,
             id: 0x100,
             extended: false,
-            dlc: 8,
-            data: [0; 8],
+            len: 8,
+            data: [0; MAX_CAN_FD_LEN],
             dir: crate::can::frame::Direction::Rx,
+            flags: FrameFlags::NONE,
         }
     }
 

@@ -1,10 +1,11 @@
 use crate::app::{App, TOOLBAR_H};
+use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::dbc::SignalInfo;
 use imgui::{Condition, Ui};
 
 fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
     let toks: Vec<&str> = s.split_whitespace().collect();
-    if toks.is_empty() || toks.len() > 8 {
+    if toks.is_empty() || toks.len() > MAX_CAN_FD_LEN {
         return None;
     }
     let mut out = Vec::with_capacity(toks.len());
@@ -14,8 +15,8 @@ fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn data_text(data: &[u8; 8], dlc: u8) -> String {
-    data[..dlc.min(8) as usize]
+fn data_text(data: &[u8], len: u8) -> String {
+    data[..len.min(data.len() as u8) as usize]
         .iter()
         .map(|b| format!("{b:02X}"))
         .collect::<Vec<_>>()
@@ -175,16 +176,29 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.tx_list[i].next_t_us = 0;
                     }
                     ui.same_line();
-                    ui.set_next_item_width(170.0);
+                    let mut fd = app.tx_list[i].flags.contains(FrameFlags::FD);
+                    if ui.checkbox(format!("FD##{i}"), &mut fd) {
+                        app.tx_list[i].flags = if fd {
+                            FrameFlags::FD
+                        } else {
+                            FrameFlags::NONE
+                        };
+                    }
+                    ui.same_line();
+                    ui.set_next_item_width(260.0);
                     if ui
                         .input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
                         .build()
                     {
                         if let Some(bytes) = parse_hex_bytes(&app.tx_list[i].data_text) {
-                            let mut data = [0u8; 8];
+                            let mut data = [0u8; MAX_CAN_FD_LEN];
                             data[..bytes.len()].copy_from_slice(&bytes);
                             app.tx_list[i].data = data;
-                            app.tx_list[i].dlc = bytes.len() as u8;
+                            app.tx_list[i].len = bytes.len() as u8;
+                            if bytes.len() > 8 {
+                                app.tx_list[i].flags =
+                                    app.tx_list[i].flags.union(FrameFlags::FD);
+                            }
                         }
                     }
                     ui.same_line();
@@ -196,6 +210,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                         ui.text("(no signals in DBC)");
                     }
                     let data = app.tx_list[i].data;
+                    let msg_size = app
+                        .channel_dbc(ch)
+                        .and_then(|db| db.messages.get(&id))
+                        .map(|m| m.dlc.min(MAX_CAN_FD_LEN as u64) as u8)
+                        .unwrap_or(app.tx_list[i].len);
                     for s in &sigs {
                         let raw =
                             crate::decode::extract_raw(&data, s.start_bit, s.size, s.big_endian);
@@ -214,8 +233,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                                 .channel_dbc(ch)
                                 .is_some_and(|db| db.encode_signal(id, &s.name, v as f64, &mut nd))
                             {
+                                let newlen = app.tx_list[i].len.max(msg_size);
+                                if newlen > 8 {
+                                    app.tx_list[i].flags =
+                                        app.tx_list[i].flags.union(FrameFlags::FD);
+                                }
+                                app.tx_list[i].len = newlen;
                                 app.tx_list[i].data = nd;
-                                app.tx_list[i].data_text = data_text(&nd, app.tx_list[i].dlc);
+                                app.tx_list[i].data_text = data_text(&nd, newlen);
                             }
                         }
                         ui.same_line();

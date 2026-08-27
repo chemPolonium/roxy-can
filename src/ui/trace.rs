@@ -3,8 +3,12 @@ use std::sync::Mutex;
 
 use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H};
 use crate::can::frame::{CanFrame, Direction};
+use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TableSortDirection, Ui};
+use imgui::{
+    Condition, TableBgTarget, TableColumnFlags, TableColumnSetup, TableFlags, TableSortDirection,
+    Ui,
+};
 
 const MAX_VISIBLE: usize = 1_000;
 
@@ -55,7 +59,7 @@ fn fmt_id(f: &CanFrame) -> String {
 }
 
 fn fmt_data(f: &CanFrame) -> String {
-    f.data[..f.dlc.min(8) as usize]
+    f.payload()
         .iter()
         .map(|b| format!("{b:02X} "))
         .collect()
@@ -63,13 +67,16 @@ fn fmt_data(f: &CanFrame) -> String {
 
 /// One trace row as plain text, used for "Copy row".
 fn fmt_row(app: &App, f: &CanFrame) -> String {
+    let tag = f.flags.tag();
+    let flags = if tag.is_empty() { "-" } else { tag };
     format!(
-        "{:.6}  {}  {}  {}  {}  {}  {}",
+        "{:.6}  {}  {}  {}  {}  {}  {}  {}",
         f.t_us as f64 / 1e6,
         app.channel_name(f.channel),
         fmt_id(f),
         app.message_name(f.channel, f.id).unwrap_or("-"),
-        f.dlc,
+        f.len,
+        flags,
         fmt_data(f).trim_end(),
         match f.dir {
             Direction::Rx => "Rx",
@@ -131,7 +138,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::SORTABLE
         | TableFlags::SORT_TRISTATE
         | TableFlags::SIZING_STRETCH_PROP;
-    let Some(_table) = ui.begin_table_with_flags(format!("trace_table{i}"), 7, tbl_flags) else {
+    let Some(_table) = ui.begin_table_with_flags(format!("trace_table{i}"), 8, tbl_flags) else {
         return;
     };
     // "{:.6}" timestamp: up to ~10 chars
@@ -158,14 +165,18 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 32.0,
-        ..TableColumnSetup::new("DLC")
+        init_width_or_weight: 36.0,
+        ..TableColumnSetup::new("Len")
     });
-    // 8 bytes of hex fit in ~165px; keep it fixed so the column stops
-    // stretching with the window.
     ui.table_setup_column_with(TableColumnSetup {
         flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 165.0,
+        init_width_or_weight: 44.0,
+        ..TableColumnSetup::new("Flags")
+    });
+    // A full 64-byte FD payload needs room; let it stretch with the window.
+    ui.table_setup_column_with(TableColumnSetup {
+        flags: TableColumnFlags::WIDTH_STRETCH,
+        init_width_or_weight: 1.4,
         ..TableColumnSetup::new("Data")
     });
     ui.table_setup_column_with(TableColumnSetup {
@@ -216,6 +227,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         shown += 1;
         let mut hovered = false;
         ui.table_next_row();
+        if f.is_error() {
+            ui.table_set_bg_color(TableBgTarget::ROW_BG1, [0.55, 0.12, 0.12, 0.35]);
+        } else if f.is_remote() {
+            ui.table_set_bg_color(TableBgTarget::ROW_BG1, [0.35, 0.22, 0.55, 0.25]);
+        }
         if !ui.table_next_column() {
             continue;
         }
@@ -234,7 +250,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         }
         hovered |= ui.is_item_hovered();
         ui.table_next_column();
-        ui.text(format!("{}", f.dlc));
+        ui.text(format!("{}", f.len));
+        hovered |= ui.is_item_hovered();
+        ui.table_next_column();
+        ui.text_colored(flags_color(f.flags), f.flags.tag());
         hovered |= ui.is_item_hovered();
         ui.table_next_column();
         ui.text(fmt_data(f));
@@ -271,8 +290,31 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                     w.dbc_only = false;
                     w.scope = SigScope::All;
                 }
-                if ui.menu_item("Add to Interactive Generator") {
+                let addable = !f.is_error() && !f.is_remote();
+                if ui
+                    .menu_item_config("Add to Interactive Generator")
+                    .enabled(addable)
+                    .build()
+                {
+                    let was_len = app.tx_list.len();
                     app.add_tx(f.channel, f.id);
+                    if app.tx_list.len() > was_len {
+                        let known = app
+                            .channel_dbc(f.channel)
+                            .is_some_and(|db| db.messages.contains_key(&f.id));
+                        if let Some(t) = app.tx_list.last_mut() {
+                            t.flags = f.flags;
+                            if !known {
+                                t.len = f.len;
+                                t.data = f.data;
+                                t.data_text = f.data[..f.len as usize]
+                                    .iter()
+                                    .map(|b| format!("{b:02X}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                            }
+                        }
+                    }
                 }
                 ui.separator();
                 if ui.menu_item("Copy row") {
@@ -296,8 +338,9 @@ fn sort_frame(app: &App, col: usize, a: &CanFrame, b: &CanFrame, asc: bool) -> O
             let nb = app.message_name(b.channel, b.id).unwrap_or("");
             na.cmp(nb)
         }
-        4 => a.dlc.cmp(&b.dlc),
-        5 => a.data[..a.dlc.min(8) as usize].cmp(&b.data[..b.dlc.min(8) as usize]),
+        4 => a.len.cmp(&b.len),
+        5 => (a.is_fd(), a.esi(), a.brs()).cmp(&(b.is_fd(), b.esi(), b.brs())),
+        6 => a.payload().cmp(b.payload()),
         _ => a.dir.cmp(&b.dir),
     };
     if asc { ord } else { ord.reverse() }
