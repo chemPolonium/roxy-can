@@ -89,7 +89,11 @@ pub fn render(app: &mut App, ui: &Ui) {
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu("File", || {
-                    if ui.menu_item_config("New Project").shortcut("Ctrl+N").build() {
+                    if ui
+                        .menu_item_config("New Project")
+                        .shortcut("Ctrl+N")
+                        .build()
+                    {
                         app.guarded_action(crate::app::PendingAction::NewProject);
                     }
                     if ui
@@ -118,7 +122,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         });
                     }
-                    if ui.menu_item_config("Save Project").shortcut("Ctrl+S").build() {
+                    if ui
+                        .menu_item_config("Save Project")
+                        .shortcut("Ctrl+S")
+                        .build()
+                    {
                         match app.project_path.clone() {
                             Some(p) => {
                                 app.save_project(Some(p));
@@ -136,7 +144,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.save_project(None);
                     }
                     ui.separator();
-                    if ui.menu_item_config("Open DBC...").shortcut("Ctrl+O").build() {
+                    if ui
+                        .menu_item_config("Open DBC...")
+                        .shortcut("Ctrl+O")
+                        .build()
+                    {
                         app.pick_dbc();
                     }
                     if ui.menu_item("Open Log...") {

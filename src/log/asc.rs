@@ -4,9 +4,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::can::frame::{
-    dlc2len, CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN,
-};
+use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN, dlc2len};
 use crate::log::error::LogError;
 use crate::source::FrameStream;
 
@@ -246,7 +244,9 @@ fn parse_fd(t_us: u64, toks: &[&str], base: u32) -> Option<CanFrame> {
     let code = u32::from_str_radix(toks.get(p + 2)?, base).ok()?;
     let data_len = toks.get(p + 3)?.parse::<usize>().ok()?;
     // The recorded data_length is authoritative over the DLC code.
-    let len = dlc2len(code as u8).max(data_len as u8).min(MAX_CAN_FD_LEN as u8);
+    let len = dlc2len(code as u8)
+        .max(data_len as u8)
+        .min(MAX_CAN_FD_LEN as u8);
     let (data, _n) = read_data(toks.get(p + 4..)?, base, data_len);
     let mut flags = FrameFlags::FD;
     if brs == 1 {
@@ -550,10 +550,7 @@ mod tests {
         assert_eq!(a.id, 0x1A4);
         assert_eq!(a.len, 12);
         assert_eq!(a.dlc_code(), 9);
-        assert_eq!(
-            a.payload(),
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        );
+        assert_eq!(a.payload(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         assert_eq!(a.channel, 0);
         assert_eq!(a.dir, Direction::Rx);
     }
@@ -573,7 +570,10 @@ mod tests {
         assert_eq!(a.channel, 1);
         assert_eq!(a.id, 0x321);
         assert_eq!(a.len, 8);
-        assert_eq!(a.payload(), &[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11]);
+        assert_eq!(
+            a.payload(),
+            &[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11]
+        );
     }
 
     #[test]

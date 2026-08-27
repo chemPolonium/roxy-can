@@ -178,11 +178,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.same_line();
                     let mut fd = app.tx_list[i].flags.contains(FrameFlags::FD);
                     if ui.checkbox(format!("FD##{i}"), &mut fd) {
-                        app.tx_list[i].flags = if fd {
-                            FrameFlags::FD
-                        } else {
-                            FrameFlags::NONE
-                        };
+                        app.tx_list[i].flags = if fd { FrameFlags::FD } else { FrameFlags::NONE };
                     }
                     ui.same_line();
                     ui.set_next_item_width(260.0);
@@ -196,8 +192,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             app.tx_list[i].data = data;
                             app.tx_list[i].len = bytes.len() as u8;
                             if bytes.len() > 8 {
-                                app.tx_list[i].flags =
-                                    app.tx_list[i].flags.union(FrameFlags::FD);
+                                app.tx_list[i].flags = app.tx_list[i].flags.union(FrameFlags::FD);
                             }
                         }
                     }

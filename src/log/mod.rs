@@ -1,4 +1,5 @@
 pub mod asc;
+pub mod blf;
 pub mod error;
 pub mod vec_stream;
 
@@ -6,6 +7,7 @@ use std::path::Path;
 
 use crate::source::FrameStream;
 use asc::{AscStream, parse_asc};
+use blf::BlfStream;
 use error::LogError;
 use vec_stream::VecStream;
 
@@ -44,7 +46,7 @@ const ASC_MMAP_THRESHOLD: u64 = 100 * 1024 * 1024;
 /// extension so adding MF4 later means one match arm, nothing at call sites.
 pub fn open_stream(path: &Path) -> Result<Box<dyn FrameStream>, LogError> {
     match LogFormat::detect(path) {
-        Some(LogFormat::Blf) => blf_arm(path),
+        Some(LogFormat::Blf) => Ok(Box::new(BlfStream::open(path)?)),
         Some(LogFormat::Mf4) => Err(LogError::UnsupportedFormat("MF4")),
         Some(LogFormat::Asc) => {
             let size = std::fs::metadata(path)?.len();
@@ -57,9 +59,4 @@ pub fn open_stream(path: &Path) -> Result<Box<dyn FrameStream>, LogError> {
         }
         None => Err(LogError::UnsupportedFormat("unknown extension")),
     }
-}
-
-/// Placeholder until `src/log/blf.rs` lands in the same release cycle.
-fn blf_arm(_path: &Path) -> Result<Box<dyn FrameStream>, LogError> {
-    Err(LogError::UnsupportedFormat("BLF"))
 }

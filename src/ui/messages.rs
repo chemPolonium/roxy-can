@@ -177,11 +177,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         ui.table_next_column();
         ui.text_colored(flags_color(agg.flags), agg.flags.tag());
         ui.table_next_column();
-        let data_str: String = agg
-            .payload()
-            .iter()
-            .map(|b| format!("{b:02X} "))
-            .collect();
+        let data_str: String = agg.payload().iter().map(|b| format!("{b:02X} ")).collect();
         ui.text(data_str);
 
         if token.is_some() {

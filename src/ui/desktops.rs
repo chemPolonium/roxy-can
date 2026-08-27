@@ -65,9 +65,9 @@ pub fn render(app: &mut App, ui: &Ui) {
                                 let label = format!("{}", i + 1);
                                 if ui
                                     .menu_item_config(&label)
-                                        .enabled(!is_current)
-                                        .selected(is_current)
-                                        .build()
+                                    .enabled(!is_current)
+                                    .selected(is_current)
+                                    .build()
                                 {
                                     app.move_desktop(k, i);
                                 }

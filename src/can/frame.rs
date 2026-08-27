@@ -177,4 +177,13 @@ mod tests {
         assert!(f.brs());
         assert!(!f.esi());
     }
+
+    #[test]
+    fn canframe_is_88_bytes() {
+        // TRACE_LIMIT × sizeof(CanFrame) sizes the replay ring; the
+        // streaming work in 0.3.0 assumes ~4.5 MB for the 50 000-frame
+        // trace buffer. If the struct grows past 88 B, revisit TRACE_LIMIT
+        // or box the data payload.
+        assert_eq!(std::mem::size_of::<CanFrame>(), 88);
+    }
 }

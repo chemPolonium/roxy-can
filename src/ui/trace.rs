@@ -59,10 +59,7 @@ fn fmt_id(f: &CanFrame) -> String {
 }
 
 fn fmt_data(f: &CanFrame) -> String {
-    f.payload()
-        .iter()
-        .map(|b| format!("{b:02X} "))
-        .collect()
+    f.payload().iter().map(|b| format!("{b:02X} ")).collect()
 }
 
 /// One trace row as plain text, used for "Copy row".

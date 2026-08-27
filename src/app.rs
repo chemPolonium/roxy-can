@@ -7,9 +7,9 @@ use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, Project
 use crate::dbc::SymbolTable;
 use crate::log::AscWriter;
 use crate::log::open_stream;
-use crate::source::{FrameSource, FrameStream};
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
+use crate::source::{FrameSource, FrameStream};
 
 pub const TRACE_LIMIT: usize = 50_000;
 pub const TOOLBAR_H: f32 = 54.0;
@@ -792,7 +792,11 @@ impl App {
                     .unwrap_or_else(|| path.to_string());
                 let info = stream.describe();
                 self.log_path = path.to_string();
-                self.log_info = if info.is_empty() { None } else { Some(info.clone()) };
+                self.log_info = if info.is_empty() {
+                    None
+                } else {
+                    Some(info.clone())
+                };
                 self.status = if info.is_empty() {
                     format!("loaded {name}")
                 } else {
@@ -1921,7 +1925,11 @@ impl App {
             name,
             len,
             data: [0; MAX_CAN_FD_LEN],
-            flags: if len > 8 { FrameFlags::FD } else { FrameFlags::NONE },
+            flags: if len > 8 {
+                FrameFlags::FD
+            } else {
+                FrameFlags::NONE
+            },
             data_text,
             cycle_us: 100_000,
             active: false,
@@ -2057,15 +2065,97 @@ mod tests {
         let first = app.last_record.clone();
         app.load_log(&first);
         assert!(!app.measuring, "loading must not start playback");
-        assert!(
-            app.log_info.is_some(),
-            "load should cache a stream summary"
-        );
+        assert!(app.log_info.is_some(), "load should cache a stream summary");
         app.replay();
         assert!(app.measuring, "replay starts on demand");
         assert!(matches!(app.mode, Mode::Replay));
         app.stop();
         std::fs::remove_file(&first).ok();
+    }
+
+    #[test]
+    fn loading_blf_does_not_start_replay() {
+        let mut app = App::new();
+        let path = std::env::temp_dir().join("roxy_can_load_blf_test.blf");
+        let bytes = minimal_blf_fixture();
+        std::fs::write(&path, &bytes).unwrap();
+        app.load_log(&path.to_string_lossy());
+        assert!(
+            app.log_info.is_some(),
+            "BLF load should cache a stream summary, got status {:?}",
+            app.status
+        );
+        assert!(!app.measuring, "loading must not start playback");
+        app.replay();
+        assert!(app.measuring, "replay starts on demand");
+        assert!(matches!(app.mode, Mode::Replay));
+        app.stop();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn open_dropped_reports_unsupported_for_mf4() {
+        let mut app = App::new();
+        app.open_dropped(std::path::Path::new("/tmp/does-not-exist.mf4"));
+        assert!(
+            app.status.contains("unsupported format: MF4"),
+            "MF4 should surface a clear reason, got {:?}",
+            app.status
+        );
+    }
+
+    /// Minimal valid BLF (file header + one raw container holding one
+    /// CAN_MESSAGE), built inline so we do not commit a binary fixture.
+    /// Mirrors the encoders in `src/log/blf.rs::tests`.
+    fn minimal_blf_fixture() -> Vec<u8> {
+        let mut v = vec![0u8; 144];
+        v[0..4].copy_from_slice(b"BLF4");
+        v[4..8].copy_from_slice(&4u32.to_le_bytes());
+        // one object at offset 12
+        v[12..16].copy_from_slice(&1u32.to_le_bytes());
+
+        // One CAN_MESSAGE object body: 16 B
+        let mut body = vec![0u8; 16];
+        body[0] = 0; // channel
+        body[1] = 1; // dlc
+        body[4..8].copy_from_slice(&0x100u32.to_le_bytes());
+        body[8] = 0xAB;
+
+        // v1 object header (32 B) + body = 48 B
+        let obj_size = 32 + body.len() as u32;
+        let mut obj = Vec::new();
+        obj.extend_from_slice(b"LOBJ");
+        obj.extend_from_slice(&32u16.to_le_bytes());
+        obj.push(1); // v1
+        obj.push(0); // object_version
+        obj.extend_from_slice(&obj_size.to_le_bytes());
+        obj.extend_from_slice(&0u32.to_le_bytes());
+        obj.extend_from_slice(&1u32.to_le_bytes()); // CAN_MESSAGE type
+        obj.extend_from_slice(&0u32.to_le_bytes()); // ts_low
+        obj.extend_from_slice(&0u16.to_le_bytes()); // ts_high
+        obj.extend_from_slice(&0u16.to_le_bytes()); // flags
+        obj.extend_from_slice(&[0u8; 4]);
+        obj.extend_from_slice(&body);
+
+        // Wrap into a raw container: LOBJ base 16 + LOG_CONTAINER_STRUCT 16
+        let container_body_len = 16 + obj.len();
+        let total = (16 + container_body_len) as u32;
+        let mut cont = Vec::new();
+        cont.extend_from_slice(b"LOBJ");
+        cont.extend_from_slice(&16u16.to_le_bytes());
+        cont.push(1);
+        cont.push(0);
+        cont.extend_from_slice(&total.to_le_bytes());
+        cont.extend_from_slice(&0u32.to_le_bytes());
+        cont.extend_from_slice(&0u16.to_le_bytes()); // raw method
+        cont.extend_from_slice(&0u16.to_le_bytes()); // version
+        cont.extend_from_slice(&(obj.len() as u32).to_le_bytes()); // uncompressed
+        cont.extend_from_slice(&(obj.len() as u32).to_le_bytes()); // compressed
+        cont.extend_from_slice(&0u32.to_le_bytes()); // pad
+        cont.extend_from_slice(&obj);
+
+        v.extend_from_slice(&cont);
+        v
     }
 
     #[test]
