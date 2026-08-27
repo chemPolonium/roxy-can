@@ -20,7 +20,7 @@
 - **ASC 录制 / 回放**：录制文件名自动带日期时间戳；加载 ASC（Open ASC...）与开始回放分开——加载只解析就绪，Play（Replay 模式）才开始播放；工具栏为播放器式走带控制：**<< / Play·Pause / >> / Stop**，`<<` `>>` 逐级放慢/加快，Stop 后的倍速下拉（0.5x / 1x / 2x / 4x）直接选择，回放中切换立即生效；回放时状态栏显示当前时间 / 总时长；ASC 路径留空可直接回放最近一次录制
 - **拖放打开 / 最近文件**：把 `.dbc` / `.asc` 文件拖到窗口即可打开（DBC 装入第一条总线）；File 菜单提供 Recent DBC / Recent ASC 列表
 - **状态栏**：当前工程名（有未保存修改时带 `*`）、测量状态、帧率 (f/s)、帧计数、录制指示；回放时显示当前时间 / 总时长
-- **多 Desktop**：类 CANoe 的多桌面——每个桌面各自记住五类观测窗口（Trace/Messages/Statistics/Graphics/Data）的开关与布局，以及全局面板（Generator/Network/Measurement Setup/Buses/ID Filter）的显示状态；底部桌面标签栏一键切换，支持新建（`+`）、重命名、删除（至少保留一个）；桌面列表与活动桌面随工程文件保存
+- **多 Desktop**：类 CANoe 的多桌面——每个桌面各自记住五类观测窗口（Trace/Messages/Statistics/Graphics/Data）的开关与布局，以及全局面板（Generator/Network/Measurement Setup/Buses/ID Filter）的显示状态；底部桌面标签栏一键切换，`+` 新建空白桌面，右键标签可重命名、删除或调整顺序（Move to 选择目标位次，至少保留一个）；桌面列表与活动桌面随工程文件保存
 - **工程文件（.rxproj）**：类 CANoe 的工程文件——总线数量/名称与各总线 DBC、全部观测窗口及其过滤设置、已选信号、生成器配置、窗口布局/停靠全部打包在一个 JSON 工程文件里；File 菜单提供 New / Open / Recent Projects / Save / Save As；DBC 路径相对工程目录存储，工程文件夹可整体移动；已保存工程退出时自动覆盖，未保存（Untitled）工程仅在有修改时于退出或切换时弹框询问（未改动则静默通过）；New Project 创建完全空的工程（无 DBC、无观测窗口、无生成器条目）；上次打开的工程自动恢复（`roxy-can.meta.json` 记录）；运行中每 30 秒写一份崩溃缓存（`roxy-can.autosave.rxproj`，不动工程文件本身），异常退出后下次启动自动恢复，正常退出时删除；旧版 `roxy-can.json` 在首次启动时自动迁移。窗口可停靠、可拖动；HiDPI 由平台层按 framebuffer scale 自动换算；字体沿用 roxy-dbc 的方案——内嵌 Inconsolata（13px、像素对齐）并合并系统中文字体字形，按基线自然对齐，支持中文输入法（IME）
 
 ## 快捷键
@@ -34,6 +34,12 @@
 | Ctrl+R | 切换 ASC 录制 |
 | Ctrl+E | 导出第一个 Trace 窗口为 ASC |
 | Ctrl+O | 打开 DBC |
+| Ctrl+N | 新建工程 |
+| Ctrl+Shift+O | 打开工程 |
+| Ctrl+S | 保存工程 |
+| Ctrl+Shift+S | 工程另存为 |
+
+菜单栏 Help → Shortcuts 可随时查看全部快捷键，About 显示版本信息。
 
 ## 构建与运行
 

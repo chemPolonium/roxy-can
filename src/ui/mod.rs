@@ -3,6 +3,7 @@ pub mod data;
 pub mod desktops;
 pub mod dockspace;
 pub mod graphics;
+pub mod help;
 pub mod idfilter;
 pub mod measurement;
 pub mod messages;
@@ -34,4 +35,5 @@ pub fn render(app: &mut App, ui: &Ui) {
     statusbar::render(app, ui);
     desktops::render(app, ui);
     project_modal::render(app, ui);
+    help::render(app, ui);
 }

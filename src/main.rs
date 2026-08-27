@@ -50,6 +50,7 @@ struct State {
     last_cursor: Option<imgui::MouseCursor>,
     ime_pos: Option<(bool, f32, f32, f32)>,
     ctrl: bool,
+    shift: bool,
     last_title: String,
     last_autosave: Instant,
 }
@@ -134,7 +135,7 @@ impl State {
                     data,
                     size_pixels: font_size,
                     config: Some(imgui::FontConfig {
-                        glyph_ranges: imgui::FontGlyphRanges::chinese_simplified_common(),
+                        glyph_ranges: imgui::FontGlyphRanges::chinese_full(),
                         ..font_config.clone()
                     }),
                 });
@@ -174,6 +175,7 @@ impl State {
             last_cursor: None,
             ime_pos: None,
             ctrl: false,
+            shift: false,
             last_title: String::new(),
             last_autosave: Instant::now(),
         }
@@ -314,17 +316,24 @@ impl ApplicationHandler for Program {
             }
             WindowEvent::ModifiersChanged(m) => {
                 st.ctrl = m.state().control_key();
+                st.shift = m.state().shift_key();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed && !event.repeat {
                     let code = match (&event.logical_key, st.ctrl) {
                         (Key::Named(NamedKey::F9), _) => 1,
-                        (Key::Character(c), true) => match c.to_ascii_lowercase().as_str() {
-                            "r" => 2,
-                            "e" => 3,
-                            "o" => 4,
-                            _ => 0,
-                        },
+                        (Key::Character(c), true) => {
+                            match (c.to_ascii_lowercase().as_str(), st.shift) {
+                                ("r", false) => 2,
+                                ("e", false) => 3,
+                                ("o", false) => 4,
+                                ("s", false) => 9,
+                                ("s", true) => 10,
+                                ("n", false) => 11,
+                                ("o", true) => 12,
+                                _ => 0,
+                            }
+                        }
                         (Key::Named(NamedKey::Space), false) => 5,
                         (Key::Character(c), false) => match c.as_str() {
                             "-" => 6,

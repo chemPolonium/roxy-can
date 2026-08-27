@@ -11,9 +11,9 @@ use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
 
 pub const TRACE_LIMIT: usize = 50_000;
-pub const TOOLBAR_H: f32 = 68.0;
-pub const STATUSBAR_H: f32 = 26.0;
-pub const TABSTRIP_H: f32 = 26.0;
+pub const TOOLBAR_H: f32 = 54.0;
+pub const STATUSBAR_H: f32 = 28.0;
+pub const TABSTRIP_H: f32 = 22.0;
 const HISTORY_LIMIT: usize = 4_000;
 const SAMPLE_INTERVAL_US: u64 = 50_000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
@@ -262,6 +262,8 @@ pub struct App {
     pub show_measurement: bool,
     pub show_buses: bool,
     pub show_id_filter: bool,
+    pub show_shortcuts: bool,
+    pub show_about: bool,
     pub id_filter_search: String,
     pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
@@ -347,6 +349,8 @@ impl App {
             show_measurement: true,
             show_buses: false,
             show_id_filter: false,
+            show_shortcuts: false,
+            show_about: false,
             id_filter_search: String::new(),
             gen_search: String::new(),
             popup_target: None,
@@ -1238,12 +1242,23 @@ impl App {
         self.apply_desktop(&target);
     }
 
-    /// Adds a desktop capturing the current arrangement and switches to it.
+    /// Adds an empty desktop (no windows, no panels) and switches to it.
     pub fn add_desktop(&mut self) {
-        let mut snap = self.desktop_snapshot();
-        snap.name = format!("Desktop {}", self.desktops.len() + 1);
+        self.sync_active_desktop();
+        let snap = Desktop {
+            name: format!("Desktop {}", self.desktops.len() + 1),
+            layout: String::new(),
+            open_windows: Vec::new(),
+            show_tx: false,
+            show_network: false,
+            show_measurement: false,
+            show_buses: false,
+            show_id_filter: false,
+        };
         self.desktops.push(snap);
         self.active_desktop = self.desktops.len() - 1;
+        let target = self.desktops[self.active_desktop].clone();
+        self.apply_desktop(&target);
     }
 
     pub fn delete_desktop(&mut self, idx: usize) {
@@ -1270,6 +1285,20 @@ impl App {
         }
         if let Some(d) = self.desktops.get_mut(idx) {
             d.name = name;
+        }
+    }
+
+    pub fn move_desktop(&mut self, from: usize, to: usize) {
+        if from >= self.desktops.len() || to >= self.desktops.len() || from == to {
+            return;
+        }
+        let d = self.desktops.remove(from);
+        self.desktops.insert(to, d);
+        match self.active_desktop {
+            a if a == from => self.active_desktop = to,
+            a if a < from && to <= a => self.active_desktop = a + 1,
+            a if a > from && to >= a => self.active_desktop = a - 1,
+            _ => {}
         }
     }
 
@@ -2490,8 +2519,8 @@ mod tests {
         assert!(app.trace_windows[0].opened);
         assert!(app.show_network);
         app.add_desktop();
-        app.trace_windows[0].opened = false;
-        app.show_network = false;
+        assert!(!app.trace_windows[0].opened, "a new desktop starts empty");
+        assert!(!app.show_network, "a new desktop hides all panels");
         app.switch_desktop(0);
         assert_eq!(app.active_desktop, 0);
         assert!(app.trace_windows[0].opened, "desktop 1 reopens its windows");

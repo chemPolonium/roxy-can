@@ -21,7 +21,9 @@ fn file_name(p: &str) -> String {
 
 /// Global shortcuts dispatched from winit key events (see `crate::CMD`):
 /// F9 start/stop, Ctrl+R record, Ctrl+E export, Ctrl+O open DBC,
-/// Space play/pause, -/+ replay speed, Home jump to the live edge.
+/// Space play/pause, -/+ replay speed, Home jump to the live edge,
+/// Ctrl+S save, Ctrl+Shift+S save as, Ctrl+N new project,
+/// Ctrl+Shift+O open project.
 fn shortcuts(app: &mut App, ui: &Ui) {
     let cmd = crate::CMD.swap(0, std::sync::atomic::Ordering::Relaxed);
     if cmd == 0 {
@@ -51,6 +53,19 @@ fn shortcuts(app: &mut App, ui: &Ui) {
         6 => app.step_replay_speed(-1),
         7 => app.step_replay_speed(1),
         8 => app.jump_to_live(),
+        9 => match app.project_path.clone() {
+            Some(p) => {
+                app.save_project(Some(p));
+            }
+            None => {
+                app.save_project(None);
+            }
+        },
+        10 => {
+            app.save_project(None);
+        }
+        11 => app.guarded_action(crate::app::PendingAction::NewProject),
+        12 => app.guarded_action(crate::app::PendingAction::OpenProject),
         _ => {}
     }
 }
@@ -74,10 +89,14 @@ pub fn render(app: &mut App, ui: &Ui) {
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu("File", || {
-                    if ui.menu_item("New Project") {
+                    if ui.menu_item_config("New Project").shortcut("Ctrl+N").build() {
                         app.guarded_action(crate::app::PendingAction::NewProject);
                     }
-                    if ui.menu_item("Open Project...") {
+                    if ui
+                        .menu_item_config("Open Project...")
+                        .shortcut("Ctrl+Shift+O")
+                        .build()
+                    {
                         app.guarded_action(crate::app::PendingAction::OpenProject);
                     }
                     if !app.recent_projects.is_empty() {
@@ -99,7 +118,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         });
                     }
-                    if ui.menu_item("Save Project") {
+                    if ui.menu_item_config("Save Project").shortcut("Ctrl+S").build() {
                         match app.project_path.clone() {
                             Some(p) => {
                                 app.save_project(Some(p));
@@ -109,11 +128,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         }
                     }
-                    if ui.menu_item("Save Project As...") {
+                    if ui
+                        .menu_item_config("Save Project As...")
+                        .shortcut("Ctrl+Shift+S")
+                        .build()
+                    {
                         app.save_project(None);
                     }
                     ui.separator();
-                    if ui.menu_item("Open DBC...\tCtrl+O") {
+                    if ui.menu_item_config("Open DBC...").shortcut("Ctrl+O").build() {
                         app.pick_dbc();
                     }
                     if ui.menu_item("Open ASC...") {
@@ -140,7 +163,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                         });
                     }
                     ui.separator();
-                    if ui.menu_item("Export Trace ASC...\tCtrl+E") {
+                    if ui
+                        .menu_item_config("Export Trace ASC...")
+                        .shortcut("Ctrl+E")
+                        .build()
+                    {
                         app.export_trace_dialog(0);
                     }
                     ui.separator();
@@ -150,14 +177,16 @@ pub fn render(app: &mut App, ui: &Ui) {
                 });
                 ui.menu("Measurement", || {
                     if ui
-                        .menu_item_config("Start\tF9")
+                        .menu_item_config("Start")
+                        .shortcut("F9")
                         .enabled(!app.measuring)
                         .build()
                     {
                         app.start_selected();
                     }
                     if ui
-                        .menu_item_config("Stop\tF9")
+                        .menu_item_config("Stop")
+                        .shortcut("F9")
                         .enabled(app.measuring)
                         .build()
                     {
@@ -199,6 +228,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .build()
                     {
                         app.show_measurement = !app.show_measurement;
+                    }
+                });
+                ui.menu("Help", || {
+                    if ui.menu_item("Shortcuts") {
+                        app.show_shortcuts = true;
+                    }
+                    if ui.menu_item("About") {
+                        app.show_about = true;
                     }
                 });
             });
