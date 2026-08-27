@@ -139,8 +139,8 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item_config("Open DBC...").shortcut("Ctrl+O").build() {
                         app.pick_dbc();
                     }
-                    if ui.menu_item("Open ASC...") {
-                        app.pick_asc();
+                    if ui.menu_item("Open Log...") {
+                        app.pick_log();
                     }
                     if !app.recent_dbc.is_empty() {
                         ui.menu("Recent DBC", || {
@@ -152,12 +152,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         });
                     }
-                    if !app.recent_asc.is_empty() {
-                        ui.menu("Recent ASC", || {
-                            let paths = app.recent_asc.clone();
+                    if !app.recent_log.is_empty() {
+                        ui.menu("Recent Logs", || {
+                            let paths = app.recent_log.clone();
                             for p in paths {
                                 if ui.menu_item(&file_name(&p)) {
-                                    app.load_asc(&p);
+                                    app.load_log(&p);
                                 }
                             }
                         });
@@ -316,13 +316,13 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             if matches!(app.run_mode, Mode::Replay) {
                 vsep(ui);
-                if ui.button("Open ASC...") {
-                    app.pick_asc();
+                if ui.button("Open Log...") {
+                    app.pick_log();
                 }
-                if !app.asc_path.trim().is_empty() {
+                if !app.log_path.trim().is_empty() {
                     ui.same_line();
                     ui.align_text_to_frame_padding();
-                    ui.text(file_name(&app.asc_path));
+                    ui.text(file_name(&app.log_path));
                 }
             }
         });

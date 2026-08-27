@@ -1,9 +1,14 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::path::Path;
+
+use memmap2::Mmap;
 
 use crate::can::frame::{
     dlc2len, CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN,
 };
+use crate::log::error::LogError;
+use crate::source::FrameStream;
 
 pub struct AscWriter {
     w: BufWriter<File>,
@@ -115,36 +120,43 @@ pub fn parse_asc(content: &str) -> Vec<CanFrame> {
     let mut frames = Vec::new();
     let mut base: u32 = 16;
     for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.len() > 5 && line[..5].eq_ignore_ascii_case("base ") {
-            base = if line.to_ascii_lowercase().contains("dec") {
-                10
-            } else {
-                16
-            };
-            continue;
-        }
-        let toks: Vec<&str> = line.split_whitespace().collect();
-        if toks.len() < 5 {
-            continue;
-        }
-        let Ok(t) = toks[0].parse::<f64>() else {
-            continue;
-        };
-        let t_us = (t * 1e6).round() as u64;
-        let frame = if toks[1].eq_ignore_ascii_case("CANFD") {
-            parse_fd(t_us, &toks, base)
-        } else {
-            parse_classic(t_us, &toks, base)
-        };
-        if let Some(f) = frame {
+        if let Some(f) = parse_asc_line(raw, &mut base) {
             frames.push(f);
         }
     }
     frames
+}
+
+/// Parses one ASC line, mutating `base` when the header `base hex|dec`
+/// token appears. Returns `None` for headers, comments, malformed rows, and
+/// trailing fields. Shared with [`AscStream`] so the mmap path and the
+/// string path can never drift on line semantics.
+fn parse_asc_line(raw: &str, base: &mut u32) -> Option<CanFrame> {
+    let line = raw.trim();
+    if line.is_empty() {
+        return None;
+    }
+    if line.len() > 5 && line[..5].eq_ignore_ascii_case("base ") {
+        *base = if line.to_ascii_lowercase().contains("dec") {
+            10
+        } else {
+            16
+        };
+        return None;
+    }
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    if toks.len() < 5 {
+        return None;
+    }
+    let Ok(t) = toks[0].parse::<f64>() else {
+        return None;
+    };
+    let t_us = (t * 1e6).round() as u64;
+    if toks[1].eq_ignore_ascii_case("CANFD") {
+        parse_fd(t_us, &toks, *base)
+    } else {
+        parse_classic(t_us, &toks, *base)
+    }
 }
 
 fn parse_id(s: &str, base: u32) -> Option<(u32, bool)> {
@@ -253,6 +265,119 @@ fn parse_fd(t_us: u64, toks: &[&str], base: u32) -> Option<CanFrame> {
         dir,
         flags,
     })
+}
+
+/// Streaming ASC reader backed by `mmap`, so a 500 MB log costs no heap.
+/// Reuses [`parse_asc_line`] to guarantee byte-identical semantics with the
+/// in-memory [`parse_asc`] path.
+pub struct AscStream {
+    map: Mmap,
+    pos: usize,
+    base: u32,
+    front: Option<CanFrame>,
+    eof: bool,
+    duration: Option<u64>,
+}
+
+impl AscStream {
+    pub fn open(path: &Path) -> Result<Self, LogError> {
+        let file = File::open(path)?;
+        // SAFETY: ASC logs are treated as immutable once written; Vector
+        // either closes the file or appends whole lines, and a partially
+        // written tail simply fails to parse (skipped as EOF).
+        let map = unsafe { Mmap::map(&file) }?;
+        let duration = asc_tail_duration_us(&map);
+        Ok(AscStream {
+            map,
+            pos: 0,
+            base: 16,
+            front: None,
+            eof: false,
+            duration,
+        })
+    }
+
+    /// Reads forward until `front` holds a frame or the file is exhausted.
+    /// Kept at one frame of lookahead so `peek_t` never over-consumes.
+    fn fill(&mut self) {
+        while self.front.is_none() && !self.eof {
+            let start = self.pos;
+            let end = match self.map[start..].iter().position(|&b| b == b'\n') {
+                Some(rel) => start + rel,
+                None => self.map.len(),
+            };
+            self.pos = end.saturating_add(1).min(self.map.len());
+            let raw = &self.map[start..end];
+            let Some(frame) = Self::parse_line_bytes(raw, &mut self.base) else {
+                if self.pos >= self.map.len() {
+                    self.eof = true;
+                }
+                continue;
+            };
+            self.front = Some(frame);
+        }
+    }
+
+    fn parse_line_bytes(bytes: &[u8], base: &mut u32) -> Option<CanFrame> {
+        // Non-UTF-8 bytes are rare (Vector writes ASCII), but a stray byte
+        // must not abort a whole capture; drop the line and keep going.
+        let Ok(s) = std::str::from_utf8(bytes) else {
+            return None;
+        };
+        parse_asc_line(s, base)
+    }
+}
+
+impl FrameStream for AscStream {
+    fn peek_t(&mut self) -> Option<u64> {
+        if self.front.is_none() {
+            self.fill();
+        }
+        self.front.as_ref().map(|f| f.t_us)
+    }
+
+    fn next_frame(&mut self) -> Option<CanFrame> {
+        if self.front.is_none() {
+            self.fill();
+        }
+        let f = self.front.take()?;
+        if self.front.is_none() && self.pos >= self.map.len() {
+            self.eof = true;
+        }
+        Some(f)
+    }
+
+    fn duration_us(&self) -> Option<u64> {
+        self.duration
+    }
+
+    fn describe(&self) -> String {
+        match self.duration {
+            Some(d) => format!("ASC, {:.1} s", d as f64 / 1e6),
+            None => "ASC".to_string(),
+        }
+    }
+}
+
+/// Best-effort tail read: parse the last 8 KB and report the timestamp of
+/// the final frame line. Avoids a full-file scan during open; the caller
+/// gets a slightly-off duration only when the last 8 KB is entirely
+/// comments or the file has fewer than one frame.
+pub fn asc_tail_duration_us(bytes: &[u8]) -> Option<u64> {
+    const WINDOW: usize = 8 * 1024;
+    let start = bytes.len().saturating_sub(WINDOW);
+    let tail = &bytes[start..];
+    let Ok(s) = std::str::from_utf8(tail) else {
+        return None;
+    };
+    let mut base = 16u32;
+    let mut last: Option<CanFrame> = None;
+    for line in s.lines() {
+        if let Some(f) = parse_asc_line(line, &mut base) {
+            last = Some(f);
+        }
+    }
+    last.map(|f| f.t_us)
 }
 
 #[cfg(test)]

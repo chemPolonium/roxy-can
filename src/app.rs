@@ -5,8 +5,9 @@ use std::time::Instant;
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 use crate::dbc::SymbolTable;
-use crate::log::asc::{AscWriter, parse_asc};
-use crate::source::FrameSource;
+use crate::log::AscWriter;
+use crate::log::open_stream;
+use crate::source::{FrameSource, FrameStream};
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
 
@@ -240,10 +241,12 @@ pub struct App {
     paused_at_us: Option<u64>,
     pub channels: Vec<Channel>,
     pub status: String,
-    pub asc_path: String,
-    asc_frames: Vec<CanFrame>,
+    /// Absolute path of the log currently loaded for replay (`.asc`, `.blf`).
+    pub log_path: String,
+    /// One-line summary from the stream's `describe()`, e.g. "BLF4, 41.2 s".
+    pub log_info: Option<String>,
     pub recent_dbc: Vec<String>,
-    pub recent_asc: Vec<String>,
+    pub recent_log: Vec<String>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
     pub project_path: Option<PathBuf>,
     pub recent_projects: Vec<String>,
@@ -336,10 +339,10 @@ impl App {
                 },
             ],
             status: "stopped".to_string(),
-            asc_path: String::new(),
-            asc_frames: Vec::new(),
+            log_path: String::new(),
+            log_info: None,
             recent_dbc: Vec::new(),
-            recent_asc: Vec::new(),
+            recent_log: Vec::new(),
             project_path: None,
             recent_projects: Vec::new(),
             layout_cache: String::new(),
@@ -567,13 +570,13 @@ impl App {
     }
 
     /// Starts measurement in the mode selected by the Simulation/Replay
-    /// dropdown; replay falls back to a file picker when no ASC is loaded.
+    /// dropdown; replay falls back to a file picker when no log is loaded.
     pub fn start_selected(&mut self) {
         match self.run_mode {
             Mode::Virtual => self.start_virtual(),
             Mode::Replay => {
                 if !self.can_replay() {
-                    self.pick_asc();
+                    self.pick_log();
                 }
                 // Start expressed the intent to run, so begin playback as
                 // soon as a log is actually available.
@@ -597,9 +600,7 @@ impl App {
     }
 
     fn can_replay(&self) -> bool {
-        !self.asc_frames.is_empty()
-            || !self.asc_path.trim().is_empty()
-            || !self.last_record.trim().is_empty()
+        !self.log_path.trim().is_empty() || !self.last_record.trim().is_empty()
     }
 
     pub fn stop(&mut self) {
@@ -746,7 +747,9 @@ impl App {
             Some("dbc") => {
                 self.open_dbc_for(0, path.to_string_lossy().into_owned());
             }
-            Some("asc") => self.load_asc(&path.to_string_lossy()),
+            Some("asc") | Some("blf") | Some("mf4") => {
+                self.load_log(&path.to_string_lossy());
+            }
             _ => {
                 let name = path
                     .file_name()
@@ -761,40 +764,43 @@ impl App {
         push_recent(&mut self.recent_dbc, path);
     }
 
-    pub fn push_recent_asc(&mut self, path: String) {
-        push_recent(&mut self.recent_asc, path);
+    pub fn push_recent_log(&mut self, path: String) {
+        push_recent(&mut self.recent_log, path);
     }
 
-    pub fn pick_asc(&mut self) {
+    pub fn pick_log(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .set_title("Open ASC")
-            .add_filter("ASC files", &["asc"])
+            .set_title("Open CAN log")
+            .add_filter("CAN logs", &["asc", "blf", "mf4"])
             .pick_file()
         {
-            self.load_asc(&p.to_string_lossy());
+            self.load_log(&p.to_string_lossy());
         }
     }
 
-    /// Parses an ASC log and keeps it ready for replay without starting
-    /// playback; Start (in Replay mode) begins it.
-    pub fn load_asc(&mut self, path: &str) {
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                let frames = parse_asc(&content);
-                if frames.is_empty() {
-                    self.status = "ASC: no frames parsed".to_string();
-                    return;
-                }
-                let name = std::path::Path::new(path)
+    /// Validates the log by opening it and caches `describe()` for the
+    /// status bar; playback still starts on demand. The stream itself is
+    /// dropped here so the mmap handle closes before `replay` reopens it —
+    /// Windows refuses to move/rename a mapped file.
+    pub fn load_log(&mut self, path: &str) {
+        let p = std::path::Path::new(path);
+        match open_stream(p) {
+            Ok(stream) => {
+                let name = p
                     .file_name()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.to_string());
-                self.asc_path = path.to_string();
-                self.status = format!("loaded {} frames: {name}", frames.len());
-                self.asc_frames = frames;
-                self.push_recent_asc(path.to_string());
+                let info = stream.describe();
+                self.log_path = path.to_string();
+                self.log_info = if info.is_empty() { None } else { Some(info.clone()) };
+                self.status = if info.is_empty() {
+                    format!("loaded {name}")
+                } else {
+                    format!("loaded {name} [{info}]")
+                };
+                self.push_recent_log(path.to_string());
             }
-            Err(e) => self.status = format!("ASC read failed [{path}]: {e}"),
+            Err(e) => self.status = format!("log load failed [{path}]: {e}"),
         }
     }
 
@@ -1046,45 +1052,43 @@ impl App {
     }
 
     pub fn replay(&mut self) {
-        if !self.asc_frames.is_empty() {
-            self.start_replay(self.asc_frames.clone());
-            return;
-        }
         let path = {
-            let p = self.asc_path.trim();
+            let p = self.log_path.trim();
             if p.is_empty() {
                 self.last_record.clone()
             } else {
                 p.to_string()
             }
         };
-        match std::fs::read_to_string(&path) {
-            Ok(content) => {
-                let frames = parse_asc(&content);
-                if frames.is_empty() {
-                    self.status = "ASC: no frames parsed".to_string();
-                    return;
-                }
-                self.start_replay(frames);
-            }
-            Err(e) => self.status = format!("ASC read failed [{path}]: {e}"),
+        if path.trim().is_empty() {
+            self.status = "replay: no log selected".to_string();
+            return;
+        }
+        match open_stream(Path::new(&path)) {
+            Ok(stream) => self.start_replay(stream),
+            Err(e) => self.status = format!("replay failed [{path}]: {e}"),
         }
     }
 
-    fn start_replay(&mut self, frames: Vec<CanFrame>) {
-        let n = frames.len();
+    fn start_replay(&mut self, stream: Box<dyn FrameStream>) {
+        let info = stream.describe();
         self.close_writer();
         // Replay just re-emits an existing log; recording it would
         // only duplicate the file, so drop the Record state.
         self.recording = false;
-        let mut source = ReplaySource::new(frames);
+        let mut source = ReplaySource::new(stream);
         source.set_speed(self.replay_speed);
         self.source = Box::new(source);
         self.mode = Mode::Replay;
         self.run_mode = Mode::Replay;
         self.reset_time();
         self.measuring = true;
-        self.status = format!("replaying {n} frames at {}x", self.replay_speed);
+        let tag = if info.is_empty() {
+            String::new()
+        } else {
+            format!(" [{info}]")
+        };
+        self.status = format!("replaying{tag} at {}x", self.replay_speed);
     }
 
     /// Changes replay speed; takes effect immediately if a replay is
@@ -1125,12 +1129,12 @@ impl App {
     pub fn reset_to_defaults(&mut self) {
         self.stop();
         let recent_dbc = std::mem::take(&mut self.recent_dbc);
-        let recent_asc = std::mem::take(&mut self.recent_asc);
+        let recent_log = std::mem::take(&mut self.recent_log);
         let recent_projects = std::mem::take(&mut self.recent_projects);
         let default_layout = std::mem::take(&mut self.default_layout);
         *self = App::new();
         self.recent_dbc = recent_dbc;
-        self.recent_asc = recent_asc;
+        self.recent_log = recent_log;
         self.recent_projects = recent_projects;
         self.default_layout = default_layout;
     }
@@ -2023,7 +2027,7 @@ mod tests {
         app.stop();
         let first = app.last_record.clone();
         assert!(!first.is_empty(), "simulation should have recorded a file");
-        app.asc_path = first.clone();
+        app.log_path = first.clone();
         app.replay();
         assert!(!app.recording, "replay must drop the Record state");
         assert_eq!(
@@ -2035,7 +2039,7 @@ mod tests {
     }
 
     #[test]
-    fn loading_asc_does_not_start_replay() {
+    fn loading_log_does_not_start_replay() {
         let mut app = App::new();
         let path = std::env::temp_dir().join("roxy_can_load_asc_test.asc");
         app.record_path = path.to_string_lossy().to_string();
@@ -2051,9 +2055,12 @@ mod tests {
         }
         app.stop();
         let first = app.last_record.clone();
-        app.load_asc(&first);
+        app.load_log(&first);
         assert!(!app.measuring, "loading must not start playback");
-        assert!(!app.asc_frames.is_empty(), "frames should be cached");
+        assert!(
+            app.log_info.is_some(),
+            "load should cache a stream summary"
+        );
         app.replay();
         assert!(app.measuring, "replay starts on demand");
         assert!(matches!(app.mode, Mode::Replay));
@@ -2359,7 +2366,7 @@ mod tests {
         }
         app.stop();
         let file = app.last_record.clone();
-        app.load_asc(&file);
+        app.load_log(&file);
         app.replay();
         let (pos0, dur) = app.replay_position().expect("replay has a timeline");
         assert!(dur > 0.0, "timeline covers the whole log");
@@ -2387,7 +2394,7 @@ mod tests {
              0.001000  1  100  Tx  8  00 00 00 00 00 00 00 00\n",
         )
         .unwrap();
-        app.load_asc(&path.to_string_lossy());
+        app.load_log(&path.to_string_lossy());
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 1_000;
         app.tx_list[0].data = [0xDE; MAX_CAN_FD_LEN];

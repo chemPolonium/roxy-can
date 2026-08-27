@@ -251,8 +251,8 @@ pub struct Config {
     pub counters: Counters,
     #[serde(default)]
     pub recent_dbc: Vec<String>,
-    #[serde(default)]
-    pub recent_asc: Vec<String>,
+    #[serde(default, alias = "recent_asc")]
+    pub recent_log: Vec<String>,
     #[serde(default)]
     pub desktops: Vec<DesktopCfg>,
     #[serde(default)]
@@ -392,7 +392,7 @@ impl Config {
                 .collect(),
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
-            recent_asc: app.recent_asc.clone(),
+            recent_log: app.recent_log.clone(),
             desktops: {
                 let mut ds: Vec<DesktopCfg> = app.desktops.iter().map(desktop_cfg).collect();
                 // The active desktop's stored state can lag behind the live
@@ -549,7 +549,7 @@ impl Config {
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
-        app.recent_asc = self.recent_asc;
+        app.recent_log = self.recent_log;
         // Restored signal lists need their subscriptions recreated,
         // otherwise they render grey and never receive values.
         let keys: Vec<(u8, u32, String)> = app

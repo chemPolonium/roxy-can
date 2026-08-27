@@ -9,7 +9,7 @@ const SHORTCUTS: [(&str, &str); 11] = [
     ("Ctrl+N", "新建工程"),
     ("Ctrl+O", "打开 DBC"),
     ("Ctrl+Shift+O", "打开工程"),
-    ("Ctrl+R", "切换 ASC 录制"),
+    ("Ctrl+R", "切换日志录制 (ASC)"),
     ("Ctrl+E", "导出 Trace 为 ASC"),
     ("Ctrl+S", "保存工程"),
     ("Ctrl+Shift+S", "工程另存为"),
@@ -51,7 +51,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         ui.modal_popup_config(ID).opened(&mut open).build(|| {
             ui.text(format!("roxy-can {}", env!("CARGO_PKG_VERSION")));
             ui.text("类 CANoe 的 CAN 总线分析工具");
-            ui.text("虚拟仿真与 ASC 回放 · DBC 解码 · 多窗口观测 · 多桌面");
+            ui.text("虚拟仿真与 ASC/BLF 回放 · DBC 解码 · 多窗口观测 · 多桌面");
             ui.separator();
             if ui.button("Close") {
                 ui.close_current_popup();
