@@ -659,6 +659,22 @@ mod tests {
         assert!(cfg.channels.is_empty());
     }
 
+    /// v0.2.x persisted `recent_asc`; the field became `recent_log` when BLF
+    /// joined. The alias keeps an old `roxy-can.json` loadable, and the next
+    /// save must migrate it forward rather than keep emitting the old key.
+    #[test]
+    fn legacy_recent_asc_key_migrates_to_recent_log() {
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(r#"{"recent_asc":["old1.asc","old2.asc"]}"#)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.recent_log, ["old1.asc", "old2.asc"]);
+
+        let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
+        assert!(json.contains(r#""recent_log""#), "writes the new key");
+        assert!(!json.contains("recent_asc"), "stops writing the legacy key");
+    }
+
     #[test]
     fn dbc_paths_relativize_and_resolve_round_the_project_dir() {
         let base = Path::new("C:/work/myproj");

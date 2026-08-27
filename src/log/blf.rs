@@ -8,14 +8,13 @@
 //! containers, either raw or zlib-deflate.
 
 use std::collections::VecDeque;
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
 use flate2::read::ZlibDecoder;
-use memmap2::Mmap;
 
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN, dlc2len};
+use crate::log::backing::Backing;
 use crate::log::error::LogError;
 use crate::source::FrameStream;
 
@@ -44,32 +43,6 @@ const FD_FLAG_EDL: u8 = 0x01;
 const FD_FLAG_BRS: u8 = 0x02;
 const FD_FLAG_ESI: u8 = 0x04;
 
-/// Backing bytes come either from a memory map (real files, cheap on RAM)
-/// or from a test-owned Vec. Both branches expose the same `&[u8]` view so
-/// the reader is unaware of which one it holds.
-enum Backing {
-    Mapped {
-        // Keeping the File alive is what pins the mapping on Windows; if
-        // it drops first the map is torn down mid-iteration.
-        #[allow(dead_code)]
-        file: File,
-        map: Mmap,
-    },
-    // Only `from_bytes` (a test helper) builds this variant; the arm still
-    // needs to exist for the shared `as_slice`/`build` code to compile.
-    #[allow(dead_code)]
-    Owned(Vec<u8>),
-}
-
-impl Backing {
-    fn as_slice(&self) -> &[u8] {
-        match self {
-            Backing::Mapped { map, .. } => &map[..],
-            Backing::Owned(v) => v.as_slice(),
-        }
-    }
-}
-
 pub struct BlfStream {
     data: Backing,
     pos: usize,
@@ -87,31 +60,24 @@ pub struct BlfStream {
 
 impl BlfStream {
     pub fn open(path: &Path) -> Result<Self, LogError> {
-        let file = File::open(path)?;
-        // SAFETY: same contract as `AscStream` — the file is treated as
-        // immutable; a partially-written tail fails the header check and
-        // we stop cleanly.
-        let map = unsafe { Mmap::map(&file) }?;
+        let data = Backing::map_path(path)?;
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Self::build(Backing::Mapped { file, map }, Some(name))
+        Self::build(data, Some(name))
     }
 
     // Test-only entry that avoids the filesystem.
     #[cfg(test)]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LogError> {
-        Self::build(Backing::Owned(bytes.to_vec()), None)
+        Self::build(Backing::owned(bytes), None)
     }
 
     fn build(data: Backing, name_hint: Option<String>) -> Result<Self, LogError> {
         let (duration, count) = read_file_header(data.as_slice())?;
+        let kind = data.kind();
         let describe = {
-            let kind = match data {
-                Backing::Mapped { .. } => "mmap",
-                Backing::Owned(_) => "mem",
-            };
             let head = match duration {
                 Some(d) => format!("BLF4 [{kind}], {:.1} s, {} objects", d as f64 / 1e6, count),
                 None => format!("BLF4 [{kind}], {} objects", count),

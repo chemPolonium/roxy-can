@@ -2,9 +2,8 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use memmap2::Mmap;
-
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN, dlc2len};
+use crate::log::backing::Backing;
 use crate::log::error::LogError;
 use crate::source::FrameStream;
 
@@ -271,7 +270,7 @@ fn parse_fd(t_us: u64, toks: &[&str], base: u32) -> Option<CanFrame> {
 /// Reuses [`parse_asc_line`] to guarantee byte-identical semantics with the
 /// in-memory [`parse_asc`] path.
 pub struct AscStream {
-    map: Mmap,
+    data: Backing,
     pos: usize,
     base: u32,
     front: Option<CanFrame>,
@@ -281,20 +280,27 @@ pub struct AscStream {
 
 impl AscStream {
     pub fn open(path: &Path) -> Result<Self, LogError> {
-        let file = File::open(path)?;
-        // SAFETY: ASC logs are treated as immutable once written; Vector
-        // either closes the file or appends whole lines, and a partially
-        // written tail simply fails to parse (skipped as EOF).
-        let map = unsafe { Mmap::map(&file) }?;
-        let duration = asc_tail_duration_us(&map);
-        Ok(AscStream {
-            map,
+        Ok(Self::from_backing(Backing::map_path(path)?))
+    }
+
+    /// Test seam: run the byte-cursor path over an in-memory log so the mmap
+    /// reader stays covered even though `open_stream` only reaches it above
+    /// the 100 MB threshold.
+    #[cfg(test)]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self::from_backing(Backing::owned(bytes))
+    }
+
+    fn from_backing(data: Backing) -> Self {
+        let duration = asc_tail_duration_us(data.as_slice());
+        AscStream {
+            data,
             pos: 0,
             base: 16,
             front: None,
             eof: false,
             duration,
-        })
+        }
     }
 
     /// Reads forward until `front` holds a frame or the file is exhausted.
@@ -302,14 +308,18 @@ impl AscStream {
     fn fill(&mut self) {
         while self.front.is_none() && !self.eof {
             let start = self.pos;
-            let end = match self.map[start..].iter().position(|&b| b == b'\n') {
+            let len = self.data.len();
+            let end = match self.data.as_slice()[start..]
+                .iter()
+                .position(|&b| b == b'\n')
+            {
                 Some(rel) => start + rel,
-                None => self.map.len(),
+                None => len,
             };
-            self.pos = end.saturating_add(1).min(self.map.len());
-            let raw = &self.map[start..end];
+            self.pos = end.saturating_add(1).min(len);
+            let raw = &self.data.as_slice()[start..end];
             let Some(frame) = Self::parse_line_bytes(raw, &mut self.base) else {
-                if self.pos >= self.map.len() {
+                if self.pos >= len {
                     self.eof = true;
                 }
                 continue;
@@ -341,7 +351,7 @@ impl FrameStream for AscStream {
             self.fill();
         }
         let f = self.front.take()?;
-        if self.front.is_none() && self.pos >= self.map.len() {
+        if self.front.is_none() && self.pos >= self.data.len() {
             self.eof = true;
         }
         Some(f)
@@ -652,6 +662,226 @@ mod tests {
         assert_eq!(parsed[1].dir, Direction::Tx);
         assert_eq!(parsed[1].len, 8);
         assert!(parsed[1].payload().is_empty());
+        std::fs::remove_file(&path).ok();
+    }
+
+    // ---- mmap byte-cursor path ------------------------------------------
+
+    // `CanFrame` deliberately has no `PartialEq` (the fixed `data` buffer is
+    // padding-sensitive), so compare the observable fields instead.
+    type FrameKey = (u64, u8, u32, bool, u8, Vec<u8>, Direction, FrameFlags);
+
+    fn frame_key(f: &CanFrame) -> FrameKey {
+        (
+            f.t_us,
+            f.channel,
+            f.id,
+            f.extended,
+            f.len,
+            f.payload().to_vec(),
+            f.dir,
+            f.flags,
+        )
+    }
+
+    fn keys(frames: &[CanFrame]) -> Vec<FrameKey> {
+        frames.iter().map(frame_key).collect()
+    }
+
+    fn drain(mut s: impl FrameStream) -> Vec<CanFrame> {
+        let mut out = Vec::new();
+        while let Some(f) = s.next_frame() {
+            out.push(f);
+        }
+        out
+    }
+
+    /// One line per frame kind the reader claims to handle, wrapped in the
+    /// header/footer junk Vector emits. Timestamps ascend so the ordering the
+    /// replay clock relies on is also covered.
+    fn mixed_log() -> String {
+        "date Sat Jan 01 00:00:00.000 2022\n\
+         base hex  timestamps absolute\n\
+         internal events logged\n\
+         Begin Triggerblock Sat Jan 01 00:00:00.000 2022\n\
+         0.000000 Start of measurement\n\
+         0.000123   1  1A4            Rx       d 8  11 22 33 44 55 66 77 88\n\
+         0.000456   1  1DB3FFFDx      Tx       d 8  DE AD BE EF 00 11 22 33\n\
+         0.000789   2  100            Rx       r 8\n\
+         0.000800   2  000            Rx       e 0\n\
+         0.005756 CANFD   1  Rx   1A4   EngineStatus 1 0 9 12 01 02 03 04 05 06 07 08 09 0A 0B 0C 0 0 00000000 0 0 0 0 0\n\
+         End TriggerBlock\n"
+            .to_string()
+    }
+
+    #[test]
+    fn stream_matches_parse_asc_on_mixed_log() {
+        let text = mixed_log();
+        let want = parse_asc(&text);
+        assert_eq!(want.len(), 5, "fixture should yield one frame per row");
+        let got = drain(AscStream::from_bytes(text.as_bytes()));
+        assert_eq!(
+            keys(&got),
+            keys(&want),
+            "mmap path drifted from the string path"
+        );
+    }
+
+    #[test]
+    fn stream_survives_a_non_utf8_line() {
+        let mut bytes = b"0.000100   1  1A4  Rx  d 2  AA BB\n".to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x80, b'\n']);
+        bytes.extend_from_slice(b"0.000200   1  1A5  Rx  d 1  CC\n");
+        let got = drain(AscStream::from_bytes(&bytes));
+        assert_eq!(got.len(), 2, "one corrupt row must not abort a capture");
+        assert_eq!(got[0].id, 0x1A4);
+        assert_eq!(got[1].id, 0x1A5);
+        assert_eq!(got[1].t_us, 200);
+    }
+
+    #[test]
+    fn stream_handles_crlf_and_a_final_unterminated_line() {
+        let unix = keys(&parse_asc(&mixed_log()));
+        let crlf = mixed_log().replace('\n', "\r\n");
+        assert_eq!(keys(&drain(AscStream::from_bytes(crlf.as_bytes()))), unix);
+
+        // Vector can be killed mid-write, leaving no trailing newline.
+        let mut truncated = crlf.clone();
+        truncated.truncate(truncated.len() - 2);
+        assert!(
+            !truncated.ends_with('\n'),
+            "fixture must drop the terminator"
+        );
+        assert_eq!(
+            keys(&drain(AscStream::from_bytes(truncated.as_bytes()))),
+            unix
+        );
+    }
+
+    #[test]
+    fn stream_peek_does_not_consume() {
+        let mut s = AscStream::from_bytes(mixed_log().as_bytes());
+        let first = s.peek_t();
+        assert_eq!(first, Some(123));
+        assert_eq!(s.peek_t(), first, "repeated peek must be stable");
+        assert_eq!(s.next_frame().map(|f| f.t_us), first);
+        assert_eq!(s.peek_t(), Some(456));
+    }
+
+    #[test]
+    fn stream_reports_no_frames_for_a_header_only_log() {
+        let s = "date Sat Jan 01 00:00:00.000 2022\nbase hex  timestamps absolute\n";
+        let mut stream = AscStream::from_bytes(s.as_bytes());
+        assert_eq!(stream.peek_t(), None);
+        assert!(stream.next_frame().is_none());
+        assert_eq!(stream.duration_us(), None);
+    }
+
+    #[test]
+    fn tail_duration_reports_the_last_frame_timestamp() {
+        assert_eq!(asc_tail_duration_us(mixed_log().as_bytes()), Some(5_756));
+    }
+
+    #[test]
+    fn tail_duration_is_none_without_frame_lines() {
+        let s = "date Sat Jan 01 00:00:00.000 2022\nbase hex\ninternal events logged\n";
+        assert_eq!(asc_tail_duration_us(s.as_bytes()), None);
+    }
+
+    #[test]
+    fn tail_duration_window_may_start_mid_line() {
+        // Longer than the 8 KB window, so the slice begins partway through a
+        // comment row; the final frame still has to be found.
+        let mut s = String::from("base hex  timestamps absolute\n");
+        for i in 0..600 {
+            s.push_str(&format!(
+                " filler comment row {i} padded out so the window has to clip a line\n"
+            ));
+        }
+        s.push_str("0.042000   1  321  Rx  d 1  A5\n");
+        assert!(
+            s.len() > 8 * 1024,
+            "fixture must exceed the window: {}",
+            s.len()
+        );
+        assert_eq!(asc_tail_duration_us(s.as_bytes()), Some(42_000));
+    }
+
+    #[test]
+    fn stream_drains_a_many_thousand_frame_log() {
+        const N: u32 = 20_000;
+        let mut s = String::from("base hex  timestamps absolute\n");
+        for i in 0..N {
+            s.push_str(&format!(
+                "{:.6}   1  {:03X}  Rx  d 2  AA BB\n",
+                f64::from(i) / 1000.0,
+                i % 0x400,
+            ));
+        }
+        let want = parse_asc(&s);
+        let got = drain(AscStream::from_bytes(s.as_bytes()));
+        assert_eq!(got.len(), N as usize);
+        assert_eq!(keys(&got), keys(&want));
+        assert_eq!(
+            AscStream::from_bytes(s.as_bytes()).duration_us(),
+            want.last().map(|f| f.t_us),
+            "tail scan must agree with the full parse"
+        );
+    }
+
+    /// Manual smoke over a real >100 MB file through the production entry
+    /// point, so the mmap threshold, `Backing::map_path` and the byte cursor
+    /// are all covered together. Run with
+    /// `cargo test large_asc_mmap_smoke -- --ignored --nocapture` and watch RSS
+    /// in Task Manager — it should stay flat while the drain runs.
+    #[test]
+    #[ignore]
+    fn large_asc_mmap_smoke() {
+        const N: u32 = 4_000_000;
+        let path = std::env::temp_dir().join("roxy_can_large.asc");
+        {
+            use std::io::Write as _;
+            let mut f = std::io::BufWriter::with_capacity(1 << 20, File::create(&path).unwrap());
+            writeln!(f, "base hex  timestamps absolute").unwrap();
+            for i in 0..N {
+                writeln!(
+                    f,
+                    "{:.6}   1  {:03X}  Rx  d 2  AA BB",
+                    f64::from(i) / 1000.0,
+                    i % 0x400,
+                )
+                .unwrap();
+            }
+            f.flush().unwrap();
+        }
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            size > crate::log::ASC_MMAP_THRESHOLD,
+            "fixture must clear the mmap threshold: {size} B"
+        );
+
+        let t0 = std::time::Instant::now();
+        let mut stream = crate::log::open_stream(&path).unwrap();
+        let describe = stream.describe();
+        assert!(
+            describe.starts_with("ASC, "),
+            "production dispatch should reach the mmap reader, got {describe}"
+        );
+        let open_ms = t0.elapsed().as_millis();
+
+        let t1 = std::time::Instant::now();
+        let mut n = 0usize;
+        while stream.next_frame().is_some() {
+            n += 1;
+        }
+        let drain_ms = t1.elapsed().as_millis();
+
+        assert_eq!(n, N as usize);
+        assert_eq!(stream.duration_us(), Some((N as u64 - 1) * 1000));
+        println!(
+            "{size} B, open {open_ms} ms, drained {n} frames in {drain_ms} ms ({:.0} frames/s)",
+            n as f64 / (drain_ms as f64 / 1000.0)
+        );
         std::fs::remove_file(&path).ok();
     }
 }
