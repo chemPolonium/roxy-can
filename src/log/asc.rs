@@ -266,6 +266,11 @@ fn parse_fd(t_us: u64, toks: &[&str], base: u32) -> Option<CanFrame> {
     })
 }
 
+/// Frames to walk between seek checkpoints. One per ~130 KB of a typical
+/// log: a backward jump then rescans at most this many lines, while the
+/// table itself costs ~1 KB per million frames.
+const ASC_CHECKPOINT_EVERY: u32 = 4096;
+
 /// Streaming ASC reader backed by `mmap`, so a 500 MB log costs no heap.
 /// Reuses [`parse_asc_line`] to guarantee byte-identical semantics with the
 /// in-memory [`parse_asc`] path.
@@ -274,8 +279,17 @@ pub struct AscStream {
     pos: usize,
     base: u32,
     front: Option<CanFrame>,
+    /// Byte offset [`AscStream::front`] was parsed from, so a checkpoint can
+    /// name the exact line boundary to resume from.
+    front_start: usize,
     eof: bool,
     duration: Option<u64>,
+    /// `(t_us, byte offset, radix in force there)` for a handful of positions
+    /// we have already walked past, ascending by `t_us`. Recording happens as
+    /// we read, so opening a log stays O(1); seeking restores the nearest
+    /// entry and rescans forward from it.
+    checkpoints: Vec<(u64, usize, u32)>,
+    since_ckpt: u32,
 }
 
 impl AscStream {
@@ -298,8 +312,11 @@ impl AscStream {
             pos: 0,
             base: 16,
             front: None,
+            front_start: 0,
             eof: false,
             duration,
+            checkpoints: Vec::new(),
+            since_ckpt: 0,
         }
     }
 
@@ -324,8 +341,35 @@ impl AscStream {
                 }
                 continue;
             };
+            self.front_start = start;
             self.front = Some(frame);
         }
+    }
+
+    /// Indexes the line `t_us` was read from, keeping the table ascending so
+    /// [`Self::seek_to_us`] can binary search it. Re-walking an already
+    /// indexed stretch must not pile up duplicates.
+    fn note_checkpoint(&mut self, t_us: u64, pos: usize, base: u32) {
+        let at = self.checkpoints.partition_point(|(t, _, _)| *t < t_us);
+        if self
+            .checkpoints
+            .get(at)
+            .is_some_and(|(t, p, _)| *t == t_us && *p == pos)
+        {
+            return;
+        }
+        self.checkpoints.insert(at, (t_us, pos, base));
+    }
+
+    /// Restores the cursor to the start of the file, forgetting nothing:
+    /// the checkpoint table survives, since it describes the bytes, not us.
+    fn rewind(&mut self) {
+        self.pos = 0;
+        self.base = 16;
+        self.front = None;
+        self.front_start = 0;
+        self.eof = false;
+        self.since_ckpt = 0;
     }
 
     fn parse_line_bytes(bytes: &[u8], base: &mut u32) -> Option<CanFrame> {
@@ -351,10 +395,46 @@ impl FrameStream for AscStream {
             self.fill();
         }
         let f = self.front.take()?;
+        if self.since_ckpt >= ASC_CHECKPOINT_EVERY {
+            // Frame rows never change the radix, so the current `base` is also
+            // the one in force when this row was read.
+            self.note_checkpoint(f.t_us, self.front_start, self.base);
+            self.since_ckpt = 0;
+        }
+        self.since_ckpt += 1;
         if self.front.is_none() && self.pos >= self.data.len() {
             self.eof = true;
         }
         Some(f)
+    }
+
+    fn seek_to_us(&mut self, target: u64) -> Option<u64> {
+        match self.checkpoints.partition_point(|(t, _, _)| *t <= target) {
+            0 => self.rewind(),
+            k => {
+                let (t, pos, base) = self.checkpoints[k - 1];
+                let _ = t;
+                self.pos = pos;
+                self.base = base;
+                self.front = None;
+                self.front_start = pos;
+                self.eof = false;
+                self.since_ckpt = 0;
+            }
+        }
+        // Walk forward to the target. Bounded by one checkpoint interval for
+        // stretches we have already indexed; the first jump into fresh
+        // territory pays for its whole prefix and leaves checkpoints behind,
+        // so the same jump is fast afterwards.
+        loop {
+            match self.peek_t() {
+                Some(t) if t >= target => return Some(t),
+                Some(_) => {
+                    self.next_frame();
+                }
+                None => return None,
+            }
+        }
     }
 
     fn duration_us(&self) -> Option<u64> {
@@ -393,6 +473,7 @@ pub fn asc_tail_duration_us(bytes: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log::vec_stream::VecStream;
 
     fn classic(id: u32, bytes: &[u8]) -> CanFrame {
         let mut data = [0u8; MAX_CAN_FD_LEN];
@@ -829,6 +910,112 @@ mod tests {
         );
     }
 
+    /// A log with `n` distinct one-microsecond-spaced frames, long enough to
+    /// cross the checkpoint interval.
+    fn timed_log(n: u32) -> String {
+        let mut s = String::from("base hex  timestamps absolute\n");
+        for i in 0..n {
+            s.push_str(&format!(
+                "{:.6}   1  {:03X}  Rx  d 2  AA BB\n",
+                f64::from(i) / 1e6,
+                0x100 + i % 0x2FF,
+            ));
+        }
+        s
+    }
+
+    fn remaining(s: &mut dyn FrameStream) -> Vec<FrameKey> {
+        let mut out = Vec::new();
+        while let Some(f) = s.next_frame() {
+            out.push(frame_key(&f));
+        }
+        out
+    }
+
+    #[test]
+    fn seek_agrees_with_the_in_memory_stream() {
+        let text = timed_log(10_000);
+        for target in [0u64, 1, 4_095, 4_096, 4_097, 9_998, 9_999] {
+            let mut a = AscStream::from_bytes(text.as_bytes());
+            let mut v = VecStream::new(parse_asc(&text));
+            assert_eq!(
+                a.seek_to_us(target),
+                v.seek_to_us(target),
+                "landing differs at t={target}"
+            );
+            assert_eq!(
+                remaining(&mut a),
+                remaining(&mut v),
+                "tail after seeking differs at t={target}"
+            );
+        }
+    }
+
+    #[test]
+    fn seek_rewinds_after_a_full_drain() {
+        let text = timed_log(9_000);
+        let mut s = AscStream::from_bytes(text.as_bytes());
+        let first_pass = remaining(&mut s);
+        assert_eq!(first_pass.len(), 9_000);
+        assert_eq!(s.seek_to_us(0), Some(0));
+        assert_eq!(
+            remaining(&mut s),
+            first_pass,
+            "rewind must replay the identical stream"
+        );
+    }
+
+    #[test]
+    fn checkpoint_restore_keeps_the_decimal_radix() {
+        // `base dec` appears once at the top, so a seek that resumes from a
+        // mid-file byte offset has to bring the radix with it.
+        let mut s = String::from("base dec  timestamps absolute\n");
+        for i in 0..5_000u32 {
+            s.push_str(&format!(
+                "{:.6}   1  {}  Rx  d 3  10 20 30\n",
+                f64::from(i) / 1e6,
+                1000 + i,
+            ));
+        }
+        let want = parse_asc(&s);
+        let mut stream = AscStream::from_bytes(s.as_bytes());
+        let target = want[4_500].t_us;
+        assert_eq!(stream.seek_to_us(target), Some(target));
+        let f = stream.next_frame().unwrap();
+        assert_eq!(f.id, 5_500, "id parsed as decimal, not hex");
+        assert_eq!(f.payload(), &[10, 20, 30]);
+    }
+
+    #[test]
+    fn seek_past_the_end_stops_at_eof() {
+        let mut s = AscStream::from_bytes(timed_log(100).as_bytes());
+        assert_eq!(s.seek_to_us(9_999_999), None);
+        assert_eq!(s.peek_t(), None);
+        assert!(s.next_frame().is_none());
+    }
+
+    #[test]
+    fn repeated_scrubbing_does_not_blow_up_the_index() {
+        let text = timed_log(9_000);
+        let mut s = AscStream::from_bytes(text.as_bytes());
+        assert_eq!(s.seek_to_us(8_999), Some(8_999));
+        for t in [0u64, 4_000, 8_999, 100, 6_000, 3] {
+            assert!(s.seek_to_us(t).is_some());
+        }
+        // One entry per interval walked, plus the scrub revisits, against a
+        // ceiling far below the frame count.
+        let per_walk = 9_000 / ASC_CHECKPOINT_EVERY as usize + 2;
+        assert!(
+            s.checkpoints.len() <= per_walk * 3,
+            "checkpoint table grew to {} for a 9000-frame log",
+            s.checkpoints.len()
+        );
+        assert!(
+            s.checkpoints.windows(2).all(|w| w[0].0 <= w[1].0),
+            "checkpoint table must stay ascending for partition_point"
+        );
+    }
+
     /// Manual smoke over a real >100 MB file through the production entry
     /// point, so the mmap threshold, `Backing::map_path` and the byte cursor
     /// are all covered together. Run with
@@ -878,9 +1065,25 @@ mod tests {
 
         assert_eq!(n, N as usize);
         assert_eq!(stream.duration_us(), Some((N as u64 - 1) * 1000));
+
+        // The scrub bar's premise: with the checkpoint table now populated by
+        // the pass above, a rewind must cost a rescan of one checkpoint
+        // interval, not another full sweep.
+        let t2 = std::time::Instant::now();
+        assert_eq!(stream.seek_to_us(1_000_000), Some(1_000_000));
+        let seek_ms = t2.elapsed().as_millis();
+        let t3 = std::time::Instant::now();
+        assert_eq!(stream.seek_to_us(3_500_000_000), Some(3_500_000_000));
+        let seek_fwd_ms = t3.elapsed().as_millis();
+
         println!(
-            "{size} B, open {open_ms} ms, drained {n} frames in {drain_ms} ms ({:.0} frames/s)",
+            "{size} B, open {open_ms} ms, drained {n} frames in {drain_ms} ms \
+             ({:.0} frames/s), seek back {seek_ms} ms, seek fwd {seek_fwd_ms} ms",
             n as f64 / (drain_ms as f64 / 1000.0)
+        );
+        assert!(
+            seek_ms.max(seek_fwd_ms) < 50,
+            "indexed scrub should be near-instant, saw {seek_ms}/{seek_fwd_ms} ms"
         );
         std::fs::remove_file(&path).ok();
     }

@@ -15,6 +15,16 @@ pub trait FrameStream {
     /// Consumes the frame `peek_t` returned.
     fn next_frame(&mut self) -> Option<CanFrame>;
 
+    /// Repositions the cursor so the next unread frame is the first one with
+    /// `t_us >= target`. Returns the timestamp actually landed on (>= target),
+    /// which lets the caller sync its clock to a real frame instead of the
+    /// requested value and avoid accumulating drift. `None` means `target` is
+    /// past the end and the cursor now sits at EOF.
+    ///
+    /// Deliberately has no default impl: positioning differs per container
+    /// format, and a wrong inherited default would silently mis-date playback.
+    fn seek_to_us(&mut self, target: u64) -> Option<u64>;
+
     /// Total length of the log timeline in microseconds, relative to the
     /// same zero point the frames use.
     fn duration_us(&self) -> Option<u64> {
@@ -44,6 +54,13 @@ pub trait FrameSource {
 
     /// Current position on the source's clock, in microseconds.
     fn position(&self) -> Option<u64> {
+        None
+    }
+
+    /// Jumps the source's clock to `us` and returns the timestamp actually
+    /// landed on. The no-op default is how a source without a timeline tells
+    /// the UI it cannot be scrubbed.
+    fn set_position_us(&mut self, _us: u64) -> Option<u64> {
         None
     }
 

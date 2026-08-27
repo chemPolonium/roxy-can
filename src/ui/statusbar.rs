@@ -48,12 +48,18 @@ pub fn render(app: &App, ui: &Ui) {
                 ui.same_line();
                 ui.text_colored([1.0, 0.4, 0.4, 1.0], "| REC");
             }
-            if app.measuring
-                && matches!(app.mode, Mode::Replay)
+            // Not gated on `measuring`: after a log runs out the source keeps
+            // its timeline, and the scrub bar needs the readout to stay put.
+            if matches!(app.mode, Mode::Replay)
                 && let Some((pos_s, dur_s)) = app.replay_position()
             {
                 ui.same_line();
-                ui.text(format!("| {:.2} / {:.2}s", pos_s.min(dur_s), dur_s));
+                let name = crate::ui::toolbar::file_name(&app.log_path);
+                if name.is_empty() {
+                    ui.text(format!("| {:.2} / {:.2}s", pos_s.min(dur_s), dur_s));
+                } else {
+                    ui.text(format!("| {name}  {:.2} / {:.2}s", pos_s.min(dur_s), dur_s));
+                }
             }
 
             wrap.end();

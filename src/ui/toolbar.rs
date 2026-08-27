@@ -12,7 +12,7 @@ fn vsep(ui: &Ui) {
     ui.same_line();
 }
 
-fn file_name(p: &str) -> String {
+pub(crate) fn file_name(p: &str) -> String {
     std::path::Path::new(p)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -37,19 +37,13 @@ fn shortcuts(app: &mut App, ui: &Ui) {
             if app.measuring {
                 app.stop();
             } else {
-                app.start_selected();
+                app.play();
             }
         }
         2 => app.toggle_record(),
         3 => app.export_trace_dialog(0),
         4 => app.pick_dbc(),
-        5 => {
-            if app.measuring {
-                app.trace_paused = !app.trace_paused;
-            } else {
-                app.start_selected();
-            }
-        }
+        5 => app.toggle_play(),
         6 => app.step_replay_speed(-1),
         7 => app.step_replay_speed(1),
         8 => app.jump_to_live(),
@@ -272,19 +266,15 @@ pub fn render(app: &mut App, ui: &Ui) {
             slower.end();
             ui.same_line();
             // Fixed width so toggling Play/Pause never shifts the buttons
-            // behind it.
-            if !app.measuring {
-                if ui.button_with_size("Play", [60.0, 0.0]) {
-                    app.start_selected();
-                }
-            } else if app.trace_paused {
-                if ui.button_with_size("Play", [60.0, 0.0]) {
-                    app.trace_paused = false;
-                }
+            // behind it. App::toggle_play decides between resuming a scrubbed
+            // replay and re-opening the log.
+            let label = if app.measuring && !app.trace_paused {
+                "Pause"
             } else {
-                if ui.button_with_size("Pause", [60.0, 0.0]) {
-                    app.trace_paused = true;
-                }
+                "Play"
+            };
+            if ui.button_with_size(label, [60.0, 0.0]) {
+                app.toggle_play();
             }
             ui.same_line();
             let faster = ui.begin_disabled(!matches!(app.mode, Mode::Replay));
@@ -308,6 +298,31 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.combo_simple_string("##speed", &mut pick, &labels) {
                 app.set_replay_speed(REPLAY_SPEEDS[pick]);
             }
+            // Scrub bar. Live whenever a replay source with a known length
+            // exists -- running, paused, or stopped after the log ran out.
+            if matches!(app.mode, Mode::Replay) {
+                vsep(ui);
+                let timeline = app.replay_position();
+                let scrub = ui.begin_disabled(timeline.is_none());
+                if let Some((pos_s, dur_s)) = timeline {
+                    let mut t_s = pos_s.min(dur_s);
+                    ui.set_next_item_width(240.0);
+                    if ui
+                        .slider_config("##scrub", 0.0, dur_s)
+                        .display_format("%.2f")
+                        .build(&mut t_s)
+                    {
+                        app.seek_replay_seconds(t_s);
+                    }
+                } else {
+                    ui.set_next_item_width(240.0);
+                    let mut unused = 0.0;
+                    ui.slider_config("##scrub", 0.0, 1.0)
+                        .display_format("log length unknown")
+                        .build(&mut unused);
+                }
+                scrub.end();
+            }
             if matches!(app.run_mode, Mode::Virtual) {
                 vsep(ui);
                 let mut rec = app.recording;
@@ -330,11 +345,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 vsep(ui);
                 if ui.button("Open Log...") {
                     app.pick_log();
-                }
-                if !app.log_path.trim().is_empty() {
-                    ui.same_line();
-                    ui.align_text_to_frame_padding();
-                    ui.text(file_name(&app.log_path));
                 }
             }
         });

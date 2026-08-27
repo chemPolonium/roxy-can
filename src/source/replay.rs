@@ -80,6 +80,21 @@ impl FrameSource for ReplaySource {
         Some(self.pos_us as u64)
     }
 
+    fn set_position_us(&mut self, us: u64) -> Option<u64> {
+        let landed = self.stream.seek_to_us(us)?;
+        // Adopt the frame we actually landed on rather than the requested
+        // value, so scrubbing back and forth never accumulates a bias.
+        self.pos_us = landed as f64;
+        // `done` is otherwise latched forever, which would leave the source
+        // silent after a jump back from the end.
+        self.done = false;
+        // Re-anchor the wall clock: the next poll sees `last == None`, adds
+        // nothing, and playback continues from the landing point. Without
+        // this the seek itself is credited as elapsed playback time.
+        self.last = None;
+        Some(landed)
+    }
+
     fn duration(&self) -> Option<u64> {
         self.stream.duration_us()
     }
@@ -193,5 +208,71 @@ mod tests {
             "single poll caps at MAX_POLL_FRAMES"
         );
         assert!(!src.is_done(), "capped poll must not mark the stream done");
+    }
+
+    #[test]
+    fn seek_forward_does_not_re_emit_discarded_frames() {
+        let frames: Vec<CanFrame> = (0..10u64).map(|i| frame(i * 100_000)).collect();
+        let mut src = ReplaySource::from_frames(frames);
+        let mut out = Vec::new();
+        src.poll(0, &mut out);
+        src.poll(250_000, &mut out);
+        assert_eq!(out.len(), 3, "t=0,100k,200k due by 250ms");
+        out.clear();
+        assert_eq!(src.set_position_us(700_000), Some(700_000));
+        src.poll(250_000, &mut out);
+        assert_eq!(
+            out.iter().map(|f| f.t_us).collect::<Vec<_>>(),
+            vec![700_000],
+            "playhead continues from the landing frame, skipping 300k..600k"
+        );
+    }
+
+    #[test]
+    fn seek_backward_clears_done_and_resumes() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000)]);
+        let mut out = Vec::new();
+        src.poll(0, &mut out);
+        src.poll(1_000_000, &mut out);
+        assert!(src.is_done(), "stream exhausted");
+        out.clear();
+        assert_eq!(src.set_position_us(0), Some(0));
+        assert!(!src.is_done(), "a jump back from the end must unlatch done");
+        src.poll(1_000_000, &mut out);
+        assert_eq!(out.len(), 1, "first poll only re-anchors the clock");
+        src.poll(2_000_000, &mut out);
+        assert_eq!(out.len(), 2, "playhead advances over both frames again");
+    }
+
+    #[test]
+    fn seek_lands_on_a_real_frame_instead_of_the_request() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
+        // Nothing sits at 150 ms, so the clock must adopt 200 ms -- using the
+        // request would leave the playhead between frames and drift.
+        assert_eq!(src.set_position_us(150_000), Some(200_000));
+        assert_eq!(src.position(), Some(200_000));
+    }
+
+    #[test]
+    fn seek_does_not_credit_its_own_cost_as_playback_time() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(500_000)]);
+        let mut out = Vec::new();
+        src.poll(10_000, &mut out);
+        src.poll(20_000, &mut out);
+        assert_eq!(src.set_position_us(500_000), Some(500_000));
+        // The next poll re-anchors instead of adding the 10 ms gap on top.
+        src.poll(30_000, &mut out);
+        assert_eq!(src.position(), Some(500_000), "no phantom advance");
+    }
+
+    #[test]
+    fn a_failed_seek_leaves_the_source_alone() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000)]);
+        let mut out = Vec::new();
+        src.poll(0, &mut out);
+        src.poll(40_000, &mut out);
+        let before = src.position();
+        assert_eq!(src.set_position_us(9_000_000), None, "past the end");
+        assert_eq!(src.position(), before, "a rejected seek is a no-op");
     }
 }

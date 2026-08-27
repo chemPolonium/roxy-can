@@ -268,6 +268,9 @@ pub struct App {
     pub desktop_rename_target: Option<usize>,
     pub desktop_rename_buf: String,
     pub replay_speed: f64,
+    /// Set by `stop`: the next Play re-opens the log from zero instead of
+    /// resuming wherever the scrub bar left the playhead.
+    pub replay_reset_pending: bool,
     pub record_path: String,
     pub last_record: String,
     pub subs: HashMap<(u8, u32, String), Subscription>,
@@ -355,6 +358,7 @@ impl App {
             desktop_rename_target: None,
             desktop_rename_buf: String::new(),
             replay_speed: 1.0,
+            replay_reset_pending: false,
             record_path: String::new(),
             last_record: String::new(),
             subs: HashMap::new(),
@@ -606,6 +610,7 @@ impl App {
     pub fn stop(&mut self) {
         self.measuring = false;
         self.close_writer();
+        self.replay_reset_pending = true;
         self.status = "stopped".to_string();
     }
 
@@ -1085,6 +1090,7 @@ impl App {
         self.source = Box::new(source);
         self.mode = Mode::Replay;
         self.run_mode = Mode::Replay;
+        self.replay_reset_pending = false;
         self.reset_time();
         self.measuring = true;
         let tag = if info.is_empty() {
@@ -1111,6 +1117,69 @@ impl App {
             .unwrap_or(1);
         let next = (idx as i32 + delta).clamp(0, REPLAY_SPEEDS.len() as i32 - 1) as usize;
         self.set_replay_speed(REPLAY_SPEEDS[next]);
+    }
+
+    /// Moves the replay playhead to `t_s` seconds. Works while running,
+    /// paused, or stopped after the log ran out; the log's own duration bounds
+    /// the request so a drag past the right edge lands on the last frame.
+    pub fn seek_replay_seconds(&mut self, t_s: f64) {
+        if !matches!(self.mode, Mode::Replay) {
+            return;
+        }
+        let dur_us = self.source.duration();
+        let target = match dur_us {
+            Some(d) => ((t_s.max(0.0) * 1e6) as u64).min(d),
+            None => (t_s.max(0.0) * 1e6) as u64,
+        };
+        match (self.source.set_position_us(target), dur_us) {
+            (Some(landed), Some(d)) => {
+                self.status = format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d as f64 / 1e6)
+            }
+            (Some(landed), None) => {
+                self.status = format!("seek {:.2} s", landed as f64 / 1e6);
+            }
+            (None, _) => self.status = "seek: past end of log".to_string(),
+        }
+    }
+
+    /// True when a scrubbed replay is parked mid-log and Play should pick up
+    /// from there instead of re-opening the file at zero.
+    fn can_resume_replay(&self) -> bool {
+        matches!(self.mode, Mode::Replay)
+            && !self.replay_reset_pending
+            && self.source.position().is_some()
+    }
+
+    /// Restarts the wall clock without touching captured history, so playback
+    /// continues from the scrubbed position. `reset_time` is deliberately not
+    /// used: it would wipe the trace and aggregates the user just scrubbed
+    /// through. The stale `last` in the replay source is harmless because the
+    /// poll clock uses `saturating_sub` against the new, smaller `now_us`.
+    fn resume_replay(&mut self) {
+        self.t0 = Instant::now();
+        self.trace_paused = false;
+        self.paused_at_us = None;
+        self.measuring = true;
+        self.status = format!("resumed at {}x", self.replay_speed);
+    }
+
+    /// Starts playback, resuming a scrubbed replay in place when there is one.
+    pub fn play(&mut self) {
+        if self.can_resume_replay() {
+            self.resume_replay();
+        } else {
+            self.start_selected();
+        }
+    }
+
+    /// Play/pause as a single action, shared by the toolbar button, Space and
+    /// F9 so the resume rule lives in exactly one place.
+    pub fn toggle_play(&mut self) {
+        if self.measuring {
+            self.trace_paused = !self.trace_paused;
+        } else {
+            self.play();
+        }
     }
 
     /// Current replay position and total duration in seconds (None when
@@ -2471,6 +2540,111 @@ mod tests {
         assert!(pos1 > pos0, "position advances while replaying");
         app.stop();
         std::fs::remove_file(&file).ok();
+    }
+
+    /// A log of `n` frames spaced `step_us` apart, so the timeline is exactly
+    /// `(n-1) * step_us` long and every frame sits on a round second.
+    fn write_timed_asc(name: &str, n: u32, step_us: u64) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        {
+            let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+            for i in 0..n {
+                let mut f = CanFrame {
+                    t_us: u64::from(i) * step_us,
+                    channel: 0,
+                    id: 0x100,
+                    extended: false,
+                    len: 2,
+                    data: [0; MAX_CAN_FD_LEN],
+                    dir: Direction::Rx,
+                    flags: FrameFlags::NONE,
+                };
+                f.data[0] = 0xAA;
+                f.data[1] = 0xBB;
+                w.write(&f).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn seek_replay_moves_the_playhead() {
+        let mut app = App::new();
+        let path = write_timed_asc("roxy_can_scrub.asc", 100, 10_000);
+        app.load_log(&path.to_string_lossy());
+        app.replay();
+        assert!(app.measuring);
+
+        app.seek_replay_seconds(0.5);
+        let (pos, dur) = app.replay_position().expect("replay has a timeline");
+        assert!(
+            (pos - 0.5).abs() < 1e-6,
+            "playhead should land on the 0.5 s frame, got {pos}"
+        );
+        assert!(dur > 0.9, "timeline covers the log, got {dur}");
+
+        // The first update after a seek only re-anchors the clock, so exactly
+        // the landing frame is emitted -- a scrub must not dump the prefix.
+        app.update();
+        assert_eq!(app.trace.len(), 1, "no flood of skipped frames");
+        assert_eq!(app.trace.back().unwrap().t_us, 500_000);
+
+        app.seek_replay_seconds(0.1);
+        app.update();
+        assert_eq!(app.trace.len(), 2, "seeking backwards replays earlier rows");
+        assert_eq!(app.trace.back().unwrap().t_us, 100_000);
+        app.stop();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn play_after_a_scrub_resumes_in_place() {
+        let mut app = App::new();
+        let path = write_timed_asc("roxy_can_scrub_resume.asc", 100, 10_000);
+        app.load_log(&path.to_string_lossy());
+        app.replay();
+
+        // Run the log out the far end without touching Stop.
+        let (_, dur) = app.replay_position().unwrap();
+        app.seek_replay_seconds(dur);
+        app.update();
+        app.update();
+        assert!(!app.measuring, "the replay finished on its own");
+
+        app.seek_replay_seconds(0.3);
+        assert!(
+            app.replay_position().is_some(),
+            "the timeline must survive the end of the log so the scrub bar stays usable"
+        );
+        app.toggle_play();
+        assert!(app.measuring, "Play resumes a finished, scrubbed replay");
+        let (pos, _) = app.replay_position().unwrap();
+        assert!(
+            (pos - 0.3).abs() < 1e-6,
+            "must continue from the scrubbed position, got {pos}"
+        );
+        app.stop();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn stop_makes_the_next_play_restart_from_zero() {
+        let mut app = App::new();
+        let path = write_timed_asc("roxy_can_scrub_stop.asc", 100, 10_000);
+        app.load_log(&path.to_string_lossy());
+        app.replay();
+        app.seek_replay_seconds(0.5);
+        app.update();
+        app.stop();
+        app.toggle_play();
+        let (pos, _) = app.replay_position().unwrap();
+        assert!(
+            pos < 0.01,
+            "Stop is an explicit request to re-open from the beginning, got {pos}"
+        );
+        app.stop();
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

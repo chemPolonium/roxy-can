@@ -49,6 +49,9 @@ pub struct BlfStream {
     duration: Option<u64>,
     describe: String,
     pending: VecDeque<CanFrame>,
+    /// Ascending `(rebased t_us, container byte offset)` index, grown as
+    /// containers are read. See [`Self::note_checkpoint`].
+    checkpoints: Vec<(u64, usize)>,
     /// Absolute t_us of the first frame we emitted; every subsequent
     /// frame is rebased by this so `ReplaySource::pos_us = 0` matches the
     /// log's opening record.
@@ -93,6 +96,7 @@ impl BlfStream {
             duration,
             describe,
             pending: VecDeque::new(),
+            checkpoints: Vec::new(),
             t_base: None,
             t_last: 0,
         })
@@ -105,6 +109,7 @@ impl BlfStream {
         if self.pos >= bytes.len() {
             return false;
         }
+        let container_start = self.pos;
         let hdr = match parse_object_header(&bytes[self.pos..]) {
             Ok(h) => h,
             Err(_) => {
@@ -148,7 +153,27 @@ impl BlfStream {
             }
         };
         parse_container_objects(&decoded, &mut self.pending);
+        if let Some(first) = self.pending.front() {
+            let raw = first.t_us;
+            self.note_checkpoint(raw, container_start);
+        }
         true
+    }
+
+    /// Keeps a `(rebased t_us -> byte offset)` entry per container we walk
+    /// into. BLF carries no timestamps in the container *header*, so this is
+    /// the finest index available without a full decompress pass up front.
+    fn note_checkpoint(&mut self, raw_us: u64, container_start: usize) {
+        let t = self.rebase(raw_us);
+        let at = self.checkpoints.partition_point(|(ct, _)| *ct < t);
+        if self
+            .checkpoints
+            .get(at)
+            .is_some_and(|(ct, p)| *ct == t && *p == container_start)
+        {
+            return;
+        }
+        self.checkpoints.insert(at, (t, container_start));
     }
 
     fn rebase(&mut self, raw_us: u64) -> u64 {
@@ -182,6 +207,25 @@ impl FrameStream for BlfStream {
             }
             if !self.enter_next_container() {
                 return None;
+            }
+        }
+    }
+
+    fn seek_to_us(&mut self, target: u64) -> Option<u64> {
+        match self.checkpoints.partition_point(|(t, _)| *t <= target) {
+            0 => self.pos = FILE_HEADER_SIZE,
+            k => self.pos = self.checkpoints[k - 1].1,
+        }
+        // Queue state is pure; `t_base` deliberately survives so a scrub does
+        // not move the log's zero point under the playhead.
+        self.pending.clear();
+        loop {
+            match self.peek_t() {
+                Some(t) if t >= target => return Some(t),
+                Some(_) => {
+                    self.next_frame();
+                }
+                None => return None,
             }
         }
     }
@@ -545,6 +589,7 @@ fn system_time_us(b: &[u8], at: usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log::vec_stream::VecStream;
     use std::io::Write;
 
     // Test-only encoders that mirror the decoder field-for-field. Keeping
@@ -994,6 +1039,142 @@ mod tests {
         assert_eq!(asc_frames[0].dir, Direction::Rx);
         assert_eq!(blf_second.dir, Direction::Tx);
         assert_eq!(asc_frames[1].dir, Direction::Tx);
+    }
+
+    /// `count` v1 CAN_MESSAGE objects starting at raw timestamp `t0`
+    /// (microseconds), 1 ms apart.
+    fn can_run(t0: u64, count: u32) -> Vec<u8> {
+        let mut v = Vec::new();
+        for i in 0..count {
+            let body = can_body(1, 2, 0, 0x100 + i, &[0xAA, 0xBB]);
+            v.extend_from_slice(&obj_header_v1(
+                OBJ_CAN_MESSAGE,
+                t0 + u64::from(i) * 1_000,
+                0,
+                &body,
+            ));
+        }
+        v
+    }
+
+    /// One container per run; `runs` holds the raw start timestamps.
+    fn multi_container_file(runs: &[u64], zlib: bool) -> Vec<u8> {
+        let mut v = file_header(
+            Some((2024, 1, 1, 1, 0, 0, 0, 0)),
+            Some((2024, 1, 1, 1, 0, 0, 5, 0)),
+        );
+        for start in runs {
+            let objects = can_run(*start, 5);
+            let container = if zlib {
+                zlib_container(&objects)
+            } else {
+                raw_container(&objects)
+            };
+            v.extend_from_slice(&container);
+        }
+        v
+    }
+
+    fn times(s: &mut dyn FrameStream) -> Vec<u64> {
+        let mut out = Vec::new();
+        while let Some(f) = s.next_frame() {
+            out.push(f.t_us);
+        }
+        out
+    }
+
+    fn read_all(bytes: &[u8]) -> Vec<CanFrame> {
+        let mut s = BlfStream::from_bytes(bytes).unwrap();
+        let mut out = Vec::new();
+        while let Some(f) = s.next_frame() {
+            out.push(f);
+        }
+        out
+    }
+
+    #[test]
+    fn seek_lands_inside_a_later_container() {
+        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
+        let mut s = BlfStream::from_bytes(&bytes).unwrap();
+        assert_eq!(s.seek_to_us(20_000), Some(20_000));
+        assert_eq!(times(&mut s), vec![20_000, 21_000, 22_000, 23_000, 24_000]);
+    }
+
+    #[test]
+    fn seek_rewinds_across_containers() {
+        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
+        let mut s = BlfStream::from_bytes(&bytes).unwrap();
+        assert_eq!(times(&mut s).len(), 15);
+        assert_eq!(s.seek_to_us(10_000), Some(10_000));
+        assert_eq!(
+            times(&mut s),
+            vec![
+                10_000, 11_000, 12_000, 13_000, 14_000, 20_000, 21_000, 22_000, 23_000, 24_000
+            ],
+            "rewind replays the remaining containers in order"
+        );
+    }
+
+    #[test]
+    fn one_checkpoint_is_recorded_per_container() {
+        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
+        let mut s = BlfStream::from_bytes(&bytes).unwrap();
+        assert!(s.checkpoints.is_empty(), "nothing walked yet");
+        assert_eq!(times(&mut s).len(), 15);
+        assert_eq!(s.checkpoints.len(), 3, "one entry per container");
+    }
+
+    #[test]
+    fn scrubbing_does_not_move_the_rebase_base() {
+        // Raw stamps start well past zero, so the rebased timeline has to stay
+        // pinned to the first frame ever read -- not to wherever we seek.
+        let bytes = multi_container_file(&[5_000_000, 5_010_000], false);
+        let mut s = BlfStream::from_bytes(&bytes).unwrap();
+        assert_eq!(s.seek_to_us(10_000), Some(10_000), "rebased 10 s");
+        assert_eq!(times(&mut s), vec![10_000, 11_000, 12_000, 13_000, 14_000]);
+        assert_eq!(s.seek_to_us(0), Some(0));
+        assert_eq!(
+            times(&mut s).first(),
+            Some(&0),
+            "the log's zero point must not shift after a scrub"
+        );
+    }
+
+    #[test]
+    fn seek_works_through_zlib_containers() {
+        let bytes = multi_container_file(&[0, 10_000, 20_000], true);
+        let mut s = BlfStream::from_bytes(&bytes).unwrap();
+        assert_eq!(s.seek_to_us(21_000), Some(21_000));
+        assert_eq!(times(&mut s), vec![21_000, 22_000, 23_000, 24_000]);
+    }
+
+    #[test]
+    fn seek_past_the_end_reports_eof() {
+        let bytes = multi_container_file(&[0, 10_000], false);
+        let mut s = BlfStream::from_bytes(&bytes).unwrap();
+        assert_eq!(s.seek_to_us(999_999), None);
+        assert_eq!(s.peek_t(), None);
+    }
+
+    #[test]
+    fn seek_agrees_with_the_in_memory_stream() {
+        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
+        let all = read_all(&bytes);
+        assert_eq!(all.len(), 15);
+        for target in [0u64, 1, 3_000, 10_000, 12_500, 24_000, 24_001] {
+            let mut a = BlfStream::from_bytes(&bytes).unwrap();
+            let mut v = VecStream::new(all.clone());
+            assert_eq!(
+                a.seek_to_us(target),
+                v.seek_to_us(target),
+                "landing differs at t={target}"
+            );
+            assert_eq!(
+                times(&mut a),
+                times(&mut v),
+                "tail after seeking differs at t={target}"
+            );
+        }
     }
 
     /// Reads a real CANoe export to catch dialect drift that our own
