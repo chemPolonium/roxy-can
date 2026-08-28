@@ -434,26 +434,39 @@ fn draw_plot(
         vmax = vmin + 1.0;
     }
 
+    // Build the value labels first so their width is known: the leftmost time
+    // label used to be drawn at the same pixel as the bottom value label, which
+    // rendered as "01000s" with both texts overprinting each other. The
+    // character-width estimate matches the legend below.
+    let y_labels: Vec<String> = (0..=4)
+        .map(|g| fmt_val(vmax - (vmax - vmin) * g as f64 / 4.0))
+        .collect();
+    let y_gutter = y_labels
+        .iter()
+        .map(|s| s.chars().count() as f32 * 7.0)
+        .fold(0.0f32, f32::max)
+        + 6.0;
+
     for g in 0..=10 {
         let x = x0 + w * g as f32 / 10.0;
         dl.add_line([x, y0], [x, y0 + h], [0.18, 0.18, 0.22, 1.0])
             .build();
         if g % 2 == 0 && g < 10 && h > 20.0 {
             let t = t_min + tw * g as f64 / 10.0;
+            let lx = (x + 3.0).max(x0 + y_gutter);
             dl.add_text(
-                [x + 3.0, y0 + h - 13.0],
+                [lx, y0 + h - 13.0],
                 [0.55, 0.55, 0.65, 1.0],
                 format!("{:.1}s", t),
             );
         }
     }
-    for g in 0..=4 {
+    for (g, label) in y_labels.iter().enumerate() {
         let y = y0 + h * g as f32 / 4.0;
         dl.add_line([x0, y], [x0 + w, y], [0.18, 0.18, 0.22, 1.0])
             .build();
-        let v = vmax - (vmax - vmin) * g as f64 / 4.0;
         let ly = if g == 0 { y + 2.0 } else { y - 13.0 };
-        dl.add_text([x0 + 3.0, ly], [0.55, 0.55, 0.65, 1.0], fmt_val(v));
+        dl.add_text([x0 + 3.0, ly], [0.55, 0.55, 0.65, 1.0], label.clone());
     }
 
     for entry in &curves {
