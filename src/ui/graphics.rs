@@ -137,6 +137,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.same_line();
     ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
     ui.same_line();
+    ui.checkbox("Dots", &mut app.graphics[i].show_markers);
+    ui.same_line();
     if ui.button("Live") {
         app.graphics[i].t_offset_s = 0.0;
     }
@@ -252,11 +254,24 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                 &[key.clone()],
                 t_right,
                 tw,
+                app.graphics[i].show_markers,
                 cursor,
             );
         }
     } else {
-        draw_plot(&dl, app, x0, y0, w, h, &keys, t_right, tw, cursor);
+        draw_plot(
+            &dl,
+            app,
+            x0,
+            y0,
+            w,
+            h,
+            &keys,
+            t_right,
+            tw,
+            app.graphics[i].show_markers,
+            cursor,
+        );
     }
 
     ui.dummy([w, h]);
@@ -291,6 +306,7 @@ fn draw_plot(
     keys: &[(u8, u32, String)],
     t_right: f64,
     tw: f64,
+    show_dots: bool,
     cursor: Option<(f32, f64)>,
 ) {
     draw_plot_frame(dl, x0, y0, w, h);
@@ -369,7 +385,7 @@ fn draw_plot(
         if pts.len() >= 2 {
             dl.add_polyline(pts, color).thickness(1.5).build();
         }
-        if show_markers(dots.len(), w) {
+        if show_dots && show_markers(dots.len(), w) {
             for p in dots {
                 dl.add_circle(p, MARKER_RADIUS_PX, color)
                     .filled(true)

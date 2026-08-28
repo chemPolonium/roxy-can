@@ -152,6 +152,9 @@ pub struct GraphicsWindow {
     pub t_offset_s: f64,
     pub show_cursor: bool,
     pub zoom_enabled: bool,
+    /// Draw a dot on each sample when the visible points are sparse enough to
+    /// read individually.
+    pub show_markers: bool,
 }
 
 pub struct DataWindow {
@@ -1997,6 +2000,7 @@ impl App {
             t_offset_s: 0.0,
             show_cursor: true,
             zoom_enabled: false,
+            show_markers: true,
         });
     }
 

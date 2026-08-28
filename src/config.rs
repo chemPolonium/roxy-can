@@ -151,6 +151,8 @@ pub struct GfxCfg {
     pub show_cursor: bool,
     #[serde(default = "true_default")]
     pub zoom_enabled: bool,
+    #[serde(default = "true_default")]
+    pub show_markers: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -365,6 +367,7 @@ impl Config {
                     stacked: g.stacked,
                     show_cursor: g.show_cursor,
                     zoom_enabled: g.zoom_enabled,
+                    show_markers: g.show_markers,
                 })
                 .collect(),
             data_windows: app
@@ -526,6 +529,7 @@ impl Config {
                     t_offset_s: 0.0,
                     show_cursor: g.show_cursor,
                     zoom_enabled: g.zoom_enabled,
+                    show_markers: g.show_markers,
                 })
                 .collect();
         }
@@ -673,6 +677,17 @@ mod tests {
         let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
         assert!(json.contains(r#""recent_log""#), "writes the new key");
         assert!(!json.contains("recent_asc"), "stops writing the legacy key");
+    }
+
+    /// Project files saved before the Dots toggle existed must keep the
+    /// behaviour they already had: markers default to on.
+    #[test]
+    fn graphics_config_defaults_markers_on_for_older_projects() {
+        let g: GfxCfg = serde_json::from_str(r#"{"name":"G1","opened":true}"#).unwrap();
+        assert!(g.show_markers, "absent key keeps markers on");
+        let off: GfxCfg =
+            serde_json::from_str(r#"{"name":"G1","opened":true,"show_markers":false}"#).unwrap();
+        assert!(!off.show_markers, "an explicit choice is honoured");
     }
 
     #[test]
