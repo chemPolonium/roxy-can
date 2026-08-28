@@ -73,36 +73,61 @@ impl SampleCache {
         self.points.clear();
     }
 
-    /// Records one sample. Out-of-order arrival only happens during a backfill
-    /// that lands behind existing coverage, so the common branch is a push.
-    pub fn push(&mut self, t_us: u64, v: f64) {
-        match self.points.last() {
-            Some(&(last_t, _)) if t_us < last_t => self.insert_sorted(t_us, v),
-            _ => self.points.push((t_us, v)),
-        }
-    }
-
-    /// Merges an ascending batch, typically one backfill scan's worth.
-    pub fn merge(&mut self, batch: &[(u64, f64)]) {
+    /// Merges an ascending batch, keeping the buffer sorted and rejecting any
+    /// candidate that lands within `min_gap` of a point already held -- or of
+    /// another accepted candidate. Returns the values it actually took, so the
+    /// caller only folds those into its statistics.
+    ///
+    /// The gap rule matters: overlapping window requests re-read ground that is
+    /// already cached, and without it each re-scan injects near-duplicate
+    /// timestamps whose values differ, so the polyline zig-zags between them and
+    /// the curve reads as a thick band instead of a line.
+    pub fn merge(&mut self, batch: &[(u64, f64)], min_gap: u64) -> Vec<f64> {
+        let gap = min_gap.max(1);
         if batch.is_empty() {
-            return;
+            return Vec::new();
         }
-        let contiguous = self
+        // Fast path: the batch starts beyond everything held, so nothing can
+        // collide except its own first element.
+        if self
             .points
             .last()
-            .is_none_or(|&(last_t, _)| batch[0].0 >= last_t);
-        if contiguous {
+            .is_none_or(|&(last_t, _)| batch[0].0 >= last_t + gap)
+        {
+            let taken = batch.iter().map(|&(_, v)| v).collect();
             self.points.extend_from_slice(batch);
-            return;
+            return taken;
         }
-        for &(t, v) in batch {
-            self.push(t, v);
+        let mut out = Vec::with_capacity(self.points.len() + batch.len());
+        let mut taken = Vec::with_capacity(batch.len());
+        let mut last_emitted: Option<u64> = None;
+        let mut j = 0usize;
+        for &(et, ev) in &self.points {
+            while j < batch.len() && batch[j].0 < et {
+                let (bt, bv) = batch[j];
+                j += 1;
+                let after_prev = last_emitted.is_none_or(|lt| bt >= lt + gap);
+                let before_next = bt.saturating_add(gap) <= et;
+                if after_prev && before_next {
+                    out.push((bt, bv));
+                    taken.push(bv);
+                    last_emitted = Some(bt);
+                }
+            }
+            out.push((et, ev));
+            last_emitted = Some(et);
         }
-    }
-
-    fn insert_sorted(&mut self, t_us: u64, v: f64) {
-        let at = self.points.partition_point(|(et, _)| *et <= t_us);
-        self.points.insert(at, (t_us, v));
+        while j < batch.len() {
+            let (bt, bv) = batch[j];
+            j += 1;
+            if last_emitted.is_none_or(|lt| bt >= lt + gap) {
+                out.push((bt, bv));
+                taken.push(bv);
+                last_emitted = Some(bt);
+            }
+        }
+        self.points = out;
+        taken
     }
 
     /// Samples inside `[t_from, t_to]`, ascending. This is the only view the
@@ -154,7 +179,16 @@ impl Subscription {
     /// run began -- recomputing them every time the oldest point is trimmed would
     /// cost an O(n) rescan per sample.
     fn push_sample(&mut self, t_us: u64, v: f64) {
-        self.history.push(t_us, v);
+        // Same spacing rule as a backfill merge. Comparing only against the
+        // newest cached point would be wrong after a rewind, where the cache
+        // legitimately still holds points ahead of the playhead.
+        if self
+            .history
+            .merge(&[(t_us, v)], SAMPLE_INTERVAL_US)
+            .is_empty()
+        {
+            return;
+        }
         self.last_sample_us = t_us;
         self.observe(v);
         self.history.trim_oldest(HISTORY_SPAN_US);
@@ -1334,12 +1368,27 @@ impl App {
         if t_to_us <= t_from_us {
             return;
         }
-        if self
-            .sample_cover
-            .is_some_and(|(lo, hi)| t_from_us >= lo && t_to_us <= hi)
-        {
-            return;
+        // Read only the edges the cache does not already cover. During playback
+        // the visible window slides forward by tens of milliseconds every frame,
+        // and re-reading the whole window each time would both cost that much
+        // again and overwrite the cache's spacing.
+        let (cov_lo, cov_hi) = self.sample_cover.unwrap_or((t_from_us, t_from_us));
+        let mut edges = Vec::new();
+        if t_from_us < cov_lo {
+            edges.push((t_from_us, t_to_us.min(cov_lo)));
         }
+        if t_to_us > cov_hi {
+            edges.push((cov_hi.max(t_from_us), t_to_us));
+        }
+        for (from, to) in edges {
+            if to > from {
+                self.backfill(from, to);
+            }
+        }
+    }
+
+    /// One scan + merge over a span known to be uncovered.
+    fn backfill(&mut self, t_from_us: u64, t_to_us: u64) {
         let mut frames = Vec::new();
         let capped = !self
             .source
@@ -1362,10 +1411,10 @@ impl App {
         }
         for (key, pts) in batches {
             if let Some(sub) = self.subs.get_mut(&key) {
-                for &(_, v) in &pts {
+                let taken = sub.history.merge(&pts, SAMPLE_INTERVAL_US);
+                for v in taken {
                     sub.observe(v);
                 }
-                sub.history.merge(&pts);
             }
         }
         // Claim the span that was *asked for*, not merely what was read. Repeating
@@ -3116,9 +3165,6 @@ mod tests {
             "expected samples across the log, got {}",
             filled.history.len()
         );
-        // The timestamp the sampling baseline would be stranded on if a rewind
-        // failed to move it.
-        let highest_before = filled.history.iter().next_back().unwrap().0;
         let (_, dur) = app.replay_position().unwrap();
 
         app.seek_replay_seconds(dur / 3.0);
@@ -3138,10 +3184,9 @@ mod tests {
         );
         let after_rewind = sub.history.len();
 
-        // The regression itself: a sampling baseline left in the deleted future
-        // made the sampler reject every replayed frame, so the curve never came
-        // back until the playhead climbed past the stale timestamp. Run only
-        // long enough to stay below it, or the assertion would pass anyway.
+        // Replaying across ground the cache already holds must not inject
+        // near-duplicates: the sampler's own baseline was pulled back to the
+        // rewind point, so only the cache's spacing rule keeps it honest.
         app.play();
         assert!(app.measuring, "Play resumes the rewound replay");
         app.set_replay_speed(4.0);
@@ -3151,16 +3196,14 @@ mod tests {
         }
         let (pos_now, _) = app.replay_position().unwrap();
         assert!(
-            pos_now * 1e6 < highest_before as f64,
-            "test setup: playhead {} us must stay below the stale baseline {} us",
-            pos_now * 1e6,
-            highest_before
+            pos_now * 1e6 > landed,
+            "the playhead should advance past the rewind point, got {pos_now}"
         );
         let sub = app.subs.get(&key).unwrap();
-        assert!(
-            sub.history.len() > after_rewind,
-            "sampling must resume after a rewind, stayed at {} samples",
-            sub.history.len()
+        assert_eq!(
+            sub.history.len(),
+            after_rewind,
+            "replaying cached ground must add nothing, not even near-duplicates"
         );
         assert!(
             sub.history
@@ -3178,10 +3221,16 @@ mod tests {
         let mut c = SampleCache::default();
         // Streaming fills the later stretch first, then a backfill lands behind
         // it; the buffer must still read ascending for the plot and value_at.
-        for i in 100..110u64 {
-            c.push(i * 1_000, i as f64);
-        }
-        c.merge(&(0..10).map(|i| (i * 1_000, i as f64)).collect::<Vec<_>>());
+        c.merge(
+            &(100..110u64)
+                .map(|i| (i * 1_000, i as f64))
+                .collect::<Vec<_>>(),
+            1_000,
+        );
+        c.merge(
+            &(0..10).map(|i| (i * 1_000, i as f64)).collect::<Vec<_>>(),
+            1_000,
+        );
         assert_eq!(c.len(), 20);
         assert!(
             c.iter().zip(c.iter().skip(1)).all(|(a, b)| a.0 <= b.0),
@@ -3193,9 +3242,12 @@ mod tests {
     #[test]
     fn sample_cache_range_and_lookup_are_inclusive_and_ordered() {
         let mut c = SampleCache::default();
-        for i in 0..10u64 {
-            c.push(i * 1_000, i as f64);
-        }
+        c.merge(
+            &(0..10u64)
+                .map(|i| (i * 1_000, i as f64))
+                .collect::<Vec<_>>(),
+            1_000,
+        );
         let win = c.range(2_000, 5_000);
         assert_eq!(
             win.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
@@ -3219,9 +3271,10 @@ mod tests {
     #[test]
     fn sample_cache_trims_by_span_not_by_count() {
         let mut c = SampleCache::default();
-        for i in 0..30u64 {
-            c.push(i * 10_000, 1.0);
-        }
+        c.merge(
+            &(0..30u64).map(|i| (i * 10_000, 1.0)).collect::<Vec<_>>(),
+            10_000,
+        );
         c.trim_oldest(100_000);
         assert_eq!(
             c.first().unwrap().0,
@@ -3229,6 +3282,35 @@ mod tests {
             "newest is 290 s, so everything from 190 s on survives"
         );
         assert_eq!(c.len(), 11);
+    }
+
+    #[test]
+    fn overlapping_backfills_do_not_pile_up_near_duplicates() {
+        let (mut app, key, file) = app_with_replayable_recording("dupstride", 60);
+        app.replay();
+        // Two requests overlapping by most of their span -- exactly what
+        // happens on consecutive frames as the playhead advances.
+        app.ensure_samples_in(100_000, 400_000);
+        app.ensure_samples_in(110_000, 410_000);
+        let sub = app.subs.get(&key).unwrap();
+        let mut tight = 0usize;
+        let mut prev: Option<u64> = None;
+        for &(t, _) in sub.history.iter() {
+            if let Some(p) = prev
+                && t.saturating_sub(p) < SAMPLE_INTERVAL_US
+            {
+                tight += 1;
+            }
+            prev = Some(t);
+        }
+        assert_eq!(
+            tight, 0,
+            "{} samples landed within one stride of a neighbour; the polyline \
+             then zig-zags between them and reads as a thick band",
+            tight
+        );
+        app.stop();
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]
