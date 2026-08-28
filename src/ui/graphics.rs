@@ -8,6 +8,12 @@ const TIME_STEPS: [f64; 14] = [
 ];
 const PANEL_W: f32 = 190.0;
 
+/// Widest window the ladder offers. Signal history has to be able to back it,
+/// or the curve's head silently vanishes once the retention cap is reached.
+/// Only read by the invariant test in `crate::app`.
+#[cfg(test)]
+pub(crate) const MAX_TIME_WINDOW_S: f64 = TIME_STEPS[TIME_STEPS.len() - 1];
+
 /// Direct-select window lengths: the whole TIME_STEPS ladder as a button
 /// row in each Graphics window.
 const TW_PRESETS: [(f64, &str); 14] = [

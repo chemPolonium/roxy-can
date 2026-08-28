@@ -15,7 +15,11 @@ pub const TRACE_LIMIT: usize = 50_000;
 pub const TOOLBAR_H: f32 = 54.0;
 pub const STATUSBAR_H: f32 = 28.0;
 pub const TABSTRIP_H: f32 = 22.0;
-const HISTORY_LIMIT: usize = 4_000;
+/// How far back sampled signal history is kept. Deliberately in seconds, not
+/// points: the Graphics window ladder goes up to an hour, and a point-count
+/// cap silently dropped the head of the curve mid-run the moment it filled,
+/// whatever width the user had chosen.
+pub(crate) const HISTORY_SPAN_US: u64 = 3_600_000_000;
 const SAMPLE_INTERVAL_US: u64 = 50_000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
@@ -47,6 +51,31 @@ pub struct Subscription {
 }
 
 impl Subscription {
+    /// Records one sample and drops whatever has fallen out of the retention
+    /// span. `min`/`max`/`avg` stay cumulative over the whole run on purpose --
+    /// correcting them at eviction time would cost an O(n) rescan per sample.
+    fn push_sample(&mut self, t_us: u64, v: f64) {
+        self.history.push_back((t_us, v));
+        self.last_sample_us = t_us;
+        if v < self.min {
+            self.min = v;
+        }
+        if v > self.max {
+            self.max = v;
+        }
+        self.sum += v;
+        self.n += 1;
+        self.avg = self.sum / self.n as f64;
+        let horizon = t_us.saturating_sub(HISTORY_SPAN_US);
+        while let Some(&(t, _)) = self.history.front() {
+            if t < horizon {
+                self.history.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Forgets everything the sampler accumulates, keeping the signal's
     /// identity (`unit`, `color`). Emptying `history` alone is not a reset:
     /// the sampler gates on `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a
@@ -1829,20 +1858,7 @@ impl App {
                     if f.t_us >= entry.last_sample_us + SAMPLE_INTERVAL_US
                         || entry.history.is_empty()
                     {
-                        entry.history.push_back((f.t_us, phys));
-                        entry.last_sample_us = f.t_us;
-                        if entry.history.len() > HISTORY_LIMIT {
-                            entry.history.pop_front();
-                        }
-                        if phys < entry.min {
-                            entry.min = phys;
-                        }
-                        if phys > entry.max {
-                            entry.max = phys;
-                        }
-                        entry.sum += phys;
-                        entry.n += 1;
-                        entry.avg = entry.sum / entry.n as f64;
+                        entry.push_sample(f.t_us, phys);
                     }
                 }
             }
@@ -2755,6 +2771,68 @@ mod tests {
         );
         app.stop();
         std::fs::remove_file(&path).ok();
+    }
+
+    fn blank_sub() -> Subscription {
+        Subscription {
+            latest: 0.0,
+            unit: String::new(),
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+            avg: 0.0,
+            sum: 0.0,
+            n: 0,
+            last_update_us: 0,
+            last_sample_us: 0,
+            history: VecDeque::new(),
+            color: 0,
+        }
+    }
+
+    #[test]
+    fn the_head_of_the_curve_survives_past_the_old_point_cap() {
+        // 250 s of samples at the real 50 ms interval: beyond the 4000-point
+        // cap this replaces, which began popping the head at exactly 200 s and
+        // made the left end of a running trace vanish on its own.
+        let mut sub = blank_sub();
+        for i in 0..5_000u64 {
+            sub.push_sample(i * SAMPLE_INTERVAL_US, (i % 97) as f64);
+        }
+        assert_eq!(sub.history.len(), 5_000, "250 s fits inside the span");
+        assert_eq!(
+            sub.history.front().unwrap().0,
+            0,
+            "the head must still be there mid-run"
+        );
+    }
+
+    #[test]
+    fn eviction_begins_only_past_the_retention_span() {
+        let mut sub = blank_sub();
+        let n = HISTORY_SPAN_US / SAMPLE_INTERVAL_US + 10;
+        for i in 0..n {
+            sub.push_sample(i * SAMPLE_INTERVAL_US, 1.0);
+        }
+        assert!(sub.history.len() < n as usize, "stale head is dropped");
+        let kept = sub.history.len() as u64 * SAMPLE_INTERVAL_US;
+        assert!(
+            kept <= HISTORY_SPAN_US + SAMPLE_INTERVAL_US,
+            "retained span {kept} us exceeds the cap"
+        );
+        assert!(
+            sub.n > sub.history.len() as u64,
+            "min/max/avg stay cumulative over the whole run"
+        );
+    }
+
+    #[test]
+    fn retention_backs_the_widest_plot_window() {
+        assert!(
+            HISTORY_SPAN_US as f64 / 1e6 >= crate::ui::graphics::MAX_TIME_WINDOW_S,
+            "the widest window is {} s but history only holds {} s",
+            crate::ui::graphics::MAX_TIME_WINDOW_S,
+            HISTORY_SPAN_US as f64 / 1e6,
+        );
     }
 
     /// Records `iters` frames of generator traffic to an ASC, then returns an
