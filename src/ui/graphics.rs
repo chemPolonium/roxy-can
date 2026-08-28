@@ -71,6 +71,30 @@ impl CurveBudget {
     }
 }
 
+/// Width held at the left of a plot for its value labels, and height held along
+/// the bottom for the time labels. Fixed rather than measured from the current
+/// values so the pointer maths and the drawing can share one function without
+/// needing the label text first.
+const AXIS_GUTTER_W: f32 = 50.0;
+const AXIS_LABEL_H: f32 = 16.0;
+
+/// The rect the curves actually occupy, inset from the panel so axis labels sit
+/// outside the data instead of overprinting it.
+fn axis_inset(x0: f32, y0: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    (
+        x0 + AXIS_GUTTER_W,
+        y0,
+        (w - AXIS_GUTTER_W).max(20.0),
+        (h - AXIS_LABEL_H).max(20.0),
+    )
+}
+
+/// Approximate rendered width of an axis label. Matches the estimate the legend
+/// uses; imgui text metrics are not reachable from the draw list.
+fn label_width(text: &str) -> f32 {
+    text.chars().count() as f32 * 7.0
+}
+
 /// A curve ready for submission: its colour plus points already folded to the
 /// vertex budget.
 type Curve = ([f32; 4], Vec<(u64, f64)>);
@@ -291,17 +315,20 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     let io = ui.io();
     let mx = io.mouse_pos[0];
     let my = io.mouse_pos[1];
-    let hover = mx >= x0 && mx <= x0 + w && my >= y0 && my <= y0 + h;
+    // Curves are inset so the axis labels sit outside them; the pointer maths
+    // has to use the same rect draw_plot works in.
+    let (ix0, iy0, iw, _ih) = axis_inset(x0, y0, w, h);
+    let hover = mx >= ix0 && mx <= ix0 + iw && my >= iy0 && my <= iy0 + h;
     if hover && app.graphics[i].zoom_enabled {
         if io.mouse_down[0] && io.mouse_delta[0] != 0.0 {
-            let dt = tw as f32 * io.mouse_delta[0] / w;
+            let dt = tw as f32 * io.mouse_delta[0] / iw;
             let off = &mut app.graphics[i].t_offset_s;
             *off = (*off + dt as f64).clamp(0.0, max_off);
         }
         if io.mouse_wheel != 0.0 {
             let new_tw = zoom_step(tw, io.mouse_wheel);
             if (new_tw - tw).abs() > 1e-9 {
-                let frac = ((mx - x0) / w) as f64;
+                let frac = ((mx - ix0) / iw) as f64;
                 let right = t_now - app.graphics[i].t_offset_s;
                 let t_mouse = right - tw * frac;
                 app.graphics[i].time_window_s = new_tw;
@@ -320,7 +347,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     let need_hi = ((t_right + tw).max(0.0) * 1e6) as u64;
     app.ensure_samples_in(need_lo, need_hi);
     let cursor = if hover && app.graphics[i].show_cursor {
-        let frac = ((mx - x0) / w) as f64;
+        let frac = ((mx - ix0) / iw) as f64;
         Some((mx, t_right - tw * (1.0 - frac)))
     } else {
         None
@@ -328,7 +355,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
 
     // Every curve in this window writes the same draw list, so the budget is
     // shared out here rather than assumed per call.
-    let budget = CurveBudget::split(keys.len(), w, app.graphics[i].show_markers);
+    let budget = CurveBudget::split(keys.len(), iw, app.graphics[i].show_markers);
     if keys.is_empty() {
         draw_plot_frame(&dl, x0, y0, w, h);
         dl.add_text(
@@ -392,6 +419,9 @@ fn draw_plot(
     budget: CurveBudget,
     cursor: Option<(f32, f64)>,
 ) {
+    // Everything below works in the inset rect, leaving the gutter and bottom
+    // strip free for the axis labels.
+    let (x0, y0, w, h) = axis_inset(x0, y0, w, h);
     draw_plot_frame(dl, x0, y0, w, h);
     let t_min = t_right - tw;
     // Slice the cache to the window: with an hour of retained samples, a view
@@ -434,18 +464,13 @@ fn draw_plot(
         vmax = vmin + 1.0;
     }
 
-    // Build the value labels first so their width is known: the leftmost time
-    // label used to be drawn at the same pixel as the bottom value label, which
-    // rendered as "01000s" with both texts overprinting each other. The
-    // character-width estimate matches the legend below.
+    // Labels live outside the curve rect: time labels centred under their
+    // gridline in the bottom strip, value labels right-aligned in the left
+    // gutter. They used to be drawn inside the data, where the bottom value and
+    // the leftmost time label landed on the same pixel.
     let y_labels: Vec<String> = (0..=4)
         .map(|g| fmt_val(vmax - (vmax - vmin) * g as f64 / 4.0))
         .collect();
-    let y_gutter = y_labels
-        .iter()
-        .map(|s| s.chars().count() as f32 * 7.0)
-        .fold(0.0f32, f32::max)
-        + 6.0;
 
     for g in 0..=10 {
         let x = x0 + w * g as f32 / 10.0;
@@ -453,20 +478,21 @@ fn draw_plot(
             .build();
         if g % 2 == 0 && g < 10 && h > 20.0 {
             let t = t_min + tw * g as f64 / 10.0;
-            let lx = (x + 3.0).max(x0 + y_gutter);
-            dl.add_text(
-                [lx, y0 + h - 13.0],
-                [0.55, 0.55, 0.65, 1.0],
-                format!("{:.1}s", t),
-            );
+            let text = format!("{:.1}s", t);
+            let lx = (x - label_width(&text) * 0.5).max(x0 - AXIS_GUTTER_W + 2.0);
+            dl.add_text([lx, y0 + h + 3.0], [0.55, 0.55, 0.65, 1.0], text);
         }
     }
     for (g, label) in y_labels.iter().enumerate() {
         let y = y0 + h * g as f32 / 4.0;
         dl.add_line([x0, y], [x0 + w, y], [0.18, 0.18, 0.22, 1.0])
             .build();
-        let ly = if g == 0 { y + 2.0 } else { y - 13.0 };
-        dl.add_text([x0 + 3.0, ly], [0.55, 0.55, 0.65, 1.0], label.clone());
+        let ly = (y - 6.5).max(y0 - 6.0);
+        dl.add_text(
+            [x0 - 4.0 - label_width(label), ly],
+            [0.55, 0.55, 0.65, 1.0],
+            label.clone(),
+        );
     }
 
     for entry in &curves {
@@ -577,7 +603,24 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CurveBudget, MARKER_RADIUS_PX, MAX_CURVE_POINTS, bucket_extremes, zoom_step};
+    use super::{
+        AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_RADIUS_PX, MAX_CURVE_POINTS, axis_inset,
+        bucket_extremes, zoom_step,
+    };
+
+    #[test]
+    fn axis_inset_reserves_room_outside_the_data() {
+        let (ix, iy, iw, ih) = axis_inset(100.0, 50.0, 600.0, 300.0);
+        assert_eq!((ix, iy), (150.0, 50.0), "left gutter for value labels");
+        assert_eq!(iw, 600.0 - AXIS_GUTTER_W);
+        assert_eq!(ih, 300.0 - AXIS_LABEL_H, "bottom strip for time labels");
+        let (_, _, tiny_w, tiny_h) = axis_inset(0.0, 0.0, 10.0, 5.0);
+        assert_eq!(
+            (tiny_w, tiny_h),
+            (20.0, 20.0),
+            "a pane too small to pay both margins keeps a usable rect"
+        );
+    }
 
     #[test]
     fn a_window_never_exceeds_the_16bit_vertex_ceiling() {
