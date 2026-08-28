@@ -1133,7 +1133,7 @@ impl App {
         };
         match self.source.set_position_us(target) {
             Some(landed) => {
-                self.drop_samples_after(landed);
+                self.rewind_samples_to(landed);
                 let dur = dur_us.map(|d| d as f64 / 1e6);
                 self.status = match dur {
                     Some(d) => format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d),
@@ -1144,18 +1144,53 @@ impl App {
         }
     }
 
-    /// Drops signal history ahead of the playhead after a scrub. `draw_plot`
-    /// walks `history` assuming ascending timestamps and `value_at`
-    /// binary-searches it, so after a jump backwards the newer "future"
-    /// samples must go or the deque is out of order and the curve silently
-    /// disappears from the Graphics window.
-    fn drop_samples_after(&mut self, t_us: u64) {
+    /// Rewinds per-signal measurement state to match a scrubbed playhead.
+    ///
+    /// `draw_plot` walks `history` assuming ascending timestamps and `value_at`
+    /// binary-searches it, so samples past the playhead must go. The baseline
+    /// has to follow them: the sampler fires on
+    /// `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a baseline left in the
+    /// future it just deleted silently rejects every replayed frame until the
+    /// playhead climbs back past it -- the curve vanishes on a rewind and only
+    /// returns once you drag forward again. Everything derived (min/max/avg,
+    /// latest) is recomputed over what survives, so the Data window cannot show
+    /// a value from a time the playhead is no longer at.
+    fn rewind_samples_to(&mut self, t_us: u64) {
         for sub in self.subs.values_mut() {
             while let Some(&(t, _)) = sub.history.back() {
                 if t > t_us {
                     sub.history.pop_back();
                 } else {
                     break;
+                }
+            }
+            sub.n = sub.history.len() as u64;
+            sub.sum = sub.history.iter().map(|(_, v)| *v).sum();
+            sub.min = sub
+                .history
+                .iter()
+                .map(|(_, v)| *v)
+                .fold(f64::INFINITY, f64::min);
+            sub.max = sub
+                .history
+                .iter()
+                .map(|(_, v)| *v)
+                .fold(f64::NEG_INFINITY, f64::max);
+            sub.avg = if sub.n > 0 {
+                sub.sum / sub.n as f64
+            } else {
+                0.0
+            };
+            match sub.history.back() {
+                Some(&(t, v)) => {
+                    sub.last_sample_us = t;
+                    sub.last_update_us = t;
+                    sub.latest = v;
+                }
+                None => {
+                    sub.last_sample_us = 0;
+                    sub.last_update_us = 0;
+                    sub.latest = 0.0;
                 }
             }
         }
@@ -2704,7 +2739,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backward_scrub_drops_the_future_samples() {
+    fn a_backward_scrub_rewinds_signal_state() {
         let mut app = App::new();
         let key = {
             let db = app.channel_dbc(0).expect("sample DBC loaded");
@@ -2745,6 +2780,9 @@ mod tests {
             "expected samples across the log, got {}",
             filled.history.len()
         );
+        // The timestamp the sampling baseline would be stranded on if a rewind
+        // failed to move it.
+        let highest_before = filled.history.back().unwrap().0;
         let (_, dur) = app.replay_position().unwrap();
 
         app.seek_replay_seconds(dur / 3.0);
@@ -2766,6 +2804,39 @@ mod tests {
                 .zip(sub.history.iter().skip(1))
                 .all(|(a, b)| a.0 <= b.0),
             "history must stay ascending for the binary search in value_at"
+        );
+        let after_rewind = sub.history.len();
+
+        // The regression itself: a sampling baseline left in the deleted future
+        // made the sampler reject every replayed frame, so the curve never came
+        // back until the playhead climbed past the stale timestamp. Run only
+        // long enough to stay below it, or the assertion would pass anyway.
+        app.play();
+        assert!(app.measuring, "Play resumes the rewound replay");
+        app.set_replay_speed(4.0);
+        for _ in 0..5 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let (pos_now, _) = app.replay_position().unwrap();
+        assert!(
+            pos_now * 1e6 < highest_before as f64,
+            "test setup: playhead {} us must stay below the stale baseline {} us",
+            pos_now * 1e6,
+            highest_before
+        );
+        let sub = app.subs.get(&key).unwrap();
+        assert!(
+            sub.history.len() > after_rewind,
+            "sampling must resume after a rewind, stayed at {} samples",
+            sub.history.len()
+        );
+        assert!(
+            sub.history
+                .iter()
+                .zip(sub.history.iter().skip(1))
+                .all(|(a, b)| a.0 <= b.0),
+            "re-sampled history must remain ascending"
         );
         app.stop();
         std::fs::remove_file(&file).ok();
