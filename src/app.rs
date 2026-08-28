@@ -46,6 +46,69 @@ pub struct Subscription {
     pub color: usize,
 }
 
+impl Subscription {
+    /// Forgets everything the sampler accumulates, keeping the signal's
+    /// identity (`unit`, `color`). Emptying `history` alone is not a reset:
+    /// the sampler gates on `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a
+    /// baseline inherited from the previous run silently rejects every frame
+    /// until the playhead climbs past where the old run ended -- which looks
+    /// like the start of the trace is simply missing.
+    fn reset_measurement(&mut self) {
+        self.history.clear();
+        self.reseed_from_history();
+    }
+
+    /// Drops samples past a scrubbed playhead and rebuilds the derived state.
+    /// `draw_plot` walks `history` assuming ascending timestamps and `value_at`
+    /// binary-searches it, so the "future" must go; recomputing min/max/avg and
+    /// `latest` from what survives keeps the Data window from describing a
+    /// time the playhead has already left.
+    fn rewind_to(&mut self, t_us: u64) {
+        while let Some(&(t, _)) = self.history.back() {
+            if t > t_us {
+                self.history.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.reseed_from_history();
+    }
+
+    /// Derives every accumulated field from `history`, the single source of
+    /// truth for what has actually been sampled.
+    fn reseed_from_history(&mut self) {
+        self.n = self.history.len() as u64;
+        self.sum = self.history.iter().map(|(_, v)| *v).sum();
+        self.min = self
+            .history
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::INFINITY, f64::min);
+        self.max = self
+            .history
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::NEG_INFINITY, f64::max);
+        self.avg = if self.n > 0 {
+            self.sum / self.n as f64
+        } else {
+            0.0
+        };
+        match self.history.back() {
+            Some(&(t, v)) => {
+                self.last_sample_us = t;
+                self.last_update_us = t;
+                self.latest = v;
+            }
+            None => {
+                self.last_sample_us = 0;
+                self.last_update_us = 0;
+                self.latest = 0.0;
+            }
+        }
+    }
+}
+
 pub struct GfxSignal {
     pub key: (u8, u32, String),
     pub visible: bool,
@@ -658,7 +721,7 @@ impl App {
             tx.next_t_us = 0;
         }
         for sub in self.subs.values_mut() {
-            sub.history.clear();
+            sub.reset_measurement();
         }
     }
 
@@ -1144,55 +1207,11 @@ impl App {
         }
     }
 
-    /// Rewinds per-signal measurement state to match a scrubbed playhead.
-    ///
-    /// `draw_plot` walks `history` assuming ascending timestamps and `value_at`
-    /// binary-searches it, so samples past the playhead must go. The baseline
-    /// has to follow them: the sampler fires on
-    /// `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a baseline left in the
-    /// future it just deleted silently rejects every replayed frame until the
-    /// playhead climbs back past it -- the curve vanishes on a rewind and only
-    /// returns once you drag forward again. Everything derived (min/max/avg,
-    /// latest) is recomputed over what survives, so the Data window cannot show
-    /// a value from a time the playhead is no longer at.
+    /// Rewinds every signal's sampled state to match a scrubbed playhead.
+    /// See [`Subscription::rewind_to`].
     fn rewind_samples_to(&mut self, t_us: u64) {
         for sub in self.subs.values_mut() {
-            while let Some(&(t, _)) = sub.history.back() {
-                if t > t_us {
-                    sub.history.pop_back();
-                } else {
-                    break;
-                }
-            }
-            sub.n = sub.history.len() as u64;
-            sub.sum = sub.history.iter().map(|(_, v)| *v).sum();
-            sub.min = sub
-                .history
-                .iter()
-                .map(|(_, v)| *v)
-                .fold(f64::INFINITY, f64::min);
-            sub.max = sub
-                .history
-                .iter()
-                .map(|(_, v)| *v)
-                .fold(f64::NEG_INFINITY, f64::max);
-            sub.avg = if sub.n > 0 {
-                sub.sum / sub.n as f64
-            } else {
-                0.0
-            };
-            match sub.history.back() {
-                Some(&(t, v)) => {
-                    sub.last_sample_us = t;
-                    sub.last_update_us = t;
-                    sub.latest = v;
-                }
-                None => {
-                    sub.last_sample_us = 0;
-                    sub.last_update_us = 0;
-                    sub.latest = 0.0;
-                }
-            }
+            sub.rewind_to(t_us);
         }
     }
 
@@ -2738,8 +2757,11 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    #[test]
-    fn a_backward_scrub_rewinds_signal_state() {
+    /// Records `iters` frames of generator traffic to an ASC, then returns an
+    /// App with the first sample.dbc signal subscribed and that log loaded but
+    /// not yet playing. The traffic has to be DBC-decodable for the Graphics
+    /// history to fill, so a hand-written fixture will not do.
+    fn app_with_replayable_recording(name: &str, iters: usize) -> (App, (u8, u32, String), String) {
         let mut app = App::new();
         let key = {
             let db = app.channel_dbc(0).expect("sample DBC loaded");
@@ -2747,8 +2769,7 @@ mod tests {
             (0u8, id, db.messages[&id].signals[0].name.clone())
         };
         app.subscribe(key.clone());
-        // Record real DBC-decodable traffic first, then replay that file.
-        let out = std::env::temp_dir().join("roxy_can_scrub_history.asc");
+        let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
         app.record_path = out.to_string_lossy().to_string();
         app.toggle_record();
         for tx in &mut app.tx_list {
@@ -2756,15 +2777,20 @@ mod tests {
             tx.cycle_us = 10_000;
         }
         app.start_virtual();
-        for _ in 0..60 {
+        for _ in 0..iters {
             std::thread::sleep(std::time::Duration::from_millis(11));
             app.update();
         }
         app.stop();
         std::fs::remove_file(&out).ok();
-
         let file = app.last_record.clone();
         app.load_log(&file);
+        (app, key, file)
+    }
+
+    #[test]
+    fn a_backward_scrub_rewinds_signal_state() {
+        let (mut app, key, file) = app_with_replayable_recording("scrub_history", 60);
         app.replay();
         // Let the clock actually run so sampling fills history across the log;
         // a forward seek cannot do it, since seeking discards the prefix.
@@ -2837,6 +2863,61 @@ mod tests {
                 .zip(sub.history.iter().skip(1))
                 .all(|(a, b)| a.0 <= b.0),
             "re-sampled history must remain ascending"
+        );
+        app.stop();
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn a_second_replay_run_samples_from_the_top() {
+        let (mut app, key, file) = app_with_replayable_recording("resample", 60);
+
+        // First run: play the log out so the subscription ends up with a
+        // sampling baseline near the end of it.
+        app.replay();
+        app.set_replay_speed(4.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let stale_baseline = app.subs.get(&key).unwrap().last_sample_us;
+        assert!(
+            stale_baseline > 200_000,
+            "setup: the first run should have sampled deep into the log, got {stale_baseline} us"
+        );
+
+        // Second run. Replaying used to inherit that baseline, and the sampler
+        // gate then rejected every frame until the playhead climbed past it --
+        // visibly, the start of the curve was simply missing.
+        app.replay();
+        {
+            let sub = app.subs.get(&key).unwrap();
+            assert!(sub.history.is_empty(), "a fresh run drops the old trace");
+            assert_eq!(
+                sub.last_sample_us, 0,
+                "a fresh run must not inherit the sampling baseline"
+            );
+            assert_eq!(sub.n, 0, "a fresh run resets the sample count");
+            assert!(
+                !sub.min.is_finite() && sub.max == f64::NEG_INFINITY,
+                "a fresh run resets min/max instead of keeping the old extremes"
+            );
+        }
+        // The first poll only anchors the replay clock; the second is what
+        // moves the playhead past the log's opening frames.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.update();
+        let sub = app.subs.get(&key).unwrap();
+        assert!(
+            !sub.history.is_empty(),
+            "sampling must start at the top of the log, not at {stale_baseline} us"
+        );
+        assert!(
+            sub.history.front().unwrap().0 < stale_baseline,
+            "the first sample of the new run should precede the previous run's last"
         );
         app.stop();
         std::fs::remove_file(&file).ok();
