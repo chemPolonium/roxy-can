@@ -14,6 +14,21 @@ const PANEL_W: f32 = 190.0;
 #[cfg(test)]
 pub(crate) const MAX_TIME_WINDOW_S: f64 = TIME_STEPS[TIME_STEPS.len() - 1];
 
+/// Radius of the dot drawn on each sample when points are sparse.
+const MARKER_RADIUS_PX: f32 = 2.2;
+
+/// Least average horizontal gap, in pixels, at which individual samples get a
+/// dot. Below this the markers merge into a solid bar and the line alone reads
+/// better -- which is the case for a dense stretch viewed in a wide window.
+const MARKER_MIN_SPACING_PX: f32 = 6.0;
+
+/// Whether to mark every sample of a curve showing `visible` points across
+/// `width_px`. A single point counts: a polyline needs two, so without a marker
+/// an isolated sample would render as nothing at all.
+fn show_markers(visible: usize, width_px: f32) -> bool {
+    visible > 0 && width_px / visible as f32 >= MARKER_MIN_SPACING_PX
+}
+
 /// Direct-select window lengths: the whole TIME_STEPS ladder as a button
 /// row in each Graphics window.
 const TW_PRESETS: [(f64, &str); 14] = [
@@ -333,20 +348,33 @@ fn draw_plot(
         let Some(sub) = app.subs.get(key) else {
             continue;
         };
+        let color = PALETTE[sub.color % PALETTE.len()];
         let mut pts = Vec::new();
+        let mut dots = Vec::new();
         for &(t, v) in &sub.history {
             let tf = t as f64 / 1e6;
             if tf < t_min {
                 continue;
             }
-            let x = x0 + w * ((tf - t_min) / tw).clamp(0.0, 1.0) as f32;
+            let frac = ((tf - t_min) / tw).clamp(0.0, 1.0) as f32;
+            let x = x0 + w * frac;
             let y = y0 + h * (1.0 - ((v - vmin) / (vmax - vmin)).clamp(0.0, 1.0)) as f32;
             pts.push([x, y]);
+            // Points past the right edge only pile up on it after clamping, so
+            // they get no marker.
+            if frac < 1.0 {
+                dots.push([x, y]);
+            }
         }
         if pts.len() >= 2 {
-            dl.add_polyline(pts, PALETTE[sub.color % PALETTE.len()])
-                .thickness(1.5)
-                .build();
+            dl.add_polyline(pts, color).thickness(1.5).build();
+        }
+        if show_markers(dots.len(), w) {
+            for p in dots {
+                dl.add_circle(p, MARKER_RADIUS_PX, color)
+                    .filled(true)
+                    .build();
+            }
         }
     }
 
@@ -435,7 +463,7 @@ fn value_at(history: &std::collections::VecDeque<(u64, f64)>, t_us: f64) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use super::zoom_step;
+    use super::{show_markers, zoom_step};
 
     #[test]
     fn zoom_walks_the_step_ladder() {
@@ -446,5 +474,35 @@ mod tests {
         assert_eq!(zoom_step(3600.0, -1.0), 3600.0, "clamped at 1 h");
         assert_eq!(zoom_step(12.0, -1.0), 20.0, "snaps to nearest step first");
         assert_eq!(zoom_step(10.0, 0.3), 10.0, "sub-notch deltas are ignored");
+    }
+
+    #[test]
+    fn sparse_curves_mark_every_sample() {
+        // A freshly seeked or narrow window holds only a handful of points.
+        assert!(show_markers(1, 600.0), "a lone sample needs a dot");
+        assert!(show_markers(20, 600.0), "20 points across 600px is sparse");
+        assert!(show_markers(100, 600.0), "exactly at the spacing floor");
+    }
+
+    #[test]
+    fn dense_curves_stay_a_plain_line() {
+        // 200 samples of a 50 ms interval fill a 10 s window; dots this close
+        // together merge into a bar wider than the line itself.
+        assert!(!show_markers(101, 600.0), "just under the spacing floor");
+        assert!(!show_markers(200, 600.0), "a 10s window at 50ms sampling");
+        assert!(!show_markers(72_000, 600.0), "an hour-wide window");
+    }
+
+    #[test]
+    fn an_empty_curve_marks_nothing() {
+        assert!(!show_markers(0, 600.0), "no points, no dots");
+        assert!(!show_markers(0, 0.0));
+    }
+
+    #[test]
+    fn a_narrow_pane_suppresses_markers() {
+        // Same point count, too little width to space them out.
+        assert!(!show_markers(20, 20.0), "1px per point would smear");
+        assert!(show_markers(3, 20.0), "but 3 points still read");
     }
 }
