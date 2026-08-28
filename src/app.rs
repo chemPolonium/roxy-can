@@ -875,11 +875,18 @@ impl App {
         }
     }
 
-    /// Validates the log by opening it and caches `describe()` for the
-    /// status bar; playback still starts on demand. The stream itself is
-    /// dropped here so the mmap handle closes before `replay` reopens it —
-    /// Windows refuses to move/rename a mapped file.
+    /// Validates a log and selects it for replay without starting playback.
+    /// The stream is dropped here so the mmap handle closes before `replay`
+    /// reopens it — Windows refuses to move/rename a mapped file.
+    ///
+    /// Refused while a replay is running: `log_path`, the status bar and the
+    /// scrub bar's length would describe the new file while the live source
+    /// keeps streaming the old one.
     pub fn load_log(&mut self, path: &str) {
+        if self.measuring && matches!(self.mode, Mode::Replay) {
+            self.status = "stop the replay before loading another log".to_string();
+            return;
+        }
         let p = std::path::Path::new(path);
         match open_stream(p) {
             Ok(stream) => {
@@ -894,6 +901,10 @@ impl App {
                 } else {
                     Some(info.clone())
                 };
+                // A newly selected log must be opened from scratch; without
+                // this, Play after a finished run would resume the previous
+                // file's source while the UI named the new one.
+                self.replay_reset_pending = true;
                 self.status = if info.is_empty() {
                     format!("loaded {name}")
                 } else {
@@ -2771,6 +2782,75 @@ mod tests {
         );
         app.stop();
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn loading_another_log_mid_replay_is_refused() {
+        let mut app = App::new();
+        let a = write_timed_asc("roxy_can_guard_a.asc", 50, 10_000);
+        let b = write_timed_asc("roxy_can_guard_b.asc", 50, 10_000);
+        app.load_log(&a.to_string_lossy());
+        app.replay();
+        assert!(app.measuring);
+
+        app.load_log(&b.to_string_lossy());
+        assert_eq!(
+            app.log_path,
+            a.to_string_lossy(),
+            "the running log must stay selected"
+        );
+        assert!(
+            app.status.contains("stop the replay"),
+            "the refusal should say why, got {:?}",
+            app.status
+        );
+        assert!(
+            !app.recent_log
+                .iter()
+                .any(|p| p == &b.to_string_lossy().to_string()),
+            "a refused load must not enter the recent list"
+        );
+
+        // Stopped, the same selection goes through and demands a fresh open.
+        app.stop();
+        app.load_log(&b.to_string_lossy());
+        assert_eq!(app.log_path, b.to_string_lossy());
+        assert!(
+            app.replay_reset_pending,
+            "a newly selected log must not be resumed over"
+        );
+        app.stop();
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
+    }
+
+    #[test]
+    fn play_after_choosing_a_new_log_opens_that_log() {
+        let mut app = App::new();
+        let a = write_timed_asc("roxy_can_switch_a.asc", 100, 10_000);
+        let b = write_timed_asc("roxy_can_switch_b.asc", 20, 10_000);
+        app.load_log(&a.to_string_lossy());
+        app.replay();
+        // Let the first log run to its natural end, which leaves the source
+        // parked but replay-able -- exactly where the old code could resume the
+        // wrong file.
+        let (_, dur_a) = app.replay_position().unwrap();
+        app.seek_replay_seconds(dur_a);
+        app.update();
+        app.update();
+        assert!(!app.measuring, "setup: the first log finished on its own");
+
+        app.load_log(&b.to_string_lossy());
+        app.play();
+        let (_, dur_b) = app.replay_position().expect("the new log has a timeline");
+        assert!(
+            dur_b < dur_a,
+            "Play must open the newly selected log ({dur_b}s) rather than resume \
+             the finished one ({dur_a}s)"
+        );
+        app.stop();
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
     }
 
     fn blank_sub() -> Subscription {

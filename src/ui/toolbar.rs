@@ -19,6 +19,14 @@ pub(crate) fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
+/// True while a replay is running, i.e. while swapping the selected log would
+/// leave the status bar and the scrub bar naming a file the live source is not
+/// playing. `App::load_log` refuses too; this only stops the UI from offering
+/// what it would reject.
+fn log_switch_blocked(app: &App) -> bool {
+    app.measuring && matches!(app.mode, Mode::Replay)
+}
+
 /// Global shortcuts dispatched from winit key events (see `crate::CMD`):
 /// F9 start/stop, Ctrl+R record, Ctrl+E export, Ctrl+O open DBC,
 /// Space play/pause, -/+ replay speed, Home jump to the live edge,
@@ -145,7 +153,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     {
                         app.pick_dbc();
                     }
-                    if ui.menu_item("Open Log...") {
+                    if ui
+                        .menu_item_config("Open Log...")
+                        .enabled(!log_switch_blocked(app))
+                        .build()
+                    {
                         app.pick_log();
                     }
                     if !app.recent_dbc.is_empty() {
@@ -160,12 +172,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     if !app.recent_log.is_empty() {
                         ui.menu("Recent Logs", || {
+                            let blocked = log_switch_blocked(app);
+                            let guard = ui.begin_disabled(blocked);
                             let paths = app.recent_log.clone();
                             for p in paths {
                                 if ui.menu_item(&file_name(&p)) {
                                     app.load_log(&p);
                                 }
                             }
+                            guard.end();
                         });
                     }
                     ui.separator();
@@ -343,9 +358,11 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             if matches!(app.run_mode, Mode::Replay) {
                 vsep(ui);
+                let open = ui.begin_disabled(log_switch_blocked(app));
                 if ui.button("Open Log...") {
                     app.pick_log();
                 }
+                open.end();
             }
         });
 }

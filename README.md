@@ -60,7 +60,7 @@ cargo test
 
 1. 用工具栏的 **Simulation / Replay** 下拉选择模式（切换时自动停止当前运行），点 **Play** 启动（同一按钮切换暂停/继续），`<<` `>>` 逐级调整回放倍速，**Stop** 停止：仿真模式跑虚拟总线，回放模式回放已加载的 ASC/BLF（未加载时弹出文件选择）；菜单栏 **File** 可打开 DBC/日志、导出与退出，**Measurement** 可启停/暂停，**View** 开关各面板（默认两条总线：CAN1 挂 `assets/sample.dbc`、CAN2 挂 `assets/motbus.dbc`）
 2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分
-3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；**Open Log...** 只加载日志（ASC 或 BLF），回放由 **Play** 启动；`<<` `>>` 逐级变倍速，Stop 后的倍速下拉直接选择（0.5x/1x/2x/4x）；倍速下拉右侧的**时间轴可拖动定位**到任意时刻（暂停时拖完再 Play 从落点继续；日志播完后拖回去再按 Play 会原地续播，按 **Stop** 再 Play 才从头重放）
+3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；**Open Log...** 只加载日志（ASC 或 BLF），回放由 **Play** 启动；`<<` `>>` 逐级变倍速，Stop 后的倍速下拉直接选择（0.5x/1x/2x/4x）；倍速下拉右侧的**时间轴可拖动定位**到任意时刻（暂停时拖完再 Play 从落点继续；日志播完后拖回去再按 Play 会原地续播，按 **Stop** 再 Play 才从头重放）；**回放进行中不能更换日志**——`Open Log...` 与 Recent Logs 会置灰，需先 **Stop**（Stop 后换日志会强制从头打开新文件，不会续播上一个）
 4. 勾选 **Record** 录制 ASC；**Measurement Setup** 表里可总览所有观测器，点 "->" 打开并跳转到对应窗口，并在此新增/删除各类窗口、逐个导出
 5. 每个观测器行内选择 **Signals** 范围（所有总线 / 单条总线 / Manual），Manual 时点 "…" 在 Message Selection 弹窗中勾选报文
 6. Data/Graphics 的信号选择在 Measurement Setup 行内点 "…" 打开 Signal Selection 弹窗勾选（按总线分组，可跨总线选择）；窗口本体只显示已选信号列表，可逐个开关
