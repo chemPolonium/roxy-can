@@ -155,7 +155,9 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
 
     let stacked = app.graphics[i].stacked;
     let tw = app.graphics[i].time_window_s;
-    let t_now = app.last_tick_us as f64 / 1e6;
+    // Follows the replay playhead, not the wall clock, so the axis moves with
+    // the scrub bar and the curve stays in view at any playback speed.
+    let t_now = app.plot_now_s();
     let keys: Vec<(u8, u32, String)> = app.graphics[i]
         .signals
         .iter()

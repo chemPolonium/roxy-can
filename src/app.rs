@@ -1131,14 +1131,33 @@ impl App {
             Some(d) => ((t_s.max(0.0) * 1e6) as u64).min(d),
             None => (t_s.max(0.0) * 1e6) as u64,
         };
-        match (self.source.set_position_us(target), dur_us) {
-            (Some(landed), Some(d)) => {
-                self.status = format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d as f64 / 1e6)
+        match self.source.set_position_us(target) {
+            Some(landed) => {
+                self.drop_samples_after(landed);
+                let dur = dur_us.map(|d| d as f64 / 1e6);
+                self.status = match dur {
+                    Some(d) => format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d),
+                    None => format!("seek {:.2} s", landed as f64 / 1e6),
+                };
             }
-            (Some(landed), None) => {
-                self.status = format!("seek {:.2} s", landed as f64 / 1e6);
+            None => self.status = "seek: past end of log".to_string(),
+        }
+    }
+
+    /// Drops signal history ahead of the playhead after a scrub. `draw_plot`
+    /// walks `history` assuming ascending timestamps and `value_at`
+    /// binary-searches it, so after a jump backwards the newer "future"
+    /// samples must go or the deque is out of order and the curve silently
+    /// disappears from the Graphics window.
+    fn drop_samples_after(&mut self, t_us: u64) {
+        for sub in self.subs.values_mut() {
+            while let Some(&(t, _)) = sub.history.back() {
+                if t > t_us {
+                    sub.history.pop_back();
+                } else {
+                    break;
+                }
             }
-            (None, _) => self.status = "seek: past end of log".to_string(),
         }
     }
 
@@ -1188,6 +1207,21 @@ impl App {
         let pos = self.source.position()? as f64 / 1e6;
         let dur = self.source.duration()? as f64 / 1e6;
         Some((pos, dur))
+    }
+
+    /// Time in seconds the plotting windows should treat as "now".
+    ///
+    /// While replaying that is the playhead, not the wall clock: samples are
+    /// stamped with the log's own `t_us`, so anchoring a window on wall time
+    /// slides the curve out of view as soon as the speed is not exactly 1x or
+    /// as soon as the user scrubs.
+    pub fn plot_now_s(&self) -> f64 {
+        if matches!(self.mode, Mode::Replay)
+            && let Some(pos) = self.source.position()
+        {
+            return pos as f64 / 1e6;
+        }
+        self.last_tick_us as f64 / 1e6
     }
 
     /// Resets the pan offsets of all plot windows back to the live edge.
@@ -2645,6 +2679,96 @@ mod tests {
         );
         app.stop();
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn the_plot_clock_follows_the_replay_playhead() {
+        let mut app = App::new();
+        let path = write_timed_asc("roxy_can_plot_clock.asc", 100, 10_000);
+        app.load_log(&path.to_string_lossy());
+        app.replay();
+        app.seek_replay_seconds(0.5);
+        assert!(
+            (app.plot_now_s() - 0.5).abs() < 1e-6,
+            "the Graphics axis must track the scrub bar, got {}",
+            app.plot_now_s()
+        );
+        app.seek_replay_seconds(0.2);
+        assert!(
+            (app.plot_now_s() - 0.2).abs() < 1e-6,
+            "and track a rewind, got {}",
+            app.plot_now_s()
+        );
+        app.stop();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_backward_scrub_drops_the_future_samples() {
+        let mut app = App::new();
+        let key = {
+            let db = app.channel_dbc(0).expect("sample DBC loaded");
+            let id = db.order[0];
+            (0u8, id, db.messages[&id].signals[0].name.clone())
+        };
+        app.subscribe(key.clone());
+        // Record real DBC-decodable traffic first, then replay that file.
+        let out = std::env::temp_dir().join("roxy_can_scrub_history.asc");
+        app.record_path = out.to_string_lossy().to_string();
+        app.toggle_record();
+        for tx in &mut app.tx_list {
+            tx.active = true;
+            tx.cycle_us = 10_000;
+        }
+        app.start_virtual();
+        for _ in 0..60 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        app.stop();
+        std::fs::remove_file(&out).ok();
+
+        let file = app.last_record.clone();
+        app.load_log(&file);
+        app.replay();
+        // Let the clock actually run so sampling fills history across the log;
+        // a forward seek cannot do it, since seeking discards the prefix.
+        app.set_replay_speed(4.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let filled = app.subs.get(&key).expect("subscribed");
+        assert!(
+            filled.history.len() > 3,
+            "expected samples across the log, got {}",
+            filled.history.len()
+        );
+        let (_, dur) = app.replay_position().unwrap();
+
+        app.seek_replay_seconds(dur / 3.0);
+        let landed = app.replay_position().unwrap().0;
+        let sub = app.subs.get(&key).unwrap();
+        assert!(
+            !sub.history.is_empty(),
+            "a rewind keeps the past, it only drops the future"
+        );
+        assert!(
+            sub.history
+                .iter()
+                .all(|(t, _)| *t as f64 / 1e6 <= landed + 1e-9),
+            "samples past the playhead must be dropped or the plot goes out of order"
+        );
+        assert!(
+            sub.history
+                .iter()
+                .zip(sub.history.iter().skip(1))
+                .all(|(a, b)| a.0 <= b.0),
+            "history must stay ascending for the binary search in value_at"
+        );
+        app.stop();
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]
