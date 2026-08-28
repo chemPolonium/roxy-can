@@ -17,6 +17,53 @@ pub(crate) const MAX_TIME_WINDOW_S: f64 = TIME_STEPS[TIME_STEPS.len() - 1];
 /// Radius of the dot drawn on each sample while `Dots` is enabled.
 const MARKER_RADIUS_PX: f32 = 2.2;
 
+/// Vertex budget for a single curve. ImGui indexes a window's draw list with
+/// 16-bit indices, so one window cannot exceed 65 536 vertices -- and several
+/// curves, their markers and the axis labels all share it. An hour retained at
+/// the 50 ms stride is 72 000 points, so anything past this is folded rather
+/// than submitted whole.
+const MAX_CURVE_POINTS: usize = 2_048;
+
+/// Least pixels two adjacent sample dots may share. Beyond about one per pixel
+/// column they overlap into a solid bar and blow the vertex budget regardless.
+const DOT_MIN_SPACING_PX: f32 = 2.0;
+
+/// A curve ready for submission: its colour plus points already folded to the
+/// vertex budget.
+type Curve = ([f32; 4], Vec<(u64, f64)>);
+
+/// Collapses an ascending slice to at most `cap` points, keeping each bucket's
+/// minimum *and* maximum in timestamp order. Stride decimation would alias away
+/// narrow spikes, which is the whole reason a bus trace is worth plotting.
+fn bucket_extremes(pts: &[(u64, f64)], cap: usize) -> Vec<(u64, f64)> {
+    if pts.len() <= cap {
+        return pts.to_vec();
+    }
+    let buckets = (cap / 2).max(1);
+    let per = pts.len().div_ceil(buckets);
+    let mut out = Vec::with_capacity(buckets * 2);
+    for chunk in pts.chunks(per) {
+        let lo = chunk
+            .iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .copied()
+            .unwrap();
+        let hi = chunk
+            .iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .copied()
+            .unwrap();
+        if lo.0 == hi.0 {
+            out.push(lo);
+        } else if lo.0 < hi.0 {
+            out.extend_from_slice(&[lo, hi]);
+        } else {
+            out.extend_from_slice(&[hi, lo]);
+        }
+    }
+    out
+}
+
 /// Direct-select window lengths: the whole TIME_STEPS ladder as a button
 /// row in each Graphics window.
 const TW_PRESETS: [(f64, &str); 14] = [
@@ -318,13 +365,25 @@ fn draw_plot(
     let lo_us = (t_min.max(0.0) * 1e6) as u64;
     let hi_us = (t_right.max(0.0) * 1e6) as u64;
 
+    // One pass per curve, folded to the vertex budget: imgui caps a window's
+    // draw list at 65 536 vertices, and an hour retained at the 50 ms stride is
+    // 72 000 points for a single signal.
+    let curves: Vec<Curve> = keys
+        .iter()
+        .filter_map(|key| {
+            let sub = app.subs.get(key)?;
+            let color = PALETTE[sub.color % PALETTE.len()];
+            Some((
+                color,
+                bucket_extremes(sub.history.range(lo_us, hi_us), MAX_CURVE_POINTS),
+            ))
+        })
+        .collect();
+
     let mut vmin = f64::INFINITY;
     let mut vmax = f64::NEG_INFINITY;
-    for key in keys {
-        let Some(sub) = app.subs.get(key) else {
-            continue;
-        };
-        for &(_, v) in sub.history.range(lo_us, hi_us) {
+    for (_, pts) in &curves {
+        for &(_, v) in pts.iter() {
             if v < vmin {
                 vmin = v;
             }
@@ -363,14 +422,10 @@ fn draw_plot(
         dl.add_text([x0 + 3.0, ly], [0.55, 0.55, 0.65, 1.0], fmt_val(v));
     }
 
-    for key in keys {
-        let Some(sub) = app.subs.get(key) else {
-            continue;
-        };
-        let color = PALETTE[sub.color % PALETTE.len()];
-        let pts: Vec<[f32; 2]> = sub
-            .history
-            .range(lo_us, hi_us)
+    for entry in &curves {
+        let color = entry.0;
+        let samples = &entry.1;
+        let pts: Vec<[f32; 2]> = samples
             .iter()
             .map(|&(t, v)| {
                 let tf = t as f64 / 1e6;
@@ -380,7 +435,12 @@ fn draw_plot(
             })
             .collect();
         if show_dots {
-            for &p in &pts {
+            // One circle costs a dozen vertices, so never submit more dots than
+            // the pane has pixel columns for. Points closer than that share a
+            // column anyway; the stride drops duplicates, not information.
+            let room = (w / DOT_MIN_SPACING_PX) as usize;
+            let stride = (pts.len() / room.max(1)) + 1;
+            for &p in pts.iter().step_by(stride) {
                 dl.add_circle(p, MARKER_RADIUS_PX, color)
                     .filled(true)
                     .build();
@@ -470,7 +530,7 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::zoom_step;
+    use super::{MAX_CURVE_POINTS, bucket_extremes, zoom_step};
 
     #[test]
     fn zoom_walks_the_step_ladder() {
@@ -481,5 +541,57 @@ mod tests {
         assert_eq!(zoom_step(3600.0, -1.0), 3600.0, "clamped at 1 h");
         assert_eq!(zoom_step(12.0, -1.0), 20.0, "snaps to nearest step first");
         assert_eq!(zoom_step(10.0, 0.3), 10.0, "sub-notch deltas are ignored");
+    }
+
+    fn ramp(n: usize) -> Vec<(u64, f64)> {
+        (0..n as u64).map(|i| (i * 50_000, i as f64)).collect()
+    }
+
+    #[test]
+    fn folding_never_exceeds_the_vertex_budget() {
+        // This is the imgui guard: one window cannot submit more than 65 536
+        // vertices, and several curves plus their markers share it.
+        let pts = ramp(72_000);
+        let folded = bucket_extremes(&pts, MAX_CURVE_POINTS);
+        assert!(
+            folded.len() <= MAX_CURVE_POINTS,
+            "folded to {} points, over the {MAX_CURVE_POINTS} cap",
+            folded.len()
+        );
+    }
+
+    #[test]
+    fn folding_keeps_a_single_narrow_spike() {
+        // Stride decimation would step straight over this and the plot would
+        // silently lose its most interesting feature.
+        let mut pts: Vec<(u64, f64)> = (0..72_000u64).map(|i| (i * 50_000, 0.0)).collect();
+        pts[50_000].1 = 12_345.0;
+        pts[1234].1 = -9_876.0;
+        let folded = bucket_extremes(&pts, MAX_CURVE_POINTS);
+        let lo = folded.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
+        let hi = folded
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert_eq!(hi, 12_345.0, "the spike must survive");
+        assert_eq!(lo, -9_876.0, "the dip must survive");
+    }
+
+    #[test]
+    fn folding_preserves_time_order() {
+        let folded = bucket_extremes(&ramp(9_000), MAX_CURVE_POINTS);
+        assert!(
+            folded
+                .iter()
+                .zip(folded.iter().skip(1))
+                .all(|(a, b)| a.0 <= b.0),
+            "add_polyline walks the points in order"
+        );
+    }
+
+    #[test]
+    fn short_curves_are_left_alone() {
+        let pts = ramp(10);
+        assert_eq!(bucket_extremes(&pts, MAX_CURVE_POINTS), pts);
     }
 }
