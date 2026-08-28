@@ -64,6 +64,21 @@ pub trait FrameSource {
         None
     }
 
+    /// Collects every frame inside `[from_us, to_us]` into `out` **without**
+    /// moving the playhead, and reports whether the span was read completely
+    /// (a capped scan returns false). This is what lets a plot show a window the
+    /// playback cursor has not walked into yet. Sources with no file to re-read
+    /// do nothing and report true, meaning "there is no pending work".
+    fn scan_range(
+        &mut self,
+        _from_us: u64,
+        _to_us: u64,
+        _max_frames: usize,
+        _out: &mut Vec<CanFrame>,
+    ) -> bool {
+        true
+    }
+
     /// Total length of the source's timeline, in microseconds.
     fn duration(&self) -> Option<u64> {
         None

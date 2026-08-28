@@ -21,6 +21,10 @@ pub const TABSTRIP_H: f32 = 22.0;
 /// whatever width the user had chosen.
 pub(crate) const HISTORY_SPAN_US: u64 = 3_600_000_000;
 const SAMPLE_INTERVAL_US: u64 = 50_000;
+/// Frames one window backfill may collect. Bounds a single synchronous pass so
+/// a dense hour-wide window cannot lock the UI; the plot shows what it got and
+/// asks again on the next change.
+const MAX_SCAN_FRAMES: usize = 300_000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 
@@ -35,6 +39,100 @@ pub const PALETTE: [[f32; 4]; 8] = [
     [0.95, 0.55, 0.85, 1.0],
 ];
 
+/// Signal samples, kept ascending by timestamp.
+///
+/// A `VecDeque` sufficed while samples only ever arrived through the playback
+/// stream. Window backfill also decodes the stretch *behind* the playhead, so
+/// insertion must work from either end: the hot streaming path still appends in
+/// O(1), and out-of-order points fall back to a search + splice. Entries stay
+/// 16 bytes with no per-node allocation, which matters because an hour of
+/// 50 ms sampling is 72 000 points per signal.
+#[derive(Debug, Default)]
+pub struct SampleCache {
+    points: Vec<(u64, f64)>,
+}
+
+impl SampleCache {
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    pub fn first(&self) -> Option<(u64, f64)> {
+        self.points.first().copied()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, (u64, f64)> {
+        self.points.iter()
+    }
+
+    pub fn clear(&mut self) {
+        self.points.clear();
+    }
+
+    /// Records one sample. Out-of-order arrival only happens during a backfill
+    /// that lands behind existing coverage, so the common branch is a push.
+    pub fn push(&mut self, t_us: u64, v: f64) {
+        match self.points.last() {
+            Some(&(last_t, _)) if t_us < last_t => self.insert_sorted(t_us, v),
+            _ => self.points.push((t_us, v)),
+        }
+    }
+
+    /// Merges an ascending batch, typically one backfill scan's worth.
+    pub fn merge(&mut self, batch: &[(u64, f64)]) {
+        if batch.is_empty() {
+            return;
+        }
+        let contiguous = self
+            .points
+            .last()
+            .is_none_or(|&(last_t, _)| batch[0].0 >= last_t);
+        if contiguous {
+            self.points.extend_from_slice(batch);
+            return;
+        }
+        for &(t, v) in batch {
+            self.push(t, v);
+        }
+    }
+
+    fn insert_sorted(&mut self, t_us: u64, v: f64) {
+        let at = self.points.partition_point(|(et, _)| *et <= t_us);
+        self.points.insert(at, (t_us, v));
+    }
+
+    /// Samples inside `[t_from, t_to]`, ascending. This is the only view the
+    /// plotter needs: the visible window is a query, not a mutable buffer.
+    pub fn range(&self, t_from: u64, t_to: u64) -> &[(u64, f64)] {
+        let lo = self.points.partition_point(|(t, _)| *t < t_from);
+        let hi = self.points.partition_point(|(t, _)| *t <= t_to);
+        &self.points[lo..hi]
+    }
+
+    /// Value of the most recent sample at or before `t_us`.
+    pub fn at(&self, t_us: u64) -> Option<f64> {
+        let idx = self.points.partition_point(|&(ts, _)| ts <= t_us);
+        idx.checked_sub(1).map(|i| self.points[i].1)
+    }
+
+    /// Drops the oldest samples until what remains fits inside `span_us` of the
+    /// newest point.
+    pub fn trim_oldest(&mut self, span_us: u64) {
+        let Some(&(newest, _)) = self.points.last() else {
+            return;
+        };
+        let horizon = newest.saturating_sub(span_us);
+        let stale = self.points.partition_point(|(t, _)| *t < horizon);
+        if stale > 0 {
+            self.points.drain(..stale);
+        }
+    }
+}
+
 pub struct Subscription {
     pub latest: f64,
     pub unit: String,
@@ -46,17 +144,24 @@ pub struct Subscription {
     n: u64,
     pub last_update_us: u64,
     pub last_sample_us: u64,
-    pub history: VecDeque<(u64, f64)>,
+    pub history: SampleCache,
     pub color: usize,
 }
 
 impl Subscription {
     /// Records one sample and drops whatever has fallen out of the retention
-    /// span. `min`/`max`/`avg` stay cumulative over the whole run on purpose --
-    /// correcting them at eviction time would cost an O(n) rescan per sample.
+    /// span. `min`/`max`/`avg` stay cumulative over everything sampled since the
+    /// run began -- recomputing them every time the oldest point is trimmed would
+    /// cost an O(n) rescan per sample.
     fn push_sample(&mut self, t_us: u64, v: f64) {
-        self.history.push_back((t_us, v));
+        self.history.push(t_us, v);
         self.last_sample_us = t_us;
+        self.observe(v);
+        self.history.trim_oldest(HISTORY_SPAN_US);
+    }
+
+    /// Folds one sampled value into the running statistics.
+    fn observe(&mut self, v: f64) {
         if v < self.min {
             self.min = v;
         }
@@ -66,74 +171,36 @@ impl Subscription {
         self.sum += v;
         self.n += 1;
         self.avg = self.sum / self.n as f64;
-        let horizon = t_us.saturating_sub(HISTORY_SPAN_US);
-        while let Some(&(t, _)) = self.history.front() {
-            if t < horizon {
-                self.history.pop_front();
-            } else {
-                break;
-            }
-        }
     }
 
-    /// Forgets everything the sampler accumulates, keeping the signal's
-    /// identity (`unit`, `color`). Emptying `history` alone is not a reset:
-    /// the sampler gates on `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a
-    /// baseline inherited from the previous run silently rejects every frame
-    /// until the playhead climbs past where the old run ended -- which looks
-    /// like the start of the trace is simply missing.
+    /// Forgets everything the sampler accumulates, keeping the signal's identity
+    /// (`unit`, `color`). Emptying the cache alone is not a reset: the sampler
+    /// gates on `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a baseline
+    /// inherited from the previous run silently rejects every frame until the
+    /// playhead climbs past where the old run ended -- which reads as the start
+    /// of the trace going missing.
     fn reset_measurement(&mut self) {
         self.history.clear();
-        self.reseed_from_history();
+        self.clear_accumulators();
     }
 
-    /// Drops samples past a scrubbed playhead and rebuilds the derived state.
-    /// `draw_plot` walks `history` assuming ascending timestamps and `value_at`
-    /// binary-searches it, so the "future" must go; recomputing min/max/avg and
-    /// `latest` from what survives keeps the Data window from describing a
-    /// time the playhead has already left.
-    fn rewind_to(&mut self, t_us: u64) {
-        while let Some(&(t, _)) = self.history.back() {
-            if t > t_us {
-                self.history.pop_back();
-            } else {
-                break;
-            }
-        }
-        self.reseed_from_history();
+    fn clear_accumulators(&mut self) {
+        self.latest = 0.0;
+        self.min = f64::INFINITY;
+        self.max = f64::NEG_INFINITY;
+        self.avg = 0.0;
+        self.sum = 0.0;
+        self.n = 0;
+        self.last_update_us = 0;
+        self.last_sample_us = 0;
     }
 
-    /// Derives every accumulated field from `history`, the single source of
-    /// truth for what has actually been sampled.
-    fn reseed_from_history(&mut self) {
-        self.n = self.history.len() as u64;
-        self.sum = self.history.iter().map(|(_, v)| *v).sum();
-        self.min = self
-            .history
-            .iter()
-            .map(|(_, v)| *v)
-            .fold(f64::INFINITY, f64::min);
-        self.max = self
-            .history
-            .iter()
-            .map(|(_, v)| *v)
-            .fold(f64::NEG_INFINITY, f64::max);
-        self.avg = if self.n > 0 {
-            self.sum / self.n as f64
-        } else {
-            0.0
-        };
-        match self.history.back() {
-            Some(&(t, v)) => {
-                self.last_sample_us = t;
-                self.last_update_us = t;
-                self.latest = v;
-            }
-            None => {
-                self.last_sample_us = 0;
-                self.last_update_us = 0;
-                self.latest = 0.0;
-            }
+    /// Lets the sampler resume at a scrubbed playhead. The cache is deliberately
+    /// left alone: points ahead of the playhead are simply outside the visible
+    /// window, and deleting them is what used to blank the curve on a rewind.
+    fn resume_sampling_at(&mut self, t_us: u64) {
+        if self.last_sample_us > t_us {
+            self.last_sample_us = t_us;
         }
     }
 }
@@ -340,6 +407,10 @@ pub struct App {
     pub log_path: String,
     /// One-line summary from the stream's `describe()`, e.g. "BLF4, 41.2 s".
     pub log_info: Option<String>,
+    /// Contiguous log-time span whose frames have already been decoded into the
+    /// signal caches. A Graphics window asking for a range outside it triggers a
+    /// backfill scan.
+    sample_cover: Option<(u64, u64)>,
     pub recent_dbc: Vec<String>,
     pub recent_log: Vec<String>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
@@ -439,6 +510,7 @@ impl App {
             status: "stopped".to_string(),
             log_path: String::new(),
             log_info: None,
+            sample_cover: None,
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
             project_path: None,
@@ -749,6 +821,7 @@ impl App {
         self.paused_at_us = None;
         self.trace.clear();
         self.aggs.clear();
+        self.sample_cover = None;
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
         }
@@ -1120,7 +1193,7 @@ impl App {
                 continue;
             };
             let bus = self.channel_name(key.0);
-            for (t, v) in &sub.history {
+            for (t, v) in sub.history.iter() {
                 s.push_str(&format!("{t},{bus},{},{v}\n", key.2));
                 n += 1;
             }
@@ -1250,11 +1323,74 @@ impl App {
         }
     }
 
-    /// Rewinds every signal's sampled state to match a scrubbed playhead.
-    /// See [`Subscription::rewind_to`].
+    /// Decodes whatever frames cover `[t_from_us, t_to_us]` into the signal
+    /// caches, unless an earlier scan already read that span.
+    ///
+    /// This is what makes the plot independent of the playback cursor. Deriving
+    /// samples only as playback walks past them meant a Graphics window showing
+    /// ground the cursor had not reached contained no points at all -- which is
+    /// exactly what a forward scrub looked like.
+    pub fn ensure_samples_in(&mut self, t_from_us: u64, t_to_us: u64) {
+        if t_to_us <= t_from_us {
+            return;
+        }
+        if self
+            .sample_cover
+            .is_some_and(|(lo, hi)| t_from_us >= lo && t_to_us <= hi)
+        {
+            return;
+        }
+        let mut frames = Vec::new();
+        let capped = !self
+            .source
+            .scan_range(t_from_us, t_to_us, MAX_SCAN_FRAMES, &mut frames);
+        // A scan-local stride: the shared per-signal baseline sits at the
+        // playhead and would reject every point that lies behind it.
+        let mut stride: HashMap<(u8, u32, String), u64> = HashMap::new();
+        let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
+        for f in &frames {
+            for (key, phys, _) in self.subscribed_values(f) {
+                if stride
+                    .get(&key)
+                    .is_some_and(|&lt| f.t_us < lt + SAMPLE_INTERVAL_US)
+                {
+                    continue;
+                }
+                stride.insert(key.clone(), f.t_us);
+                batches.entry(key).or_default().push((f.t_us, phys));
+            }
+        }
+        for (key, pts) in batches {
+            if let Some(sub) = self.subs.get_mut(&key) {
+                for &(_, v) in &pts {
+                    sub.observe(v);
+                }
+                sub.history.merge(&pts);
+            }
+        }
+        // Claim the span that was *asked for*, not merely what was read. Repeating
+        // an unsatisfied request every frame would rescan the same stretch
+        // forever; a scan stopped by the frame cap can therefore leave the tail of
+        // a very dense window thin until the view moves enough to ask again.
+        self.sample_cover = match self.sample_cover {
+            Some((lo, hi)) if t_from_us <= hi && t_to_us >= lo => {
+                Some((lo.min(t_from_us), hi.max(t_to_us)))
+            }
+            _ => Some((t_from_us, t_to_us)),
+        };
+        if capped {
+            self.status = format!(
+                "plot: window too dense to decode fully ({} frames)",
+                MAX_SCAN_FRAMES
+            );
+        }
+    }
+
+    /// Lets every signal's sampler resume at a scrubbed playhead. Retained
+    /// samples are left in place; see [`Subscription::resume_sampling_at`].
     fn rewind_samples_to(&mut self, t_us: u64) {
         for sub in self.subs.values_mut() {
-            sub.rewind_to(t_us);
+            sub.resume_sampling_at(t_us);
         }
     }
 
@@ -1856,24 +1992,15 @@ impl App {
             agg.len = f.len;
             agg.data = f.data;
             agg.flags = f.flags;
-            let db = self
-                .channels
-                .get(f.channel as usize)
-                .and_then(|c| c.dbc.as_ref());
-            if let Some(db) = db {
-                for (name, phys, unit) in db.decode_signals(&f) {
-                    let key = (f.channel, f.id, name.clone());
-                    let Some(entry) = self.subs.get_mut(&key) else {
-                        continue;
-                    };
-                    entry.latest = phys;
-                    entry.unit = unit;
-                    entry.last_update_us = f.t_us;
-                    if f.t_us >= entry.last_sample_us + SAMPLE_INTERVAL_US
-                        || entry.history.is_empty()
-                    {
-                        entry.push_sample(f.t_us, phys);
-                    }
+            for (key, phys, unit) in self.subscribed_values(&f) {
+                let Some(entry) = self.subs.get_mut(&key) else {
+                    continue;
+                };
+                entry.latest = phys;
+                entry.unit = unit;
+                entry.last_update_us = f.t_us;
+                if f.t_us >= entry.last_sample_us + SAMPLE_INTERVAL_US || entry.history.is_empty() {
+                    entry.push_sample(f.t_us, phys);
                 }
             }
         }
@@ -1884,6 +2011,27 @@ impl App {
             let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
             self.status = format!("replay finished at {dur:.2}s");
         }
+    }
+
+    /// Decodes one frame into `(signal key, physical value, unit)` for the
+    /// signals that are currently subscribed. Shared by the playback loop and
+    /// the Graphics window backfill so the two cannot drift on what a signal's
+    /// value is.
+    fn subscribed_values(&self, f: &CanFrame) -> Vec<((u8, u32, String), f64, String)> {
+        let Some(db) = self
+            .channels
+            .get(f.channel as usize)
+            .and_then(|c| c.dbc.as_ref())
+        else {
+            return Vec::new();
+        };
+        db.decode_signals(f)
+            .into_iter()
+            .filter_map(|(name, phys, unit)| {
+                let key = (f.channel, f.id, name);
+                self.subs.contains_key(&key).then_some((key, phys, unit))
+            })
+            .collect()
     }
 
     pub fn subscribe(&mut self, key: (u8, u32, String)) {
@@ -1902,7 +2050,7 @@ impl App {
                     n: 0,
                     last_update_us: 0,
                     last_sample_us: 0,
-                    history: VecDeque::new(),
+                    history: SampleCache::default(),
                     color,
                 },
             );
@@ -2868,7 +3016,7 @@ mod tests {
             n: 0,
             last_update_us: 0,
             last_sample_us: 0,
-            history: VecDeque::new(),
+            history: SampleCache::default(),
             color: 0,
         }
     }
@@ -2884,7 +3032,7 @@ mod tests {
         }
         assert_eq!(sub.history.len(), 5_000, "250 s fits inside the span");
         assert_eq!(
-            sub.history.front().unwrap().0,
+            sub.history.first().unwrap().0,
             0,
             "the head must still be there mid-run"
         );
@@ -2970,28 +3118,23 @@ mod tests {
         );
         // The timestamp the sampling baseline would be stranded on if a rewind
         // failed to move it.
-        let highest_before = filled.history.back().unwrap().0;
+        let highest_before = filled.history.iter().next_back().unwrap().0;
         let (_, dur) = app.replay_position().unwrap();
 
         app.seek_replay_seconds(dur / 3.0);
         let landed = app.replay_position().unwrap().0;
         let sub = app.subs.get(&key).unwrap();
         assert!(
-            !sub.history.is_empty(),
-            "a rewind keeps the past, it only drops the future"
-        );
-        assert!(
-            sub.history
-                .iter()
-                .all(|(t, _)| *t as f64 / 1e6 <= landed + 1e-9),
-            "samples past the playhead must be dropped or the plot goes out of order"
+            sub.history.iter().any(|(t, _)| *t as f64 / 1e6 > landed),
+            "the cache keeps samples ahead of a rewound playhead; the window \
+             slice hides them, and deleting them was what blanked the curve"
         );
         assert!(
             sub.history
                 .iter()
                 .zip(sub.history.iter().skip(1))
                 .all(|(a, b)| a.0 <= b.0),
-            "history must stay ascending for the binary search in value_at"
+            "the cache must stay ascending for the binary search in value_at"
         );
         let after_rewind = sub.history.len();
 
@@ -3026,6 +3169,102 @@ mod tests {
                 .all(|(a, b)| a.0 <= b.0),
             "re-sampled history must remain ascending"
         );
+        app.stop();
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn sample_cache_stays_ascending_when_filled_from_either_end() {
+        let mut c = SampleCache::default();
+        // Streaming fills the later stretch first, then a backfill lands behind
+        // it; the buffer must still read ascending for the plot and value_at.
+        for i in 100..110u64 {
+            c.push(i * 1_000, i as f64);
+        }
+        c.merge(&(0..10).map(|i| (i * 1_000, i as f64)).collect::<Vec<_>>());
+        assert_eq!(c.len(), 20);
+        assert!(
+            c.iter().zip(c.iter().skip(1)).all(|(a, b)| a.0 <= b.0),
+            "merge behind existing points must keep the buffer sorted"
+        );
+        assert_eq!(c.first().unwrap().0, 0);
+    }
+
+    #[test]
+    fn sample_cache_range_and_lookup_are_inclusive_and_ordered() {
+        let mut c = SampleCache::default();
+        for i in 0..10u64 {
+            c.push(i * 1_000, i as f64);
+        }
+        let win = c.range(2_000, 5_000);
+        assert_eq!(
+            win.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            vec![2_000, 3_000, 4_000, 5_000],
+            "both ends of the window are included"
+        );
+        assert_eq!(c.at(4_500), Some(4.0), "last value at or before");
+        assert_eq!(
+            c.at(0),
+            Some(0.0),
+            "the first sample resolves on its own edge"
+        );
+        assert_eq!(c.at(999), Some(0.0), "step-signal semantics hold");
+        assert_eq!(
+            SampleCache::default().at(999),
+            None,
+            "an empty cache has no value to report"
+        );
+    }
+
+    #[test]
+    fn sample_cache_trims_by_span_not_by_count() {
+        let mut c = SampleCache::default();
+        for i in 0..30u64 {
+            c.push(i * 10_000, 1.0);
+        }
+        c.trim_oldest(100_000);
+        assert_eq!(
+            c.first().unwrap().0,
+            190_000,
+            "newest is 290 s, so everything from 190 s on survives"
+        );
+        assert_eq!(c.len(), 11);
+    }
+
+    #[test]
+    fn a_plot_window_decodes_without_waiting_for_playback() {
+        let (mut app, key, file) = app_with_replayable_recording("backfill", 60);
+        app.replay();
+        let (pos0, dur) = app.replay_position().unwrap();
+        assert!(
+            dur > 0.4,
+            "setup: the log should span the window under test, got {dur} s"
+        );
+
+        {
+            // Ask for a stretch the playback cursor has never walked through.
+            // Under the old streaming-only design this window was simply empty.
+            app.ensure_samples_in(200_000, 400_000);
+            let sub = app.subs.get(&key).unwrap();
+            let win = sub.history.range(200_000, 400_000);
+            assert!(
+                win.len() > 3,
+                "the window must decode on demand, got {} points",
+                win.len()
+            );
+            assert!(
+                win.iter()
+                    .zip(win.iter().skip(1))
+                    .all(|(a, b)| b.0 - a.0 >= SAMPLE_INTERVAL_US),
+                "a backfill must honour the sampling stride"
+            );
+            assert!(
+                win.first().unwrap().0 >= 200_000 && win.last().unwrap().0 <= 400_000,
+                "returned points must lie inside the request"
+            );
+        }
+        let (pos1, _) = app.replay_position().unwrap();
+        assert_eq!(pos1, pos0, "a backfill must not move the playhead");
         app.stop();
         std::fs::remove_file(&file).ok();
     }
@@ -3078,7 +3317,7 @@ mod tests {
             "sampling must start at the top of the log, not at {stale_baseline} us"
         );
         assert!(
-            sub.history.front().unwrap().0 < stale_baseline,
+            sub.history.first().unwrap().0 < stale_baseline,
             "the first sample of the new run should precede the previous run's last"
         );
         app.stop();

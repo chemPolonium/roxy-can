@@ -180,7 +180,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     let mut oldest = f64::INFINITY;
     for key in &keys {
         if let Some(sub) = app.subs.get(key)
-            && let Some(&(t, _)) = sub.history.front()
+            && let Some((t, _)) = sub.history.first()
         {
             oldest = oldest.min(t as f64 / 1e6);
         }
@@ -222,6 +222,13 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     }
 
     let t_right = t_now - app.graphics[i].t_offset_s;
+    // The view asks for its own data rather than waiting for playback to walk
+    // past it, so a scrubbed or panned-to window is complete immediately. The
+    // extra window-width ahead of the right edge keeps ordinary playback from
+    // triggering a scan every frame.
+    let need_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
+    let need_hi = ((t_right + tw).max(0.0) * 1e6) as u64;
+    app.ensure_samples_in(need_lo, need_hi);
     let cursor = if hover && app.graphics[i].show_cursor {
         let frac = ((mx - x0) / w) as f64;
         Some((mx, t_right - tw * (1.0 - frac)))
@@ -306,6 +313,10 @@ fn draw_plot(
 ) {
     draw_plot_frame(dl, x0, y0, w, h);
     let t_min = t_right - tw;
+    // Slice the cache to the window: with an hour of retained samples, a view
+    // showing seconds must not walk every point each frame.
+    let lo_us = (t_min.max(0.0) * 1e6) as u64;
+    let hi_us = (t_right.max(0.0) * 1e6) as u64;
 
     let mut vmin = f64::INFINITY;
     let mut vmax = f64::NEG_INFINITY;
@@ -313,10 +324,7 @@ fn draw_plot(
         let Some(sub) = app.subs.get(key) else {
             continue;
         };
-        for &(t, v) in &sub.history {
-            if (t as f64 / 1e6) < t_min {
-                continue;
-            }
+        for &(_, v) in sub.history.range(lo_us, hi_us) {
             if v < vmin {
                 vmin = v;
             }
@@ -360,32 +368,26 @@ fn draw_plot(
             continue;
         };
         let color = PALETTE[sub.color % PALETTE.len()];
-        let mut pts = Vec::new();
-        let mut dots = Vec::new();
-        for &(t, v) in &sub.history {
-            let tf = t as f64 / 1e6;
-            if tf < t_min {
-                continue;
-            }
-            let frac = ((tf - t_min) / tw).clamp(0.0, 1.0) as f32;
-            let x = x0 + w * frac;
-            let y = y0 + h * (1.0 - ((v - vmin) / (vmax - vmin)).clamp(0.0, 1.0)) as f32;
-            pts.push([x, y]);
-            // Points past the right edge only pile up on it after clamping, so
-            // they get no marker.
-            if frac < 1.0 {
-                dots.push([x, y]);
-            }
-        }
-        if pts.len() >= 2 {
-            dl.add_polyline(pts, color).thickness(1.5).build();
-        }
+        let pts: Vec<[f32; 2]> = sub
+            .history
+            .range(lo_us, hi_us)
+            .iter()
+            .map(|&(t, v)| {
+                let tf = t as f64 / 1e6;
+                let x = x0 + w * ((tf - t_min) / tw).clamp(0.0, 1.0) as f32;
+                let y = y0 + h * (1.0 - ((v - vmin) / (vmax - vmin)).clamp(0.0, 1.0)) as f32;
+                [x, y]
+            })
+            .collect();
         if show_dots {
-            for p in dots {
+            for &p in &pts {
                 dl.add_circle(p, MARKER_RADIUS_PX, color)
                     .filled(true)
                     .build();
             }
+        }
+        if pts.len() >= 2 {
+            dl.add_polyline(pts, color).thickness(1.5).build();
         }
     }
 
@@ -459,17 +461,11 @@ fn draw_plot(
 }
 
 /// Last sample at or before the given time (step-signal semantics).
-fn value_at(history: &std::collections::VecDeque<(u64, f64)>, t_us: f64) -> Option<f64> {
+fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
     if !t_us.is_finite() || t_us < 0.0 {
         return None;
     }
-    let t = t_us as u64;
-    let idx = history.partition_point(|&(ts, _)| ts <= t);
-    if idx == 0 {
-        None
-    } else {
-        history.get(idx - 1).map(|&(_, v)| v)
-    }
+    history.at(t_us as u64)
 }
 
 #[cfg(test)]

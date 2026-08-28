@@ -95,6 +95,42 @@ impl FrameSource for ReplaySource {
         Some(landed)
     }
 
+    fn scan_range(
+        &mut self,
+        from_us: u64,
+        to_us: u64,
+        max_frames: usize,
+        out: &mut Vec<CanFrame>,
+    ) -> bool {
+        let playhead = self.pos_us as u64;
+        self.stream.seek_to_us(from_us);
+        let mut complete = true;
+        while let Some(t) = self.stream.peek_t() {
+            if t > to_us {
+                break;
+            }
+            if out.len() >= max_frames {
+                complete = false;
+                break;
+            }
+            match self.stream.next_frame() {
+                Some(f) => out.push(f),
+                None => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        // Put the cursor back where playback left it. `done` is cleared because
+        // the scan may have looked at the tail; the next poll re-latches it from
+        // the playhead. `last` goes to None so the scan's own wall time is not
+        // credited to playback on the next poll.
+        self.stream.seek_to_us(playhead);
+        self.done = false;
+        self.last = None;
+        complete
+    }
+
     fn duration(&self) -> Option<u64> {
         self.stream.duration_us()
     }
