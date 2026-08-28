@@ -32,9 +32,11 @@ const WINDOW_VERTEX_BUDGET: usize = 40_000;
 /// ImGui tessellates a filled circle from twelve segments.
 const CIRCLE_VERTS: usize = 13;
 
-/// Least pixels two adjacent sample dots may share. Beyond about one per pixel
-/// column they overlap into a solid bar and blow the vertex budget regardless.
-const DOT_MIN_SPACING_PX: f32 = 2.0;
+/// Least pixels two adjacent sample dots may keep apart. This must be at least
+/// the dot's diameter: closer than that, consecutive filled circles overlap and
+/// merge into a band about three times the line weight, which reads as the curve
+/// having inexplicably become thick rather than as points on a line.
+const DOT_MIN_SPACING_PX: f32 = MARKER_RADIUS_PX * 2.0;
 
 /// What one curve may submit this frame, after the window's budget has been
 /// shared out between all the curves drawn into the same draw list.
@@ -562,7 +564,7 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CurveBudget, MAX_CURVE_POINTS, bucket_extremes, zoom_step};
+    use super::{CurveBudget, MARKER_RADIUS_PX, MAX_CURVE_POINTS, bucket_extremes, zoom_step};
 
     #[test]
     fn a_window_never_exceeds_the_16bit_vertex_ceiling() {
@@ -607,6 +609,24 @@ mod tests {
 
     fn ramp(n: usize) -> Vec<(u64, f64)> {
         (0..n as u64).map(|i| (i * 50_000, i as f64)).collect()
+    }
+
+    #[test]
+    fn dots_cannot_outnumber_the_columns_that_fit_their_own_diameter() {
+        // Markers closer together than their diameter overlap and read as a
+        // thick line rather than points, so the budget must stay under
+        // width / (2 * radius) whatever the curve count.
+        for curves in [1usize, 4, 16] {
+            for width in [400.0f32, 1920.0, 3840.0] {
+                let b = CurveBudget::split(curves, width, true);
+                let room = (width / (2.0 * MARKER_RADIUS_PX)) as usize;
+                assert!(
+                    b.dots.unwrap() <= room.max(1),
+                    "{curves} curves at {width}px allow {} dots into {room} columns",
+                    b.dots.unwrap()
+                );
+            }
+        }
     }
 
     #[test]
