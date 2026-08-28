@@ -24,9 +24,50 @@ const MARKER_RADIUS_PX: f32 = 2.2;
 /// than submitted whole.
 const MAX_CURVE_POINTS: usize = 2_048;
 
+/// Vertices any one Graphics window may submit. Comfortably under the 65 536
+/// ceiling: the frame, grid, axis labels and legend live in the same list, and
+/// stacked mode draws every curve into it.
+const WINDOW_VERTEX_BUDGET: usize = 40_000;
+
+/// ImGui tessellates a filled circle from twelve segments.
+const CIRCLE_VERTS: usize = 13;
+
 /// Least pixels two adjacent sample dots may share. Beyond about one per pixel
 /// column they overlap into a solid bar and blow the vertex budget regardless.
 const DOT_MIN_SPACING_PX: f32 = 2.0;
+
+/// What one curve may submit this frame, after the window's budget has been
+/// shared out between all the curves drawn into the same draw list.
+#[derive(Clone, Copy, Debug)]
+struct CurveBudget {
+    points: usize,
+    /// `None` when markers are switched off.
+    dots: Option<usize>,
+}
+
+impl CurveBudget {
+    fn split(curves: usize, width_px: f32, dots_enabled: bool) -> Self {
+        let share = WINDOW_VERTEX_BUDGET / curves.max(1);
+        // Markers dominate the cost, so when they are on they get the larger
+        // half and the polyline gives up the rest.
+        let (points, dots) = if dots_enabled {
+            (share * 2 / 5, Some(share * 3 / 5 / CIRCLE_VERTS))
+        } else {
+            (share, None)
+        };
+        let columns = (width_px / DOT_MIN_SPACING_PX) as usize;
+        Self {
+            points: points.clamp(64, MAX_CURVE_POINTS),
+            dots: dots.map(|d| d.clamp(1, columns.max(1))),
+        }
+    }
+
+    /// Worst-case vertices this curve can submit. Read only by the budget test.
+    #[cfg(test)]
+    fn vertices(&self) -> usize {
+        self.points + self.dots.unwrap_or(0) * CIRCLE_VERTS
+    }
+}
 
 /// A curve ready for submission: its colour plus points already folded to the
 /// vertex budget.
@@ -283,6 +324,9 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         None
     };
 
+    // Every curve in this window writes the same draw list, so the budget is
+    // shared out here rather than assumed per call.
+    let budget = CurveBudget::split(keys.len(), w, app.graphics[i].show_markers);
     if keys.is_empty() {
         draw_plot_frame(&dl, x0, y0, w, h);
         dl.add_text(
@@ -303,24 +347,12 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                 &[key.clone()],
                 t_right,
                 tw,
-                app.graphics[i].show_markers,
+                budget,
                 cursor,
             );
         }
     } else {
-        draw_plot(
-            &dl,
-            app,
-            x0,
-            y0,
-            w,
-            h,
-            &keys,
-            t_right,
-            tw,
-            app.graphics[i].show_markers,
-            cursor,
-        );
+        draw_plot(&dl, app, x0, y0, w, h, &keys, t_right, tw, budget, cursor);
     }
 
     ui.dummy([w, h]);
@@ -355,7 +387,7 @@ fn draw_plot(
     keys: &[(u8, u32, String)],
     t_right: f64,
     tw: f64,
-    show_dots: bool,
+    budget: CurveBudget,
     cursor: Option<(f32, f64)>,
 ) {
     draw_plot_frame(dl, x0, y0, w, h);
@@ -375,7 +407,7 @@ fn draw_plot(
             let color = PALETTE[sub.color % PALETTE.len()];
             Some((
                 color,
-                bucket_extremes(sub.history.range(lo_us, hi_us), MAX_CURVE_POINTS),
+                bucket_extremes(sub.history.range(lo_us, hi_us), budget.points),
             ))
         })
         .collect();
@@ -434,12 +466,12 @@ fn draw_plot(
                 [x, y]
             })
             .collect();
-        if show_dots {
-            // One circle costs a dozen vertices, so never submit more dots than
-            // the pane has pixel columns for. Points closer than that share a
-            // column anyway; the stride drops duplicates, not information.
-            let room = (w / DOT_MIN_SPACING_PX) as usize;
-            let stride = (pts.len() / room.max(1)) + 1;
+        if let Some(max_dots) = budget.dots {
+            // One circle costs about thirteen vertices, so markers are the
+            // expensive half of the budget. Points closer together than a pixel
+            // column share that column anyway: the stride drops duplicates, not
+            // information.
+            let stride = (pts.len() / max_dots.max(1)) + 1;
             for &p in pts.iter().step_by(stride) {
                 dl.add_circle(p, MARKER_RADIUS_PX, color)
                     .filled(true)
@@ -530,7 +562,37 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_CURVE_POINTS, bucket_extremes, zoom_step};
+    use super::{CurveBudget, MAX_CURVE_POINTS, bucket_extremes, zoom_step};
+
+    #[test]
+    fn a_window_never_exceeds_the_16bit_vertex_ceiling() {
+        // The assert that killed replay: imgui indexes a window's draw list with
+        // 16-bit indices, and every curve, marker and label in one Graphics
+        // window shares that one list.
+        for curves in [1usize, 4, 12, 32, 64] {
+            for width in [400.0f32, 1920.0, 3840.0] {
+                let b = CurveBudget::split(curves, width, true);
+                let total = curves * b.vertices();
+                assert!(
+                    total < 65_536,
+                    "{curves} curves at {width}px submit {total} vertices"
+                );
+                let plain = CurveBudget::split(curves, width, false);
+                assert!(curves * plain.vertices() < 65_536, "markers off");
+            }
+        }
+    }
+
+    #[test]
+    fn many_curves_share_the_budget_instead_of_each_taking_a_full_one() {
+        let few = CurveBudget::split(1, 1920.0, true);
+        let many = CurveBudget::split(16, 1920.0, true);
+        assert!(
+            many.points < few.points && many.dots < few.dots,
+            "16 curves must get a smaller share each: {many:?} vs {few:?}"
+        );
+        assert!(few.points == MAX_CURVE_POINTS, "a lone curve takes the cap");
+    }
 
     #[test]
     fn zoom_walks_the_step_ladder() {
