@@ -12,6 +12,7 @@ use crate::app::{
     TraceWin, WindowKind,
 };
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
+use crate::sim::{SrcKind, ValueSrc};
 
 pub const CONFIG_PATH: &str = "roxy-can.json";
 pub const META_PATH: &str = "roxy-can.meta.json";
@@ -165,6 +166,31 @@ pub struct DataCfg {
     pub viz_bar: bool,
 }
 
+/// One driven signal's parameters. `kind` is [`crate::sim::SrcKind::to_u8`];
+/// an unknown code drops the whole entry on load rather than guessing a shape.
+#[derive(Serialize, Deserialize)]
+pub struct SrcCfg {
+    pub name: String,
+    #[serde(default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub lo: f64,
+    #[serde(default)]
+    pub hi: f64,
+    #[serde(default)]
+    pub period_us: u64,
+    #[serde(default)]
+    pub phase_us: u64,
+    #[serde(default)]
+    pub value: f64,
+    #[serde(default)]
+    pub seq: Vec<f64>,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub redraw_us: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct TxCfg {
     pub channel: u8,
@@ -179,6 +205,10 @@ pub struct TxCfg {
     pub cycle_us: u64,
     #[serde(default)]
     pub fd: bool,
+    /// Value sources layered over `data` at emit time. Absent in projects
+    /// saved before the stimulus engine, which then behave exactly as before.
+    #[serde(default)]
+    pub srcs: Vec<SrcCfg>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -271,6 +301,37 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
             visible: s.visible,
         })
         .collect()
+}
+
+fn src_cfg(s: &ValueSrc) -> SrcCfg {
+    SrcCfg {
+        name: s.name.clone(),
+        kind: s.kind.to_u8(),
+        lo: s.lo,
+        hi: s.hi,
+        period_us: s.period_us,
+        phase_us: s.phase_us,
+        value: s.value,
+        seq: s.seq.clone(),
+        seed: s.seed,
+        redraw_us: s.redraw_us,
+    }
+}
+
+fn value_src(c: SrcCfg) -> Option<ValueSrc> {
+    let kind = SrcKind::from_u8(c.kind)?;
+    Some(ValueSrc {
+        name: c.name,
+        kind,
+        lo: c.lo,
+        hi: c.hi,
+        period_us: c.period_us,
+        phase_us: c.phase_us,
+        value: c.value,
+        seq: c.seq,
+        seed: c.seed,
+        redraw_us: c.redraw_us,
+    })
 }
 
 fn desktop_cfg(d: &Desktop) -> DesktopCfg {
@@ -391,6 +452,7 @@ impl Config {
                     data: t.data[..t.len as usize].to_vec(),
                     cycle_us: t.cycle_us,
                     fd: t.flags.contains(FrameFlags::FD),
+                    srcs: t.srcs.iter().map(src_cfg).collect(),
                 })
                 .collect(),
             counters: app.window_counters(),
@@ -473,6 +535,7 @@ impl Config {
                     m.data = data;
                     m.len = n as u8;
                 }
+                m.srcs = t.srcs.into_iter().filter_map(value_src).collect();
             }
         }
         if !self.trace_windows.is_empty() {
@@ -653,6 +716,84 @@ mod tests {
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert_eq!(restored.channels.len(), app.channels.len());
+    }
+
+    /// A waveform that does not survive a save comes back flat, which is the
+    /// kind of loss a project file exists to prevent.
+    #[test]
+    fn tx_value_sources_round_trip() {
+        let mut app = App::new();
+        app.set_source(
+            0,
+            ValueSrc {
+                period_us: 2_000_000,
+                phase_us: 250_000,
+                ..ValueSrc::new("EngineSpeed", SrcKind::Sine, 0.0, 8000.0)
+            },
+        );
+        app.set_source(
+            0,
+            ValueSrc {
+                seq: vec![1.0, 2.5, 4.0],
+                ..ValueSrc::new("GearPosition", SrcKind::Step, 0.0, 6.0)
+            },
+        );
+        app.set_source(
+            0,
+            ValueSrc {
+                seed: 99,
+                redraw_us: 5_000,
+                ..ValueSrc::new("ThrottlePos", SrcKind::Random, 0.0, 100.0)
+            },
+        );
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        assert!(json.contains(r#""srcs""#), "the key is written");
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.tx_list[0].srcs, app.tx_list[0].srcs);
+    }
+
+    /// v0.3 project files have no `srcs` key at all: they must load with
+    /// nothing driven, which is exactly how those generators behave today.
+    #[test]
+    fn legacy_tx_entry_without_srcs_stays_flat() {
+        let mut restored = App::new();
+        let legacy = r#"{"tx":[{"channel":0,"id":256,"active":true,"cycle_us":20000,
+                               "data_text":"01 02","data":[1,2]}]}"#;
+        serde_json::from_str::<Config>(legacy)
+            .unwrap()
+            .apply(&mut restored);
+        let tx = restored
+            .tx_list
+            .iter()
+            .find(|t| t.id == 0x100)
+            .expect("EngineStatus entry");
+        assert!(tx.srcs.is_empty(), "an absent key means no driven signal");
+        assert!(tx.active, "the rest of the entry still applied");
+        assert_eq!(tx.len, 2);
+    }
+
+    /// A source written by a newer build must vanish on its own rather than
+    /// come back as some other shape.
+    #[test]
+    fn an_unknown_kind_code_drops_only_that_source() {
+        let mut restored = App::new();
+        let json = r#"{"tx":[{"channel":0,"id":256,"srcs":[{"name":"EngineSpeed","kind":2,"lo":0.0,"hi":8000.0,"period_us":2000000},{"name":"GearPosition","kind":200}]}]}"#;
+        serde_json::from_str::<Config>(json)
+            .unwrap()
+            .apply(&mut restored);
+        let tx = restored
+            .tx_list
+            .iter()
+            .find(|t| t.id == 0x100)
+            .expect("EngineStatus entry");
+        assert_eq!(tx.srcs.len(), 1, "only the unreadable entry goes");
+        assert_eq!(tx.srcs[0].name, "EngineSpeed");
+        assert_eq!(tx.srcs[0].kind, SrcKind::Sine, "kind 2 is Sine");
+        assert_eq!(tx.srcs[0].period_us, 2_000_000);
     }
 
     #[test]

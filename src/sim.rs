@@ -41,6 +41,18 @@ impl SrcKind {
             SrcKind::Random => "Random",
         }
     }
+
+    /// Persisted code. Derived from [`KINDS`] so it stays equal to the index the
+    /// generator's combo shows.
+    pub fn to_u8(self) -> u8 {
+        KINDS.iter().position(|&k| k == self).unwrap_or(0) as u8
+    }
+
+    /// None for a code written by a newer version, so the caller drops the
+    /// source rather than inventing a shape for it.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        KINDS.get(v as usize).copied()
+    }
 }
 
 /// One driven signal. `name` is the DBC signal name; values are physical, so
@@ -257,6 +269,15 @@ mod tests {
         let s = src(SrcKind::Ramp, 0.0, 10.0, 0);
         assert_eq!(eval_phys(&s, 500_000), 5.0);
         assert_eq!(eval_phys(&s, 1_000_000), 0.0);
+    }
+
+    #[test]
+    fn kinds_round_trip_through_u8() {
+        for (i, &k) in KINDS.iter().enumerate() {
+            assert_eq!(u8::try_from(i).ok().and_then(SrcKind::from_u8), Some(k));
+            assert_eq!(usize::from(k.to_u8()), i, "the code is the combo index");
+        }
+        assert_eq!(SrcKind::from_u8(KINDS.len() as u8), None, "unknown code");
     }
 
     #[test]
