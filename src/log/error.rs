@@ -7,12 +7,9 @@ use std::fmt;
 pub enum LogError {
     Io(std::io::Error),
     /// Leading magic bytes did not match what the reader expected
-    /// (e.g. a `.blf` file whose header is not `BLF4`).
+    /// (e.g. a `.blf` file whose header is not `LOGG`).
     #[allow(dead_code)]
     BadSignature,
-    /// Container/object header advertised a version we cannot decode.
-    #[allow(dead_code)]
-    UnsupportedVersion(u32),
     /// File ended mid-record. Only reported for fixed-layout formats; the
     /// ASC reader treats a truncated tail as EOF.
     #[allow(dead_code)]
@@ -26,7 +23,6 @@ impl fmt::Display for LogError {
         match self {
             LogError::Io(e) => write!(f, "io: {e}"),
             LogError::BadSignature => write!(f, "bad signature"),
-            LogError::UnsupportedVersion(v) => write!(f, "unsupported version {v}"),
             LogError::Truncated => write!(f, "truncated"),
             LogError::UnsupportedFormat(s) => write!(f, "unsupported format: {s}"),
         }

@@ -1,11 +1,12 @@
-//! Vector "BLF4" reader. The layout matches python-can's `can/io/blf.py`
-//! field-for-field so a CANoe export opens without re-encoding, and any
-//! real-world drift shows up as `BadSignature`/`UnsupportedVersion`
-//! instead of garbage frames.
+//! Vector's binary CAN log format, as written by CANoe. Every offset here is
+//! python-can's `can/io/blf.py` struct field-for-field; that reader has parsed
+//! real Vector exports for years, so a CANoe file opens without re-encoding and
+//! anything genuinely unparseable shows up as `BadSignature` rather than as
+//! frames that look plausible and are wrong.
 //!
-//! File header is a fixed 144 B record; per-object headers come in v1
-//! (32 B) and v2 (40 B) sharing a 16 B base. Objects are grouped into
-//! containers, either raw or zlib-deflate.
+//! A file is a fixed header -- whose declared size says where the records
+//! start -- followed by containers of raw or zlib-deflate objects. Object
+//! headers come in v1 (32 B) and v2 (40 B) sharing a 16 B base.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -19,33 +20,72 @@ use crate::log::error::LogError;
 use crate::source::FrameStream;
 
 const FILE_HEADER_SIZE: usize = 144;
-const FILE_SIGNATURE: &[u8; 4] = b"BLF4";
+/// Vector's `LOGG_FileHeader` starts with the literal `LOGG`. Real files carry
+/// no "BLF4" string anywhere -- an earlier revision of this reader required it
+/// and so rejected every genuine export while happily accepting our own
+/// synthetic fixtures.
+const FILE_SIGNATURE: &[u8; 4] = b"LOGG";
 const OBJECT_SIGNATURE: &[u8; 4] = b"LOBJ";
+
+/// Byte offsets inside the file header, per Vector's
+/// `struct.Struct("<4sLBBBBBBBBQQLL8H8H")` (4s@0, L@4, 8*B@8, Q@16, Q@24,
+/// L@32, L@36, 8*H@40, 8*H@56).
+const HDR_OBJECT_COUNT: usize = 32;
+const HDR_START_TIME: usize = 40;
+const HDR_STOP_TIME: usize = 56;
+/// Declared length of the padded file header, at offset 4.
+const HDR_HEADER_SIZE: usize = 4;
+/// `FILE_HEADER_STRUCT` occupies 72 of the 144 bytes; the declared header size
+/// says where the first object starts.
+const FILE_HEADER_STRUCT_SIZE: usize = 72;
+/// Smallest record an LOBJ header can describe. Stepping by less than this
+/// would point the walk at the signature it just read.
+const MIN_OBJECT_SIZE: usize = 32;
 
 const METHOD_RAW: u16 = 0;
 const METHOD_ZLIB: u16 = 2;
 
 const OBJ_CAN_MESSAGE: u32 = 1;
+const OBJ_LOG_CONTAINER: u32 = 10;
 const OBJ_CAN_MESSAGE2: u32 = 86;
 const OBJ_CAN_FD_MESSAGE: u32 = 100;
 const OBJ_CAN_FD_MESSAGE_64: u32 = 101;
 const OBJ_CAN_ERROR_EXT: u32 = 73;
 
-/// Object-header flag bits steering the timestamp interpretation.
-const TS_TEN_MICRO: u16 = 0x0001;
-const TS_NANO: u16 = 0x0002;
+/// Object-header flag values steering the timestamp interpretation. Vector's
+/// reference reader treats `flags == 1` as 10 µs ticks and *anything else* as
+/// nanoseconds -- there is no "already microseconds" case.
+const TS_TEN_MICRO: u32 = 0x0000_0001;
 
-const CAN_FLAG_EXTENDED: u8 = 0x02;
-const CAN_FLAG_REMOTE: u8 = 0x04;
+/// Arbitration id bit 31 marks an extended frame; the id itself is the low 29
+/// bits.
+const CAN_ID_EXT: u32 = 0x8000_0000;
+const CAN_ID_MASK: u32 = 0x1FFF_FFFF;
+
+/// Message flags byte: bit 0 is direction (set = Tx), bit 7 is RTR.
 const CAN_DIR_TX: u8 = 0x01;
+const CAN_FLAG_REMOTE: u8 = 0x80;
 
+/// `CAN_FD_MESSAGE` (100) carries its FD bits in one byte.
 const FD_FLAG_EDL: u8 = 0x01;
 const FD_FLAG_BRS: u8 = 0x02;
 const FD_FLAG_ESI: u8 = 0x04;
 
+/// `CAN_FD_MESSAGE_64` (101) is a different dialect again: the FD bits live in
+/// a u32 at bit 12 and up, RTR is bit 4, and direction is a separate field.
+const FD64_RTR: u32 = 0x0010;
+const FD64_EDL: u32 = 0x1000;
+const FD64_BRS: u32 = 0x2000;
+const FD64_ESI: u32 = 0x4000;
+
+/// Size of the `CAN_FD_MESSAGE_64` fixed record; the payload follows it.
+const FD64_STRUCT_SIZE: usize = 40;
+
 pub struct BlfStream {
     data: Backing,
     pos: usize,
+    /// Offset just past the file header, as declared by the header itself.
+    objects_at: usize,
     duration: Option<u64>,
     describe: String,
     pending: VecDeque<CanFrame>,
@@ -78,7 +118,8 @@ impl BlfStream {
     }
 
     fn build(data: Backing, name_hint: Option<String>) -> Result<Self, LogError> {
-        let (duration, count) = read_file_header(data.as_slice())?;
+        let header = read_file_header(data.as_slice())?;
+        let (duration, count) = (header.duration, header.count);
         let kind = data.kind();
         let describe = {
             let head = match duration {
@@ -92,7 +133,8 @@ impl BlfStream {
         };
         Ok(BlfStream {
             data,
-            pos: FILE_HEADER_SIZE,
+            pos: header.objects_at,
+            objects_at: header.objects_at,
             duration,
             describe,
             pending: VecDeque::new(),
@@ -106,11 +148,14 @@ impl BlfStream {
     /// EOF or when the trailing bytes cannot form another valid header.
     fn enter_next_container(&mut self) -> bool {
         let bytes = self.data.as_slice();
-        if self.pos >= bytes.len() {
-            return false;
-        }
-        let container_start = self.pos;
-        let hdr = match parse_object_header(&bytes[self.pos..]) {
+        let container_start = match next_object(bytes, self.pos) {
+            Some(at) => at,
+            None => {
+                self.pos = bytes.len();
+                return false;
+            }
+        };
+        let hdr = match parse_object_header(&bytes[container_start..]) {
             Ok(h) => h,
             Err(_) => {
                 self.pos = bytes.len();
@@ -119,24 +164,27 @@ impl BlfStream {
         };
         let header_len = hdr.header_size as usize;
         let object_total = hdr.object_size as usize;
-        if object_total < header_len || self.pos + object_total > bytes.len() {
+        let body_end = container_start + object_total;
+        if !(MIN_OBJECT_SIZE..).contains(&object_total)
+            || object_total < header_len
+            || body_end > bytes.len()
+        {
             self.pos = bytes.len();
             return false;
         }
-        let body_start = self.pos + header_len;
-        let body_end = self.pos + object_total;
+        let body_start = container_start + header_len;
         self.pos = body_end;
-        if body_end - body_start < 16 {
-            return true; // empty or malformed container: skip
+        if hdr.object_type != OBJ_LOG_CONTAINER || body_end - body_start < 16 {
+            return true; // not a container, or an empty one: step over it
         }
         let body = &bytes[body_start..body_end];
+        // `LOG_CONTAINER_STRUCT = <H6xL4x`: method at 0, uncompressed size at 8,
+        // payload from 16. The stored length is not a field -- it is whatever
+        // remains of the object, so reading a "compressed" u32 at offset 8
+        // mistook the uncompressed size for it.
         let method = u16_at(body, 0);
-        let uncompressed = u32_at(body, 4) as usize;
-        let compressed = u32_at(body, 8) as usize;
+        let uncompressed = u32_at(body, 8) as usize;
         let payload = body.get(16..).unwrap_or(&[]);
-        let payload = payload
-            .get(..compressed.min(payload.len()))
-            .unwrap_or(payload);
         let decoded: Vec<u8> = match method {
             METHOD_RAW => payload.to_vec(),
             METHOD_ZLIB => {
@@ -213,7 +261,7 @@ impl FrameStream for BlfStream {
 
     fn seek_to_us(&mut self, target: u64) -> Option<u64> {
         match self.checkpoints.partition_point(|(t, _)| *t <= target) {
-            0 => self.pos = FILE_HEADER_SIZE,
+            0 => self.pos = self.objects_at,
             k => self.pos = self.checkpoints[k - 1].1,
         }
         // Queue state is pure; `t_base` deliberately survives so a scrub does
@@ -248,98 +296,95 @@ impl FrameStream for BlfStream {
 
 struct ObjectHeader {
     header_size: u16,
+    header_version: u8,
     object_size: u32,
-    /// Little-endian u32 that python-can reads at base+16 in both v1 and
-    /// v2 dialects; carries the CAN object type (1, 86, 100, 101, 73, ...).
     object_type: u32,
     timestamp: u64,
-    flags: u16,
+    flags: u32,
 }
 
+/// `OBJ_HEADER_BASE_STRUCT = <4sHHLL` followed by `<LHHQ` (v1) or `<LBxHQ8x`
+/// (v2). Both dialects agree where the fields we need live -- object type at 12,
+/// header flags at 16, timestamp at 24 -- and only the total header length
+/// differs, which `header_size` states outright.
+///
+/// An unknown `header_version` is *not* an error here: Vector's reader skips
+/// such objects rather than abandoning the file, and a container's layout never
+/// depends on the version.
 fn parse_object_header(bytes: &[u8]) -> Result<ObjectHeader, LogError> {
-    if bytes.len() < 16 {
+    if bytes.len() < 32 {
         return Err(LogError::Truncated);
     }
     if &bytes[0..4] != OBJECT_SIGNATURE {
         return Err(LogError::BadSignature);
     }
-    let header_size = u16_at(bytes, 4);
-    let header_version = bytes[6];
-    let object_size = u32_at(bytes, 8);
-    let object_type = u32_at(bytes, 16);
-    let (timestamp, flags) = match header_version {
-        1 => {
-            if bytes.len() < 32 {
-                return Err(LogError::Truncated);
-            }
-            // python-can: tail = <L HH Q. The leading u32 duplicates
-            // `object_type` in our layout; the timestamp is split across
-            // low 32 + high 16, and flags sit at 22..24.
-            let low = u32_at(bytes, 20) as u64;
-            let high = u16_at(bytes, 24) as u64;
-            let flags = u16_at(bytes, 26);
-            ((high << 32) | low, flags)
-        }
-        2 => {
-            if bytes.len() < 40 {
-                return Err(LogError::Truncated);
-            }
-            let flags = bytes[20] as u16;
-            let ts = u64::from_le_bytes([
-                bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30],
-                bytes[31],
-            ]);
-            (ts, flags)
-        }
-        other => return Err(LogError::UnsupportedVersion(other as u32)),
-    };
     Ok(ObjectHeader {
-        header_size,
-        object_size,
-        object_type,
-        timestamp,
-        flags,
+        header_size: u16_at(bytes, 4),
+        header_version: bytes[6],
+        object_size: u32_at(bytes, 8),
+        object_type: u32_at(bytes, 12),
+        flags: u32_at(bytes, 16),
+        timestamp: u64_at(bytes, 24),
     })
 }
 
-fn object_time(raw: u64, flags: u16) -> u64 {
-    if flags & TS_TEN_MICRO != 0 {
+/// Vector's reference reader treats `flags == 1` as 10 µs ticks and **any other
+/// value** as nanoseconds -- there is no "already microseconds" case, so
+/// assuming one inflates every stamp by a factor of 1000.
+fn object_time(raw: u64, flags: u32) -> u64 {
+    if flags == TS_TEN_MICRO {
         raw.saturating_mul(10)
-    } else if flags & TS_NANO != 0 {
-        raw / 1_000
     } else {
-        raw
+        raw / 1_000
     }
+}
+
+/// Locate the next object. Vector pads records so `object_size` alone does not
+/// always land on the following signature, and python-can's reader likewise
+/// searches for the next `LOBJ` within the first eight bytes.
+fn next_object(bytes: &[u8], from: usize) -> Option<usize> {
+    let rest = bytes.get(from..)?;
+    let offset = rest[..rest.len().min(8)]
+        .windows(4)
+        .position(|w| w == OBJECT_SIGNATURE)?;
+    Some(from + offset)
 }
 
 /// Decode every recognised object inside one container. Objects with
 /// unknown types are stepped over using `object_size`, so CANoe files
 /// that mix CAN with LIN/Ethernet still yield their CAN traffic.
 fn parse_container_objects(bytes: &[u8], out: &mut VecDeque<CanFrame>) {
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        let Ok(h) = parse_object_header(&bytes[pos..]) else {
-            break;
-        };
+    let mut pos = match next_object(bytes, 0) {
+        Some(at) => at,
+        None => return,
+    };
+    while let Ok(h) = parse_object_header(&bytes[pos..]) {
         let size = h.object_size as usize;
         let header_len = h.header_size as usize;
-        if size < header_len || pos + size > bytes.len() {
+        let next = pos + size;
+        if !(MIN_OBJECT_SIZE..).contains(&size) || size < header_len || next > bytes.len() {
             break;
         }
-        let body = &bytes[pos + header_len..pos + size];
-        let t_us = object_time(h.timestamp, h.flags);
-        let decoded = match h.object_type {
-            OBJ_CAN_MESSAGE => decode_can_message(body, t_us),
-            OBJ_CAN_MESSAGE2 => decode_can_message2(body, t_us),
-            OBJ_CAN_FD_MESSAGE => decode_fd_message(body, t_us),
-            OBJ_CAN_FD_MESSAGE_64 => decode_fd_message_64(body, t_us),
-            OBJ_CAN_ERROR_EXT => Some(decode_error_ext(body, t_us)),
-            _ => None,
-        };
-        if let Some(f) = decoded {
-            out.push_back(f);
+        // Only versions 1 and 2 have a known timestamp field; anything else is
+        // stepped over whole rather than decoded from guessed offsets.
+        if matches!(h.header_version, 1 | 2) {
+            let body = &bytes[pos + header_len..next];
+            let t_us = object_time(h.timestamp, h.flags);
+            let decoded = match h.object_type {
+                OBJ_CAN_MESSAGE | OBJ_CAN_MESSAGE2 => decode_can_msg(body, t_us),
+                OBJ_CAN_FD_MESSAGE => decode_fd_message(body, t_us),
+                OBJ_CAN_FD_MESSAGE_64 => decode_fd_message_64(body, t_us, header_len, size),
+                OBJ_CAN_ERROR_EXT => Some(decode_error_ext(body, t_us)),
+                _ => None,
+            };
+            if let Some(f) = decoded {
+                out.push_back(f);
+            }
         }
-        pos += size;
+        pos = match next_object(bytes, next) {
+            Some(at) => at,
+            None => break,
+        };
     }
 }
 
@@ -351,186 +396,195 @@ fn u32_at(b: &[u8], at: usize) -> u32 {
 fn u16_at(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
 }
+#[inline]
+fn u64_at(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes([
+        b[at],
+        b[at + 1],
+        b[at + 2],
+        b[at + 3],
+        b[at + 4],
+        b[at + 5],
+        b[at + 6],
+        b[at + 7],
+    ])
+}
 
-/// CAN_MESSAGE (type 1) — 16-byte body: channel, dlc, variant, _pad,
-/// u32 id, [u8; 8].
-fn decode_can_message(body: &[u8], t_us: u64) -> Option<CanFrame> {
+/// `CAN_MSG_STRUCT = <HBBL8s`, shared by CAN_MESSAGE (1) and CAN_MESSAGE2 (86):
+/// u16 1-based channel, flags byte (bit 0 = direction, bit 7 = RTR), dlc byte,
+/// u32 arbitration id (bit 31 = extended), then eight data bytes.
+fn decode_can_msg(body: &[u8], t_us: u64) -> Option<CanFrame> {
     if body.len() < 16 {
         return None;
     }
-    let channel = body[0];
-    let dlc = body[1] & 0x0F;
-    let var = body[2]; // 0=std, 1=ext, 2=rtr, 3=rtr_ext (bit 7 = direction)
+    let channel = u16_at(body, 0);
+    let msg_flags = body[2];
+    let dlc = body[3];
     let raw_id = u32_at(body, 4);
-    let extended = (var & 0x01) != 0 || (raw_id & 0x8000_0000) != 0;
-    let remote = (var & 0x02) != 0;
-    let dir = if var & 0x80 != 0 {
-        Direction::Tx
+    let remote = msg_flags & CAN_FLAG_REMOTE != 0;
+    // Vector stores a plain byte count here and slices the eight-byte field
+    // with it, so a non-canonical value clamps to eight rather than going
+    // through the FD ladder. One Vector unittest file carries dlc 0x33.
+    let len = if remote {
+        dlc2len(dlc & 0x0F)
     } else {
-        Direction::Rx
+        (dlc as usize).min(8) as u8
     };
-    let len = dlc2len(dlc).min(8);
     let mut data = [0u8; MAX_CAN_FD_LEN];
-    data[..len as usize].copy_from_slice(&body[8..8 + len as usize]);
+    if !remote {
+        data[..len as usize].copy_from_slice(&body[8..8 + len as usize]);
+    }
     let mut flags = FrameFlags::NONE;
     if remote {
         flags = flags.union(FrameFlags::RTR);
     }
     Some(CanFrame {
         t_us,
-        channel,
-        id: raw_id & 0x7FFF_FFFF,
-        extended,
+        channel: channel.saturating_sub(1) as u8,
+        id: raw_id & CAN_ID_MASK,
+        extended: raw_id & CAN_ID_EXT != 0,
         len,
         data,
-        dir,
+        dir: if msg_flags & CAN_DIR_TX != 0 {
+            Direction::Tx
+        } else {
+            Direction::Rx
+        },
         flags,
     })
 }
 
-/// CAN_MESSAGE2 (type 86). Same 16-byte body layout as CAN_MESSAGE with
-/// an explicit direction byte and a flags byte carrying EXT/RTR bits.
-fn decode_can_message2(body: &[u8], t_us: u64) -> Option<CanFrame> {
-    if body.len() < 16 {
-        return None;
-    }
-    let channel = body[0];
-    let dlc = body[1] & 0x0F;
-    let dir = if body[2] & CAN_DIR_TX != 0 {
-        Direction::Tx
-    } else {
-        Direction::Rx
-    };
-    let f = body[3];
-    let raw_id = u32_at(body, 4);
-    let extended = (f & CAN_FLAG_EXTENDED) != 0 || (raw_id & 0x8000_0000) != 0;
-    let remote = (f & CAN_FLAG_REMOTE) != 0;
-    let len = dlc2len(dlc).min(8);
-    let mut data = [0u8; MAX_CAN_FD_LEN];
-    data[..len as usize].copy_from_slice(&body[8..8 + len as usize]);
-    let mut flags = FrameFlags::NONE;
-    if remote {
-        flags = flags.union(FrameFlags::RTR);
-    }
-    Some(CanFrame {
-        t_us,
-        channel,
-        id: raw_id & 0x7FFF_FFFF,
-        extended,
-        len,
-        data,
-        dir,
-        flags,
-    })
-}
-
-/// CAN_FD_MESSAGE (type 100). Body offsets:
-///   [0] ch, [1] dlc, [2] valid_bytes, [3] dir, [4] flags, [5..8] rsv,
-///   [8..12] u32 id, [12..76] u8 data[64].
+/// `CAN_FD_MSG_STRUCT = <HBBLLBBB5x64s`: u16 1-based channel, flags byte (bit 0
+/// direction, bit 7 RTR), dlc byte, u32 id, u32 frame length, bit count at 12,
+/// FD flags at 13 (EDL 0x1 / BRS 0x2 / ESI 0x4), valid byte count at 14, then 64
+/// data bytes from offset 20.
 fn decode_fd_message(body: &[u8], t_us: u64) -> Option<CanFrame> {
-    if body.len() < 76 {
+    if body.len() < 20 {
         return None;
     }
-    let channel = body[0];
-    let dlc = body[1] & 0x0F;
-    let valid = body[2];
-    let dir = if body[3] & CAN_DIR_TX != 0 {
-        Direction::Tx
-    } else {
-        Direction::Rx
-    };
-    let f = body[4];
-    let raw_id = u32_at(body, 8);
-    let extended = (f & CAN_FLAG_EXTENDED) != 0 || (raw_id & 0x8000_0000) != 0;
-    let is_fd = (f & FD_FLAG_EDL) != 0;
-    let brs = (f & FD_FLAG_BRS) != 0;
-    let esi = (f & FD_FLAG_ESI) != 0;
-    let len = valid.min(dlc2len(dlc)).min(MAX_CAN_FD_LEN as u8);
+    let channel = u16_at(body, 0);
+    let msg_flags = body[2];
+    let dlc = body[3];
+    let raw_id = u32_at(body, 4);
+    let fd_flags = body[13];
+    let valid = body[14];
+    let len = valid.min(MAX_CAN_FD_LEN as u8);
     let mut data = [0u8; MAX_CAN_FD_LEN];
-    data[..len as usize].copy_from_slice(&body[12..12 + len as usize]);
+    let avail = body.len().saturating_sub(20);
+    let copied = len as usize;
+    if copied <= avail {
+        data[..copied].copy_from_slice(&body[20..20 + copied]);
+    }
     let mut flags = FrameFlags::NONE;
-    if is_fd {
+    if fd_flags & FD_FLAG_EDL != 0 {
         flags = flags.union(FrameFlags::FD);
     }
-    if brs {
+    if fd_flags & FD_FLAG_BRS != 0 {
         flags = flags.union(FrameFlags::BRS);
     }
-    if esi {
+    if fd_flags & FD_FLAG_ESI != 0 {
         flags = flags.union(FrameFlags::ESI);
+    }
+    if msg_flags & CAN_FLAG_REMOTE != 0 {
+        flags = flags.union(FrameFlags::RTR);
     }
     Some(CanFrame {
         t_us,
-        channel,
-        id: raw_id & 0x7FFF_FFFF,
-        extended,
-        len,
+        channel: channel.saturating_sub(1) as u8,
+        id: raw_id & CAN_ID_MASK,
+        extended: raw_id & CAN_ID_EXT != 0,
+        len: dlc2len(dlc).min(len.max(1)),
         data,
-        dir,
+        dir: if msg_flags & CAN_DIR_TX != 0 {
+            Direction::Tx
+        } else {
+            Direction::Rx
+        },
         flags,
     })
 }
 
-/// CAN_FD_MESSAGE_64 (type 101). The payload can sit at a variable
-/// `extDataOffset` inside the record (Vector moves it when extra metadata
-/// is present); if the offset is missing or beyond the body we keep the
-/// declared length and leave data zeroed, matching the "warn once, do not
-/// crash" policy in the plan §9.
-fn decode_fd_message_64(body: &[u8], t_us: u64) -> Option<CanFrame> {
-    if body.len() < 24 {
+/// `CAN_FD_MSG_64_STRUCT = <BBBBLLLLLLLHBBL` (40 bytes, payload follows):
+/// u8 1-based channel, dlc, valid byte count, tx count, u32 id, frame length,
+/// **u32** FD flags (EDL 0x1000 / BRS 0x2000 / ESI 0x4000 / RTR 0x0010 -- a
+/// different dialect from `CAN_FD_MESSAGE`), bit rates and offsets, a direction
+/// byte at 34 and an `extDataOffset` byte at 35.
+fn decode_fd_message_64(
+    body: &[u8],
+    t_us: u64,
+    header_size: usize,
+    object_size: usize,
+) -> Option<CanFrame> {
+    if body.len() < FD64_STRUCT_SIZE {
         return None;
     }
     let channel = body[0];
-    let dlc = body[1] & 0x0F;
     let valid = body[2];
-    let ext_off = body[3] as usize;
-    let f = body[4];
-    let dir = if body[5] & CAN_DIR_TX != 0 {
-        Direction::Tx
-    } else {
-        Direction::Rx
-    };
-    let raw_id = u32_at(body, 8);
-    let extended = (f & CAN_FLAG_EXTENDED) != 0 || (raw_id & 0x8000_0000) != 0;
-    let is_fd = (f & FD_FLAG_EDL) != 0;
-    let brs = (f & FD_FLAG_BRS) != 0;
-    let esi = (f & FD_FLAG_ESI) != 0;
-    let len = valid.min(dlc2len(dlc)).min(MAX_CAN_FD_LEN as u8);
+    let raw_id = u32_at(body, 4);
+    let fd_flags = u32_at(body, 12);
+    let direction = body[34];
+    let ext_data_offset = body[35] as usize;
     let mut data = [0u8; MAX_CAN_FD_LEN];
-    let start = if ext_off == 0 { 20 } else { ext_off };
-    if start + len as usize <= body.len() {
-        data[..len as usize].copy_from_slice(&body[start..start + len as usize]);
-    }
+    // `valid_bytes` can exceed what the record actually carries -- Vector's
+    // issue 1905 file declares 64 and stores 48. The data field stops at
+    // `extDataOffset` when it is set and at the end of the object otherwise,
+    // and CANoe shows the shortfall as zero padding.
+    let field_end = if ext_data_offset > 0 {
+        ext_data_offset
+    } else {
+        object_size
+    };
+    let limit = field_end
+        .saturating_sub(header_size)
+        .saturating_sub(FD64_STRUCT_SIZE)
+        .min(body.len() - FD64_STRUCT_SIZE);
+    let copied = (valid as usize).min(limit).min(MAX_CAN_FD_LEN);
+    data[..copied].copy_from_slice(&body[FD64_STRUCT_SIZE..FD64_STRUCT_SIZE + copied]);
     let mut flags = FrameFlags::NONE;
-    if is_fd {
+    if fd_flags & FD64_EDL != 0 {
         flags = flags.union(FrameFlags::FD);
     }
-    if brs {
+    if fd_flags & FD64_BRS != 0 {
         flags = flags.union(FrameFlags::BRS);
     }
-    if esi {
+    if fd_flags & FD64_ESI != 0 {
         flags = flags.union(FrameFlags::ESI);
+    }
+    if fd_flags & FD64_RTR != 0 {
+        flags = flags.union(FrameFlags::RTR);
     }
     Some(CanFrame {
         t_us,
-        channel,
-        id: raw_id & 0x7FFF_FFFF,
-        extended,
-        len,
+        channel: channel.saturating_sub(1),
+        id: raw_id & CAN_ID_MASK,
+        extended: raw_id & CAN_ID_EXT != 0,
+        len: (valid as usize).min(MAX_CAN_FD_LEN) as u8,
         data,
-        dir,
+        dir: if direction != 0 {
+            Direction::Tx
+        } else {
+            Direction::Rx
+        },
         flags,
     })
 }
 
-/// CAN_ERROR_EXT (type 73). Error frames have no identifier on the wire;
-/// normalize to id 0 so downstream aggregation stays well-defined.
+/// `CAN_ERROR_EXT_STRUCT = <HHLBBBxLLH2x8s`: u16 1-based channel at 0, dlc byte
+/// at 10, u32 arbitration id at 16, payload at 24. Error frames have no
+/// identifier on the wire, so the id is normalised to zero and the payload
+/// dropped -- see the aggregation contract on `FrameFlags::ERROR`.
 fn decode_error_ext(body: &[u8], t_us: u64) -> CanFrame {
-    let channel = if body.is_empty() { 0 } else { body[0] };
+    let channel = if body.len() >= 2 {
+        u16_at(body, 0).saturating_sub(1) as u8
+    } else {
+        0
+    };
+    let extended = body.len() >= 20 && u32_at(body, 16) & CAN_ID_EXT != 0;
     CanFrame {
         t_us,
         channel,
         id: 0,
-        extended: false,
+        extended,
         len: 0,
         data: [0u8; MAX_CAN_FD_LEN],
         dir: Direction::Rx,
@@ -540,21 +594,38 @@ fn decode_error_ext(body: &[u8], t_us: u64) -> CanFrame {
 
 /// Validates the file signature and reads `object_count_total` plus the
 /// start/stop SYSTEMTIMEs. Missing stop stamps give `duration = None`.
-fn read_file_header(bytes: &[u8]) -> Result<(Option<u64>, u32), LogError> {
+fn read_file_header(bytes: &[u8]) -> Result<FileHeader, LogError> {
     if bytes.len() < FILE_HEADER_SIZE {
         return Err(LogError::Truncated);
     }
     if &bytes[0..4] != FILE_SIGNATURE {
         return Err(LogError::BadSignature);
     }
-    let count = u32_at(bytes, 12);
-    let start = system_time_us(bytes, 24);
-    let stop = system_time_us(bytes, 40);
+    let count = u32_at(bytes, HDR_OBJECT_COUNT);
+    let start = system_time_us(bytes, HDR_START_TIME);
+    let stop = system_time_us(bytes, HDR_STOP_TIME);
     let duration = match (start, stop) {
         (Some(a), Some(b)) if b > a => Some(b - a),
         _ => None,
     };
-    Ok((duration, count))
+    // The declared size is the only thing that says how the header was padded.
+    let declared = u32_at(bytes, HDR_HEADER_SIZE) as usize;
+    let objects_at = if (FILE_HEADER_STRUCT_SIZE..bytes.len()).contains(&declared) {
+        declared
+    } else {
+        FILE_HEADER_SIZE
+    };
+    Ok(FileHeader {
+        duration,
+        count,
+        objects_at,
+    })
+}
+
+struct FileHeader {
+    duration: Option<u64>,
+    count: u32,
+    objects_at: usize,
 }
 
 /// Vector SYSTEMTIME: 8 consecutive u16 fields
@@ -587,75 +658,94 @@ fn system_time_us(b: &[u8], at: usize) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::log::vec_stream::VecStream;
     use std::io::Write;
 
+    /// A one-frame log built by the encoders below, for tests elsewhere in the
+    /// crate that only need bytes the reader accepts.
+    pub(crate) fn minimal_file() -> Vec<u8> {
+        let body = can_body(0, 1, 0, 0x100, &[0xAB]);
+        assemble(&obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &body))
+    }
+
+    /// Vector's `TIME_ONE_NANS`. The reader never names it -- nanoseconds are
+    /// the default branch -- so only the tests need the value.
+    const TS_ONE_NANO: u32 = 2;
+
     // Test-only encoders that mirror the decoder field-for-field. Keeping
-    // them in the same file means a reader change is caught the moment
-    // it stops matching the writer.
-    fn obj_header_v1(object_type: u32, ts_raw: u64, flags: u16, body: &[u8]) -> Vec<u8> {
-        let total = (16 + 16 + body.len()) as u32; // base + v1 tail + body
-        let mut v = Vec::with_capacity(total as usize);
+    // them in the same file means a reader change is caught the moment it
+    // stops matching the writer; the offsets below are taken from Vector's own
+    // struct definitions so both sides agree with the format, not just each
+    // other.
+    /// A `flags == 0` stamp is nanoseconds, so express test timestamps in the
+    /// microseconds the reader is asserted against.
+    fn ns(micros: u64) -> u64 {
+        micros * 1_000
+    }
+
+    /// `OBJ_HEADER_BASE_STRUCT = <4sHHLL` (signature, header size, header
+    /// version, object size, object type) followed by the `OBJ_HEADER_V1_STRUCT
+    /// = <LHHQ` or `OBJ_HEADER_V2_STRUCT = <LBxHQ8x` tail. Both tails put flags
+    /// at 16 and the timestamp at 24, so only the header length differs.
+    fn obj_header(version: u8, object_type: u32, ts_raw: u64, flags: u32, body: &[u8]) -> Vec<u8> {
+        let header_size: u16 = if version == 1 { 32 } else { 40 };
+        let total = usize::from(header_size) + body.len();
+        let mut v = Vec::with_capacity(total);
         v.extend_from_slice(b"LOBJ");
-        v.extend_from_slice(&32u16.to_le_bytes()); // header_size
-        v.push(1); // header_version
-        v.push(0); // object_version
-        v.extend_from_slice(&total.to_le_bytes());
-        v.extend_from_slice(&0u32.to_le_bytes()); // unused
-        // v1 tail (16 B) starting at offset 16:
-        v.extend_from_slice(&object_type.to_le_bytes()); // 16..20 type
-        v.extend_from_slice(&(ts_raw as u32).to_le_bytes()); // 20..24 ts_low
-        v.extend_from_slice(&((ts_raw >> 32) as u16).to_le_bytes()); // 24..26 ts_high
-        v.extend_from_slice(&flags.to_le_bytes()); // 26..28 flags
-        v.extend_from_slice(&[0u8; 4]); // 28..32 pad to 32 B
+        v.extend_from_slice(&header_size.to_le_bytes()); // 4..6
+        v.push(version); // 6
+        v.push(0); // 7 object version
+        v.extend_from_slice(&(total as u32).to_le_bytes()); // 8..12
+        v.extend_from_slice(&object_type.to_le_bytes()); // 12..16
+        v.extend_from_slice(&flags.to_le_bytes()); // 16..20
+        if version == 1 {
+            v.extend_from_slice(&0u16.to_le_bytes()); // 20..22 client index
+        } else {
+            v.push(0); // 20 timestamp status
+            v.push(0); // 21 pad
+        }
+        v.extend_from_slice(&0u16.to_le_bytes()); // 22..24 object version
+        v.extend_from_slice(&ts_raw.to_le_bytes()); // 24..32
+        if version == 2 {
+            v.extend_from_slice(&[0u8; 8]); // 32..40 original timestamp
+        }
         v.extend_from_slice(body);
         v
     }
 
-    fn obj_header_v2(object_type: u32, ts_raw: u64, flags: u8, body: &[u8]) -> Vec<u8> {
-        let total = (16 + 24 + body.len()) as u32;
-        let mut v = Vec::with_capacity(total as usize);
-        v.extend_from_slice(b"LOBJ");
-        v.extend_from_slice(&40u16.to_le_bytes());
-        v.push(2);
-        v.push(0);
-        v.extend_from_slice(&total.to_le_bytes());
-        v.extend_from_slice(&0u32.to_le_bytes());
-        v.extend_from_slice(&object_type.to_le_bytes()); // 16..20 type
-        v.push(flags); // 20
-        v.extend_from_slice(&[0u8; 3]); // 21..24 pad
-        v.extend_from_slice(&ts_raw.to_le_bytes()); // 24..32 ts
-        v.extend_from_slice(&[0u8; 8]); // 32..40 pad
-        v.extend_from_slice(body);
-        v
+    fn obj_header_v1(object_type: u32, ts_raw: u64, flags: u32, body: &[u8]) -> Vec<u8> {
+        obj_header(1, object_type, ts_raw, flags, body)
     }
 
+    fn obj_header_v2(object_type: u32, ts_raw: u64, flags: u32, body: &[u8]) -> Vec<u8> {
+        obj_header(2, object_type, ts_raw, flags, body)
+    }
+
+    /// A `LOG_CONTAINER` object: the 16 B base header is followed straight by
+    /// `LOG_CONTAINER_STRUCT = <H6xL4x` (method u16 at 0, uncompressed u32 at
+    /// 8), which occupies the bytes a message header's tail would use -- hence
+    /// `header_size = 16`. There is no compressed-length field; the payload
+    /// runs to the end of the object.
     fn wrap_container(objects: &[u8], method: u16, encoder: fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
         let (uncompressed, payload) = if method == METHOD_ZLIB {
             (objects.len(), encoder(objects))
         } else {
             (objects.len(), objects.to_vec())
         };
-        // LOG_CONTAINER header = 16 B (method u16, version u16, uncompressed u32,
-        // compressed u32, pad u32), placed inside an LOBJ v1 header whose tail
-        // doubles as this 16 B block. Object type is 0 (unclassified container).
-        let container_body_len = 16 + payload.len();
-        let total = (16u32 + container_body_len as u32) as usize;
+        let total = 16 + 16 + payload.len();
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(b"LOBJ");
-        out.extend_from_slice(&16u16.to_le_bytes()); // header_size = base 16 only (tail lives in body)
-        out.push(1); // header_version (v1: 32-byte header — but our container treats "body" as LOG_CONTAINER_STRUCT)
+        out.extend_from_slice(&16u16.to_le_bytes()); // header_size
+        out.push(1); // header_version
         out.push(0); // object_version
         out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
-        // 16 B base ends here; body starts at offset 16 = LOG_CONTAINER_STRUCT
-        out.extend_from_slice(&method.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&(uncompressed as u32).to_le_bytes());
-        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes()); // pad
+        out.extend_from_slice(&OBJ_LOG_CONTAINER.to_le_bytes()); // 12..16 type
+        out.extend_from_slice(&method.to_le_bytes()); // 16..18
+        out.extend_from_slice(&[0u8; 6]); // 18..24
+        out.extend_from_slice(&(uncompressed as u32).to_le_bytes()); // 24..28
+        out.extend_from_slice(&[0u8; 4]); // 28..32
         out.extend_from_slice(&payload);
         out
     }
@@ -676,31 +766,39 @@ mod tests {
 
     type SystemTimeTuple = (u16, u16, u16, u16, u16, u16, u16, u16);
 
+    fn put_time(v: &mut [u8], at: usize, t: SystemTimeTuple) {
+        for (i, field) in [t.0, t.1, t.2, t.3, t.4, t.5, t.6, t.7].iter().enumerate() {
+            v[at + i * 2..at + i * 2 + 2].copy_from_slice(&field.to_le_bytes());
+        }
+    }
+
+    /// Mirrors `LOGG_FileHeader`: "LOGG" at 0, header size at 4, object count at
+    /// 32, start SYSTEMTIME at 40, stop at 56. An earlier revision wrote "BLF4"
+    /// and the wrong offsets, so the whole suite stayed green against a reader
+    /// that could not open a single real file.
     fn file_header(start: Option<SystemTimeTuple>, stop: Option<SystemTimeTuple>) -> Vec<u8> {
         let mut v = vec![0u8; FILE_HEADER_SIZE];
-        v[0..4].copy_from_slice(b"BLF4");
-        v[4..8].copy_from_slice(&4u32.to_le_bytes()); // version
-        v[8..12].copy_from_slice(&(FILE_HEADER_SIZE as u32).to_le_bytes()); // file_size (unused)
-        if let Some((y, mo, dow, d, h, mi, s, ms)) = start {
-            v[24..26].copy_from_slice(&y.to_le_bytes());
-            v[26..28].copy_from_slice(&mo.to_le_bytes());
-            v[28..30].copy_from_slice(&dow.to_le_bytes());
-            v[30..32].copy_from_slice(&d.to_le_bytes());
-            v[32..34].copy_from_slice(&h.to_le_bytes());
-            v[34..36].copy_from_slice(&mi.to_le_bytes());
-            v[36..38].copy_from_slice(&s.to_le_bytes());
-            v[38..40].copy_from_slice(&ms.to_le_bytes());
+        v[0..4].copy_from_slice(b"LOGG");
+        v[4..8].copy_from_slice(&(FILE_HEADER_SIZE as u32).to_le_bytes());
+        if let Some(t) = start {
+            put_time(&mut v, HDR_START_TIME, t);
         }
-        if let Some((y, mo, dow, d, h, mi, s, ms)) = stop {
-            v[40..42].copy_from_slice(&y.to_le_bytes());
-            v[42..44].copy_from_slice(&mo.to_le_bytes());
-            v[44..46].copy_from_slice(&dow.to_le_bytes());
-            v[46..48].copy_from_slice(&d.to_le_bytes());
-            v[48..50].copy_from_slice(&h.to_le_bytes());
-            v[50..52].copy_from_slice(&mi.to_le_bytes());
-            v[52..54].copy_from_slice(&s.to_le_bytes());
-            v[54..56].copy_from_slice(&ms.to_le_bytes());
+        if let Some(t) = stop {
+            put_time(&mut v, HDR_STOP_TIME, t);
         }
+        v
+    }
+
+    /// The standard 144-byte header widened by `extra`, with the declared
+    /// header size at offset 4 following suit.
+    fn padded_file_header(extra: &[u8]) -> Vec<u8> {
+        let mut v = file_header(
+            Some((2024, 1, 1, 1, 0, 0, 0, 0)),
+            Some((2024, 1, 1, 1, 0, 0, 5, 0)),
+        );
+        let declared = (v.len() + extra.len()) as u32;
+        v[4..8].copy_from_slice(&declared.to_le_bytes());
+        v.extend_from_slice(extra);
         v
     }
 
@@ -713,18 +811,24 @@ mod tests {
         v
     }
 
-    fn can_body(channel: u8, dlc: u8, variant: u8, id: u32, data: &[u8]) -> Vec<u8> {
+    /// `CAN_MSG_STRUCT = <HBBL8s`, shared by CAN_MESSAGE (1) and CAN_MESSAGE2
+    /// (86). Vector stores the channel one-based, so `channel0` is written as
+    /// `channel0 + 1` and a reader that forgets to subtract fails.
+    fn can_body(channel0: u8, dlc: u8, flags: u8, id: u32, data: &[u8]) -> Vec<u8> {
         let mut b = vec![0u8; 16];
-        b[0] = channel;
-        b[1] = dlc & 0x0F;
-        b[2] = variant;
+        b[0..2].copy_from_slice(&(u16::from(channel0) + 1).to_le_bytes());
+        b[2] = flags;
+        b[3] = dlc;
         b[4..8].copy_from_slice(&id.to_le_bytes());
-        b[8..8 + data.len().min(8)].copy_from_slice(&data[..data.len().min(8)]);
+        let n = data.len().min(8);
+        b[8..8 + n].copy_from_slice(&data[..n]);
         b
     }
 
+    /// `CAN_FD_MSG_STRUCT = <HBBLLBBB5x64s`: frame length at 8, bit count at 12,
+    /// FD flags at 13, valid byte count at 14, payload at 20.
     fn fd_body(
-        channel: u8,
+        channel0: u8,
         dlc: u8,
         valid: u8,
         dir_tx: bool,
@@ -732,15 +836,59 @@ mod tests {
         id: u32,
         data: &[u8],
     ) -> Vec<u8> {
-        let mut b = vec![0u8; 76];
-        b[0] = channel;
-        b[1] = dlc & 0x0F;
-        b[2] = valid;
-        b[3] = if dir_tx { CAN_DIR_TX } else { 0 };
-        b[4] = fd_flags;
-        b[8..12].copy_from_slice(&id.to_le_bytes());
-        b[12..12 + data.len().min(MAX_CAN_FD_LEN)]
-            .copy_from_slice(&data[..data.len().min(MAX_CAN_FD_LEN)]);
+        let mut b = vec![0u8; 20 + MAX_CAN_FD_LEN];
+        b[0..2].copy_from_slice(&(u16::from(channel0) + 1).to_le_bytes());
+        b[2] = if dir_tx { CAN_DIR_TX } else { 0 };
+        b[3] = dlc;
+        b[4..8].copy_from_slice(&id.to_le_bytes());
+        b[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        b[13] = fd_flags;
+        b[14] = valid;
+        let n = data.len().min(MAX_CAN_FD_LEN);
+        b[20..20 + n].copy_from_slice(&data[..n]);
+        b
+    }
+
+    /// Field values for [`fd64_body`], which otherwise takes eight positions.
+    #[derive(Default)]
+    struct Fd64 {
+        channel0: u8,
+        dlc: u8,
+        valid: u8,
+        tx: bool,
+        fd_flags: u32,
+        id: u32,
+        /// Absolute offset inside the object that bounds the data field, or 0
+        /// to let the object size bound it.
+        ext_data_offset: u8,
+        data: Vec<u8>,
+    }
+
+    /// `CAN_FD_MSG_64_STRUCT = <BBBBLLLLLLLHBBL` (40 B) with the payload right
+    /// after it.
+    fn fd64_body(f: Fd64) -> Vec<u8> {
+        let mut b = vec![0u8; FD64_STRUCT_SIZE + f.data.len()];
+        b[0] = f.channel0 + 1;
+        b[1] = f.dlc;
+        b[2] = f.valid;
+        b[4..8].copy_from_slice(&f.id.to_le_bytes());
+        b[8..12].copy_from_slice(&(f.data.len() as u32).to_le_bytes());
+        b[12..16].copy_from_slice(&f.fd_flags.to_le_bytes());
+        b[34] = u8::from(f.tx);
+        b[35] = f.ext_data_offset;
+        b[FD64_STRUCT_SIZE..].copy_from_slice(&f.data);
+        b
+    }
+
+    /// `CAN_ERROR_EXT_STRUCT = <HHLBBBxLLH2x8s`: dlc at 10, arbitration id at 16,
+    /// eight data bytes at 24.
+    fn error_ext_body(channel0: u8, dlc: u8, id: u32, data: &[u8]) -> Vec<u8> {
+        let mut b = vec![0u8; 32];
+        b[0..2].copy_from_slice(&(u16::from(channel0) + 1).to_le_bytes());
+        b[10] = dlc;
+        b[16..20].copy_from_slice(&id.to_le_bytes());
+        let n = data.len().min(8);
+        b[24..24 + n].copy_from_slice(&data[..n]);
         b
     }
 
@@ -757,7 +905,7 @@ mod tests {
 
     #[test]
     fn rejects_truncated_file() {
-        let v = vec![b'B', b'L', b'F', b'4'];
+        let v = *b"LOGG";
         match BlfStream::from_bytes(&v) {
             Err(LogError::Truncated) => {}
             Err(e) => panic!("expected Truncated, got {e}"),
@@ -776,7 +924,7 @@ mod tests {
     #[test]
     fn decodes_classic_can_message() {
         let body = can_body(1, 8, 0, 0x1A4, &[1, 2, 3, 4, 5, 6, 7, 8]);
-        let obj = obj_header_v1(OBJ_CAN_MESSAGE, 12_345_000, 0, &body);
+        let obj = obj_header_v1(OBJ_CAN_MESSAGE, ns(12_345_000), 0, &body);
         let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
         let f = s.next_frame().expect("frame");
         // First frame is rebased to zero.
@@ -794,8 +942,8 @@ mod tests {
     fn rebase_shifts_every_frame() {
         let a_body = can_body(0, 1, 0, 0x100, &[0xAA]);
         let b_body = can_body(0, 1, 0, 0x101, &[0xBB]);
-        let a = obj_header_v1(OBJ_CAN_MESSAGE, 5_000_000, 0, &a_body);
-        let b = obj_header_v1(OBJ_CAN_MESSAGE, 6_000_000, 0, &b_body);
+        let a = obj_header_v1(OBJ_CAN_MESSAGE, ns(5_000_000), 0, &a_body);
+        let b = obj_header_v1(OBJ_CAN_MESSAGE, ns(6_000_000), 0, &b_body);
         let mut objs = Vec::new();
         objs.extend_from_slice(&a);
         objs.extend_from_slice(&b);
@@ -808,22 +956,23 @@ mod tests {
 
     #[test]
     fn decodes_can_message2_with_direction_and_extended() {
-        // CAN_MESSAGE2 body layout:
-        //   [0] channel, [1] dlc, [2] dir, [3] flags, [4..8] id, [8..16] data
-        let mut body = vec![0u8; 16];
-        body[0] = 2;
-        body[1] = 4;
-        body[2] = CAN_DIR_TX;
-        body[3] = CAN_FLAG_EXTENDED;
-        body[4..8].copy_from_slice(&0x1DB3FFFDu32.to_le_bytes());
-        body[8..12].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
-        let obj = obj_header_v1(OBJ_CAN_MESSAGE2, 7_000_000, 0, &body);
+        // CAN_MESSAGE2 is the same record as CAN_MESSAGE; bit 31 of the
+        // arbitration id is what makes it an extended frame.
+        let body = can_body(
+            2,
+            4,
+            CAN_DIR_TX,
+            0x1DB3_FFFD | CAN_ID_EXT,
+            &[0xDE, 0xAD, 0xBE, 0xEF],
+        );
+        let obj = obj_header_v1(OBJ_CAN_MESSAGE2, ns(7_000_000), 0, &body);
         let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
         let f = s.next_frame().unwrap();
         assert_eq!(f.channel, 2);
         assert_eq!(f.dir, Direction::Tx);
         assert!(f.extended);
-        assert_eq!(f.id, 0x1DB3FFFD);
+        assert_eq!(f.id, 0x1DB3_FFFD);
+        assert_eq!(f.len, 4);
         assert_eq!(f.payload(), &[0xDE, 0xAD, 0xBE, 0xEF]);
     }
 
@@ -835,11 +984,11 @@ mod tests {
             14,
             48,
             true,
-            FD_FLAG_EDL | FD_FLAG_BRS | FD_FLAG_ESI | CAN_FLAG_EXTENDED,
-            0x1234_5678,
+            FD_FLAG_EDL | FD_FLAG_BRS | FD_FLAG_ESI,
+            0x1234_5678 | CAN_ID_EXT,
             &payload,
         );
-        let obj = obj_header_v1(OBJ_CAN_FD_MESSAGE, 20_000_000, 0, &body);
+        let obj = obj_header_v1(OBJ_CAN_FD_MESSAGE, ns(20_000_000), 0, &body);
         let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
         let f = s.next_frame().unwrap();
         assert!(f.is_fd());
@@ -856,21 +1005,31 @@ mod tests {
 
     #[test]
     fn decodes_error_ext_frame() {
-        let mut body = vec![0u8; 8];
-        body[0] = 1; // channel
-        let obj = obj_header_v1(OBJ_CAN_ERROR_EXT, 30_000_000, 0, &body);
+        // Values taken from Vector's `test_CanErrorFrameExt.blf`: an extended id
+        // of 0x19999999 and eight payload bytes. An error frame carries neither
+        // on the wire, and the Statistics view aggregates them, so both are
+        // dropped deliberately -- see `FrameFlags::ERROR`.
+        let body = error_ext_body(
+            1,
+            0x66,
+            0x1999_9999 | CAN_ID_EXT,
+            &[0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44],
+        );
+        let obj = obj_header_v1(OBJ_CAN_ERROR_EXT, ns(30_000_000), 0, &body);
         let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
         let f = s.next_frame().unwrap();
         assert!(f.is_error());
-        assert_eq!(f.id, 0);
-        assert!(f.payload().is_empty());
         assert_eq!(f.channel, 1);
+        assert!(f.extended, "the IDE bit is still a property of the frame");
+        assert_eq!(f.id, 0);
+        assert_eq!(f.len, 0);
+        assert!(f.payload().is_empty());
     }
 
     #[test]
     fn decodes_zlib_container() {
         let body = can_body(0, 2, 0, 0x321, &[0xAA, 0xBB]);
-        let obj = obj_header_v1(OBJ_CAN_MESSAGE, 1_000_000, 0, &body);
+        let obj = obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &body);
         let mut v = file_header(
             Some((2024, 1, 1, 1, 0, 0, 0, 0)),
             Some((2024, 1, 1, 1, 0, 0, 1, 0)),
@@ -884,9 +1043,9 @@ mod tests {
 
     #[test]
     fn unknown_object_type_is_skipped() {
-        let noise = obj_header_v1(9999, 500_000, 0, &[0u8; 8]);
+        let noise = obj_header_v1(9999, ns(500_000), 0, &[0u8; 8]);
         let good_body = can_body(0, 1, 0, 0x7AA, &[0x11]);
-        let good = obj_header_v1(OBJ_CAN_MESSAGE, 1_000_000, 0, &good_body);
+        let good = obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &good_body);
         let mut objs = Vec::new();
         objs.extend_from_slice(&noise);
         objs.extend_from_slice(&good);
@@ -898,7 +1057,7 @@ mod tests {
     #[test]
     fn v2_header_decodes() {
         let body = can_body(0, 1, 0, 0x55, &[0xEE]);
-        let obj = obj_header_v2(OBJ_CAN_MESSAGE, 2_000_000, 0x00, &body);
+        let obj = obj_header_v2(OBJ_CAN_MESSAGE, ns(2_000_000), 0, &body);
         let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
         let f = s.next_frame().unwrap();
         assert_eq!(f.id, 0x55);
@@ -907,32 +1066,114 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_flag_ten_micro_units() {
-        // raw = 100_000 ticks × 10 µs/tick = 1_000_000 µs.
-        let body = can_body(0, 1, 0, 0x100, &[1]);
-        let obj = obj_header_v1(OBJ_CAN_MESSAGE, 100_000, TS_TEN_MICRO, &body);
-        let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
-        let f = s.next_frame().unwrap();
-        // Rebased to zero; the raw µs delta is validated implicitly because
-        // the following frame carries the intended spacing.
-        assert_eq!(f.t_us, 0);
+    fn an_unknown_header_version_is_stepped_over() {
+        // A newer CANoe writing version 3 must not cost us the rest of the log.
+        let body = can_body(0, 1, 0, 0x55, &[0xEE]);
+        let mut future = obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &body);
+        future[6] = 3;
+        let mut objs = future;
+        objs.extend_from_slice(&obj_header_v1(OBJ_CAN_MESSAGE, ns(2_000_000), 0, &body));
+        let mut s = BlfStream::from_bytes(&assemble(&objs)).unwrap();
+        assert_eq!(s.next_frame().unwrap().id, 0x55);
+        assert!(s.next_frame().is_none(), "only the known header decoded");
     }
 
     #[test]
-    fn timestamp_flag_units_scale_relative_spacing() {
-        // Two frames, second is 100_000 raw × 10 µs = 1_000_000 µs later.
-        let a_body = can_body(0, 1, 0, 0x100, &[1]);
-        let b_body = can_body(0, 1, 0, 0x101, &[2]);
-        let a = obj_header_v1(OBJ_CAN_MESSAGE, 1_000_000, TS_TEN_MICRO, &a_body);
-        let b = obj_header_v1(OBJ_CAN_MESSAGE, 1_100_000, TS_TEN_MICRO, &b_body);
-        let mut objs = Vec::new();
-        objs.extend_from_slice(&a);
+    fn padded_objects_inside_a_container_are_stepped_over() {
+        let mut objs = obj_header_v1(
+            OBJ_CAN_MESSAGE,
+            ns(1_000_000),
+            0,
+            &can_body(0, 1, 0, 0x100, &[1]),
+        );
+        objs.extend_from_slice(&[0u8; 4]);
+        objs.extend_from_slice(&obj_header_v1(
+            OBJ_CAN_MESSAGE,
+            ns(2_000_000),
+            0,
+            &can_body(0, 1, 0, 0x101, &[2]),
+        ));
+        let mut s = BlfStream::from_bytes(&assemble(&objs)).unwrap();
+        assert_eq!(times(&mut s), vec![0, 1_000_000]);
+    }
+
+    #[test]
+    fn padding_between_containers_does_not_truncate_the_log() {
+        // Vector pads top-level records and `object_size` does not always
+        // absorb the slack, so walking by stride alone would stop after the
+        // first container and silently lose the rest of the file.
+        let mut v = padded_file_header(&[]);
+        v.extend_from_slice(&raw_container(&can_run(0, 5)));
+        v.extend_from_slice(&[0u8; 4]);
+        v.extend_from_slice(&raw_container(&can_run(10_000, 5)));
+        let mut s = BlfStream::from_bytes(&v).unwrap();
+        assert_eq!(times(&mut s).len(), 10, "both containers were read");
+    }
+
+    #[test]
+    fn a_wider_file_header_is_honoured() {
+        let mut v = padded_file_header(&[0u8; 16]);
+        v.extend_from_slice(&raw_container(&can_run(0, 3)));
+        let mut s = BlfStream::from_bytes(&v).unwrap();
+        assert_eq!(times(&mut s), vec![0, 1_000, 2_000], "objects start at 160");
+    }
+
+    #[test]
+    fn a_top_level_object_that_is_not_a_container_is_stepped_over() {
+        // Markers and application records sit at the top level beside
+        // containers. Their bytes must not be mistaken for one, and they must
+        // not end the walk either.
+        let marker = obj_header_v1(96 /* GLOBAL_MARKER */, ns(500_000), 0, &[0x20u8; 24]);
+        let mut v = padded_file_header(&[]);
+        v.extend_from_slice(&marker);
+        v.extend_from_slice(&raw_container(&can_run(1_000_000, 3)));
+        let mut s = BlfStream::from_bytes(&v).unwrap();
+        assert_eq!(times(&mut s), vec![0, 1_000, 2_000]);
+    }
+
+    /// Rebasing hides the absolute stamp, so the unit a header declares is
+    /// asserted through the spacing between two frames written with it.
+    fn stamp_pair(flags: u32, first: u64, second: u64) -> (u64, u64) {
+        let a = obj_header_v1(
+            OBJ_CAN_MESSAGE,
+            first,
+            flags,
+            &can_body(0, 1, 0, 0x100, &[1]),
+        );
+        let b = obj_header_v1(
+            OBJ_CAN_MESSAGE,
+            second,
+            flags,
+            &can_body(0, 1, 0, 0x101, &[2]),
+        );
+        let mut objs = a;
         objs.extend_from_slice(&b);
         let mut s = BlfStream::from_bytes(&assemble(&objs)).unwrap();
-        let f1 = s.next_frame().unwrap();
-        let f2 = s.next_frame().unwrap();
-        assert_eq!(f1.t_us, 0);
-        assert_eq!(f2.t_us, 1_000_000, "10 µs ticks scale correctly");
+        let first = s.next_frame().unwrap().t_us;
+        let second = s.next_frame().unwrap().t_us;
+        (first, second)
+    }
+
+    #[test]
+    fn zero_flag_stamps_are_treated_as_nanoseconds() {
+        // `flags == 0` is not a documented unit; Vector's reader treats anything
+        // but 1 as nanoseconds, and that is what real files rely on.
+        assert_eq!(stamp_pair(0, ns(1_000_000), ns(1_001_000)), (0, 1_000));
+    }
+
+    #[test]
+    fn nanosecond_stamps_scale_to_microseconds() {
+        // 1 ms apart, carried in Vector's TIME_ONE_NANS units.
+        assert_eq!(
+            stamp_pair(TS_ONE_NANO, 1_000_000_000, 1_001_000_000),
+            (0, 1_000)
+        );
+    }
+
+    #[test]
+    fn ten_microsecond_stamps_scale_to_microseconds() {
+        // `flags == 1`: 100 ticks × 10 µs = 1 ms.
+        assert_eq!(stamp_pair(TS_TEN_MICRO, 100_000, 100_100), (0, 1_000));
     }
 
     #[test]
@@ -947,29 +1188,76 @@ mod tests {
     }
 
     #[test]
-    fn fd_message_64_reads_from_ext_offset() {
-        let payload: Vec<u8> = (0..16u8).collect();
-        // CAN_FD_MESSAGE_64 body: [0] ch, [1] dlc, [2] valid, [3] ext_off,
-        // [4] flags, [5] dir, [6..8] pad, [8..12] id, [12..20] more meta,
-        // [20..] payload (default when ext_off == 0).
-        let mut b = vec![0u8; 20 + payload.len()];
-        b[0] = 1;
-        b[1] = 9; // DLC 9 → 12 bytes
-        b[2] = 16;
-        b[3] = 20; // explicit extDataOffset
-        b[4] = FD_FLAG_EDL | FD_FLAG_BRS;
-        b[5] = CAN_DIR_TX;
-        b[8..12].copy_from_slice(&0xABCDEFu32.to_le_bytes());
-        b[20..20 + payload.len()].copy_from_slice(&payload);
-        let obj = obj_header_v1(OBJ_CAN_FD_MESSAGE_64, 500_000, 0, &b);
+    fn fd_message_64_decodes_the_64_bit_dialect() {
+        // A 12-byte FD frame, Tx, with bit-rate switching. Note the FD bits are
+        // in a u32 at 0x1000 and up here, not the low bits `CAN_FD_MESSAGE`
+        // uses, so decoding either dialect with the other's mask shows up as
+        // `is_fd` being false.
+        let payload: Vec<u8> = (0..12u8).collect();
+        let body = fd64_body(Fd64 {
+            channel0: 1,
+            dlc: 9, // DLC code 9 -> 12 bytes
+            valid: 12,
+            tx: true,
+            fd_flags: FD64_EDL | FD64_BRS,
+            id: 0x00AB_CDEF | CAN_ID_EXT,
+            data: payload.clone(),
+            ..Default::default()
+        });
+        let obj = obj_header_v1(OBJ_CAN_FD_MESSAGE_64, ns(500_000), 0, &body);
         let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
         let f = s.next_frame().unwrap();
         assert!(f.is_fd());
         assert!(f.brs());
-        assert_eq!(f.len, 12, "dlc 9 caps the valid_bytes at 12");
-        assert_eq!(f.payload(), &payload[..12]);
-        assert_eq!(f.id, 0xABCDEF);
+        assert!(!f.esi());
+        assert!(!f.is_remote());
+        assert_eq!(f.dir, Direction::Tx);
+        assert!(f.extended);
+        assert_eq!(f.id, 0x00AB_CDEF);
         assert_eq!(f.channel, 1);
+        assert_eq!(f.len, 12);
+        assert_eq!(f.payload(), &payload[..]);
+    }
+
+    /// A `CAN_FD_MESSAGE_64` record declaring `valid` payload bytes but only
+    /// carrying `stored`, the shape Vector's issue-1905 sample has.
+    fn over_declared_fd64(valid: u8, stored: usize, ext_data_offset: u8) -> CanFrame {
+        let body = fd64_body(Fd64 {
+            dlc: 15,
+            valid,
+            fd_flags: FD64_EDL,
+            id: 0x6A9,
+            ext_data_offset,
+            data: vec![0xFFu8; stored],
+            ..Default::default()
+        });
+        let obj = obj_header_v1(OBJ_CAN_FD_MESSAGE_64, ns(1_000_000), 0, &body);
+        let mut s = BlfStream::from_bytes(&assemble(&obj)).unwrap();
+        s.next_frame().expect("frame")
+    }
+
+    #[test]
+    fn fd_message_64_pads_the_payload_the_object_does_not_carry() {
+        // 64 bytes declared, 48 actually in the record: CANoe shows the
+        // remainder as zero, and reading past the object would show the next
+        // record's header instead.
+        let f = over_declared_fd64(64, 48, 0);
+        assert_eq!(f.len, 64);
+        let mut expected = vec![0xFFu8; 48];
+        expected.extend_from_slice(&[0u8; 16]);
+        assert_eq!(f.payload(), &expected[..]);
+    }
+
+    #[test]
+    fn fd_message_64_data_field_stops_at_ext_data_offset() {
+        // extDataOffset is absolute inside the object: 32 B header + 40 B
+        // record + 32 B of data. The object carries 48 bytes, so the last 16
+        // are not part of this frame.
+        let f = over_declared_fd64(64, 48, 32 + 40 + 32);
+        assert_eq!(f.len, 64);
+        let mut expected = vec![0xFFu8; 32];
+        expected.extend_from_slice(&[0u8; 32]);
+        assert_eq!(f.payload(), &expected[..]);
     }
 
     /// Same logical traffic (one classic, one FD-with-BRS) written to both
@@ -1005,17 +1293,17 @@ mod tests {
 
         // BLF side: encode the same logical traffic and rebase on first frame.
         let a_body = can_body(0, 4, 0, 0x1A4, &[0x11, 0x22, 0x33, 0x44]);
-        let a = obj_header_v1(OBJ_CAN_MESSAGE, 1_000_000, 0, &a_body);
+        let a = obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &a_body);
         let b_body = fd_body(
             1,
             14,
             48,
             true,
-            FD_FLAG_EDL | FD_FLAG_BRS | CAN_FLAG_EXTENDED,
-            0x1DB3FF01,
+            FD_FLAG_EDL | FD_FLAG_BRS,
+            0x1DB3_FF01 | CAN_ID_EXT,
             &fd_data[..48],
         );
-        let b = obj_header_v1(OBJ_CAN_FD_MESSAGE, 2_000_000, 0, &b_body);
+        let b = obj_header_v1(OBJ_CAN_FD_MESSAGE, ns(2_000_000), 0, &b_body);
         let mut objs = Vec::new();
         objs.extend_from_slice(&a);
         objs.extend_from_slice(&b);
@@ -1049,7 +1337,7 @@ mod tests {
             let body = can_body(1, 2, 0, 0x100 + i, &[0xAA, 0xBB]);
             v.extend_from_slice(&obj_header_v1(
                 OBJ_CAN_MESSAGE,
-                t0 + u64::from(i) * 1_000,
+                ns(t0 + u64::from(i) * 1_000),
                 0,
                 &body,
             ));
@@ -1177,28 +1465,65 @@ mod tests {
         }
     }
 
-    /// Reads a real CANoe export to catch dialect drift that our own
+    /// Reads real Vector-authored BLF files to catch dialect drift that our own
     /// encoders would happily paper over. Enable with:
-    /// `ROXY_BLF_SAMPLE=<path> cargo test read_real_canoe_blf -- --ignored`.
+    /// `ROXY_BLF_SAMPLE=<file or directory> cargo test read_real_canoe_blf -- --ignored --nocapture`.
+    ///
+    /// The upstream reference is python-can's `test/data/*.blf`; those files
+    /// were written by Vector's own BLF library (`logformats_test.py`: "log
+    /// files created by Toby Lorenz ... events_from_binlog"), so they are an
+    /// independent witness rather than something our reader produced. Their
+    /// field values are deliberately non-canonical bit patterns, which is what
+    /// makes them good at exposing divergences.
     #[test]
     #[ignore]
     fn read_real_canoe_blf() {
-        let Ok(path) = std::env::var("ROXY_BLF_SAMPLE") else {
+        let Ok(arg) = std::env::var("ROXY_BLF_SAMPLE") else {
             eprintln!("set ROXY_BLF_SAMPLE=<path> to enable");
             return;
         };
-        let mut s = BlfStream::open(Path::new(&path)).expect("open");
-        let mut n = 0usize;
-        while let Some(f) = s.next_frame() {
-            n += 1;
-            // Sanity checks: t_us must be monotonic after rebase and
-            // lengths must fall on the FD ladder.
-            assert!(
-                f.len == 0 || f.len <= 8 || matches!(f.len, 12 | 16 | 20 | 24 | 32 | 48 | 64),
-                "frame {n} has non-ladder len {}",
-                f.len
-            );
+        let root = Path::new(&arg);
+        let mut files = Vec::new();
+        if root.is_dir() {
+            for e in std::fs::read_dir(root).unwrap().flatten() {
+                let p = e.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("blf") {
+                    files.push(p);
+                }
+            }
+            files.sort();
+        } else {
+            files.push(root.to_path_buf());
         }
-        assert!(n > 0, "expected frames in {path}");
+        assert!(!files.is_empty(), "no .blf found at {arg}");
+
+        for path in files {
+            eprintln!("\n=== {} ===", path.file_name().unwrap().to_string_lossy());
+            let mut s = BlfStream::open(&path).expect("open");
+            eprintln!("  describe: {}", s.describe());
+            let mut n = 0usize;
+            while let Some(f) = s.next_frame() {
+                let hex: Vec<String> = f.payload().iter().map(|b| format!("{b:02X}")).collect();
+                eprintln!(
+                    "  [{n}] t={:<12} ch={:<5} id={:08X} ext={} len={:<3} dir={:?} err={} \
+                     rtr={} fd={} brs={} esi={} data={}",
+                    f.t_us,
+                    f.channel,
+                    f.id,
+                    f.extended,
+                    f.len,
+                    f.dir,
+                    f.is_error(),
+                    f.is_remote(),
+                    f.is_fd(),
+                    f.brs(),
+                    f.esi(),
+                    hex.join(" "),
+                );
+                n += 1;
+            }
+            assert!(n > 0, "expected frames in {path:?}");
+            eprintln!("  total: {n} frames");
+        }
     }
 }

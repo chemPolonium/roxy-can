@@ -978,7 +978,7 @@ impl App {
     pub fn pick_log(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
             .set_title("Open CAN log")
-            .add_filter("CAN logs", &["asc", "blf", "mf4"])
+            .add_filter("CAN logs", &["asc", "blf"])
             .pick_file()
         {
             self.load_log(&p.to_string_lossy());
@@ -2467,7 +2467,7 @@ mod tests {
     fn loading_blf_does_not_start_replay() {
         let mut app = App::new();
         let path = std::env::temp_dir().join("roxy_can_load_blf_test.blf");
-        let bytes = minimal_blf_fixture();
+        let bytes = crate::log::blf::tests::minimal_file();
         std::fs::write(&path, &bytes).unwrap();
         app.load_log(&path.to_string_lossy());
         assert!(
@@ -2492,60 +2492,6 @@ mod tests {
             "MF4 should surface a clear reason, got {:?}",
             app.status
         );
-    }
-
-    /// Minimal valid BLF (file header + one raw container holding one
-    /// CAN_MESSAGE), built inline so we do not commit a binary fixture.
-    /// Mirrors the encoders in `src/log/blf.rs::tests`.
-    fn minimal_blf_fixture() -> Vec<u8> {
-        let mut v = vec![0u8; 144];
-        v[0..4].copy_from_slice(b"BLF4");
-        v[4..8].copy_from_slice(&4u32.to_le_bytes());
-        // one object at offset 12
-        v[12..16].copy_from_slice(&1u32.to_le_bytes());
-
-        // One CAN_MESSAGE object body: 16 B
-        let mut body = vec![0u8; 16];
-        body[0] = 0; // channel
-        body[1] = 1; // dlc
-        body[4..8].copy_from_slice(&0x100u32.to_le_bytes());
-        body[8] = 0xAB;
-
-        // v1 object header (32 B) + body = 48 B
-        let obj_size = 32 + body.len() as u32;
-        let mut obj = Vec::new();
-        obj.extend_from_slice(b"LOBJ");
-        obj.extend_from_slice(&32u16.to_le_bytes());
-        obj.push(1); // v1
-        obj.push(0); // object_version
-        obj.extend_from_slice(&obj_size.to_le_bytes());
-        obj.extend_from_slice(&0u32.to_le_bytes());
-        obj.extend_from_slice(&1u32.to_le_bytes()); // CAN_MESSAGE type
-        obj.extend_from_slice(&0u32.to_le_bytes()); // ts_low
-        obj.extend_from_slice(&0u16.to_le_bytes()); // ts_high
-        obj.extend_from_slice(&0u16.to_le_bytes()); // flags
-        obj.extend_from_slice(&[0u8; 4]);
-        obj.extend_from_slice(&body);
-
-        // Wrap into a raw container: LOBJ base 16 + LOG_CONTAINER_STRUCT 16
-        let container_body_len = 16 + obj.len();
-        let total = (16 + container_body_len) as u32;
-        let mut cont = Vec::new();
-        cont.extend_from_slice(b"LOBJ");
-        cont.extend_from_slice(&16u16.to_le_bytes());
-        cont.push(1);
-        cont.push(0);
-        cont.extend_from_slice(&total.to_le_bytes());
-        cont.extend_from_slice(&0u32.to_le_bytes());
-        cont.extend_from_slice(&0u16.to_le_bytes()); // raw method
-        cont.extend_from_slice(&0u16.to_le_bytes()); // version
-        cont.extend_from_slice(&(obj.len() as u32).to_le_bytes()); // uncompressed
-        cont.extend_from_slice(&(obj.len() as u32).to_le_bytes()); // compressed
-        cont.extend_from_slice(&0u32.to_le_bytes()); // pad
-        cont.extend_from_slice(&obj);
-
-        v.extend_from_slice(&cont);
-        v
     }
 
     #[test]
