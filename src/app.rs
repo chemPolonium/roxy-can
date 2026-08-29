@@ -491,6 +491,13 @@ pub struct App {
     pub tx_list: Vec<TxMsg>,
     pub tx_pick: usize,
     pub last_tick_us: u64,
+    /// Simulation clock: accumulates only while measuring and unpaused.
+    /// Generator frames are stamped on it and their signal values are evaluated
+    /// from it, so a pause freezes the bus in place instead of letting it jump
+    /// phase. Replay polling still uses the wall clock (`last_tick_us`).
+    pub sim_t_us: u64,
+    /// `now_us()` at the previous accepted tick, the reference for `sim_t_us`.
+    sim_prev_us: u64,
     pub frame_rate: f64,
     pub trace_windows: Vec<TraceWin>,
     pub msg_windows: Vec<MsgWin>,
@@ -580,6 +587,8 @@ impl App {
             tx_list: Vec::new(),
             tx_pick: 0,
             last_tick_us: 0,
+            sim_t_us: 0,
+            sim_prev_us: 0,
             frame_rate: 0.0,
             trace_windows: Vec::new(),
             msg_windows: Vec::new(),
@@ -849,6 +858,9 @@ impl App {
 
     fn reset_time(&mut self) {
         self.t0 = Instant::now();
+        self.sim_t_us = 0;
+        self.sim_prev_us = 0;
+        self.last_tick_us = 0;
         self.frame_counter = 0;
         // A fresh start must not inherit the previous run's pause state.
         self.trace_paused = false;
@@ -1458,6 +1470,7 @@ impl App {
     /// poll clock uses `saturating_sub` against the new, smaller `now_us`.
     fn resume_replay(&mut self) {
         self.t0 = Instant::now();
+        self.sim_prev_us = 0;
         self.trace_paused = false;
         self.paused_at_us = None;
         self.measuring = true;
@@ -1497,13 +1510,16 @@ impl App {
     /// stamped with the log's own `t_us`, so anchoring a window on wall time
     /// slides the curve out of view as soon as the speed is not exactly 1x or
     /// as soon as the user scrubs.
+    ///
+    /// While simulating it is `sim_t_us`, which stops during a pause; the wall
+    /// clock does not, so a paused window used to drift its own curve away.
     pub fn plot_now_s(&self) -> f64 {
         if matches!(self.mode, Mode::Replay)
             && let Some(pos) = self.source.position()
         {
             return pos as f64 / 1e6;
         }
-        self.last_tick_us as f64 / 1e6
+        self.sim_t_us as f64 / 1e6
     }
 
     /// Resets the pan offsets of all plot windows back to the live edge.
@@ -1947,12 +1963,17 @@ impl App {
             }
             return;
         }
+        let now = self.now_us();
         if let Some(t) = self.paused_at_us.take() {
             // Skip the paused interval so replay resumes in place
             // instead of fast-forwarding through it.
-            self.source.shift_time(self.now_us().saturating_sub(t));
+            self.source.shift_time(now.saturating_sub(t));
+            // The simulation clock must skip it too, or every generator's
+            // schedule and waveform phase jumps by the paused span.
+            self.sim_prev_us = now;
         }
-        let now = self.now_us();
+        self.sim_t_us += now.saturating_sub(self.sim_prev_us);
+        self.sim_prev_us = now;
         if self.last_tick_us > 0 && now > self.last_tick_us {
             let dt_s = (now - self.last_tick_us) as f64 / 1e6;
             let inst = (self.buf.len() as f64) / dt_s;
@@ -1963,29 +1984,44 @@ impl App {
             };
         }
         self.last_tick_us = now;
+        self.tick(now);
+    }
+
+    /// One step of the measurement loop, polled against wall clock `now_us`.
+    /// Split out of [`Self::update`] so a test can run a single step at a time
+    /// of its choosing; the generator reads `sim_t_us`, which `update` maintains.
+    pub fn tick(&mut self, now_us: u64) {
+        let sim = self.sim_t_us;
         self.buf.clear();
-        self.source.poll(now, &mut self.buf);
+        self.source.poll(now_us, &mut self.buf);
         let source_empty = self.buf.is_empty();
 
         // Generators only transmit in live simulation; replaying an ASC must
         // not mix in synthetic frames from active generator entries.
         if matches!(self.mode, Mode::Virtual) {
             for tx in &mut self.tx_list {
-                if tx.active && tx.cycle_us > 0 && tx.next_t_us <= now {
-                    while tx.next_t_us <= now {
-                        tx.next_t_us += tx.cycle_us;
-                    }
-                    self.buf.push(CanFrame {
-                        t_us: now,
-                        channel: tx.channel,
-                        id: tx.id,
-                        extended: tx.extended,
-                        len: tx.len,
-                        data: tx.data,
-                        dir: Direction::Tx,
-                        flags: tx.flags,
-                    });
+                if !tx.active || tx.cycle_us == 0 || tx.next_t_us > sim {
+                    continue;
                 }
+                // Emit the slot this frame was due on, not the wall clock: a
+                // stalled UI drops backlog rather than bursting, but the
+                // spacing of what does go out stays exactly `cycle_us`.
+                let slot = tx.next_t_us;
+                tx.next_t_us += tx.cycle_us;
+                if tx.next_t_us < sim {
+                    let behind = (sim - tx.next_t_us) / tx.cycle_us + 1;
+                    tx.next_t_us += behind * tx.cycle_us;
+                }
+                self.buf.push(CanFrame {
+                    t_us: slot,
+                    channel: tx.channel,
+                    id: tx.id,
+                    extended: tx.extended,
+                    len: tx.len,
+                    data: tx.data,
+                    dir: Direction::Tx,
+                    flags: tx.flags,
+                });
             }
         }
 
@@ -2521,6 +2557,107 @@ mod tests {
         );
         assert!(agg.min_us > 0.0, "min cycle should be recorded");
         assert!(agg.max_us >= agg.min_us, "max cycle >= min cycle");
+        app.stop();
+    }
+
+    /// Drives `ticks` steps of the loop, each `step_us` of simulation time
+    /// apart. `tick` reads `sim_t_us` directly, so no wall clock is involved.
+    fn run_sim(app: &mut App, ticks: u32, step_us: u64) {
+        for i in 1..=ticks {
+            app.sim_t_us = u64::from(i) * step_us;
+            app.tick(app.sim_t_us);
+        }
+    }
+
+    fn slots_of(app: &App, id: u32) -> Vec<u64> {
+        app.trace
+            .iter()
+            .filter(|f| f.id == id)
+            .map(|f| f.t_us)
+            .collect()
+    }
+
+    #[test]
+    fn generator_frames_are_spaced_exactly_one_cycle() {
+        let mut app = App::new();
+        app.add_tx(0, 0x777);
+        let tx = app.tx_list.last_mut().unwrap();
+        tx.cycle_us = 20_000;
+        tx.active = true;
+        app.start_virtual();
+        // Ticks land on multiples of 7 ms, which the 20 ms cycle never lines up
+        // with: slots must still come out on exact 20 ms boundaries.
+        run_sim(&mut app, 12, 7_000);
+        assert_eq!(
+            slots_of(&app, 0x777),
+            vec![0, 20_000, 40_000, 60_000, 80_000]
+        );
+        let agg = app.aggs.get(&(0, 0x777)).expect("aggregate");
+        assert_eq!((agg.min_us, agg.max_us), (20_000.0, 20_000.0));
+        app.stop();
+    }
+
+    #[test]
+    fn a_tick_exactly_on_a_slot_does_not_drop_a_cycle() {
+        let mut app = App::new();
+        app.add_tx(0, 0x779);
+        let tx = app.tx_list.last_mut().unwrap();
+        tx.cycle_us = 20_000;
+        tx.active = true;
+        app.start_virtual();
+        // Ticks land precisely on slot boundaries.
+        run_sim(&mut app, 6, 20_000);
+        assert_eq!(
+            slots_of(&app, 0x779),
+            vec![0, 20_000, 40_000, 60_000, 80_000, 100_000],
+            "one frame per cycle, none skipped at the boundary"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_stalled_ui_drops_cycles_instead_of_bursting() {
+        let mut app = App::new();
+        app.add_tx(0, 0x778);
+        let tx = app.tx_list.last_mut().unwrap();
+        tx.cycle_us = 20_000;
+        tx.active = true;
+        app.start_virtual();
+        app.sim_t_us = 0;
+        app.tick(0);
+        // Twelve cycles' worth of stall must produce one frame, and the
+        // schedule must end up past the stall rather than queued behind it.
+        app.sim_t_us = 250_000;
+        app.tick(250_000);
+        assert_eq!(slots_of(&app, 0x778), vec![0, 20_000], "one frame per tick");
+        assert_eq!(
+            app.tx_list.last().unwrap().next_t_us,
+            260_000,
+            "the backlog was skipped, not deferred"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_pause_freezes_the_simulation_clock_and_its_phase() {
+        let mut app = App::new();
+        app.start_virtual();
+        app.update();
+        let before = app.sim_t_us;
+        // Age the wall clock by 400 ms the way a real pause would, then check
+        // the simulation clock neither moves during the pause nor absorbs the
+        // paused span afterwards.
+        app.trace_paused = true;
+        app.t0 = Instant::now() - std::time::Duration::from_millis(400);
+        app.update();
+        assert_eq!(app.sim_t_us, before, "a paused clock must not advance");
+        app.trace_paused = false;
+        app.update();
+        assert!(
+            app.sim_t_us - before < 50_000,
+            "resuming absorbed the paused span: sim advanced {} us",
+            app.sim_t_us - before
+        );
         app.stop();
     }
 
