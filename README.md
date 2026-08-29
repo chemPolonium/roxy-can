@@ -1,6 +1,6 @@
 # roxy-can
 
-一个基于 Rust + Dear ImGui 的 CAN 总线分析工具，界面与交互参考 CANoe。总线数量不固定，可在 **Buses** 窗口中增删并自定义名称，每条总线各挂一个 DBC；Data/Graphics 窗口是纯信号观测器，可跨总线混合选择信号。虚拟模式下总线默认空闲，报文由内置信号生成器（Interactive Generator）产生，信号还可选常量/斜坡/正弦/阶跃/随机激励随仿真时间连续变化；帧模型覆盖经典 CAN、**CAN FD**（变长载荷至 64 字节、BRS/ESI 标志）、以及错误帧 / 远程帧，支持 DBC 解码，以及与 Vector/CANoe 兼容的 ASC 录制与 ASC/BLF 回放（大文件走 mmap 流式加载）。
+一个基于 Rust + Dear ImGui 的 CAN 总线分析工具，界面与交互参考 CANoe。总线数量不固定，可在 **Buses** 窗口中增删并自定义名称，每条总线各挂一个 DBC；Data/Graphics 窗口是纯信号观测器，可跨总线混合选择信号。虚拟模式下总线默认空闲，报文由内置信号生成器（Interactive Generator）产生，信号还可选斜坡/正弦/阶跃/随机激励随仿真时间连续变化；帧模型覆盖经典 CAN、**CAN FD**（变长载荷至 64 字节、BRS/ESI 标志）、以及错误帧 / 远程帧，支持 DBC 解码，以及与 Vector/CANoe 兼容的 ASC 录制与 ASC/BLF 回放（大文件走 mmap 流式加载）。
 
 ![roxy-can](screenshot.png)
 
@@ -9,7 +9,7 @@
 - **CAN FD / 错误帧 / 远程帧帧模型**：载荷变长至 64 字节，DLC 码与真实字节长度分离，FD 帧携带 BRS / ESI 标志；同时识别经典 CAN 的错误帧（`e` 类型）与远程帧（`r` 类型），并在 Trace 中给错误行铺红底、远程行铺淡紫底；Trace / Messages / Statistics 共用一个 `Flags` 列显示 `FD` / `FD·B` / `FD·E` / `FD·BE` / `ERR` / `RTR`；错误帧不进入 Messages / Statistics 聚合，远程帧的 payload 视为空；经典 CAN 数据帧行为完全向后兼容
 - **动态总线**：Buses 窗口（View → Buses）中可添加/删除总线、自定义总线名、为每条总线单独加载 DBC；删除总线时所有观测器、过滤器、生成器自动重映射
 - **Interactive Generator（信号生成器）**：所有总线的 DBC 报文即开即用，支持按周期发送、按信号拖拽编辑物理值（自动编码为数据字节）或按 hex 编辑；每条报文带 FD 勾选（DBC 报文 >8 字节时自动置为 FD），hex 编辑最多 64 字节；搜索框按名称/ID 过滤，每条总线可一键 All On / All Off
-  - **信号激励（value source）**：每个信号可选 **Off / Const / Ramp / Sine / Step / Random**，取值随仿真时间连续变化，起测量后在 Graphics 里直接看到曲线。信号行右侧下拉选形状，`...` 弹窗设参数（lo/hi、周期、相位；Random 为 redraw 间隔与 seed；Step 为逗号分隔序列）。首次启用时按 DBC 量程快照 lo/hi，之后显式存储并随工程文件保存；选 Off 即回到该信号的 base 值。启用激励的报文标题会显示 `N driven`，被驱动的信号实时值前缀 `~`
+  - **信号激励（value source）**：每个信号可选 **Ramp / Sine / Step / Random**，取值随仿真时间连续变化，起测量后在 Graphics 里直接看到曲线；要一个固定值就留 **Off** 并用滑块/hex 设 base 值，那是 base 的职责、不是一种形状。信号行右侧下拉选形状，`...` 弹窗设参数（lo/hi、周期、相位；Random 为 redraw 间隔与 seed；Step 为逗号分隔序列）。首次启用时按 DBC 量程快照 lo/hi，之后显式存储并随工程文件保存；选 Off 即回到该信号的 base 值。启用激励的报文标题会显示 `N driven`，被驱动的信号实时值前缀 `~`
   - **base 与激励分离**：hex 框与滑块编辑的是 base 报文，激励只在发送瞬间叠加、永不改写 base（`base` 标签提示该行有激励）。暂停时拖动某个信号的滑块＝"就地按停"，只清掉这一个信号的激励，其他信号仍在动；改 hex 不会销毁已配好的激励
   - **仿真时基**：生成帧打在理论时隙上（不是 UI 心跳），所以 Statistics 的周期 Min/Avg/Max 恒等于设定周期，Trace 时间列与录制的 ASC 也落在仿真时基上；UI 卡顿会丢弃积压周期而不是补发一串；暂停会冻结仿真时钟，波形相位与发送计划停在原地，恢复后继续、不跳相位
 - **Trace / Messages / Statistics 均可多开**：在 Measurement Setup 中用 +Trace / +Messages / +Statistics 新建，每个窗口有独立的过滤设置

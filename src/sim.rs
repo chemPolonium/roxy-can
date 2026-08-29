@@ -5,12 +5,10 @@
 //! no mutable state, so a waveform is reproducible across runs and a stalled or
 //! paused UI cannot warp its phase.
 
-/// Shape of a driven signal's value over time.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+/// Shape of a driven signal's value over time. A signal with no source is not
+/// listed here: it simply holds whatever the base payload says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SrcKind {
-    /// Hold [`ValueSrc::value`]; the only kind that ignores time.
-    #[default]
-    Const,
     /// `lo` rising to `hi` over one period, then wrapping. Descending when
     /// `hi < lo`.
     Ramp,
@@ -23,18 +21,11 @@ pub enum SrcKind {
 }
 
 /// Combo-box order, so the UI and the persisted `u8` agree.
-pub const KINDS: [SrcKind; 5] = [
-    SrcKind::Const,
-    SrcKind::Ramp,
-    SrcKind::Sine,
-    SrcKind::Step,
-    SrcKind::Random,
-];
+pub const KINDS: [SrcKind; 4] = [SrcKind::Ramp, SrcKind::Sine, SrcKind::Step, SrcKind::Random];
 
 impl SrcKind {
     pub fn label(self) -> &'static str {
         match self {
-            SrcKind::Const => "Const",
             SrcKind::Ramp => "Ramp",
             SrcKind::Sine => "Sine",
             SrcKind::Step => "Step",
@@ -67,8 +58,6 @@ pub struct ValueSrc {
     pub period_us: u64,
     /// Shifted onto `t_us` before wrapping.
     pub phase_us: u64,
-    /// Held value for [`SrcKind::Const`].
-    pub value: f64,
     /// Equal-duration values for [`SrcKind::Step`].
     pub seq: Vec<f64>,
     pub seed: u64,
@@ -85,7 +74,6 @@ impl ValueSrc {
             hi,
             period_us: 1_000_000,
             phase_us: 0,
-            value: lo,
             seq: Vec::new(),
             seed: 0x5EED_1234,
             redraw_us: 0,
@@ -118,7 +106,6 @@ fn splitmix64(state: &mut u64) -> u64 {
 pub fn eval_phys(src: &ValueSrc, t_us: u64) -> f64 {
     let span = src.hi - src.lo;
     match src.kind {
-        SrcKind::Const => src.value,
         SrcKind::Ramp => src.lo + span * frac(src, t_us),
         // cos rather than sin so the cycle starts at `lo` and its endpoints are
         // exact instead of one sample off.
@@ -215,12 +202,18 @@ mod tests {
         assert_eq!(eval_phys(&s, 999_999), 8.0);
     }
 
+    /// Every shape moves; holding a value is the base payload's job, not a
+    /// shape's.
     #[test]
-    fn const_ignores_time() {
-        let mut s = src(SrcKind::Const, 0.0, 100.0, 1_000_000);
-        s.value = 42.0;
-        assert_eq!(eval_phys(&s, 0), 42.0);
-        assert_eq!(eval_phys(&s, 123_456_789), 42.0);
+    fn every_shape_changes_over_a_cycle() {
+        for &kind in &KINDS {
+            let s = src(kind, 0.0, 100.0, 1_000_000);
+            assert_ne!(
+                eval_phys(&s, 0),
+                eval_phys(&s, 500_000),
+                "{kind:?} must not hold one value through the cycle"
+            );
+        }
     }
 
     #[test]

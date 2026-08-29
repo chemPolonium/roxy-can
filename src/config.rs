@@ -182,8 +182,6 @@ pub struct SrcCfg {
     #[serde(default)]
     pub phase_us: u64,
     #[serde(default)]
-    pub value: f64,
-    #[serde(default)]
     pub seq: Vec<f64>,
     #[serde(default)]
     pub seed: u64,
@@ -311,7 +309,6 @@ fn src_cfg(s: &ValueSrc) -> SrcCfg {
         hi: s.hi,
         period_us: s.period_us,
         phase_us: s.phase_us,
-        value: s.value,
         seq: s.seq.clone(),
         seed: s.seed,
         redraw_us: s.redraw_us,
@@ -327,7 +324,6 @@ fn value_src(c: SrcCfg) -> Option<ValueSrc> {
         hi: c.hi,
         period_us: c.period_us,
         phase_us: c.phase_us,
-        value: c.value,
         seq: c.seq,
         seed: c.seed,
         redraw_us: c.redraw_us,
@@ -781,7 +777,7 @@ mod tests {
     #[test]
     fn an_unknown_kind_code_drops_only_that_source() {
         let mut restored = App::new();
-        let json = r#"{"tx":[{"channel":0,"id":256,"srcs":[{"name":"EngineSpeed","kind":2,"lo":0.0,"hi":8000.0,"period_us":2000000},{"name":"GearPosition","kind":200}]}]}"#;
+        let json = r#"{"tx":[{"channel":0,"id":256,"srcs":[{"name":"EngineSpeed","kind":1,"lo":0.0,"hi":8000.0,"period_us":2000000},{"name":"GearPosition","kind":200}]}]}"#;
         serde_json::from_str::<Config>(json)
             .unwrap()
             .apply(&mut restored);
@@ -792,7 +788,7 @@ mod tests {
             .expect("EngineStatus entry");
         assert_eq!(tx.srcs.len(), 1, "only the unreadable entry goes");
         assert_eq!(tx.srcs[0].name, "EngineSpeed");
-        assert_eq!(tx.srcs[0].kind, SrcKind::Sine, "kind 2 is Sine");
+        assert_eq!(tx.srcs[0].kind, SrcKind::Sine, "code 1 is Sine");
         assert_eq!(tx.srcs[0].period_us, 2_000_000);
     }
 

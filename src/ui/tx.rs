@@ -337,85 +337,70 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             src.kind = KINDS[pick];
         }
         let speed = ((src.hi - src.lo).abs() / 100.0).max(0.01);
-        if src.kind == SrcKind::Const {
+        ui.set_next_item_width(150.0);
+        let mut lo = src.lo;
+        if imgui::Drag::new("lo")
+            .speed(speed as f32)
+            .build(ui, &mut lo)
+        {
+            src.lo = lo;
+        }
+        ui.same_line();
+        ui.set_next_item_width(150.0);
+        let mut hi = src.hi;
+        if imgui::Drag::new("hi")
+            .speed(speed as f32)
+            .build(ui, &mut hi)
+        {
+            src.hi = hi;
+        }
+        if src.kind == SrcKind::Random {
             ui.set_next_item_width(220.0);
-            let mut v = src.value;
-            if imgui::Drag::new("value")
-                .speed(speed as f32)
-                .build(ui, &mut v)
+            let mut ms = src.redraw_us as f64 / 1000.0;
+            if imgui::Drag::new("redraw ms")
+                .speed(1.0)
+                .range(0.0f64, 600_000.0)
+                .build(ui, &mut ms)
             {
-                src.value = v;
+                src.redraw_us = (ms * 1000.0).max(0.0) as u64;
+            }
+            ui.set_next_item_width(220.0);
+            let mut seed = src.seed as f64;
+            if imgui::Drag::new("seed").speed(1.0).build(ui, &mut seed) {
+                src.seed = seed.max(0.0) as u64;
             }
         } else {
-            ui.set_next_item_width(150.0);
-            let mut lo = src.lo;
-            if imgui::Drag::new("lo")
-                .speed(speed as f32)
-                .build(ui, &mut lo)
+            ui.set_next_item_width(220.0);
+            let mut ms = src.period_us as f64 / 1000.0;
+            if imgui::Drag::new("period ms")
+                .speed(10.0)
+                .range(1.0f64, 600_000.0)
+                .build(ui, &mut ms)
             {
-                src.lo = lo;
+                src.period_us = (ms * 1000.0).max(1.0) as u64;
             }
-            ui.same_line();
-            ui.set_next_item_width(150.0);
-            let mut hi = src.hi;
-            if imgui::Drag::new("hi")
-                .speed(speed as f32)
-                .build(ui, &mut hi)
+            ui.set_next_item_width(220.0);
+            let mut ms = src.phase_us as f64 / 1000.0;
+            if imgui::Drag::new("phase ms")
+                .speed(10.0)
+                .range(0.0f64, src.period_us as f64 / 1000.0)
+                .build(ui, &mut ms)
             {
-                src.hi = hi;
+                src.phase_us = (ms * 1000.0).max(0.0) as u64;
             }
-        }
-        match src.kind {
-            SrcKind::Const => {}
-            SrcKind::Random => {
-                ui.set_next_item_width(220.0);
-                let mut ms = src.redraw_us as f64 / 1000.0;
-                if imgui::Drag::new("redraw ms")
-                    .speed(1.0)
-                    .range(0.0f64, 600_000.0)
-                    .build(ui, &mut ms)
+            if src.kind == SrcKind::Step {
+                ui.set_next_item_width(300.0);
+                if ui
+                    .input_text("steps", &mut app.src_seq_buf)
+                    .hint("0, 30, 60, 90")
+                    .build()
                 {
-                    src.redraw_us = (ms * 1000.0).max(0.0) as u64;
-                }
-                ui.set_next_item_width(220.0);
-                let mut seed = src.seed as f64;
-                if imgui::Drag::new("seed").speed(1.0).build(ui, &mut seed) {
-                    src.seed = seed.max(0.0) as u64;
-                }
-            }
-            kind => {
-                ui.set_next_item_width(220.0);
-                let mut ms = src.period_us as f64 / 1000.0;
-                if imgui::Drag::new("period ms")
-                    .speed(10.0)
-                    .range(1.0f64, 600_000.0)
-                    .build(ui, &mut ms)
-                {
-                    src.period_us = (ms * 1000.0).max(1.0) as u64;
-                }
-                ui.set_next_item_width(220.0);
-                let mut ms = src.phase_us as f64 / 1000.0;
-                if imgui::Drag::new("phase ms")
-                    .speed(10.0)
-                    .range(0.0f64, src.period_us as f64 / 1000.0)
-                    .build(ui, &mut ms)
-                {
-                    src.phase_us = (ms * 1000.0).max(0.0) as u64;
-                }
-                if kind == SrcKind::Step {
-                    ui.set_next_item_width(300.0);
-                    if ui
-                        .input_text("steps", &mut app.src_seq_buf)
-                        .hint("0, 30, 60, 90")
-                        .build()
-                    {
-                        let seq = parse_seq(&app.src_seq_buf);
-                        // Ignore a text that parses to nothing: an empty seq
-                        // already means "toggle lo/hi", so clearing the box by
-                        // mistake must not silently drop a defined sequence.
-                        if !seq.is_empty() {
-                            src.seq = seq;
-                        }
+                    let seq = parse_seq(&app.src_seq_buf);
+                    // Ignore a text that parses to nothing: an empty seq already
+                    // means "toggle lo/hi", so clearing the box by mistake must
+                    // not silently drop a defined sequence.
+                    if !seq.is_empty() {
+                        src.seq = seq;
                     }
                 }
             }
