@@ -365,6 +365,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         );
     } else if stacked {
         let ph = h / keys.len() as f32;
+        let last = keys.len() - 1;
         for (k, key) in keys.iter().enumerate() {
             draw_plot(
                 &dl,
@@ -377,11 +378,17 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                 t_right,
                 tw,
                 budget,
+                // The time axis is shared, so labelling it once at the bottom
+                // is enough -- per pane it collided with the next pane's top
+                // value label.
+                k == last,
                 cursor,
             );
         }
     } else {
-        draw_plot(&dl, app, x0, y0, w, h, &keys, t_right, tw, budget, cursor);
+        draw_plot(
+            &dl, app, x0, y0, w, h, &keys, t_right, tw, budget, true, cursor,
+        );
     }
 
     ui.dummy([w, h]);
@@ -417,6 +424,7 @@ fn draw_plot(
     t_right: f64,
     tw: f64,
     budget: CurveBudget,
+    time_labels: bool,
     cursor: Option<(f32, f64)>,
 ) {
     // Everything below works in the inset rect, leaving the gutter and bottom
@@ -476,7 +484,7 @@ fn draw_plot(
         let x = x0 + w * g as f32 / 10.0;
         dl.add_line([x, y0], [x, y0 + h], [0.18, 0.18, 0.22, 1.0])
             .build();
-        if g % 2 == 0 && g < 10 && h > 20.0 {
+        if time_labels && g % 2 == 0 && g < 10 && h > 20.0 {
             let t = t_min + tw * g as f64 / 10.0;
             let text = format!("{:.1}s", t);
             let lx = (x - label_width(&text) * 0.5).max(x0 - AXIS_GUTTER_W + 2.0);

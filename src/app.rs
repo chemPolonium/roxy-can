@@ -2020,8 +2020,13 @@ impl App {
                 data: f.data,
                 flags: f.flags,
             });
-            if agg.count > 0 {
-                let dt = f.t_us.saturating_sub(agg.last_t_us) as f64;
+            // Only a strictly later timestamp marks a real cycle. A backwards
+            // or repeated one is a discontinuity -- a seek, or an out-of-order
+            // log row -- and folding it in used to pin `min_us` at zero for the
+            // rest of the run. The running average keeps its pre-seek value and
+            // resumes blending at the next real interval.
+            if agg.count > 0 && f.t_us > agg.last_t_us {
+                let dt = (f.t_us - agg.last_t_us) as f64;
                 agg.cycle_us = if agg.count == 1 {
                     dt
                 } else {
@@ -3309,6 +3314,42 @@ mod tests {
              then zig-zags between them and reads as a thick band",
             tight
         );
+        app.stop();
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn a_rewind_does_not_record_a_zero_cycle_time() {
+        let (mut app, _key, file) = app_with_replayable_recording("cycle_rebase", 60);
+        app.replay();
+        app.set_replay_speed(4.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        let (_, dur) = app.replay_position().unwrap();
+        assert!(!app.aggs.is_empty(), "setup: messages should be aggregated");
+
+        // Walk back over ground already seen: every replayed frame is a
+        // backwards timestamp for its message, which used to be folded in as a
+        // zero-length cycle.
+        app.seek_replay_seconds(dur / 3.0);
+        app.play();
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(11));
+            app.update();
+        }
+        for agg in app.aggs.values() {
+            if agg.count > 1 {
+                assert!(
+                    agg.min_us > 0.0,
+                    "message {:#05X} reports a {} us minimum cycle after a rewind",
+                    agg.id,
+                    agg.min_us
+                );
+            }
+        }
         app.stop();
         std::fs::remove_file(&file).ok();
     }
