@@ -1,6 +1,6 @@
 # roxy-can
 
-一个基于 Rust + Dear ImGui 的 CAN 总线分析工具，界面与交互参考 CANoe。总线数量不固定，可在 **Buses** 窗口中增删并自定义名称，每条总线各挂一个 DBC；Data/Graphics 窗口是纯信号观测器，可跨总线混合选择信号。虚拟模式下总线默认空闲，报文由内置信号生成器（Interactive Generator）产生；帧模型覆盖经典 CAN、**CAN FD**（变长载荷至 64 字节、BRS/ESI 标志）、以及错误帧 / 远程帧，支持 DBC 解码，以及与 Vector/CANoe 兼容的 ASC 录制与 ASC/BLF 回放（大文件走 mmap 流式加载）。
+一个基于 Rust + Dear ImGui 的 CAN 总线分析工具，界面与交互参考 CANoe。总线数量不固定，可在 **Buses** 窗口中增删并自定义名称，每条总线各挂一个 DBC；Data/Graphics 窗口是纯信号观测器，可跨总线混合选择信号。虚拟模式下总线默认空闲，报文由内置信号生成器（Interactive Generator）产生，信号还可选常量/斜坡/正弦/阶跃/随机激励随仿真时间连续变化；帧模型覆盖经典 CAN、**CAN FD**（变长载荷至 64 字节、BRS/ESI 标志）、以及错误帧 / 远程帧，支持 DBC 解码，以及与 Vector/CANoe 兼容的 ASC 录制与 ASC/BLF 回放（大文件走 mmap 流式加载）。
 
 ![roxy-can](screenshot.png)
 
@@ -9,6 +9,9 @@
 - **CAN FD / 错误帧 / 远程帧帧模型**：载荷变长至 64 字节，DLC 码与真实字节长度分离，FD 帧携带 BRS / ESI 标志；同时识别经典 CAN 的错误帧（`e` 类型）与远程帧（`r` 类型），并在 Trace 中给错误行铺红底、远程行铺淡紫底；Trace / Messages / Statistics 共用一个 `Flags` 列显示 `FD` / `FD·B` / `FD·E` / `FD·BE` / `ERR` / `RTR`；错误帧不进入 Messages / Statistics 聚合，远程帧的 payload 视为空；经典 CAN 数据帧行为完全向后兼容
 - **动态总线**：Buses 窗口（View → Buses）中可添加/删除总线、自定义总线名、为每条总线单独加载 DBC；删除总线时所有观测器、过滤器、生成器自动重映射
 - **Interactive Generator（信号生成器）**：所有总线的 DBC 报文即开即用，支持按周期发送、按信号拖拽编辑物理值（自动编码为数据字节）或按 hex 编辑；每条报文带 FD 勾选（DBC 报文 >8 字节时自动置为 FD），hex 编辑最多 64 字节；搜索框按名称/ID 过滤，每条总线可一键 All On / All Off
+  - **信号激励（value source）**：每个信号可选 **Off / Const / Ramp / Sine / Step / Random**，取值随仿真时间连续变化，起测量后在 Graphics 里直接看到曲线。信号行右侧下拉选形状，`...` 弹窗设参数（lo/hi、周期、相位；Random 为 redraw 间隔与 seed；Step 为逗号分隔序列）。首次启用时按 DBC 量程快照 lo/hi，之后显式存储并随工程文件保存；选 Off 即回到该信号的 base 值。启用激励的报文标题会显示 `N driven`，被驱动的信号实时值前缀 `~`
+  - **base 与激励分离**：hex 框与滑块编辑的是 base 报文，激励只在发送瞬间叠加、永不改写 base（`base` 标签提示该行有激励）。暂停时拖动某个信号的滑块＝"就地按停"，只清掉这一个信号的激励，其他信号仍在动；改 hex 不会销毁已配好的激励
+  - **仿真时基**：生成帧打在理论时隙上（不是 UI 心跳），所以 Statistics 的周期 Min/Avg/Max 恒等于设定周期，Trace 时间列与录制的 ASC 也落在仿真时基上；UI 卡顿会丢弃积压周期而不是补发一串；暂停会冻结仿真时钟，波形相位与发送计划停在原地，恢复后继续、不跳相位
 - **Trace / Messages / Statistics 均可多开**：在 Measurement Setup 中用 +Trace / +Messages / +Statistics 新建，每个窗口有独立的过滤设置
 - **Signals 选项**：每个观测器一个 Signals 下拉框，三档可选——所有总线、某一条总线、Manual（手动勾选，各窗口的勾选项互相独立）；选 "…" 打开 Message Selection 弹窗，按报文勾选，勾选即切换为 Manual，Clear 恢复为所有总线
 - **Trace 视图**：逐帧滚动显示，含时间、总线、ID、报文名、数据、方向（Tx 高亮），支持 Signals 范围 + 文本/方向/DBC-only 过滤；点列头可按该列排序（第三次点击恢复默认新→旧）；右键行可快速过滤该 ID、清除过滤、加入生成器或复制整行/ID，可按当前过滤导出 ASC
@@ -59,7 +62,7 @@ cargo test
 ## 使用
 
 1. 用工具栏的 **Simulation / Replay** 下拉选择模式（切换时自动停止当前运行），点 **Play** 启动（同一按钮切换暂停/继续），`<<` `>>` 逐级调整回放倍速，**Stop** 停止：仿真模式跑虚拟总线，回放模式回放已加载的 ASC/BLF（未加载时弹出文件选择）；菜单栏 **File** 可打开 DBC/日志、导出与退出，**Measurement** 可启停/暂停，**View** 开关各面板（默认两条总线：CAN1 挂 `assets/sample.dbc`、CAN2 挂 `assets/motbus.dbc`）
-2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分
+2. 在 **Interactive Generator** 中勾选报文 **On** 产生总线流量（可展开按信号调整数值），报文按总线区分。要让某个信号自己动起来：在该信号右侧下拉里选形状（如 Sine），点 `...` 设 lo/hi 与周期，例如 `EngineSpeed` 选 Sine、lo 0 / hi 8000 / period 2000 ms，起测量后把它加进 Graphics 就是一条连续正弦；拖该信号的滑块会把它"按停"在当前位置，下拉改回 Off 则完全交还 base 值
 3. **View → Buses** 管理总线：改名、**Open...** 为单条总线加载 DBC、**+ Add bus** 新增、**x** 删除；**Open Log...** 只加载日志（ASC 或 BLF），回放由 **Play** 启动；`<<` `>>` 逐级变倍速，Stop 后的倍速下拉直接选择（0.5x/1x/2x/4x）；倍速下拉右侧的**时间轴可拖动定位**到任意时刻（暂停时拖完再 Play 从落点继续；日志播完后拖回去再按 Play 会原地续播，按 **Stop** 再 Play 才从头重放）；**回放进行中不能更换日志**——`Open Log...` 与 Recent Logs 会置灰，需先 **Stop**（Stop 后换日志会强制从头打开新文件，不会续播上一个）
 4. 勾选 **Record** 录制 ASC；**Measurement Setup** 表里可总览所有观测器，点 "->" 打开并跳转到对应窗口，并在此新增/删除各类窗口、逐个导出
 5. 每个观测器行内选择 **Signals** 范围（所有总线 / 单条总线 / Manual），Manual 时点 "…" 在 Message Selection 弹窗中勾选报文
