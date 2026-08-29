@@ -15,7 +15,7 @@ const SHORTCUTS: [(&str, &str); 11] = [
     ("Ctrl+Shift+S", "工程另存为"),
 ];
 
-fn popup_is_open(_ui: &Ui, id: &str) -> bool {
+pub(crate) fn popup_is_open(_ui: &Ui, id: &str) -> bool {
     let cstr = std::ffi::CString::new(id).unwrap();
     unsafe { imgui::sys::igIsPopupOpen_Str(cstr.as_ptr(), imgui::sys::ImGuiPopupFlags_None as i32) }
 }

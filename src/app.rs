@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN, dlc2len, len2dlc};
 use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 use crate::dbc::SymbolTable;
 use crate::log::AscWriter;
 use crate::log::open_stream;
+use crate::sim::{ValueSrc, eval_phys};
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
 use crate::source::{FrameSource, FrameStream};
@@ -360,6 +361,78 @@ pub struct TxMsg {
     pub cycle_us: u64,
     pub active: bool,
     pub next_t_us: u64,
+    /// Signals whose value is generated over time rather than held at whatever
+    /// `data` says. Applied on top of the base payload at emit time; `data`
+    /// itself is never rewritten by them. See [`crate::sim`].
+    pub srcs: Vec<ValueSrc>,
+}
+
+/// Whitespace-separated hex bytes, as typed in the generator's data box.
+/// Returns None on an empty, over-long or non-hex string.
+fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
+    let toks: Vec<&str> = s.split_whitespace().collect();
+    if toks.is_empty() || toks.len() > MAX_CAN_FD_LEN {
+        return None;
+    }
+    let mut out = Vec::with_capacity(toks.len());
+    for t in toks {
+        out.push(u8::from_str_radix(t, 16).ok()?);
+    }
+    Some(out)
+}
+
+fn hex_text(data: &[u8; MAX_CAN_FD_LEN], len: u8) -> String {
+    data[..len.min(MAX_CAN_FD_LEN as u8) as usize]
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Payload for one generated frame: `tx`'s base bytes with every driven signal
+/// overwritten by its value at `at_us`. Never mutates `tx`, so `data` and
+/// `len` stay whatever the user set and a save captures the base rather than
+/// wherever the waveform happened to be.
+///
+/// Takes `channels` explicitly rather than `&self` so the generator can call it
+/// while holding a mutable borrow of `tx_list`.
+fn tx_payload(
+    channels: &[Channel],
+    tx: &TxMsg,
+    at_us: u64,
+) -> ([u8; MAX_CAN_FD_LEN], u8, FrameFlags) {
+    let mut data = tx.data;
+    let mut len = tx.len;
+    let mut flags = tx.flags;
+    let Some((table, msg)) = channels
+        .get(tx.channel as usize)
+        .and_then(|c| c.dbc.as_ref())
+        .and_then(|db| db.messages.get(&tx.id).map(|m| (db, m)))
+    else {
+        return (data, len, flags);
+    };
+    for src in &tx.srcs {
+        let Some(s) = msg.signals.iter().find(|s| s.name == src.name) else {
+            continue;
+        };
+        // The whole 64-byte array goes in: encode_signal skips bits that fall
+        // outside its argument, so a narrowed slice would silently drop them.
+        if !table.encode_signal(tx.id, &src.name, eval_phys(src, at_us), &mut data) {
+            continue;
+        }
+        // A driven signal reaching past the base length must widen the frame,
+        // or decoders -- including our own plots -- read the value as zero.
+        let needed = ((s.start_bit + s.size) as usize)
+            .div_ceil(8)
+            .min(MAX_CAN_FD_LEN);
+        len = len.max(needed as u8);
+    }
+    if len > 8 {
+        // Snap to a length a real FD frame can carry, and say so.
+        len = dlc2len(len2dlc(len));
+        flags = flags.union(FrameFlags::FD);
+    }
+    (data, len, flags)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -490,6 +563,12 @@ pub struct App {
     pub net_selected: usize,
     pub tx_list: Vec<TxMsg>,
     pub tx_pick: usize,
+    /// Generator row whose value-source parameters the modal is editing:
+    /// index into `tx_list` plus the DBC signal name.
+    pub src_edit: Option<(usize, String)>,
+    /// Edit buffer for the step sequence, kept on `App` so the text box keeps
+    /// its caret and partial input across frames.
+    pub src_seq_buf: String,
     pub last_tick_us: u64,
     /// Simulation clock: accumulates only while measuring and unpaused.
     /// Generator frames are stamped on it and their signal values are evaluated
@@ -586,6 +665,8 @@ impl App {
             net_selected: 0,
             tx_list: Vec::new(),
             tx_pick: 0,
+            src_edit: None,
+            src_seq_buf: String::new(),
             last_tick_us: 0,
             sim_t_us: 0,
             sim_prev_us: 0,
@@ -1998,6 +2079,7 @@ impl App {
 
         // Generators only transmit in live simulation; replaying an ASC must
         // not mix in synthetic frames from active generator entries.
+        let channels = &self.channels;
         if matches!(self.mode, Mode::Virtual) {
             for tx in &mut self.tx_list {
                 if !tx.active || tx.cycle_us == 0 || tx.next_t_us > sim {
@@ -2012,15 +2094,19 @@ impl App {
                     let behind = (sim - tx.next_t_us) / tx.cycle_us + 1;
                     tx.next_t_us += behind * tx.cycle_us;
                 }
+                // Values are read at the slot, not at `sim`: a frame stamped
+                // `slot` must carry the waveform's value at `slot`, or every
+                // payload would lead its own timestamp by up to a full cycle.
+                let (data, len, flags) = tx_payload(channels, tx, slot);
                 self.buf.push(CanFrame {
                     t_us: slot,
                     channel: tx.channel,
                     id: tx.id,
                     extended: tx.extended,
-                    len: tx.len,
-                    data: tx.data,
+                    len,
+                    data,
                     dir: Direction::Tx,
-                    flags: tx.flags,
+                    flags,
                 });
             }
         }
@@ -2347,6 +2433,7 @@ impl App {
         self.tx_list.push(TxMsg {
             channel,
             id,
+            srcs: Vec::new(),
             extended: id > 0x7FF,
             name,
             len,
@@ -2361,6 +2448,78 @@ impl App {
             active: false,
             next_t_us: 0,
         });
+    }
+
+    /// Adds or replaces the source driving `src.name` on generator `i`.
+    pub fn set_source(&mut self, i: usize, src: ValueSrc) {
+        let Some(tx) = self.tx_list.get_mut(i) else {
+            return;
+        };
+        match tx.srcs.iter_mut().find(|s| s.name == src.name) {
+            Some(held) => *held = src,
+            None => tx.srcs.push(src),
+        }
+    }
+
+    /// Stops driving `name`, which leaves the base bytes in charge again.
+    pub fn clear_source(&mut self, i: usize, name: &str) {
+        if let Some(tx) = self.tx_list.get_mut(i) {
+            tx.srcs.retain(|s| s.name != name);
+        }
+    }
+
+    /// Writes a physical value into the base payload and pins that signal by
+    /// dropping only its source: grabbing a moving slider means "hold here".
+    pub fn pin_signal(&mut self, i: usize, name: &str, phys: f64) -> bool {
+        let Some(tx) = self.tx_list.get(i) else {
+            return false;
+        };
+        let (channel, id, mut data) = (tx.channel, tx.id, tx.data);
+        let Some(table) = self.channel_dbc(channel) else {
+            return false;
+        };
+        if !table.encode_signal(id, name, phys, &mut data) {
+            return false;
+        }
+        let msg_size = table
+            .messages
+            .get(&id)
+            .map(|m| m.dlc.min(MAX_CAN_FD_LEN as u64) as u8)
+            .unwrap_or(0);
+        let tx = &mut self.tx_list[i];
+        tx.srcs.retain(|s| s.name != name);
+        let len = tx.len.max(msg_size);
+        Self::set_tx_base(tx, data, len);
+        true
+    }
+
+    /// Replaces the base payload from the generator's hex box. Active sources
+    /// deliberately survive: correcting one byte must not throw away a whole
+    /// stimulus setup. Returns false if the text is not whole hex bytes.
+    pub fn set_tx_hex(&mut self, i: usize, text: &str) -> bool {
+        let Some(bytes) = parse_hex_bytes(text) else {
+            return false;
+        };
+        let Some(tx) = self.tx_list.get_mut(i) else {
+            return false;
+        };
+        let mut data = [0u8; MAX_CAN_FD_LEN];
+        data[..bytes.len()].copy_from_slice(&bytes);
+        let len = bytes.len() as u8;
+        Self::set_tx_base(tx, data, len);
+        true
+    }
+
+    /// Installs base bytes and keeps length, the FD flag and the hex text in
+    /// step with them.
+    fn set_tx_base(tx: &mut TxMsg, data: [u8; MAX_CAN_FD_LEN], len: u8) {
+        let len = len.min(MAX_CAN_FD_LEN as u8);
+        tx.data = data;
+        tx.len = len;
+        if len > 8 {
+            tx.flags = tx.flags.union(FrameFlags::FD);
+        }
+        tx.data_text = hex_text(&data, len);
     }
 
     pub fn bus_counter(&self) -> usize {
@@ -2658,6 +2817,180 @@ mod tests {
             "resuming absorbed the paused span: sim advanced {} us",
             app.sim_t_us - before
         );
+        app.stop();
+    }
+
+    /// A 16-byte message with one signal in the classic area and one starting at
+    /// byte 9, so payload widening is testable without an FD asset.
+    const WIDE_DBC: &str = r#"VERSION "roxy-can test database"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 768 WideMsg: 16 ECU
+ SG_ NearSig : 0|16@1+ (1,0) [0|65535] "" ECU
+ SG_ FarSig : 72|16@1+ (1,0) [0|65535] "" ECU
+"#;
+
+    /// Channel 0 on [`WIDE_DBC`] with one active, source-driven `WideMsg`. The
+    /// default period is one second, so a slot `t` microseconds into the run
+    /// carries `(t as f64 / 1e6) * hi`.
+    fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App {
+        let mut app = App::new();
+        app.channels[0].dbc = Some(crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"));
+        app.add_tx(0, 0x300);
+        let tx = app.tx_list.last_mut().expect("tx entry added");
+        tx.cycle_us = 20_000;
+        tx.active = true;
+        tx.srcs.push(ValueSrc::new(signal, kind, lo, hi));
+        app.start_virtual();
+        app
+    }
+
+    fn emitted(app: &App, id: u32) -> Vec<CanFrame> {
+        app.trace.iter().filter(|f| f.id == id).copied().collect()
+    }
+
+    fn raw_at(f: &CanFrame, start_bit: u64) -> u64 {
+        crate::decode::extract_raw(&f.data, start_bit, 16, false)
+    }
+
+    #[test]
+    fn a_driven_signal_carries_the_value_of_its_own_timestamp() {
+        // Ticks land off the 20 ms slot grid on purpose, so a payload read at
+        // the tick instead of at the stamp it carries would come out wrong.
+        let mut app = driven_app("NearSig", crate::sim::SrcKind::Ramp, 0.0, 1000.0);
+        run_sim(&mut app, 12, 7_000);
+        let frames = emitted(&app, 0x300);
+        let slots: Vec<u64> = frames.iter().map(|f| f.t_us).collect();
+        assert_eq!(slots, vec![0, 20_000, 40_000, 60_000, 80_000]);
+        let vals: Vec<u64> = frames.iter().map(|f| raw_at(f, 0)).collect();
+        assert_eq!(
+            vals,
+            vec![0, 20, 40, 60, 80],
+            "each frame must hold the ramp value at its own stamp"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn the_wall_clock_cannot_move_a_generated_value() {
+        let value_at = |now_us: u64| {
+            let mut app = driven_app("NearSig", crate::sim::SrcKind::Ramp, 0.0, 1000.0);
+            app.tx_list.last_mut().unwrap().next_t_us = 40_000;
+            app.sim_t_us = 45_000;
+            app.tick(now_us);
+            raw_at(&emitted(&app, 0x300)[0], 0)
+        };
+        assert_eq!(
+            value_at(45_000),
+            value_at(9_999_999),
+            "payloads must depend on simulation time only"
+        );
+        assert_eq!(value_at(9_999_999), 40, "the value at the slot stamped");
+    }
+
+    #[test]
+    fn driving_a_signal_leaves_the_base_payload_alone() {
+        let mut app = driven_app("NearSig", crate::sim::SrcKind::Sine, 0.0, 1000.0);
+        let base = app.tx_list.last().unwrap().data;
+        run_sim(&mut app, 30, 7_000);
+        assert!(
+            emitted(&app, 0x300).iter().any(|f| raw_at(f, 0) != 0),
+            "the source should have moved something by now"
+        );
+        assert_eq!(
+            app.tx_list.last().unwrap().data,
+            base,
+            "a waveform sample must not become the saved base payload"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_driven_signal_past_byte_8_widens_the_frame() {
+        let mut app = driven_app("FarSig", crate::sim::SrcKind::Ramp, 0.0, 1000.0);
+        let i = app.tx_list.len() - 1;
+        assert!(app.set_tx_hex(i, "00 01 02 03 04 05 06 07"));
+        app.tx_list[i].next_t_us = 70_000;
+        app.sim_t_us = 70_000;
+        app.tick(70_000);
+        let f = emitted(&app, 0x300).pop().expect("one frame");
+        // Bits 72..88 need 11 bytes; 11 is not a legal FD length, so the frame
+        // goes out at 12 with the FD flag set.
+        assert_eq!(f.len, 12, "widened to the next legal FD length");
+        assert!(f.flags.contains(FrameFlags::FD), "widening implies FD");
+        assert_eq!(raw_at(&f, 72), 70, "the driven bytes are really there");
+        assert_eq!(raw_at(&f, 0), 0x0100, "the base bytes still come through");
+        assert_eq!(
+            app.tx_list[i].len, 8,
+            "only the emitted frame grows, not the base"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn pin_signal_stops_only_that_signal() {
+        let mut app = driven_app("NearSig", crate::sim::SrcKind::Ramp, 0.0, 1000.0);
+        let i = app.tx_list.len() - 1;
+        app.set_source(
+            i,
+            ValueSrc::new("FarSig", crate::sim::SrcKind::Sine, 0.0, 100.0),
+        );
+        assert_eq!(app.tx_list[i].srcs.len(), 2);
+        assert!(app.pin_signal(i, "NearSig", 250.0));
+        let names: Vec<&str> = app.tx_list[i]
+            .srcs
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["FarSig"], "pinning must not stop the other source");
+        assert_eq!(
+            crate::decode::extract_raw(&app.tx_list[i].data, 0, 16, false),
+            250,
+            "pinned into the base"
+        );
+        assert_eq!(
+            app.tx_list[i].data_text,
+            "FA 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+        );
+        assert!(
+            !app.pin_signal(i, "NoSuchSignal", 1.0),
+            "unknown signal refused"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_hex_edit_keeps_the_sources_running() {
+        let mut app = driven_app("NearSig", crate::sim::SrcKind::Ramp, 0.0, 1000.0);
+        let i = app.tx_list.len() - 1;
+        assert!(!app.set_tx_hex(i, "0 zz"), "non-hex must not apply");
+        assert_eq!(app.tx_list[i].len, 16, "the rejected edit changed nothing");
+        assert!(app.set_tx_hex(i, "11 22 33"));
+        assert_eq!(app.tx_list[i].len, 3);
+        assert_eq!(app.tx_list[i].data_text, "11 22 33", "text stays canonical");
+        assert_eq!(
+            app.tx_list[i].srcs.len(),
+            1,
+            "fixing one byte must not throw away the stimulus setup"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn set_source_replaces_by_name() {
+        let mut app = driven_app("NearSig", crate::sim::SrcKind::Ramp, 0.0, 1000.0);
+        let i = app.tx_list.len() - 1;
+        app.set_source(
+            i,
+            ValueSrc::new("NearSig", crate::sim::SrcKind::Sine, 0.0, 50.0),
+        );
+        assert_eq!(app.tx_list[i].srcs.len(), 1, "the same name is one source");
+        assert_eq!(app.tx_list[i].srcs[0].hi, 50.0, "and the later one wins");
+        app.clear_source(i, "NearSig");
+        assert!(app.tx_list[i].srcs.is_empty());
         app.stop();
     }
 

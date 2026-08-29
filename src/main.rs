@@ -6,6 +6,7 @@ mod config;
 mod dbc;
 mod decode;
 mod log;
+mod sim;
 mod source;
 mod ui;
 
