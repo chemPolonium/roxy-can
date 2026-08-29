@@ -324,12 +324,12 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     }
     let mut open = true;
     let mut applied = false;
-    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([340.0, 0.0]));
+    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([520.0, 240.0]));
     ui.modal_popup_config(ID).opened(&mut open).build(|| {
         applied = true;
         ui.text(format!("{msg_name}  {msg_id:X}  /  {sig} {unit}"));
         ui.separator();
-        ui.set_next_item_width(150.0);
+        ui.set_next_item_width(240.0);
         let mut pick = KINDS.iter().position(|k| *k == src.kind).unwrap_or(0);
         // Skip the leading "Off": the row combo turns a source off.
         let shapes = &kinds[1..];
@@ -337,7 +337,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             src.kind = KINDS[pick];
         }
         let speed = ((src.hi - src.lo).abs() / 100.0).max(0.01);
-        ui.set_next_item_width(150.0);
+        ui.set_next_item_width(220.0);
         let mut lo = src.lo;
         if imgui::Drag::new("lo")
             .speed(speed as f32)
@@ -346,7 +346,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             src.lo = lo;
         }
         ui.same_line();
-        ui.set_next_item_width(150.0);
+        ui.set_next_item_width(220.0);
         let mut hi = src.hi;
         if imgui::Drag::new("hi")
             .speed(speed as f32)
@@ -355,7 +355,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             src.hi = hi;
         }
         if src.kind == SrcKind::Random {
-            ui.set_next_item_width(220.0);
+            ui.set_next_item_width(340.0);
             let mut ms = src.redraw_us as f64 / 1000.0;
             if imgui::Drag::new("redraw ms")
                 .speed(1.0)
@@ -364,13 +364,13 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             {
                 src.redraw_us = (ms * 1000.0).max(0.0) as u64;
             }
-            ui.set_next_item_width(220.0);
+            ui.set_next_item_width(340.0);
             let mut seed = src.seed as f64;
             if imgui::Drag::new("seed").speed(1.0).build(ui, &mut seed) {
                 src.seed = seed.max(0.0) as u64;
             }
         } else {
-            ui.set_next_item_width(220.0);
+            ui.set_next_item_width(340.0);
             let mut ms = src.period_us as f64 / 1000.0;
             if imgui::Drag::new("period ms")
                 .speed(10.0)
@@ -379,7 +379,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             {
                 src.period_us = (ms * 1000.0).max(1.0) as u64;
             }
-            ui.set_next_item_width(220.0);
+            ui.set_next_item_width(340.0);
             let mut ms = src.phase_us as f64 / 1000.0;
             if imgui::Drag::new("phase ms")
                 .speed(10.0)
@@ -389,7 +389,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
                 src.phase_us = (ms * 1000.0).max(0.0) as u64;
             }
             if src.kind == SrcKind::Step {
-                ui.set_next_item_width(300.0);
+                ui.set_next_item_width(480.0);
                 if ui
                     .input_text("steps", &mut app.src_seq_buf)
                     .hint("0, 30, 60, 90")
