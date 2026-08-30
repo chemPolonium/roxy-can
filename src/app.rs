@@ -362,6 +362,10 @@ pub struct TxMsg {
     pub id: u32,
     pub extended: bool,
     pub name: String,
+    /// DBC node this message belongs to, i.e. its transmitter. Empty when the
+    /// database assigns no node. Derived by `add_tx` like `extended`, so it is
+    /// not saved in the project file.
+    pub node: String,
     pub len: u8,
     pub data: [u8; MAX_CAN_FD_LEN],
     pub flags: FrameFlags,
@@ -2427,6 +2431,76 @@ impl App {
         }
     }
 
+    /// Ticks or unticks a DBC node as one this tool transmits as.
+    ///
+    /// Ticking adds whatever generator entry the node is missing and switches
+    /// them on. The period of an entry that already exists is never rewritten,
+    /// so a value tuned by hand outlives the click. Unticking only stops
+    /// sending: entries keep their payload and waveforms, so ticking the node
+    /// again restores it exactly as it was.
+    pub fn set_node_sim(&mut self, channel: u8, node: &str, on: bool) {
+        // `""` is what the parser writes for "no transmitter assigned", and
+        // `node_tx_ids` matches it against every unassigned message at once.
+        if node.is_empty() || channel as usize >= self.channels.len() {
+            return;
+        }
+        // The tick is recorded first and unconditionally: a node that sends
+        // nothing still has to remember that we mean to be it.
+        let list = &mut self.channels[channel as usize].sim_nodes;
+        if on {
+            if !list.iter().any(|n| n == node) {
+                list.push(node.to_string());
+            }
+        } else {
+            list.retain(|n| n != node);
+        }
+
+        // Membership comes from the live database, not from each entry's
+        // stamped `node`: loading another DBC does not rebuild the generator,
+        // so a stamp can name a message this node no longer owns.
+        let ids = self
+            .channel_dbc(channel)
+            .map(|db| db.node_tx_ids(node))
+            .unwrap_or_default();
+        if on {
+            for id in &ids {
+                self.add_tx(channel, *id);
+            }
+            for t in &mut self.tx_list {
+                if t.channel == channel && ids.contains(&t.id) && !t.active {
+                    t.active = true;
+                    // Re-zeroed rather than kept: an entry left over from the
+                    // last tick still carries its old schedule, and picking it
+                    // up mid-cycle would hold it silent for a whole period.
+                    t.next_t_us = 0;
+                }
+            }
+        } else {
+            // The stamped name is included on the way out only, so unchecking
+            // still silences a node whose database has since been swapped or
+            // unloaded. "I unchecked it and it is still transmitting" is the
+            // one outcome a user cannot recover from by guessing.
+            for t in &mut self.tx_list {
+                if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
+                    t.active = false;
+                }
+            }
+        }
+        let bus = self.channel_name(channel);
+        self.status = if on {
+            format!("simulating {node} on {bus} ({} message(s))", ids.len())
+        } else {
+            format!("{node} stopped on {bus}")
+        };
+    }
+
+    /// Whether this bus was told to transmit as `node`.
+    pub fn is_node_simulated(&self, ch: u8, node: &str) -> bool {
+        self.channels
+            .get(ch as usize)
+            .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
+    }
+
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         if self
             .tx_list
@@ -2435,12 +2509,13 @@ impl App {
         {
             return;
         }
-        let (name, len, cycle_us) = self
+        let (name, node, len, cycle_us) = self
             .channel_dbc(channel)
             .and_then(|db| db.messages.get(&id))
             .map(|m| {
                 (
                     m.name.clone(),
+                    m.transmitter.clone(),
                     m.dlc.min(MAX_CAN_FD_LEN as u64) as u8,
                     // A declared 0 is event-triggered, so `unwrap_or` rather
                     // than `unwrap_or_default` on the Option: only "the DBC
@@ -2448,7 +2523,7 @@ impl App {
                     m.cycle_us.unwrap_or(DEFAULT_TX_CYCLE_US),
                 )
             })
-            .unwrap_or_else(|| (format!("{id:X}"), 8, DEFAULT_TX_CYCLE_US));
+            .unwrap_or_else(|| (format!("{id:X}"), String::new(), 8, DEFAULT_TX_CYCLE_US));
         let data_text = vec!["00"; len as usize].join(" ");
         self.tx_list.push(TxMsg {
             channel,
@@ -2456,6 +2531,7 @@ impl App {
             srcs: Vec::new(),
             extended: id > 0x7FF,
             name,
+            node,
             len,
             data: [0; MAX_CAN_FD_LEN],
             flags: if len > 8 {
@@ -3095,6 +3171,166 @@ BA_ "GenMsgCycleTime" BO_ 4096 0;
             app.channels[0].sim_nodes,
             ["ABS"],
             "the survivor keeps its own nodes instead of inheriting the deleted bus's"
+        );
+    }
+
+    /// What one bus is actually putting on the wire right now.
+    fn active_ids(app: &App, ch: u8) -> Vec<u32> {
+        let mut ids: Vec<u32> = app
+            .tx_list
+            .iter()
+            .filter(|t| t.channel == ch && t.active)
+            .map(|t| t.id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
+        app.tx_list
+            .iter()
+            .find(|t| t.channel == ch && t.id == id)
+            .expect("entry exists")
+    }
+
+    #[test]
+    fn ticking_a_node_activates_only_its_own_messages() {
+        let mut app = App::new();
+        app.set_node_sim(1, "ABS", true);
+        // assets/motbus.dbc:31,35,54 -- ABS owns these three, nobody else.
+        assert_eq!(active_ids(&app, 1), [199, 200, 201]);
+        assert!(active_ids(&app, 0).is_empty(), "the other bus untouched");
+        assert!(
+            app.tx_list
+                .iter()
+                .filter(|t| t.channel == 1 && t.active)
+                .all(|t| t.next_t_us == 0),
+            "a ticked node starts on the next tick, not one period later"
+        );
+        assert!(app.is_node_simulated(1, "ABS"));
+        assert!(!app.is_node_simulated(1, "GearBox"), "not a side effect");
+    }
+
+    #[test]
+    fn ticking_a_node_creates_the_entries_it_lacks() {
+        let mut app = App::new();
+        app.tx_list.clear();
+        app.set_node_sim(1, "ABS", true);
+        assert_eq!(
+            active_ids(&app, 1),
+            [199, 200, 201],
+            "the generator refills from the DBC"
+        );
+        assert_eq!(app.tx_list.len(), 3, "and only this node's messages");
+        assert_eq!(entry_of(&app, 1, 201).name, "ABSdata");
+        assert_eq!(entry_of(&app, 1, 201).cycle_us, 50_000);
+    }
+
+    #[test]
+    fn ticking_a_node_never_overwrites_a_tuned_cycle() {
+        let mut app = App::new();
+        let tuned = entry_of(&app, 1, 201).cycle_us;
+        assert_eq!(tuned, 50_000, "what the DBC declares");
+        let i = app
+            .tx_list
+            .iter()
+            .position(|t| t.channel == 1 && t.id == 201)
+            .unwrap();
+        app.tx_list[i].cycle_us = 250_000;
+        app.set_node_sim(1, "ABS", true);
+        assert_eq!(
+            app.tx_list[i].cycle_us, 250_000,
+            "a period someone dialed in outlives the click"
+        );
+        assert!(app.tx_list[i].active, "but the entry is switched on");
+    }
+
+    #[test]
+    fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
+        let mut app = App::new();
+        app.set_node_sim(1, "ABS", true);
+        let i = app
+            .tx_list
+            .iter()
+            .position(|t| t.channel == 1 && t.id == 201)
+            .unwrap();
+        app.set_source(
+            i,
+            ValueSrc::new("CarSpeed", crate::sim::SrcKind::Ramp, 0.0, 300.0),
+        );
+        let before = app.tx_list.len();
+
+        app.set_node_sim(1, "ABS", false);
+        assert!(active_ids(&app, 1).is_empty(), "stopped sending");
+        assert_eq!(app.tx_list.len(), before, "entries survive");
+        assert_eq!(app.tx_list[i].srcs.len(), 1, "with the waveform attached");
+        assert_eq!(app.tx_list[i].cycle_us, 50_000, "and the declared period");
+
+        app.set_node_sim(1, "ABS", true);
+        assert_eq!(
+            app.tx_list[i].srcs.len(),
+            1,
+            "ticking it back on does not rebuild the entry"
+        );
+        assert!(app.tx_list[i].active);
+    }
+
+    /// Loading a different database does not rebuild the generator, so the
+    /// only thing left to go by is the node stamped on each entry.
+    #[test]
+    fn unticking_still_silences_a_node_after_its_dbc_is_gone() {
+        let mut app = App::new();
+        app.set_node_sim(1, "ABS", true);
+        assert_eq!(active_ids(&app, 1).len(), 3);
+        app.channels[1].dbc = None;
+        app.set_node_sim(1, "ABS", false);
+        assert!(
+            active_ids(&app, 1).is_empty(),
+            "unchecking must work even with nothing to look up"
+        );
+        assert!(!app.is_node_simulated(1, "ABS"));
+    }
+
+    #[test]
+    fn a_receive_only_node_can_still_be_ticked() {
+        let mut app = App::new();
+        app.set_node_sim(1, "DashBoard", true);
+        assert!(active_ids(&app, 1).is_empty(), "it has no messages to send");
+        assert!(
+            app.is_node_simulated(1, "DashBoard"),
+            "the intent is remembered anyway"
+        );
+    }
+
+    /// The parser writes `""` for a transmitter the DBC never assigned, and
+    /// that matches every unassigned message at once.
+    const NO_OWNER_DBC: &str = r#"VERSION "roxy-can orphan test"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 4096 Orphan: 8 Vector__XXX
+ SG_ S : 0|8@1+ (1,0) [0|0] "" ECU
+
+"#;
+
+    #[test]
+    fn a_node_with_no_name_simulates_nothing() {
+        let mut app = App::new();
+        app.channels[0].dbc = Some(crate::dbc::load_dbc_str(NO_OWNER_DBC).unwrap());
+        app.tx_list.retain(|t| t.channel != 0);
+        app.add_tx(0, 4096);
+        assert_eq!(entry_of(&app, 0, 4096).node, "", "unassigned");
+
+        app.set_node_sim(0, "", true);
+        assert!(
+            app.channels[0].sim_nodes.is_empty(),
+            "not even recorded as a tick"
+        );
+        assert!(
+            active_ids(&app, 0).is_empty(),
+            "an empty name must not adopt every message without an owner"
         );
     }
 

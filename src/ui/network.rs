@@ -128,6 +128,18 @@ fn draw_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base
         dl.add_rect([bx, box_y], [bx + BOX_W, box_y + BOX_H], border)
             .rounding(6.0)
             .build();
+        // Amber bar on the left edge: "I transmit as this ECU". Deliberately a
+        // different channel from the green dot, which means "I have seen this
+        // ECU send" -- a simulated node that is also real shows both.
+        if app.is_node_simulated(ch as u8, &ni.name) {
+            dl.add_rect(
+                [bx + 3.0, box_y + 7.0],
+                [bx + 6.0, box_y + BOX_H - 7.0],
+                [0.95, 0.70, 0.20, 1.0],
+            )
+            .filled(true)
+            .build();
+        }
         let size = ui.calc_text_size(ni.name.clone());
         dl.add_text(
             [cx - size[0] / 2.0, box_y + (BOX_H - size[1]) / 2.0],
@@ -213,6 +225,16 @@ pub fn render(app: &mut App, ui: &Ui) {
                             ni.rx.len()
                         ),
                     );
+                    let mut sim = app.is_node_simulated(ch as u8, &ni.name);
+                    if ui.checkbox("Simulate this node", &mut sim) {
+                        app.set_node_sim(ch as u8, &ni.name, sim);
+                    }
+                    if ni.tx.is_empty() {
+                        ui.text_colored(
+                            [0.5, 0.5, 0.6, 1.0],
+                            "  (sends nothing -- ticking only records the intent)",
+                        );
+                    }
                     ui.text("Sent messages");
                     for (id, name) in &ni.tx {
                         let (count, cycle) = app

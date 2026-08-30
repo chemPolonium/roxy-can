@@ -847,9 +847,10 @@ mod tests {
     }
 
     /// Which nodes a bus simulates has to outlive the session, or the bus
-    /// composition a user set up is lost on every reload.
+    /// composition a user set up is lost on every reload. Restoring it must
+    /// not, however, start any traffic by itself.
     #[test]
-    fn simulated_nodes_round_trip() {
+    fn simulated_nodes_round_trip_without_starting_traffic() {
         let mut app = App::new();
         app.channels[1].sim_nodes = vec!["ABS".to_string(), "GearBox".to_string()];
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
@@ -861,6 +862,10 @@ mod tests {
         assert!(
             restored.channels[0].sim_nodes.is_empty(),
             "the other bus keeps its own list"
+        );
+        assert!(
+            restored.tx_list.iter().all(|t| !t.active),
+            "a read-only look at a saved project must not begin transmitting"
         );
     }
 
