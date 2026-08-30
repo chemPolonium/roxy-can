@@ -1,9 +1,9 @@
-use crate::app::{App, TOOLBAR_H};
+use crate::app::{App, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::can::frame::FrameFlags;
 use crate::dbc::SignalInfo;
 use crate::sim::{KINDS, SrcKind, ValueSrc, eval_phys};
 use crate::ui::help::popup_is_open;
-use imgui::{Condition, Ui};
+use imgui::{Condition, InputTextFlags, Key, Ui};
 
 /// Combo entries for a signal's source: "Off" first so picking index 0 means
 /// "stop driving this signal", the rest in [`KINDS`] order.
@@ -174,15 +174,19 @@ pub fn render(app: &mut App, ui: &Ui) {
                         }
                     }
                     ui.same_line();
-                    ui.set_next_item_width(90.0);
-                    let mut ms = app.tx_list[i].cycle_us as f32 / 1000.0;
-                    if imgui::Drag::new(format!("ms##cyc{i}"))
-                        .speed(1.0)
-                        .range(1.0f32, 60_000.0)
-                        .build(ui, &mut ms)
-                    {
-                        app.tx_list[i].cycle_us = ((ms as f64) * 1000.0) as u64;
-                        app.tx_list[i].next_t_us = 0;
+                    // Not an inline number box any more: dragging one edits its
+                    // text in place, and every keystroke was applied, so dialing
+                    // in 100 put the message on the wire at 1 ms first. The
+                    // dialog drafts it and only writes on Apply.
+                    let cycle = app.tx_list[i].cycle_us;
+                    let cyc = if cycle == 0 {
+                        "event".to_string()
+                    } else {
+                        format!("{} ms", cycle / 1000)
+                    };
+                    if ui.button_with_size(format!("{cyc}##cyc{i}"), [84.0, 0.0]) {
+                        app.tx_cycle_edit = Some(i);
+                        app.tx_cycle_buf = (cycle / 1000).to_string();
                     }
                     ui.same_line();
                     let mut fd = app.tx_list[i].flags.contains(FrameFlags::FD);
@@ -308,8 +312,124 @@ pub fn render(app: &mut App, ui: &Ui) {
     app.show_tx = open;
     if open {
         params_modal(app, ui, &kinds);
+        cycle_modal(app, ui);
     } else {
         app.src_edit = None;
+        app.tx_cycle_edit = None;
+    }
+}
+
+/// Send period of one message, drafted rather than written in place. The row
+/// held an inline number box before, and those apply every keystroke, so
+/// dialing in 100 put the message on the wire at 1 ms and then 10 ms on the way
+/// there. Nothing here touches the schedule until Apply.
+fn cycle_modal(app: &mut App, ui: &Ui) {
+    const ID: &str = "Send cycle##cycmodal";
+    let Some(row) = app.tx_cycle_edit else {
+        return;
+    };
+    let Some(tx) = app.tx_list.get(row) else {
+        app.tx_cycle_edit = None;
+        return;
+    };
+    let (ch, id, current, name) = (tx.channel, tx.id, tx.cycle_us, tx.name.clone());
+    let declared = app.dbc_cycle_us(ch, id);
+    if !popup_is_open(ui, ID) {
+        ui.open_popup(ID);
+    }
+    let mut open = true;
+    // `opened()` keeps `open` borrowed for the whole frame, so the widgets
+    // inside record a dismissal here instead.
+    let mut dismissed = false;
+    let mut confirmed: Option<u64> = None;
+    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([420.0, 0.0]));
+    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+        ui.text(format!("{}  {:X}  on {}", name, id, app.channel_name(ch)));
+        ui.separator();
+        // Focus and select on open, so click the row, type, Enter is the whole
+        // gesture; the old value is highlighted rather than left to delete.
+        if ui.is_window_appearing() {
+            ui.set_keyboard_focus_here();
+        }
+        ui.set_next_item_width(120.0);
+        let entered = ui
+            .input_text("ms", &mut app.tx_cycle_buf)
+            .flags(InputTextFlags::CHARS_DECIMAL | InputTextFlags::AUTO_SELECT_ALL)
+            .enter_returns_true(true)
+            .build();
+        // Still draggable for a coarse sweep, but it writes the same draft.
+        ui.same_line();
+        ui.set_next_item_width(220.0);
+        let mut sweep = cycle_from_ms_text(&app.tx_cycle_buf).unwrap_or(0) as f32 / 1000.0;
+        if imgui::Drag::new("##cycsweep")
+            .speed(1.0)
+            .range(0.0f32, TX_CYCLE_MAX_MS as f32)
+            .build(ui, &mut sweep)
+        {
+            app.tx_cycle_buf = (sweep.round().max(0.0) as u64).to_string();
+        }
+        let draft = cycle_from_ms_text(&app.tx_cycle_buf);
+        match draft {
+            Some(0) => {
+                ui.text_colored(
+                    [0.95, 0.70, 0.20, 1.0],
+                    "event-triggered: never sent on a timer",
+                );
+            }
+            Some(us) => {
+                ui.text(format!(
+                    "every {} ms  ({:.2} frames/s)",
+                    us / 1000,
+                    1_000_000.0 / us as f64
+                ));
+            }
+            None => {
+                ui.text_colored(
+                    [0.60, 0.60, 0.65, 1.0],
+                    format!("whole milliseconds, 1 to {TX_CYCLE_MAX_MS} -- or 0 for event"),
+                );
+            }
+        }
+        if let Some(d) = declared.filter(|d| *d != current) {
+            ui.text(format!(
+                "DBC declares {}",
+                if d == 0 {
+                    "event".to_string()
+                } else {
+                    format!("{} ms", d / 1000)
+                }
+            ));
+            ui.same_line();
+            if ui.small_button("use it") {
+                app.tx_cycle_buf = (d / 1000).to_string();
+            }
+        }
+        ui.separator();
+        if ui.is_key_pressed(Key::Escape) {
+            dismissed = true;
+        }
+        let dis = ui.begin_disabled(draft.is_none());
+        if ui.button_with_size("Apply", [90.0, 0.0]) || (entered && draft.is_some()) {
+            confirmed = draft;
+            ui.close_current_popup();
+        }
+        dis.end();
+        ui.same_line();
+        if ui.button_with_size("Cancel", [90.0, 0.0]) {
+            dismissed = true;
+        }
+    });
+    min.pop();
+    if let Some(us) = confirmed
+        && let Some(t) = app.tx_list.get_mut(row)
+    {
+        t.cycle_us = us;
+        // Same convention as every other way of switching a message on: the
+        // new schedule starts now rather than at the end of the old one.
+        t.next_t_us = 0;
+    }
+    if !open || dismissed || confirmed.is_some() {
+        app.tx_cycle_edit = None;
     }
 }
 

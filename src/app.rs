@@ -401,6 +401,18 @@ fn hex_text(data: &[u8; MAX_CAN_FD_LEN], len: u8) -> String {
         .join(" ")
 }
 
+/// Ceiling of the period the cycle dialog accepts, in milliseconds.
+pub(crate) const TX_CYCLE_MAX_MS: u64 = 60_000;
+
+/// The cycle dialog's draft text as microseconds. Whole milliseconds only, and
+/// 0 stays meaningful: it is an event-triggered message. Anything that does not
+/// read as a period -- half-deleted, fractional, out of range -- is refused so
+/// the dialog can disable its confirm button rather than guess one.
+pub(crate) fn cycle_from_ms_text(s: &str) -> Option<u64> {
+    let ms: u64 = s.trim().parse().ok()?;
+    (ms <= TX_CYCLE_MAX_MS).then_some(ms * 1_000)
+}
+
 /// Payload for one generated frame: `tx`'s base bytes with every driven signal
 /// overwritten by its value at `at_us`. Never mutates `tx`, so `data` and
 /// `len` stay whatever the user set and a save captures the base rather than
@@ -581,6 +593,12 @@ pub struct App {
     /// Edit buffer for the step sequence, kept on `App` so the text box keeps
     /// its caret and partial input across frames.
     pub src_seq_buf: String,
+    /// Generator row whose send period the cycle dialog is drafting. The value
+    /// stays a draft until the dialog confirms it: as an inline number box it
+    /// applied every keystroke, so dialing in 100 sent at 1 ms first.
+    pub tx_cycle_edit: Option<usize>,
+    /// Draft period in whole milliseconds for that row.
+    pub tx_cycle_buf: String,
     pub last_tick_us: u64,
     /// Simulation clock: accumulates only while measuring and unpaused.
     /// Generator frames are stamped on it and their signal values are evaluated
@@ -681,6 +699,8 @@ impl App {
             tx_pick: 0,
             src_edit: None,
             src_seq_buf: String::new(),
+            tx_cycle_edit: None,
+            tx_cycle_buf: String::new(),
             last_tick_us: 0,
             sim_t_us: 0,
             sim_prev_us: 0,
@@ -3340,6 +3360,23 @@ BA_ "GenMsgCycleTime" BO_ 4096 0;
             Some(0),
             "a declared 0 is event-triggered, not undeclared"
         );
+    }
+
+    #[test]
+    fn the_cycle_box_accepts_only_whole_milliseconds_in_range() {
+        assert_eq!(cycle_from_ms_text("100"), Some(100_000));
+        assert_eq!(cycle_from_ms_text("  133 "), Some(133_000));
+        assert_eq!(cycle_from_ms_text("0"), Some(0), "0 is event-triggered");
+        assert_eq!(
+            cycle_from_ms_text("60000"),
+            Some(60_000_000),
+            "top of the range"
+        );
+        assert_eq!(cycle_from_ms_text(""), None, "half-deleted text");
+        assert_eq!(cycle_from_ms_text("1.5"), None, "no sub-millisecond step");
+        assert_eq!(cycle_from_ms_text("-1"), None);
+        assert_eq!(cycle_from_ms_text("60001"), None, "past the ceiling");
+        assert_eq!(cycle_from_ms_text("abc"), None);
     }
 
     /// The parser writes `""` for a transmitter the DBC never assigned, and
