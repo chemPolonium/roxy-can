@@ -189,8 +189,25 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.checkbox(format!("FD##{i}"), &mut fd) {
                         app.tx_list[i].flags = if fd { FrameFlags::FD } else { FrameFlags::NONE };
                     }
+                    // Only ever shown when the two disagree, so a row that
+                    // matches its database stays exactly as wide as before.
+                    let off = app
+                        .dbc_cycle_us(ch, id)
+                        .filter(|d| *d != app.tx_list[i].cycle_us);
+                    if let Some(declared) = off {
+                        ui.same_line();
+                        let label = if declared == 0 {
+                            "DBC event".to_string()
+                        } else {
+                            format!("DBC {}ms", declared / 1000)
+                        };
+                        if ui.small_button(format!("{label}##dbc{i}")) {
+                            app.tx_list[i].cycle_us = declared;
+                            app.tx_list[i].next_t_us = 0;
+                        }
+                    }
                     ui.same_line();
-                    ui.set_next_item_width(260.0);
+                    ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
                     if ui
                         .input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
                         .build()
