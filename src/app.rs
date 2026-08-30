@@ -28,6 +28,9 @@ const SAMPLE_INTERVAL_US: u64 = 50_000;
 const MAX_SCAN_FRAMES: usize = 300_000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
+/// Cycle a new generator entry gets when its DBC declares none. A declared
+/// value always wins; this is only the invention we fall back to.
+const DEFAULT_TX_CYCLE_US: u64 = 100_000;
 
 pub const PALETTE: [[f32; 4]; 8] = [
     [0.30, 0.80, 1.00, 1.0],
@@ -2424,11 +2427,20 @@ impl App {
         {
             return;
         }
-        let (name, len) = self
+        let (name, len, cycle_us) = self
             .channel_dbc(channel)
             .and_then(|db| db.messages.get(&id))
-            .map(|m| (m.name.clone(), m.dlc.min(MAX_CAN_FD_LEN as u64) as u8))
-            .unwrap_or_else(|| (format!("{id:X}"), 8));
+            .map(|m| {
+                (
+                    m.name.clone(),
+                    m.dlc.min(MAX_CAN_FD_LEN as u64) as u8,
+                    // A declared 0 is event-triggered, so `unwrap_or` rather
+                    // than `unwrap_or_default` on the Option: only "the DBC
+                    // said nothing" gets our invented period.
+                    m.cycle_us.unwrap_or(DEFAULT_TX_CYCLE_US),
+                )
+            })
+            .unwrap_or_else(|| (format!("{id:X}"), 8, DEFAULT_TX_CYCLE_US));
         let data_text = vec!["00"; len as usize].join(" ");
         self.tx_list.push(TxMsg {
             channel,
@@ -2444,7 +2456,7 @@ impl App {
                 FrameFlags::NONE
             },
             data_text,
-            cycle_us: 100_000,
+            cycle_us,
             active: false,
             next_t_us: 0,
         });
@@ -2991,6 +3003,77 @@ BO_ 768 WideMsg: 16 ECU
         assert_eq!(app.tx_list[i].srcs[0].hi, 50.0, "and the later one wins");
         app.clear_source(i, "NearSig");
         assert!(app.tx_list[i].srcs.is_empty());
+        app.stop();
+    }
+
+    /// A DBC that declares 0 ms means event-triggered; one that declares
+    /// nothing at all must still get the invented fallback period.
+    const CYCLE_TEST_DBC: &str = r#"VERSION "roxy-can cycle test"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 4096 EventMsg: 8 ECU
+ SG_ S : 0|8@1+ (1,0) [0|0] "" ECU
+
+BO_ 4097 DefaultedMsg: 8 ECU
+ SG_ S : 0|8@1+ (1,0) [0|0] "" ECU
+
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 10000;
+BA_DEF_DEF_  "GenMsgCycleTime" 77;
+BA_ "GenMsgCycleTime" BO_ 4096 0;
+"#;
+
+    #[test]
+    fn new_generator_entries_inherit_the_declared_cycle() {
+        let app = App::new();
+        let cycle = |ch: u8, id: u32| {
+            app.tx_list
+                .iter()
+                .find(|t| t.channel == ch && t.id == id)
+                .map(|t| t.cycle_us)
+        };
+        // assets/motbus.dbc:62-63 declare these two explicitly...
+        assert_eq!(cycle(1, 0x64), Some(133_000), "EngineData 133ms");
+        assert_eq!(cycle(1, 0xC9), Some(50_000), "ABSdata 50ms");
+        // ...and its BA_DEF_DEF_ puts 100ms on the rest.
+        assert_eq!(cycle(1, 0xC7), Some(100_000), "declared default");
+        // sample.dbc declares nothing, so the fallback is what shows up.
+        assert_eq!(cycle(0, 0x100), Some(100_000), "no declaration -> fallback");
+    }
+
+    #[test]
+    fn an_event_triggered_message_is_never_auto_sent() {
+        let mut app = App::new();
+        app.channels[0].dbc = Some(crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap());
+        app.tx_list.retain(|t| t.channel != 0);
+        app.add_tx(0, 4096);
+        app.add_tx(0, 4097);
+        let i = app.tx_list.len() - 2;
+        assert_eq!(
+            app.tx_list[i].cycle_us, 0,
+            "an explicit 0 is not 'undeclared'"
+        );
+        assert_eq!(
+            app.tx_list[i + 1].cycle_us,
+            77_000,
+            "the default still applies"
+        );
+        for t in &mut app.tx_list {
+            t.active = true;
+        }
+        app.start_virtual();
+        run_sim(&mut app, 20, 10_000);
+        assert!(
+            slots_of(&app, 4096).is_empty(),
+            "event-triggered means no timer"
+        );
+        assert_eq!(
+            slots_of(&app, 4097),
+            vec![0, 77_000, 154_000],
+            "the declared 77ms period is what runs"
+        );
         app.stop();
     }
 

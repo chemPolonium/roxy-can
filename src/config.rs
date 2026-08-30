@@ -517,7 +517,13 @@ impl Config {
                 .find(|m| m.channel == t.channel && m.id == t.id)
             {
                 m.active = t.active;
-                m.cycle_us = t.cycle_us.max(1_000);
+                // 0 is a real state now: a DBC-declared event-triggered
+                // message. Everything else keeps the anti-typo floor.
+                m.cycle_us = if t.cycle_us == 0 {
+                    0
+                } else {
+                    t.cycle_us.max(1_000)
+                };
                 m.flags = if t.fd {
                     FrameFlags::FD
                 } else {
@@ -790,6 +796,45 @@ mod tests {
         assert_eq!(tx.srcs[0].name, "EngineSpeed");
         assert_eq!(tx.srcs[0].kind, SrcKind::Sine, "code 1 is Sine");
         assert_eq!(tx.srcs[0].period_us, 2_000_000);
+    }
+
+    /// A stored cycle of 0 means event-triggered, so the load-time floor must
+    /// not resurrect it as a 1 ms cyclic sender -- but it must still catch
+    /// genuinely bogus small values.
+    #[test]
+    fn an_event_triggered_cycle_survives_a_project_round_trip() {
+        let mut app = App::new();
+        let i = app
+            .tx_list
+            .iter()
+            .position(|t| t.channel == 0 && t.id == 0x100)
+            .expect("EngineStatus entry");
+        app.tx_list[i].cycle_us = 0;
+        let j = app
+            .tx_list
+            .iter()
+            .position(|t| t.channel == 0 && t.id == 0x200)
+            .expect("VehicleState entry");
+        app.tx_list[j].cycle_us = 500;
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        let find = |id: u32| {
+            restored
+                .tx_list
+                .iter()
+                .find(|t| t.channel == 0 && t.id == id)
+                .map(|t| t.cycle_us)
+        };
+        assert_eq!(find(0x100), Some(0), "0 must not come back as 1ms");
+        assert_eq!(
+            find(0x200),
+            Some(1_000),
+            "the anti-typo floor still applies"
+        );
     }
 
     #[test]
