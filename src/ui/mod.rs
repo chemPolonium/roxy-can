@@ -10,6 +10,7 @@ pub mod messages;
 pub mod network;
 pub mod project_modal;
 pub mod siglist;
+pub mod spec;
 pub mod stats;
 pub mod statusbar;
 pub mod toolbar;
@@ -49,6 +50,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     buses::render(app, ui);
     tx::render(app, ui);
     network::render(app, ui);
+    spec::render(app, ui);
     data::render(app, ui);
     graphics::render(app, ui);
     statusbar::render(app, ui);

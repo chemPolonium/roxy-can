@@ -8,6 +8,7 @@ mod decode;
 mod log;
 mod sim;
 mod source;
+mod spec;
 mod ui;
 
 use std::sync::Arc;

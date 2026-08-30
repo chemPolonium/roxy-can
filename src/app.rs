@@ -11,6 +11,9 @@ use crate::sim::{ValueSrc, eval_phys};
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
 use crate::source::{FrameSource, FrameStream};
+use crate::spec::{
+    GRACE_CYCLES, Kind, Spec, TOLERANCE_PERCENT, cycle_offender, dlc_offender, missing_offender,
+};
 
 pub const TRACE_LIMIT: usize = 50_000;
 pub const TOOLBAR_H: f32 = 54.0;
@@ -509,6 +512,7 @@ pub struct Desktop {
     pub show_network: bool,
     pub show_measurement: bool,
     pub show_buses: bool,
+    pub show_spec: bool,
     pub show_id_filter: bool,
 }
 
@@ -572,11 +576,19 @@ pub struct App {
     pub last_record: String,
     pub subs: HashMap<(u8, u32, String), Subscription>,
     pub aggs: HashMap<(u8, u32), MessageAgg>,
+    /// Observed-versus-declared violations, recomputed on every measurement
+    /// step from `aggs` and the loaded databases.
+    pub spec: Spec,
+    /// Which violation kinds the report window lists, indexed by
+    /// [`crate::spec::Kind::ALL`]. A noise control, deliberately not part of the
+    /// project: hiding third-party traffic today should not hide it next week.
+    pub spec_show: [bool; 4],
     pub symbol_search: String,
     pub show_tx: bool,
     pub show_network: bool,
     pub show_measurement: bool,
     pub show_buses: bool,
+    pub show_spec: bool,
     pub show_id_filter: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
@@ -689,11 +701,14 @@ impl App {
             last_record: String::new(),
             subs: HashMap::new(),
             aggs: HashMap::new(),
+            spec: Spec::default(),
+            spec_show: [true; 4],
             symbol_search: String::new(),
             show_tx: true,
             show_network: true,
             show_measurement: true,
             show_buses: false,
+            show_spec: false,
             show_id_filter: false,
             show_shortcuts: false,
             show_about: false,
@@ -830,6 +845,7 @@ impl App {
             .drain()
             .filter_map(|((c, id, sig), s)| remap(c).map(|nc| ((nc, id, sig), s)))
             .collect();
+        self.spec.drop_channel(ch as u8);
         let remap_set = |set: &mut HashSet<(u8, u32)>| {
             *set = set
                 .drain()
@@ -992,6 +1008,10 @@ impl App {
         self.paused_at_us = None;
         self.trace.clear();
         self.aggs.clear();
+        // Along with the aggregates it reads: keeping the previous run's
+        // interval memory would turn the first step of a new run into one
+        // enormous measured period.
+        self.spec = Spec::default();
         self.sample_cover = None;
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
@@ -1743,6 +1763,7 @@ impl App {
             show_network: self.show_network,
             show_measurement: self.show_measurement,
             show_buses: self.show_buses,
+            show_spec: self.show_spec,
             show_id_filter: self.show_id_filter,
         }
     }
@@ -1771,6 +1792,7 @@ impl App {
         self.show_network = d.show_network;
         self.show_measurement = d.show_measurement;
         self.show_buses = d.show_buses;
+        self.show_spec = d.show_spec;
         self.show_id_filter = d.show_id_filter;
         let layout = if d.layout.is_empty() {
             self.default_layout.clone()
@@ -1812,6 +1834,7 @@ impl App {
             show_network: false,
             show_measurement: false,
             show_buses: false,
+            show_spec: false,
             show_id_filter: false,
         };
         self.desktops.push(snap);
@@ -2225,11 +2248,92 @@ impl App {
             }
         }
 
+        self.check_spec();
+
         if replay_done {
             self.measuring = false;
             self.close_writer();
             let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
             self.status = format!("replay finished at {dur:.2}s");
+        }
+    }
+
+    /// Compare what arrived against what the databases promise.
+    ///
+    /// Once per step, not per frame: every verdict here is a claim about a
+    /// *message's* timing or identity, and the loop above has already folded the
+    /// frames into one aggregate per `(bus, id)`. Sweeping the aggregates turns a
+    /// step of two hundred frames into one verdict each instead of two hundred
+    /// latch writes, and it cannot read an aggregate mid-update the way a check
+    /// inside that loop would.
+    fn check_spec(&mut self) {
+        let now = self.sim_t_us;
+        // "Dropped" is the only verdict that needs a present tense. Replay runs
+        // on the log's own timestamps, where "still going" has no meaning, so
+        // only live simulation may call a message gone; pausing is covered
+        // separately by `tick` not running at all. The other three are facts
+        // about frames already seen and stay on in every mode.
+        let live = matches!(self.mode, Mode::Virtual) && !self.trace_paused;
+        let mut hits: Vec<((u8, u32, Kind), f64, f64)> = Vec::new();
+        let mut seen: Vec<((u8, u32), u64)> = Vec::with_capacity(self.aggs.len());
+        for (&key, agg) in &self.aggs {
+            let (ch, id) = key;
+            seen.push((key, agg.last_t_us));
+            // No database on this bus means no opinion, not a clean bill.
+            let Some(db) = self.channel_dbc(ch) else {
+                continue;
+            };
+            let Some(m) = db.messages.get(&id) else {
+                hits.push(((ch, id, Kind::Unknown), 0.0, 0.0));
+                continue;
+            };
+            // A declaration of 0 is event-triggered, which the two timing
+            // predicates below reject on their own; `None` is the database
+            // saying nothing, and neither is a period to check against.
+            let declared = m.cycle_us;
+            // Our own frames are exempt from the length and period verdicts.
+            // Driving a signal that reaches past the base length widens the
+            // frame on purpose (see `tx_payload`), so judging a Tx frame by the
+            // declared DLC would convict a configuration chosen deliberately;
+            // and the generator row already offers to restore a hand-tuned
+            // period. Transmitting an id the database lacks is still reported.
+            if matches!(agg.dir, Direction::Rx) {
+                if dlc_offender(agg.len, m.dlc) {
+                    hits.push(((ch, id, Kind::Dlc), m.dlc as f64, f64::from(agg.len)));
+                }
+                // The interval since the previous step, never the running
+                // average in `agg.cycle_us`: an EMA reads a five-fold stall as
+                // 1.4x and takes twenty samples to converge, and `min_us` /
+                // `max_us` latch forever, so either would hide or keep a
+                // violation that a single real interval states plainly. A
+                // message with no previous step, or with a step that brought it
+                // no new frame, has no interval to judge yet.
+                let elapsed = self
+                    .spec
+                    .previous(key)
+                    .and_then(|from| agg.last_t_us.checked_sub(from))
+                    .filter(|i| *i > 0);
+                if let (Some(d), Some(interval)) = (declared, elapsed)
+                    && cycle_offender(interval, d, TOLERANCE_PERCENT)
+                {
+                    hits.push(((ch, id, Kind::Cycle), d as f64, interval as f64));
+                }
+            }
+            if let (true, Some(d)) = (live, declared)
+                && missing_offender(now, agg.last_t_us, d, GRACE_CYCLES)
+            {
+                hits.push((
+                    (ch, id, Kind::Missing),
+                    d as f64,
+                    now.saturating_sub(agg.last_t_us) as f64,
+                ));
+            }
+        }
+        for (key, declared, measured) in hits {
+            self.spec.record(key, now, declared, measured);
+        }
+        for (key, last_t_us) in seen {
+            self.spec.note(key, last_t_us);
         }
     }
 
@@ -4647,5 +4751,407 @@ BO_ 4096 Orphan: 8 Vector__XXX
         );
         app.set_bus_tx(0, false);
         assert!(app.tx_list.iter().all(|t| !t.active));
+    }
+
+    use crate::spec::Kind;
+
+    /// A database covering the three declarations the monitor distinguishes:
+    /// 100 on a declared 100 ms period, 300 declared event-triggered, and 200
+    /// with no cycle at all. There is deliberately no `BA_DEF_DEF_` line, so an
+    /// unannotated message gets no declaration rather than a default one.
+    const SPEC_DBC: &str = r#"VERSION "roxy-can spec test"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 100 Periodic: 8 ECU
+ SG_ S : 0|8@1+ (1,0) [0|0] "" ECU
+
+BO_ 200 Undeclared: 8 ECU
+ SG_ S : 0|8@1+ (1,0) [0|0] "" ECU
+
+BO_ 300 EventMsg: 8 ECU
+ SG_ S : 0|8@1+ (1,0) [0|0] "" ECU
+
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 10000;
+BA_ "GenMsgCycleTime" BO_ 100 100;
+BA_ "GenMsgCycleTime" BO_ 300 0;
+"#;
+
+    /// A virtual bus with a silent generator, so everything the monitor sees
+    /// arrived through `receive`.
+    fn spec_app() -> App {
+        let mut app = App::new();
+        app.channels[0].dbc = Some(crate::dbc::load_dbc_str(SPEC_DBC).unwrap());
+        app.tx_list.retain(|t| t.channel != 0);
+        app.start_virtual();
+        app
+    }
+
+    fn frame_at(t_us: u64, id: u32, len: u8, dir: Direction) -> CanFrame {
+        CanFrame {
+            t_us,
+            channel: 0,
+            id,
+            extended: false,
+            len,
+            data: [0; MAX_CAN_FD_LEN],
+            dir,
+            flags: FrameFlags::NONE,
+        }
+    }
+
+    /// Runs exactly one measurement step in which `frames` arrive and the
+    /// simulation clock reads `t_us`. A scripted source is the only way to get
+    /// received traffic through the real aggregation path without writing a log
+    /// file, and it keeps the step exact: no wall clock, no sleeping.
+    fn receive(app: &mut App, t_us: u64, frames: Vec<CanFrame>) {
+        struct Scripted(Option<Vec<CanFrame>>);
+        impl FrameSource for Scripted {
+            fn poll(&mut self, _now_us: u64, out: &mut Vec<CanFrame>) {
+                if let Some(v) = self.0.take() {
+                    out.extend(v);
+                }
+            }
+        }
+        app.sim_t_us = t_us;
+        app.source = Box::new(Scripted(Some(frames)));
+        app.tick(t_us);
+    }
+
+    fn flagged(app: &App, ch: u8, id: u32, kind: Kind) -> bool {
+        app.spec.rows.contains_key(&(ch, id, kind))
+    }
+
+    fn verdict(app: &App, ch: u8, id: u32, kind: Kind) -> crate::spec::Latch {
+        app.spec.rows[&(ch, id, kind)]
+    }
+
+    #[test]
+    fn an_identifier_the_database_lacks_is_reported_unknown() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 0x777, 8, Direction::Rx)]);
+        assert!(flagged(&app, 0, 0x777, Kind::Unknown));
+        receive(
+            &mut app,
+            10_000,
+            vec![frame_at(10_000, 100, 8, Direction::Rx)],
+        );
+        assert!(
+            !flagged(&app, 0, 100, Kind::Unknown),
+            "a declared id is not a violation"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_bus_with_no_database_reports_nothing_at_all() {
+        let mut app = spec_app();
+        app.channels[0].dbc = None;
+        assert!(app.channel_dbc(0).is_none(), "test setup: no database");
+        receive(&mut app, 0, vec![frame_at(0, 0x777, 3, Direction::Rx)]);
+        receive(&mut app, 900_000, vec![]);
+        assert!(app.spec.rows.is_empty(), "no database, no opinion");
+        app.stop();
+    }
+
+    /// The frame facts are judged only for traffic we did not produce: driving a
+    /// signal past the base length widens a Tx frame on purpose, and the
+    /// generator row already offers to restore a hand-tuned period.
+    #[test]
+    fn our_own_transmission_is_never_a_cycle_or_dlc_violation() {
+        let mut tx = spec_app();
+        receive(&mut tx, 0, vec![frame_at(0, 100, 6, Direction::Tx)]);
+        receive(
+            &mut tx,
+            115_000,
+            vec![frame_at(115_000, 100, 6, Direction::Tx)],
+        );
+        assert!(!flagged(&tx, 0, 100, Kind::Dlc), "we chose that length");
+        assert!(!flagged(&tx, 0, 100, Kind::Cycle));
+
+        let mut rx = spec_app();
+        receive(&mut rx, 0, vec![frame_at(0, 100, 6, Direction::Rx)]);
+        receive(
+            &mut rx,
+            115_000,
+            vec![frame_at(115_000, 100, 6, Direction::Rx)],
+        );
+        assert!(
+            flagged(&rx, 0, 100, Kind::Dlc),
+            "the same frame received is"
+        );
+        assert!(flagged(&rx, 0, 100, Kind::Cycle));
+        rx.stop();
+        tx.stop();
+    }
+
+    #[test]
+    fn a_frame_shorter_than_the_declared_size_is_a_dlc_mismatch() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 6, Direction::Rx)]);
+        assert_eq!(
+            verdict(&app, 0, 100, Kind::Dlc),
+            crate::spec::Latch {
+                count: 1,
+                first_t_us: 0,
+                last_t_us: 0,
+                declared: 8.0,
+                measured: 6.0,
+            }
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn timing_is_silent_where_the_database_declares_no_cycle() {
+        let mut app = spec_app();
+        assert!(
+            app.dbc_cycle_us(0, 200).is_none(),
+            "test setup: 200 declares no period"
+        );
+        receive(&mut app, 0, vec![frame_at(0, 200, 8, Direction::Rx)]);
+        receive(
+            &mut app,
+            5_000_000,
+            vec![frame_at(5_000_000, 200, 8, Direction::Rx)],
+        );
+        assert!(
+            !flagged(&app, 0, 200, Kind::Cycle),
+            "five seconds between two frames promises nothing was broken"
+        );
+        assert!(!flagged(&app, 0, 200, Kind::Missing));
+        app.stop();
+    }
+
+    #[test]
+    fn an_event_triggered_message_is_never_reported_missing() {
+        let mut app = spec_app();
+        assert_eq!(
+            app.dbc_cycle_us(0, 300),
+            Some(0),
+            "test setup: a declared 0 means event-triggered"
+        );
+        receive(&mut app, 0, vec![frame_at(0, 300, 8, Direction::Rx)]);
+        receive(&mut app, 5_000_000, vec![]);
+        assert!(!flagged(&app, 0, 300, Kind::Missing));
+        assert!(!flagged(&app, 0, 300, Kind::Cycle));
+        app.stop();
+    }
+
+    /// The report must not become a list of everyone we chose not to simulate:
+    /// a virtual bus only ever carries the nodes the user switched on.
+    #[test]
+    fn a_message_that_never_appeared_is_not_reported_missing() {
+        let mut app = spec_app();
+        assert_eq!(
+            app.dbc_cycle_us(0, 100),
+            Some(100_000),
+            "test setup: 100 is declared periodic"
+        );
+        run_sim(&mut app, 20, 50_000);
+        assert!(
+            app.spec.rows.is_empty(),
+            "never seen is not the same as dropped: {:?}",
+            app.spec.rows.keys().collect::<Vec<_>>()
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_message_that_went_silent_beyond_the_grace_is_reported_missing() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        receive(
+            &mut app,
+            100_000,
+            vec![frame_at(100_000, 100, 8, Direction::Rx)],
+        );
+        receive(&mut app, 300_000, vec![]);
+        assert!(
+            !flagged(&app, 0, 100, Kind::Missing),
+            "two silent periods is still inside a grace of three"
+        );
+        receive(&mut app, 420_000, vec![]);
+        assert!(flagged(&app, 0, 100, Kind::Missing));
+        assert_eq!(verdict(&app, 0, 100, Kind::Missing).measured, 320_000.0);
+        app.stop();
+    }
+
+    #[test]
+    fn the_cycle_check_uses_the_last_interval_not_the_running_average() {
+        let mut app = spec_app();
+        for i in 0..10u64 {
+            let t = i * 100_000;
+            receive(&mut app, t, vec![frame_at(t, 100, 8, Direction::Rx)]);
+        }
+        assert!(!flagged(&app, 0, 100, Kind::Cycle), "ten on-time frames");
+        // 115 ms is 15% late, which the aggregate's running average smooths down
+        // to 1.5% and would never report.
+        receive(
+            &mut app,
+            1_015_000,
+            vec![frame_at(1_015_000, 100, 8, Direction::Rx)],
+        );
+        assert!(
+            flagged(&app, 0, 100, Kind::Cycle),
+            "agg.cycle_us reads 1.5% off here; only the raw interval is 15%"
+        );
+        assert_eq!(verdict(&app, 0, 100, Kind::Cycle).measured, 115_000.0);
+        app.stop();
+    }
+
+    #[test]
+    fn one_bad_interval_is_counted_once_and_never_forgotten() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        receive(
+            &mut app,
+            200_000,
+            vec![frame_at(200_000, 100, 8, Direction::Rx)],
+        );
+        assert_eq!(verdict(&app, 0, 100, Kind::Cycle).count, 1);
+        for i in 1..=5u64 {
+            // Continue the declared spacing from 200 ms, so each of these is a
+            // clean interval rather than another gap.
+            let t = 200_000 + i * 100_000;
+            receive(&mut app, t, vec![frame_at(t, 100, 8, Direction::Rx)]);
+        }
+        assert_eq!(
+            verdict(&app, 0, 100, Kind::Cycle).count,
+            1,
+            "a verdict from min/max would keep convicting"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn the_first_sample_of_a_message_is_never_a_cycle_violation() {
+        let mut app = spec_app();
+        // Arrives five periods late, so the only thing standing between this and
+        // a verdict is that nothing preceded it.
+        receive(
+            &mut app,
+            500_000,
+            vec![frame_at(500_000, 100, 8, Direction::Rx)],
+        );
+        assert_eq!(
+            app.aggs[&(0, 100)].count,
+            1,
+            "test setup: one frame, no interval yet"
+        );
+        assert!(!flagged(&app, 0, 100, Kind::Cycle));
+        app.stop();
+    }
+
+    #[test]
+    fn a_step_that_brought_no_new_frame_is_not_a_new_interval() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        receive(
+            &mut app,
+            100_000,
+            vec![frame_at(100_000, 100, 8, Direction::Rx)],
+        );
+        assert!(!flagged(&app, 0, 100, Kind::Cycle), "test setup: on time");
+        // Nothing arrives for two steps. The aggregate has not moved, so there
+        // is no period to measure -- only the silence clock runs here.
+        receive(&mut app, 200_000, vec![]);
+        receive(&mut app, 300_000, vec![]);
+        assert!(!flagged(&app, 0, 100, Kind::Cycle));
+        app.stop();
+    }
+
+    #[test]
+    fn replay_traffic_never_raises_a_missing_violation() {
+        let mut app = spec_app();
+        app.mode = Mode::Replay;
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        receive(&mut app, 5_000_000, vec![]);
+        assert!(
+            !flagged(&app, 0, 100, Kind::Missing),
+            "a log's clock cannot say what is still talking"
+        );
+        // The frame facts stay judged in replay, because they need no clock.
+        receive(
+            &mut app,
+            5_100_000,
+            vec![frame_at(5_100_000, 100, 5, Direction::Rx)],
+        );
+        assert!(flagged(&app, 0, 100, Kind::Dlc));
+        app.stop();
+    }
+
+    #[test]
+    fn a_paused_clock_does_not_make_a_message_missing() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        app.trace_paused = true;
+        assert!(app.trace_paused, "test setup: paused");
+        // The real loop never calls `tick` while paused; driving it anyway
+        // shows the verdict is gated on the pause itself, not on a missing step.
+        for i in 1..=10u64 {
+            receive(&mut app, i * 200_000, vec![]);
+        }
+        assert!(!flagged(&app, 0, 100, Kind::Missing));
+        app.stop();
+    }
+
+    #[test]
+    fn a_verdict_follows_its_bus_when_an_earlier_bus_is_deleted() {
+        let mut app = spec_app();
+        // Move the fixture database onto the second bus and leave the first
+        // without one, then delete the first.
+        app.channels[1].dbc = app.channels[0].dbc.take();
+        receive(
+            &mut app,
+            0,
+            vec![CanFrame {
+                channel: 1,
+                ..frame_at(0, 100, 6, Direction::Rx)
+            }],
+        );
+        assert!(flagged(&app, 1, 100, Kind::Dlc), "test setup: on bus 1");
+        app.remove_channel(0);
+        assert!(
+            flagged(&app, 0, 100, Kind::Dlc),
+            "the row must move with the bus, not stay behind at the old index"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn the_monitor_forgets_everything_when_a_new_run_starts() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        receive(
+            &mut app,
+            200_000,
+            vec![frame_at(200_000, 100, 8, Direction::Rx)],
+        );
+        assert!(
+            flagged(&app, 0, 100, Kind::Cycle),
+            "test setup: a verdict worth forgetting"
+        );
+        app.start_virtual();
+        assert!(app.spec.rows.is_empty(), "the report belongs to a run");
+        assert_eq!(
+            app.spec.previous((0, 100)),
+            None,
+            "and so does the interval memory"
+        );
+        // Five seconds later on a clock that started over. Against the previous
+        // run's interval this would read as one enormous measured period.
+        receive(
+            &mut app,
+            5_000_000,
+            vec![frame_at(5_000_000, 100, 8, Direction::Rx)],
+        );
+        assert!(
+            !flagged(&app, 0, 100, Kind::Cycle),
+            "a stale interval from the old run would convict this frame"
+        );
+        app.stop();
     }
 }

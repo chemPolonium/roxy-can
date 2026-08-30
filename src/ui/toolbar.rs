@@ -244,6 +244,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.show_network = !app.show_network;
                     }
                     if ui
+                        .menu_item_config("Specification")
+                        .selected(app.show_spec)
+                        .build()
+                    {
+                        app.show_spec = !app.show_spec;
+                    }
+                    if ui
                         .menu_item_config("Measurement Setup")
                         .selected(app.show_measurement)
                         .build()

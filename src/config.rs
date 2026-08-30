@@ -230,6 +230,8 @@ pub struct DesktopCfg {
     #[serde(default)]
     pub show_buses: bool,
     #[serde(default)]
+    pub show_spec: bool,
+    #[serde(default)]
     pub show_id_filter: bool,
 }
 
@@ -265,6 +267,8 @@ pub struct Config {
     pub show_measurement: bool,
     #[serde(default)]
     pub show_buses: bool,
+    #[serde(default)]
+    pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
     #[serde(default = "one_default")]
@@ -347,6 +351,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_network: d.show_network,
         show_measurement: d.show_measurement,
         show_buses: d.show_buses,
+        show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
     }
 }
@@ -381,6 +386,7 @@ impl Config {
             show_network: app.show_network,
             show_measurement: app.show_measurement,
             show_buses: app.show_buses,
+            show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
             replay_speed: app.replay_speed,
             trace_windows: app
@@ -623,6 +629,7 @@ impl Config {
         app.show_network = self.show_network;
         app.show_measurement = self.show_measurement;
         app.show_buses = self.show_buses;
+        app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
         app.set_window_counters(self.counters);
@@ -664,6 +671,7 @@ impl Config {
                     show_network: d.show_network,
                     show_measurement: d.show_measurement,
                     show_buses: d.show_buses,
+                    show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
                 })
                 .collect();
