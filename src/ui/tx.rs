@@ -154,18 +154,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .map(|m| m.signals.clone())
                         .unwrap_or_default();
                     let driven = app.tx_list[i].srcs.len();
-
-                    let header = if driven == 0 {
-                        format!("{}  {}  ({:X})##tx{i}", app.channel_name(ch), name, id)
-                    } else {
-                        format!(
-                            "{}  {}  ({:X})  {driven} driven##tx{i}",
-                            app.channel_name(ch),
-                            name,
-                            id
-                        )
-                    };
-                    let header_open = ui.collapsing_header(header, imgui::TreeNodeFlags::empty());
+                    let header_open = ui.collapsing_header(
+                        row_header(ch, &app.channel_name(ch), &name, id, driven),
+                        imgui::TreeNodeFlags::empty(),
+                    );
                     if !header_open {
                         continue;
                     }
@@ -341,6 +333,28 @@ pub fn render(app: &mut App, ui: &Ui) {
         app.src_draft = None;
         app.tx_cycle_edit = None;
     }
+}
+
+/// One row's header.
+///
+/// The `###` suffix carries the row's identity, and it has to be `###` rather
+/// than `##`: imgui resets the id hash at `###` and hashes only what follows
+/// (`ImHashStr`, imgui.cpp:1916), while still displaying only the text *before*
+/// it. A `##` suffix is appended to the hash instead, so the badge below would
+/// rename the item -- and a renamed tree node is a brand new one, which opens
+/// closed. That is how adding or removing a stimulus used to collapse the row
+/// out from under whoever was editing it.
+///
+/// The identity is the `(bus, message)` pair, not the loop index: `add_tx`
+/// allows one entry per pair, and rows are removed from the middle, so an index
+/// would silently move every later row's open state onto its neighbour.
+fn row_header(ch: u8, bus: &str, name: &str, id: u32, driven: usize) -> String {
+    let badge = if driven == 0 {
+        String::new()
+    } else {
+        format!("  {driven} driven")
+    };
+    format!("{bus}  {name}  ({id:X}){badge}###tx{ch}_{id:X}")
 }
 
 /// Send period of one message, drafted rather than written in place. The row
@@ -602,5 +616,92 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         app.src_draft = None;
     } else if applied {
         app.src_draft = Some(src);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_header;
+
+    /// What imgui hashes into the item id. `###` restarts the hash and folds in
+    /// only the tail; without it the whole label is the id source, because `##`
+    /// hides text from the display but does not drop it from the hash.
+    fn identity(header: &str) -> &str {
+        match header.split_once("###") {
+            Some((_, after)) => after,
+            None => header,
+        }
+    }
+
+    /// What the row shows: rendering stops at the first `##`, of either kind.
+    fn label(header: &str) -> &str {
+        let cut = header.find("##").unwrap_or(header.len());
+        &header[..cut]
+    }
+
+    /// The reported bug. Every change to the badge used to rename the item, and
+    /// a renamed tree node opens closed, so configuring a stimulus collapsed the
+    /// row the user was working in.
+    #[test]
+    fn a_row_keeps_its_identity_while_the_badge_moves() {
+        let before = row_header(1, "CAN2", "EngineData", 0x64, 0);
+        let after = row_header(1, "CAN2", "EngineData", 0x64, 2);
+        assert_eq!(
+            identity(&before),
+            identity(&after),
+            "adding a stimulus must not move the row"
+        );
+        assert!(!label(&before).contains("driven"));
+        assert_eq!(label(&after), "CAN2  EngineData  (64)  2 driven");
+    }
+
+    /// The shape this row shipped with before the fix, rebuilt here so the
+    /// assertion says why the marker has to be `###`: `##` leaves the label in
+    /// the hash, so `identity` moves with the badge and the row reopens
+    /// collapsed. Without this, a test comparing `identity` could pass against a
+    /// helper that simply ignored the marker.
+    #[test]
+    fn a_double_hash_suffix_would_move_with_the_badge() {
+        let fixed = row_header(1, "CAN2", "EngineData", 0x64, 2);
+        let before_fix = fixed.replace("###", "##");
+        assert!(
+            identity(&before_fix).contains("driven"),
+            "## folds the badge into the id, which is the bug"
+        );
+        assert_eq!(label(&before_fix), label(&fixed), "both display the same");
+    }
+
+    /// And the bus has to be in that tail, or two buses carrying the same
+    /// message id would share one open/closed state.
+    #[test]
+    fn the_identity_starts_with_the_bus() {
+        let a = row_header(0, "CAN1", "EngineData", 0x64, 0);
+        let b = row_header(1, "CAN2", "EngineData", 0x64, 0);
+        assert!(identity(&a).starts_with("tx0_"), "{a}");
+        assert!(identity(&b).starts_with("tx1_"), "{b}");
+    }
+
+    /// Two buses can carry the same message id, and a name is editable, so
+    /// neither may be the whole identity.
+    #[test]
+    fn rows_on_different_buses_are_different_rows() {
+        assert_ne!(
+            identity(&row_header(0, "CAN1", "EngineData", 0x64, 0)),
+            identity(&row_header(1, "CAN1", "EngineData", 0x64, 0))
+        );
+        assert_ne!(
+            identity(&row_header(0, "CAN1", "EngineData", 0x64, 0)),
+            identity(&row_header(0, "CAN1", "EngineData", 0x65, 0))
+        );
+    }
+
+    /// A row that is renamed -- a DBC reloaded under a new message name -- keeps
+    /// its place in the list rather than its label.
+    #[test]
+    fn the_identity_ignores_the_displayed_names() {
+        assert_eq!(
+            identity(&row_header(1, "CAN2", "EngineData", 0x64, 1)),
+            identity(&row_header(1, "Bus B", "EngineSpeed", 0x64, 1))
+        );
     }
 }
