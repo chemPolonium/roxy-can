@@ -90,6 +90,10 @@ fn sixty_default() -> f64 {
 pub struct ChannelCfg {
     pub name: String,
     pub dbc_path: String,
+    /// DBC nodes ticked as simulated on this bus. Absent from projects saved
+    /// before v0.5, which then load with nothing simulated.
+    #[serde(default)]
+    pub sim_nodes: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -369,6 +373,7 @@ impl Config {
                         Some(b) => relativize(&c.dbc_path, b),
                         None => c.dbc_path.clone(),
                     },
+                    sim_nodes: c.sim_nodes.clone(),
                 })
                 .collect(),
             bus_counter: app.bus_counter(),
@@ -487,6 +492,10 @@ impl Config {
                     name: c.name,
                     dbc: None,
                     dbc_path: c.dbc_path,
+                    // Intent only. What transmits is decided by each TxCfg's
+                    // `active` below, so a restored project never starts
+                    // traffic that was stopped when it was saved.
+                    sim_nodes: c.sim_nodes,
                 })
                 .collect();
             app.set_bus_counter(self.bus_counter.max(app.channels.len()));
@@ -834,6 +843,40 @@ mod tests {
             find(0x200),
             Some(1_000),
             "the anti-typo floor still applies"
+        );
+    }
+
+    /// Which nodes a bus simulates has to outlive the session, or the bus
+    /// composition a user set up is lost on every reload.
+    #[test]
+    fn simulated_nodes_round_trip() {
+        let mut app = App::new();
+        app.channels[1].sim_nodes = vec!["ABS".to_string(), "GearBox".to_string()];
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.channels[1].sim_nodes, ["ABS", "GearBox"]);
+        assert!(
+            restored.channels[0].sim_nodes.is_empty(),
+            "the other bus keeps its own list"
+        );
+    }
+
+    /// Projects saved before simulated nodes existed carry no `sim_nodes` key.
+    /// They must load with nothing simulated -- and `name`/`dbc_path` must stay
+    /// required, since accepting a nameless bus would hide real corruption.
+    #[test]
+    fn legacy_channel_config_without_sim_nodes_still_loads() {
+        let cfg: Config =
+            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc"}]}"#)
+                .unwrap();
+        assert_eq!(cfg.channels.len(), 1);
+        assert!(cfg.channels[0].sim_nodes.is_empty());
+        assert!(
+            serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
+            "name is still required"
         );
     }
 

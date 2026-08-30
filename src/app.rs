@@ -271,11 +271,16 @@ pub struct DataWindow {
     pub viz_bar: bool,
 }
 
-/// One CAN bus: user-defined name, a DBC database, and the path it came from.
+/// One CAN bus: user-defined name, a DBC database, the path it came from, and
+/// the DBC nodes this tool transmits as.
 pub struct Channel {
     pub name: String,
     pub dbc: Option<SymbolTable>,
     pub dbc_path: String,
+    /// Names of the DBC nodes marked as simulated on this bus. Kept on the
+    /// channel itself so deleting or renumbering a bus takes its nodes along
+    /// without a second remap pass.
+    pub sim_nodes: Vec<String>,
 }
 
 /// Which buses/messages an analysis window looks at.
@@ -623,11 +628,13 @@ impl App {
                     name: "CAN1".to_string(),
                     dbc: None,
                     dbc_path: "assets/sample.dbc".to_string(),
+                    sim_nodes: Vec::new(),
                 },
                 Channel {
                     name: "CAN2".to_string(),
                     dbc: None,
                     dbc_path: "assets/motbus.dbc".to_string(),
+                    sim_nodes: Vec::new(),
                 },
             ],
             status: "stopped".to_string(),
@@ -741,6 +748,7 @@ impl App {
             name: format!("CAN{}", self.bus_counter),
             dbc: None,
             dbc_path: "assets/sample.dbc".to_string(),
+            sim_nodes: Vec::new(),
         });
         let ch = self.channels.len() - 1;
         self.load_channel(ch);
@@ -3075,6 +3083,19 @@ BA_ "GenMsgCycleTime" BO_ 4096 0;
             "the declared 77ms period is what runs"
         );
         app.stop();
+    }
+
+    #[test]
+    fn simulated_node_state_follows_the_bus_it_lives_on() {
+        let mut app = App::new();
+        app.channels[0].sim_nodes.push("EngineECU".to_string());
+        app.channels[1].sim_nodes.push("ABS".to_string());
+        app.remove_channel(0);
+        assert_eq!(
+            app.channels[0].sim_nodes,
+            ["ABS"],
+            "the survivor keeps its own nodes instead of inheriting the deleted bus's"
+        );
     }
 
     #[test]
