@@ -5,10 +5,14 @@ use crate::sim::{KINDS, SrcKind, ValueSrc, eval_phys};
 use crate::ui::help::popup_is_open;
 use imgui::{Condition, InputTextFlags, Key, Ui};
 
-/// Combo entries for a signal's source: "Off" first so picking index 0 means
-/// "stop driving this signal", the rest in [`KINDS`] order.
+/// Combo entries for a signal's source: "Constant" first so picking index 0
+/// means "hold the base value", the rest in [`KINDS`] order.
+///
+/// The name is a label only. Index 0 stores no source at all and the value
+/// lives in the message's base payload, so the persisted kind codes -- which
+/// are [`KINDS`] positions -- do not move.
 fn kind_labels() -> Vec<String> {
-    let mut v = vec!["Off".to_string()];
+    let mut v = vec!["Constant".to_string()];
     v.extend(KINDS.iter().map(|k| k.label().to_string()));
     v
 }
@@ -212,13 +216,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     ui.same_line();
                     ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
-                    if ui
-                        .input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
-                        .build()
-                    {
-                        let text = app.tx_list[i].data_text.clone();
-                        // Bad text simply stays unapplied until the box parses;
+                    ui.input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
+                        .build();
+                    if ui.is_item_deactivated_after_edit() {
+                        // Decoding waits for the box to be left. Parsing each
+                        // keystroke meant retyping "11 22 33" briefly put a
+                        // one-byte frame on the bus, and a length the row never
+                        // asked for. Bad text still simply stays unapplied, and
                         // active sources are never cleared by a hex edit.
+                        let text = app.tx_list[i].data_text.clone();
                         app.set_tx_hex(i, &text);
                     }
                     if driven > 0 {
@@ -249,18 +255,34 @@ pub fn render(app: &mut App, ui: &Ui) {
                             crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset);
                         let (lo, hi) = sig_range(s);
                         // A driven row shows the live value, so the handle rides
-                        // the wave; grabbing it pins the signal right there.
-                        let shown = held
+                        // the wave; grabbing it pins the signal right there --
+                        // but only once the gesture ends.
+                        let model_shown = held
                             .as_ref()
                             .map_or(cur as f32, |h| eval_phys(h, sim) as f32);
+                        // Pinning rewrites the base payload and clears this
+                        // signal's source, so doing it per keystroke would let a
+                        // half-typed 100 encode as 1 and cut the wave off with
+                        // it. The draft carries the preview; the model waits.
+                        let key = format!("sig{i}{}", s.name);
+                        let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
                         ui.set_next_item_width(180.0);
                         let mut v = shown;
-                        if imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
+                        let moved = imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
                             .speed(((hi - lo) / 200.0).max(0.01))
                             .range(lo, hi)
-                            .build(ui, &mut v)
-                        {
-                            app.pin_signal(i, &s.name, v as f64);
+                            .build(ui, &mut v);
+                        let ends = ui.is_item_deactivated();
+                        let committed = app.num_draft.step(
+                            &key,
+                            v as f64,
+                            moved,
+                            ui.is_item_deactivated_after_edit(),
+                            ends,
+                        );
+                        if let Some(val) = committed {
+                            app.pin_signal(i, &s.name, val);
+                            shown = val as f32;
                         }
                         ui.same_line();
                         ui.set_next_item_width(90.0);
@@ -288,6 +310,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             ui.same_line();
                             if ui.small_button(format!("...##pp{i}_{}", s.name)) {
                                 app.src_edit = Some((i, s.name.clone()));
+                                app.src_draft = Some(h.clone());
                                 app.src_seq_buf = h
                                     .seq
                                     .iter()
@@ -315,6 +338,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         cycle_modal(app, ui);
     } else {
         app.src_edit = None;
+        app.src_draft = None;
         app.tx_cycle_edit = None;
     }
 }
@@ -440,13 +464,20 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     let Some((row, sig)) = app.src_edit.clone() else {
         return;
     };
-    let held = app
-        .tx_list
-        .get(row)
-        .and_then(|t| t.srcs.iter().find(|s| s.name == sig).cloned());
-    let Some(mut src) = held else {
-        app.src_edit = None;
-        return;
+    let mut src = match app.src_draft.clone() {
+        Some(d) if d.name == sig => d,
+        _ => match app
+            .tx_list
+            .get(row)
+            .and_then(|t| t.srcs.iter().find(|s| s.name == sig).cloned())
+        {
+            Some(h) => h,
+            None => {
+                app.src_edit = None;
+                app.src_draft = None;
+                return;
+            }
+        },
     };
     let desc = app.tx_list.get(row).and_then(|t| {
         app.channel_dbc(t.channel)
@@ -460,6 +491,10 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         ui.open_popup(ID);
     }
     let mut open = true;
+    // `opened()` borrows `open` for the whole frame, so the buttons below note
+    // their own outcome instead of writing it.
+    let mut dismissed = false;
+    let mut confirmed = false;
     let mut applied = false;
     let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([520.0, 240.0]));
     ui.modal_popup_config(ID).opened(&mut open).build(|| {
@@ -468,7 +503,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         ui.separator();
         ui.set_next_item_width(240.0);
         let mut pick = KINDS.iter().position(|k| *k == src.kind).unwrap_or(0);
-        // Skip the leading "Off": the row combo turns a source off.
+        // Skip the leading "Constant": the row combo picks the shape.
         let shapes = &kinds[1..];
         if ui.combo_simple_string("Shape", &mut pick, shapes) {
             src.kind = KINDS[pick];
@@ -542,12 +577,30 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
                 }
             }
         }
+        ui.separator();
+        if ui.is_key_pressed(Key::Escape) {
+            dismissed = true;
+        }
+        if ui.button_with_size("Apply", [90.0, 0.0]) {
+            confirmed = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button_with_size("Cancel", [90.0, 0.0]) {
+            dismissed = true;
+        }
+        ui.same_line();
+        ui.text_colored([0.6, 0.6, 0.65, 1.0], "Apply is what changes the waveform");
     });
     min.pop();
-    if applied {
+    if confirmed {
         app.set_source(row, src);
-    }
-    if !open {
         app.src_edit = None;
+        app.src_draft = None;
+    } else if !open || dismissed {
+        app.src_edit = None;
+        app.src_draft = None;
+    } else if applied {
+        app.src_draft = Some(src);
     }
 }

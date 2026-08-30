@@ -593,6 +593,13 @@ pub struct App {
     /// Edit buffer for the step sequence, kept on `App` so the text box keeps
     /// its caret and partial input across frames.
     pub src_seq_buf: String,
+    /// The value-source dialog's in-progress parameters. Applied to the row only
+    /// when the dialog confirms, so typing 8000 into `hi` cannot make the
+    /// running waveform pass through 8 and 80 first.
+    pub src_draft: Option<crate::sim::ValueSrc>,
+    /// A generator slider's value while it is being dragged or typed; the model
+    /// waits for the edit to end. See [`crate::ui::Draft`].
+    pub num_draft: crate::ui::Draft,
     /// Generator row whose send period the cycle dialog is drafting. The value
     /// stays a draft until the dialog confirms it: as an inline number box it
     /// applied every keystroke, so dialing in 100 sent at 1 ms first.
@@ -699,6 +706,8 @@ impl App {
             tx_pick: 0,
             src_edit: None,
             src_seq_buf: String::new(),
+            src_draft: None,
+            num_draft: crate::ui::Draft::default(),
             tx_cycle_edit: None,
             tx_cycle_buf: String::new(),
             last_tick_us: 0,
