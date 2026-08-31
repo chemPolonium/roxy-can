@@ -583,6 +583,10 @@ pub struct App {
     /// [`crate::spec::Kind::ALL`]. A noise control, deliberately not part of the
     /// project: hiding third-party traffic today should not hide it next week.
     pub spec_show: [bool; 4],
+    /// How far an observed period may stray from the declared one, in percent.
+    pub spec_tol_pct: u64,
+    /// How many declared periods of silence count as a dropped message.
+    pub spec_grace: u64,
     pub symbol_search: String,
     pub show_tx: bool,
     pub show_network: bool,
@@ -703,6 +707,8 @@ impl App {
             aggs: HashMap::new(),
             spec: Spec::default(),
             spec_show: [true; 4],
+            spec_tol_pct: TOLERANCE_PERCENT,
+            spec_grace: GRACE_CYCLES,
             symbol_search: String::new(),
             show_tx: true,
             show_network: true,
@@ -2314,13 +2320,13 @@ impl App {
                     .and_then(|from| agg.last_t_us.checked_sub(from))
                     .filter(|i| *i > 0);
                 if let (Some(d), Some(interval)) = (declared, elapsed)
-                    && cycle_offender(interval, d, TOLERANCE_PERCENT)
+                    && cycle_offender(interval, d, self.spec_tol_pct)
                 {
                     hits.push(((ch, id, Kind::Cycle), d as f64, interval as f64));
                 }
             }
             if let (true, Some(d)) = (live, declared)
-                && missing_offender(now, agg.last_t_us, d, GRACE_CYCLES)
+                && missing_offender(now, agg.last_t_us, d, self.spec_grace)
             {
                 hits.push((
                     (ch, id, Kind::Missing),
@@ -4999,6 +5005,55 @@ BA_ "GenMsgCycleTime" BO_ 300 0;
             "agg.cycle_us reads 1.5% off here; only the raw interval is 15%"
         );
         assert_eq!(verdict(&app, 0, 100, Kind::Cycle).measured, 115_000.0);
+        app.stop();
+    }
+
+    #[test]
+    fn the_tolerance_setting_decides_how_late_is_late() {
+        let mut app = spec_app();
+        for i in 0..10u64 {
+            let t = i * 100_000;
+            receive(&mut app, t, vec![frame_at(t, 100, 8, Direction::Rx)]);
+        }
+        app.spec_tol_pct = 20;
+        receive(
+            &mut app,
+            1_015_000,
+            vec![frame_at(1_015_000, 100, 8, Direction::Rx)],
+        );
+        assert!(
+            !flagged(&app, 0, 100, Kind::Cycle),
+            "15% late is clean at a 20% tolerance"
+        );
+        app.spec_tol_pct = 5;
+        receive(
+            &mut app,
+            1_126_000,
+            vec![frame_at(1_126_000, 100, 8, Direction::Rx)],
+        );
+        assert!(
+            flagged(&app, 0, 100, Kind::Cycle),
+            "the next interval is only 11% late, but the tolerance now says 5"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn the_grace_setting_decides_when_silence_counts_as_dropout() {
+        let mut app = spec_app();
+        receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+        app.spec_grace = 10;
+        receive(&mut app, 950_000, vec![]);
+        assert!(
+            !flagged(&app, 0, 100, Kind::Missing),
+            "9.5 periods of silence is inside a grace of ten"
+        );
+        app.spec_grace = 2;
+        receive(&mut app, 960_000, vec![]);
+        assert!(
+            flagged(&app, 0, 100, Kind::Missing),
+            "tightening the grace convicts the same continuing silence"
+        );
         app.stop();
     }
 

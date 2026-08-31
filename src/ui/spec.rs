@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::spec::{GRACE_CYCLES, Kind, Latch, TOLERANCE_PERCENT};
+use crate::spec::{Kind, Latch};
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
 /// What arrived that the databases said must not, or did not arrive at all.
@@ -38,9 +38,15 @@ fn content(app: &mut App, ui: &Ui) {
                 .count()
         })
         .sum();
-    ui.text(format!(
-        "tolerance {TOLERANCE_PERCENT}% / grace {GRACE_CYCLES}x  -  {periodic} periodic messages declared"
-    ));
+    ui.text("tolerance");
+    ui.same_line();
+    app.spec_tol_pct = threshold(app, ui, "spec_tol", app.spec_tol_pct, 0.0, 100.0, "%.0f%%");
+    ui.same_line();
+    ui.text("grace");
+    ui.same_line();
+    app.spec_grace = threshold(app, ui, "spec_grace", app.spec_grace, 1.0, 20.0, "%.0fx");
+    ui.same_line();
+    ui.text(format!("{periodic} periodic messages declared"));
 
     // One checkbox per rule, session-only: real logs carry other people's
     // traffic, and being able to stop looking at it without editing the project
@@ -121,6 +127,31 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             ui.text(column);
         }
+    }
+}
+
+/// One integer threshold. The drag previews while it moves and the model only
+/// hears about it when the gesture ends: a monitor setting typed one digit at a
+/// time would otherwise re-judge the bus at every keystroke.
+fn threshold(app: &mut App, ui: &Ui, key: &str, model: u64, lo: f32, hi: f32, fmt: &str) -> u64 {
+    let label = format!("##{key}");
+    let mut v = app.num_draft.shown(key, model as f64) as f32;
+    let moved = imgui::Drag::new(&label)
+        .speed((hi - lo) / 100.0)
+        .range(lo, hi)
+        .display_format(fmt)
+        .build(ui, &mut v);
+    let ended = ui.is_item_deactivated();
+    let committed = app.num_draft.step(
+        key,
+        v as f64,
+        moved,
+        ui.is_item_deactivated_after_edit(),
+        ended,
+    );
+    match committed {
+        Some(val) => val.clamp(lo as f64, hi as f64).round() as u64,
+        None => model,
     }
 }
 

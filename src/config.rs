@@ -253,6 +253,33 @@ pub struct Counters {
     pub data: usize,
 }
 
+fn tolerance_default() -> u64 {
+    crate::spec::TOLERANCE_PERCENT
+}
+
+fn grace_default() -> u64 {
+    crate::spec::GRACE_CYCLES
+}
+
+/// How strictly the monitor reads the database's promises. Projects saved
+/// before the monitor existed get both defaults.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct SpecCfg {
+    #[serde(default = "tolerance_default")]
+    pub tolerance_percent: u64,
+    #[serde(default = "grace_default")]
+    pub grace_cycles: u64,
+}
+
+impl Default for SpecCfg {
+    fn default() -> Self {
+        Self {
+            tolerance_percent: tolerance_default(),
+            grace_cycles: grace_default(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -295,6 +322,8 @@ pub struct Config {
     pub desktops: Vec<DesktopCfg>,
     #[serde(default)]
     pub active_desktop: usize,
+    #[serde(default)]
+    pub spec: SpecCfg,
 }
 
 fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
@@ -477,6 +506,10 @@ impl Config {
                 ds
             },
             active_desktop: app.active_desktop,
+            spec: SpecCfg {
+                tolerance_percent: app.spec_tol_pct,
+                grace_cycles: app.spec_grace,
+            },
         }
     }
 
@@ -631,6 +664,8 @@ impl Config {
         app.show_buses = self.show_buses;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
+        app.spec_tol_pct = self.spec.tolerance_percent;
+        app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
@@ -890,6 +925,52 @@ mod tests {
         assert!(
             serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
             "name is still required"
+        );
+    }
+
+    /// The two monitor thresholds are a project-level opinion about how
+    /// strictly to read the database, so they must survive a save.
+    #[test]
+    fn spec_settings_survive_a_project_round_trip() {
+        let mut app = App::new();
+        app.spec_tol_pct = 25;
+        app.spec_grace = 8;
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.spec_tol_pct, 25);
+        assert_eq!(restored.spec_grace, 8);
+    }
+
+    /// Projects saved before the monitor existed carry no `spec` block, and a
+    /// hand-edited block may name only one of the two keys: each defaults on
+    /// its own. A grace of zero would condemn every message not received in
+    /// the current step, so the floor is applied on the way in.
+    #[test]
+    fn an_old_project_without_a_spec_block_loads_the_defaults() {
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(r#"{"channels":[]}"#)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.spec_tol_pct, crate::spec::TOLERANCE_PERCENT);
+        assert_eq!(restored.spec_grace, crate::spec::GRACE_CYCLES);
+
+        let partial: Config = serde_json::from_str(r#"{"spec":{"grace_cycles":5}}"#).unwrap();
+        assert_eq!(
+            partial.spec.tolerance_percent,
+            crate::spec::TOLERANCE_PERCENT,
+            "the key that was not written keeps its own default"
+        );
+
+        let mut zeroed = App::new();
+        serde_json::from_str::<Config>(r#"{"spec":{"grace_cycles":0}}"#)
+            .unwrap()
+            .apply(&mut zeroed);
+        assert_eq!(
+            zeroed.spec_grace, 1,
+            "a grace of zero cycles is not a thing"
         );
     }
 
