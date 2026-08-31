@@ -94,6 +94,21 @@ pub struct ChannelCfg {
     /// before v0.5, which then load with nothing simulated.
     #[serde(default)]
     pub sim_nodes: Vec<String>,
+    /// Arbitration and CAN FD data-phase bitrates in kbit/s, for the load
+    /// view. Absent from projects saved before v0.8, which load with the
+    /// defaults.
+    #[serde(default = "default_bitrate")]
+    pub bitrate_kbps: u32,
+    #[serde(default = "default_fd_data_bitrate")]
+    pub fd_data_kbps: u32,
+}
+
+fn default_bitrate() -> u32 {
+    crate::app::Channel::DEFAULT_BITRATE_KBPS
+}
+
+fn default_fd_data_bitrate() -> u32 {
+    crate::app::Channel::DEFAULT_FD_DATA_KBPS
 }
 
 #[derive(Serialize, Deserialize)]
@@ -408,6 +423,8 @@ impl Config {
                         None => c.dbc_path.clone(),
                     },
                     sim_nodes: c.sim_nodes.clone(),
+                    bitrate_kbps: c.bitrate_kbps,
+                    fd_data_kbps: c.fd_data_kbps,
                 })
                 .collect(),
             bus_counter: app.bus_counter(),
@@ -535,6 +552,8 @@ impl Config {
                     // `active` below, so a restored project never starts
                     // traffic that was stopped when it was saved.
                     sim_nodes: c.sim_nodes,
+                    bitrate_kbps: c.bitrate_kbps,
+                    fd_data_kbps: c.fd_data_kbps,
                 })
                 .collect();
             app.set_bus_counter(self.bus_counter.max(app.channels.len()));
@@ -925,6 +944,44 @@ mod tests {
         assert!(
             serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
             "name is still required"
+        );
+    }
+
+    /// The bitrates feed the load view's arithmetic, so a saved opinion about
+    /// them must come back exactly.
+    #[test]
+    fn bitrates_round_trip() {
+        let mut app = App::new();
+        app.channels[0].bitrate_kbps = 1_000;
+        app.channels[0].fd_data_kbps = 5_000;
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::new();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.channels[0].bitrate_kbps, 1_000);
+        assert_eq!(restored.channels[0].fd_data_kbps, 5_000);
+        assert_eq!(
+            restored.channels[1].bitrate_kbps,
+            crate::app::Channel::DEFAULT_BITRATE_KBPS,
+            "the other bus keeps its own rate"
+        );
+    }
+
+    /// Projects saved before the load view existed carry no bitrate keys;
+    /// they load at the defaults rather than failing or reading zero.
+    #[test]
+    fn legacy_channel_config_without_bitrates_loads_at_defaults() {
+        let cfg: Config =
+            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc"}]}"#)
+                .unwrap();
+        assert_eq!(
+            cfg.channels[0].bitrate_kbps,
+            crate::app::Channel::DEFAULT_BITRATE_KBPS
+        );
+        assert_eq!(
+            cfg.channels[0].fd_data_kbps,
+            crate::app::Channel::DEFAULT_FD_DATA_KBPS
         );
     }
 

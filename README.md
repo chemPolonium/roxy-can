@@ -10,6 +10,7 @@
 - **DBC 解码**：复用报文只解当前组（`M` / `mN` / `mNM` 嵌套、`SG_MUL_VAL_` 区间扩展复用）；`VAL_` 值表显示枚举文本；`SIG_VALTYPE_` 浮点按位模式解码；数值带类型标记（`[u16]` / `[f32]`）
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧；Trace 中错误行铺红底、远程行铺淡紫底，Flags 列统一显示帧类型
 - **信号观测器**：Trace / Messages / Statistics / Data / Graphics 五类窗口均可多开、各自独立过滤；Data / Graphics 可跨总线选择信号，Data 含 Min / Avg / Max 统计与 Sparkline，Graphics 有 14 档时间窗、缩放平移、采样点圆点
+- **总线负载统计**：Statistics 窗口顶部按总线给出线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；仲裁与 CAN FD 数据段比特率按总线设置，BRS 载荷按数据段速率计费
 - **Interactive Generator**：DBC 报文即开即用，按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random 激励随仿真时间连续变化
 - **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；勾选 **Simulate this node** 即按 DBC 声明的周期模拟整个 ECU
 - **Specification（规格监视）**：实测流量与数据库声明逐条对账，四类判定——Unknown（未知 ID）、Dlc（长度不符）、Cycle（周期漂移）、Missing（掉线）；容差与宽限可调并随工程保存

@@ -44,7 +44,7 @@ fn content(app: &mut App, ui: &Ui) {
     let mut remove: Option<usize> = None;
     let n = app.channels.len();
     {
-        let Some(_table) = ui.begin_table_with_flags("bus_table", 3, flags) else {
+        let Some(_table) = ui.begin_table_with_flags("bus_table", 4, flags) else {
             return;
         };
         ui.table_setup_column_with(TableColumnSetup {
@@ -54,8 +54,13 @@ fn content(app: &mut App, ui: &Ui) {
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.8,
+            init_width_or_weight: 1.6,
             ..TableColumnSetup::new("DBC")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 130.0,
+            ..TableColumnSetup::new("kbit/s (arb / FD data)")
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
@@ -83,6 +88,31 @@ fn content(app: &mut App, ui: &Ui) {
             ui.same_line();
             if ui.small_button(format!("Open...##busdbc{i}")) {
                 app.pick_dbc_for(i);
+            }
+            ui.table_next_column();
+            // The load view divides wire bits by these; there is no hardware
+            // behind the simulation, so the values are declarations about the
+            // bus being analysed, not device settings.
+            ui.set_next_item_width(56.0);
+            let mut arb = app.channels[i].bitrate_kbps as i32;
+            if ui
+                .input_int(format!("##busarb{i}"), &mut arb)
+                .step(50)
+                .step_fast(500)
+                .build()
+            {
+                app.channels[i].bitrate_kbps = arb.max(1) as u32;
+            }
+            ui.same_line();
+            ui.set_next_item_width(56.0);
+            let mut data = app.channels[i].fd_data_kbps as i32;
+            if ui
+                .input_int(format!("##busdata{i}"), &mut data)
+                .step(100)
+                .step_fast(1000)
+                .build()
+            {
+                app.channels[i].fd_data_kbps = data.max(1) as u32;
             }
             ui.table_next_column();
             if ui.small_button(format!("x##busrm{i}")) {

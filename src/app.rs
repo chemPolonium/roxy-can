@@ -292,6 +292,17 @@ pub struct Channel {
     /// channel itself so deleting or renumbering a bus takes its nodes along
     /// without a second remap pass.
     pub sim_nodes: Vec<String>,
+    /// Arbitration bitrate in kbit/s, as the load view divides wire bits by
+    /// it. There is no hardware behind the simulation, so the value is a
+    /// declaration about the bus being analysed, not a device setting.
+    pub bitrate_kbps: u32,
+    /// CAN FD data-phase bitrate in kbit/s, applied to BRS frames only.
+    pub fd_data_kbps: u32,
+}
+
+impl Channel {
+    pub const DEFAULT_BITRATE_KBPS: u32 = 500;
+    pub const DEFAULT_FD_DATA_KBPS: u32 = 2000;
 }
 
 /// Which buses/messages an analysis window looks at.
@@ -584,6 +595,9 @@ pub struct App {
     pub last_record: String,
     pub subs: HashMap<(u8, u32, String), Subscription>,
     pub aggs: HashMap<(u8, u32), MessageAgg>,
+    /// Per-bus load / frame-rate / error rolling state, one entry per
+    /// channel. Fed from the same frame loop as `aggs`.
+    pub bus_loads: Vec<crate::load::BusLoad>,
     /// Observed-versus-declared violations, recomputed on every measurement
     /// step from `aggs` and the loaded databases.
     pub spec: Spec,
@@ -682,12 +696,16 @@ impl App {
                     dbc: None,
                     dbc_path: "assets/sample.dbc".to_string(),
                     sim_nodes: Vec::new(),
+                    bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+                    fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
                 },
                 Channel {
                     name: "CAN2".to_string(),
                     dbc: None,
                     dbc_path: "assets/motbus.dbc".to_string(),
                     sim_nodes: Vec::new(),
+                    bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+                    fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
                 },
             ],
             status: "stopped".to_string(),
@@ -713,6 +731,10 @@ impl App {
             last_record: String::new(),
             subs: HashMap::new(),
             aggs: HashMap::new(),
+            bus_loads: vec![
+                crate::load::BusLoad::new(),
+                crate::load::BusLoad::new(),
+            ],
             spec: Spec::default(),
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
@@ -811,7 +833,10 @@ impl App {
             dbc: None,
             dbc_path: "assets/sample.dbc".to_string(),
             sim_nodes: Vec::new(),
+            bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
         });
+        self.bus_loads.push(crate::load::BusLoad::new());
         let ch = self.channels.len() - 1;
         self.load_channel(ch);
         let ids: Vec<u32> = self.channels[ch]
@@ -835,6 +860,7 @@ impl App {
         }
         let name = self.channels[ch].name.clone();
         self.channels.remove(ch);
+        self.bus_loads.remove(ch);
         let remap = |c: u8| -> Option<u8> {
             if (c as usize) < ch {
                 Some(c)
@@ -1022,6 +1048,9 @@ impl App {
         self.paused_at_us = None;
         self.trace.clear();
         self.aggs.clear();
+        for load in &mut self.bus_loads {
+            load.clear();
+        }
         // Along with the aggregates it reads: keeping the previous run's
         // interval memory would turn the first step of a new run into one
         // enormous measured period.
@@ -2211,6 +2240,16 @@ impl App {
             }
             self.trace.push_back(f);
             self.frame_counter += 1;
+            // Error frames included: they occupy the bus and the load view
+            // counts them; per-message aggregation below skips them.
+            if let Some(load) = self.bus_loads.get_mut(f.channel as usize) {
+                let (arb, data) = {
+                    let ch = &self.channels[f.channel as usize];
+                    (ch.bitrate_kbps, ch.fd_data_kbps)
+                };
+                let wire = crate::load::wire_time_us(&f, arb, data);
+                load.note(&f, wire);
+            }
             if f.is_error() {
                 // Error frames carry no identifier and no payload; they are
                 // intentionally kept out of per-message aggregation.
@@ -5311,5 +5350,127 @@ BO_ 400 Muxed: 8 ECU
             "once its group is switched in, the signal is sampled again"
         );
         app.stop();
+    }
+
+    fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
+        CanFrame {
+            t_us,
+            channel: 0,
+            id,
+            extended: false,
+            len,
+            data: [0u8; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags,
+        }
+    }
+
+    fn quiet_app() -> App {
+        let mut app = App::new();
+        app.start_virtual();
+        // Only frames built by the test may reach the bus statistics.
+        app.tx_list.retain(|t| t.channel != 0);
+        app
+    }
+
+    /// The load view's whole point: the same traffic reads differently at
+    /// different bitrates, and each number agrees with a hand calculation.
+    /// 100 classic 8-byte frames over one second are 111 bits each, 222 µs of
+    /// wire time at 500 kbit/s -- 2.22 % of the bus.
+    #[test]
+    fn bus_load_matches_the_hand_calculation() {
+        let mut app = quiet_app();
+        let frames: Vec<CanFrame> = (0..100)
+            .map(|i| rx_frame((i + 1) * 10_000, 0x100, 8, FrameFlags::NONE))
+            .collect();
+        receive(&mut app, 1_000_000, frames);
+        assert!((app.bus_loads[0].frame_rate() - 100.0).abs() < 1e-9);
+        assert!(
+            (app.bus_loads[0].load() - 0.0222).abs() < 1e-9,
+            "got {}, expected 2.22 %",
+            app.bus_loads[0].load()
+        );
+        app.stop();
+    }
+
+    /// A 64-byte BRS payload clocks out of the data phase, so the same frame
+    /// stream is far cheaper at a 2 Mbit/s data phase than at 500 kbit/s --
+    /// the acceptance case from the capability backlog, and exactly what a
+    /// frame-counting "load" would get wrong.
+    #[test]
+    fn a_brs_payload_gets_cheaper_at_a_faster_data_phase() {
+        let mut app = quiet_app();
+        let frames: Vec<CanFrame> = (0..100)
+            .map(|i| {
+                rx_frame(
+                    (i + 1) * 10_000,
+                    0x200,
+                    64,
+                    FrameFlags::FD.union(FrameFlags::BRS),
+                )
+            })
+            .collect();
+        // 55 arbitration bits at 500 kbit/s + 552 data bits at 2 Mbit/s =
+        // 110 + 276 = 386 µs per frame -> 3.86 % load.
+        receive(&mut app, 1_000_000, frames.clone());
+        assert!(
+            (app.bus_loads[0].load() - 0.0386).abs() < 1e-9,
+            "got {}, expected 3.86 %",
+            app.bus_loads[0].load()
+        );
+        // Same frames, data phase throttled to the arbitration rate: all 607
+        // bits at 500 kbit/s = 1214 µs -> 12.14 %.
+        app.channels[0].fd_data_kbps = 500;
+        for load in &mut app.bus_loads {
+            load.clear();
+        }
+        receive(&mut app, 3_000_000, frames);
+        assert!(
+            (app.bus_loads[0].load() - 0.1214).abs() < 1e-9,
+            "got {}, expected 12.14 %",
+            app.bus_loads[0].load()
+        );
+        app.stop();
+    }
+
+    /// Error frames never enter per-message aggregation, but the bus view
+    /// must still report them: they occupy the bus and are the thing you are
+    /// usually hunting.
+    #[test]
+    fn error_frames_are_counted_per_bus() {
+        let mut app = quiet_app();
+        receive(
+            &mut app,
+            1_000,
+            vec![rx_frame(1_000, 0x300, 0, FrameFlags::ERROR)],
+        );
+        assert_eq!(app.bus_loads[0].errors, 1);
+        receive(
+            &mut app,
+            2_000,
+            vec![rx_frame(2_000, 0x300, 0, FrameFlags::ERROR)],
+        );
+        assert_eq!(app.bus_loads[0].errors, 2);
+        assert!(
+            app.bus_loads[1].errors == 0,
+            "bus 1 saw nothing and says so"
+        );
+        app.stop();
+    }
+
+    /// A fresh run must not inherit the previous run's load: the window is
+    /// cleared with the aggregates it accompanies.
+    #[test]
+    fn restarting_measurement_clears_the_bus_windows() {
+        let mut app = quiet_app();
+        receive(
+            &mut app,
+            1_000,
+            vec![rx_frame(1_000, 0x100, 8, FrameFlags::NONE)],
+        );
+        assert!(app.bus_loads[0].load() > 0.0);
+        app.reset_time();
+        assert_eq!(app.bus_loads[0].load(), 0.0);
+        assert_eq!(app.bus_loads[0].errors, 0);
     }
 }

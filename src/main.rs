@@ -5,6 +5,7 @@ mod can;
 mod config;
 mod dbc;
 mod decode;
+mod load;
 mod log;
 mod sim;
 mod source;
