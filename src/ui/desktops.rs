@@ -1,7 +1,7 @@
 use crate::app::{App, STATUSBAR_H, TABSTRIP_H};
 use imgui::{Condition, Ui, WindowFlags};
 
-/// CANoe-style desktop tab strip above the status bar: each tab is a named
+/// Desktop tab strip above the status bar: each tab is a named
 /// workspace arrangement (open windows/panels + layout); clicking switches.
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();

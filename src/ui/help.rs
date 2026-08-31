@@ -50,7 +50,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         let mut close = false;
         ui.modal_popup_config(ID).opened(&mut open).build(|| {
             ui.text(format!("roxy-can {}", env!("CARGO_PKG_VERSION")));
-            ui.text("类 CANoe 的 CAN 总线分析工具");
+            ui.text("CAN 总线仿真与分析工具");
             ui.text("虚拟仿真与 ASC/BLF 回放 · DBC 解码 · 多窗口观测 · 多桌面");
             ui.separator();
             if ui.button("Close") {

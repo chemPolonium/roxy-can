@@ -1,4 +1,4 @@
-//! Workspace persistence as CANoe-style project files (.rxproj): buses,
+//! Workspace persistence as project files (.rxproj): buses,
 //! analysis windows, signals, filters, the generator and the imgui window
 //! layout are bundled in one JSON file. A small `roxy-can.meta.json`
 //! remembers the last opened project. The legacy `roxy-can.json` (no

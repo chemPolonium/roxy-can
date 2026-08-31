@@ -12,7 +12,8 @@ fn goto_button(ui: &Ui, id: &str) -> bool {
 
 /// Single-table overview of every observer (Trace, Messages, Statistics,
 /// Graphics, Data): open state, Signals scope, and per-observer export.
-/// Replaces CANoe's graph-based Measurement Setup with a flat list.
+/// A flat list rather than a node graph: there is no measurement topology to
+/// wire here, only a table of what exists.
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
     let mut open = app.show_measurement;
