@@ -538,7 +538,16 @@ fn draw_plot(
             app.subs.get(key).map(|sub| {
                 (
                     PALETTE[sub.color % PALETTE.len()],
-                    format!("{} = {:.3} {}", key.2, sub.latest, sub.unit),
+                    format!(
+                        "{} = {}",
+                        key.2,
+                        crate::dbc::fmt_signal_value(
+                            sub.latest,
+                            &sub.unit,
+                            &sub.type_tag,
+                            sub.label.as_deref(),
+                        )
+                    ),
                 )
             })
         })

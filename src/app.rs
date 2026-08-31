@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN, dlc2len, len2dlc};
 use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 use crate::dbc::SymbolTable;
+use crate::dbc::DecodedSignal;
 use crate::log::AscWriter;
 use crate::log::open_stream;
 use crate::sim::{ValueSrc, eval_phys};
@@ -168,6 +169,12 @@ impl SampleCache {
 pub struct Subscription {
     pub latest: f64,
     pub unit: String,
+    /// The database's enum label for the latest value, if one names it.
+    pub label: Option<String>,
+    /// How the database types this signal (`u8`/`i16`/`f32`/`f64`); the value
+    /// prints in its own format and the tag goes after it. Identity like
+    /// `unit`: set from the database at subscribe time, refreshed per frame.
+    pub type_tag: String,
     pub min: f64,
     pub max: f64,
     /// Running average over the sampled values.
@@ -215,7 +222,7 @@ impl Subscription {
     }
 
     /// Forgets everything the sampler accumulates, keeping the signal's identity
-    /// (`unit`, `color`). Emptying the cache alone is not a reset: the sampler
+    /// (`unit`, `type_tag`, `color`). Emptying the cache alone is not a reset: the sampler
     /// gates on `t_us >= last_sample_us + SAMPLE_INTERVAL_US`, so a baseline
     /// inherited from the previous run silently rejects every frame until the
     /// playhead climbs past where the old run ended -- which reads as the start
@@ -227,6 +234,7 @@ impl Subscription {
 
     fn clear_accumulators(&mut self) {
         self.latest = 0.0;
+        self.label = None;
         self.min = f64::INFINITY;
         self.max = f64::NEG_INFINITY;
         self.avg = 0.0;
@@ -1414,7 +1422,10 @@ impl App {
         }
     }
 
-    /// Snapshot of the latest signal values shown in a Data window.
+    /// Snapshot of the latest signal values shown in a Data window. Each row
+    /// carries the raw number and, where the database names this value, its
+    /// enum label -- both, so a spreadsheet can sort on the number while a
+    /// report keeps the text.
     pub fn export_data_csv(&mut self, i: usize, path: &str) {
         let Some(d) = self.data_windows.get(i) else {
             return;
@@ -1425,13 +1436,17 @@ impl App {
             .filter(|s| s.visible)
             .map(|s| s.key.clone())
             .collect();
-        let mut s = String::from("bus,signal,value,unit\n");
+        let mut s = String::from("bus,signal,value,unit,type,label\n");
         for key in &keys {
             let Some(sub) = self.subs.get(key) else {
                 continue;
             };
             let bus = self.channel_name(key.0);
-            s.push_str(&format!("{bus},{},{},{}\n", key.2, sub.latest, sub.unit));
+            let label = sub.label.as_deref().unwrap_or("");
+            s.push_str(&format!(
+                "{bus},{},{},{},{},{label}\n",
+                key.2, sub.latest, sub.unit, sub.type_tag
+            ));
         }
         self.write_export(path, s);
     }
@@ -1561,7 +1576,7 @@ impl App {
         let mut stride: HashMap<(u8, u32, String), u64> = HashMap::new();
         let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
         for f in &frames {
-            for (key, phys, _) in self.subscribed_values(f) {
+            for (key, d) in self.subscribed_values(f) {
                 if stride
                     .get(&key)
                     .is_some_and(|&lt| f.t_us < lt + SAMPLE_INTERVAL_US)
@@ -1569,7 +1584,7 @@ impl App {
                     continue;
                 }
                 stride.insert(key.clone(), f.t_us);
-                batches.entry(key).or_default().push((f.t_us, phys));
+                batches.entry(key).or_default().push((f.t_us, d.phys));
             }
         }
         for (key, pts) in batches {
@@ -2241,15 +2256,17 @@ impl App {
             agg.len = f.len;
             agg.data = f.data;
             agg.flags = f.flags;
-            for (key, phys, unit) in self.subscribed_values(&f) {
+            for (key, d) in self.subscribed_values(&f) {
                 let Some(entry) = self.subs.get_mut(&key) else {
                     continue;
                 };
-                entry.latest = phys;
-                entry.unit = unit;
+                entry.latest = d.phys;
+                entry.unit = d.unit;
+                entry.type_tag = d.type_tag;
+                entry.label = d.label;
                 entry.last_update_us = f.t_us;
                 if f.t_us >= entry.last_sample_us + SAMPLE_INTERVAL_US || entry.history.is_empty() {
-                    entry.push_sample(f.t_us, phys);
+                    entry.push_sample(f.t_us, d.phys);
                 }
             }
         }
@@ -2343,11 +2360,11 @@ impl App {
         }
     }
 
-    /// Decodes one frame into `(signal key, physical value, unit)` for the
+    /// Decodes one frame into `(signal key, decoded signal)` pairs for the
     /// signals that are currently subscribed. Shared by the playback loop and
     /// the Graphics window backfill so the two cannot drift on what a signal's
     /// value is.
-    fn subscribed_values(&self, f: &CanFrame) -> Vec<((u8, u32, String), f64, String)> {
+    fn subscribed_values(&self, f: &CanFrame) -> Vec<((u8, u32, String), DecodedSignal)> {
         let Some(db) = self
             .channels
             .get(f.channel as usize)
@@ -2357,22 +2374,38 @@ impl App {
         };
         db.decode_signals(f)
             .into_iter()
-            .filter_map(|(name, phys, unit)| {
-                let key = (f.channel, f.id, name);
-                self.subs.contains_key(&key).then_some((key, phys, unit))
+            .filter_map(|d| {
+                let key = (f.channel, f.id, d.name.clone());
+                self.subs.contains_key(&key).then_some((key, d))
             })
             .collect()
+    }
+
+    /// The display type the database declares for a subscribed signal, used
+    /// until the first frame refreshes it -- and forever when no database
+    /// names it.
+    fn signal_meta(&self, key: &(u8, u32, String)) -> String {
+        self.channels
+            .get(key.0 as usize)
+            .and_then(|c| c.dbc.as_ref())
+            .and_then(|db| db.messages.get(&key.1))
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .map(|s| s.type_tag.clone())
+            .unwrap_or_default()
     }
 
     pub fn subscribe(&mut self, key: (u8, u32, String)) {
         if !self.subs.contains_key(&key) {
             let color = self.color_counter;
             self.color_counter += 1;
+            let type_tag = self.signal_meta(&key);
             self.subs.insert(
                 key,
                 Subscription {
                     latest: 0.0,
                     unit: String::new(),
+                    label: None,
+                    type_tag,
                     min: f64::INFINITY,
                     max: f64::NEG_INFINITY,
                     avg: 0.0,
@@ -4015,6 +4048,8 @@ BO_ 4096 Orphan: 8 Vector__XXX
         Subscription {
             latest: 0.0,
             unit: String::new(),
+            label: None,
+            type_tag: String::new(),
             min: f64::INFINITY,
             max: f64::NEG_INFINITY,
             avg: 0.0,
@@ -5206,6 +5241,74 @@ BA_ "GenMsgCycleTime" BO_ 300 0;
         assert!(
             !flagged(&app, 0, 100, Kind::Cycle),
             "a stale interval from the old run would convict this frame"
+        );
+        app.stop();
+    }
+
+    /// Same mux layout as `MUX_DBC` in the dbc tests, one bus, generator
+    /// silenced so only the frames built here reach the sampler.
+    const MUX_SAMPLE_DBC: &str = r#"VERSION "roxy-can mux sampling test"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 400 Muxed: 8 ECU
+ SG_ Switch M : 0|8@1+ (1,0) [0|0] "" ECU
+ SG_ G1_A m1 : 16|16@1+ (0.1,0) [0|0] "" ECU
+ SG_ G2_C m2 : 16|16@1+ (0.5,0) [0|0] "" ECU
+"#;
+
+    fn mux_app() -> App {
+        let mut app = App::new();
+        app.channels[0].dbc = Some(crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap());
+        app.tx_list.retain(|t| t.channel != 0);
+        app.start_virtual();
+        app
+    }
+
+    fn mux_frame(t_us: u64, switch: u8) -> CanFrame {
+        let mut f = frame_at(t_us, 400, 8, Direction::Rx);
+        f.data[0] = switch;
+        f.data[2] = 100;
+        f
+    }
+
+    #[test]
+    fn a_signal_of_the_inactive_group_is_not_sampled() {
+        let mut app = mux_app();
+        let g1 = (0u8, 400u32, "G1_A".to_string());
+        let g2 = (0u8, 400u32, "G2_C".to_string());
+        app.subscribe(g1.clone());
+        app.subscribe(g2.clone());
+        assert!(app.subs.contains_key(&g1), "both signals are subscribed");
+        assert!(app.subs.contains_key(&g2));
+
+        receive(&mut app, 100_000, vec![mux_frame(100_000, 1)]);
+        assert!(
+            app.subs[&g2].history.is_empty(),
+            "group 2 was not in the frame, so it has no samples"
+        );
+        assert!(
+            !app.subs[&g1].history.is_empty(),
+            "group 1 was active and got sampled"
+        );
+        app.stop();
+    }
+
+    #[test]
+    fn a_group_signal_gains_samples_once_its_group_is_switched_in() {
+        let mut app = mux_app();
+        let g2 = (0u8, 400u32, "G2_C".to_string());
+        app.subscribe(g2.clone());
+
+        receive(&mut app, 100_000, vec![mux_frame(100_000, 1)]);
+        let before = app.subs[&g2].history.len();
+        receive(&mut app, 200_000, vec![mux_frame(200_000, 2)]);
+        assert_eq!(before, 0, "inactive until the switch changes");
+        assert!(
+            app.subs[&g2].history.len() > before,
+            "once its group is switched in, the signal is sampled again"
         );
         app.stop();
     }

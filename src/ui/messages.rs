@@ -200,12 +200,17 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_column();
                 ui.text("   (not in DBC)");
             } else {
-                for (sig_name, phys, unit) in &sigs {
+                for d in &sigs {
                     ui.table_next_row();
                     ui.table_next_column();
-                    ui.text(format!("   {sig_name}"));
+                    ui.text(format!("   {}", d.name));
                     ui.table_set_column_index(1);
-                    ui.text(format!("{phys:.3} {unit}"));
+                    ui.text(crate::dbc::fmt_signal_value(
+                        d.phys,
+                        &d.unit,
+                        &d.type_tag,
+                        d.label.as_deref(),
+                    ));
                 }
             }
         }

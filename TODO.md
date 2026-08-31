@@ -6,22 +6,15 @@
 
 ## P0 解码正确性
 
-1. **复用报文（mux）解码**
-   现状：`SymbolTable` 只抄了 `name/start_bit/size/byte_order/value_type/factor/offset/min/max/unit/receivers`，没有任何 mux 字段（`src/dbc.rs:110-131`），解码是对匹配 ID 的**全部** `SG_` 无条件进行（`src/dbc.rs:202-214`）。挂一份带 `SG_ M` / `m12` 的库，Trace/Data/Graphics 会同时显示当前这一帧根本不存在的子报文信号。
-   要做：`SignalInfo` 带 mux 指示，按 switch 值分组解码；`M`、`m12`、以及扩展复用（`extended_multiplex`，can-dbc 10 已暴露 `message_multiplexor_switch`）三档都要判；Trace / Messages / Data / Graphics 四条链路一致。
-   验收：一份 mux 测试库，切到组 1 时组 2 的信号**不出现**（而不是显示 0）。
-
-2. **VAL_ 值表**
-   现状：`db.value_tables` 全程未解析。数据库写了 `0=OK 1=Error` 的地方，工具显示裸数字。
-   要做：随符号表带值表，解码结果显示文本（CSV 导出同时给裸值与文本，不要只给一个）。
-
-3. **标准帧与扩展帧共用裸 `u32` 做键**
+1. ~~**复用报文（mux）解码**~~ ✅ 0.7.0
+   落地：`SignalInfo.mux_when` 存条件列表（开关名 + 闭区间集），`mN` 生成单值条件、`mNM` 嵌套在加载时继承祖先开关条件、`SG_MUL_VAL_` 按区间直接 gating（多区间、多开关、覆盖 `m` 标记三案都有测试）；Trace / Messages / Data / Graphics 同走 `decode_signals`，切组后旧组信号立即消失。已知边界：`MuxCondition` 引用消息里不存在的开关时按"无条件"放行（坏库仍显示数据而不是空解码）。
+2. ~~**VAL_ 值表**~~ ✅ 0.7.0
+   落地：`SymbolTable.value_tables` 按（报文， 信号）收 `VAL_` 枚举，解码按符号扩展后的原始值匹配（负 id 可标注有符号信号）；Messages / Data / Graphics 显示 `(标签)`，Data 导出的 CSV 给 `value` 裸值与 `label` 文本两列。`VAL_TABLE_` 命名表引用仍不可解析（can-dbc-pest 无该产生式，已有测试钉住）。
+3. **标准帧与扩展帧共用裸 `u32` 做键**（未动）
    现状：聚合与 DBC 都只用裸 ID（0.6.0 明确接受并写进了 README），所以 `0x123` 标准帧与 `0x123` 扩展帧互相顶名，会假报 Unknown / Dlc、也会让两个观测器读到同一份聚合。
    要做：键改成 `(id, extended)`。这是有传染性的改动（`aggs`、`spec`、DBC 查表、导出、工程文件里的 ID 集合），先想清楚迁移再动。
-
-4. **`SigType` / 单位的显示口径**
-   现状：只提取了线性 `factor`/`offset`（`src/decode.rs:71-79`），`min`/`max` 只用于生成器编辑框夹范围，不显示。
-   要做：至少把单位与信号类型显示到解码值后面；浮点/整型不要按同一格式打。
+4. ~~**`SigType` / 单位的显示口径**~~ ✅ 0.7.0
+   落地：每个信号带 `type_tag`（`u8`/`i16`/`f32`/`f64`），值后统一显示 `[u16]` 型标记；`SIG_VALTYPE_` 声明的浮点按位模式解码（can-dbc 约定 0=整型 1=f32 2=f64，与 Vector 文档的 0/1 约定不同，以解析器为准）；整型按需显示小数，`fmt_decoded`/`fmt_signal_value` 是唯一的格式化出口。min/max 仍只在生成器夹范围，未显示。
 
 ## P1 用已有聚合数据换来的视图
 
@@ -73,5 +66,5 @@
 
 - 第 8 项的"条件"与第 10 项的"规则"是同一个求值器，合并设计。
 - 第 9 项会改变第 5 项的取数方式，所以第 5 项先落地更划算。
-- 第 1、2、4 项都是解码层，适合作为一个"解码正确性"版本（0.7.0）一起做，README 里能说清"以前哪些库会看错"。
+- ~~第 1、2、4 项都是解码层，适合作为一个"解码正确性"版本（0.7.0）一起做~~ 已照此落地（0.7.0）。
 - 本工具界面无自动化测试床（`src/ui/*` 没有任何 imgui 测试），所有条目的验收都分两半：判定逻辑能自动证明，控件行为只能人眼看。

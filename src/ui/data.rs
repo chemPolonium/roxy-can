@@ -90,7 +90,12 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             }
             ui.text(&key.2);
             ui.table_next_column();
-            ui.text(format!("{:.3} {}", sub.latest, sub.unit));
+            ui.text(crate::dbc::fmt_signal_value(
+                sub.latest,
+                &sub.unit,
+                &sub.type_tag,
+                sub.label.as_deref(),
+            ));
             ui.table_next_column();
             ui.text(fmt_stat(sub.min));
             ui.table_next_column();
