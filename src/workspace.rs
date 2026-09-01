@@ -392,11 +392,10 @@ impl App {
                     return false;
                 }
             }
-            2 => {
-                if !matches!(f.dir, Direction::Tx) {
+            2
+                if !matches!(f.dir, Direction::Tx) => {
                     return false;
                 }
-            }
             _ => {}
         }
         let name = self.message_name(f.channel, f.id);

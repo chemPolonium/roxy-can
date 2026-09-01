@@ -19,7 +19,7 @@ pub fn extract_raw(data: &[u8], start_bit: u64, size: u64, big_endian: bool) -> 
             if byte < n && (data[byte] >> (bit % 8)) & 1 == 1 {
                 raw |= 1 << (size - 1 - i);
             }
-            if bit % 8 == 0 {
+            if bit.is_multiple_of(8) {
                 bit += 15;
             } else {
                 bit -= 1;
@@ -59,7 +59,7 @@ pub fn pack_raw(data: &mut [u8], start_bit: u64, size: u64, big_endian: bool, ra
                     data[byte] &= !mask;
                 }
             }
-            if bit % 8 == 0 {
+            if bit.is_multiple_of(8) {
                 bit += 15;
             } else {
                 bit -= 1;

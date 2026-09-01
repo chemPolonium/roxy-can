@@ -361,7 +361,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         dl.add_text(
             [x0 + 8.0, y0 + 8.0],
             [0.5, 0.5, 0.6, 1.0],
-            "add signals via Measurement Setup (…)".to_string(),
+            "add signals via Measurement Setup (…)",
         );
     } else if stacked {
         let ph = h / keys.len() as f32;
@@ -370,24 +370,39 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
             draw_plot(
                 &dl,
                 app,
-                x0,
-                y0 + k as f32 * ph,
-                w,
-                ph,
-                &[key.clone()],
-                t_right,
-                tw,
-                budget,
-                // The time axis is shared, so labelling it once at the bottom
-                // is enough -- per pane it collided with the next pane's top
-                // value label.
-                k == last,
-                cursor,
+                PlotPane {
+                    x0,
+                    y0: y0 + k as f32 * ph,
+                    w,
+                    h: ph,
+                    keys: std::slice::from_ref(key),
+                    t_right,
+                    tw,
+                    budget,
+                    // The time axis is shared, so labelling it once at the bottom
+                    // is enough -- per pane it collided with the next pane's top
+                    // value label.
+                    time_labels: k == last,
+                    cursor,
+                },
             );
         }
     } else {
         draw_plot(
-            &dl, app, x0, y0, w, h, &keys, t_right, tw, budget, true, cursor,
+            &dl,
+            app,
+            PlotPane {
+                x0,
+                y0,
+                w,
+                h,
+                keys: &keys,
+                t_right,
+                tw,
+                budget,
+                time_labels: true,
+                cursor,
+            },
         );
     }
 
@@ -413,20 +428,34 @@ fn fmt_val(v: f64) -> String {
     }
 }
 
-fn draw_plot(
-    dl: &imgui::DrawListMut<'_>,
-    app: &App,
+/// One draw_plot invocation: where the pane sits and what it plots. A plain
+/// argument list ran to twelve parameters and tripped the lint.
+struct PlotPane<'a> {
     x0: f32,
     y0: f32,
     w: f32,
     h: f32,
-    keys: &[(u8, u32, String)],
+    keys: &'a [(u8, u32, String)],
     t_right: f64,
     tw: f64,
     budget: CurveBudget,
     time_labels: bool,
     cursor: Option<(f32, f64)>,
-) {
+}
+
+fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
+    let PlotPane {
+        x0,
+        y0,
+        w,
+        h,
+        keys,
+        t_right,
+        tw,
+        budget,
+        time_labels,
+        cursor,
+    } = pane;
     // Everything below works in the inset rect, leaving the gutter and bottom
     // strip free for the axis labels.
     let (x0, y0, w, h) = axis_inset(x0, y0, w, h);

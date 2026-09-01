@@ -282,8 +282,8 @@ impl App {
             }
             let _ = std::fs::remove_file(AUTOSAVE_PATH);
         }
-        if let Ok(text) = std::fs::read_to_string(META_PATH) {
-            if let Ok(meta) = serde_json::from_str::<Meta>(&text) {
+        if let Ok(text) = std::fs::read_to_string(META_PATH)
+            && let Ok(meta) = serde_json::from_str::<Meta>(&text) {
                 self.recent_projects = meta.recent_projects;
                 if let Some(last) = meta.last_project {
                     let path = PathBuf::from(last);
@@ -295,7 +295,6 @@ impl App {
                 }
                 return;
             }
-        }
         self.load_config();
     }
 }

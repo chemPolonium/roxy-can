@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::can::frame::{CanFrame, Direction};
-use crate::log::AscWriter;
 use crate::log::open_stream;
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;

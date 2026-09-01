@@ -3,6 +3,7 @@
     // ones app.rs itself no longer needs are imported directly here.
     use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
     use crate::config::Config;
+    use crate::log::AscWriter;
     use crate::sim::ValueSrc;
 
     #[test]
@@ -36,8 +37,8 @@
         let content = std::fs::read_to_string(&actual).unwrap();
         let frames = crate::log::asc::parse_asc(&content);
         assert!(frames.len() >= 10, "expected frames, got {}", frames.len());
-        if let Some(dir) = std::path::Path::new(&actual).parent() {
-            if let Ok(rd) = std::fs::read_dir(dir) {
+        if let Some(dir) = std::path::Path::new(&actual).parent()
+            && let Ok(rd) = std::fs::read_dir(dir) {
                 for e in rd.flatten() {
                     let n = e.file_name().to_string_lossy().to_string();
                     if n.starts_with("roxy_can_record_test") {
@@ -45,7 +46,6 @@
                     }
                 }
             }
-        }
     }
 
     #[test]
@@ -752,7 +752,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
             "expected a Tx frame from the generator"
         );
         assert!(
-            app.aggs.get(&(0, 0x777)).is_some(),
+            app.aggs.contains_key(&(0, 0x777)),
             "generator frames aggregate"
         );
         app.stop();

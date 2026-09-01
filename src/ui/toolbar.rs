@@ -109,7 +109,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         ui.menu("Recent Projects", || {
                             let paths = app.recent_projects.clone();
                             for p in paths {
-                                if ui.menu_item(&file_name(&p)) {
+                                if ui.menu_item(file_name(&p)) {
                                     let path = std::path::PathBuf::from(&p);
                                     if let Some(cur) = app.project_path.clone() {
                                         app.save_project(Some(cur));
@@ -164,7 +164,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         ui.menu("Recent DBC", || {
                             let paths = app.recent_dbc.clone();
                             for p in paths {
-                                if ui.menu_item(&file_name(&p)) {
+                                if ui.menu_item(file_name(&p)) {
                                     app.open_dbc_for(0, p);
                                 }
                             }
@@ -176,7 +176,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             let guard = ui.begin_disabled(blocked);
                             let paths = app.recent_log.clone();
                             for p in paths {
-                                if ui.menu_item(&file_name(&p)) {
+                                if ui.menu_item(file_name(&p)) {
                                     app.load_log(&p);
                                 }
                             }

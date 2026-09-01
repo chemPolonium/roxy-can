@@ -204,8 +204,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         let raw = imgui::sys::igTableGetSortSpecs();
         !raw.is_null() && (*raw).SpecsCount > 0
     };
-    if specs_active {
-        if let Some(mut specs) = ui.table_sort_specs_mut() {
+    if specs_active
+        && let Some(mut specs) = ui.table_sort_specs_mut() {
             let spec = specs.specs().iter().next();
             if let Some(s) = spec {
                 let col = s.column_idx();
@@ -214,14 +214,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             }
             specs.set_sorted();
         }
-    }
 
-    let mut shown = 0usize;
-    for f in &rows {
-        if shown >= MAX_VISIBLE {
-            break;
-        }
-        shown += 1;
+    for f in rows.iter().take(MAX_VISIBLE) {
         let mut hovered = false;
         ui.table_next_row();
         if f.is_error() {
@@ -267,9 +261,9 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         }
     }
 
-    if let Some(_p) = ui.begin_popup(format!("trace_row_ctx{i}")) {
-        if let Some((pi, f)) = *CTX.lock().unwrap() {
-            if pi == i {
+    if let Some(_p) = ui.begin_popup(format!("trace_row_ctx{i}"))
+        && let Some((pi, f)) = *CTX.lock().unwrap()
+            && pi == i {
                 let name = app.message_name(f.channel, f.id).unwrap_or("-");
                 ui.text(format!(
                     "{}  {}  {name}",
@@ -321,8 +315,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                     ui.set_clipboard_text(fmt_id(&f));
                 }
             }
-        }
-    }
 }
 
 fn sort_frame(app: &App, col: usize, a: &CanFrame, b: &CanFrame, asc: bool) -> Ordering {

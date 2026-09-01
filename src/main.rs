@@ -241,7 +241,7 @@ impl State {
         if self.ime_pos != Some(req) {
             self.ime_pos = Some(req);
             if req.0 {
-                let _ = self.window.set_ime_cursor_area(
+                self.window.set_ime_cursor_area(
                     LogicalPosition::new(req.1 as f64, req.2 as f64),
                     LogicalSize::new(20.0, req.3.max(16.0) as f64),
                 );
@@ -329,8 +329,8 @@ impl ApplicationHandler for Program {
                 st.ctrl = m.state().control_key();
                 st.shift = m.state().shift_key();
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed && !event.repeat {
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed && !event.repeat => {
                     let code = match (&event.logical_key, st.ctrl) {
                         (Key::Named(NamedKey::F9), _) => 1,
                         (Key::Character(c), true) => {
@@ -358,7 +358,6 @@ impl ApplicationHandler for Program {
                         CMD.store(code, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-            }
             _ => {}
         }
         st.platform.handle_event::<()>(
