@@ -1266,6 +1266,7 @@ fn play_after_choosing_a_new_log_opens_that_log() {
 fn blank_sub() -> Subscription {
     Subscription {
         latest: 0.0,
+        last_raw: 0,
         unit: String::new(),
         label: None,
         type_tag: String::new(),

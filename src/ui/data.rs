@@ -57,7 +57,11 @@ fn left_panel(app: &mut App, ui: &Ui, i: usize) {
     crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Data(i));
 }
 
-/// Right area: value table for the visible signals.
+/// Right area: value table for the visible signals, the reference Data
+/// window's column set -- physical value, unit, and raw wire value in
+/// their own columns, then a bar. The bar draws the latest value's place
+/// in the database's declared min..max; a signal without a declared range
+/// falls back to its observed one.
 fn values_area(app: &mut App, ui: &Ui, i: usize) {
     let keys: Vec<(u8, u32, String)> = app.data_windows[i]
         .signals
@@ -70,13 +74,12 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         return;
     }
     let tbl_flags = TableFlags::BORDERS_INNER | TableFlags::ROW_BG | TableFlags::SCROLL_Y;
-    if let Some(_table) = ui.begin_table_with_flags("data_table", 6, tbl_flags) {
-        ui.table_setup_column("Signal");
+    if let Some(_table) = ui.begin_table_with_flags("data_table", 5, tbl_flags) {
+        ui.table_setup_column("Name");
         ui.table_setup_column("Value");
-        ui.table_setup_column("Min");
-        ui.table_setup_column("Avg");
-        ui.table_setup_column("Max");
-        ui.table_setup_column("Viz");
+        ui.table_setup_column("Unit");
+        ui.table_setup_column("Raw Value");
+        ui.table_setup_column("Bar");
         ui.table_headers_row();
         for key in keys.iter() {
             let Some(sub) = app.subs.get(key) else {
@@ -88,40 +91,31 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             }
             ui.text(&key.2);
             ui.table_next_column();
-            ui.text(crate::dbc::fmt_signal_value(
-                sub.latest,
-                &sub.unit,
-                &sub.type_tag,
-                sub.label.as_deref(),
-            ));
+            // An enum-labelled signal shows the label as its value ("On"),
+            // the way the reference window does.
+            let value = sub
+                .label
+                .clone()
+                .unwrap_or_else(|| crate::dbc::fmt_decoded(&sub.type_tag, sub.latest));
+            ui.text(value);
             ui.table_next_column();
-            ui.text(fmt_stat(sub.min));
+            ui.text(&sub.unit);
             ui.table_next_column();
-            ui.text(fmt_stat(sub.avg));
+            ui.text(sub.last_raw.to_string());
             ui.table_next_column();
-            ui.text(fmt_stat(sub.max));
-            ui.table_next_column();
-            // A slim bar, not a full widget-height one: anything taller
-            // than the text propped every row open. The fill is the
-            // latest value's place in the observed min..max range.
-            let frac = if sub.max > sub.min {
-                ((sub.latest - sub.min) / (sub.max - sub.min)).clamp(0.0, 1.0)
-            } else {
-                0.0
+            let frac = match app.declared_range(key) {
+                Some((lo, hi)) => ((sub.latest - lo) / (hi - lo)).clamp(0.0, 1.0),
+                None if sub.max > sub.min => {
+                    ((sub.latest - sub.min) / (sub.max - sub.min)).clamp(0.0, 1.0)
+                }
+                None => 0.0,
             };
+            // A slim bar, not a full widget-height one: anything taller
+            // than the text propped every row open.
             let font_h = unsafe { imgui::sys::igGetFontSize() };
             ProgressBar::new(frac as f32)
                 .size([ui.content_region_avail()[0], (font_h * 0.6).max(6.0)])
                 .build(ui);
         }
-    }
-}
-
-/// "-" until the first sample arrives (min/max start infinite).
-fn fmt_stat(v: f64) -> String {
-    if v.is_finite() {
-        format!("{:.3}", v)
-    } else {
-        "-".to_string()
     }
 }

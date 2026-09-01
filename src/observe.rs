@@ -128,6 +128,9 @@ impl SampleCache {
 
 pub struct Subscription {
     pub latest: f64,
+    /// The raw integer the latest frame carried for this signal, before
+    /// factor and offset -- the Data window's Raw Value column.
+    pub last_raw: i64,
     pub unit: String,
     /// The database's enum label for the latest value, if one names it.
     pub label: Option<String>,
@@ -194,6 +197,7 @@ impl Subscription {
 
     pub(crate) fn clear_accumulators(&mut self) {
         self.latest = 0.0;
+        self.last_raw = 0;
         self.label = None;
         self.min = f64::INFINITY;
         self.max = f64::NEG_INFINITY;
@@ -369,6 +373,18 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// The database's declared min..max for a signal -- the scale the Data
+    /// window's bar draws against. None when no database names the signal
+    /// or declares a usable range on it.
+    pub(crate) fn declared_range(&self, key: &(u8, u32, String)) -> Option<(f64, f64)> {
+        self.channels
+            .get(key.0 as usize)
+            .and_then(|c| c.dbc.as_ref())
+            .and_then(|db| db.messages.get(&key.1))
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .and_then(|s| (s.max > s.min).then_some((s.min, s.max)))
+    }
+
     pub fn subscribe(&mut self, key: (u8, u32, String)) {
         if !self.subs.contains_key(&key) {
             let color = self.color_counter;
@@ -378,6 +394,7 @@ impl App {
                 key,
                 Subscription {
                     latest: 0.0,
+                    last_raw: 0,
                     unit: String::new(),
                     label: None,
                     type_tag,

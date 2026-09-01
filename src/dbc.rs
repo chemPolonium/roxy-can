@@ -429,9 +429,18 @@ impl SymbolTable {
                 } else {
                     self.val_label(frame.id, &s.name, raw, s.size, s.signed)
                 };
+                // The raw integer, sign-extended for signed signals: the Data
+                // window's Raw Value column shows the wire value before the
+                // factor and offset touch it.
+                let raw_val = if s.is_float {
+                    raw as i64
+                } else {
+                    decode::to_physical(raw, s.size, s.signed, 1.0, 0.0) as i64
+                };
                 DecodedSignal {
                     name: s.name.clone(),
                     phys,
+                    raw: raw_val,
                     unit: s.unit.clone(),
                     type_tag: s.type_tag.clone(),
                     label,
@@ -452,11 +461,13 @@ impl SymbolTable {
     }
 }
 
-/// One decoded signal: physical value plus, where the database gives one, the
-/// enum label for this raw value, and the type tag the windows print with it.
+/// One decoded signal: physical value plus the raw integer the wire carried,
+/// and where the database gives one, the enum label for this raw value, and
+/// the type tag the windows print with it.
 pub struct DecodedSignal {
     pub name: String,
     pub phys: f64,
+    pub raw: i64,
     pub unit: String,
     pub type_tag: String,
     pub label: Option<String>,

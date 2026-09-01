@@ -823,6 +823,7 @@ impl App {
                     continue;
                 };
                 entry.latest = d.phys;
+                entry.last_raw = d.raw;
                 entry.unit = d.unit;
                 entry.type_tag = d.type_tag;
                 entry.label = d.label;
