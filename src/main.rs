@@ -1,16 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod aggregate;
 mod app;
 mod can;
+mod channel;
 mod config;
 mod dbc;
 mod decode;
+mod generator;
 mod load;
 mod log;
+mod observe;
 mod sim;
 mod source;
 mod spec;
 mod ui;
+mod workspace;
 
 use std::sync::Arc;
 use std::time::Instant;
