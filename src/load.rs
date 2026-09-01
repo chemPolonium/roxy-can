@@ -29,15 +29,9 @@ pub fn wire_time_us(f: &CanFrame, arb_kbps: u32, data_kbps: u32) -> f64 {
         // The payload and the (longer) FD CRC clock out of the data phase at
         // the data bitrate; frame tail (EOF/ACK/IFS) stays in arbitration.
         let (arb_bits, data_bits) = if brs {
-            (
-                arb_bits as f64,
-                8.0 * f.len as f64 + FD_DATA_PHASE_EXTRA,
-            )
+            (arb_bits as f64, 8.0 * f.len as f64 + FD_DATA_PHASE_EXTRA)
         } else {
-            (
-                (arb_bits + 8 * f.len as u64) as f64,
-                0.0,
-            )
+            ((arb_bits + 8 * f.len as u64) as f64, 0.0)
         };
         arb_bits / kbits_per_us(arb_kbps) + data_bits / kbits_per_us(data_kbps)
     } else {
@@ -202,8 +196,10 @@ mod tests {
     fn an_extended_frame_costs_more_than_a_standard_one() {
         let std = frame(0, 8, false, FrameFlags::NONE);
         let ext = frame(0, 8, true, FrameFlags::NONE);
-        assert!((wire_time_us(&ext, 500, 2000) - wire_time_us(&std, 500, 2000) - 40.0).abs() < 1e-9,
-            "the 20 extra identifier bits are 40 µs at 500 kbit/s");
+        assert!(
+            (wire_time_us(&ext, 500, 2000) - wire_time_us(&std, 500, 2000) - 40.0).abs() < 1e-9,
+            "the 20 extra identifier bits are 40 µs at 500 kbit/s"
+        );
     }
 
     #[test]
@@ -226,8 +222,10 @@ mod tests {
     #[test]
     fn a_non_fd_frame_ignores_the_data_rate() {
         let f = frame(0, 8, false, FrameFlags::BRS);
-        assert!((wire_time_us(&f, 500, 8000) - 222.0).abs() < 1e-9,
-            "BRS without FD is nonsense; the arbitration rate decides");
+        assert!(
+            (wire_time_us(&f, 500, 8000) - 222.0).abs() < 1e-9,
+            "BRS without FD is nonsense; the arbitration rate decides"
+        );
     }
 
     #[test]

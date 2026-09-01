@@ -1,4 +1,4 @@
-﻿//! One CAN bus: user identity, its DBC, and the bitrate declarations the
+//! One CAN bus: user identity, its DBC, and the bitrate declarations the
 //! load view divides wire bits by.
 
 use crate::dbc::SymbolTable;
@@ -32,7 +32,6 @@ use crate::app::App;
 use crate::observe::GfxSignal;
 use crate::workspace::SigScope;
 impl App {
-
     pub fn channel_dbc(&self, ch: u8) -> Option<&SymbolTable> {
         self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
     }
@@ -267,4 +266,3 @@ impl App {
         self.bus_counter = n;
     }
 }
-

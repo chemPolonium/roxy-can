@@ -1,9 +1,9 @@
 //! The interactive generator's message model: base payload, per-signal value
 //! sources, and the payload assembly that drives a frame out.
 
-use crate::can::frame::{dlc2len, len2dlc, FrameFlags, MAX_CAN_FD_LEN};
+use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN, dlc2len, len2dlc};
 use crate::channel::Channel;
-use crate::sim::{eval_phys, ValueSrc};
+use crate::sim::{ValueSrc, eval_phys};
 
 pub struct TxMsg {
     pub channel: u8,
@@ -106,8 +106,6 @@ pub(crate) fn tx_payload(
     }
     (data, len, flags)
 }
-
-
 
 use crate::app::{App, DEFAULT_TX_CYCLE_US};
 

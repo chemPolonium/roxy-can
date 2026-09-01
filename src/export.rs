@@ -1,9 +1,7 @@
-
 use crate::app::{App, MessageAgg};
 use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
 impl App {
-
     /// Exports the frames that pass the given Trace window's filter as ASC.
     pub fn export_trace(&mut self, win: usize, path: &str) {
         if self.trace.is_empty() {
@@ -308,7 +306,8 @@ impl App {
     }
 
     pub fn export_spec_dialog(&mut self) {
-        if let Some(p) = App::csv_save_dialog("Export Specification report as CSV", "spec_report.csv")
+        if let Some(p) =
+            App::csv_save_dialog("Export Specification report as CSV", "spec_report.csv")
         {
             self.export_spec_csv(&p.to_string_lossy());
         }

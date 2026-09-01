@@ -204,16 +204,15 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         let raw = imgui::sys::igTableGetSortSpecs();
         !raw.is_null() && (*raw).SpecsCount > 0
     };
-    if specs_active
-        && let Some(mut specs) = ui.table_sort_specs_mut() {
-            let spec = specs.specs().iter().next();
-            if let Some(s) = spec {
-                let col = s.column_idx();
-                let asc = s.sort_direction() == Some(TableSortDirection::Ascending);
-                rows.sort_by(|a, b| sort_frame(app, col, a, b, asc));
-            }
-            specs.set_sorted();
+    if specs_active && let Some(mut specs) = ui.table_sort_specs_mut() {
+        let spec = specs.specs().iter().next();
+        if let Some(s) = spec {
+            let col = s.column_idx();
+            let asc = s.sort_direction() == Some(TableSortDirection::Ascending);
+            rows.sort_by(|a, b| sort_frame(app, col, a, b, asc));
         }
+        specs.set_sorted();
+    }
 
     for f in rows.iter().take(MAX_VISIBLE) {
         let mut hovered = false;
@@ -263,58 +262,59 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
 
     if let Some(_p) = ui.begin_popup(format!("trace_row_ctx{i}"))
         && let Some((pi, f)) = *CTX.lock().unwrap()
-            && pi == i {
-                let name = app.message_name(f.channel, f.id).unwrap_or("-");
-                ui.text(format!(
-                    "{}  {}  {name}",
-                    app.channel_name(f.channel),
-                    fmt_id(&f)
-                ));
-                ui.separator();
-                if ui.menu_item(format!("Filter this ID ({})", fmt_id(&f))) {
-                    app.trace_windows[i].filter = format!("{:03X}", f.id);
-                }
-                if ui.menu_item("Clear filter") {
-                    let w = &mut app.trace_windows[i];
-                    w.filter.clear();
-                    w.dir = 0;
-                    w.dbc_only = false;
-                    w.scope = SigScope::All;
-                }
-                let addable = !f.is_error() && !f.is_remote();
-                if ui
-                    .menu_item_config("Add to Interactive Generator")
-                    .enabled(addable)
-                    .build()
-                {
-                    let was_len = app.tx_list.len();
-                    app.add_tx(f.channel, f.id);
-                    if app.tx_list.len() > was_len {
-                        let known = app
-                            .channel_dbc(f.channel)
-                            .is_some_and(|db| db.messages.contains_key(&f.id));
-                        if let Some(t) = app.tx_list.last_mut() {
-                            t.flags = f.flags;
-                            if !known {
-                                t.len = f.len;
-                                t.data = f.data;
-                                t.data_text = f.data[..f.len as usize]
-                                    .iter()
-                                    .map(|b| format!("{b:02X}"))
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                            }
-                        }
+        && pi == i
+    {
+        let name = app.message_name(f.channel, f.id).unwrap_or("-");
+        ui.text(format!(
+            "{}  {}  {name}",
+            app.channel_name(f.channel),
+            fmt_id(&f)
+        ));
+        ui.separator();
+        if ui.menu_item(format!("Filter this ID ({})", fmt_id(&f))) {
+            app.trace_windows[i].filter = format!("{:03X}", f.id);
+        }
+        if ui.menu_item("Clear filter") {
+            let w = &mut app.trace_windows[i];
+            w.filter.clear();
+            w.dir = 0;
+            w.dbc_only = false;
+            w.scope = SigScope::All;
+        }
+        let addable = !f.is_error() && !f.is_remote();
+        if ui
+            .menu_item_config("Add to Interactive Generator")
+            .enabled(addable)
+            .build()
+        {
+            let was_len = app.tx_list.len();
+            app.add_tx(f.channel, f.id);
+            if app.tx_list.len() > was_len {
+                let known = app
+                    .channel_dbc(f.channel)
+                    .is_some_and(|db| db.messages.contains_key(&f.id));
+                if let Some(t) = app.tx_list.last_mut() {
+                    t.flags = f.flags;
+                    if !known {
+                        t.len = f.len;
+                        t.data = f.data;
+                        t.data_text = f.data[..f.len as usize]
+                            .iter()
+                            .map(|b| format!("{b:02X}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                     }
                 }
-                ui.separator();
-                if ui.menu_item("Copy row") {
-                    ui.set_clipboard_text(fmt_row(app, &f));
-                }
-                if ui.menu_item("Copy ID") {
-                    ui.set_clipboard_text(fmt_id(&f));
-                }
             }
+        }
+        ui.separator();
+        if ui.menu_item("Copy row") {
+            ui.set_clipboard_text(fmt_row(app, &f));
+        }
+        if ui.menu_item("Copy ID") {
+            ui.set_clipboard_text(fmt_id(&f));
+        }
+    }
 }
 
 fn sort_frame(app: &App, col: usize, a: &CanFrame, b: &CanFrame, asc: bool) -> Ordering {

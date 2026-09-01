@@ -239,8 +239,6 @@ pub struct DataWindow {
     pub viz_bar: bool,
 }
 
-
-
 use std::collections::HashMap;
 
 use crate::app::{App, MAX_SCAN_FRAMES};
@@ -248,7 +246,6 @@ use crate::can::frame::CanFrame;
 use crate::dbc::DecodedSignal;
 
 impl App {
-
     /// Decodes whatever frames cover `[t_from_us, t_to_us]` into the signal
     /// caches, unless an earlier scan already read that span.
     ///
@@ -339,7 +336,10 @@ impl App {
     /// signals that are currently subscribed. Shared by the playback loop and
     /// the Graphics window backfill so the two cannot drift on what a signal's
     /// value is.
-    pub(crate) fn subscribed_values(&self, f: &CanFrame) -> Vec<((u8, u32, String), DecodedSignal)> {
+    pub(crate) fn subscribed_values(
+        &self,
+        f: &CanFrame,
+    ) -> Vec<((u8, u32, String), DecodedSignal)> {
         let Some(db) = self
             .channels
             .get(f.channel as usize)
@@ -410,4 +410,3 @@ impl App {
         }
     }
 }
-

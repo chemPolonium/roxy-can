@@ -102,7 +102,6 @@ use crate::app::App;
 use crate::can::frame::{CanFrame, Direction};
 use crate::observe::{DataWindow, GfxSignal, GraphicsWindow};
 impl App {
-
     /// Live snapshot of the current window/panel arrangement.
     pub fn desktop_snapshot(&self) -> Desktop {
         let mut open_windows = Vec::new();
@@ -392,10 +391,9 @@ impl App {
                     return false;
                 }
             }
-            2
-                if !matches!(f.dir, Direction::Tx) => {
-                    return false;
-                }
+            2 if !matches!(f.dir, Direction::Tx) => {
+                return false;
+            }
             _ => {}
         }
         let name = self.message_name(f.channel, f.id);

@@ -283,18 +283,19 @@ impl App {
             let _ = std::fs::remove_file(AUTOSAVE_PATH);
         }
         if let Ok(text) = std::fs::read_to_string(META_PATH)
-            && let Ok(meta) = serde_json::from_str::<Meta>(&text) {
-                self.recent_projects = meta.recent_projects;
-                if let Some(last) = meta.last_project {
-                    let path = PathBuf::from(last);
-                    if path.exists() {
-                        self.open_project_path(&path);
-                    } else {
-                        self.status = "last project missing, started empty".to_string();
-                    }
+            && let Ok(meta) = serde_json::from_str::<Meta>(&text)
+        {
+            self.recent_projects = meta.recent_projects;
+            if let Some(last) = meta.last_project {
+                let path = PathBuf::from(last);
+                if path.exists() {
+                    self.open_project_path(&path);
+                } else {
+                    self.status = "last project missing, started empty".to_string();
                 }
-                return;
             }
+            return;
+        }
         self.load_config();
     }
 }

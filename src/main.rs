@@ -330,34 +330,35 @@ impl ApplicationHandler for Program {
                 st.shift = m.state().shift_key();
             }
             WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Pressed && !event.repeat => {
-                    let code = match (&event.logical_key, st.ctrl) {
-                        (Key::Named(NamedKey::F9), _) => 1,
-                        (Key::Character(c), true) => {
-                            match (c.to_ascii_lowercase().as_str(), st.shift) {
-                                ("r", false) => 2,
-                                ("e", false) => 3,
-                                ("o", false) => 4,
-                                ("s", false) => 9,
-                                ("s", true) => 10,
-                                ("n", false) => 11,
-                                ("o", true) => 12,
-                                _ => 0,
-                            }
-                        }
-                        (Key::Named(NamedKey::Space), false) => 5,
-                        (Key::Character(c), false) => match c.as_str() {
-                            "-" => 6,
-                            "+" | "=" => 7,
+                if event.state == ElementState::Pressed && !event.repeat =>
+            {
+                let code = match (&event.logical_key, st.ctrl) {
+                    (Key::Named(NamedKey::F9), _) => 1,
+                    (Key::Character(c), true) => {
+                        match (c.to_ascii_lowercase().as_str(), st.shift) {
+                            ("r", false) => 2,
+                            ("e", false) => 3,
+                            ("o", false) => 4,
+                            ("s", false) => 9,
+                            ("s", true) => 10,
+                            ("n", false) => 11,
+                            ("o", true) => 12,
                             _ => 0,
-                        },
-                        (Key::Named(NamedKey::Home), _) => 8,
-                        _ => 0,
-                    };
-                    if code != 0 {
-                        CMD.store(code, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
+                    (Key::Named(NamedKey::Space), false) => 5,
+                    (Key::Character(c), false) => match c.as_str() {
+                        "-" => 6,
+                        "+" | "=" => 7,
+                        _ => 0,
+                    },
+                    (Key::Named(NamedKey::Home), _) => 8,
+                    _ => 0,
+                };
+                if code != 0 {
+                    CMD.store(code, std::sync::atomic::Ordering::Relaxed);
                 }
+            }
             _ => {}
         }
         st.platform.handle_event::<()>(

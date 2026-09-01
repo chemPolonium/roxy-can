@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use can_dbc::{
-    AttributeValue, ByteOrder, MessageId, MultiplexIndicator, NumericValue, SignalExtendedValueType,
-    ValueDescription, ValueType,
+    AttributeValue, ByteOrder, MessageId, MultiplexIndicator, NumericValue,
+    SignalExtendedValueType, ValueDescription, ValueType,
 };
 
 use crate::can::frame::CanFrame;
@@ -177,7 +177,10 @@ impl SymbolTable {
                 .signals
                 .iter()
                 .map(|s| {
-                    let mux_when: Vec<MuxCondition> = match ext_mux.get(&id).and_then(|m| m.get(s.name.as_str())) {
+                    let mux_when: Vec<MuxCondition> = match ext_mux
+                        .get(&id)
+                        .and_then(|m| m.get(s.name.as_str()))
+                    {
                         // An `SG_MUL_VAL_` line supersedes whatever the
                         // signal's own `m` marker says.
                         Some(by_switch) => by_switch
@@ -272,7 +275,10 @@ impl SymbolTable {
                         .into_iter()
                         .flat_map(|cs| cs.iter())
                     {
-                        merged.entry(c.switch.clone()).or_default().extend(c.ranges.iter().copied());
+                        merged
+                            .entry(c.switch.clone())
+                            .or_default()
+                            .extend(c.ranges.iter().copied());
                         worklist.push(c.switch.clone());
                     }
                 }
@@ -392,7 +398,8 @@ impl SymbolTable {
         let mut switches: HashMap<&str, u64> = HashMap::new();
         for name in &msg.switch_names {
             if let Some(sw) = msg.signals.iter().find(|s| s.name == *name) {
-                let raw = decode::extract_raw(frame.payload(), sw.start_bit, sw.size, sw.big_endian);
+                let raw =
+                    decode::extract_raw(frame.payload(), sw.start_bit, sw.size, sw.big_endian);
                 let v = decode::to_physical(raw, sw.size, sw.signed, 1.0, 0.0) as i64;
                 switches.insert(sw.name.as_str(), v as u64);
             }
@@ -400,13 +407,15 @@ impl SymbolTable {
         msg.signals
             .iter()
             .filter(|s| {
-                s.mux_when.iter().all(|c| match switches.get(c.switch.as_str()) {
-                    Some(&v) => c.ranges.iter().any(|&(lo, hi)| v >= lo && v <= hi),
-                    // A condition naming a switch the message does not carry
-                    // is taken as satisfied, so a broken database still shows
-                    // data rather than an empty decode.
-                    None => true,
-                })
+                s.mux_when
+                    .iter()
+                    .all(|c| match switches.get(c.switch.as_str()) {
+                        Some(&v) => c.ranges.iter().any(|&(lo, hi)| v >= lo && v <= hi),
+                        // A condition naming a switch the message does not carry
+                        // is taken as satisfied, so a broken database still shows
+                        // data rather than an empty decode.
+                        None => true,
+                    })
             })
             .map(|s| {
                 let raw = decode::extract_raw(frame.payload(), s.start_bit, s.size, s.big_endian);
@@ -467,11 +476,7 @@ pub fn fmt_decoded(type_tag: &str, phys: f64) -> String {
         _ => {
             let s = format!("{phys:.3}");
             let t = s.trim_end_matches('0');
-            if t.ends_with('.') {
-                s
-            } else {
-                t.to_string()
-            }
+            if t.ends_with('.') { s } else { t.to_string() }
         }
     }
 }
@@ -842,7 +847,10 @@ SG_MUL_VAL_ 430 Leaf Mid 5-5;
         let both = table.decode_signals(&frame_with(430, &[1, 0, 5, 0, 0, 0, 0, 0]));
         assert!(names(&both).contains(&"Mid") && names(&both).contains(&"Leaf"));
         let wrong_nested = table.decode_signals(&frame_with(430, &[1, 0, 6, 0, 0, 0, 0, 0]));
-        assert!(names(&wrong_nested).contains(&"Mid"), "Mid itself is active");
+        assert!(
+            names(&wrong_nested).contains(&"Mid"),
+            "Mid itself is active"
+        );
         assert!(
             !names(&wrong_nested).contains(&"Leaf"),
             "the nested switch reads 6, so Leaf must hide"
@@ -901,7 +909,11 @@ SG_MUL_VAL_ 432 B2 MuxB 2-2;
         let both = table.decode_signals(&frame_with(432, &[1, 2, 0, 0, 0, 0, 0, 0]));
         assert_eq!(names(&both), ["MuxA", "MuxB", "A1", "B2"]);
         let neither = table.decode_signals(&frame_with(432, &[5, 5, 0, 0, 0, 0, 0, 0]));
-        assert_eq!(names(&neither), ["MuxA", "MuxB"], "switches are always shown");
+        assert_eq!(
+            names(&neither),
+            ["MuxA", "MuxB"],
+            "switches are always shown"
+        );
     }
 
     /// A float declaration makes the raw bits an IEEE value instead of an
@@ -1005,13 +1017,20 @@ BO_ 441 Tags: 8 ECU
 
     #[test]
     fn a_float_value_prints_in_its_own_width() {
-        assert_eq!(fmt_decoded("f32", 0.1), "0.1", "the f32 reading, not binary noise");
+        assert_eq!(
+            fmt_decoded("f32", 0.1),
+            "0.1",
+            "the f32 reading, not binary noise"
+        );
         assert_eq!(fmt_decoded("f64", 12.5), "12.5");
     }
 
     #[test]
     fn the_value_cell_joins_only_the_parts_that_exist() {
-        assert_eq!(fmt_signal_value(3000.0, "rpm", "u16", None), "3000 rpm [u16]");
+        assert_eq!(
+            fmt_signal_value(3000.0, "rpm", "u16", None),
+            "3000 rpm [u16]"
+        );
         assert_eq!(fmt_signal_value(3000.0, "", "u16", None), "3000 [u16]");
         assert_eq!(
             fmt_signal_value(2.0, "", "u8", Some("Gear_2")),
