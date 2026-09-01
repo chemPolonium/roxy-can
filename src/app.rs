@@ -833,6 +833,12 @@ impl App {
             }
         }
 
+        // One sample of the windowed numbers per step feeds the Min/Max/Avg
+        // columns of the Bus Statistics window.
+        for load in &mut self.bus_loads {
+            load.sample();
+        }
+
         self.check_spec();
 
         if replay_done {
