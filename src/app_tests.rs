@@ -5,6 +5,7 @@ use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
 use crate::log::AscWriter;
 use crate::sim::ValueSrc;
+use crate::trigger::{Trigger, TriggerAction, TriggerCond};
 
 #[test]
 fn record_survives_start_and_writes_frames() {
@@ -2675,4 +2676,135 @@ fn restarting_measurement_clears_the_bus_windows() {
     app.reset_time();
     assert_eq!(app.bus_loads[0].load(), 0.0);
     assert_eq!(app.bus_loads[0].errors, 0);
+}
+
+/// A 0x100 frame carrying `rpm` on EngineSpeed (sample.dbc: factor 0.25,
+/// little-endian 16 bit at bit 0).
+fn rpm_frame(t_us: u64, rpm: f64) -> CanFrame {
+    let raw = (rpm / 0.25) as u16;
+    let mut f = rx_frame(t_us, 0x100, 2, FrameFlags::NONE);
+    f.data[0] = (raw & 0xFF) as u8;
+    f.data[1] = (raw >> 8) as u8;
+    f
+}
+
+#[test]
+fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
+    let mut app = quiet_app();
+    let base = std::env::temp_dir().join("roxy_can_trigger_cross.asc");
+    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.triggers.push(Trigger::new(
+        TriggerCond::SignalCross {
+            ch: 0,
+            id: 0x100,
+            signal: "EngineSpeed".to_string(),
+            threshold: 3000.0,
+            rising: true,
+        },
+        TriggerAction::StartRecording,
+    ));
+
+    receive(&mut app, 10_000, vec![rpm_frame(10_000, 1000.0)]);
+    assert!(!app.recorder.recording, "below threshold: nothing fires");
+
+    receive(&mut app, 20_000, vec![rpm_frame(20_000, 3000.0)]);
+    assert!(app.recorder.recording, "the crossing itself fires");
+
+    receive(&mut app, 30_000, vec![rpm_frame(30_000, 3500.0)]);
+    assert_eq!(app.triggers[0].fired, 1, "staying above is not an edge");
+
+    receive(&mut app, 40_000, vec![rpm_frame(40_000, 1000.0)]);
+    receive(&mut app, 50_000, vec![rpm_frame(50_000, 3200.0)]);
+    assert_eq!(app.triggers[0].fired, 2, "re-crossing re-arms");
+    assert_eq!(app.triggers[0].last_fire_t_us, 50_000);
+
+    // The recording opened on the crossing frame, so the very frame that
+    // fired the trigger is in the file.
+    app.recorder.close();
+    let text = std::fs::read_to_string(&app.recorder.last_record).unwrap();
+    let times: Vec<u64> = crate::log::asc::parse_asc(&text)
+        .iter()
+        .map(|f| f.t_us)
+        .collect();
+    assert_eq!(
+        times,
+        vec![20_000, 30_000, 40_000, 50_000],
+        "capture starts at the firing frame"
+    );
+    std::fs::remove_file(&app.recorder.last_record).ok();
+}
+
+#[test]
+fn an_id_present_trigger_latches_and_can_stop_a_recording() {
+    let mut app = quiet_app();
+    let base = std::env::temp_dir().join("roxy_can_trigger_id.asc");
+    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::StopRecording,
+    ));
+    app.recorder.recording = true;
+    app.recorder.open().unwrap();
+
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x100, 8, FrameFlags::NONE)],
+    );
+    assert!(app.recorder.recording, "an unwatched id changes nothing");
+
+    receive(
+        &mut app,
+        20_000,
+        vec![rx_frame(20_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert!(
+        !app.recorder.recording,
+        "the watched id stops the recording"
+    );
+    assert_eq!(app.triggers[0].fired, 1);
+
+    receive(
+        &mut app,
+        30_000,
+        vec![rx_frame(30_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert_eq!(app.triggers[0].fired, 1, "presence latches for the run");
+    app.recorder.close();
+    std::fs::remove_file(&app.recorder.last_record).ok();
+}
+
+#[test]
+fn an_error_frame_trigger_latches_once_per_run() {
+    let mut app = quiet_app();
+    let base = std::env::temp_dir().join("roxy_can_trigger_err.asc");
+    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.triggers.push(Trigger::new(
+        TriggerCond::ErrorFrame { ch: 0 },
+        TriggerAction::StartRecording,
+    ));
+
+    let mut other_bus = rx_frame(10_000, 0x300, 0, FrameFlags::ERROR);
+    other_bus.channel = 1;
+    receive(&mut app, 10_000, vec![other_bus]);
+    assert!(
+        !app.recorder.recording,
+        "error frames on another bus are not ours"
+    );
+
+    receive(
+        &mut app,
+        20_000,
+        vec![rx_frame(20_000, 0x300, 0, FrameFlags::ERROR)],
+    );
+    assert!(app.recorder.recording, "our first error frame fires");
+
+    receive(
+        &mut app,
+        30_000,
+        vec![rx_frame(30_000, 0x300, 0, FrameFlags::ERROR)],
+    );
+    assert_eq!(app.triggers[0].fired, 1, "latches: one fire per run");
+    app.recorder.close();
+    std::fs::remove_file(&app.recorder.last_record).ok();
 }

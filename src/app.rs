@@ -110,6 +110,7 @@ pub struct App {
     /// Per-bus load / frame-rate / error rolling state, one entry per
     /// channel. Fed from the same frame loop as `aggs`.
     pub bus_loads: Vec<crate::load::BusLoad>,
+    pub triggers: Vec<crate::trigger::Trigger>,
     /// Observed-versus-declared violations, recomputed on every measurement
     /// step from `aggs` and the loaded databases.
     pub spec: Spec,
@@ -234,6 +235,7 @@ impl App {
             subs: HashMap::new(),
             aggs: HashMap::new(),
             bus_loads: vec![crate::load::BusLoad::new(), crate::load::BusLoad::new()],
+            triggers: Vec::new(),
             spec: Spec::default(),
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
@@ -725,7 +727,15 @@ impl App {
         let replay_done =
             matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
 
-        for &f in &self.buf {
+        // Index walk rather than `for &f in &self.buf`: a frame is
+        // copied out one at a time so `eval_triggers` can take `&mut
+        // self` without the iterator holding `buf` borrowed.
+        for i in 0..self.buf.len() {
+            let f = self.buf[i];
+            // Triggers judge the frame before anything else consumes it,
+            // so a trigger that starts a recording captures the very
+            // frame that fired it.
+            self.eval_triggers(&f);
             self.recorder.write(&f);
             if self.trace.len() >= TRACE_LIMIT {
                 self.trace.pop_front();
