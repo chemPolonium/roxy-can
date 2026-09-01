@@ -18,6 +18,9 @@ pub struct SampleCache {
 }
 
 impl SampleCache {
+    /// Point count; the Data sparkline that read this is gone, but the
+    /// accessor belongs with the rest of the slice API and the tests use it.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.points.len()
     }
@@ -234,9 +237,6 @@ pub struct DataWindow {
     pub name: String,
     pub signals: Vec<GfxSignal>,
     pub opened: bool,
-    /// Visualization column style: true = value bar, false = sparkline;
-    /// clicking the column toggles it.
-    pub viz_bar: bool,
 }
 
 use std::collections::HashMap;

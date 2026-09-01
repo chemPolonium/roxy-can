@@ -182,8 +182,6 @@ pub struct DataCfg {
     pub opened: bool,
     #[serde(default)]
     pub signals: Vec<SignalCfg>,
-    #[serde(default = "true_default")]
-    pub viz_bar: bool,
 }
 
 /// One driven signal's parameters. `kind` is [`crate::sim::SrcKind::to_u8`];
@@ -531,7 +529,6 @@ impl Config {
                     name: d.name.clone(),
                     opened: d.opened,
                     signals: sig_cfgs(&d.signals),
-                    viz_bar: d.viz_bar,
                 })
                 .collect(),
             tx: app
@@ -757,7 +754,6 @@ impl Config {
                     name: d.name,
                     signals: sig_keys(d.signals),
                     opened: d.opened,
-                    viz_bar: d.viz_bar,
                 })
                 .collect();
         }

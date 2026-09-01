@@ -1,4 +1,4 @@
-use crate::app::{App, PALETTE, Subscription, TOOLBAR_H};
+use crate::app::{App, TOOLBAR_H};
 use imgui::{Condition, ProgressBar, TableFlags, Ui};
 
 const PANEL_W: f32 = 190.0;
@@ -69,8 +69,6 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         ui.text("add signals via Measurement Setup (…)");
         return;
     }
-    let viz_bar = app.data_windows[i].viz_bar;
-    let mut new_mode: Option<bool> = None;
     let tbl_flags = TableFlags::BORDERS_INNER | TableFlags::ROW_BG | TableFlags::SCROLL_Y;
     if let Some(_table) = ui.begin_table_with_flags("data_table", 6, tbl_flags) {
         ui.table_setup_column("Signal");
@@ -80,7 +78,7 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         ui.table_setup_column("Max");
         ui.table_setup_column("Viz");
         ui.table_headers_row();
-        for (row, key) in keys.iter().enumerate() {
+        for key in keys.iter() {
             let Some(sub) = app.subs.get(key) else {
                 continue;
             };
@@ -103,27 +101,19 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             ui.table_next_column();
             ui.text(fmt_stat(sub.max));
             ui.table_next_column();
+            // A slim bar, not a full widget-height one: anything taller
+            // than the text propped every row open. The fill is the
+            // latest value's place in the observed min..max range.
             let frac = if sub.max > sub.min {
                 ((sub.latest - sub.min) / (sub.max - sub.min)).clamp(0.0, 1.0)
             } else {
                 0.0
             };
-            if viz_bar {
-                ProgressBar::new(frac as f32).build(ui);
-            } else {
-                let w = ui.content_region_avail()[0].max(40.0);
-                let h = ui.frame_height();
-                let pos = ui.cursor_screen_pos();
-                ui.invisible_button(format!("##viz{row}"), [w, h]);
-                draw_sparkline(ui, pos, w, h, sub);
-            }
-            if ui.is_item_clicked() {
-                new_mode = Some(!viz_bar);
-            }
+            let font_h = unsafe { imgui::sys::igGetFontSize() };
+            ProgressBar::new(frac as f32)
+                .size([ui.content_region_avail()[0], (font_h * 0.6).max(6.0)])
+                .build(ui);
         }
-    }
-    if let Some(mode) = new_mode {
-        app.data_windows[i].viz_bar = mode;
     }
 }
 
@@ -134,38 +124,4 @@ fn fmt_stat(v: f64) -> String {
     } else {
         "-".to_string()
     }
-}
-
-/// Recent history as a polyline, newest at the right edge, scaled to the
-/// signal's observed min..max range.
-fn draw_sparkline(ui: &Ui, pos: [f32; 2], w: f32, h: f32, sub: &Subscription) {
-    let dl = ui.get_window_draw_list();
-    dl.add_rect(pos, [pos[0] + w, pos[1] + h], [0.16, 0.16, 0.20, 1.0])
-        .filled(true)
-        .rounding(2.0)
-        .build();
-    let max_pts = ((w / 2.0) as usize).max(2);
-    let skip = sub.history.len().saturating_sub(max_pts);
-    let vals: Vec<f64> = sub.history.iter().skip(skip).map(|(_, v)| *v).collect();
-    if vals.is_empty() {
-        return;
-    }
-    let (lo, hi) = if sub.min.is_finite() && sub.max.is_finite() && sub.max > sub.min {
-        (sub.min, sub.max)
-    } else {
-        let v = *vals.last().unwrap();
-        (v - 1.0, v + 1.0)
-    };
-    let dx = w / max_pts as f32;
-    let points: Vec<[f32; 2]> = vals
-        .iter()
-        .enumerate()
-        .map(|(j, v)| {
-            let x = pos[0] + w - (vals.len() - 1 - j) as f32 * dx;
-            let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0) as f32;
-            [x, pos[1] + h - 1.0 - t * (h - 2.0)]
-        })
-        .collect();
-    let color = PALETTE[sub.color % PALETTE.len()];
-    dl.add_polyline(points, color).thickness(1.2).build();
 }

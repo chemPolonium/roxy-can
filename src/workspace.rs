@@ -353,7 +353,6 @@ impl App {
             name: format!("Data {}", self.data_counter),
             signals: Vec::new(),
             opened: true,
-            viz_bar: true,
         });
     }
 
