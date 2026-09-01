@@ -2850,3 +2850,99 @@ fn adding_a_signal_trigger_picks_the_first_database_signal() {
         "a summary for a missing row is empty, not a panic"
     );
 }
+
+/// The timeout condition rides the spec's grace: message 100 in `SPEC_DBC`
+/// declares a 100 ms period and the default grace is three periods, so 450 ms
+/// of silence convicts while a message never seen stays unjudged. Traffic
+/// resuming clears the level, making every dropout a fresh edge.
+#[test]
+fn a_cycle_timeout_trigger_fires_on_each_dropout() {
+    let mut app = spec_app();
+    let base = std::env::temp_dir().join("roxy_can_trigger_timeout.asc");
+    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.triggers.push(Trigger::new(
+        TriggerCond::CycleTimeout { ch: 0, id: 100 },
+        TriggerAction::StartRecording,
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::CycleTimeout { ch: 0, id: 0x777 },
+        TriggerAction::StartRecording,
+    ));
+
+    receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+    assert!(!app.recorder.recording, "traffic present: no dropout");
+    assert_eq!(app.triggers[0].fired, 0);
+
+    receive(&mut app, 450_000, vec![]);
+    assert!(app.recorder.recording, "4.5 silent periods is past grace 3");
+    assert_eq!(app.triggers[0].fired, 1);
+    assert_eq!(
+        app.triggers[1].fired, 0,
+        "a message never seen is no opinion, not a dropout"
+    );
+
+    receive(
+        &mut app,
+        500_000,
+        vec![frame_at(500_000, 100, 8, Direction::Rx)],
+    );
+    receive(&mut app, 900_000, vec![]);
+    assert_eq!(
+        app.triggers[0].fired, 2,
+        "resumed then silent again: re-fires"
+    );
+    app.recorder.close();
+    std::fs::remove_file(&app.recorder.last_record).ok();
+}
+
+#[test]
+fn triggers_round_trip_through_a_project() {
+    let mut app = App::new();
+    app.add_signal_trigger();
+    if let TriggerCond::SignalCross {
+        threshold, rising, ..
+    } = &mut app.triggers[0].cond
+    {
+        *threshold = 3000.0;
+        *rising = false;
+    }
+    app.add_id_trigger();
+    app.triggers[1].action = TriggerAction::StopRecording;
+    app.triggers[1].enabled = false;
+    app.add_error_trigger();
+    app.triggers[2].cond = TriggerCond::CycleTimeout { ch: 1, id: 0x200 };
+
+    let path = std::env::temp_dir().join("roxy_can_trig_roundtrip.rxproj");
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+
+    let mut restored = App::new();
+    restored.open_project_path(&path);
+    assert_eq!(restored.triggers.len(), 3, "all three shapes come back");
+    match &restored.triggers[0].cond {
+        TriggerCond::SignalCross {
+            ch,
+            id,
+            signal,
+            threshold,
+            rising,
+        } => {
+            assert_eq!(*ch, 0);
+            assert_eq!(*id, 0x100);
+            assert_eq!(signal, "EngineSpeed");
+            assert_eq!(*threshold, 3000.0);
+            assert!(!*rising);
+        }
+        other => panic!("expected a signal trigger, got {other:?}"),
+    }
+    assert!(matches!(
+        restored.triggers[1].action,
+        TriggerAction::StopRecording
+    ));
+    assert!(!restored.triggers[1].enabled, "the disabled flag survives");
+    assert!(matches!(
+        &restored.triggers[2].cond,
+        TriggerCond::CycleTimeout { ch: 1, id: 0x200 }
+    ));
+    assert_eq!(restored.trigger_sel, None, "runtime selection does not");
+    std::fs::remove_file(&path).ok();
+}

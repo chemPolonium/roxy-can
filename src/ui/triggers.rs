@@ -39,6 +39,10 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.button("+ Error frames") {
         app.add_error_trigger();
     }
+    ui.same_line();
+    if ui.button("+ Timeout") {
+        app.add_timeout_trigger();
+    }
     ui.separator();
 
     let flags = TableFlags::BORDERS_INNER
@@ -191,6 +195,14 @@ fn editor(app: &mut App, ui: &Ui) {
                 changed = true;
             }
         }
+        TriggerCond::CycleTimeout { id, .. } => {
+            sync_id_buf(app, sel, *id);
+            if id_field(app, ui, id) {
+                changed = true;
+            }
+            ui.same_line();
+            ui.text("silent past the grace window");
+        }
         TriggerCond::ErrorFrame { .. } => {
             ui.text("any error frame on the bus");
         }
@@ -226,6 +238,7 @@ fn set_bus(cond: &mut TriggerCond, ch: u8) {
     match cond {
         TriggerCond::SignalCross { ch: c, .. }
         | TriggerCond::IdPresent { ch: c, .. }
+        | TriggerCond::CycleTimeout { ch: c, .. }
         | TriggerCond::ErrorFrame { ch: c } => *c = ch,
     }
 }

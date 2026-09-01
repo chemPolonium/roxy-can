@@ -908,6 +908,9 @@ impl App {
         for (key, last_t_us) in seen {
             self.spec.note(key, last_t_us);
         }
+        // Timeout triggers sweep on the same cadence and the same clock
+        // as the Missing verdict above, reusing its grace comparison.
+        self.eval_timeout_triggers(now);
     }
 }
 

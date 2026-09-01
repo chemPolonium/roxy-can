@@ -13,6 +13,7 @@ use crate::app::{
 };
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::sim::{SrcKind, ValueSrc};
+use crate::trigger::{TriggerAction, TriggerCond};
 
 pub const CONFIG_PATH: &str = "roxy-can.json";
 pub const META_PATH: &str = "roxy-can.meta.json";
@@ -278,6 +279,26 @@ fn grace_default() -> u64 {
     crate::spec::GRACE_CYCLES
 }
 
+/// The persisted form of one trigger: the condition flattened to a kind
+/// code plus its fields, the action as a code, and the enabled flag.
+/// Runtime edge state (`level`, fire counts) deliberately does not round
+/// trip -- a reloaded workspace is a fresh measurement.
+#[derive(Serialize, Deserialize)]
+pub struct TriggerCfg {
+    pub kind: u8,
+    pub ch: u8,
+    pub id: u32,
+    #[serde(default)]
+    pub signal: String,
+    #[serde(default)]
+    pub threshold: f64,
+    #[serde(default)]
+    pub rising: bool,
+    pub action: u8,
+    #[serde(default = "true_default")]
+    pub enabled: bool,
+}
+
 /// How strictly the monitor reads the database's promises. Projects saved
 /// before the monitor existed get both defaults.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -343,6 +364,8 @@ pub struct Config {
     pub active_desktop: usize,
     #[serde(default)]
     pub spec: SpecCfg,
+    #[serde(default)]
+    pub triggers: Vec<TriggerCfg>,
 }
 
 fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
@@ -533,6 +556,41 @@ impl Config {
                 tolerance_percent: app.spec_tol_pct,
                 grace_cycles: app.spec_grace,
             },
+            triggers: app
+                .triggers
+                .iter()
+                .map(|t| {
+                    let (kind, ch, id, signal, threshold, rising) = match &t.cond {
+                        TriggerCond::SignalCross {
+                            ch,
+                            id,
+                            signal,
+                            threshold,
+                            rising,
+                        } => (0, *ch, *id, signal.clone(), *threshold, *rising),
+                        TriggerCond::IdPresent { ch, id } => {
+                            (1, *ch, *id, String::new(), 0.0, false)
+                        }
+                        TriggerCond::ErrorFrame { ch } => (2, *ch, 0, String::new(), 0.0, false),
+                        TriggerCond::CycleTimeout { ch, id } => {
+                            (3, *ch, *id, String::new(), 0.0, false)
+                        }
+                    };
+                    TriggerCfg {
+                        kind,
+                        ch,
+                        id,
+                        signal,
+                        threshold,
+                        rising,
+                        action: match t.action {
+                            TriggerAction::StartRecording => 0,
+                            TriggerAction::StopRecording => 1,
+                        },
+                        enabled: t.enabled,
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -690,6 +748,36 @@ impl Config {
         app.show_triggers = self.show_triggers;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
+        // An unknown kind code (a project from a future version) drops
+        // only that trigger; the rest load.
+        app.triggers = self
+            .triggers
+            .iter()
+            .filter_map(|c| {
+                let cond = match c.kind {
+                    0 => TriggerCond::SignalCross {
+                        ch: c.ch,
+                        id: c.id,
+                        signal: c.signal.clone(),
+                        threshold: c.threshold,
+                        rising: c.rising,
+                    },
+                    1 => TriggerCond::IdPresent { ch: c.ch, id: c.id },
+                    2 => TriggerCond::ErrorFrame { ch: c.ch },
+                    3 => TriggerCond::CycleTimeout { ch: c.ch, id: c.id },
+                    _ => return None,
+                };
+                let action = match c.action {
+                    1 => TriggerAction::StopRecording,
+                    _ => TriggerAction::StartRecording,
+                };
+                let mut t = crate::trigger::Trigger::new(cond, action);
+                t.enabled = c.enabled;
+                Some(t)
+            })
+            .collect();
+        app.trigger_sel = None;
+        app.trig_edit_sel = None;
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);

@@ -37,6 +37,11 @@ pub enum TriggerCond {
     IdPresent { ch: u8, id: u32 },
     /// Any error frame on this bus. Latches for the run.
     ErrorFrame { ch: u8 },
+    /// A message that has been seen going silent beyond the spec's
+    /// grace window. Swept once per step against the aggregates, not
+    /// per frame; the level clears when traffic resumes, so every new
+    /// dropout is a fresh edge.
+    CycleTimeout { ch: u8, id: u32 },
 }
 
 /// What a fired trigger does. Recording actions today; `Send` joins
@@ -78,7 +83,8 @@ impl TriggerCond {
         match self {
             TriggerCond::SignalCross { ch, .. }
             | TriggerCond::IdPresent { ch, .. }
-            | TriggerCond::ErrorFrame { ch } => *ch,
+            | TriggerCond::ErrorFrame { ch }
+            | TriggerCond::CycleTimeout { ch, .. } => *ch,
         }
     }
 
@@ -98,6 +104,7 @@ impl TriggerCond {
             ),
             TriggerCond::IdPresent { id, .. } => format!("0x{id:X} present"),
             TriggerCond::ErrorFrame { .. } => "error frames".to_string(),
+            TriggerCond::CycleTimeout { id, .. } => format!("0x{id:X} timeout"),
         }
     }
 }
@@ -160,6 +167,9 @@ impl App {
                         }
                         true
                     }
+                    // Not a frame condition: swept once per step against
+                    // the aggregates in `eval_timeout_triggers`.
+                    TriggerCond::CycleTimeout { .. } => continue,
                 }
             };
             let t = &mut self.triggers[i];
@@ -171,6 +181,53 @@ impl App {
                 fired.push(t.action);
             }
         }
+        self.run_actions(fired);
+    }
+
+    /// Sweep conditions: evaluated once per measurement step against the
+    /// aggregates, not per frame. A message only convicts after it has
+    /// been seen once (the Missing verdict takes the same stance), and
+    /// the level clears when traffic resumes, so every new dropout is a
+    /// fresh edge.
+    pub fn eval_timeout_triggers(&mut self, now_us: u64) {
+        if self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<TriggerAction> = Vec::new();
+        for i in 0..self.triggers.len() {
+            let (ch, id) = match &self.triggers[i].cond {
+                TriggerCond::CycleTimeout { ch, id } => (*ch, *id),
+                _ => continue,
+            };
+            if !self.triggers[i].enabled {
+                continue;
+            }
+            let silent = self.timeout_silent(ch, id, now_us);
+            let t = &mut self.triggers[i];
+            let was = t.level;
+            t.level = silent;
+            if silent && !was {
+                t.fired += 1;
+                t.last_fire_t_us = now_us;
+                fired.push(t.action);
+            }
+        }
+        self.run_actions(fired);
+    }
+
+    /// The spec's own grace comparison decides silence, so a trigger and
+    /// the Dropped verdict can never disagree about the same message.
+    fn timeout_silent(&self, ch: u8, id: u32, now_us: u64) -> bool {
+        let Some(agg) = self.aggs.get(&(ch, id)) else {
+            return false; // never seen: no opinion, not a dropout
+        };
+        let Some(declared) = self.dbc_cycle_us(ch, id) else {
+            return false; // no database, message, or declared period
+        };
+        crate::spec::missing_offender(now_us, agg.last_t_us, declared, self.spec_grace)
+    }
+
+    fn run_actions(&mut self, fired: Vec<TriggerAction>) {
         for action in fired {
             match action {
                 TriggerAction::StartRecording => {
@@ -238,6 +295,10 @@ impl App {
 
     pub fn add_error_trigger(&mut self) {
         self.push_trigger(TriggerCond::ErrorFrame { ch: 0 });
+    }
+
+    pub fn add_timeout_trigger(&mut self) {
+        self.push_trigger(TriggerCond::CycleTimeout { ch: 0, id: 0x100 });
     }
 
     fn push_trigger(&mut self, cond: TriggerCond) {
