@@ -295,6 +295,11 @@ pub struct TriggerCfg {
     #[serde(default)]
     pub rising: bool,
     pub action: u8,
+    /// Target generator entry for `action` code 2 (Send); ignored otherwise.
+    #[serde(default)]
+    pub send_ch: u8,
+    #[serde(default)]
+    pub send_id: u32,
     #[serde(default = "true_default")]
     pub enabled: bool,
 }
@@ -560,6 +565,8 @@ impl Config {
                 .triggers
                 .iter()
                 .map(|t| {
+                    let mut send_ch = 0u8;
+                    let mut send_id = 0u32;
                     let (kind, ch, id, signal, threshold, rising) = match &t.cond {
                         TriggerCond::SignalCross {
                             ch,
@@ -586,7 +593,14 @@ impl Config {
                         action: match t.action {
                             TriggerAction::StartRecording => 0,
                             TriggerAction::StopRecording => 1,
+                            TriggerAction::Send { ch, id } => {
+                                send_ch = ch;
+                                send_id = id;
+                                2
+                            }
                         },
+                        send_ch,
+                        send_id,
                         enabled: t.enabled,
                     }
                 })
@@ -769,6 +783,10 @@ impl Config {
                 };
                 let action = match c.action {
                     1 => TriggerAction::StopRecording,
+                    2 => TriggerAction::Send {
+                        ch: c.send_ch,
+                        id: c.send_id,
+                    },
                     _ => TriggerAction::StartRecording,
                 };
                 let mut t = crate::trigger::Trigger::new(cond, action);

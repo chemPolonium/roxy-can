@@ -18,7 +18,7 @@
 #![allow(dead_code)]
 
 use crate::app::App;
-use crate::can::frame::CanFrame;
+use crate::can::frame::{CanFrame, Direction};
 
 /// What a trigger watches.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,12 +44,20 @@ pub enum TriggerCond {
     CycleTimeout { ch: u8, id: u32 },
 }
 
-/// What a fired trigger does. Recording actions today; `Send` joins
-/// here with the reaction rules, on the same edge.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// What a fired trigger does.
+///
+/// `Send` is the reaction rule of TODO item 10 riding the same evaluator:
+/// on the edge it transmits **one** frame from the generator entry with
+/// that (bus, id) -- payload assembled by the entry's own base bytes and
+/// waveform sources, stamped with the triggering frame's own timestamp so
+/// a reaction during replay lands on the log timeline like any injected
+/// frame. Referencing the entry keeps the rule alive across generator
+/// row edits; a missing entry is a no-op, not an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriggerAction {
     StartRecording,
     StopRecording,
+    Send { ch: u8, id: u32 },
 }
 
 /// One armed condition plus its edge state and fire history.
@@ -118,7 +126,7 @@ impl App {
         if self.triggers.is_empty() {
             return;
         }
-        let mut fired: Vec<TriggerAction> = Vec::new();
+        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
         for i in 0..self.triggers.len() {
             // Observe under shared borrows first: acting on an edge
             // needs `self` exclusively, and the two cannot overlap.
@@ -178,7 +186,7 @@ impl App {
             if now && !was {
                 t.fired += 1;
                 t.last_fire_t_us = f.t_us;
-                fired.push(t.action);
+                fired.push((t.action, f.t_us));
             }
         }
         self.run_actions(fired);
@@ -193,7 +201,7 @@ impl App {
         if self.triggers.is_empty() {
             return;
         }
-        let mut fired: Vec<TriggerAction> = Vec::new();
+        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
         for i in 0..self.triggers.len() {
             let (ch, id) = match &self.triggers[i].cond {
                 TriggerCond::CycleTimeout { ch, id } => (*ch, *id),
@@ -209,7 +217,7 @@ impl App {
             if silent && !was {
                 t.fired += 1;
                 t.last_fire_t_us = now_us;
-                fired.push(t.action);
+                fired.push((t.action, now_us));
             }
         }
         self.run_actions(fired);
@@ -227,8 +235,8 @@ impl App {
         crate::spec::missing_offender(now_us, agg.last_t_us, declared, self.spec_grace)
     }
 
-    fn run_actions(&mut self, fired: Vec<TriggerAction>) {
-        for action in fired {
+    fn run_actions(&mut self, fired: Vec<(TriggerAction, u64)>) {
+        for (action, at_us) in fired {
             match action {
                 TriggerAction::StartRecording => {
                     if self.measuring && !self.recorder.recording {
@@ -248,8 +256,44 @@ impl App {
                         self.status = "trigger stopped recording".to_string();
                     }
                 }
+                TriggerAction::Send { ch, id } => {
+                    self.send_one_shot(ch, id, at_us);
+                }
             }
         }
+    }
+
+    /// Transmits one frame from the generator entry `(ch, id)`, stamped
+    /// `at_us`. The frame goes onto `buf`, so the running tick processes
+    /// it exactly like received traffic -- trace, aggregates, load,
+    /// recording -- and the trigger evaluator sees it too. That is safe:
+    /// every frame-driven condition latches on the frame it matched, so
+    /// a rule reacting to its own output cannot loop.
+    fn send_one_shot(&mut self, ch: u8, id: u32, at_us: u64) {
+        let Some(i) = self
+            .tx_list
+            .iter()
+            .position(|t| t.channel == ch && t.id == id)
+        else {
+            return; // the generator row is gone: the rule idles
+        };
+        let (data, len, flags) =
+            crate::generator::tx_payload(&self.channels, &self.tx_list[i], at_us);
+        let (tch, tid, ext) = (
+            self.tx_list[i].channel,
+            self.tx_list[i].id,
+            self.tx_list[i].extended,
+        );
+        self.buf.push(CanFrame {
+            t_us: at_us,
+            channel: tch,
+            id: tid,
+            extended: ext,
+            len,
+            data,
+            dir: Direction::Tx,
+            flags,
+        });
     }
 
     /// One-line description of trigger `i` for the list: bus name plus

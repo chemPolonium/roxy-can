@@ -2911,6 +2911,7 @@ fn triggers_round_trip_through_a_project() {
     app.triggers[1].enabled = false;
     app.add_error_trigger();
     app.triggers[2].cond = TriggerCond::CycleTimeout { ch: 1, id: 0x200 };
+    app.triggers[2].action = TriggerAction::Send { ch: 1, id: 0x300 };
 
     let path = std::env::temp_dir().join("roxy_can_trig_roundtrip.rxproj");
     assert!(app.save_project(Some(path.clone())), "save writes the file");
@@ -2943,6 +2944,66 @@ fn triggers_round_trip_through_a_project() {
         &restored.triggers[2].cond,
         TriggerCond::CycleTimeout { ch: 1, id: 0x200 }
     ));
+    assert_eq!(
+        restored.triggers[2].action,
+        TriggerAction::Send { ch: 1, id: 0x300 },
+        "the send target survives as data, not an index"
+    );
     assert_eq!(restored.trigger_sel, None, "runtime selection does not");
     std::fs::remove_file(&path).ok();
+}
+
+/// The reaction rule in its smallest form: a watched message arrives and one
+/// frame from the generator entry goes out, carrying the entry's payload and
+/// the triggering frame's own timestamp. One edge, one frame.
+#[test]
+fn a_send_action_transmits_one_generator_frame() {
+    let mut app = quiet_app();
+    app.add_tx(0, 0x777);
+    let i = app
+        .tx_list
+        .iter()
+        .position(|t| t.channel == 0 && t.id == 0x777)
+        .expect("entry added");
+    app.tx_list[i].len = 2;
+    app.tx_list[i].data[0] = 0xDE;
+    app.tx_list[i].data[1] = 0xAD;
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x555 },
+        TriggerAction::Send { ch: 0, id: 0x777 },
+    ));
+
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x555, 8, FrameFlags::NONE)],
+    );
+    let sent: Vec<CanFrame> = app
+        .trace
+        .iter()
+        .filter(|f| f.id == 0x777 && matches!(f.dir, Direction::Tx))
+        .copied()
+        .collect();
+    assert_eq!(sent.len(), 1, "exactly one reaction frame");
+    assert_eq!(
+        sent[0].t_us, 10_000,
+        "stamped with the triggering frame's clock"
+    );
+    assert_eq!(
+        &sent[0].data[..2],
+        &[0xDE, 0xAD],
+        "the entry's payload goes out"
+    );
+    assert!(
+        app.aggs.contains_key(&(0, 0x777)),
+        "the reaction aggregates like any real traffic"
+    );
+
+    // IdPresent latches, so the rule does not keep answering.
+    receive(&mut app, 20_000, vec![]);
+    assert_eq!(
+        app.trace.iter().filter(|f| f.id == 0x777).count(),
+        1,
+        "one edge, one frame -- no repeats"
+    );
 }

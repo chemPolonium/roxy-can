@@ -101,10 +101,12 @@ fn content(app: &mut App, ui: &Ui) {
                 app.triggers[i].enabled = on;
             }
             ui.table_next_column();
-            ui.text(match app.triggers[i].action {
-                crate::trigger::TriggerAction::StartRecording => "start rec",
-                crate::trigger::TriggerAction::StopRecording => "stop rec",
-            });
+            let action_text = match app.triggers[i].action {
+                crate::trigger::TriggerAction::StartRecording => "start rec".to_string(),
+                crate::trigger::TriggerAction::StopRecording => "stop rec".to_string(),
+                crate::trigger::TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
+            };
+            ui.text(action_text);
             ui.table_next_column();
             ui.text(format!("{}", app.triggers[i].fired));
             ui.table_next_column();
@@ -211,18 +213,53 @@ fn editor(app: &mut App, ui: &Ui) {
     let mut act = match action {
         crate::trigger::TriggerAction::StartRecording => 0,
         crate::trigger::TriggerAction::StopRecording => 1,
+        crate::trigger::TriggerAction::Send { .. } => 2,
     };
     ui.set_next_item_width(150.0);
     if ui.combo_simple_string(
         "##trigaction",
         &mut act,
-        &["Start recording", "Stop recording"],
+        &["Start recording", "Stop recording", "Send generator entry"],
     ) {
         action = match act {
             0 => crate::trigger::TriggerAction::StartRecording,
-            _ => crate::trigger::TriggerAction::StopRecording,
+            1 => crate::trigger::TriggerAction::StopRecording,
+            // Coming back to Send keeps whatever target was last set.
+            _ => match action {
+                crate::trigger::TriggerAction::Send { ch, id } => {
+                    crate::trigger::TriggerAction::Send { ch, id }
+                }
+                _ => crate::trigger::TriggerAction::Send { ch: 0, id: 0x100 },
+            },
         };
         changed = true;
+    }
+
+    // The entry picker only means something while the action is Send.
+    if matches!(action, crate::trigger::TriggerAction::Send { .. }) && !app.tx_list.is_empty() {
+        let names: Vec<String> = app
+            .tx_list
+            .iter()
+            .map(|t| format!("{} 0x{:03X} {}", app.channel_name(t.channel), t.id, t.name))
+            .collect();
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let mut pick = app
+            .tx_list
+            .iter()
+            .position(|t| {
+                matches!(action, crate::trigger::TriggerAction::Send { ch, id }
+                    if t.channel == ch && t.id == id)
+            })
+            .unwrap_or(0);
+        ui.set_next_item_width(220.0);
+        if ui.combo_simple_string("##trigsend", &mut pick, &refs) {
+            let t = &app.tx_list[pick];
+            action = crate::trigger::TriggerAction::Send {
+                ch: t.channel,
+                id: t.id,
+            };
+            changed = true;
+        }
     }
 
     if changed {

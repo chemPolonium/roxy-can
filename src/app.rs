@@ -184,7 +184,9 @@ pub struct App {
     pub(crate) bus_counter: usize,
     pub(crate) color_counter: usize,
     pub(crate) source: Box<dyn FrameSource>,
-    buf: Vec<CanFrame>,
+    /// Frames polled this step, plus frames pushed by Send reactions;
+    /// the tick loop walks it by index so late arrivals are processed.
+    pub(crate) buf: Vec<CanFrame>,
 }
 
 impl App {
@@ -738,9 +740,17 @@ impl App {
 
         // Index walk rather than `for &f in &self.buf`: a frame is
         // copied out one at a time so `eval_triggers` can take `&mut
-        // self` without the iterator holding `buf` borrowed.
-        for i in 0..self.buf.len() {
+        // self` without the iterator holding `buf` borrowed. A `while`,
+        // not a `for` over `0..len()`: the range freezes its end before
+        // the loop, and a Send reaction pushing onto `buf` mid-loop must
+        // be processed by this same tick, not wiped by the next one.
+        let mut i = 0;
+        while i < self.buf.len() {
             let f = self.buf[i];
+            // Advance before anything else: the body has `continue`s
+            // (error frames skip aggregation, unsampled signals skip
+            // bookkeeping) and none of them may skip the increment.
+            i += 1;
             // Triggers judge the frame before anything else consumes it,
             // so a trigger that starts a recording captures the very
             // frame that fired it.
