@@ -1,4 +1,4 @@
-﻿use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -61,7 +61,8 @@ pub enum Mode {
 
 pub struct App {
     pub measuring: bool,
-    pub recording: bool,
+    /// ASC recording state: the checkbox intent plus the open file.
+    pub recorder: crate::recorder::Recorder,
     pub mode: Mode,
     pub run_mode: Mode,
     pub quit: bool,
@@ -106,8 +107,6 @@ pub struct App {
     /// Set by `stop`: the next Play re-opens the log from zero instead of
     /// resuming wherever the scrub bar left the playhead.
     pub replay_reset_pending: bool,
-    pub record_path: String,
-    pub last_record: String,
     pub subs: HashMap<(u8, u32, String), Subscription>,
     pub aggs: HashMap<(u8, u32), MessageAgg>,
     /// Per-bus load / frame-rate / error rolling state, one entry per
@@ -181,7 +180,6 @@ pub struct App {
     pub(crate) bus_counter: usize,
     pub(crate) color_counter: usize,
     pub(crate) source: Box<dyn FrameSource>,
-    writer: Option<AscWriter>,
     buf: Vec<CanFrame>,
 }
 
@@ -189,7 +187,7 @@ impl App {
     pub fn new() -> Self {
         let mut app = App {
             measuring: false,
-            recording: false,
+            recorder: crate::recorder::Recorder::new(),
             mode: Mode::Virtual,
             run_mode: Mode::Virtual,
             quit: false,
@@ -235,8 +233,6 @@ impl App {
             desktop_rename_buf: String::new(),
             replay_speed: 1.0,
             replay_reset_pending: false,
-            record_path: String::new(),
-            last_record: String::new(),
             subs: HashMap::new(),
             aggs: HashMap::new(),
             bus_loads: vec![
@@ -286,7 +282,6 @@ impl App {
             bus_counter: 2,
             color_counter: 0,
             source: Box::new(VirtualSource::new()),
-            writer: None,
             buf: Vec::new(),
         };
         app.load_dbcs();
@@ -323,15 +318,18 @@ impl App {
     }
 
     pub fn start_virtual(&mut self) {
-        self.close_writer();
+        self.recorder.close();
         self.source = Box::new(VirtualSource::new());
         self.mode = Mode::Virtual;
         self.run_mode = Mode::Virtual;
         self.reset_time();
         self.measuring = true;
         self.status = "measuring (virtual)".to_string();
-        if self.recording {
-            self.open_writer();
+        if self.recorder.recording {
+            match self.recorder.open() {
+                Ok(path) => self.status = format!("recording to {path}"),
+                Err(e) => self.status = format!("record failed: {e}"),
+            }
         }
     }
 
@@ -366,44 +364,31 @@ impl App {
     }
 
     fn can_replay(&self) -> bool {
-        !self.log_path.trim().is_empty() || !self.last_record.trim().is_empty()
+        !self.log_path.trim().is_empty() || !self.recorder.last_record.trim().is_empty()
     }
 
     pub fn stop(&mut self) {
         self.measuring = false;
-        self.close_writer();
+        self.recorder.close();
         self.replay_reset_pending = true;
         self.status = "stopped".to_string();
     }
 
-    fn close_writer(&mut self) {
-        if let Some(w) = self.writer.take() {
-            w.finish().ok();
-        }
-    }
-
-    fn open_writer(&mut self) -> bool {
-        let b = self.record_path.trim();
-        let b = b
-            .strip_suffix(".asc")
-            .or_else(|| b.strip_suffix(".ASC"))
-            .unwrap_or(b);
-        let base = if b.is_empty() { "record" } else { b };
-        let path = format!(
-            "{}_{}.asc",
-            base,
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        match AscWriter::new(&path) {
-            Ok(w) => {
-                self.writer = Some(w);
-                self.last_record = path.clone();
-                self.status = format!("recording to {path}");
-                true
-            }
-            Err(e) => {
-                self.status = format!("record failed: {e}");
-                false
+    pub fn toggle_record(&mut self) {
+        if self.recorder.recording {
+            self.recorder.close();
+            self.recorder.recording = false;
+        } else {
+            self.recorder.recording = true;
+            // While stopped, the file is created by the next start_virtual;
+            // checking Record must not leave an empty record file behind.
+            if self.measuring {
+                let opened = self.recorder.open();
+                self.recorder.recording = opened.is_ok();
+                match opened {
+                    Ok(path) => self.status = format!("recording to {path}"),
+                    Err(e) => self.status = format!("record failed: {e}"),
+                }
             }
         }
     }
@@ -432,20 +417,6 @@ impl App {
         }
         for sub in self.subs.values_mut() {
             sub.reset_measurement();
-        }
-    }
-
-    pub fn toggle_record(&mut self) {
-        if self.recording {
-            self.close_writer();
-            self.recording = false;
-        } else {
-            self.recording = true;
-            // While stopped, the file is created by the next start_virtual;
-            // checking Record must not leave an empty record file behind.
-            if self.measuring {
-                self.recording = self.open_writer();
-            }
         }
     }
 
@@ -504,7 +475,7 @@ impl App {
         let path = {
             let p = self.log_path.trim();
             if p.is_empty() {
-                self.last_record.clone()
+                self.recorder.last_record.clone()
             } else {
                 p.to_string()
             }
@@ -521,10 +492,10 @@ impl App {
 
     fn start_replay(&mut self, stream: Box<dyn FrameStream>) {
         let info = stream.describe();
-        self.close_writer();
+        self.recorder.close();
         // Replay just re-emits an existing log; recording it would
         // only duplicate the file, so drop the Record state.
-        self.recording = false;
+        self.recorder.recording = false;
         let mut source = ReplaySource::new(stream);
         source.set_speed(self.replay_speed);
         self.source = Box::new(source);
@@ -739,9 +710,7 @@ impl App {
             matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
 
         for &f in &self.buf {
-            if let Some(w) = &mut self.writer {
-                w.write(&f).ok();
-            }
+            self.recorder.write(&f);
             if self.trace.len() >= TRACE_LIMIT {
                 self.trace.pop_front();
             }
@@ -821,7 +790,7 @@ impl App {
 
         if replay_done {
             self.measuring = false;
-            self.close_writer();
+            self.recorder.close();
             let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
             self.status = format!("replay finished at {dur:.2}s");
         }
@@ -927,9 +896,9 @@ mod tests {
     fn record_survives_start_and_writes_frames() {
         let mut app = App::new();
         let path = std::env::temp_dir().join("roxy_can_record_test.asc");
-        app.record_path = path.to_string_lossy().to_string();
+        app.recorder.record_path = path.to_string_lossy().to_string();
         app.toggle_record();
-        assert!(app.recording);
+        assert!(app.recorder.recording);
         assert!(
             !app.tx_list.is_empty(),
             "DBC messages pre-populate the generator"
@@ -939,13 +908,13 @@ mod tests {
             tx.cycle_us = 10_000;
         }
         app.start_virtual();
-        assert!(app.recording, "Start must not clear the Record checkbox");
+        assert!(app.recorder.recording, "Start must not clear the Record checkbox");
         for _ in 0..12 {
             std::thread::sleep(std::time::Duration::from_millis(11));
             app.update();
         }
         app.stop();
-        let actual = app.last_record.clone();
+        let actual = app.recorder.last_record.clone();
         assert!(actual.ends_with(".asc"), "no record file: {actual}");
         assert!(
             actual.contains("roxy_can_record_test_"),
@@ -970,7 +939,7 @@ mod tests {
     fn replay_after_recorded_simulation_creates_no_second_file() {
         let mut app = App::new();
         let path = std::env::temp_dir().join("roxy_can_replay_rec_test.asc");
-        app.record_path = path.to_string_lossy().to_string();
+        app.recorder.record_path = path.to_string_lossy().to_string();
         app.toggle_record();
         for tx in &mut app.tx_list {
             tx.active = true;
@@ -982,13 +951,13 @@ mod tests {
             app.update();
         }
         app.stop();
-        let first = app.last_record.clone();
+        let first = app.recorder.last_record.clone();
         assert!(!first.is_empty(), "simulation should have recorded a file");
         app.log_path = first.clone();
         app.replay();
-        assert!(!app.recording, "replay must drop the Record state");
+        assert!(!app.recorder.recording, "replay must drop the Record state");
         assert_eq!(
-            app.last_record, first,
+            app.recorder.last_record, first,
             "replay must not open a second record file"
         );
         app.stop();
@@ -999,7 +968,7 @@ mod tests {
     fn loading_log_does_not_start_replay() {
         let mut app = App::new();
         let path = std::env::temp_dir().join("roxy_can_load_asc_test.asc");
-        app.record_path = path.to_string_lossy().to_string();
+        app.recorder.record_path = path.to_string_lossy().to_string();
         app.toggle_record();
         for tx in &mut app.tx_list {
             tx.active = true;
@@ -1011,7 +980,7 @@ mod tests {
             app.update();
         }
         app.stop();
-        let first = app.last_record.clone();
+        let first = app.recorder.last_record.clone();
         app.load_log(&first);
         assert!(!app.measuring, "loading must not start playback");
         assert!(app.log_info.is_some(), "load should cache a stream summary");
@@ -1906,7 +1875,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
     fn replay_position_tracks_playback() {
         let mut app = App::new();
         let path = std::env::temp_dir().join("roxy_can_seek_test.asc");
-        app.record_path = path.to_string_lossy().to_string();
+        app.recorder.record_path = path.to_string_lossy().to_string();
         app.toggle_record();
         for tx in &mut app.tx_list {
             tx.active = true;
@@ -1918,7 +1887,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
             app.update();
         }
         app.stop();
-        let file = app.last_record.clone();
+        let file = app.recorder.last_record.clone();
         app.load_log(&file);
         app.replay();
         let (pos0, dur) = app.replay_position().expect("replay has a timeline");
@@ -2209,7 +2178,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
         };
         app.subscribe(key.clone());
         let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
-        app.record_path = out.to_string_lossy().to_string();
+        app.recorder.record_path = out.to_string_lossy().to_string();
         app.toggle_record();
         for tx in &mut app.tx_list {
             tx.active = true;
@@ -2222,7 +2191,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
         }
         app.stop();
         std::fs::remove_file(&out).ok();
-        let file = app.last_record.clone();
+        let file = app.recorder.last_record.clone();
         app.load_log(&file);
         (app, key, file)
     }
@@ -2834,7 +2803,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
         let mut payload = [0u8; MAX_CAN_FD_LEN];
         payload[..8].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
         app.tx_list[0].data = payload;
-        app.record_path = "target/test_record".to_string();
+        app.recorder.record_path = "target/test_record".to_string();
         app.toggle_record();
         app.start_virtual();
         for _ in 0..8 {
@@ -2842,7 +2811,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
             app.update();
         }
         app.stop();
-        let path = app.last_record.clone();
+        let path = app.recorder.last_record.clone();
         assert!(!path.is_empty(), "recording produced a file");
         let content = std::fs::read_to_string(&path).expect("record file readable");
         let parsed = crate::log::asc::parse_asc(&content);

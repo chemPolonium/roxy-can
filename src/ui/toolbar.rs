@@ -347,7 +347,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             if matches!(app.run_mode, Mode::Virtual) {
                 vsep(ui);
-                let mut rec = app.recording;
+                let mut rec = app.recorder.recording;
                 if ui.checkbox("Record", &mut rec) {
                     app.toggle_record();
                 }
@@ -356,7 +356,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.text("to");
                 ui.same_line();
                 ui.set_next_item_width(130.0);
-                ui.input_text("##record", &mut app.record_path)
+                ui.input_text("##record", &mut app.recorder.record_path)
                     .hint("record")
                     .build();
                 ui.same_line();

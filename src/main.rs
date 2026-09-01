@@ -13,6 +13,7 @@ mod load;
 mod log;
 mod observe;
 mod project;
+mod recorder;
 mod sim;
 mod source;
 mod spec;

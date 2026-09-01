@@ -44,7 +44,7 @@ pub fn render(app: &App, ui: &Ui) {
                 app.trace.len(),
                 app.subs.len()
             ));
-            if app.recording {
+            if app.recorder.recording {
                 ui.same_line();
                 ui.text_colored([1.0, 0.4, 0.4, 1.0], "| REC");
             }
