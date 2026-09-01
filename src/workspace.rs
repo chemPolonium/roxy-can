@@ -94,6 +94,7 @@ pub struct Desktop {
     pub show_network: bool,
     pub show_measurement: bool,
     pub show_buses: bool,
+    pub show_triggers: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
 }
@@ -138,6 +139,7 @@ impl App {
             show_network: self.show_network,
             show_measurement: self.show_measurement,
             show_buses: self.show_buses,
+            show_triggers: self.show_triggers,
             show_spec: self.show_spec,
             show_id_filter: self.show_id_filter,
         }
@@ -167,6 +169,7 @@ impl App {
         self.show_network = d.show_network;
         self.show_measurement = d.show_measurement;
         self.show_buses = d.show_buses;
+        self.show_triggers = d.show_triggers;
         self.show_spec = d.show_spec;
         self.show_id_filter = d.show_id_filter;
         let layout = if d.layout.is_empty() {
@@ -209,6 +212,7 @@ impl App {
             show_network: false,
             show_measurement: false,
             show_buses: false,
+            show_triggers: false,
             show_spec: false,
             show_id_filter: false,
         };

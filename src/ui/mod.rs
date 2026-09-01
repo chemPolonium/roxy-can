@@ -15,6 +15,7 @@ pub mod stats;
 pub mod statusbar;
 pub mod toolbar;
 pub mod trace;
+pub mod triggers;
 pub mod tx;
 
 use crate::app::App;
@@ -48,6 +49,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     measurement::render(app, ui);
     idfilter::render(app, ui);
     buses::render(app, ui);
+    triggers::render(app, ui);
     tx::render(app, ui);
     network::render(app, ui);
     spec::render(app, ui);

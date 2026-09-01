@@ -21,7 +21,7 @@ use crate::app::App;
 use crate::can::frame::CanFrame;
 
 /// What a trigger watches.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TriggerCond {
     /// A decoded signal's physical value at or past a threshold. The
     /// edge is the crossing; the level follows the signal's own frames
@@ -68,6 +68,36 @@ impl Trigger {
             level: false,
             fired: 0,
             last_fire_t_us: 0,
+        }
+    }
+}
+
+impl TriggerCond {
+    /// The bus the condition watches.
+    pub fn bus(&self) -> u8 {
+        match self {
+            TriggerCond::SignalCross { ch, .. }
+            | TriggerCond::IdPresent { ch, .. }
+            | TriggerCond::ErrorFrame { ch } => *ch,
+        }
+    }
+
+    /// One-line summary without the bus name; the trigger list shows the
+    /// bus separately.
+    pub fn short(&self) -> String {
+        match self {
+            TriggerCond::SignalCross {
+                id,
+                signal,
+                threshold,
+                rising,
+                ..
+            } => format!(
+                "{signal} {} {threshold} @ 0x{id:X}",
+                if *rising { ">=" } else { "<=" }
+            ),
+            TriggerCond::IdPresent { id, .. } => format!("0x{id:X} present"),
+            TriggerCond::ErrorFrame { .. } => "error frames".to_string(),
         }
     }
 }
@@ -163,5 +193,68 @@ impl App {
                 }
             }
         }
+    }
+
+    /// One-line description of trigger `i` for the list: bus name plus
+    /// the condition's own summary.
+    pub fn trigger_summary(&self, i: usize) -> String {
+        match self.triggers.get(i) {
+            Some(t) => format!("{}  {}", self.channel_name(t.cond.bus()), t.cond.short()),
+            None => String::new(),
+        }
+    }
+
+    /// Signal names the database declares on `(ch, id)`, for the editor's
+    /// signal picker; empty when there is no database or message.
+    pub fn signal_names(&self, ch: u8, id: u32) -> Vec<String> {
+        self.channel_dbc(ch)
+            .and_then(|db| db.messages.get(&id))
+            .map(|m| m.signals.iter().map(|s| s.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn add_signal_trigger(&mut self) {
+        // Default to the database's first message and signal so the row
+        // starts watching something real instead of a blind id.
+        let db = self.channels.first().and_then(|c| c.dbc.as_ref());
+        let id = db.and_then(|db| db.order.first()).copied().unwrap_or(0x100);
+        let signal = db
+            .and_then(|db| db.messages.get(&id))
+            .and_then(|m| m.signals.first())
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "Signal".to_string());
+        self.push_trigger(TriggerCond::SignalCross {
+            ch: 0,
+            id,
+            signal,
+            threshold: 0.0,
+            rising: true,
+        });
+    }
+
+    pub fn add_id_trigger(&mut self) {
+        self.push_trigger(TriggerCond::IdPresent { ch: 0, id: 0x100 });
+    }
+
+    pub fn add_error_trigger(&mut self) {
+        self.push_trigger(TriggerCond::ErrorFrame { ch: 0 });
+    }
+
+    fn push_trigger(&mut self, cond: TriggerCond) {
+        self.triggers
+            .push(Trigger::new(cond, TriggerAction::StartRecording));
+        self.trigger_sel = Some(self.triggers.len() - 1);
+        self.show_triggers = true;
+    }
+
+    pub fn remove_trigger(&mut self, i: usize) {
+        if i < self.triggers.len() {
+            self.triggers.remove(i);
+        }
+        if self.trigger_sel.is_some_and(|s| s >= self.triggers.len()) {
+            self.trigger_sel = None;
+        }
+        // The editor's hex buffer names a trigger that may be gone.
+        self.trig_edit_sel = None;
     }
 }

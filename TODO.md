@@ -27,9 +27,9 @@
 
 ## P2 结构解锁
 
-8. **触发层**（地基已落：`src/trigger.rs`）
-   已有：条件模型 `TriggerCond`（信号越阈 `SignalCross` / 某 ID 出现 `IdPresent` / 错误帧 `ErrorFrame`）+ 动作 `TriggerAction`（开始·停止录制），`App.triggers` 在 `tick` 帧循环**最前**求值——触发帧本身被录进文件。边沿语义：信号条件按存储的 false→true 沿触发，电平跟随该报文自己的帧（CAN 信号在两帧之间保持原值）；出现类条件一次运行锁存一次。第 10 项的反应规则复用同一个 `TriggerCond`，动作枚举里加 `Send` 即可，**不要另写求值器**。
-   要做：触发器的编辑 UI 与工程文件持久化；`CycleTimeout` 条件（挂进 `check_spec` 的聚合扫描，复用宽限语义）；插入标记 + 清 Trace 动作；pre/post 环形缓冲；解除锁存的再武装手段（清 Trace / 手动）。
+8. **触发层**（地基 + 编辑 UI 已落：`src/trigger.rs`、`src/ui/triggers.rs`）
+   已有：条件模型 `TriggerCond`（信号越阈 `SignalCross` / 某 ID 出现 `IdPresent` / 错误帧 `ErrorFrame`）+ 动作 `TriggerAction`（开始·停止录制），`App.triggers` 在 `tick` 帧循环**最前**求值——触发帧本身被录进文件。边沿语义：信号条件按存储的 false→true 沿触发，电平跟随该报文自己的帧（CAN 信号在两帧之间保持原值）；出现类条件一次运行锁存一次。Triggers 窗口可增删、启停、选中编辑（总线/ID 十六进制/信号下拉自 DBC/阈值/方向/动作），面板开关随桌面与工程文件保存。第 10 项的反应规则复用同一个 `TriggerCond`，动作枚举里加 `Send` 即可，**不要另写求值器**。
+   要做：触发器**内容**的工程文件持久化（条件列表本身，与面板开关是两回事）；`CycleTimeout` 条件（挂进 `check_spec` 的聚合扫描，复用宽限语义）；插入标记 + 清 Trace 动作；pre/post 环形缓冲；解除锁存的再武装手段（清 Trace / 手动）。
 
 9. **Trace 突破 50k 环 + 按过滤器落盘**
    现状：`TRACE_LIMIT = 50_000`（`src/app.rs:18`）固定环形缓冲，满了就丢头部（`src/app.rs:2190-2197`）——长时间实时抓取会**静默丢掉开头**；而录制走的是**每帧、不过滤**（`src/app.rs:2191-2193`）。方向正好相反的做法是：测量数据落盘、并且能只落被选中的那部分。

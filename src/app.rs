@@ -111,6 +111,10 @@ pub struct App {
     /// channel. Fed from the same frame loop as `aggs`.
     pub bus_loads: Vec<crate::load::BusLoad>,
     pub triggers: Vec<crate::trigger::Trigger>,
+    /// The trigger the Triggers window is editing, if any.
+    pub trigger_sel: Option<usize>,
+    pub(crate) trig_id_buf: String,
+    pub(crate) trig_edit_sel: Option<usize>,
     /// Observed-versus-declared violations, recomputed on every measurement
     /// step from `aggs` and the loaded databases.
     pub spec: Spec,
@@ -127,6 +131,7 @@ pub struct App {
     pub show_network: bool,
     pub show_measurement: bool,
     pub show_buses: bool,
+    pub show_triggers: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
     pub show_shortcuts: bool,
@@ -236,6 +241,9 @@ impl App {
             aggs: HashMap::new(),
             bus_loads: vec![crate::load::BusLoad::new(), crate::load::BusLoad::new()],
             triggers: Vec::new(),
+            trigger_sel: None,
+            trig_id_buf: String::new(),
+            trig_edit_sel: None,
             spec: Spec::default(),
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
@@ -245,6 +253,7 @@ impl App {
             show_network: true,
             show_measurement: true,
             show_buses: false,
+            show_triggers: false,
             show_spec: false,
             show_id_filter: false,
             show_shortcuts: false,

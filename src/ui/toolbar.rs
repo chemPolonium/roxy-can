@@ -230,6 +230,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.show_buses = !app.show_buses;
                     }
                     if ui
+                        .menu_item_config("Triggers")
+                        .selected(app.show_triggers)
+                        .build()
+                    {
+                        app.show_triggers = !app.show_triggers;
+                    }
+                    if ui
                         .menu_item_config("Interactive Generator")
                         .selected(app.show_tx)
                         .build()

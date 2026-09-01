@@ -2808,3 +2808,45 @@ fn an_error_frame_trigger_latches_once_per_run() {
     app.recorder.close();
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
+
+/// The "+ Signal" button must land on something real: the database's first
+/// message and signal, not a blind id the editor cannot decode.
+#[test]
+fn adding_a_signal_trigger_picks_the_first_database_signal() {
+    let mut app = quiet_app();
+    app.add_signal_trigger();
+    assert_eq!(app.triggers.len(), 1);
+    assert_eq!(app.trigger_sel, Some(0), "the new row is up for editing");
+    match &app.triggers[0].cond {
+        TriggerCond::SignalCross {
+            ch,
+            id,
+            signal,
+            rising,
+            ..
+        } => {
+            assert_eq!(*ch, 0);
+            assert_eq!(*id, 0x100, "sample.dbc's first message");
+            assert_eq!(signal, "EngineSpeed", "its first signal");
+            assert!(*rising);
+        }
+        other => panic!("expected a signal trigger, got {other:?}"),
+    }
+
+    app.add_error_trigger();
+    assert_eq!(app.trigger_sel, Some(1), "the newest row is selected");
+    app.trigger_sel = Some(0);
+    app.remove_trigger(1);
+    assert_eq!(
+        app.trigger_sel,
+        Some(0),
+        "deleting another row keeps the selection"
+    );
+    app.remove_trigger(0);
+    assert_eq!(app.trigger_sel, None, "nothing left to select");
+    assert_eq!(
+        app.trigger_summary(0),
+        "",
+        "a summary for a missing row is empty, not a panic"
+    );
+}
