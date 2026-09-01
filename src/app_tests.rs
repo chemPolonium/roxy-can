@@ -215,18 +215,20 @@ fn a_tick_exactly_on_a_slot_does_not_drop_a_cycle() {
     tx.cycle_us = 20_000;
     tx.active = true;
     app.start_virtual();
-    // Ticks land precisely on slot boundaries.
+    // Ticks land precisely on slot boundaries. A slot is due when the
+    // clock reaches it, so the tick sitting on 120 ms owns that slot too --
+    // nothing is skipped, and nothing waits a tick past its own stamp.
     run_sim(&mut app, 6, 20_000);
     assert_eq!(
         slots_of(&app, 0x779),
-        vec![0, 20_000, 40_000, 60_000, 80_000, 100_000],
+        vec![0, 20_000, 40_000, 60_000, 80_000, 100_000, 120_000],
         "one frame per cycle, none skipped at the boundary"
     );
     app.stop();
 }
 
 #[test]
-fn a_stalled_ui_drops_cycles_instead_of_bursting() {
+fn a_stalled_ui_backfills_the_slots_it_missed() {
     let mut app = App::new();
     app.add_tx(0, 0x778);
     let tx = app.tx_list.last_mut().unwrap();
@@ -235,16 +237,100 @@ fn a_stalled_ui_drops_cycles_instead_of_bursting() {
     app.start_virtual();
     app.sim_t_us = 0;
     app.tick(0);
-    // Twelve cycles' worth of stall must produce one frame, and the
-    // schedule must end up past the stall rather than queued behind it.
+    // Twelve cycles' worth of stall: every missed slot still goes out at
+    // its own stamp. Skipping the backlog used to punch a hole into the
+    // bus's own timeline, and at fine Graphics strides that hole read as
+    // the curve being eaten while the plot slid on.
     app.sim_t_us = 250_000;
     app.tick(250_000);
-    assert_eq!(slots_of(&app, 0x778), vec![0, 20_000], "one frame per tick");
+    assert_eq!(
+        slots_of(&app, 0x778),
+        (0..13u64).map(|i| i * 20_000).collect::<Vec<_>>(),
+        "the backlog was emitted, not skipped"
+    );
     assert_eq!(
         app.tx_list.last().unwrap().next_t_us,
         260_000,
-        "the backlog was skipped, not deferred"
+        "the schedule resumes past the stall"
     );
+    app.stop();
+}
+
+#[test]
+fn a_stall_backfill_is_bounded_per_tick() {
+    let mut app = App::new();
+    app.add_tx(0, 0x778);
+    let tx = app.tx_list.last_mut().unwrap();
+    tx.cycle_us = 1_000;
+    tx.active = true;
+    app.start_virtual();
+    app.sim_t_us = 0;
+    app.tick(0);
+    // A 100 s freeze at a 1 ms cycle owes 100 000 slots: one tick takes a
+    // bounded bite and the rest streams over the following ticks.
+    app.sim_t_us = 100_000_000;
+    app.tick(app.sim_t_us);
+    assert_eq!(
+        slots_of(&app, 0x778).len() as u32,
+        MAX_TX_CATCHUP + 1,
+        "slot 0 plus the bounded burst"
+    );
+    assert!(
+        app.tx_list.last().unwrap().next_t_us <= app.sim_t_us,
+        "still behind, so the next tick keeps streaming"
+    );
+    app.tick(app.sim_t_us);
+    assert_eq!(
+        slots_of(&app, 0x778).len() as u32,
+        2 * MAX_TX_CATCHUP + 1,
+        "each tick takes another bounded bite"
+    );
+    app.stop();
+}
+
+#[test]
+fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
+    let mut app = App::new();
+    let key = {
+        let db = app.channel_dbc(0).expect("sample DBC loaded");
+        let id = db.order[0];
+        (0u8, id, db.messages[&id].signals[0].name.clone())
+    };
+    app.subscribe(key.clone());
+    for tx in &mut app.tx_list {
+        tx.active = true;
+        tx.cycle_us = 10_000;
+    }
+    app.start_virtual();
+    app.graphics[0].opened = true;
+    app.graphics[0].time_window_s = 1.0;
+    // Two seconds of ordinary ticks, then the clock jumps a 0.4 s UI
+    // freeze in one step, then ordinary ticks resume. Whatever the stall,
+    // the sampled timeline must stay on its 10 ms grid.
+    for _ in 0..120 {
+        app.sim_t_us += 16_667;
+        app.tick(app.sim_t_us);
+    }
+    app.sim_t_us += 400_000;
+    app.tick(app.sim_t_us);
+    for _ in 0..60 {
+        app.sim_t_us += 16_667;
+        app.tick(app.sim_t_us);
+    }
+    let stamps: Vec<u64> = app.subs[&key].history.iter().map(|&(t, _)| t).collect();
+    assert!(
+        stamps.len() > 200,
+        "100 Hz for ~3.4 s, got {}",
+        stamps.len()
+    );
+    for (a, b) in stamps.iter().zip(stamps.iter().skip(1)) {
+        assert!(
+            b - a <= 20_000,
+            "a {} us gap at {:.3}s -- the stall ate the samples",
+            b - a,
+            *a as f64 / 1e6
+        );
+    }
     app.stop();
 }
 
@@ -3061,5 +3147,119 @@ fn a_send_action_transmits_one_generator_frame() {
         app.trace.iter().filter(|f| f.id == 0x777).count(),
         1,
         "one edge, one frame -- no repeats"
+    );
+}
+
+/// What a one-second Graphics window would draw right now: asks for the
+/// view's data exactly the way `draw_plot` does (view request, then a cache
+/// slice), and reports the plot clock plus the visible slice's point count
+/// and right edge. A curve that "breathes" -- shrinking back and forth in
+/// the time direction -- shows up as the count or the right edge swinging
+/// while the clock only ever moves forward.
+fn visible_curve(app: &mut App, key: &(u8, u32, String)) -> (f64, usize, f64) {
+    let t_now = app.plot_now_s();
+    let tw = app.graphics[0].time_window_s;
+    let t_right = t_now - app.graphics[0].t_offset_s;
+    let need_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
+    let need_hi = ((t_right + tw).max(0.0) * 1e6) as u64;
+    app.ensure_samples_in(need_lo, need_hi);
+    let lo_us = ((t_right - tw).max(0.0) * 1e6) as u64;
+    let hi_us = (t_right.max(0.0) * 1e6) as u64;
+    let pts = app
+        .subs
+        .get(key)
+        .expect("subscribed")
+        .history
+        .range(lo_us, hi_us);
+    let right = pts.last().map(|&(t, _)| t as f64 / 1e6).unwrap_or(f64::NAN);
+    (t_now, pts.len(), right)
+}
+
+#[test]
+fn the_replay_curve_holds_still_at_a_one_second_window() {
+    let (mut app, key, file) = app_with_replayable_recording("breathe_1s", 500);
+    app.replay();
+    app.set_replay_speed(4.0);
+    app.graphics[0].opened = true;
+    app.graphics[0].time_window_s = 1.0;
+
+    let (mut prev_right, mut prev_count) = (f64::NAN, 0usize);
+    let mut worst_gap = 0.0f64;
+    let mut worst_drop = 0isize;
+    for _ in 0..80 {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+        let (t_now, count, right) = visible_curve(&mut app, &key);
+        if !right.is_finite() || t_now < 1.2 {
+            prev_right = right;
+            prev_count = count;
+            continue;
+        }
+        // The window is full from here on: the right end must ride the
+        // playhead and the point count must hover at the steady state
+        // instead of swinging as points appear and vanish.
+        let gap = t_now - right;
+        worst_gap = worst_gap.max(gap);
+        assert!(
+            right >= prev_right - 1e-9,
+            "the curve's right end moved backwards: {prev_right} -> {right} at t={t_now}"
+        );
+        worst_drop = worst_drop.max(prev_count as isize - count as isize);
+        assert!(
+            (count as isize - prev_count as isize).abs() <= 10,
+            "the visible point count swung {prev_count} -> {count} at t={t_now}"
+        );
+        prev_right = right;
+        prev_count = count;
+    }
+    assert!(
+        prev_count >= 80,
+        "a 1 s window at 100 Hz holds ~100 points, ended at {prev_count} (worst gap {worst_gap:.3}s, worst drop {worst_drop})"
+    );
+    app.stop();
+    std::fs::remove_file(&file).ok();
+}
+
+#[test]
+fn the_sim_curve_holds_still_at_a_one_second_window() {
+    let mut app = App::new();
+    let key = {
+        let db = app.channel_dbc(0).expect("sample DBC loaded");
+        let id = db.order[0];
+        (0u8, id, db.messages[&id].signals[0].name.clone())
+    };
+    app.subscribe(key.clone());
+    for tx in &mut app.tx_list {
+        tx.active = true;
+        tx.cycle_us = 10_000;
+    }
+    app.start_virtual();
+    app.graphics[0].opened = true;
+    app.graphics[0].time_window_s = 1.0;
+
+    let (mut prev_right, mut prev_count) = (f64::NAN, 0usize);
+    for _ in 0..600 {
+        app.sim_t_us += 16_667;
+        app.tick(app.sim_t_us);
+        let (t_now, count, right) = visible_curve(&mut app, &key);
+        if !right.is_finite() || t_now < 1.2 {
+            prev_right = right;
+            prev_count = count;
+            continue;
+        }
+        assert!(
+            right >= prev_right - 1e-9,
+            "the curve's right end moved backwards: {prev_right} -> {right} at t={t_now}"
+        );
+        assert!(
+            (count as isize - prev_count as isize).abs() <= 10,
+            "the visible point count swung {prev_count} -> {count} at t={t_now}"
+        );
+        prev_right = right;
+        prev_count = count;
+    }
+    assert!(
+        prev_count >= 80,
+        "a 1 s window at 100 Hz holds ~100 points, ended at {prev_count}"
     );
 }

@@ -36,6 +36,10 @@ pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 /// Cycle a new generator entry gets when its DBC declares none. A declared
 /// value always wins; this is only the invention we fall back to.
 pub(crate) const DEFAULT_TX_CYCLE_US: u64 = 100_000;
+/// Slots one generator entry may backfill per tick after the clock jumped
+/// (a frozen UI, a seek). Bounds the burst; anything longer streams over the
+/// following ticks. At 100 Hz one tick covers ~10 s of missed timeline.
+pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
 
 pub const PALETTE: [[f32; 4]; 8] = [
     [0.30, 0.80, 1.00, 1.0],
@@ -733,32 +737,33 @@ impl App {
                 // dated the epoch.
                 tx.next_t_us = sim;
             }
-            if !tx.active || tx.cycle_us == 0 || tx.next_t_us > sim {
-                continue;
+            // Every slot the clock has passed goes out at its own stamp.
+            // Skipping the backlog after a UI stall (the old policy) kept the
+            // tick cheap but punched a hole into the bus's own timeline --
+            // and at Graphics strides fine enough to show single updates,
+            // that hole reads as the curve being eaten while the plot
+            // slides on. Frames carry their slot's timestamp, so spacing
+            // stays exactly `cycle_us` even in the catch-up burst.
+            let mut budget = MAX_TX_CATCHUP;
+            while budget > 0 && tx.active && tx.cycle_us != 0 && tx.next_t_us <= sim {
+                budget -= 1;
+                // Values are read at the slot, not at `sim`: a frame stamped
+                // `slot` must carry the waveform's value at `slot`, or every
+                // payload would lead its own timestamp by up to a full cycle.
+                let slot = tx.next_t_us;
+                tx.next_t_us += tx.cycle_us;
+                let (data, len, flags) = tx_payload(channels, tx, slot);
+                self.buf.push(CanFrame {
+                    t_us: slot,
+                    channel: tx.channel,
+                    id: tx.id,
+                    extended: tx.extended,
+                    len,
+                    data,
+                    dir: Direction::Tx,
+                    flags,
+                });
             }
-            // Emit the slot this frame was due on, not the wall clock: a
-            // stalled UI drops backlog rather than bursting, but the
-            // spacing of what does go out stays exactly `cycle_us`.
-            let slot = tx.next_t_us;
-            tx.next_t_us += tx.cycle_us;
-            if tx.next_t_us < sim {
-                let behind = (sim - tx.next_t_us) / tx.cycle_us + 1;
-                tx.next_t_us += behind * tx.cycle_us;
-            }
-            // Values are read at the slot, not at `sim`: a frame stamped
-            // `slot` must carry the waveform's value at `slot`, or every
-            // payload would lead its own timestamp by up to a full cycle.
-            let (data, len, flags) = tx_payload(channels, tx, slot);
-            self.buf.push(CanFrame {
-                t_us: slot,
-                channel: tx.channel,
-                id: tx.id,
-                extended: tx.extended,
-                len,
-                data,
-                dir: Direction::Tx,
-                flags,
-            });
         }
 
         let replay_done =
