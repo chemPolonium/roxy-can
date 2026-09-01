@@ -95,6 +95,7 @@ pub struct Desktop {
     pub show_measurement: bool,
     pub show_buses: bool,
     pub show_triggers: bool,
+    pub show_bus_stats: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
 }
@@ -140,6 +141,7 @@ impl App {
             show_measurement: self.show_measurement,
             show_buses: self.show_buses,
             show_triggers: self.show_triggers,
+            show_bus_stats: self.show_bus_stats,
             show_spec: self.show_spec,
             show_id_filter: self.show_id_filter,
         }
@@ -170,6 +172,7 @@ impl App {
         self.show_measurement = d.show_measurement;
         self.show_buses = d.show_buses;
         self.show_triggers = d.show_triggers;
+        self.show_bus_stats = d.show_bus_stats;
         self.show_spec = d.show_spec;
         self.show_id_filter = d.show_id_filter;
         let layout = if d.layout.is_empty() {
@@ -213,6 +216,7 @@ impl App {
             show_measurement: false,
             show_buses: false,
             show_triggers: false,
+            show_bus_stats: false,
             show_spec: false,
             show_id_filter: false,
         };
@@ -321,7 +325,7 @@ impl App {
     pub fn new_stats_window(&mut self) {
         self.stats_counter += 1;
         self.stats_windows.push(StatsWin {
-            name: format!("Statistics {}", self.stats_counter),
+            name: format!("Message Statistics {}", self.stats_counter),
             opened: true,
             scope: SigScope::All,
             manual: HashSet::new(),

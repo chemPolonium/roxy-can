@@ -1,4 +1,5 @@
 pub mod buses;
+pub mod busstats;
 pub mod data;
 pub mod desktops;
 pub mod dockspace;
@@ -49,6 +50,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     measurement::render(app, ui);
     idfilter::render(app, ui);
     buses::render(app, ui);
+    busstats::render(app, ui);
     triggers::render(app, ui);
     tx::render(app, ui);
     network::render(app, ui);

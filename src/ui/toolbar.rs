@@ -237,6 +237,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.show_triggers = !app.show_triggers;
                     }
                     if ui
+                        .menu_item_config("Bus Statistics")
+                        .selected(app.show_bus_stats)
+                        .build()
+                    {
+                        app.show_bus_stats = !app.show_bus_stats;
+                    }
+                    if ui
                         .menu_item_config("Interactive Generator")
                         .selected(app.show_tx)
                         .build()

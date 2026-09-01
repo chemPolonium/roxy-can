@@ -1872,6 +1872,7 @@ fn desktops_round_trip_through_config() {
     let mut app = App::new();
     app.add_desktop();
     app.switch_desktop(0);
+    app.show_bus_stats = true;
     let cfg = Config::from_app(&app, None);
     let mut restored = App::new();
     cfg.apply(&mut restored);
@@ -1882,6 +1883,10 @@ fn desktops_round_trip_through_config() {
     assert_eq!(
         restored.desktops[0].open_windows.len(),
         app.desktops[0].open_windows.len()
+    );
+    assert!(
+        restored.show_bus_stats,
+        "panel visibility rides the desktop like every other flag"
     );
 }
 

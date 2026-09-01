@@ -248,6 +248,8 @@ pub struct DesktopCfg {
     #[serde(default)]
     pub show_triggers: bool,
     #[serde(default)]
+    pub show_bus_stats: bool,
+    #[serde(default)]
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
@@ -340,6 +342,8 @@ pub struct Config {
     #[serde(default)]
     pub show_triggers: bool,
     #[serde(default)]
+    pub show_bus_stats: bool,
+    #[serde(default)]
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
@@ -428,6 +432,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_measurement: d.show_measurement,
         show_buses: d.show_buses,
         show_triggers: d.show_triggers,
+        show_bus_stats: d.show_bus_stats,
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
     }
@@ -466,6 +471,7 @@ impl Config {
             show_measurement: app.show_measurement,
             show_buses: app.show_buses,
             show_triggers: app.show_triggers,
+            show_bus_stats: app.show_bus_stats,
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
             replay_speed: app.replay_speed,
@@ -760,6 +766,7 @@ impl Config {
         app.show_measurement = self.show_measurement;
         app.show_buses = self.show_buses;
         app.show_triggers = self.show_triggers;
+        app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
         // An unknown kind code (a project from a future version) drops
@@ -839,6 +846,7 @@ impl Config {
                     show_measurement: d.show_measurement,
                     show_buses: d.show_buses,
                     show_triggers: d.show_triggers,
+                    show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
                 })

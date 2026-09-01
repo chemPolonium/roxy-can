@@ -144,7 +144,12 @@ impl BusLoad {
         self.recent.len() as f64 / (WINDOW_US as f64 / 1_000_000.0)
     }
 
-    /// The sparkline as (t_us, load fraction) pairs, one per 100 ms bucket.
+    /// The load history as (t_us, load fraction) pairs, one per 100 ms
+    /// bucket. The sparkline that drew this was removed by decree --
+    /// load reads as a plain percentage in the Bus Statistics window --
+    /// but the collection stays: tests pin the bucketing, and a future
+    /// export path gets the history for free.
+    #[allow(dead_code)]
     pub fn history(&self) -> impl Iterator<Item = (u64, f64)> + '_ {
         self.buckets
             .iter()
