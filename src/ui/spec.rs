@@ -61,6 +61,10 @@ fn content(app: &mut App, ui: &Ui) {
         }
     }
     ui.same_line();
+    if ui.small_button("Export##spec") {
+        app.export_spec_dialog();
+    }
+    ui.same_line();
     if ui.small_button("Clear##spec") {
         app.spec.clear();
     }
@@ -118,8 +122,8 @@ fn content(app: &mut App, ui: &Ui) {
         for column in [
             app.channel_name(ch),
             kind.label().to_string(),
-            qty(kind, l.declared),
-            qty(kind, l.measured),
+            crate::spec::qty(kind, l.declared),
+            crate::spec::qty(kind, l.measured),
             format!("{}", l.count),
             secs(l.first_t_us),
             secs(l.last_t_us),
@@ -152,16 +156,6 @@ fn threshold(app: &mut App, ui: &Ui, key: &str, model: u64, lo: f32, hi: f32, fm
     match committed {
         Some(val) => val.clamp(lo as f64, hi as f64).round() as u64,
         None => model,
-    }
-}
-
-/// A magnitude in the unit its rule uses: microseconds for the two timing
-/// rules, bytes for the length one, and nothing at all for an unknown id.
-fn qty(kind: Kind, v: f64) -> String {
-    match kind {
-        Kind::Unknown => "-".to_string(),
-        Kind::Dlc => format!("{v:.0} B"),
-        Kind::Cycle | Kind::Missing => format!("{:.1} ms", v / 1e3),
     }
 }
 

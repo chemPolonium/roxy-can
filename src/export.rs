@@ -257,4 +257,60 @@ impl App {
         }
         self.write_export(path, s);
     }
+
+    /// The whole violation report, every latched row regardless of the
+    /// window's session-only filter checkboxes, prefixed with the premises it
+    /// was judged under: which database each bus carried, the tolerance and
+    /// grace in effect, and how many messages had a period to break at all.
+    /// Without those a report cannot be re-checked -- the same table means
+    /// something else at ±5% and grace 2.
+    pub fn export_spec_csv(&mut self, path: &str) {
+        let mut s = String::new();
+        for c in &self.channels {
+            let dbc = if c.dbc_path.trim().is_empty() {
+                "(none)".to_string()
+            } else {
+                c.dbc_path.clone()
+            };
+            s.push_str(&format!("# database,{},{dbc}\n", c.name));
+        }
+        s.push_str(&format!("# tolerance,+/-{}%\n", self.spec_tol_pct));
+        s.push_str(&format!("# grace,{}x declared period\n", self.spec_grace));
+        let periodic: usize = self
+            .channels
+            .iter()
+            .filter_map(|c| c.dbc.as_ref())
+            .map(|db| {
+                db.messages
+                    .values()
+                    .filter(|m| m.cycle_us.is_some_and(|d| d > 0))
+                    .count()
+            })
+            .sum();
+        s.push_str(&format!("# periodic messages declared,{periodic}\n"));
+        s.push_str("bus,id,name,rule,declared,measured,count,first_s,last_s\n");
+        for ((ch, id, kind), l) in &self.spec.rows {
+            let name = self.message_name(*ch, *id).unwrap_or("not in database");
+            s.push_str(&format!(
+                "{},{:X},{},{},{},{},{},{:.3},{:.3}\n",
+                self.channel_name(*ch),
+                id,
+                name,
+                kind.label(),
+                crate::spec::qty(*kind, l.declared),
+                crate::spec::qty(*kind, l.measured),
+                l.count,
+                l.first_t_us as f64 / 1e6,
+                l.last_t_us as f64 / 1e6,
+            ));
+        }
+        self.write_export(path, s);
+    }
+
+    pub fn export_spec_dialog(&mut self) {
+        if let Some(p) = App::csv_save_dialog("Export Specification report as CSV", "spec_report.csv")
+        {
+            self.export_spec_csv(&p.to_string_lossy());
+        }
+    }
 }

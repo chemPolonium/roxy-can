@@ -782,6 +782,49 @@ BO_ 4096 Orphan: 8 Vector__XXX
         app.stop();
     }
 
+    /// The report carries its own premises -- which databases, the tolerance
+    /// and grace in effect, how many messages declared a period -- plus every
+    /// latched row. Without the header, the same table means something else
+    /// at a different threshold setting and cannot be re-checked.
+    #[test]
+    fn the_spec_report_export_includes_its_premises_and_rows() {
+        let mut app = App::new();
+        app.start_virtual();
+        app.tx_list.retain(|t| t.channel != 0);
+        receive(
+            &mut app,
+            1_000,
+            vec![rx_frame(1_000, 0x777, 8, FrameFlags::NONE)],
+        );
+        assert!(app
+            .spec
+            .rows
+            .contains_key(&(0, 0x777, crate::spec::Kind::Unknown)));
+        app.spec_tol_pct = 5;
+        app.spec_grace = 4;
+
+        let path = std::env::temp_dir().join("roxy_can_spec_report.csv");
+        app.export_spec_csv(&path.to_string_lossy().to_string());
+        let content = std::fs::read_to_string(&path).unwrap();
+
+        assert!(
+            content.contains("# database,CAN1,assets/sample.dbc"),
+            "which database each bus carried"
+        );
+        assert!(content.contains("# tolerance,+/-5%"));
+        assert!(content.contains("# grace,4x declared period"));
+        assert!(
+            content.contains("# periodic messages declared,"),
+            "how many messages had a period to break"
+        );
+        assert!(
+            content.contains("CAN1,777,not in database,Unknown id"),
+            "the latched row itself: {content}"
+        );
+        std::fs::remove_file(&path).ok();
+        app.stop();
+    }
+
     #[test]
     fn two_channels_aggregate_separately() {
         let mut app = App::new();

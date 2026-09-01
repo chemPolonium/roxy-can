@@ -167,6 +167,17 @@ pub fn missing_offender(now_us: u64, last_t_us: u64, declared_us: u64, grace: u6
     now_us.saturating_sub(last_t_us) > declared_us.saturating_mul(grace)
 }
 
+/// A magnitude in the unit its rule uses: bytes for the length rule,
+/// milliseconds for the two timing ones, and nothing at all for an unknown
+/// id. The report window and the CSV export render the same wording.
+pub fn qty(kind: Kind, v: f64) -> String {
+    match kind {
+        Kind::Unknown => "-".to_string(),
+        Kind::Dlc => format!("{v:.0} B"),
+        Kind::Cycle | Kind::Missing => format!("{:.1} ms", v / 1e3),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{GRACE_CYCLES, Kind, Latch, Spec, cycle_offender, dlc_offender, missing_offender};
