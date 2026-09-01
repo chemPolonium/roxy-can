@@ -43,20 +43,19 @@ pub const PALETTE: [[f32; 4]; 8] = [
 ];
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
-pub use crate::generator::{cycle_from_ms_text, TxMsg, TX_CYCLE_MAX_MS};
+use crate::generator::tx_payload;
+pub use crate::generator::{TX_CYCLE_MAX_MS, TxMsg, cycle_from_ms_text};
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, Subscription};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
 };
-use crate::generator::tx_payload;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Virtual,
     Replay,
 }
-
 
 pub struct App {
     pub measuring: bool,
@@ -234,10 +233,7 @@ impl App {
             replay_reset_pending: false,
             subs: HashMap::new(),
             aggs: HashMap::new(),
-            bus_loads: vec![
-                crate::load::BusLoad::new(),
-                crate::load::BusLoad::new(),
-            ],
+            bus_loads: vec![crate::load::BusLoad::new(), crate::load::BusLoad::new()],
             spec: Spec::default(),
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
@@ -647,7 +643,12 @@ impl App {
             // schedule and waveform phase jumps by the paused span.
             self.sim_prev_us = now;
         }
-        self.sim_t_us += now.saturating_sub(self.sim_prev_us);
+        // In replay the simulation clock is owned by `tick`, which reads it
+        // off the log frames; adding wall time here would let the generator
+        // march on while the log is quiet and snap back on the next frame.
+        if !matches!(self.mode, Mode::Replay) {
+            self.sim_t_us += now.saturating_sub(self.sim_prev_us);
+        }
         self.sim_prev_us = now;
         if self.last_tick_us > 0 && now > self.last_tick_us {
             let dt_s = (now - self.last_tick_us) as f64 / 1e6;
@@ -666,43 +667,59 @@ impl App {
     /// Split out of [`Self::update`] so a test can run a single step at a time
     /// of its choosing; the generator reads `sim_t_us`, which `update` maintains.
     pub fn tick(&mut self, now_us: u64) {
-        let sim = self.sim_t_us;
         self.buf.clear();
         self.source.poll(now_us, &mut self.buf);
         let source_empty = self.buf.is_empty();
 
-        // Generators only transmit in live simulation; replaying an ASC must
-        // not mix in synthetic frames from active generator entries.
+        // The log clock is primary while replaying: `sim_t_us` follows the
+        // newest log frame's own stamp and holds between frames, so injected
+        // frames land on the same timeline the log carries and every
+        // consumer -- aggregates, plots, the spec check -- sees one clock.
+        // Live simulation keeps the wall-derived clock `update` maintains.
+        if matches!(self.mode, Mode::Replay)
+            && let Some(t) = self.buf.last().map(|f| f.t_us)
+        {
+            self.sim_t_us = t;
+        }
+        let sim = self.sim_t_us;
+
+        // Generators transmit in every running mode: an active entry during
+        // replay injects onto the log timeline, which is what makes
+        // "replay a real log and stir a few frames in" possible.
         let channels = &self.channels;
-        if matches!(self.mode, Mode::Virtual) {
-            for tx in &mut self.tx_list {
-                if !tx.active || tx.cycle_us == 0 || tx.next_t_us > sim {
-                    continue;
-                }
-                // Emit the slot this frame was due on, not the wall clock: a
-                // stalled UI drops backlog rather than bursting, but the
-                // spacing of what does go out stays exactly `cycle_us`.
-                let slot = tx.next_t_us;
-                tx.next_t_us += tx.cycle_us;
-                if tx.next_t_us < sim {
-                    let behind = (sim - tx.next_t_us) / tx.cycle_us + 1;
-                    tx.next_t_us += behind * tx.cycle_us;
-                }
-                // Values are read at the slot, not at `sim`: a frame stamped
-                // `slot` must carry the waveform's value at `slot`, or every
-                // payload would lead its own timestamp by up to a full cycle.
-                let (data, len, flags) = tx_payload(channels, tx, slot);
-                self.buf.push(CanFrame {
-                    t_us: slot,
-                    channel: tx.channel,
-                    id: tx.id,
-                    extended: tx.extended,
-                    len,
-                    data,
-                    dir: Direction::Tx,
-                    flags,
-                });
+        for tx in &mut self.tx_list {
+            if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
+                // Log time has no slot zero: an entry picked up mid-log is
+                // anchored at the playhead instead of emitting one frame
+                // dated the epoch.
+                tx.next_t_us = sim;
             }
+            if !tx.active || tx.cycle_us == 0 || tx.next_t_us > sim {
+                continue;
+            }
+            // Emit the slot this frame was due on, not the wall clock: a
+            // stalled UI drops backlog rather than bursting, but the
+            // spacing of what does go out stays exactly `cycle_us`.
+            let slot = tx.next_t_us;
+            tx.next_t_us += tx.cycle_us;
+            if tx.next_t_us < sim {
+                let behind = (sim - tx.next_t_us) / tx.cycle_us + 1;
+                tx.next_t_us += behind * tx.cycle_us;
+            }
+            // Values are read at the slot, not at `sim`: a frame stamped
+            // `slot` must carry the waveform's value at `slot`, or every
+            // payload would lead its own timestamp by up to a full cycle.
+            let (data, len, flags) = tx_payload(channels, tx, slot);
+            self.buf.push(CanFrame {
+                t_us: slot,
+                channel: tx.channel,
+                id: tx.id,
+                extended: tx.extended,
+                len,
+                data,
+                dir: Direction::Tx,
+                flags,
+            });
         }
 
         let replay_done =
@@ -873,7 +890,6 @@ impl App {
             self.spec.note(key, last_t_us);
         }
     }
-
 }
 
 impl Default for App {
@@ -884,4 +900,3 @@ impl Default for App {
 #[cfg(test)]
 #[path = "app_tests.rs"]
 mod tests;
-
