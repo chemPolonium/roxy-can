@@ -1,5 +1,5 @@
 use crate::app::{App, TOOLBAR_H};
-use imgui::{Condition, ProgressBar, TableFlags, Ui};
+use imgui::{Condition, ProgressBar, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
 const PANEL_W: f32 = 190.0;
 
@@ -75,11 +75,33 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
     }
     let tbl_flags = TableFlags::BORDERS_INNER | TableFlags::ROW_BG | TableFlags::SCROLL_Y;
     if let Some(_table) = ui.begin_table_with_flags("data_table", 5, tbl_flags) {
-        ui.table_setup_column("Name");
-        ui.table_setup_column("Value");
-        ui.table_setup_column("Unit");
-        ui.table_setup_column("Raw Value");
-        ui.table_setup_column("Bar");
+        // Fixed widths for the text columns; the Bar column stretches and
+        // takes whatever is left.
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 150.0,
+            ..TableColumnSetup::new("Name")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 70.0,
+            ..TableColumnSetup::new("Value")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 60.0,
+            ..TableColumnSetup::new("Unit")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 85.0,
+            ..TableColumnSetup::new("Raw Value")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_STRETCH,
+            init_width_or_weight: 1.0,
+            ..TableColumnSetup::new("Bar")
+        });
         ui.table_headers_row();
         for key in keys.iter() {
             let Some(sub) = app.subs.get(key) else {
@@ -110,12 +132,9 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
                 }
                 None => 0.0,
             };
-            // A slim bar, not a full widget-height one: anything taller
-            // than the text propped every row open.
-            let font_h = unsafe { imgui::sys::igGetFontSize() };
-            ProgressBar::new(frac as f32)
-                .size([ui.content_region_avail()[0], (font_h * 0.6).max(6.0)])
-                .build(ui);
+            // Default frame height: the slim variant clipped the fill
+            // percentage ImGui draws inside the bar.
+            ProgressBar::new(frac as f32).build(ui);
         }
     }
 }
