@@ -21,6 +21,12 @@ pub const TABSTRIP_H: f32 = 22.0;
 /// whatever width the user had chosen.
 pub(crate) const HISTORY_SPAN_US: u64 = 3_600_000_000;
 pub(crate) const SAMPLE_INTERVAL_US: u64 = 50_000;
+/// Live sampling aims for this many points across the smallest open
+/// Graphics window, then clamps into `[MIN_STRIDE_US .. SAMPLE_INTERVAL_US]`:
+/// a 0.1 s window samples every 500 µs (CANoe-style -- zooming in reveals
+/// every update), while the hour window keeps the 50 ms memory bound.
+pub(crate) const STRIDE_POINTS_PER_WINDOW: u64 = 200;
+pub(crate) const MIN_STRIDE_US: u64 = 1_000;
 /// Frames one window backfill may collect. Bounds a single synchronous pass so
 /// a dense hour-wide window cannot lock the UI; the plot shows what it got and
 /// asks again on the next change.
@@ -79,6 +85,11 @@ pub struct App {
     /// signal caches. A Graphics window asking for a range outside it triggers a
     /// backfill scan.
     pub(crate) sample_cover: Option<(u64, u64)>,
+    /// The sampling stride currently applied to the signal caches. When the
+    /// smallest Graphics window shrinks, the stride gets finer -- and spans
+    /// already scanned at the coarse stride must rescan, so `sample_cover`
+    /// is invalidated here too.
+    pub(crate) applied_stride_us: u64,
     pub recent_dbc: Vec<String>,
     pub recent_log: Vec<String>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
@@ -225,6 +236,7 @@ impl App {
             log_path: String::new(),
             log_info: None,
             sample_cover: None,
+            applied_stride_us: SAMPLE_INTERVAL_US,
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
             project_path: None,
@@ -686,6 +698,18 @@ impl App {
         self.source.poll(now_us, &mut self.buf);
         let source_empty = self.buf.is_empty();
 
+        // The sampling stride follows the smallest open Graphics window:
+        // zooming in tight must reveal every signal update (the CANoe
+        // Graphics behaviour), while wide windows keep the coarse stride
+        // that bounds the cache. A change invalidates the scan cover -- a
+        // span read at 50 ms holds no 1 ms detail -- so the windows rescan
+        // at the finer gap and the merges interleave the new points.
+        let stride = self.wanted_stride_us();
+        if stride != self.applied_stride_us {
+            self.sample_cover = None;
+            self.applied_stride_us = stride;
+        }
+
         // The log clock is primary while replaying: `sim_t_us` follows the
         // newest log frame's own stamp and holds between frames, so injected
         // frames land on the same timeline the log carries and every
@@ -828,8 +852,8 @@ impl App {
                 entry.type_tag = d.type_tag;
                 entry.label = d.label;
                 entry.last_update_us = f.t_us;
-                if f.t_us >= entry.last_sample_us + SAMPLE_INTERVAL_US || entry.history.is_empty() {
-                    entry.push_sample(f.t_us, d.phys);
+                if f.t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
+                    entry.push_sample(f.t_us, d.phys, stride);
                 }
             }
         }

@@ -1289,7 +1289,7 @@ fn the_head_of_the_curve_survives_past_the_old_point_cap() {
     // made the left end of a running trace vanish on its own.
     let mut sub = blank_sub();
     for i in 0..5_000u64 {
-        sub.push_sample(i * SAMPLE_INTERVAL_US, (i % 97) as f64);
+        sub.push_sample(i * SAMPLE_INTERVAL_US, (i % 97) as f64, SAMPLE_INTERVAL_US);
     }
     assert_eq!(sub.history.len(), 5_000, "250 s fits inside the span");
     assert_eq!(
@@ -1304,7 +1304,7 @@ fn eviction_begins_only_past_the_retention_span() {
     let mut sub = blank_sub();
     let n = HISTORY_SPAN_US / SAMPLE_INTERVAL_US + 10;
     for i in 0..n {
-        sub.push_sample(i * SAMPLE_INTERVAL_US, 1.0);
+        sub.push_sample(i * SAMPLE_INTERVAL_US, 1.0, SAMPLE_INTERVAL_US);
     }
     assert!(sub.history.len() < n as usize, "stale head is dropped");
     let kept = sub.history.len() as u64 * SAMPLE_INTERVAL_US;
@@ -2899,6 +2899,56 @@ fn a_cycle_timeout_trigger_fires_on_each_dropout() {
     );
     app.recorder.close();
     std::fs::remove_file(&app.recorder.last_record).ok();
+}
+
+/// The CANoe Graphics behaviour: zooming into a small window must reveal
+/// every signal update. A 100 Hz signal watched through a 0.1 s window
+/// samples every frame at the tightened stride, where the old fixed 50 ms
+/// stride kept only two points per window.
+#[test]
+fn a_small_graphics_window_pulls_the_sample_stride_down() {
+    let mut app = quiet_app();
+    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+
+    // The default 10 s window keeps the coarse stride: 21 frames at 100 Hz
+    // yield at most one point per 50 ms.
+    app.graphics[0].time_window_s = 10.0;
+    let frames: Vec<CanFrame> = (0..21u64)
+        .map(|i| rx_frame(i * 10_000, 0x100, 2, FrameFlags::NONE))
+        .collect();
+    receive(&mut app, 200_000, frames.clone());
+    let coarse = app.subs.get(&key).unwrap().history.len();
+    assert!(coarse <= 6, "coarse stride decimates: {coarse} points");
+
+    // Zoom to 0.1 s: the stride drops to 500 µs and every frame lands.
+    app.graphics[0].time_window_s = 0.1;
+    receive(
+        &mut app,
+        400_000,
+        (21..41u64)
+            .map(|i| rx_frame(i * 10_000, 0x100, 2, FrameFlags::NONE))
+            .collect(),
+    );
+    let fine = app.subs.get(&key).unwrap().history.len();
+    assert!(
+        fine - coarse >= 15,
+        "the zoomed window samples nearly every frame: {coarse} -> {fine}"
+    );
+}
+
+/// A span backfilled at the coarse stride holds no fine detail, so a
+/// stride change must forget the scan cover and let the windows rescan.
+#[test]
+fn shrinking_the_window_forgets_the_scan_cover() {
+    let mut app = quiet_app();
+    app.sample_cover = Some((0, 1_000_000));
+    app.graphics[0].time_window_s = 0.1;
+    receive(&mut app, 0, vec![]);
+    assert!(
+        app.sample_cover.is_none(),
+        "the finer stride invalidates what 'covered' means"
+    );
 }
 
 #[test]

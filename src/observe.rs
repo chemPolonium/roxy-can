@@ -2,7 +2,7 @@
 //! statistics that fold samples into min/avg/max, and the Graphics/Data
 //! window signal lists that pick what to observe.
 
-use crate::app::{HISTORY_SPAN_US, SAMPLE_INTERVAL_US};
+use crate::app::{HISTORY_SPAN_US, MIN_STRIDE_US, SAMPLE_INTERVAL_US, STRIDE_POINTS_PER_WINDOW};
 
 /// Signal samples, kept ascending by timestamp.
 ///
@@ -11,7 +11,8 @@ use crate::app::{HISTORY_SPAN_US, SAMPLE_INTERVAL_US};
 /// insertion must work from either end: the hot streaming path still appends in
 /// O(1), and out-of-order points fall back to a search + splice. Entries stay
 /// 16 bytes with no per-node allocation, which matters because an hour of
-/// 50 ms sampling is 72 000 points per signal.
+/// coarse-stride sampling is 72 000 points per signal (the stride tightens
+/// while a Graphics window is zoomed in, trading cache size for detail).
 #[derive(Debug, Default)]
 pub struct SampleCache {
     pub(crate) points: Vec<(u64, f64)>,
@@ -155,15 +156,11 @@ impl Subscription {
     /// span. `min`/`max`/`avg` stay cumulative over everything sampled since the
     /// run began -- recomputing them every time the oldest point is trimmed would
     /// cost an O(n) rescan per sample.
-    pub(crate) fn push_sample(&mut self, t_us: u64, v: f64) {
+    pub(crate) fn push_sample(&mut self, t_us: u64, v: f64, min_gap: u64) {
         // Same spacing rule as a backfill merge. Comparing only against the
         // newest cached point would be wrong after a rewind, where the cache
         // legitimately still holds points ahead of the playhead.
-        if self
-            .history
-            .merge(&[(t_us, v)], SAMPLE_INTERVAL_US)
-            .is_empty()
-        {
+        if self.history.merge(&[(t_us, v)], min_gap).is_empty() {
             return;
         }
         self.last_sample_us = t_us;
@@ -250,6 +247,21 @@ use crate::can::frame::CanFrame;
 use crate::dbc::DecodedSignal;
 
 impl App {
+    /// The sampling stride the signal caches should hold right now: derived
+    /// from the smallest open Graphics window so a tight zoom gets every
+    /// signal update, while wide windows keep the coarse stride that bounds
+    /// the cache to a few ten-thousand points per signal.
+    pub(crate) fn wanted_stride_us(&self) -> u64 {
+        let min_window_us = self
+            .graphics
+            .iter()
+            .filter(|g| g.opened)
+            .map(|g| (g.time_window_s * 1e6) as u64)
+            .min()
+            .unwrap_or(u64::MAX);
+        (min_window_us / STRIDE_POINTS_PER_WINDOW).clamp(MIN_STRIDE_US, SAMPLE_INTERVAL_US)
+    }
+
     /// Decodes whatever frames cover `[t_from_us, t_to_us]` into the signal
     /// caches, unless an earlier scan already read that span.
     ///
@@ -282,29 +294,27 @@ impl App {
 
     /// One scan + merge over a span known to be uncovered.
     fn backfill(&mut self, t_from_us: u64, t_to_us: u64) {
+        let stride = self.wanted_stride_us();
         let mut frames = Vec::new();
         let capped = !self
             .source
             .scan_range(t_from_us, t_to_us, MAX_SCAN_FRAMES, &mut frames);
         // A scan-local stride: the shared per-signal baseline sits at the
         // playhead and would reject every point that lies behind it.
-        let mut stride: HashMap<(u8, u32, String), u64> = HashMap::new();
+        let mut stride_map: HashMap<(u8, u32, String), u64> = HashMap::new();
         let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
         for f in &frames {
             for (key, d) in self.subscribed_values(f) {
-                if stride
-                    .get(&key)
-                    .is_some_and(|&lt| f.t_us < lt + SAMPLE_INTERVAL_US)
-                {
+                if stride_map.get(&key).is_some_and(|&lt| f.t_us < lt + stride) {
                     continue;
                 }
-                stride.insert(key.clone(), f.t_us);
+                stride_map.insert(key.clone(), f.t_us);
                 batches.entry(key).or_default().push((f.t_us, d.phys));
             }
         }
         for (key, pts) in batches {
             if let Some(sub) = self.subs.get_mut(&key) {
-                let taken = sub.history.merge(&pts, SAMPLE_INTERVAL_US);
+                let taken = sub.history.merge(&pts, stride);
                 for v in taken {
                     sub.observe(v);
                 }
