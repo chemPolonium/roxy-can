@@ -240,3 +240,174 @@ pub struct DataWindow {
 }
 
 
+
+use std::collections::HashMap;
+
+use crate::app::{App, MAX_SCAN_FRAMES};
+use crate::can::frame::CanFrame;
+use crate::dbc::DecodedSignal;
+
+impl App {
+
+    /// Decodes whatever frames cover `[t_from_us, t_to_us]` into the signal
+    /// caches, unless an earlier scan already read that span.
+    ///
+    /// This is what makes the plot independent of the playback cursor. Deriving
+    /// samples only as playback walks past them meant a Graphics window showing
+    /// ground the cursor had not reached contained no points at all -- which is
+    /// exactly what a forward scrub looked like.
+    pub fn ensure_samples_in(&mut self, t_from_us: u64, t_to_us: u64) {
+        if t_to_us <= t_from_us {
+            return;
+        }
+        // Read only the edges the cache does not already cover. During playback
+        // the visible window slides forward by tens of milliseconds every frame,
+        // and re-reading the whole window each time would both cost that much
+        // again and overwrite the cache's spacing.
+        let (cov_lo, cov_hi) = self.sample_cover.unwrap_or((t_from_us, t_from_us));
+        let mut edges = Vec::new();
+        if t_from_us < cov_lo {
+            edges.push((t_from_us, t_to_us.min(cov_lo)));
+        }
+        if t_to_us > cov_hi {
+            edges.push((cov_hi.max(t_from_us), t_to_us));
+        }
+        for (from, to) in edges {
+            if to > from {
+                self.backfill(from, to);
+            }
+        }
+    }
+
+    /// One scan + merge over a span known to be uncovered.
+    fn backfill(&mut self, t_from_us: u64, t_to_us: u64) {
+        let mut frames = Vec::new();
+        let capped = !self
+            .source
+            .scan_range(t_from_us, t_to_us, MAX_SCAN_FRAMES, &mut frames);
+        // A scan-local stride: the shared per-signal baseline sits at the
+        // playhead and would reject every point that lies behind it.
+        let mut stride: HashMap<(u8, u32, String), u64> = HashMap::new();
+        let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
+        for f in &frames {
+            for (key, d) in self.subscribed_values(f) {
+                if stride
+                    .get(&key)
+                    .is_some_and(|&lt| f.t_us < lt + SAMPLE_INTERVAL_US)
+                {
+                    continue;
+                }
+                stride.insert(key.clone(), f.t_us);
+                batches.entry(key).or_default().push((f.t_us, d.phys));
+            }
+        }
+        for (key, pts) in batches {
+            if let Some(sub) = self.subs.get_mut(&key) {
+                let taken = sub.history.merge(&pts, SAMPLE_INTERVAL_US);
+                for v in taken {
+                    sub.observe(v);
+                }
+            }
+        }
+        // Claim the span that was *asked for*, not merely what was read. Repeating
+        // an unsatisfied request every frame would rescan the same stretch
+        // forever; a scan stopped by the frame cap can therefore leave the tail of
+        // a very dense window thin until the view moves enough to ask again.
+        self.sample_cover = match self.sample_cover {
+            Some((lo, hi)) if t_from_us <= hi && t_to_us >= lo => {
+                Some((lo.min(t_from_us), hi.max(t_to_us)))
+            }
+            _ => Some((t_from_us, t_to_us)),
+        };
+        if capped {
+            self.status = format!(
+                "plot: window too dense to decode fully ({} frames)",
+                MAX_SCAN_FRAMES
+            );
+        }
+    }
+
+    /// Lets every signal's sampler resume at a scrubbed playhead. Retained
+    /// samples are left in place; see [`Subscription::resume_sampling_at`].
+    pub(crate) fn rewind_samples_to(&mut self, t_us: u64) {
+        for sub in self.subs.values_mut() {
+            sub.resume_sampling_at(t_us);
+        }
+    }
+
+    /// Decodes one frame into `(signal key, decoded signal)` pairs for the
+    /// signals that are currently subscribed. Shared by the playback loop and
+    /// the Graphics window backfill so the two cannot drift on what a signal's
+    /// value is.
+    pub(crate) fn subscribed_values(&self, f: &CanFrame) -> Vec<((u8, u32, String), DecodedSignal)> {
+        let Some(db) = self
+            .channels
+            .get(f.channel as usize)
+            .and_then(|c| c.dbc.as_ref())
+        else {
+            return Vec::new();
+        };
+        db.decode_signals(f)
+            .into_iter()
+            .filter_map(|d| {
+                let key = (f.channel, f.id, d.name.clone());
+                self.subs.contains_key(&key).then_some((key, d))
+            })
+            .collect()
+    }
+
+    /// The display type the database declares for a subscribed signal, used
+    /// until the first frame refreshes it -- and forever when no database
+    /// names it.
+    fn signal_meta(&self, key: &(u8, u32, String)) -> String {
+        self.channels
+            .get(key.0 as usize)
+            .and_then(|c| c.dbc.as_ref())
+            .and_then(|db| db.messages.get(&key.1))
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .map(|s| s.type_tag.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn subscribe(&mut self, key: (u8, u32, String)) {
+        if !self.subs.contains_key(&key) {
+            let color = self.color_counter;
+            self.color_counter += 1;
+            let type_tag = self.signal_meta(&key);
+            self.subs.insert(
+                key,
+                Subscription {
+                    latest: 0.0,
+                    unit: String::new(),
+                    label: None,
+                    type_tag,
+                    min: f64::INFINITY,
+                    max: f64::NEG_INFINITY,
+                    avg: 0.0,
+                    sum: 0.0,
+                    n: 0,
+                    last_update_us: 0,
+                    last_sample_us: 0,
+                    history: SampleCache::default(),
+                    color,
+                },
+            );
+        }
+    }
+
+    /// Drops the subscription if no Data/Graphics window references the signal anymore.
+    pub fn prune_signal(&mut self, key: &(u8, u32, String)) {
+        let in_use = self
+            .graphics
+            .iter()
+            .any(|g| g.signals.iter().any(|s| &s.key == key))
+            || self
+                .data_windows
+                .iter()
+                .any(|d| d.signals.iter().any(|s| &s.key == key));
+        if !in_use {
+            self.subs.remove(key);
+        }
+    }
+}
+

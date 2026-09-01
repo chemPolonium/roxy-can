@@ -108,3 +108,215 @@ pub(crate) fn tx_payload(
 }
 
 
+
+use crate::app::{App, DEFAULT_TX_CYCLE_US};
+
+impl App {
+    /// Enables or disables every generator message of one bus; freshly
+    /// enabled messages restart their cycle immediately.
+    pub fn set_bus_tx(&mut self, ch: u8, on: bool) {
+        for t in &mut self.tx_list {
+            if t.channel == ch && t.active != on {
+                t.active = on;
+                if on {
+                    t.next_t_us = 0;
+                }
+            }
+        }
+    }
+
+    /// Ticks or unticks a DBC node as one this tool transmits as.
+    ///
+    /// Ticking adds whatever generator entry the node is missing and switches
+    /// them on. The period of an entry that already exists is never rewritten,
+    /// so a value tuned by hand outlives the click. Unticking only stops
+    /// sending: entries keep their payload and waveforms, so ticking the node
+    /// again restores it exactly as it was.
+    pub fn set_node_sim(&mut self, channel: u8, node: &str, on: bool) {
+        // `""` is what the parser writes for "no transmitter assigned", and
+        // `node_tx_ids` matches it against every unassigned message at once.
+        if node.is_empty() || channel as usize >= self.channels.len() {
+            return;
+        }
+        // The tick is recorded first and unconditionally: a node that sends
+        // nothing still has to remember that we mean to be it.
+        let list = &mut self.channels[channel as usize].sim_nodes;
+        if on {
+            if !list.iter().any(|n| n == node) {
+                list.push(node.to_string());
+            }
+        } else {
+            list.retain(|n| n != node);
+        }
+
+        // Membership comes from the live database, not from each entry's
+        // stamped `node`: loading another DBC does not rebuild the generator,
+        // so a stamp can name a message this node no longer owns.
+        let ids = self
+            .channel_dbc(channel)
+            .map(|db| db.node_tx_ids(node))
+            .unwrap_or_default();
+        if on {
+            for id in &ids {
+                self.add_tx(channel, *id);
+            }
+            for t in &mut self.tx_list {
+                if t.channel == channel && ids.contains(&t.id) && !t.active {
+                    t.active = true;
+                    // Re-zeroed rather than kept: an entry left over from the
+                    // last tick still carries its old schedule, and picking it
+                    // up mid-cycle would hold it silent for a whole period.
+                    t.next_t_us = 0;
+                }
+            }
+        } else {
+            // The stamped name is included on the way out only, so unchecking
+            // still silences a node whose database has since been swapped or
+            // unloaded. "I unchecked it and it is still transmitting" is the
+            // one outcome a user cannot recover from by guessing.
+            for t in &mut self.tx_list {
+                if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
+                    t.active = false;
+                }
+            }
+        }
+        let bus = self.channel_name(channel);
+        self.status = if on {
+            format!("simulating {node} on {bus} ({} message(s))", ids.len())
+        } else {
+            format!("{node} stopped on {bus}")
+        };
+    }
+
+    /// Whether this bus was told to transmit as `node`.
+    pub fn is_node_simulated(&self, ch: u8, node: &str) -> bool {
+        self.channels
+            .get(ch as usize)
+            .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
+    }
+
+    /// What the database declares for this message: `Some(0)` for an
+    /// event-triggered one, `None` when it says nothing at all.
+    pub fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
+        self.channel_dbc(ch)
+            .and_then(|db| db.messages.get(&id))
+            .and_then(|m| m.cycle_us)
+    }
+
+    pub fn add_tx(&mut self, channel: u8, id: u32) {
+        if self
+            .tx_list
+            .iter()
+            .any(|t| t.channel == channel && t.id == id)
+        {
+            return;
+        }
+        let (name, node, len, cycle_us) = self
+            .channel_dbc(channel)
+            .and_then(|db| db.messages.get(&id))
+            .map(|m| {
+                (
+                    m.name.clone(),
+                    m.transmitter.clone(),
+                    m.dlc.min(MAX_CAN_FD_LEN as u64) as u8,
+                    // A declared 0 is event-triggered, so `unwrap_or` rather
+                    // than `unwrap_or_default` on the Option: only "the DBC
+                    // said nothing" gets our invented period.
+                    m.cycle_us.unwrap_or(DEFAULT_TX_CYCLE_US),
+                )
+            })
+            .unwrap_or_else(|| (format!("{id:X}"), String::new(), 8, DEFAULT_TX_CYCLE_US));
+        let data_text = vec!["00"; len as usize].join(" ");
+        self.tx_list.push(TxMsg {
+            channel,
+            id,
+            srcs: Vec::new(),
+            extended: id > 0x7FF,
+            name,
+            node,
+            len,
+            data: [0; MAX_CAN_FD_LEN],
+            flags: if len > 8 {
+                FrameFlags::FD
+            } else {
+                FrameFlags::NONE
+            },
+            data_text,
+            cycle_us,
+            active: false,
+            next_t_us: 0,
+        });
+    }
+
+    /// Adds or replaces the source driving `src.name` on generator `i`.
+    pub fn set_source(&mut self, i: usize, src: ValueSrc) {
+        let Some(tx) = self.tx_list.get_mut(i) else {
+            return;
+        };
+        match tx.srcs.iter_mut().find(|s| s.name == src.name) {
+            Some(held) => *held = src,
+            None => tx.srcs.push(src),
+        }
+    }
+
+    /// Stops driving `name`, which leaves the base bytes in charge again.
+    pub fn clear_source(&mut self, i: usize, name: &str) {
+        if let Some(tx) = self.tx_list.get_mut(i) {
+            tx.srcs.retain(|s| s.name != name);
+        }
+    }
+
+    /// Writes a physical value into the base payload and pins that signal by
+    /// dropping only its source: grabbing a moving slider means "hold here".
+    pub fn pin_signal(&mut self, i: usize, name: &str, phys: f64) -> bool {
+        let Some(tx) = self.tx_list.get(i) else {
+            return false;
+        };
+        let (channel, id, mut data) = (tx.channel, tx.id, tx.data);
+        let Some(table) = self.channel_dbc(channel) else {
+            return false;
+        };
+        if !table.encode_signal(id, name, phys, &mut data) {
+            return false;
+        }
+        let msg_size = table
+            .messages
+            .get(&id)
+            .map(|m| m.dlc.min(MAX_CAN_FD_LEN as u64) as u8)
+            .unwrap_or(0);
+        let tx = &mut self.tx_list[i];
+        tx.srcs.retain(|s| s.name != name);
+        let len = tx.len.max(msg_size);
+        Self::set_tx_base(tx, data, len);
+        true
+    }
+
+    /// Replaces the base payload from the generator's hex box. Active sources
+    /// deliberately survive: correcting one byte must not throw away a whole
+    /// stimulus setup. Returns false if the text is not whole hex bytes.
+    pub fn set_tx_hex(&mut self, i: usize, text: &str) -> bool {
+        let Some(bytes) = parse_hex_bytes(text) else {
+            return false;
+        };
+        let Some(tx) = self.tx_list.get_mut(i) else {
+            return false;
+        };
+        let mut data = [0u8; MAX_CAN_FD_LEN];
+        data[..bytes.len()].copy_from_slice(&bytes);
+        let len = bytes.len() as u8;
+        Self::set_tx_base(tx, data, len);
+        true
+    }
+
+    /// Installs base bytes and keeps length, the FD flag and the hex text in
+    /// step with them.
+    fn set_tx_base(tx: &mut TxMsg, data: [u8; MAX_CAN_FD_LEN], len: u8) {
+        let len = len.min(MAX_CAN_FD_LEN as u8);
+        tx.data = data;
+        tx.len = len;
+        if len > 8 {
+            tx.flags = tx.flags.union(FrameFlags::FD);
+        }
+        tx.data_text = hex_text(&data, len);
+    }
+}

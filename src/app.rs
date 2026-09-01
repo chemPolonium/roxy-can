@@ -1,14 +1,10 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+﻿use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
-use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
-use crate::dbc::SymbolTable;
-use crate::dbc::DecodedSignal;
+use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
 use crate::log::open_stream;
-use crate::sim::ValueSrc;
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
 use crate::source::{FrameSource, FrameStream};
@@ -29,12 +25,12 @@ pub(crate) const SAMPLE_INTERVAL_US: u64 = 50_000;
 /// Frames one window backfill may collect. Bounds a single synchronous pass so
 /// a dense hour-wide window cannot lock the UI; the plot shows what it got and
 /// asks again on the next change.
-const MAX_SCAN_FRAMES: usize = 300_000;
+pub(crate) const MAX_SCAN_FRAMES: usize = 300_000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 /// Cycle a new generator entry gets when its DBC declares none. A declared
 /// value always wins; this is only the invention we fall back to.
-const DEFAULT_TX_CYCLE_US: u64 = 100_000;
+pub(crate) const DEFAULT_TX_CYCLE_US: u64 = 100_000;
 
 pub const PALETTE: [[f32; 4]; 8] = [
     [0.30, 0.80, 1.00, 1.0],
@@ -50,10 +46,11 @@ pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 pub use crate::generator::{cycle_from_ms_text, TxMsg, TX_CYCLE_MAX_MS};
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, Subscription};
+pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
 };
-use crate::generator::{hex_text, parse_hex_bytes, tx_payload};
+use crate::generator::tx_payload;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -61,14 +58,6 @@ pub enum Mode {
     Replay,
 }
 
-/// Deferred action waiting behind the "unsaved project" confirmation modal.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PendingAction {
-    Quit,
-    NewProject,
-    OpenProject,
-    OpenPath(PathBuf),
-}
 
 pub struct App {
     pub measuring: bool,
@@ -90,7 +79,7 @@ pub struct App {
     /// Contiguous log-time span whose frames have already been decoded into the
     /// signal caches. A Graphics window asking for a range outside it triggers a
     /// backfill scan.
-    sample_cover: Option<(u64, u64)>,
+    pub(crate) sample_cover: Option<(u64, u64)>,
     pub recent_dbc: Vec<String>,
     pub recent_log: Vec<String>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
@@ -106,7 +95,7 @@ pub struct App {
     pub pending_action: Option<PendingAction>,
     /// Config JSON snapshot of the last clean state (loaded/saved/reset);
     /// compared against the live config to decide if anything changed.
-    baseline: String,
+    pub(crate) baseline: String,
     /// Named workspace arrangements; always holds at least one desktop.
     pub desktops: Vec<Desktop>,
     pub active_desktop: usize,
@@ -184,23 +173,16 @@ pub struct App {
     pub stats_windows: Vec<StatsWin>,
     pub graphics: Vec<GraphicsWindow>,
     pub data_windows: Vec<DataWindow>,
-    trace_counter: usize,
-    msg_counter: usize,
-    stats_counter: usize,
-    graphics_counter: usize,
-    data_counter: usize,
-    bus_counter: usize,
-    color_counter: usize,
-    source: Box<dyn FrameSource>,
+    pub(crate) trace_counter: usize,
+    pub(crate) msg_counter: usize,
+    pub(crate) stats_counter: usize,
+    pub(crate) graphics_counter: usize,
+    pub(crate) data_counter: usize,
+    pub(crate) bus_counter: usize,
+    pub(crate) color_counter: usize,
+    pub(crate) source: Box<dyn FrameSource>,
     writer: Option<AscWriter>,
     buf: Vec<CanFrame>,
-}
-
-/// Newest-first recent list: dedups and caps at 8 entries.
-fn push_recent(list: &mut Vec<String>, path: String) {
-    list.retain(|p| p != &path);
-    list.insert(0, path);
-    list.truncate(8);
 }
 
 impl App {
@@ -336,143 +318,6 @@ impl App {
         app
     }
 
-    pub fn channel_dbc(&self, ch: u8) -> Option<&SymbolTable> {
-        self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
-    }
-
-    pub fn message_name(&self, ch: u8, id: u32) -> Option<&str> {
-        self.channel_dbc(ch).and_then(|db| db.message_name(id))
-    }
-
-    pub fn channel_name(&self, ch: u8) -> String {
-        self.channels
-            .get(ch as usize)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| format!("CAN{}", ch + 1))
-    }
-
-    /// Adds a new bus, loads its default DBC, and pre-populates the generator.
-    pub fn add_channel(&mut self) {
-        self.bus_counter += 1;
-        self.channels.push(Channel {
-            name: format!("CAN{}", self.bus_counter),
-            dbc: None,
-            dbc_path: "assets/sample.dbc".to_string(),
-            sim_nodes: Vec::new(),
-            bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-        });
-        self.bus_loads.push(crate::load::BusLoad::new());
-        let ch = self.channels.len() - 1;
-        self.load_channel(ch);
-        let ids: Vec<u32> = self.channels[ch]
-            .dbc
-            .as_ref()
-            .map(|db| db.order.clone())
-            .unwrap_or_default();
-        for id in ids {
-            self.add_tx(ch as u8, id);
-        }
-    }
-
-    /// Removes a bus and remaps every channel-indexed reference one step down.
-    pub fn remove_channel(&mut self, ch: usize) {
-        if self.channels.len() <= 1 {
-            self.status = "at least one bus is required".to_string();
-            return;
-        }
-        if ch >= self.channels.len() {
-            return;
-        }
-        let name = self.channels[ch].name.clone();
-        self.channels.remove(ch);
-        self.bus_loads.remove(ch);
-        let remap = |c: u8| -> Option<u8> {
-            if (c as usize) < ch {
-                Some(c)
-            } else if (c as usize) == ch {
-                None
-            } else {
-                Some(c - 1)
-            }
-        };
-        self.aggs = self
-            .aggs
-            .drain()
-            .filter_map(|((c, id), mut a)| {
-                remap(c).map(|nc| {
-                    a.channel = nc;
-                    ((nc, id), a)
-                })
-            })
-            .collect();
-        self.subs = self
-            .subs
-            .drain()
-            .filter_map(|((c, id, sig), s)| remap(c).map(|nc| ((nc, id, sig), s)))
-            .collect();
-        self.spec.drop_channel(ch as u8);
-        let remap_set = |set: &mut HashSet<(u8, u32)>| {
-            *set = set
-                .drain()
-                .filter_map(|(c, id)| remap(c).map(|nc| (nc, id)))
-                .collect();
-        };
-        for w in &mut self.trace_windows {
-            remap_set(&mut w.manual);
-        }
-        for w in &mut self.msg_windows {
-            remap_set(&mut w.manual);
-        }
-        for w in &mut self.stats_windows {
-            remap_set(&mut w.manual);
-        }
-        self.tx_list.retain(|t| t.channel as usize != ch);
-        for t in &mut self.tx_list {
-            if t.channel as usize > ch {
-                t.channel -= 1;
-            }
-        }
-        self.trace.retain(|f| f.channel as usize != ch);
-        for f in self.trace.iter_mut() {
-            if f.channel as usize > ch {
-                f.channel -= 1;
-            }
-        }
-        let remap_keys = |signals: &mut Vec<GfxSignal>| {
-            signals.retain(|s| remap(s.key.0).is_some());
-            for s in signals.iter_mut() {
-                s.key.0 = remap(s.key.0).unwrap();
-            }
-        };
-        for g in &mut self.graphics {
-            remap_keys(&mut g.signals);
-        }
-        for d in &mut self.data_windows {
-            remap_keys(&mut d.signals);
-        }
-        let fix_scope = |s: &mut SigScope| {
-            if let SigScope::Bus(b) = *s {
-                *s = match (b as usize).cmp(&ch) {
-                    std::cmp::Ordering::Equal => SigScope::All,
-                    std::cmp::Ordering::Greater => SigScope::Bus(b - 1),
-                    std::cmp::Ordering::Less => *s,
-                };
-            }
-        };
-        for w in &mut self.trace_windows {
-            fix_scope(&mut w.scope);
-        }
-        for w in &mut self.msg_windows {
-            fix_scope(&mut w.scope);
-        }
-        for w in &mut self.stats_windows {
-            fix_scope(&mut w.scope);
-        }
-        self.net_selected = 0;
-        self.status = format!("bus {name} removed");
-    }
-
     pub fn now_us(&self) -> u64 {
         self.t0.elapsed().as_micros() as u64
     }
@@ -604,103 +449,6 @@ impl App {
         }
     }
 
-    pub fn load_channel(&mut self, ch: usize) -> bool {
-        let Some(channel) = self.channels.get_mut(ch) else {
-            return false;
-        };
-        let name = channel.name.clone();
-        match std::fs::read_to_string(channel.dbc_path.trim()) {
-            Ok(content) => match crate::dbc::load_dbc_str(&content) {
-                Ok(table) => {
-                    self.status = format!("{name} DBC loaded: {} messages", table.order.len());
-                    channel.dbc = Some(table);
-                    true
-                }
-                Err(e) => {
-                    self.status = format!("{name} DBC error: {e}");
-                    false
-                }
-            },
-            Err(e) => {
-                self.status = format!("{name} DBC read failed: {e}");
-                false
-            }
-        }
-    }
-
-    pub fn load_dbcs(&mut self) {
-        for ch in 0..self.channels.len() {
-            self.load_channel(ch);
-        }
-    }
-
-    pub fn pick_dbc(&mut self) {
-        let ch = 0;
-        let name = self.channel_name(ch as u8);
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Open DBC for {name}"))
-            .add_filter("DBC files", &["dbc"])
-            .pick_file()
-        {
-            self.open_dbc_for(ch, p.to_string_lossy().into_owned());
-        }
-    }
-
-    /// Open a DBC directly for a given channel (used by the Buses window).
-    pub fn pick_dbc_for(&mut self, ch: usize) {
-        let name = self.channel_name(ch as u8);
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Open DBC for {name}"))
-            .add_filter("DBC files", &["dbc"])
-            .pick_file()
-        {
-            self.open_dbc_for(ch, p.to_string_lossy().into_owned());
-        }
-    }
-
-    /// Sets a bus's DBC path and loads it; successful parses are recorded
-    /// in the recent list.
-    pub fn open_dbc_for(&mut self, ch: usize, path: String) {
-        if let Some(channel) = self.channels.get_mut(ch) {
-            channel.dbc_path = path.clone();
-        }
-        if self.load_channel(ch) {
-            self.push_recent_dbc(path);
-        }
-    }
-
-    /// Opens a file dropped onto the window: a DBC goes into the first
-    /// bus, an ASC becomes the replay log.
-    pub fn open_dropped(&mut self, path: &std::path::Path) {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase());
-        match ext.as_deref() {
-            Some("dbc") => {
-                self.open_dbc_for(0, path.to_string_lossy().into_owned());
-            }
-            Some("asc") | Some("blf") | Some("mf4") => {
-                self.load_log(&path.to_string_lossy());
-            }
-            _ => {
-                let name = path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                self.status = format!("unsupported file: {name}");
-            }
-        }
-    }
-
-    pub fn push_recent_dbc(&mut self, path: String) {
-        push_recent(&mut self.recent_dbc, path);
-    }
-
-    pub fn push_recent_log(&mut self, path: String) {
-        push_recent(&mut self.recent_log, path);
-    }
-
     pub fn pick_log(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
             .set_title("Open CAN log")
@@ -713,7 +461,7 @@ impl App {
 
     /// Validates a log and selects it for replay without starting playback.
     /// The stream is dropped here so the mmap handle closes before `replay`
-    /// reopens it — Windows refuses to move/rename a mapped file.
+    /// reopens it 鈥?Windows refuses to move/rename a mapped file.
     ///
     /// Refused while a replay is running: `log_path`, the status bar and the
     /// scrub bar's length would describe the new file while the live source
@@ -750,260 +498,6 @@ impl App {
             }
             Err(e) => self.status = format!("log load failed [{path}]: {e}"),
         }
-    }
-
-    /// Exports the frames that pass the given Trace window's filter as ASC.
-    pub fn export_trace(&mut self, win: usize, path: &str) {
-        if self.trace.is_empty() {
-            self.status = "export: trace is empty".to_string();
-            return;
-        }
-        let Some(w) = self.trace_windows.get(win) else {
-            return;
-        };
-        let frames: Vec<CanFrame> = self
-            .trace
-            .iter()
-            .copied()
-            .filter(|f| self.trace_match(w, f))
-            .collect();
-        if frames.is_empty() {
-            self.status = "export: no frames pass the trace filter".to_string();
-            return;
-        }
-        match AscWriter::new(path) {
-            Ok(mut w) => {
-                for f in &frames {
-                    w.write(f).ok();
-                }
-                w.finish().ok();
-                self.status = format!(
-                    "exported {} of {} frames to {path}",
-                    frames.len(),
-                    self.trace.len()
-                );
-            }
-            Err(e) => self.status = format!("export failed: {e}"),
-        }
-    }
-
-    pub fn export_trace_dialog(&mut self, win: usize) {
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title("Export Trace as ASC")
-            .set_file_name("trace_export.asc")
-            .add_filter("ASC files", &["asc"])
-            .save_file()
-        {
-            let path = p.to_string_lossy().to_string();
-            self.export_trace(win, &path);
-        }
-    }
-
-    fn csv_save_dialog(title: &str, name: &str) -> Option<std::path::PathBuf> {
-        rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(name)
-            .add_filter("CSV files", &["csv"])
-            .save_file()
-    }
-
-    fn write_export(&mut self, path: &str, content: String) {
-        match std::fs::write(path, content) {
-            Ok(()) => self.status = format!("exported to {path}"),
-            Err(e) => self.status = format!("export failed: {e}"),
-        }
-    }
-
-    pub fn export_stats_dialog(&mut self, win: usize) {
-        if let Some(p) = Self::csv_save_dialog("Export Statistics as CSV", "statistics.csv") {
-            self.export_stats_csv(win, &p.to_string_lossy());
-        }
-    }
-
-    pub fn export_stats_csv(&mut self, win: usize, path: &str) {
-        let Some(w) = self.stats_windows.get(win) else {
-            return;
-        };
-        let scope = w.scope;
-        let manual = &w.manual;
-        let mut rows: Vec<&MessageAgg> = self
-            .aggs
-            .values()
-            .filter(|a| Self::scope_match(scope, manual, a.channel, a.id))
-            .collect();
-        rows.sort_by_key(|a| (a.channel, a.id));
-        let mut s =
-            String::from("bus,id,name,count,cycle_min_ms,cycle_avg_ms,cycle_max_ms,len,flags\n");
-        for a in &rows {
-            let name = self.message_name(a.channel, a.id).unwrap_or("-");
-            let bus = self.channel_name(a.channel);
-            let (cmin, cavg, cmax) = if a.count > 1 {
-                (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
-            } else {
-                (0.0, 0.0, 0.0)
-            };
-            s.push_str(&format!(
-                "{bus},{},{},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{}\n",
-                a.id,
-                name,
-                a.count,
-                a.len,
-                a.flags.tag()
-            ));
-        }
-        self.write_export(path, s);
-    }
-
-    pub fn export_messages_dialog(&mut self, win: usize) {
-        if let Some(p) = Self::csv_save_dialog("Export Messages as CSV", "messages.csv") {
-            self.export_messages_csv(win, &p.to_string_lossy());
-        }
-    }
-
-    /// Exports the aggregation rows currently visible in the given Messages window.
-    pub fn export_messages_csv(&mut self, win: usize, path: &str) {
-        let Some(w) = self.msg_windows.get(win) else {
-            return;
-        };
-        let scope = w.scope;
-        let filter = w.filter.trim().to_lowercase();
-        let dbc_only = w.dbc_only;
-        let manual = &w.manual;
-        let mut rows: Vec<MessageAgg> = self
-            .aggs
-            .values()
-            .copied()
-            .filter(|a| {
-                if !Self::scope_match(scope, manual, a.channel, a.id) {
-                    return false;
-                }
-                let name = self.message_name(a.channel, a.id).unwrap_or("-");
-                if dbc_only && name == "-" {
-                    return false;
-                }
-                if filter.is_empty() {
-                    return true;
-                }
-                let id_str = format!("{:x}", a.id);
-                name.to_lowercase().contains(&filter) || id_str.contains(&filter)
-            })
-            .collect();
-        rows.sort_by_key(|a| (a.channel, a.id));
-        let mut s = String::from("bus,id,name,dir,count,cycle_ms,len,flags,data\n");
-        for a in &rows {
-            let name = self.message_name(a.channel, a.id).unwrap_or("-");
-            let bus = self.channel_name(a.channel);
-            let dir = match a.dir {
-                Direction::Rx => "Rx",
-                Direction::Tx => "Tx",
-            };
-            let cycle = if a.count > 1 {
-                a.cycle_us / 1000.0
-            } else {
-                0.0
-            };
-            let data: String = a
-                .payload()
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            s.push_str(&format!(
-                "{bus},{},{},{},{},{cycle:.3},{},{},{}\n",
-                a.id,
-                name,
-                dir,
-                a.count,
-                a.len,
-                a.flags.tag(),
-                data
-            ));
-        }
-        self.write_export(path, s);
-    }
-
-    pub fn export_graphics_dialog(&mut self, i: usize) {
-        let name = self
-            .graphics
-            .get(i)
-            .map(|g| g.name.to_lowercase().replace(' ', "_"))
-            .unwrap_or_else(|| "graphics".to_string());
-        if let Some(p) =
-            Self::csv_save_dialog("Export Graphics history as CSV", &format!("{name}.csv"))
-        {
-            self.export_graphics_csv(i, &p.to_string_lossy());
-        }
-    }
-
-    /// Snapshot of the plotted signal history, long format: one row per sample.
-    pub fn export_graphics_csv(&mut self, i: usize, path: &str) {
-        let Some(g) = self.graphics.get(i) else {
-            return;
-        };
-        let keys: Vec<(u8, u32, String)> = g
-            .signals
-            .iter()
-            .filter(|s| s.visible)
-            .map(|s| s.key.clone())
-            .collect();
-        let mut s = String::from("time_us,bus,signal,value\n");
-        let mut n = 0usize;
-        for key in &keys {
-            let Some(sub) = self.subs.get(key) else {
-                continue;
-            };
-            let bus = self.channel_name(key.0);
-            for (t, v) in sub.history.iter() {
-                s.push_str(&format!("{t},{bus},{},{v}\n", key.2));
-                n += 1;
-            }
-        }
-        if n == 0 {
-            self.status = "export: no signal history yet".to_string();
-            return;
-        }
-        self.write_export(path, s);
-    }
-
-    pub fn export_data_dialog(&mut self, i: usize) {
-        let name = self
-            .data_windows
-            .get(i)
-            .map(|d| d.name.to_lowercase().replace(' ', "_"))
-            .unwrap_or_else(|| "data".to_string());
-        if let Some(p) = Self::csv_save_dialog("Export Data values as CSV", &format!("{name}.csv"))
-        {
-            self.export_data_csv(i, &p.to_string_lossy());
-        }
-    }
-
-    /// Snapshot of the latest signal values shown in a Data window. Each row
-    /// carries the raw number and, where the database names this value, its
-    /// enum label -- both, so a spreadsheet can sort on the number while a
-    /// report keeps the text.
-    pub fn export_data_csv(&mut self, i: usize, path: &str) {
-        let Some(d) = self.data_windows.get(i) else {
-            return;
-        };
-        let keys: Vec<(u8, u32, String)> = d
-            .signals
-            .iter()
-            .filter(|s| s.visible)
-            .map(|s| s.key.clone())
-            .collect();
-        let mut s = String::from("bus,signal,value,unit,type,label\n");
-        for key in &keys {
-            let Some(sub) = self.subs.get(key) else {
-                continue;
-            };
-            let bus = self.channel_name(key.0);
-            let label = sub.label.as_deref().unwrap_or("");
-            s.push_str(&format!(
-                "{bus},{},{},{},{},{label}\n",
-                key.2, sub.latest, sub.unit, sub.type_tag
-            ));
-        }
-        self.write_export(path, s);
     }
 
     pub fn replay(&mut self) {
@@ -1090,92 +584,6 @@ impl App {
         }
     }
 
-    /// Decodes whatever frames cover `[t_from_us, t_to_us]` into the signal
-    /// caches, unless an earlier scan already read that span.
-    ///
-    /// This is what makes the plot independent of the playback cursor. Deriving
-    /// samples only as playback walks past them meant a Graphics window showing
-    /// ground the cursor had not reached contained no points at all -- which is
-    /// exactly what a forward scrub looked like.
-    pub fn ensure_samples_in(&mut self, t_from_us: u64, t_to_us: u64) {
-        if t_to_us <= t_from_us {
-            return;
-        }
-        // Read only the edges the cache does not already cover. During playback
-        // the visible window slides forward by tens of milliseconds every frame,
-        // and re-reading the whole window each time would both cost that much
-        // again and overwrite the cache's spacing.
-        let (cov_lo, cov_hi) = self.sample_cover.unwrap_or((t_from_us, t_from_us));
-        let mut edges = Vec::new();
-        if t_from_us < cov_lo {
-            edges.push((t_from_us, t_to_us.min(cov_lo)));
-        }
-        if t_to_us > cov_hi {
-            edges.push((cov_hi.max(t_from_us), t_to_us));
-        }
-        for (from, to) in edges {
-            if to > from {
-                self.backfill(from, to);
-            }
-        }
-    }
-
-    /// One scan + merge over a span known to be uncovered.
-    fn backfill(&mut self, t_from_us: u64, t_to_us: u64) {
-        let mut frames = Vec::new();
-        let capped = !self
-            .source
-            .scan_range(t_from_us, t_to_us, MAX_SCAN_FRAMES, &mut frames);
-        // A scan-local stride: the shared per-signal baseline sits at the
-        // playhead and would reject every point that lies behind it.
-        let mut stride: HashMap<(u8, u32, String), u64> = HashMap::new();
-        let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
-        for f in &frames {
-            for (key, d) in self.subscribed_values(f) {
-                if stride
-                    .get(&key)
-                    .is_some_and(|&lt| f.t_us < lt + SAMPLE_INTERVAL_US)
-                {
-                    continue;
-                }
-                stride.insert(key.clone(), f.t_us);
-                batches.entry(key).or_default().push((f.t_us, d.phys));
-            }
-        }
-        for (key, pts) in batches {
-            if let Some(sub) = self.subs.get_mut(&key) {
-                let taken = sub.history.merge(&pts, SAMPLE_INTERVAL_US);
-                for v in taken {
-                    sub.observe(v);
-                }
-            }
-        }
-        // Claim the span that was *asked for*, not merely what was read. Repeating
-        // an unsatisfied request every frame would rescan the same stretch
-        // forever; a scan stopped by the frame cap can therefore leave the tail of
-        // a very dense window thin until the view moves enough to ask again.
-        self.sample_cover = match self.sample_cover {
-            Some((lo, hi)) if t_from_us <= hi && t_to_us >= lo => {
-                Some((lo.min(t_from_us), hi.max(t_to_us)))
-            }
-            _ => Some((t_from_us, t_to_us)),
-        };
-        if capped {
-            self.status = format!(
-                "plot: window too dense to decode fully ({} frames)",
-                MAX_SCAN_FRAMES
-            );
-        }
-    }
-
-    /// Lets every signal's sampler resume at a scrubbed playhead. Retained
-    /// samples are left in place; see [`Subscription::resume_sampling_at`].
-    fn rewind_samples_to(&mut self, t_us: u64) {
-        for sub in self.subs.values_mut() {
-            sub.resume_sampling_at(t_us);
-        }
-    }
-
     /// True when a scrubbed replay is parked mid-log and Play should pick up
     /// from there instead of re-opening the file at zero.
     fn can_resume_replay(&self) -> bool {
@@ -1248,433 +656,6 @@ impl App {
         for g in &mut self.graphics {
             g.t_offset_s = 0.0;
         }
-    }
-
-    /// Rebuilds the whole workspace back to factory defaults, keeping only
-    /// the machine-local recents and the captured default layout.
-    pub fn reset_to_defaults(&mut self) {
-        self.stop();
-        let recent_dbc = std::mem::take(&mut self.recent_dbc);
-        let recent_log = std::mem::take(&mut self.recent_log);
-        let recent_projects = std::mem::take(&mut self.recent_projects);
-        let default_layout = std::mem::take(&mut self.default_layout);
-        *self = App::new();
-        self.recent_dbc = recent_dbc;
-        self.recent_log = recent_log;
-        self.recent_projects = recent_projects;
-        self.default_layout = default_layout;
-    }
-
-    /// Display name of the current project: the file stem, or "Untitled".
-    pub fn project_name(&self) -> String {
-        self.project_path
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Untitled".to_string())
-    }
-
-    /// Project name with a `*` suffix when there are unsaved changes.
-    pub fn display_name(&self) -> String {
-        let name = self.project_name();
-        if self.is_dirty() {
-            format!("{name} *")
-        } else {
-            name
-        }
-    }
-
-    pub fn push_recent_project(&mut self, path: String) {
-        push_recent(&mut self.recent_projects, path);
-    }
-
-    /// Serializable snapshot of the workspace configuration, used to tell
-    /// whether anything changed since the last load/save/reset.
-    fn config_snapshot(&self) -> String {
-        serde_json::to_string(&Config::from_app(self, None)).unwrap_or_default()
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.config_snapshot() != self.baseline
-    }
-
-    /// Marks the current workspace as the clean baseline (after load/save).
-    pub fn mark_clean(&mut self) {
-        self.baseline = self.config_snapshot();
-    }
-
-    /// Live snapshot of the current window/panel arrangement.
-    pub fn desktop_snapshot(&self) -> Desktop {
-        let mut open_windows = Vec::new();
-        for w in &self.trace_windows {
-            if w.opened {
-                open_windows.push((WindowKind::Trace, w.name.clone()));
-            }
-        }
-        for w in &self.msg_windows {
-            if w.opened {
-                open_windows.push((WindowKind::Messages, w.name.clone()));
-            }
-        }
-        for w in &self.stats_windows {
-            if w.opened {
-                open_windows.push((WindowKind::Statistics, w.name.clone()));
-            }
-        }
-        for w in &self.graphics {
-            if w.opened {
-                open_windows.push((WindowKind::Graphics, w.name.clone()));
-            }
-        }
-        for w in &self.data_windows {
-            if w.opened {
-                open_windows.push((WindowKind::Data, w.name.clone()));
-            }
-        }
-        Desktop {
-            name: String::new(),
-            layout: self.layout_cache.clone(),
-            open_windows,
-            show_tx: self.show_tx,
-            show_network: self.show_network,
-            show_measurement: self.show_measurement,
-            show_buses: self.show_buses,
-            show_spec: self.show_spec,
-            show_id_filter: self.show_id_filter,
-        }
-    }
-
-    /// Opens/closes windows and panels to match the given desktop.
-    pub fn apply_desktop(&mut self, d: &Desktop) {
-        let has = |kind: WindowKind, name: &str| {
-            d.open_windows.iter().any(|(k, n)| *k == kind && n == name)
-        };
-        for w in &mut self.trace_windows {
-            w.opened = has(WindowKind::Trace, &w.name);
-        }
-        for w in &mut self.msg_windows {
-            w.opened = has(WindowKind::Messages, &w.name);
-        }
-        for w in &mut self.stats_windows {
-            w.opened = has(WindowKind::Statistics, &w.name);
-        }
-        for w in &mut self.graphics {
-            w.opened = has(WindowKind::Graphics, &w.name);
-        }
-        for w in &mut self.data_windows {
-            w.opened = has(WindowKind::Data, &w.name);
-        }
-        self.show_tx = d.show_tx;
-        self.show_network = d.show_network;
-        self.show_measurement = d.show_measurement;
-        self.show_buses = d.show_buses;
-        self.show_spec = d.show_spec;
-        self.show_id_filter = d.show_id_filter;
-        let layout = if d.layout.is_empty() {
-            self.default_layout.clone()
-        } else {
-            d.layout.clone()
-        };
-        if !layout.is_empty() {
-            self.pending_layout = Some(layout);
-        }
-    }
-
-    /// Refreshes the stored state of the active desktop from live state.
-    pub fn sync_active_desktop(&mut self) {
-        let mut snap = self.desktop_snapshot();
-        if let Some(d) = self.desktops.get_mut(self.active_desktop) {
-            snap.name = d.name.clone();
-            *d = snap;
-        }
-    }
-
-    pub fn switch_desktop(&mut self, idx: usize) {
-        if idx >= self.desktops.len() || idx == self.active_desktop {
-            return;
-        }
-        self.sync_active_desktop();
-        self.active_desktop = idx;
-        let target = self.desktops[idx].clone();
-        self.apply_desktop(&target);
-    }
-
-    /// Adds an empty desktop (no windows, no panels) and switches to it.
-    pub fn add_desktop(&mut self) {
-        self.sync_active_desktop();
-        let snap = Desktop {
-            name: format!("Desktop {}", self.desktops.len() + 1),
-            layout: String::new(),
-            open_windows: Vec::new(),
-            show_tx: false,
-            show_network: false,
-            show_measurement: false,
-            show_buses: false,
-            show_spec: false,
-            show_id_filter: false,
-        };
-        self.desktops.push(snap);
-        self.active_desktop = self.desktops.len() - 1;
-        let target = self.desktops[self.active_desktop].clone();
-        self.apply_desktop(&target);
-    }
-
-    pub fn delete_desktop(&mut self, idx: usize) {
-        if self.desktops.len() <= 1 || idx >= self.desktops.len() {
-            return;
-        }
-        let was_active = idx == self.active_desktop;
-        self.desktops.remove(idx);
-        if idx < self.active_desktop {
-            self.active_desktop -= 1;
-        } else if self.active_desktop >= self.desktops.len() {
-            self.active_desktop = self.desktops.len() - 1;
-        }
-        if was_active {
-            let target = self.desktops[self.active_desktop].clone();
-            self.apply_desktop(&target);
-        }
-    }
-
-    pub fn rename_desktop(&mut self, idx: usize, name: String) {
-        let name = name.trim().to_string();
-        if name.is_empty() {
-            return;
-        }
-        if let Some(d) = self.desktops.get_mut(idx) {
-            d.name = name;
-        }
-    }
-
-    pub fn move_desktop(&mut self, from: usize, to: usize) {
-        if from >= self.desktops.len() || to >= self.desktops.len() || from == to {
-            return;
-        }
-        let d = self.desktops.remove(from);
-        self.desktops.insert(to, d);
-        match self.active_desktop {
-            a if a == from => self.active_desktop = to,
-            a if a < from && to <= a => self.active_desktop = a + 1,
-            a if a > from && to >= a => self.active_desktop = a - 1,
-            _ => {}
-        }
-    }
-
-    pub fn run_action(&mut self, action: PendingAction) {
-        match action {
-            PendingAction::Quit => self.quit = true,
-            PendingAction::NewProject => self.new_project(),
-            PendingAction::OpenProject => self.open_project_dialog(),
-            PendingAction::OpenPath(p) => self.open_project_path(&p),
-        }
-    }
-
-    /// Saved projects auto-save and proceed; untouched untitled workspaces
-    /// have nothing to lose and proceed directly; only a modified untitled
-    /// workspace is routed through the confirmation modal.
-    pub fn guarded_action(&mut self, action: PendingAction) {
-        if let Some(p) = self.project_path.clone() {
-            self.save_project(Some(p));
-            self.run_action(action);
-        } else if self.is_dirty() {
-            self.pending_action = Some(action);
-        } else {
-            self.run_action(action);
-        }
-    }
-
-    /// Saves the workspace as a .rxproj file. `None` opens a picker.
-    /// Returns true when a file was written.
-    pub fn save_project(&mut self, path: Option<PathBuf>) -> bool {
-        let path = match path {
-            Some(p) => p,
-            None => {
-                let mut dlg = rfd::FileDialog::new().add_filter("roxy-can project", &[PROJECT_EXT]);
-                if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
-                    dlg = dlg.set_directory(dir);
-                }
-                dlg = dlg.set_file_name(format!("{}.rxproj", self.project_name()));
-                match dlg.save_file() {
-                    Some(p) => p,
-                    None => return false,
-                }
-            }
-        };
-        let base = path.parent().map(|d| d.to_path_buf());
-        let proj = ProjectFile {
-            version: 1,
-            layout: self.layout_cache.clone(),
-            project: None,
-            config: Config::from_app(self, base.as_deref()),
-        };
-        let written = serde_json::to_string_pretty(&proj)
-            .map_err(|e| e.to_string())
-            .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
-        match written {
-            Ok(()) => {
-                self.push_recent_project(path.to_string_lossy().to_string());
-                self.project_path = Some(path.clone());
-                self.baseline = self.config_snapshot();
-                self.status = format!("project saved: {}", path.display());
-                true
-            }
-            Err(e) => {
-                self.status = format!("project save failed: {e}");
-                false
-            }
-        }
-    }
-
-    /// Loads a .rxproj file, replacing the current workspace.
-    pub fn open_project_path(&mut self, path: &Path) {
-        let text = match std::fs::read_to_string(path) {
-            Ok(t) => t,
-            Err(e) => {
-                self.status = format!("project read failed: {e}");
-                return;
-            }
-        };
-        match serde_json::from_str::<ProjectFile>(&text) {
-            Ok(proj) => {
-                self.reset_to_defaults();
-                let mut cfg = proj.config;
-                cfg.resolve_paths(path.parent());
-                cfg.apply(self);
-                self.project_path = Some(path.to_path_buf());
-                if !proj.layout.is_empty() {
-                    self.pending_layout = Some(proj.layout);
-                }
-                self.baseline = self.config_snapshot();
-                self.push_recent_project(path.to_string_lossy().to_string());
-                self.status = format!("project loaded: {}", path.display());
-            }
-            Err(e) => self.status = format!("project ignored: {e}"),
-        }
-    }
-
-    pub fn open_project_dialog(&mut self) {
-        let pick = rfd::FileDialog::new()
-            .add_filter("roxy-can project", &[PROJECT_EXT])
-            .pick_file();
-        if let Some(p) = pick {
-            self.open_project_path(&p);
-        }
-    }
-
-    /// Periodic crash cache; the real project file is never touched.
-    pub fn write_autosave(&self) {
-        let base = self
-            .project_path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|d| d.to_path_buf());
-        let proj = ProjectFile {
-            version: 1,
-            layout: self.layout_cache.clone(),
-            project: self
-                .project_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            config: Config::from_app(self, base.as_deref()),
-        };
-        if let Ok(json) = serde_json::to_string_pretty(&proj) {
-            let _ = std::fs::write(AUTOSAVE_PATH, json);
-        }
-    }
-
-    /// Restores the crash cache left behind by an abnormal exit.
-    pub fn load_autosave(&mut self) -> bool {
-        let Ok(text) = std::fs::read_to_string(AUTOSAVE_PATH) else {
-            return false;
-        };
-        let Ok(proj) = serde_json::from_str::<ProjectFile>(&text) else {
-            return false;
-        };
-        self.reset_to_defaults();
-        let base = proj
-            .project
-            .as_deref()
-            .map(Path::new)
-            .and_then(|p| p.parent());
-        let mut cfg = proj.config;
-        cfg.resolve_paths(base);
-        cfg.apply(self);
-        self.project_path = proj.project.map(PathBuf::from);
-        if !proj.layout.is_empty() {
-            self.pending_layout = Some(proj.layout);
-        }
-        self.mark_clean();
-        self.status = "restored autosave".to_string();
-        true
-    }
-
-    /// Starts a fresh, completely empty untitled workspace: no DBCs, no
-    /// observer windows, no generator entries, default layout.
-    pub fn new_project(&mut self) {
-        self.reset_to_defaults();
-        for c in &mut self.channels {
-            c.dbc_path.clear();
-            c.dbc = None;
-        }
-        self.trace_windows.clear();
-        self.msg_windows.clear();
-        self.stats_windows.clear();
-        self.graphics.clear();
-        self.data_windows.clear();
-        self.tx_list.clear();
-        self.subs.clear();
-        self.baseline = self.config_snapshot();
-        if !self.default_layout.is_empty() {
-            self.pending_layout = Some(self.default_layout.clone());
-        }
-        self.status = "new project".to_string();
-    }
-
-    /// Saved projects quit silently (auto-save on exit); untitled ones
-    /// only go through the confirmation modal when actually modified.
-    pub fn request_quit(&mut self) {
-        self.guarded_action(PendingAction::Quit);
-    }
-
-    /// Writes the startup driver (last project + recent projects).
-    pub fn write_meta(&self) {
-        let meta = Meta {
-            last_project: self
-                .project_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            recent_projects: self.recent_projects.clone(),
-        };
-        if let Ok(json) = serde_json::to_string_pretty(&meta) {
-            let _ = std::fs::write(META_PATH, json);
-        }
-    }
-
-    /// Startup restore: an autosave left by a crash comes first, then the
-    /// last project when one is known, then the legacy `roxy-can.json`
-    /// import on a very first launch, else defaults.
-    pub fn startup_workspace(&mut self) {
-        if Path::new(AUTOSAVE_PATH).exists() {
-            if self.load_autosave() {
-                return;
-            }
-            let _ = std::fs::remove_file(AUTOSAVE_PATH);
-        }
-        if let Ok(text) = std::fs::read_to_string(META_PATH) {
-            if let Ok(meta) = serde_json::from_str::<Meta>(&text) {
-                self.recent_projects = meta.recent_projects;
-                if let Some(last) = meta.last_project {
-                    let path = PathBuf::from(last);
-                    if path.exists() {
-                        self.open_project_path(&path);
-                    } else {
-                        self.status = "last project missing, started empty".to_string();
-                    }
-                }
-                return;
-            }
-        }
-        self.load_config();
     }
 
     pub fn update(&mut self) {
@@ -1925,469 +906,6 @@ impl App {
         }
     }
 
-    /// Decodes one frame into `(signal key, decoded signal)` pairs for the
-    /// signals that are currently subscribed. Shared by the playback loop and
-    /// the Graphics window backfill so the two cannot drift on what a signal's
-    /// value is.
-    fn subscribed_values(&self, f: &CanFrame) -> Vec<((u8, u32, String), DecodedSignal)> {
-        let Some(db) = self
-            .channels
-            .get(f.channel as usize)
-            .and_then(|c| c.dbc.as_ref())
-        else {
-            return Vec::new();
-        };
-        db.decode_signals(f)
-            .into_iter()
-            .filter_map(|d| {
-                let key = (f.channel, f.id, d.name.clone());
-                self.subs.contains_key(&key).then_some((key, d))
-            })
-            .collect()
-    }
-
-    /// The display type the database declares for a subscribed signal, used
-    /// until the first frame refreshes it -- and forever when no database
-    /// names it.
-    fn signal_meta(&self, key: &(u8, u32, String)) -> String {
-        self.channels
-            .get(key.0 as usize)
-            .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.messages.get(&key.1))
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
-            .map(|s| s.type_tag.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn subscribe(&mut self, key: (u8, u32, String)) {
-        if !self.subs.contains_key(&key) {
-            let color = self.color_counter;
-            self.color_counter += 1;
-            let type_tag = self.signal_meta(&key);
-            self.subs.insert(
-                key,
-                Subscription {
-                    latest: 0.0,
-                    unit: String::new(),
-                    label: None,
-                    type_tag,
-                    min: f64::INFINITY,
-                    max: f64::NEG_INFINITY,
-                    avg: 0.0,
-                    sum: 0.0,
-                    n: 0,
-                    last_update_us: 0,
-                    last_sample_us: 0,
-                    history: SampleCache::default(),
-                    color,
-                },
-            );
-        }
-    }
-
-    /// Drops the subscription if no Data/Graphics window references the signal anymore.
-    pub fn prune_signal(&mut self, key: &(u8, u32, String)) {
-        let in_use = self
-            .graphics
-            .iter()
-            .any(|g| g.signals.iter().any(|s| &s.key == key))
-            || self
-                .data_windows
-                .iter()
-                .any(|d| d.signals.iter().any(|s| &s.key == key));
-        if !in_use {
-            self.subs.remove(key);
-        }
-    }
-
-    /// Adds or removes a signal in a Graphics/Data window's signal list
-    /// (used by the Signal Selection popup).
-    pub fn set_win_signal(&mut self, target: PopupTarget, key: (u8, u32, String), on: bool) {
-        let signals: Option<&mut Vec<GfxSignal>> = match target {
-            PopupTarget::Graphics(i) => self.graphics.get_mut(i).map(|w| &mut w.signals),
-            PopupTarget::Data(i) => self.data_windows.get_mut(i).map(|w| &mut w.signals),
-            _ => None,
-        };
-        let Some(signals) = signals else {
-            return;
-        };
-        let present = signals.iter().any(|s| s.key == key);
-        if on == present {
-            return;
-        }
-        if on {
-            signals.push(GfxSignal {
-                key: key.clone(),
-                visible: true,
-            });
-        } else {
-            signals.retain(|s| s.key != key);
-        }
-        if on {
-            self.subscribe(key);
-        } else {
-            self.prune_signal(&key);
-        }
-    }
-
-    pub fn new_trace_window(&mut self) {
-        self.trace_counter += 1;
-        self.trace_windows.push(TraceWin {
-            name: format!("Trace {}", self.trace_counter),
-            opened: true,
-            scope: SigScope::All,
-            manual: HashSet::new(),
-            filter: String::new(),
-            dir: 0,
-            dbc_only: false,
-        });
-    }
-
-    pub fn new_msg_window(&mut self) {
-        self.msg_counter += 1;
-        self.msg_windows.push(MsgWin {
-            name: format!("Messages {}", self.msg_counter),
-            opened: true,
-            scope: SigScope::All,
-            manual: HashSet::new(),
-            filter: String::new(),
-            dbc_only: false,
-        });
-    }
-
-    pub fn new_stats_window(&mut self) {
-        self.stats_counter += 1;
-        self.stats_windows.push(StatsWin {
-            name: format!("Statistics {}", self.stats_counter),
-            opened: true,
-            scope: SigScope::All,
-            manual: HashSet::new(),
-        });
-    }
-
-    pub fn new_graphics_window(&mut self) {
-        self.graphics_counter += 1;
-        self.graphics.push(GraphicsWindow {
-            name: format!("Graphics {}", self.graphics_counter),
-            signals: Vec::new(),
-            time_window_s: 10.0,
-            stacked: false,
-            opened: true,
-            t_offset_s: 0.0,
-            show_cursor: true,
-            zoom_enabled: false,
-            show_markers: true,
-        });
-    }
-
-    pub fn new_data_window(&mut self) {
-        self.data_counter += 1;
-        self.data_windows.push(DataWindow {
-            name: format!("Data {}", self.data_counter),
-            signals: Vec::new(),
-            opened: true,
-            viz_bar: true,
-        });
-    }
-
-    /// Scope check shared by all analysis windows: All passes everything,
-    /// Bus passes one channel, Manual uses that window's own selection set.
-    pub fn scope_match(scope: SigScope, manual: &HashSet<(u8, u32)>, channel: u8, id: u32) -> bool {
-        match scope {
-            SigScope::All => true,
-            SigScope::Bus(ch) => channel == ch,
-            SigScope::Manual => manual.contains(&(channel, id)),
-        }
-    }
-
-    /// Manual selection set of the window named by `t` (None for
-    /// Graphics/Data, which filter at the signal level).
-    pub fn win_manual(&self, t: PopupTarget) -> Option<&HashSet<(u8, u32)>> {
-        match t {
-            PopupTarget::Trace(i) => self.trace_windows.get(i).map(|w| &w.manual),
-            PopupTarget::Messages(i) => self.msg_windows.get(i).map(|w| &w.manual),
-            PopupTarget::Stats(i) => self.stats_windows.get(i).map(|w| &w.manual),
-            _ => None,
-        }
-    }
-
-    pub fn win_manual_mut(&mut self, t: PopupTarget) -> Option<&mut HashSet<(u8, u32)>> {
-        match t {
-            PopupTarget::Trace(i) => self.trace_windows.get_mut(i).map(|w| &mut w.manual),
-            PopupTarget::Messages(i) => self.msg_windows.get_mut(i).map(|w| &mut w.manual),
-            PopupTarget::Stats(i) => self.stats_windows.get_mut(i).map(|w| &mut w.manual),
-            _ => None,
-        }
-    }
-
-    /// Applies one Trace window's filter: scope, direction, DBC-only,
-    /// and ID/name substring.
-    pub fn trace_match(&self, w: &TraceWin, f: &CanFrame) -> bool {
-        if !Self::scope_match(w.scope, &w.manual, f.channel, f.id) {
-            return false;
-        }
-        match w.dir {
-            1 => {
-                if !matches!(f.dir, Direction::Rx) {
-                    return false;
-                }
-            }
-            2 => {
-                if !matches!(f.dir, Direction::Tx) {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-        let name = self.message_name(f.channel, f.id);
-        if w.dbc_only && name.is_none() {
-            return false;
-        }
-        let q = w.filter.trim();
-        if !q.is_empty() {
-            let q = q.to_ascii_uppercase();
-            let hex = format!("{:X}", f.id);
-            let in_name = name.is_some_and(|n| n.to_ascii_uppercase().contains(&q));
-            if !hex.contains(&q) && !in_name {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// Enables or disables every generator message of one bus; freshly
-    /// enabled messages restart their cycle immediately.
-    pub fn set_bus_tx(&mut self, ch: u8, on: bool) {
-        for t in &mut self.tx_list {
-            if t.channel == ch && t.active != on {
-                t.active = on;
-                if on {
-                    t.next_t_us = 0;
-                }
-            }
-        }
-    }
-
-    /// Ticks or unticks a DBC node as one this tool transmits as.
-    ///
-    /// Ticking adds whatever generator entry the node is missing and switches
-    /// them on. The period of an entry that already exists is never rewritten,
-    /// so a value tuned by hand outlives the click. Unticking only stops
-    /// sending: entries keep their payload and waveforms, so ticking the node
-    /// again restores it exactly as it was.
-    pub fn set_node_sim(&mut self, channel: u8, node: &str, on: bool) {
-        // `""` is what the parser writes for "no transmitter assigned", and
-        // `node_tx_ids` matches it against every unassigned message at once.
-        if node.is_empty() || channel as usize >= self.channels.len() {
-            return;
-        }
-        // The tick is recorded first and unconditionally: a node that sends
-        // nothing still has to remember that we mean to be it.
-        let list = &mut self.channels[channel as usize].sim_nodes;
-        if on {
-            if !list.iter().any(|n| n == node) {
-                list.push(node.to_string());
-            }
-        } else {
-            list.retain(|n| n != node);
-        }
-
-        // Membership comes from the live database, not from each entry's
-        // stamped `node`: loading another DBC does not rebuild the generator,
-        // so a stamp can name a message this node no longer owns.
-        let ids = self
-            .channel_dbc(channel)
-            .map(|db| db.node_tx_ids(node))
-            .unwrap_or_default();
-        if on {
-            for id in &ids {
-                self.add_tx(channel, *id);
-            }
-            for t in &mut self.tx_list {
-                if t.channel == channel && ids.contains(&t.id) && !t.active {
-                    t.active = true;
-                    // Re-zeroed rather than kept: an entry left over from the
-                    // last tick still carries its old schedule, and picking it
-                    // up mid-cycle would hold it silent for a whole period.
-                    t.next_t_us = 0;
-                }
-            }
-        } else {
-            // The stamped name is included on the way out only, so unchecking
-            // still silences a node whose database has since been swapped or
-            // unloaded. "I unchecked it and it is still transmitting" is the
-            // one outcome a user cannot recover from by guessing.
-            for t in &mut self.tx_list {
-                if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
-                    t.active = false;
-                }
-            }
-        }
-        let bus = self.channel_name(channel);
-        self.status = if on {
-            format!("simulating {node} on {bus} ({} message(s))", ids.len())
-        } else {
-            format!("{node} stopped on {bus}")
-        };
-    }
-
-    /// Whether this bus was told to transmit as `node`.
-    pub fn is_node_simulated(&self, ch: u8, node: &str) -> bool {
-        self.channels
-            .get(ch as usize)
-            .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
-    }
-
-    /// What the database declares for this message: `Some(0)` for an
-    /// event-triggered one, `None` when it says nothing at all.
-    pub fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
-        self.channel_dbc(ch)
-            .and_then(|db| db.messages.get(&id))
-            .and_then(|m| m.cycle_us)
-    }
-
-    pub fn add_tx(&mut self, channel: u8, id: u32) {
-        if self
-            .tx_list
-            .iter()
-            .any(|t| t.channel == channel && t.id == id)
-        {
-            return;
-        }
-        let (name, node, len, cycle_us) = self
-            .channel_dbc(channel)
-            .and_then(|db| db.messages.get(&id))
-            .map(|m| {
-                (
-                    m.name.clone(),
-                    m.transmitter.clone(),
-                    m.dlc.min(MAX_CAN_FD_LEN as u64) as u8,
-                    // A declared 0 is event-triggered, so `unwrap_or` rather
-                    // than `unwrap_or_default` on the Option: only "the DBC
-                    // said nothing" gets our invented period.
-                    m.cycle_us.unwrap_or(DEFAULT_TX_CYCLE_US),
-                )
-            })
-            .unwrap_or_else(|| (format!("{id:X}"), String::new(), 8, DEFAULT_TX_CYCLE_US));
-        let data_text = vec!["00"; len as usize].join(" ");
-        self.tx_list.push(TxMsg {
-            channel,
-            id,
-            srcs: Vec::new(),
-            extended: id > 0x7FF,
-            name,
-            node,
-            len,
-            data: [0; MAX_CAN_FD_LEN],
-            flags: if len > 8 {
-                FrameFlags::FD
-            } else {
-                FrameFlags::NONE
-            },
-            data_text,
-            cycle_us,
-            active: false,
-            next_t_us: 0,
-        });
-    }
-
-    /// Adds or replaces the source driving `src.name` on generator `i`.
-    pub fn set_source(&mut self, i: usize, src: ValueSrc) {
-        let Some(tx) = self.tx_list.get_mut(i) else {
-            return;
-        };
-        match tx.srcs.iter_mut().find(|s| s.name == src.name) {
-            Some(held) => *held = src,
-            None => tx.srcs.push(src),
-        }
-    }
-
-    /// Stops driving `name`, which leaves the base bytes in charge again.
-    pub fn clear_source(&mut self, i: usize, name: &str) {
-        if let Some(tx) = self.tx_list.get_mut(i) {
-            tx.srcs.retain(|s| s.name != name);
-        }
-    }
-
-    /// Writes a physical value into the base payload and pins that signal by
-    /// dropping only its source: grabbing a moving slider means "hold here".
-    pub fn pin_signal(&mut self, i: usize, name: &str, phys: f64) -> bool {
-        let Some(tx) = self.tx_list.get(i) else {
-            return false;
-        };
-        let (channel, id, mut data) = (tx.channel, tx.id, tx.data);
-        let Some(table) = self.channel_dbc(channel) else {
-            return false;
-        };
-        if !table.encode_signal(id, name, phys, &mut data) {
-            return false;
-        }
-        let msg_size = table
-            .messages
-            .get(&id)
-            .map(|m| m.dlc.min(MAX_CAN_FD_LEN as u64) as u8)
-            .unwrap_or(0);
-        let tx = &mut self.tx_list[i];
-        tx.srcs.retain(|s| s.name != name);
-        let len = tx.len.max(msg_size);
-        Self::set_tx_base(tx, data, len);
-        true
-    }
-
-    /// Replaces the base payload from the generator's hex box. Active sources
-    /// deliberately survive: correcting one byte must not throw away a whole
-    /// stimulus setup. Returns false if the text is not whole hex bytes.
-    pub fn set_tx_hex(&mut self, i: usize, text: &str) -> bool {
-        let Some(bytes) = parse_hex_bytes(text) else {
-            return false;
-        };
-        let Some(tx) = self.tx_list.get_mut(i) else {
-            return false;
-        };
-        let mut data = [0u8; MAX_CAN_FD_LEN];
-        data[..bytes.len()].copy_from_slice(&bytes);
-        let len = bytes.len() as u8;
-        Self::set_tx_base(tx, data, len);
-        true
-    }
-
-    /// Installs base bytes and keeps length, the FD flag and the hex text in
-    /// step with them.
-    fn set_tx_base(tx: &mut TxMsg, data: [u8; MAX_CAN_FD_LEN], len: u8) {
-        let len = len.min(MAX_CAN_FD_LEN as u8);
-        tx.data = data;
-        tx.len = len;
-        if len > 8 {
-            tx.flags = tx.flags.union(FrameFlags::FD);
-        }
-        tx.data_text = hex_text(&data, len);
-    }
-
-    pub fn bus_counter(&self) -> usize {
-        self.bus_counter
-    }
-
-    pub fn set_bus_counter(&mut self, n: usize) {
-        self.bus_counter = n;
-    }
-
-    pub fn window_counters(&self) -> crate::config::Counters {
-        crate::config::Counters {
-            trace: self.trace_counter,
-            msg: self.msg_counter,
-            stats: self.stats_counter,
-            graphics: self.graphics_counter,
-            data: self.data_counter,
-        }
-    }
-
-    pub fn set_window_counters(&mut self, c: crate::config::Counters) {
-        self.trace_counter = c.trace.max(self.trace_windows.len());
-        self.msg_counter = c.msg.max(self.msg_windows.len());
-        self.stats_counter = c.stats.max(self.stats_windows.len());
-        self.graphics_counter = c.graphics.max(self.graphics.len());
-        self.data_counter = c.data.max(self.data_windows.len());
-    }
 }
 
 impl Default for App {
@@ -2399,6 +917,11 @@ impl Default for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The tests rely on the parent's imports through `use super::*`; the
+    // ones app.rs itself no longer needs are imported directly here.
+    use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
+    use crate::config::Config;
+    use crate::sim::ValueSrc;
 
     #[test]
     fn record_survives_start_and_writes_frames() {
@@ -4901,7 +3424,7 @@ BO_ 400 Muxed: 8 ECU
 
     /// The load view's whole point: the same traffic reads differently at
     /// different bitrates, and each number agrees with a hand calculation.
-    /// 100 classic 8-byte frames over one second are 111 bits each, 222 µs of
+    /// 100 classic 8-byte frames over one second are 111 bits each, 222 碌s of
     /// wire time at 500 kbit/s -- 2.22 % of the bus.
     #[test]
     fn bus_load_matches_the_hand_calculation() {
@@ -4937,7 +3460,7 @@ BO_ 400 Muxed: 8 ECU
             })
             .collect();
         // 55 arbitration bits at 500 kbit/s + 552 data bits at 2 Mbit/s =
-        // 110 + 276 = 386 µs per frame -> 3.86 % load.
+        // 110 + 276 = 386 碌s per frame -> 3.86 % load.
         receive(&mut app, 1_000_000, frames.clone());
         assert!(
             (app.bus_loads[0].load() - 0.0386).abs() < 1e-9,
@@ -4945,7 +3468,7 @@ BO_ 400 Muxed: 8 ECU
             app.bus_loads[0].load()
         );
         // Same frames, data phase throttled to the arbitration rate: all 607
-        // bits at 500 kbit/s = 1214 µs -> 12.14 %.
+        // bits at 500 kbit/s = 1214 碌s -> 12.14 %.
         app.channels[0].fd_data_kbps = 500;
         for load in &mut app.bus_loads {
             load.clear();
@@ -5000,3 +3523,5 @@ BO_ 400 Muxed: 8 ECU
         assert_eq!(app.bus_loads[0].errors, 0);
     }
 }
+
+
