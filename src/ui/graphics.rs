@@ -237,15 +237,19 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     app.graphics[i].stacked = stacked;
     ui.same_line();
     ui.checkbox("Cursor", &mut app.graphics[i].show_cursor);
-    ui.same_line();
+    wrap_same_line(ui, "Zoom");
     ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
-    ui.same_line();
+    wrap_same_line(ui, "Dots");
     ui.checkbox("Dots", &mut app.graphics[i].show_markers);
-    ui.same_line();
     // Value-axis scaling: fit the view, freeze it, grow-only, or the
-    // database's declared span.
+    // database's declared span. The combo gets an explicit width -- left to
+    // its default it fills the whole remaining row and everything after it
+    // (the Live button) lands past the window edge.
+    wrap_same_line(ui, "Y DBC range");
     let mode = app.graphics[i].y_mode;
     let mut pick = mode as usize;
+    let combo_w = ui.calc_text_size("DBC range")[0] + ui.frame_height() * 1.8;
+    ui.set_next_item_width(combo_w);
     if ui.combo_simple_string(format!("Y##y{i}"), &mut pick, &YMode::LABELS) {
         let next = YMode::from_u8(pick as u8);
         if next != mode {
@@ -255,7 +259,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             app.graphics[i].y_mode = next;
         }
     }
-    ui.same_line();
+    wrap_same_line(ui, "Live");
     if ui.button("Live") {
         app.graphics[i].t_offset_s = 0.0;
     }
@@ -280,6 +284,23 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
 fn left_panel(app: &mut App, ui: &Ui, i: usize) {
     ui.text("Curves");
     crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(i));
+}
+
+/// Chains the next toolbar item onto the current row when an item labelled
+/// `text` still fits, otherwise leaves the cursor where it is so the item
+/// starts a new row. The toolbar outgrew one row when the Y combo arrived,
+/// and a plain `same_line` chain never wraps: whatever runs past the window
+/// edge is silently clipped -- which is how the Live button vanished on
+/// narrow windows.
+///
+/// The size comes from the live font and style, not hardcoded pixels, and
+/// is padded generously: a needlessly short row costs nothing, while an
+/// underestimate is what clipped the button in the first place.
+fn wrap_same_line(ui: &Ui, text: &str) {
+    let item_w = ui.calc_text_size(text)[0] + ui.frame_height() * 1.6;
+    if ui.content_region_avail()[0] >= item_w {
+        ui.same_line();
+    }
 }
 
 /// Right area: draws plots directly on the draw list and reserves exactly
