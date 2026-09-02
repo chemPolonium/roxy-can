@@ -36,6 +36,12 @@ use winit::window::{Window, WindowId};
 static IME_REQ: std::sync::Mutex<(bool, f32, f32, f32)> =
     std::sync::Mutex::new((false, 0.0, 0.0, 0.0));
 
+/// Redraw cadence. A bus tool idles most of the time; redrawing at 30 fps
+/// keeps the UI responsive while the event loop sleeps between frames
+/// instead of spinning a render at the display's refresh rate.
+const TARGET_FPS: u64 = 30;
+const FRAME_DT: std::time::Duration = std::time::Duration::from_nanos(1_000_000_000 / TARGET_FPS);
+
 /// Pending global shortcut: 1=start/stop, 2=record, 3=export, 4=open DBC,
 /// 5=play/pause, 6=slower, 7=faster, 8=jump to the live edge.
 pub static CMD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -65,6 +71,8 @@ struct State {
     shift: bool,
     last_title: String,
     last_autosave: Instant,
+    /// When the next redraw is due; the event loop sleeps until then.
+    next_frame: Instant,
 }
 
 impl State {
@@ -190,6 +198,7 @@ impl State {
             shift: false,
             last_title: String::new(),
             last_autosave: Instant::now(),
+            next_frame: Instant::now(),
         }
     }
 
@@ -287,6 +296,11 @@ impl State {
         drop(rpass);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+
+        // Next redraw one frame budget after this one started; if the frame
+        // overran the budget already, draw again immediately rather than
+        // adding delay on top.
+        self.next_frame = (self.last_frame + FRAME_DT).max(Instant::now());
     }
 }
 
@@ -369,9 +383,15 @@ impl ApplicationHandler for Program {
         );
     }
 
-    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         if let Some(st) = &mut self.state {
-            st.window.request_redraw();
+            // Redraw on the frame cadence; between frames the event loop
+            // sleeps on the deadline and still dispatches OS events (input
+            // stays low-latency, only the drawing is throttled).
+            if Instant::now() >= st.next_frame {
+                st.window.request_redraw();
+            }
+            el.set_control_flow(ControlFlow::WaitUntil(st.next_frame));
             st.platform
                 .handle_event::<()>(st.context.io_mut(), &st.window, &Event::AboutToWait);
         }
