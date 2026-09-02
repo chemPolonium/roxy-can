@@ -155,27 +155,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .map(|m| m.signals.clone())
                         .unwrap_or_default();
                     let driven = app.tx_list[i].srcs.len();
-                    let header_open = ui.collapsing_header(
-                        row_header(ch, &app.channel_name(ch), &name, id, driven),
-                        imgui::TreeNodeFlags::empty(),
-                    );
-                    if !header_open {
-                        continue;
-                    }
-                    ui.indent();
-                    let mut act = app.tx_list[i].active;
-                    if ui.checkbox(format!("On##{i}"), &mut act) {
-                        app.tx_list[i].active = act;
-                        if act {
-                            app.tx_list[i].next_t_us = 0;
-                        }
-                    }
-                    // Transmit state as one scannable chip beside the
-                    // control that owns it: ON / OFF / MUTE. MUTE is the
-                    // replay silencing -- the checkbox keeps its state, but
-                    // an id the replayed log carries must not double-send
-                    // over it. Hover explains each.
-                    ui.same_line();
+                    // The transmit state rides the header line, so the whole
+                    // list scans without expanding anything. MUTE is the
+                    // replay silencing: the checkbox keeps its state, but an
+                    // id the replayed log carries must not double-send.
                     let (chip, color, hint) = if !app.tx_list[i].active {
                         ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：On 勾选框未勾选。")
                     } else if matches!(app.mode, Mode::Replay)
@@ -195,9 +178,27 @@ pub fn render(app: &mut App, ui: &Ui) {
                             "正在发送：条目已勾选，且没有被任何机制抑制。",
                         )
                     };
-                    ui.text_colored(color, chip);
+                    // Four cells wide in the monospace font, so the three
+                    // words -- and every row's header -- line up.
+                    ui.text_colored(color, format!("{chip:<4}"));
                     if ui.is_item_hovered() {
                         ui.tooltip_text(hint);
+                    }
+                    ui.same_line();
+                    let header_open = ui.collapsing_header(
+                        row_header(ch, &app.channel_name(ch), &name, id, driven),
+                        imgui::TreeNodeFlags::empty(),
+                    );
+                    if !header_open {
+                        continue;
+                    }
+                    ui.indent();
+                    let mut act = app.tx_list[i].active;
+                    if ui.checkbox(format!("On##{i}"), &mut act) {
+                        app.tx_list[i].active = act;
+                        if act {
+                            app.tx_list[i].next_t_us = 0;
+                        }
                     }
                     ui.same_line();
                     // Not an inline number box any more: dragging one edits its
