@@ -327,6 +327,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let mut v = shown;
                         let _read_only = held.is_some().then(|| ui.begin_disabled(true));
                         let moved = imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
+                            .display_format("%g")
                             .speed(((hi - lo) / 200.0).max(0.01))
                             .range(lo, hi)
                             .build(ui, &mut v);
@@ -467,6 +468,7 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         ui.set_next_item_width(220.0);
         let mut sweep = cycle_from_ms_text(&app.tx_cycle_buf).unwrap_or(0) as f32 / 1000.0;
         if imgui::Drag::new("##cycsweep")
+            .display_format("%g")
             .speed(1.0)
             .range(0.0f32, TX_CYCLE_MAX_MS as f32)
             .build(ui, &mut sweep)
@@ -593,6 +595,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         ui.set_next_item_width(220.0);
         let mut lo = src.lo;
         if imgui::Drag::new("lo")
+            .display_format("%g")
             .speed(speed as f32)
             .build(ui, &mut lo)
         {
@@ -602,6 +605,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         ui.set_next_item_width(220.0);
         let mut hi = src.hi;
         if imgui::Drag::new("hi")
+            .display_format("%g")
             .speed(speed as f32)
             .build(ui, &mut hi)
         {
@@ -611,6 +615,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             ui.set_next_item_width(340.0);
             let mut ms = src.redraw_us as f64 / 1000.0;
             if imgui::Drag::new("redraw ms")
+                .display_format("%g")
                 .speed(1.0)
                 .range(0.0f64, 600_000.0)
                 .build(ui, &mut ms)
@@ -619,13 +624,20 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             }
             ui.set_next_item_width(340.0);
             let mut seed = src.seed as f64;
-            if imgui::Drag::new("seed").speed(1.0).build(ui, &mut seed) {
+            // An integer identifier: a %g would render big seeds in exponent
+            // notation, so this one gets whole numbers instead.
+            if imgui::Drag::new("seed")
+                .display_format("%.0f")
+                .speed(1.0)
+                .build(ui, &mut seed)
+            {
                 src.seed = seed.max(0.0) as u64;
             }
         } else {
             ui.set_next_item_width(340.0);
             let mut ms = src.period_us as f64 / 1000.0;
             if imgui::Drag::new("period ms")
+                .display_format("%g")
                 .speed(10.0)
                 .range(1.0f64, 600_000.0)
                 .build(ui, &mut ms)
@@ -635,6 +647,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             ui.set_next_item_width(340.0);
             let mut ms = src.phase_us as f64 / 1000.0;
             if imgui::Drag::new("phase ms")
+                .display_format("%g")
                 .speed(10.0)
                 .range(0.0f64, src.period_us as f64 / 1000.0)
                 .build(ui, &mut ms)
