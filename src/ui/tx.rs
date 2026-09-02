@@ -281,8 +281,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                             crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset);
                         let (lo, hi) = sig_range(s);
                         // A driven row shows the live value, so the handle rides
-                        // the wave; grabbing it pins the signal right there --
-                        // but only once the gesture ends.
+                        // the wave. The value belongs to the source, so there
+                        // the handle is disabled: grabbing it used to pin the
+                        // signal and silently drop the source, which read like
+                        // the wave simply breaking. Un-drive through the kind
+                        // combo's "Constant" instead.
                         let model_shown = held
                             .as_ref()
                             .map_or(cur as f32, |h| eval_phys(h, sim) as f32);
@@ -294,6 +297,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
                         ui.set_next_item_width(180.0);
                         let mut v = shown;
+                        let _read_only = held.is_some().then(|| ui.begin_disabled(true));
                         let moved = imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
                             .speed(((hi - lo) / 200.0).max(0.01))
                             .range(lo, hi)
@@ -306,6 +310,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             ui.is_item_deactivated_after_edit(),
                             ends,
                         );
+                        drop(_read_only);
                         if let Some(val) = committed {
                             app.pin_signal(i, &s.name, val);
                             shown = val as f32;
