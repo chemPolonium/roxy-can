@@ -2,7 +2,7 @@ use crate::app::{App, Mode, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::can::frame::FrameFlags;
 use crate::dbc::SignalInfo;
 use crate::generator::{hex_text, tx_payload};
-use crate::sim::{KINDS, SrcKind, ValueSrc, eval_phys};
+use crate::sim::{KINDS, SrcKind, ValueSrc};
 use crate::ui::help::popup_is_open;
 use imgui::{Condition, InputTextFlags, Key, Ui};
 
@@ -276,6 +276,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     let data = app.tx_list[i].data;
                     let sim = app.sim_t_us;
+                    // The bytes that actually go out this instant: base with
+                    // every driven source laid over them. Driven rows read
+                    // their displayed value back out of these, so what you
+                    // see is what the bus sees -- byte-width truncation and
+                    // all. The raw computed number never reaches the wire.
+                    let (sent_data, _, _) = tx_payload(&app.channels, &app.tx_list[i], sim);
                     for s in &sigs {
                         let held = app.tx_list[i]
                             .srcs
@@ -293,9 +299,24 @@ pub fn render(app: &mut App, ui: &Ui) {
                         // signal and silently drop the source, which read like
                         // the wave simply breaking. Un-drive through the kind
                         // combo's "Constant" instead.
-                        let model_shown = held
-                            .as_ref()
-                            .map_or(cur as f32, |h| eval_phys(h, sim) as f32);
+                        let model_shown = match held.as_ref() {
+                            Some(_) => {
+                                let raw = crate::decode::extract_raw(
+                                    &sent_data,
+                                    s.start_bit,
+                                    s.size,
+                                    s.big_endian,
+                                );
+                                crate::decode::to_physical(
+                                    raw,
+                                    s.size,
+                                    s.signed,
+                                    s.factor,
+                                    s.offset,
+                                ) as f32
+                            }
+                            None => cur as f32,
+                        };
                         // Pinning rewrites the base payload and clears this
                         // signal's source, so doing it per keystroke would let a
                         // half-typed 100 encode as 1 and cut the wave off with
