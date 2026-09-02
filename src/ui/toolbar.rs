@@ -324,15 +324,20 @@ pub fn render(app: &mut App, ui: &Ui) {
                 app.stop();
             }
             stop.end();
-            ui.same_line();
-            let labels = ["0.5x", "1x", "2x", "4x"];
-            let mut pick = REPLAY_SPEEDS
-                .iter()
-                .position(|s| (*s - app.replay_speed).abs() < 1e-9)
-                .unwrap_or(1);
-            ui.set_next_item_width(64.0);
-            if ui.combo_simple_string("##speed", &mut pick, &labels) {
-                app.set_replay_speed(REPLAY_SPEEDS[pick]);
+            // The speed ladder drives only the replay clock -- VirtualSource
+            // ignores it -- so simulation mode hides it instead of offering
+            // a control that does nothing.
+            if matches!(app.mode, Mode::Replay) {
+                ui.same_line();
+                let labels = ["0.5x", "1x", "2x", "4x"];
+                let mut pick = REPLAY_SPEEDS
+                    .iter()
+                    .position(|s| (*s - app.replay_speed).abs() < 1e-9)
+                    .unwrap_or(1);
+                ui.set_next_item_width(64.0);
+                if ui.combo_simple_string("##speed", &mut pick, &labels) {
+                    app.set_replay_speed(REPLAY_SPEEDS[pick]);
+                }
             }
             ui.same_line();
             // How often number readouts (Data values, Statistics, Messages)
