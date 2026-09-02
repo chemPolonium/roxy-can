@@ -178,11 +178,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     // payload.
                     ui.same_line();
                     let (chip, color, hint) = if !app.tx_list[i].active {
-                        (
-                            "OFF",
-                            [0.55, 0.58, 0.65, 1.0],
-                            "Not transmitting: the On checkbox is off.",
-                        )
+                        ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：On 勾选框未勾选。")
                     } else if matches!(app.mode, Mode::Replay)
                         && app
                             .replay_ids
@@ -191,16 +187,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         (
                             "MUTE",
                             [1.0, 0.65, 0.2, 1.0],
-                            "Silenced for this replay: the loaded log carries this id, and \
-                             a second sender would mix two streams of one signal into every \
-                             consumer. The On checkbox is untouched -- the entry transmits \
-                             again outside replay.",
+                            "本次回放期间静音：已加载的日志中带有此 ID，若再有第二个发送者，同一条信号的两路数据会混进曲线、统计等所有视图。On 勾选框保持原样——退出回放后照常发送。",
                         )
                     } else {
                         (
                             "ON",
                             [0.4, 0.95, 0.5, 1.0],
-                            "Transmitting now: the entry is active and nothing silences it.",
+                            "正在发送：条目已勾选，且没有被任何机制抑制。",
                         )
                     };
                     ui.text_colored(color, chip);
@@ -212,9 +205,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         ui.text_colored([0.55, 0.75, 1.0, 1.0], "BASE");
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "The data box holds the base payload only. Driven sources \
-                                 below write their signals on top of it before the frame \
-                                 goes out.",
+                                "数据框里只是基础载荷。发送前，下方挂的驱动源会把自己的信号值写到对应的信号位上。",
                             );
                         }
                     }
