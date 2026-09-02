@@ -960,10 +960,12 @@ fn csv_exports_match_window_state() {
     app.graphics[0].signals.push(GfxSignal {
         key: key.clone(),
         visible: true,
+        y_mode: YMode::Auto,
     });
     app.data_windows[0].signals.push(GfxSignal {
         key: key.clone(),
         visible: true,
+        y_mode: YMode::Auto,
     });
     for tx in &mut app.tx_list {
         tx.active = true;
@@ -2062,6 +2064,7 @@ fn restored_signals_are_resubscribed() {
     app.graphics[0].signals.push(GfxSignal {
         key: key.clone(),
         visible: true,
+        y_mode: YMode::Auto,
     });
     let path = std::env::temp_dir().join("roxy_can_resub.rxproj");
     assert!(app.save_project(Some(path.clone())));
@@ -3271,67 +3274,54 @@ fn feed_rpm(app: &mut App, pts: &[(u64, f64)]) {
     receive(app, t, pts.iter().map(|&(t, v)| rpm_frame(t, v)).collect());
 }
 
-#[test]
-fn lock_freezes_the_value_axis_until_the_mode_is_re_entered() {
+/// Subscribe EngineSpeed and hang it in Graphics 1's curve list with the
+/// given value-axis policy -- the strategies resolve from the list entry,
+/// not the window.
+fn gfx_app(mode: YMode) -> (App, (u8, u32, String)) {
     let mut app = quiet_app();
     let key = (0u8, 0x100u32, "EngineSpeed".to_string());
     app.subscribe(key.clone());
     app.graphics[0].opened = true;
+    app.graphics[0].signals.push(GfxSignal {
+        key: key.clone(),
+        visible: true,
+        y_mode: mode,
+    });
+    (app, key)
+}
+
+#[test]
+fn lock_freezes_the_value_axis_until_the_mode_is_re_entered() {
+    let (mut app, key) = gfx_app(YMode::Auto);
     feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 100.0),
         "auto fits what the run has shown"
     );
 
     // Picking Lock captures the range on screen; later, taller values may
     // not move it.
-    app.graphics[0].y_mode = YMode::Lock;
+    app.graphics[0].signals[0].y_mode = YMode::Lock;
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 100.0),
         "the capture takes the current view"
     );
     feed_rpm(&mut app, &[(300_000, 500.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 100.0),
         "locked means locked: 500 rpm must not widen the axis"
     );
 
-    // Leaving the mode disarms it, so re-entering re-captures afresh.
-    app.graphics[0].y_mode = YMode::Auto;
+    // Leaving the mode drops the frozen range -- the list menu does this --
+    // so re-entering re-captures afresh.
+    app.graphics[0].signals[0].y_mode = YMode::Auto;
+    app.graphics[0].y_locks.remove(&format!("{key:?}"));
     feed_rpm(&mut app, &[(400_000, 900.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 900.0),
         "auto follows again"
     );
@@ -3340,46 +3330,21 @@ fn lock_freezes_the_value_axis_until_the_mode_is_re_entered() {
 
 #[test]
 fn fit_all_only_ever_widens_the_value_axis() {
-    let mut app = quiet_app();
-    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
-    app.subscribe(key.clone());
-    app.graphics[0].opened = true;
-    app.graphics[0].y_mode = YMode::FitAll;
+    let (mut app, key) = gfx_app(YMode::FitAll);
     feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 100.0)
     );
     feed_rpm(&mut app, &[(300_000, 250.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 250.0),
         "a taller peak widens the axis"
     );
     feed_rpm(&mut app, &[(400_000, 30.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         (0.0, 250.0),
         "quieter values never shrink it back -- everything seen stays visible"
     );
@@ -3388,24 +3353,13 @@ fn fit_all_only_ever_widens_the_value_axis() {
 
 #[test]
 fn dbc_mode_scales_by_the_declared_range() {
-    let mut app = quiet_app();
-    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
-    app.subscribe(key.clone());
-    app.graphics[0].opened = true;
-    app.graphics[0].y_mode = YMode::Dbc;
+    let (mut app, key) = gfx_app(YMode::Dbc);
     let declared = app
         .declared_range(&key)
         .expect("sample.dbc declares the range");
     feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         declared,
         "the axis is the database's word, not the traffic's"
     );
@@ -3413,29 +3367,65 @@ fn dbc_mode_scales_by_the_declared_range() {
     // clamps at the plot edge instead.
     feed_rpm(&mut app, &[(300_000, 9_000.0)]);
     assert_eq!(
-        crate::ui::graphics::resolve_y_range(
-            &mut app,
-            0,
-            "",
-            std::slice::from_ref(&key),
-            0,
-            1_000_000
-        ),
+        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
         declared
     );
     app.stop();
 }
 
 #[test]
+fn each_signal_keeps_its_own_axis_in_the_overlay_union() {
+    // Overlay shares one axis, but the policies stay per signal: EngineSpeed
+    // locked keeps its span as a floor/ceiling while an Auto neighbour
+    // widens the shared span past it.
+    let (mut app, key) = gfx_app(YMode::Lock);
+    let temp = (0u8, 0x100u32, "EngineTemp".to_string());
+    app.subscribe(temp.clone());
+    app.graphics[0].signals.push(GfxSignal {
+        key: temp.clone(),
+        visible: true,
+        y_mode: YMode::Auto,
+    });
+    let keys = vec![key.clone(), temp.clone()];
+
+    // rpm_frame fills EngineSpeed's bytes; byte 2 carries EngineTemp
+    // (sample.dbc: raw with a -40 offset).
+    let mut f = rpm_frame(10_000, 100.0);
+    f.len = 3;
+    f.data[2] = 100;
+    let mut f2 = rpm_frame(200_000, 50.0);
+    f2.len = 3;
+    f2.data[2] = 100;
+    receive(&mut app, 300_000, vec![f, f2]);
+    let pinned = crate::ui::graphics::resolve_y_range(&mut app, 0, &keys, 0, 1_000_000);
+    assert_eq!(pinned, (50.0, 100.0), "the locked signal pins the axis");
+
+    let mut f3 = rpm_frame(300_000, 50.0);
+    f3.len = 3;
+    f3.data[2] = 200;
+    receive(&mut app, 400_000, vec![f3]);
+    let grown = crate::ui::graphics::resolve_y_range(&mut app, 0, &keys, 0, 1_000_000);
+    assert!(
+        grown.1 > 100.0,
+        "the auto neighbour widens the shared axis: {grown:?}"
+    );
+    assert_eq!(grown.0, 50.0, "the locked floor survives the union");
+    app.stop();
+}
+
+#[test]
 fn the_y_mode_round_trips_through_a_project() {
-    let mut app = App::new();
-    app.graphics[0].y_mode = YMode::FitAll;
+    let (mut app, _key) = gfx_app(YMode::FitAll);
     let path = std::env::temp_dir().join("roxy_can_ymode.rxproj");
     assert!(app.save_project(Some(path.clone())));
 
     let mut restored = App::new();
     restored.open_project_path(&path);
-    assert_eq!(restored.graphics[0].y_mode, YMode::FitAll);
+    assert_eq!(
+        restored.graphics[0].signals[0].y_mode,
+        YMode::FitAll,
+        "the per-signal policy rides the project file"
+    );
     assert!(
         restored.graphics[0].y_locks.is_empty(),
         "frozen ranges are session state, never persisted"

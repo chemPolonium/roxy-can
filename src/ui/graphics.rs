@@ -7,7 +7,7 @@ use imgui::{Condition, Ui};
 const TIME_STEPS: [f64; 14] = [
     0.1, 0.2, 0.5, 1.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
 ];
-const PANEL_W: f32 = 190.0;
+pub(crate) const PANEL_W: f32 = 190.0;
 
 /// Widest window the ladder offers. Signal history has to be able to back it,
 /// or the curve's head silently vanishes once the retention cap is reached.
@@ -264,24 +264,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
     wrap_same_line(ui, "Dots");
     ui.checkbox("Dots", &mut app.graphics[i].show_markers);
-    // Value-axis scaling: fit the view, freeze it, grow-only, or the
-    // database's declared span. The combo gets an explicit width -- left to
-    // its default it fills the whole remaining row and everything after it
-    // (the Live button) lands past the window edge.
-    wrap_same_line(ui, "Y DBC range");
-    let mode = app.graphics[i].y_mode;
-    let mut pick = mode as usize;
-    let combo_w = ui.calc_text_size("DBC range")[0] + ui.frame_height() * 1.8;
-    ui.set_next_item_width(combo_w);
-    if ui.combo_simple_string(format!("Y##y{i}"), &mut pick, &YMode::LABELS) {
-        let next = YMode::from_u8(pick as u8);
-        if next != mode {
-            // Re-entering Lock re-captures whatever the axis shows then,
-            // so dropping the frozen ranges is the re-arm.
-            app.graphics[i].y_locks.clear();
-            app.graphics[i].y_mode = next;
-        }
-    }
     wrap_same_line(ui, "Live");
     if ui.button("Live") {
         app.graphics[i].t_offset_s = 0.0;
@@ -428,14 +410,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         let ph = h / keys.len() as f32;
         let last = keys.len() - 1;
         for (k, key) in keys.iter().enumerate() {
-            let y_range = resolve_y_range(
-                app,
-                i,
-                &format!("{key:?}"),
-                std::slice::from_ref(key),
-                vis_lo,
-                vis_hi,
-            );
+            let y_range = resolve_y_range(app, i, std::slice::from_ref(key), vis_lo, vis_hi);
             draw_plot(
                 &dl,
                 app,
@@ -458,7 +433,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
             );
         }
     } else {
-        let y_range = resolve_y_range(app, i, "", &keys, vis_lo, vis_hi);
+        let y_range = resolve_y_range(app, i, &keys, vis_lo, vis_hi);
         draw_plot(
             &dl,
             app,
@@ -518,34 +493,65 @@ struct PlotPane<'a> {
     cursor: Option<(f32, f64)>,
 }
 
-/// The value range one pane draws against, per the window's Y mode.
+/// The value range one pane draws against.
 ///
-/// `lock_key` names the pane inside the window's lock table: the empty
-/// string for the shared overlay axis, one entry per signal in
-/// one-plot-per-signal mode. Locking captures the auto range the first
-/// frame it is needed, so a project restored straight into Lock mode waits
-/// for data instead of freezing the empty 0..1 placeholder.
+/// Each signal carries its own [`YMode`], so in one-plot-per-signal mode
+/// every pane scales by its own signal's policy. The shared overlay axis is
+/// the union of the visible signals' individual ranges: a locked signal pins
+/// its floor or ceiling into the axis while an Auto neighbour keeps
+/// breathing around it.
 pub(crate) fn resolve_y_range(
     app: &mut App,
     gi: usize,
-    lock_key: &str,
     keys: &[(u8, u32, String)],
     lo_us: u64,
     hi_us: u64,
 ) -> (f64, f64) {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for key in keys {
+        let (a, b) = resolve_signal_range(app, gi, key, lo_us, hi_us);
+        lo = lo.min(a);
+        hi = hi.max(b);
+    }
+    if !lo.is_finite() || !hi.is_finite() || hi - lo < 1e-9 {
+        (0.0, 1.0)
+    } else {
+        (lo, hi)
+    }
+}
+
+/// One signal's value range under its own Y policy.
+///
+/// Locking captures the auto range the first frame it is needed, so a
+/// project restored straight into Lock mode waits for data instead of
+/// freezing the empty 0..1 placeholder.
+fn resolve_signal_range(
+    app: &mut App,
+    gi: usize,
+    key: &(u8, u32, String),
+    lo_us: u64,
+    hi_us: u64,
+) -> (f64, f64) {
+    let mode = app.graphics[gi]
+        .signals
+        .iter()
+        .find(|s| &s.key == key)
+        .map(|s| s.y_mode)
+        .unwrap_or(YMode::Auto);
+    let lock_key = format!("{key:?}");
+
     /// What the visible slice spans right now -- the behaviour of every
     /// Graphics tool before the Y modes existed.
-    fn auto(app: &App, keys: &[(u8, u32, String)], lo_us: u64, hi_us: u64) -> (f64, f64) {
-        let (mut vmin, mut vmax) = (f64::INFINITY, f64::NEG_INFINITY);
-        for key in keys {
-            if let Some(sub) = app.subs.get(key) {
-                for &(_, v) in sub.history.range(lo_us, hi_us) {
-                    if v < vmin {
-                        vmin = v;
-                    }
-                    if v > vmax {
-                        vmax = v;
-                    }
+    fn auto(app: &App, key: &(u8, u32, String), lo_us: u64, hi_us: u64) -> (f64, f64) {
+        let mut vmin = f64::INFINITY;
+        let mut vmax = f64::NEG_INFINITY;
+        if let Some(sub) = app.subs.get(key) {
+            for &(_, v) in sub.history.range(lo_us, hi_us) {
+                if v < vmin {
+                    vmin = v;
+                }
+                if v > vmax {
+                    vmax = v;
                 }
             }
         }
@@ -558,52 +564,41 @@ pub(crate) fn resolve_y_range(
         }
     }
 
-    match app.graphics[gi].y_mode {
-        YMode::Auto => auto(app, keys, lo_us, hi_us),
+    match mode {
+        YMode::Auto => auto(app, key, lo_us, hi_us),
         YMode::Lock => {
-            if let Some(&r) = app.graphics[gi].y_locks.get(lock_key) {
+            if let Some(&r) = app.graphics[gi].y_locks.get(&lock_key) {
                 r
             } else {
-                let r = auto(app, keys, lo_us, hi_us);
-                app.graphics[gi].y_locks.insert(lock_key.to_string(), r);
+                let r = auto(app, key, lo_us, hi_us);
+                app.graphics[gi].y_locks.insert(lock_key, r);
                 r
             }
         }
         YMode::FitAll => {
             // The cumulative sampler stats are the run's whole envelope: they
             // only ever widen, which is the point of this mode.
-            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-            for key in keys {
-                if let Some(sub) = app.subs.get(key) {
-                    lo = lo.min(sub.min);
-                    hi = hi.max(sub.max);
+            match app.subs.get(key) {
+                Some(sub) if sub.min.is_finite() && sub.max.is_finite() => {
+                    if sub.max - sub.min < 1e-9 {
+                        (sub.min, sub.max + 1.0)
+                    } else {
+                        (sub.min, sub.max)
+                    }
                 }
-            }
-            if !lo.is_finite() || !hi.is_finite() {
-                (0.0, 1.0)
-            } else if hi - lo < 1e-9 {
-                (lo, hi + 1.0)
-            } else {
-                (lo, hi)
+                _ => (0.0, 1.0),
             }
         }
         YMode::Dbc => {
-            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-            for key in keys {
-                if let Some((a, b)) = app.declared_range(key).or_else(|| {
-                    // Undeclared signals still deserve a sane axis: their
-                    // observed extremes, once anything has been sampled.
-                    app.subs.get(key).map(|s| (s.min, s.max))
-                }) {
-                    lo = lo.min(a);
-                    hi = hi.max(b);
-                }
-            }
-            if !lo.is_finite() || !hi.is_finite() || hi - lo < 1e-9 {
-                (0.0, 1.0)
-            } else {
-                (lo, hi)
-            }
+            // The database's word wins; an undeclared signal falls back to
+            // its observed extremes once anything has been sampled.
+            let declared = app.declared_range(key).or_else(|| {
+                app.subs
+                    .get(key)
+                    .map(|s| (s.min, s.max))
+                    .filter(|(a, b)| a.is_finite() && b.is_finite() && b - a >= 1e-9)
+            });
+            declared.unwrap_or((0.0, 1.0))
         }
     }
 }

@@ -286,6 +286,7 @@ impl App {
             signals.push(GfxSignal {
                 key: key.clone(),
                 visible: true,
+                y_mode: crate::observe::YMode::Auto,
             });
         } else {
             signals.retain(|s| s.key != key);
@@ -344,7 +345,6 @@ impl App {
             show_cursor: true,
             zoom_enabled: false,
             show_markers: true,
-            y_mode: crate::observe::YMode::Auto,
             y_locks: HashMap::new(),
         });
     }

@@ -1,4 +1,5 @@
 use crate::app::{App, GfxSignal, PALETTE};
+use crate::observe::YMode;
 use imgui::{MouseButton, Ui};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -19,9 +20,10 @@ fn signals_mut(app: &mut App, kind: ListKind) -> &mut Vec<GfxSignal> {
 }
 
 /// Shared selected-signal list of Graphics/Data windows. Supports
-/// visibility toggles, "show all", and drag reordering with an insertion
-/// line indicator. Adding/removing signals happens in the Signal Selection
-/// popup (Measurement Setup).
+/// visibility toggles, "show all", drag reordering with an insertion
+/// line indicator, and -- for Graphics lists only -- each signal's own
+/// value-axis policy badge. Adding/removing signals happens in the Signal
+/// Selection popup (Measurement Setup).
 pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
     if ui.small_button("Show all") {
         for s in signals_mut(app, kind).iter_mut() {
@@ -51,11 +53,38 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         ui.dummy([14.0, 0.0]);
         ui.same_line();
         let mut vis = signals_mut(app, kind)[j].visible;
-        if ui.checkbox(format!("{}##sig{j}", key.2), &mut vis) {
+        if ui.checkbox(format!("##sigvis{j}"), &mut vis) {
             signals_mut(app, kind)[j].visible = vis;
         }
         if ui.is_item_active() && ui.is_mouse_dragging(MouseButton::Left) {
             *DRAG.lock().unwrap() = Some((kind, j));
+        }
+        ui.same_line();
+        ui.text(&key.2);
+        // Each Graphics signal scales its own value axis; the badge shows
+        // the policy's initial and opens the mode menu. A Data table has no
+        // axis, so its rows stay bare.
+        if let ListKind::Graphics(gi) = kind {
+            let mode = signals_mut(app, kind)[j].y_mode;
+            let menu_id = format!("Y scale##{gi}-{j}");
+            ui.same_line_with_pos(super::graphics::PANEL_W - 44.0);
+            if ui.small_button(format!("{}##ym{j}", mode.short())) {
+                ui.open_popup(&menu_id);
+            }
+            ui.popup(&menu_id, || {
+                for m in YMode::ALL {
+                    if ui.selectable_config(m.label()).selected(m == mode).build() {
+                        // Re-entering Lock re-captures whatever the axis
+                        // shows then, so any change drops the frozen range.
+                        let changed_key = {
+                            let sigs = signals_mut(app, kind);
+                            sigs[j].y_mode = m;
+                            format!("{:?}", sigs[j].key)
+                        };
+                        app.graphics[gi].y_locks.remove(&changed_key);
+                    }
+                }
+            });
         }
         dl.add_rect([p[0], p[1] + 4.0], [p[0] + 10.0, p[1] + 14.0], color)
             .filled(true)

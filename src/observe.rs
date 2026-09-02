@@ -218,6 +218,12 @@ impl Subscription {
 pub struct GfxSignal {
     pub key: (u8, u32, String),
     pub visible: bool,
+    /// This signal's value-axis policy. Each curve scales on its own: one
+    /// signal riding Auto breathes with its window while a neighbour stays
+    /// locked, and in one-plot-per-signal mode every pane follows its own
+    /// signal's choice. In overlay the shared axis is the union of what the
+    /// signals' policies ask for.
+    pub y_mode: YMode,
 }
 
 /// How a Graphics window scales its value axis.
@@ -238,10 +244,27 @@ pub enum YMode {
 }
 
 impl YMode {
-    /// Toolbar labels, in `YMode::ALL` order.
-    pub const LABELS: [&'static str; 4] = ["Auto", "Lock", "Fit all", "DBC range"];
-
     pub const ALL: [YMode; 4] = [YMode::Auto, YMode::Lock, YMode::FitAll, YMode::Dbc];
+
+    /// One-letter form for the per-signal badge in the curve list.
+    pub fn short(&self) -> &'static str {
+        match self {
+            YMode::Auto => "A",
+            YMode::Lock => "L",
+            YMode::FitAll => "F",
+            YMode::Dbc => "D",
+        }
+    }
+
+    /// Full name, in menu and legend positions.
+    pub fn label(&self) -> &'static str {
+        match self {
+            YMode::Auto => "Auto",
+            YMode::Lock => "Lock",
+            YMode::FitAll => "Fit all",
+            YMode::Dbc => "DBC range",
+        }
+    }
 
     /// Project-file code; unknown values load as [`YMode::Auto`].
     pub fn to_u8(self) -> u8 {
@@ -265,11 +288,9 @@ pub struct GraphicsWindow {
     /// Draw a dot on each sample when the visible points are sparse enough to
     /// read individually.
     pub show_markers: bool,
-    pub y_mode: YMode,
-    /// Frozen ranges while [`YMode::Lock`] is active, keyed per plot pane:
-    /// the empty string for the shared overlay axis, the signal key's debug
-    /// text for each pane in one-plot-per-signal mode. Session state only --
-    /// leaving the mode clears it.
+    /// Frozen ranges while a signal's [`YMode::Lock`] is active, keyed by the
+    /// signal key's debug text. Session state only -- leaving the mode clears
+    /// the entry.
     pub(crate) y_locks: HashMap<String, (f64, f64)>,
 }
 

@@ -157,6 +157,9 @@ pub struct SignalCfg {
     pub signal: String,
     #[serde(default = "true_default")]
     pub visible: bool,
+    /// [`crate::observe::YMode`] code; unknown values load as Auto.
+    #[serde(default)]
+    pub y_mode: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -175,9 +178,6 @@ pub struct GfxCfg {
     pub zoom_enabled: bool,
     #[serde(default = "true_default")]
     pub show_markers: bool,
-    /// [`crate::observe::YMode`] code; unknown values load as Auto.
-    #[serde(default)]
-    pub y_mode: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -387,6 +387,7 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
             id: s.key.1,
             signal: s.key.2.clone(),
             visible: s.visible,
+            y_mode: s.y_mode.to_u8(),
         })
         .collect()
 }
@@ -446,6 +447,7 @@ fn sig_keys(signals: Vec<SignalCfg>) -> Vec<GfxSignal> {
         .map(|s| GfxSignal {
             key: (s.ch, s.id, s.signal),
             visible: s.visible,
+            y_mode: YMode::from_u8(s.y_mode),
         })
         .collect()
 }
@@ -524,7 +526,6 @@ impl Config {
                     show_cursor: g.show_cursor,
                     zoom_enabled: g.zoom_enabled,
                     show_markers: g.show_markers,
-                    y_mode: g.y_mode.to_u8(),
                 })
                 .collect(),
             data_windows: app
@@ -748,7 +749,6 @@ impl Config {
                     show_cursor: g.show_cursor,
                     zoom_enabled: g.zoom_enabled,
                     show_markers: g.show_markers,
-                    y_mode: YMode::from_u8(g.y_mode),
                     y_locks: HashMap::new(),
                 })
                 .collect();
