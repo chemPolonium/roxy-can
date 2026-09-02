@@ -714,6 +714,8 @@ impl Config {
                     filter: w.filter,
                     dir: w.dir.min(2),
                     dbc_only: w.dbc_only,
+                    shown_t_us: u64::MAX,
+                    shown_count: 0,
                 })
                 .collect();
         }

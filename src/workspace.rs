@@ -30,6 +30,14 @@ pub struct TraceWin {
     pub filter: String,
     pub dir: usize,
     pub dbc_only: bool,
+    /// The newest frame timestamp this window has revealed. Rows stream in
+    /// batches on the text gate (see [`crate::app::App::sync_trace_text`])
+    /// instead of churning every frame; `u64::MAX` means everything so far.
+    /// Survives ring wrap-around because committed rows only ever leave the
+    /// front of the deque. Session state only.
+    pub(crate) shown_t_us: u64,
+    /// Buffer length as of the last reveal, for the throttled header count.
+    pub(crate) shown_count: usize,
 }
 
 #[derive(Clone)]
@@ -319,6 +327,8 @@ impl App {
             filter: String::new(),
             dir: 0,
             dbc_only: false,
+            shown_t_us: self.trace.back().map(|f| f.t_us).unwrap_or(u64::MAX),
+            shown_count: self.trace.len(),
         });
     }
 

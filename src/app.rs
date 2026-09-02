@@ -888,6 +888,33 @@ impl App {
         win.text_header = format!("{} messages", win.text_keys.len());
     }
 
+    /// Advances Trace window `i`'s reveal watermark on text frames: the rows
+    /// already on screen never change, so the throttle decides how quickly
+    /// *new* rows may appear. A run restart or a backward seek re-stamps
+    /// frames below the watermark, and [`App::trace_revealed`] shows those
+    /// immediately -- only the fresh tail is batched.
+    pub(crate) fn sync_trace_text(&mut self, i: usize) {
+        if !self.text_fresh {
+            return;
+        }
+        let newest = self.trace.back().map(|f| f.t_us).unwrap_or(u64::MAX);
+        let w = &mut self.trace_windows[i];
+        w.shown_t_us = newest;
+        w.shown_count = self.trace.len();
+    }
+
+    /// Trace window `w`'s revealed frames, newest first: the whole buffer
+    /// minus the not-yet-revealed tail beyond the watermark.
+    pub(crate) fn trace_revealed<'a>(
+        &'a self,
+        w: &'a TraceWin,
+    ) -> impl Iterator<Item = &'a CanFrame> {
+        self.trace
+            .iter()
+            .rev()
+            .skip_while(|f| f.t_us > w.shown_t_us)
+    }
+
     /// Refreshes the status bar's throttled counters line. The state, the REC
     /// marker and the replay position beside it stay live on purpose: they
     /// change rarely or must track the scrub bar.

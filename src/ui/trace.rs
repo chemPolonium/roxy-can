@@ -83,10 +83,14 @@ fn fmt_row(app: &App, f: &CanFrame) -> String {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
+    // New rows stream in batches on the text gate, like every number
+    // readout; the rows already drawn are immutable history.
+    app.sync_trace_text(i);
+    let shown_count = app.trace_windows[i].shown_count;
     ui.text(format!(
         "{} frames (showing newest {})",
-        app.trace.len(),
-        MAX_VISIBLE.min(app.trace.len())
+        shown_count,
+        MAX_VISIBLE.min(shown_count)
     ));
     let new_scope = scope_combo(
         app,
@@ -188,11 +192,12 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let w = app.trace_windows[i].clone();
 
     // Newest first (the default order); sorted when a column header is
-    // clicked, back to default on the third click (tri-state).
+    // clicked, back to default on the third click (tri-state). Only rows at
+    // or before the reveal watermark are visible: the fresh tail waits for
+    // the text gate, while anything re-stamped below it -- a run restart, a
+    // backward seek -- shows up at once.
     let mut rows: Vec<CanFrame> = app
-        .trace
-        .iter()
-        .rev()
+        .trace_revealed(&w)
         .filter(|f| app.trace_match(&w, f))
         .take(MAX_VISIBLE)
         .copied()

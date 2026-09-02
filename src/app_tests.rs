@@ -3604,3 +3604,64 @@ fn graphics_legends_hold_still_until_the_text_gate_fires() {
     );
     app.stop();
 }
+
+#[test]
+fn trace_rows_reveal_in_batches_on_the_text_gate() {
+    let mut app = quiet_app();
+    if app.trace_windows.is_empty() {
+        app.new_trace_window();
+    }
+    feed_rpm(&mut app, &[(10_000, 100.0), (30_000, 110.0)]);
+
+    app.text_fresh = true;
+    app.sync_trace_text(0);
+    assert_eq!(app.trace_windows[0].shown_count, 2, "first reveal");
+    assert_eq!(
+        app.trace_revealed(&app.trace_windows[0]).count(),
+        2,
+        "both rows are on screen"
+    );
+
+    // More traffic, gate closed: the fresh tail stays hidden while the
+    // drawn rows hold still.
+    feed_rpm(&mut app, &[(50_000, 120.0)]);
+    app.text_fresh = false;
+    app.sync_trace_text(0);
+    assert_eq!(app.trace.len(), 3, "the frame did arrive");
+    assert_eq!(
+        app.trace_revealed(&app.trace_windows[0]).count(),
+        2,
+        "stale by design between text frames"
+    );
+
+    // The gate fires and the row appears in one step.
+    app.text_fresh = true;
+    app.sync_trace_text(0);
+    assert_eq!(app.trace_revealed(&app.trace_windows[0]).count(), 3);
+    assert_eq!(app.trace_windows[0].shown_count, 3);
+    app.stop();
+}
+
+#[test]
+fn a_rewound_or_restarted_run_reveals_its_rows_at_once() {
+    let mut app = quiet_app();
+    if app.trace_windows.is_empty() {
+        app.new_trace_window();
+    }
+    feed_rpm(&mut app, &[(10_000, 100.0), (30_000, 110.0)]);
+    app.text_fresh = true;
+    app.sync_trace_text(0);
+    assert_eq!(app.trace_windows[0].shown_t_us, 30_000);
+
+    // A backward seek re-stamps frames below the watermark; those must not
+    // wait for the gate -- only the fresh tail is batched.
+    feed_rpm(&mut app, &[(5_000, 40.0)]);
+    app.text_fresh = false;
+    app.sync_trace_text(0);
+    assert_eq!(
+        app.trace_revealed(&app.trace_windows[0]).count(),
+        3,
+        "the older-stamped row shows immediately"
+    );
+    app.stop();
+}
