@@ -71,6 +71,18 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
             if ui.small_button(format!("{}##ym{j}", mode.short())) {
                 ui.open_popup(&menu_id);
             }
+            let badge_hovered = ui.is_item_hovered();
+            // The initials alone leave too much to guess: hovering explains
+            // the current policy, and each menu entry explains itself.
+            // Gated on the badge itself -- `popup` submits no item when it
+            // is closed, and an ungated tooltip would latch onto whatever
+            // the previous row left hovered.
+            if badge_hovered {
+                ui.tooltip(|| {
+                    ui.text(format!("Y axis: {}", mode.label()));
+                    ui.text_disabled(mode.hint());
+                });
+            }
             ui.popup(&menu_id, || {
                 for m in YMode::ALL {
                     if ui.selectable_config(m.label()).selected(m == mode).build() {
@@ -82,6 +94,11 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                             format!("{:?}", sigs[j].key)
                         };
                         app.graphics[gi].y_locks.remove(&changed_key);
+                    }
+                    // imgui-rs tooltips draw unconditionally; without this
+                    // gate every entry's hint piles up at the mouse.
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(m.hint());
                     }
                 }
             });

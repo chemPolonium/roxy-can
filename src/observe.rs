@@ -266,6 +266,17 @@ impl YMode {
         }
     }
 
+    /// One-line explanation for the hover hints -- the names alone leave
+    /// too much to guess.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            YMode::Auto => "Fit the visible time window, rescaling every frame",
+            YMode::Lock => "Freeze the axis at the range on screen right now",
+            YMode::FitAll => "Grow to fit every value seen, never shrink back",
+            YMode::Dbc => "Scale by the min..max declared in the database",
+        }
+    }
+
     /// Project-file code; unknown values load as [`YMode::Auto`].
     pub fn to_u8(self) -> u8 {
         self as u8
