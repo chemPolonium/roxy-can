@@ -117,13 +117,28 @@ impl App {
     /// Enables or disables every generator message of one bus; freshly
     /// enabled messages restart their cycle immediately.
     pub fn set_bus_tx(&mut self, ch: u8, on: bool) {
-        for t in &mut self.tx_list {
-            if t.channel == ch && t.active != on {
-                t.active = on;
-                if on {
-                    t.next_t_us = 0;
-                }
+        for i in 0..self.tx_list.len() {
+            if self.tx_list[i].channel == ch && self.tx_list[i].active != on {
+                self.set_tx_active(i, on);
             }
+        }
+    }
+
+    /// Ticks one entry's On checkbox. Activating anchors the schedule at the
+    /// current clock: `next_t_us` still sits at the last slot before the
+    /// entry was switched off, and letting the catch-up loop run from there
+    /// would re-emit frames dated across the whole off period -- rewriting
+    /// the gap in every plot with waveform values computed at those stale
+    /// stamps. A re-enabled entry starts sending from now. Deactivating
+    /// touches only the flag, so payload, waveforms and schedule survive the
+    /// pause.
+    pub fn set_tx_active(&mut self, i: usize, on: bool) {
+        let Some(tx) = self.tx_list.get_mut(i) else {
+            return;
+        };
+        tx.active = on;
+        if on {
+            tx.next_t_us = self.sim_t_us;
         }
     }
 
@@ -162,13 +177,12 @@ impl App {
             for id in &ids {
                 self.add_tx(channel, *id);
             }
-            for t in &mut self.tx_list {
-                if t.channel == channel && ids.contains(&t.id) && !t.active {
-                    t.active = true;
-                    // Re-zeroed rather than kept: an entry left over from the
-                    // last tick still carries its old schedule, and picking it
-                    // up mid-cycle would hold it silent for a whole period.
-                    t.next_t_us = 0;
+            for i in 0..self.tx_list.len() {
+                if self.tx_list[i].channel == channel
+                    && ids.contains(&self.tx_list[i].id)
+                    && !self.tx_list[i].active
+                {
+                    self.set_tx_active(i, true);
                 }
             }
         } else {

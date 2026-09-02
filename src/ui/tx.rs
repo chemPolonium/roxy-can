@@ -195,10 +195,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.indent();
                     let mut act = app.tx_list[i].active;
                     if ui.checkbox(format!("On##{i}"), &mut act) {
-                        app.tx_list[i].active = act;
-                        if act {
-                            app.tx_list[i].next_t_us = 0;
-                        }
+                        // Routes through the model: activating anchors the
+                        // schedule at the current clock, so re-enabling an
+                        // entry never re-emits frames dated across the time
+                        // it was off.
+                        app.set_tx_active(i, act);
                     }
                     ui.same_line();
                     // Not an inline number box any more: dragging one edits its

@@ -3731,3 +3731,46 @@ fn a_log_id_stays_silent_during_replay_and_returns_in_simulation() {
     );
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn re_activating_a_generator_starts_from_now_not_from_history() {
+    // The old activation path re-zeroed next_t_us, so the catch-up loop
+    // re-emitted the whole off period with wave values at those stale
+    // stamps -- Graphics read the refilled gap as a continuous wave.
+    let mut app = quiet_app();
+    app.add_tx(0, 0x300);
+    let i = app.tx_list.len() - 1;
+    app.tx_list[i].cycle_us = 10_000;
+    app.set_tx_active(i, true);
+    run_sim(&mut app, 100, 10_000); // transmits until t = 1 s
+
+    // Off for two seconds of clock -- time moves, no frames go out.
+    app.set_tx_active(i, false);
+    let mut now = 1_000_000u64;
+    while now < 2_990_000 {
+        now += 10_000;
+        app.sim_t_us = now;
+        app.tick(now);
+    }
+    let before = slots_of(&app, 0x300).len();
+    assert_eq!(
+        before, 101,
+        "one batch on the first tick, one per tick after"
+    );
+
+    // On again: anchored at the clock, the silent second stays silent.
+    app.set_tx_active(i, true); // schedule starts at t = 2.99 s
+    let end = now + 100 * 10_000;
+    while now < end {
+        now += 10_000;
+        app.sim_t_us = now;
+        app.tick(now);
+    }
+    let slots = slots_of(&app, 0x300);
+    assert_eq!(slots.len(), 202, "the off period contributes no frames");
+    assert!(
+        slots.iter().all(|&t| t <= 1_000_000 || t >= 2_990_000),
+        "no frame may be dated inside the off period"
+    );
+    app.stop();
+}
