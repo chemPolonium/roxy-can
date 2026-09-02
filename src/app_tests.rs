@@ -1748,6 +1748,10 @@ fn replay_injection_lands_on_the_log_timeline() {
     let mut app = App::new();
     let file = write_timed_asc("roxy_can_inject.asc", 3, 100_000);
     app.load_log(&file.to_string_lossy());
+    // An id the log does NOT carry: a log-carried id stands down during
+    // replay (see the muting test below), and what this test pins is the
+    // injection's timing.
+    app.tx_list[0].id = 0x123;
     let tx_id = app.tx_list[0].id;
     let tx_ch = app.tx_list[0].channel;
     app.tx_list[0].active = true;
@@ -1779,10 +1783,7 @@ fn replay_injection_lands_on_the_log_timeline() {
         .aggs
         .get(&(tx_ch, tx_id))
         .expect("injected frames aggregate");
-    // The default generator entry shares the log's id 0x100, so the one
-    // aggregate row folds both traffics together -- exactly what a real
-    // bus with a responder on the same id looks like.
-    assert_eq!(agg.count, (injected.len() + 3) as u64);
+    assert_eq!(agg.count, injected.len() as u64);
     assert!(
         app.trace
             .iter()
@@ -3664,4 +3665,69 @@ fn a_rewound_or_restarted_run_reveals_its_rows_at_once() {
         "the older-stamped row shows immediately"
     );
     app.stop();
+}
+
+#[test]
+fn a_log_id_stays_silent_during_replay_and_returns_in_simulation() {
+    // The log carries 0x100 at 100 ms. An active generator twin at 10 ms
+    // must hold its breath for the run -- replaying a recording of this
+    // same simulation used to interleave two senders of one signal -- while
+    // an id the log lacks keeps injecting, so "stir a few frames in"
+    // survives.
+    let path = write_timed_asc("roxy_can_mute_twin.asc", 20, 100_000);
+    let mut app = App::new();
+    // The sample config pre-populates a generator entry for the log's 0x100;
+    // add one id the log lacks as the stirring control.
+    let twin = app
+        .tx_list
+        .iter()
+        .position(|t| t.channel == 0 && t.id == 0x100)
+        .expect("sample config carries a 0x100 entry");
+    {
+        let tx = &mut app.tx_list[twin];
+        tx.cycle_us = 10_000;
+        tx.active = true;
+    }
+    app.add_tx(0, 0x123);
+    {
+        let tx = app.tx_list.last_mut().unwrap();
+        tx.cycle_us = 10_000;
+        tx.active = true;
+    }
+    app.load_log(&path.to_string_lossy());
+    app.replay();
+    assert!(matches!(app.mode, Mode::Replay), "the replay is running");
+    assert!(
+        app.replay_ids.contains(&(0u8, 0x100u32)),
+        "the scan saw the log's id"
+    );
+
+    // ~2.4 s of replay clock covers the whole 1.9 s log.
+    let mut now = 0u64;
+    for _ in 0..240 {
+        now += 10_000;
+        app.tick(now);
+    }
+
+    assert_eq!(
+        slots_of(&app, 0x100).len(),
+        20,
+        "exactly the log's own 0x100 frames, none injected"
+    );
+    let stirred = slots_of(&app, 0x123);
+    assert!(
+        stirred.len() > 100,
+        "an id the log lacks still injects freely, got {}",
+        stirred.len()
+    );
+
+    // Back on the simulated bus the twin transmits again from a clean start.
+    app.stop();
+    app.start_virtual();
+    run_sim(&mut app, 30, 10_000);
+    assert!(
+        slots_of(&app, 0x100).len() >= 30,
+        "the twin speaks again once the replay is over"
+    );
+    std::fs::remove_file(&path).ok();
 }

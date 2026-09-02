@@ -1,4 +1,4 @@
-use crate::app::{App, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
+use crate::app::{App, Mode, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::can::frame::FrameFlags;
 use crate::dbc::SignalInfo;
 use crate::sim::{KINDS, SrcKind, ValueSrc, eval_phys};
@@ -218,6 +218,18 @@ pub fn render(app: &mut App, ui: &Ui) {
                         // active sources are never cleared by a hex edit.
                         let text = app.tx_list[i].data_text.clone();
                         app.set_tx_hex(i, &text);
+                    }
+                    // The row's checkbox keeps its state, but during a replay
+                    // an id the log carries is silenced -- replaying a
+                    // recording of this same simulation must not mix two
+                    // senders of one signal into the plot. Say so.
+                    if matches!(app.mode, Mode::Replay)
+                        && app
+                            .replay_ids
+                            .contains(&(app.tx_list[i].channel, app.tx_list[i].id))
+                    {
+                        ui.same_line();
+                        ui.text_disabled("in log");
                     }
                     if driven > 0 {
                         // The box edits the base payload only; what goes out is

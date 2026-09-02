@@ -120,6 +120,12 @@ pub struct App {
     pub log_path: String,
     /// One-line summary from the stream's `describe()`, e.g. "BLF4, 41.2 s".
     pub log_info: Option<String>,
+    /// Every (channel, id) the loaded log carries. While replaying, transmit
+    /// entries carrying one of these ids stand down -- replaying a recording
+    /// of this very simulation used to interleave two senders of one signal,
+    /// and the plot read the mix as a dense sawtooth. Filled by
+    /// [`App::replay`], consulted only in Replay mode, never persisted.
+    pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
     /// Contiguous log-time span whose frames have already been decoded into the
     /// signal caches. A Graphics window asking for a range outside it triggers a
     /// backfill scan.
@@ -303,6 +309,7 @@ impl App {
             desktop_rename_buf: String::new(),
             replay_speed: 1.0,
             replay_reset_pending: false,
+            replay_ids: std::collections::HashSet::new(),
             subs: HashMap::new(),
             aggs: HashMap::new(),
             bus_loads: vec![crate::load::BusLoad::new(), crate::load::BusLoad::new()],
@@ -562,9 +569,27 @@ impl App {
             return;
         }
         match open_stream(Path::new(&path)) {
-            Ok(stream) => self.start_replay(stream),
+            Ok(stream) => {
+                // Collect the log's ids once at open, from a temporary second
+                // stream, so the generators can stand down for the ids the
+                // replay itself covers. Draining here, never per frame.
+                self.replay_ids = Self::scan_log_ids(Path::new(&path)).unwrap_or_default();
+                self.start_replay(stream);
+            }
             Err(e) => self.status = format!("replay failed [{path}]: {e}"),
         }
+    }
+
+    /// Every (channel, id) the log file carries -- the twin-silencing set for
+    /// [`App::replay`]. A plain full read of a temporary stream: parsing is
+    /// the cost of one open, paid once per replay, never per frame.
+    fn scan_log_ids(path: &Path) -> Option<std::collections::HashSet<(u8, u32)>> {
+        let mut stream = open_stream(path).ok()?;
+        let mut ids = std::collections::HashSet::new();
+        while let Some(f) = stream.next_frame() {
+            ids.insert((f.channel, f.id));
+        }
+        Some(ids)
     }
 
     fn start_replay(&mut self, stream: Box<dyn FrameStream>) {
@@ -1012,7 +1037,11 @@ impl App {
 
         // Generators transmit in every running mode: an active entry during
         // replay injects onto the log timeline, which is what makes
-        // "replay a real log and stir a few frames in" possible.
+        // "replay a real log and stir a few frames in" possible. One
+        // exception: an id the log itself carries stays silent, or replaying
+        // a recording of this same simulation interleaves two senders of one
+        // signal and every consumer sees their mixed values. Only consulted
+        // in Replay mode, so nothing to restore when the run ends.
         let channels = &self.channels;
         for tx in &mut self.tx_list {
             if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
@@ -1021,6 +1050,8 @@ impl App {
                 // dated the epoch.
                 tx.next_t_us = sim;
             }
+            let muted =
+                matches!(self.mode, Mode::Replay) && self.replay_ids.contains(&(tx.channel, tx.id));
             // Every slot the clock has passed goes out at its own stamp.
             // Skipping the backlog after a UI stall (the old policy) kept the
             // tick cheap but punched a hole into the bus's own timeline --
@@ -1029,7 +1060,7 @@ impl App {
             // slides on. Frames carry their slot's timestamp, so spacing
             // stays exactly `cycle_us` even in the catch-up burst.
             let mut budget = MAX_TX_CATCHUP;
-            while budget > 0 && tx.active && tx.cycle_us != 0 && tx.next_t_us <= sim {
+            while budget > 0 && tx.active && !muted && tx.cycle_us != 0 && tx.next_t_us <= sim {
                 budget -= 1;
                 // Values are read at the slot, not at `sim`: a frame stamped
                 // `slot` must carry the waveform's value at `slot`, or every
