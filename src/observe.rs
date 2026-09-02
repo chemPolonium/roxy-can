@@ -303,6 +303,12 @@ pub struct GraphicsWindow {
     /// signal key's debug text. Session state only -- leaving the mode clears
     /// the entry.
     pub(crate) y_locks: HashMap<String, (f64, f64)>,
+    /// Legend readouts ("EngineSpeed = 100 rpm") as of the last throttled
+    /// text refresh, aligned with `legend_keys`; the plot draws these so the
+    /// digits hold still while the curve itself animates at full frame rate.
+    /// Session state only.
+    pub(crate) legend_keys: Vec<(u8, u32, String)>,
+    pub(crate) legend: Vec<String>,
 }
 
 pub struct DataWindow {
@@ -321,6 +327,23 @@ use std::collections::HashMap;
 use crate::app::{App, MAX_SCAN_FRAMES};
 use crate::can::frame::CanFrame;
 use crate::dbc::DecodedSignal;
+
+impl GraphicsWindow {
+    /// The throttled legend strings for `keys`, in the same order; an empty
+    /// string stands in until the first text refresh fills the snapshot.
+    pub(crate) fn legend_for(&self, keys: &[(u8, u32, String)]) -> Vec<String> {
+        keys.iter()
+            .map(|key| {
+                self.legend_keys
+                    .iter()
+                    .position(|k| k == key)
+                    .and_then(|n| self.legend.get(n))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+}
 
 impl App {
     /// The sampling stride the signal caches should hold right now: derived
@@ -501,6 +524,43 @@ impl App {
         let win = &mut self.data_windows[i];
         win.text_keys = keys;
         win.text_cache = rows;
+    }
+
+    /// Refreshes Graphics window `i`'s throttled legend snapshot -- the
+    /// "{name} = {value}" readouts the plot draws over the curves. Same gate
+    /// as [`App::sync_data_text`]: no-op unless the text gate says so or the
+    /// visible signal set changed.
+    pub(crate) fn sync_gfx_legend(&mut self, i: usize) {
+        let keys: Vec<(u8, u32, String)> = self.graphics[i]
+            .signals
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.key.clone())
+            .collect();
+        if self.graphics[i].legend_keys == keys && !self.text_fresh {
+            return;
+        }
+        let legend = keys
+            .iter()
+            .map(|key| match self.subs.get(key) {
+                Some(sub) => {
+                    format!(
+                        "{} = {}",
+                        key.2,
+                        crate::dbc::fmt_signal_value(
+                            sub.latest,
+                            &sub.unit,
+                            &sub.type_tag,
+                            sub.label.as_deref(),
+                        )
+                    )
+                }
+                None => format!("{} = -", key.2),
+            })
+            .collect();
+        let win = &mut self.graphics[i];
+        win.legend_keys = keys;
+        win.legend = legend;
     }
 
     pub fn subscribe(&mut self, key: (u8, u32, String)) {

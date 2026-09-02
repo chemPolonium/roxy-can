@@ -37,13 +37,10 @@ pub fn render(app: &App, ui: &Ui) {
             };
             ui.text_colored(color, state);
             ui.same_line();
-            ui.text(format!(
-                "| frames: {:>8}  | {:7.0} f/s  | trace: {:>6}  | signals: {:>4}",
-                app.frame_counter,
-                app.frame_rate,
-                app.trace.len(),
-                app.subs.len()
-            ));
+            // Throttled counters, refreshed on the text gate by
+            // `sync_status_text`, so the digits hold still long enough to
+            // read instead of flickering with every frame.
+            ui.text(&app.status_counters);
             if app.recorder.recording {
                 ui.same_line();
                 ui.text_colored([1.0, 0.4, 0.4, 1.0], "| REC");

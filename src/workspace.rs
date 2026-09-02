@@ -40,6 +40,12 @@ pub struct MsgWin {
     pub manual: HashSet<(u8, u32)>,
     pub filter: String,
     pub dbc_only: bool,
+    /// Message rows as of the last throttled text refresh (see
+    /// [`crate::app::App::sync_msg_text`]); the table draws these so the
+    /// counters hold still long enough to read. Session state only.
+    pub(crate) text_keys: Vec<(u8, u32)>,
+    pub(crate) text_header: String,
+    pub(crate) text_rows: Vec<crate::app::MsgRowText>,
 }
 
 #[derive(Clone)]
@@ -48,6 +54,11 @@ pub struct StatsWin {
     pub opened: bool,
     pub scope: SigScope,
     pub manual: HashSet<(u8, u32)>,
+    /// Message Statistics rows as of the last throttled text refresh (see
+    /// [`crate::app::App::sync_stats_text`]). Session state only.
+    pub(crate) text_keys: Vec<(u8, u32)>,
+    pub(crate) text_header: String,
+    pub(crate) text_rows: Vec<crate::app::StatsRowText>,
 }
 
 /// Observer window categories a desktop tracks.
@@ -320,6 +331,9 @@ impl App {
             manual: HashSet::new(),
             filter: String::new(),
             dbc_only: false,
+            text_keys: Vec::new(),
+            text_header: String::new(),
+            text_rows: Vec::new(),
         });
     }
 
@@ -330,6 +344,9 @@ impl App {
             opened: true,
             scope: SigScope::All,
             manual: HashSet::new(),
+            text_keys: Vec::new(),
+            text_header: String::new(),
+            text_rows: Vec::new(),
         });
     }
 
@@ -346,6 +363,8 @@ impl App {
             zoom_enabled: false,
             show_markers: true,
             y_locks: HashMap::new(),
+            legend_keys: Vec::new(),
+            legend: Vec::new(),
         });
     }
 

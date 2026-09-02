@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::can::frame::{CanFrame, Direction};
+use crate::can::frame::{CanFrame, Direction, FrameFlags};
 use crate::log::open_stream;
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
@@ -60,6 +60,41 @@ pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
 };
+
+/// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot
+/// builders below.
+fn ms_text(v: f64) -> String {
+    format!("{:.2}", v / 1000.0)
+}
+
+/// One Message Statistics row as throttled text, refreshed on the text gate
+/// (see [`App::sync_stats_text`]): built strings, ready to draw.
+#[derive(Clone)]
+pub struct StatsRowText {
+    pub label: String,
+    pub bus: String,
+    pub count: String,
+    pub min: String,
+    pub avg: String,
+    pub max: String,
+    pub len: String,
+    pub flags: FrameFlags,
+    pub share: String,
+}
+
+/// One Messages row as throttled text (see [`App::sync_msg_text`]); the
+/// expanded tree draws the pre-decoded signal name/value pairs.
+#[derive(Clone)]
+pub struct MsgRowText {
+    pub label: String,
+    pub bus: String,
+    pub dir: &'static str,
+    pub count: String,
+    pub cycle: String,
+    pub flags: FrameFlags,
+    pub data: String,
+    pub signals: Vec<(String, String)>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -187,6 +222,10 @@ pub struct App {
     /// True on frames where throttled text content should re-render.
     pub text_fresh: bool,
     last_text_refresh: std::time::Instant,
+    /// The status bar's "| frames: .. | f/s | trace | signals" line as of the
+    /// last throttled text refresh; the state and replay readouts beside it
+    /// stay live. See [`App::sync_status_text`].
+    pub(crate) status_counters: String,
     /// Simulation clock: accumulates only while measuring and unpaused.
     /// Generator frames are stamped on it and their signal values are evaluated
     /// from it, so a pause freezes the bus in place instead of letting it jump
@@ -303,6 +342,7 @@ impl App {
             text_rate_hz: 10,
             text_fresh: true,
             last_text_refresh: std::time::Instant::now(),
+            status_counters: String::new(),
             sim_t_us: 0,
             sim_prev_us: 0,
             frame_rate: 0.0,
@@ -664,6 +704,204 @@ impl App {
         for g in &mut self.graphics {
             g.t_offset_s = 0.0;
         }
+    }
+
+    /// Refreshes Message Statistics window `i`'s throttled text snapshot:
+    /// the header line and one pre-formatted struct per row. Same gate as
+    /// [`App::sync_data_text`] -- a no-op unless the text gate says so or the
+    /// visible message set changed, so a new id shows up without waiting a
+    /// full period.
+    pub(crate) fn sync_stats_text(&mut self, i: usize) {
+        let (scope, manual) = {
+            let w = &self.stats_windows[i];
+            (w.scope, w.manual.clone())
+        };
+        let mut keys: Vec<(u8, u32)> = self
+            .aggs
+            .keys()
+            .copied()
+            .filter(|&(ch, id)| App::scope_match(scope, &manual, ch, id))
+            .collect();
+        keys.sort_unstable();
+        if self.stats_windows[i].text_keys == keys && !self.text_fresh {
+            return;
+        }
+        let total: u64 = keys
+            .iter()
+            .filter_map(|k| self.aggs.get(k))
+            .map(|a| a.count)
+            .sum();
+        let mut rows = Vec::with_capacity(keys.len());
+        for key in &keys {
+            let Some(agg) = self.aggs.get(key) else {
+                continue;
+            };
+            let id_str = if agg.extended {
+                format!("{:08X}x", agg.id)
+            } else {
+                format!("{:03X}", agg.id)
+            };
+            let name = self.message_name(agg.channel, agg.id).unwrap_or("-");
+            rows.push(StatsRowText {
+                label: format!("{id_str}  {name}"),
+                bus: self.channel_name(agg.channel),
+                count: agg.count.to_string(),
+                min: if agg.count >= 2 {
+                    ms_text(agg.min_us)
+                } else {
+                    "-".to_string()
+                },
+                avg: if agg.count >= 2 {
+                    ms_text(agg.cycle_us)
+                } else {
+                    "-".to_string()
+                },
+                max: if agg.count >= 2 {
+                    ms_text(agg.max_us)
+                } else {
+                    "-".to_string()
+                },
+                len: agg.len.to_string(),
+                flags: agg.flags,
+                share: format!(
+                    "{:.1}%",
+                    if total > 0 {
+                        agg.count as f64 / total as f64 * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            });
+        }
+        let win = &mut self.stats_windows[i];
+        win.text_keys = keys;
+        win.text_rows = rows;
+        win.text_header = format!(
+            "{} messages, {} frames since start",
+            win.text_keys.len(),
+            total
+        );
+    }
+
+    /// Refreshes Messages window `i`'s throttled text snapshot: the header
+    /// count and one pre-formatted struct per row, including the decoded
+    /// signal pairs the expanded tree shows. Same gate as
+    /// [`App::sync_data_text`].
+    pub(crate) fn sync_msg_text(&mut self, i: usize) {
+        let (scope, manual, dbc_only, filter) = {
+            let w = &self.msg_windows[i];
+            (
+                w.scope,
+                w.manual.clone(),
+                w.dbc_only,
+                w.filter.trim().to_lowercase(),
+            )
+        };
+        let mut keys: Vec<(u8, u32)> = self
+            .aggs
+            .keys()
+            .copied()
+            .filter(|&(ch, id)| {
+                if !App::scope_match(scope, &manual, ch, id) {
+                    return false;
+                }
+                if dbc_only || !filter.is_empty() {
+                    let name = self.message_name(ch, id).unwrap_or("-");
+                    if dbc_only && name == "-" {
+                        return false;
+                    }
+                    if !filter.is_empty() {
+                        let id_str = format!("{id:x}");
+                        if !name.to_lowercase().contains(&filter) && !id_str.contains(&filter) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+            .collect();
+        keys.sort_unstable();
+        if self.msg_windows[i].text_keys == keys && !self.text_fresh {
+            return;
+        }
+        let mut rows = Vec::with_capacity(keys.len());
+        for key in &keys {
+            let Some(agg) = self.aggs.get(key) else {
+                continue;
+            };
+            let id_str = if agg.extended {
+                format!("{:08X}x", agg.id)
+            } else {
+                format!("{:03X}", agg.id)
+            };
+            let name = self.message_name(agg.channel, agg.id).unwrap_or("-");
+            // The expanded tree reads the last frame's signals exactly as
+            // before; only the refresh rate changed.
+            let frame = CanFrame {
+                t_us: agg.last_t_us,
+                channel: agg.channel,
+                id: agg.id,
+                extended: agg.extended,
+                len: agg.len,
+                data: agg.data,
+                dir: agg.dir,
+                flags: agg.flags,
+            };
+            let signals = self
+                .channel_dbc(agg.channel)
+                .map(|db| db.decode_signals(&frame))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|d| {
+                    (
+                        d.name,
+                        crate::dbc::fmt_signal_value(
+                            d.phys,
+                            &d.unit,
+                            &d.type_tag,
+                            d.label.as_deref(),
+                        ),
+                    )
+                })
+                .collect();
+            rows.push(MsgRowText {
+                label: format!("{id_str}  {name}"),
+                bus: self.channel_name(agg.channel),
+                dir: match agg.dir {
+                    Direction::Rx => "Rx",
+                    Direction::Tx => "Tx",
+                },
+                count: agg.count.to_string(),
+                cycle: if agg.count > 1 {
+                    format!("{:.1}", agg.cycle_us / 1000.0)
+                } else {
+                    "-".to_string()
+                },
+                flags: agg.flags,
+                data: agg.payload().iter().map(|b| format!("{b:02X} ")).collect(),
+                signals,
+            });
+        }
+        let win = &mut self.msg_windows[i];
+        win.text_keys = keys;
+        win.text_rows = rows;
+        win.text_header = format!("{} messages", win.text_keys.len());
+    }
+
+    /// Refreshes the status bar's throttled counters line. The state, the REC
+    /// marker and the replay position beside it stay live on purpose: they
+    /// change rarely or must track the scrub bar.
+    pub(crate) fn sync_status_text(&mut self) {
+        if !self.text_fresh {
+            return;
+        }
+        self.status_counters = format!(
+            "| frames: {:>8}  | {:7.0} f/s  | trace: {:>6}  | signals: {:>4}",
+            self.frame_counter,
+            self.frame_rate,
+            self.trace.len(),
+            self.subs.len()
+        );
     }
 
     pub fn update(&mut self) {

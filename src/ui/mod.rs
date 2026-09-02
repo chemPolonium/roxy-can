@@ -42,6 +42,9 @@ pub(crate) fn flags_color(flags: FrameFlags) -> [f32; 4] {
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
+    // The status bar takes `&App`, so its throttled counters refresh here;
+    // every other window syncs inside its own draw path.
+    app.sync_status_text();
     dockspace::render(ui);
     toolbar::render(app, ui);
     trace::render(app, ui);

@@ -3503,3 +3503,104 @@ fn the_text_rate_round_trips_through_a_project() {
     assert_eq!(restored.text_rate_hz, 5);
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn stats_and_message_rows_hold_still_until_the_text_gate_fires() {
+    let mut app = quiet_app();
+    if app.msg_windows.is_empty() {
+        app.new_msg_window();
+    }
+    if app.stats_windows.is_empty() {
+        app.new_stats_window();
+    }
+    feed_rpm(&mut app, &[(10_000, 100.0), (30_000, 110.0)]);
+
+    app.text_fresh = true;
+    app.sync_stats_text(0);
+    app.sync_msg_text(0);
+    assert_eq!(
+        app.stats_windows[0].text_rows[0].count, "2",
+        "first snapshot"
+    );
+    assert_eq!(app.msg_windows[0].text_rows[0].count, "2");
+    assert!(
+        app.stats_windows[0]
+            .text_header
+            .starts_with("1 messages, 2 frames"),
+        "the header counts rows and frames: {}",
+        app.stats_windows[0].text_header
+    );
+
+    // More traffic, gate closed: both tables keep drawing the old snapshot.
+    feed_rpm(&mut app, &[(50_000, 120.0)]);
+    app.text_fresh = false;
+    app.sync_stats_text(0);
+    app.sync_msg_text(0);
+    assert_eq!(
+        app.stats_windows[0].text_rows[0].count, "2",
+        "stale by design between text frames"
+    );
+    assert_eq!(app.msg_windows[0].text_rows[0].count, "2");
+
+    // The gate fires and both tables catch up in one step.
+    app.text_fresh = true;
+    app.sync_stats_text(0);
+    app.sync_msg_text(0);
+    assert_eq!(app.stats_windows[0].text_rows[0].count, "3");
+    assert_eq!(app.msg_windows[0].text_rows[0].count, "3");
+    assert_eq!(app.msg_windows[0].text_header, "1 messages");
+    app.stop();
+}
+
+#[test]
+fn the_status_counters_hold_still_until_the_text_gate_fires() {
+    let mut app = quiet_app();
+    feed_rpm(&mut app, &[(10_000, 100.0)]);
+
+    app.text_fresh = true;
+    app.sync_status_text();
+    let held = app.status_counters.clone();
+    assert!(held.contains("frames:"), "the snapshot was built: {held}");
+
+    feed_rpm(&mut app, &[(30_000, 110.0)]);
+    app.text_fresh = false;
+    app.sync_status_text();
+    assert_eq!(app.status_counters, held, "stale between text frames");
+
+    app.text_fresh = true;
+    app.sync_status_text();
+    assert_ne!(app.status_counters, held, "the counters caught up");
+    app.stop();
+}
+
+#[test]
+fn graphics_legends_hold_still_until_the_text_gate_fires() {
+    let (mut app, _key) = gfx_app(YMode::Auto);
+    feed_rpm(&mut app, &[(10_000, 100.0)]);
+
+    app.text_fresh = true;
+    app.sync_gfx_legend(0);
+    let held = app.graphics[0].legend[0].clone();
+    assert!(
+        held.starts_with("EngineSpeed = 100"),
+        "first snapshot: {held}"
+    );
+
+    feed_rpm(&mut app, &[(200_000, 300.0)]);
+    app.text_fresh = false;
+    app.sync_gfx_legend(0);
+    assert_eq!(
+        app.graphics[0].legend,
+        vec![held],
+        "stale between text frames"
+    );
+
+    app.text_fresh = true;
+    app.sync_gfx_legend(0);
+    assert!(
+        app.graphics[0].legend[0].starts_with("EngineSpeed = 300"),
+        "caught up: {}",
+        app.graphics[0].legend[0]
+    );
+    app.stop();
+}

@@ -728,6 +728,9 @@ impl Config {
                     manual: w.manual.into_iter().collect(),
                     filter: w.filter,
                     dbc_only: w.dbc_only,
+                    text_keys: Vec::new(),
+                    text_header: String::new(),
+                    text_rows: Vec::new(),
                 })
                 .collect();
         }
@@ -740,6 +743,9 @@ impl Config {
                     opened: w.opened,
                     scope: w.scope,
                     manual: w.manual.into_iter().collect(),
+                    text_keys: Vec::new(),
+                    text_header: String::new(),
+                    text_rows: Vec::new(),
                 })
                 .collect();
         }
@@ -758,6 +764,8 @@ impl Config {
                     zoom_enabled: g.zoom_enabled,
                     show_markers: g.show_markers,
                     y_locks: HashMap::new(),
+                    legend_keys: Vec::new(),
+                    legend: Vec::new(),
                 })
                 .collect();
         }

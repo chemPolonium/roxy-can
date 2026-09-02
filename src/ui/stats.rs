@@ -3,10 +3,6 @@ use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
-fn ms(v: f64) -> String {
-    format!("{:.2}", v / 1000.0)
-}
-
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
     let n = app.stats_windows.len();
@@ -56,24 +52,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     }
     ui.separator();
 
-    let w = app.stats_windows[i].clone();
-    let mut keys: Vec<(u8, u32)> = app
-        .aggs
-        .keys()
-        .copied()
-        .filter(|&(ch, id)| App::scope_match(w.scope, &w.manual, ch, id))
-        .collect();
-    keys.sort_unstable();
-    let total: u64 = keys
-        .iter()
-        .filter_map(|k| app.aggs.get(k))
-        .map(|a| a.count)
-        .sum();
-    ui.text(format!(
-        "{} messages, {} frames since start",
-        keys.len(),
-        total
-    ));
+    // The rows are throttled text: refreshed on the text gate so the
+    // counters hold still long enough to read, not on every frame.
+    app.sync_stats_text(i);
+    ui.text(&app.stats_windows[i].text_header);
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -126,54 +108,27 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_headers_row();
 
-    for key in keys {
-        let Some(agg) = app.aggs.get(&key) else {
-            continue;
-        };
-        let id = agg.id;
+    for row in &app.stats_windows[i].text_rows {
         ui.table_next_row();
         if !ui.table_next_column() {
             continue;
         }
-        let id_str = if agg.extended {
-            format!("{:08X}x", id)
-        } else {
-            format!("{:03X}", id)
-        };
-        let name = app.message_name(agg.channel, id).unwrap_or("-");
-        ui.text(format!("{id_str}  {name}"));
+        ui.text(&row.label);
         ui.table_next_column();
-        ui.text(app.channel_name(agg.channel));
+        ui.text(&row.bus);
         ui.table_next_column();
-        ui.text(format!("{}", agg.count));
+        ui.text(&row.count);
         ui.table_next_column();
-        ui.text(if agg.count >= 2 {
-            ms(agg.min_us)
-        } else {
-            "-".to_string()
-        });
+        ui.text(&row.min);
         ui.table_next_column();
-        ui.text(if agg.count >= 2 {
-            ms(agg.cycle_us)
-        } else {
-            "-".to_string()
-        });
+        ui.text(&row.avg);
         ui.table_next_column();
-        ui.text(if agg.count >= 2 {
-            ms(agg.max_us)
-        } else {
-            "-".to_string()
-        });
+        ui.text(&row.max);
         ui.table_next_column();
-        ui.text(format!("{}", agg.len));
+        ui.text(&row.len);
         ui.table_next_column();
-        ui.text_colored(flags_color(agg.flags), agg.flags.tag());
+        ui.text_colored(flags_color(row.flags), row.flags.tag());
         ui.table_next_column();
-        let share = if total > 0 {
-            agg.count as f64 / total as f64 * 100.0
-        } else {
-            0.0
-        };
-        ui.text(format!("{share:.1}%"));
+        ui.text(&row.share);
     }
 }

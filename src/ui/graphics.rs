@@ -331,6 +331,10 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         .map(|s| s.key.clone())
         .collect();
 
+    // The legend readouts are throttled text; refresh the snapshot once
+    // before the panes pick out their slices.
+    app.sync_gfx_legend(i);
+
     // Never pan or zoom further back than the oldest stored sample.
     let mut oldest = f64::INFINITY;
     for key in &keys {
@@ -410,6 +414,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         let ph = h / keys.len() as f32;
         let last = keys.len() - 1;
         for (k, key) in keys.iter().enumerate() {
+            let legend = app.graphics[i].legend_for(std::slice::from_ref(key));
             let y_range = resolve_y_range(app, i, std::slice::from_ref(key), vis_lo, vis_hi);
             draw_plot(
                 &dl,
@@ -420,6 +425,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                     w,
                     h: ph,
                     keys: std::slice::from_ref(key),
+                    legend,
                     t_right,
                     tw,
                     y_range,
@@ -443,6 +449,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                 w,
                 h,
                 keys: &keys,
+                legend: app.graphics[i].legend_for(&keys),
                 t_right,
                 tw,
                 y_range,
@@ -483,6 +490,10 @@ struct PlotPane<'a> {
     w: f32,
     h: f32,
     keys: &'a [(u8, u32, String)],
+    /// Throttled legend strings, one per key (see
+    /// `App::sync_gfx_legend`); the readout holds still while the curve
+    /// animates at full frame rate.
+    legend: Vec<String>,
     t_right: f64,
     tw: f64,
     /// The value range this pane draws against, resolved by the window's
@@ -610,6 +621,7 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         w,
         h,
         keys,
+        legend,
         t_right,
         tw,
         y_range,
@@ -710,24 +722,14 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         }
     }
 
+    // The value strings are the throttled legend snapshot, aligned with
+    // `keys` by position; only the color comes from the live subscription.
     let entries: Vec<([f32; 4], String)> = keys
         .iter()
-        .filter_map(|key| {
-            app.subs.get(key).map(|sub| {
-                (
-                    PALETTE[sub.color % PALETTE.len()],
-                    format!(
-                        "{} = {}",
-                        key.2,
-                        crate::dbc::fmt_signal_value(
-                            sub.latest,
-                            &sub.unit,
-                            &sub.type_tag,
-                            sub.label.as_deref(),
-                        )
-                    ),
-                )
-            })
+        .enumerate()
+        .filter_map(|(n, key)| {
+            let sub = app.subs.get(key)?;
+            Some((PALETTE[sub.color % PALETTE.len()], legend[n].clone()))
         })
         .collect();
     if !entries.is_empty() {

@@ -1,5 +1,4 @@
-use crate::app::{App, MessageAgg, PopupTarget, SigScope};
-use crate::can::frame::{CanFrame, Direction};
+use crate::app::{App, PopupTarget, SigScope};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TreeNodeFlags, Ui};
@@ -68,31 +67,12 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         app.export_messages_dialog(i);
     }
 
-    let w = app.msg_windows[i].clone();
-    let filter = w.filter.trim().to_lowercase();
-    let mut rows: Vec<MessageAgg> = app
-        .aggs
-        .values()
-        .copied()
-        .filter(|a| {
-            if !App::scope_match(w.scope, &w.manual, a.channel, a.id) {
-                return false;
-            }
-            let name = app.message_name(a.channel, a.id).unwrap_or("-");
-            if w.dbc_only && name == "-" {
-                return false;
-            }
-            if filter.is_empty() {
-                return true;
-            }
-            let id_str = format!("{:x}", a.id);
-            name.to_lowercase().contains(&filter) || id_str.contains(&filter)
-        })
-        .collect();
-    rows.sort_by_key(|a| (a.channel, a.id));
+    // Throttled like every number readout: the rows are snapshots from the
+    // text gate, so Count and Cycle hold still long enough to read.
+    app.sync_msg_text(i);
 
     ui.same_line();
-    ui.text(format!("{} messages", rows.len()));
+    ui.text(&app.msg_windows[i].text_header);
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -143,74 +123,41 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_headers_row();
 
-    for agg in &rows {
-        let name = app.message_name(agg.channel, agg.id).unwrap_or("-");
+    for row in &app.msg_windows[i].text_rows {
         ui.table_next_row();
         if !ui.table_next_column() {
             continue;
         }
-        let id_str = if agg.extended {
-            format!("{:08X}x", agg.id)
-        } else {
-            format!("{:03X}", agg.id)
-        };
         let token = ui
-            .tree_node_config(format!("{id_str}  {name}"))
+            .tree_node_config(row.label.clone())
             .flags(TreeNodeFlags::SPAN_FULL_WIDTH)
             .push();
 
         ui.table_next_column();
-        ui.text(app.channel_name(agg.channel));
+        ui.text(&row.bus);
         ui.table_next_column();
-        ui.text(match agg.dir {
-            Direction::Rx => "Rx",
-            Direction::Tx => "Tx",
-        });
+        ui.text(row.dir);
         ui.table_next_column();
-        ui.text(format!("{}", agg.count));
+        ui.text(&row.count);
         ui.table_next_column();
-        if agg.count > 1 {
-            ui.text(format!("{:.1}", agg.cycle_us / 1000.0));
-        } else {
-            ui.text("-");
-        }
+        ui.text(&row.cycle);
         ui.table_next_column();
-        ui.text_colored(flags_color(agg.flags), agg.flags.tag());
+        ui.text_colored(flags_color(row.flags), row.flags.tag());
         ui.table_next_column();
-        let data_str: String = agg.payload().iter().map(|b| format!("{b:02X} ")).collect();
-        ui.text(data_str);
+        ui.text(&row.data);
 
         if token.is_some() {
-            let frame = CanFrame {
-                t_us: agg.last_t_us,
-                channel: agg.channel,
-                id: agg.id,
-                extended: agg.extended,
-                len: agg.len,
-                data: agg.data,
-                dir: agg.dir,
-                flags: agg.flags,
-            };
-            let sigs = app
-                .channel_dbc(agg.channel)
-                .map(|db| db.decode_signals(&frame))
-                .unwrap_or_default();
-            if sigs.is_empty() {
+            if row.signals.is_empty() {
                 ui.table_next_row();
                 ui.table_next_column();
                 ui.text("   (not in DBC)");
             } else {
-                for d in &sigs {
+                for (name, value) in &row.signals {
                     ui.table_next_row();
                     ui.table_next_column();
-                    ui.text(format!("   {}", d.name));
+                    ui.text(format!("   {name}"));
                     ui.table_set_column_index(1);
-                    ui.text(crate::dbc::fmt_signal_value(
-                        d.phys,
-                        &d.unit,
-                        &d.type_tag,
-                        d.label.as_deref(),
-                    ));
+                    ui.text(value);
                 }
             }
         }
