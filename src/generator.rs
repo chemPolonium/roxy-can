@@ -25,6 +25,10 @@ pub struct TxMsg {
     /// `data` says. Applied on top of the base payload at emit time; `data`
     /// itself is never rewritten by them. See [`crate::sim`].
     pub srcs: Vec<ValueSrc>,
+    /// The bytes on the wire as of the last throttled text refresh -- the base
+    /// payload with every driven source's value laid over it. The generator
+    /// row renders this read-only; session state, never saved.
+    pub(crate) sent_text: String,
 }
 
 /// Whitespace-separated hex bytes, as typed in the generator's data box.
@@ -243,6 +247,7 @@ impl App {
             cycle_us,
             active: false,
             next_t_us: 0,
+            sent_text: String::new(),
         });
     }
 

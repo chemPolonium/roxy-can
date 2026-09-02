@@ -1,6 +1,7 @@
 use crate::app::{App, Mode, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::can::frame::FrameFlags;
 use crate::dbc::SignalInfo;
+use crate::generator::{hex_text, tx_payload};
 use crate::sim::{KINDS, SrcKind, ValueSrc, eval_phys};
 use crate::ui::help::popup_is_open;
 use imgui::{Condition, InputTextFlags, Key, Ui};
@@ -173,9 +174,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     // control that owns it: ON / OFF / MUTE. MUTE is the
                     // replay silencing -- the checkbox keeps its state, but
                     // an id the replayed log carries must not double-send
-                    // over it. Hover explains each; driven rows add BASE,
-                    // the hint that the data box alone is not the whole
-                    // payload.
+                    // over it. Hover explains each.
                     ui.same_line();
                     let (chip, color, hint) = if !app.tx_list[i].active {
                         ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：On 勾选框未勾选。")
@@ -199,15 +198,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.text_colored(color, chip);
                     if ui.is_item_hovered() {
                         ui.tooltip_text(hint);
-                    }
-                    if driven > 0 {
-                        ui.same_line();
-                        ui.text_colored([0.55, 0.75, 1.0, 1.0], "BASE");
-                        if ui.is_item_hovered() {
-                            ui.tooltip_text(
-                                "数据框里只是基础载荷。发送前，下方挂的驱动源会把自己的信号值写到对应的信号位上。",
-                            );
-                        }
                     }
                     ui.same_line();
                     // Not an inline number box any more: dragging one edits its
@@ -247,17 +237,34 @@ pub fn render(app: &mut App, ui: &Ui) {
                         }
                     }
                     ui.same_line();
-                    ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
-                    ui.input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
-                        .build();
-                    if ui.is_item_deactivated_after_edit() {
-                        // Decoding waits for the box to be left. Parsing each
-                        // keystroke meant retyping "11 22 33" briefly put a
-                        // one-byte frame on the bus, and a length the row never
-                        // asked for. Bad text still simply stays unapplied, and
-                        // active sources are never cleared by a hex edit.
-                        let text = app.tx_list[i].data_text.clone();
-                        app.set_tx_hex(i, &text);
+                    // Values are edited through the signal handles below. For
+                    // a message the database knows, the box only shows the
+                    // bytes that actually go out -- base payload with every
+                    // driven source's value already laid over it -- refreshed
+                    // on the text gate like every number readout. Only a
+                    // message without DBC signals keeps an editable box,
+                    // because it has no handles to edit instead.
+                    if sigs.is_empty() {
+                        ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
+                        ui.input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
+                            .build();
+                        if ui.is_item_deactivated_after_edit() {
+                            // Decoding waits for the box to be left. Parsing
+                            // each keystroke meant retyping "11 22 33" briefly
+                            // put a one-byte frame on the bus, and a length the
+                            // row never asked for. Bad text still simply stays
+                            // unapplied, and active sources are never cleared
+                            // by a hex edit.
+                            let text = app.tx_list[i].data_text.clone();
+                            app.set_tx_hex(i, &text);
+                        }
+                    } else {
+                        if app.text_fresh || app.tx_list[i].sent_text.is_empty() {
+                            let (data, len, _) =
+                                tx_payload(&app.channels, &app.tx_list[i], app.sim_t_us);
+                            app.tx_list[i].sent_text = hex_text(&data, len);
+                        }
+                        ui.text_disabled(&app.tx_list[i].sent_text);
                     }
                     ui.same_line();
                     if ui.small_button(format!("x##{i}")) {
