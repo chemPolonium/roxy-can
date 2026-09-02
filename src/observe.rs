@@ -309,6 +309,11 @@ pub struct DataWindow {
     pub name: String,
     pub signals: Vec<GfxSignal>,
     pub opened: bool,
+    /// Value/unit/raw strings as of the last throttled text refresh; the
+    /// table draws these so digits hold still long enough to read, while
+    /// the bar next to them animates at full frame rate.
+    pub(crate) text_keys: Vec<(u8, u32, String)>,
+    pub(crate) text_cache: Vec<[String; 3]>,
 }
 
 use std::collections::HashMap;
@@ -464,6 +469,38 @@ impl App {
             .and_then(|db| db.messages.get(&key.1))
             .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
             .and_then(|s| (s.max > s.min).then_some((s.min, s.max)))
+    }
+
+    /// Refreshes Data window `i`'s throttled text snapshot. Called every
+    /// frame: it does nothing unless the text gate says so or the visible
+    /// signal set changed (adding a signal must not wait a full period to
+    /// show its first value).
+    pub(crate) fn sync_data_text(&mut self, i: usize) {
+        let keys: Vec<(u8, u32, String)> = self.data_windows[i]
+            .signals
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.key.clone())
+            .collect();
+        if self.data_windows[i].text_keys == keys && !self.text_fresh {
+            return;
+        }
+        let mut rows = Vec::with_capacity(keys.len());
+        for key in &keys {
+            let Some(sub) = self.subs.get(key) else {
+                continue;
+            };
+            rows.push([
+                sub.label
+                    .clone()
+                    .unwrap_or_else(|| crate::dbc::fmt_decoded(&sub.type_tag, sub.latest)),
+                sub.unit.clone(),
+                sub.last_raw.to_string(),
+            ]);
+        }
+        let win = &mut self.data_windows[i];
+        win.text_keys = keys;
+        win.text_cache = rows;
     }
 
     pub fn subscribe(&mut self, key: (u8, u32, String)) {

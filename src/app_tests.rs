@@ -3432,3 +3432,74 @@ fn the_y_mode_round_trips_through_a_project() {
     );
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn the_text_gate_fires_on_its_cadence() {
+    let mut app = quiet_app();
+    app.text_rate_hz = 10;
+    // Long since the last refresh: the next frame re-renders text...
+    app.last_text_refresh = std::time::Instant::now() - std::time::Duration::from_millis(200);
+    app.update();
+    assert!(app.text_fresh, "past the period: text re-renders");
+    // ...and the frame right after it does not.
+    app.update();
+    assert!(!app.text_fresh, "within the period: text holds");
+
+    // Rate 0 means follow the frame rate: every frame is a text frame.
+    app.text_rate_hz = 0;
+    app.update();
+    assert!(app.text_fresh, "unthrottled re-renders every frame");
+}
+
+#[test]
+fn data_values_hold_still_until_the_text_gate_fires() {
+    let mut app = quiet_app();
+    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+    if app.data_windows.is_empty() {
+        app.new_data_window();
+    }
+    app.data_windows[0].signals.push(GfxSignal {
+        key: key.clone(),
+        visible: true,
+        y_mode: YMode::Auto,
+    });
+
+    feed_rpm(&mut app, &[(10_000, 100.0)]);
+    app.text_fresh = true;
+    app.sync_data_text(0);
+    assert_eq!(
+        app.data_windows[0].text_cache[0][0], "100",
+        "first snapshot"
+    );
+
+    // New traffic arrives, but the gate has not fired: the drawn text must
+    // hold at the last snapshot instead of flickering with every frame.
+    feed_rpm(&mut app, &[(200_000, 300.0)]);
+    app.text_fresh = false;
+    app.sync_data_text(0);
+    assert_eq!(
+        app.data_windows[0].text_cache[0][0], "100",
+        "stale by design between text frames"
+    );
+
+    // The gate fires and the snapshot catches up -- while the bar, fed
+    // straight from `latest`, never waited.
+    app.text_fresh = true;
+    app.sync_data_text(0);
+    assert_eq!(app.data_windows[0].text_cache[0][0], "300");
+    assert_eq!(app.subs[&key].latest, 300.0);
+}
+
+#[test]
+fn the_text_rate_round_trips_through_a_project() {
+    let mut app = App::new();
+    app.text_rate_hz = 5;
+    let path = std::env::temp_dir().join("roxy_can_textrate.rxproj");
+    assert!(app.save_project(Some(path.clone())));
+
+    let mut restored = App::new();
+    restored.open_project_path(&path);
+    assert_eq!(restored.text_rate_hz, 5);
+    std::fs::remove_file(&path).ok();
+}

@@ -334,6 +334,27 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.combo_simple_string("##speed", &mut pick, &labels) {
                 app.set_replay_speed(REPLAY_SPEEDS[pick]);
             }
+            ui.same_line();
+            // How often number readouts (Data values, Statistics, Messages)
+            // re-render; "full" follows the frame rate. Curves and bars
+            // always draw at full speed -- a 60 fps stream of changing
+            // digits is unreadable, which is what this throttles.
+            let rates = [
+                "Text: full",
+                "Text: 20 Hz",
+                "Text: 10 Hz",
+                "Text: 5 Hz",
+                "Text: 2 Hz",
+            ];
+            let vals = [0u32, 20, 10, 5, 2];
+            let mut pick = vals
+                .iter()
+                .position(|&v| v == app.text_rate_hz)
+                .unwrap_or(2);
+            ui.set_next_item_width(104.0);
+            if ui.combo_simple_string("##textrate", &mut pick, &rates) {
+                app.text_rate_hz = vals[pick];
+            }
             // Scrub bar. Live whenever a replay source with a known length
             // exists -- running, paused, or stopped after the log ran out.
             if matches!(app.mode, Mode::Replay) {

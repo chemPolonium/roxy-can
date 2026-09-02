@@ -84,6 +84,9 @@ fn true_default() -> bool {
 fn one_default() -> f64 {
     1.0
 }
+fn ten_default() -> u32 {
+    10
+}
 fn sixty_default() -> f64 {
     60.0
 }
@@ -351,6 +354,10 @@ pub struct Config {
     pub show_id_filter: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
+    /// Throttled text refresh for number readouts, in Hz; 0 follows the
+    /// frame rate.
+    #[serde(default = "ten_default")]
+    pub text_rate_hz: u32,
     #[serde(default)]
     pub trace_windows: Vec<TraceCfg>,
     #[serde(default)]
@@ -479,6 +486,7 @@ impl Config {
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
             replay_speed: app.replay_speed,
+            text_rate_hz: app.text_rate_hz,
             trace_windows: app
                 .trace_windows
                 .iter()
@@ -761,6 +769,8 @@ impl Config {
                     name: d.name,
                     signals: sig_keys(d.signals),
                     opened: d.opened,
+                    text_keys: Vec::new(),
+                    text_cache: Vec::new(),
                 })
                 .collect();
         }
@@ -772,6 +782,7 @@ impl Config {
         app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
+        app.text_rate_hz = self.text_rate_hz;
         // An unknown kind code (a project from a future version) drops
         // only that trigger; the rest load.
         app.triggers = self

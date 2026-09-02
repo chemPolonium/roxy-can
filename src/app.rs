@@ -179,6 +179,14 @@ pub struct App {
     /// Draft period in whole milliseconds for that row.
     pub tx_cycle_buf: String,
     pub last_tick_us: u64,
+    /// How often number readouts (Data values, Statistics, Messages, the
+    /// status bar) re-render, in Hz; 0 follows the frame rate. Curves and
+    /// bars always render at full frame rate -- a 60 fps stream of changing
+    /// digits is unreadable, which is what this throttles.
+    pub text_rate_hz: u32,
+    /// True on frames where throttled text content should re-render.
+    pub text_fresh: bool,
+    last_text_refresh: std::time::Instant,
     /// Simulation clock: accumulates only while measuring and unpaused.
     /// Generator frames are stamped on it and their signal values are evaluated
     /// from it, so a pause freezes the bus in place instead of letting it jump
@@ -292,6 +300,9 @@ impl App {
             tx_cycle_edit: None,
             tx_cycle_buf: String::new(),
             last_tick_us: 0,
+            text_rate_hz: 10,
+            text_fresh: true,
+            last_text_refresh: std::time::Instant::now(),
             sim_t_us: 0,
             sim_prev_us: 0,
             frame_rate: 0.0,
@@ -656,6 +667,14 @@ impl App {
     }
 
     pub fn update(&mut self) {
+        // The text-throttle gate runs before anything that can early-return:
+        // every frame decides once whether throttled readouts re-render.
+        self.text_fresh = self.text_rate_hz == 0
+            || self.last_text_refresh.elapsed()
+                >= std::time::Duration::from_millis(1000 / self.text_rate_hz.max(1) as u64);
+        if self.text_fresh {
+            self.last_text_refresh = std::time::Instant::now();
+        }
         if !self.measuring {
             return;
         }

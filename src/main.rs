@@ -36,10 +36,10 @@ use winit::window::{Window, WindowId};
 static IME_REQ: std::sync::Mutex<(bool, f32, f32, f32)> =
     std::sync::Mutex::new((false, 0.0, 0.0, 0.0));
 
-/// Redraw cadence. A bus tool idles most of the time; redrawing at 30 fps
-/// keeps the UI responsive while the event loop sleeps between frames
-/// instead of spinning a render at the display's refresh rate.
-const TARGET_FPS: u64 = 30;
+/// Redraw cadence. The event loop sleeps between frames instead of spinning
+/// a render at the display's refresh rate; 60 keeps motion smooth, while
+/// text content throttles itself separately (see `App::text_fresh`).
+const TARGET_FPS: u64 = 60;
 const FRAME_DT: std::time::Duration = std::time::Duration::from_nanos(1_000_000_000 / TARGET_FPS);
 
 /// Pending global shortcut: 1=start/stop, 2=record, 3=export, 4=open DBC,

@@ -355,6 +355,8 @@ impl App {
             name: format!("Data {}", self.data_counter),
             signals: Vec::new(),
             opened: true,
+            text_keys: Vec::new(),
+            text_cache: Vec::new(),
         });
     }
 

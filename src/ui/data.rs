@@ -1,5 +1,5 @@
 use crate::app::{App, TOOLBAR_H};
-use imgui::{Condition, ProgressBar, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use imgui::{Condition, StyleColor, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
 const PANEL_W: f32 = 190.0;
 
@@ -62,13 +62,16 @@ fn left_panel(app: &mut App, ui: &Ui, i: usize) {
 /// their own columns, then a bar. The bar draws the latest value's place
 /// in the database's declared min..max; a signal without a declared range
 /// falls back to its observed one.
+///
+/// The value/unit/raw columns draw a throttled snapshot (`sync_data_text`)
+/// so digits hold still long enough to read, while the bar -- drawn as a
+/// plain filled rect, no text inside -- animates at full frame rate.
 fn values_area(app: &mut App, ui: &Ui, i: usize) {
-    let keys: Vec<(u8, u32, String)> = app.data_windows[i]
-        .signals
-        .iter()
-        .filter(|s| s.visible)
-        .map(|s| s.key.clone())
-        .collect();
+    app.sync_data_text(i);
+    let (keys, cache) = {
+        let w = &app.data_windows[i];
+        (w.text_keys.clone(), w.text_cache.clone())
+    };
     if keys.is_empty() {
         ui.text("add signals via Measurement Setup (…)");
         return;
@@ -103,7 +106,10 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             ..TableColumnSetup::new("Bar")
         });
         ui.table_headers_row();
-        for key in keys.iter() {
+        let dl = ui.get_window_draw_list();
+        let bar_bg = ui.style_color(StyleColor::FrameBg);
+        let bar_fill = ui.style_color(StyleColor::PlotHistogram);
+        for (key, text) in keys.iter().zip(cache.iter()) {
             let Some(sub) = app.subs.get(key) else {
                 continue;
             };
@@ -113,17 +119,11 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             }
             ui.text(&key.2);
             ui.table_next_column();
-            // An enum-labelled signal shows the label as its value ("On"),
-            // the way the reference window does.
-            let value = sub
-                .label
-                .clone()
-                .unwrap_or_else(|| crate::dbc::fmt_decoded(&sub.type_tag, sub.latest));
-            ui.text(value);
+            ui.text(&text[0]);
             ui.table_next_column();
-            ui.text(&sub.unit);
+            ui.text(&text[1]);
             ui.table_next_column();
-            ui.text(sub.last_raw.to_string());
+            ui.text(&text[2]);
             ui.table_next_column();
             let frac = match app.declared_range(key) {
                 Some((lo, hi)) => ((sub.latest - lo) / (hi - lo)).clamp(0.0, 1.0),
@@ -132,9 +132,20 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
                 }
                 None => 0.0,
             };
-            // Default frame height: the slim variant clipped the fill
-            // percentage ImGui draws inside the bar.
-            ProgressBar::new(frac as f32).build(ui);
+            // A plain filled rect instead of ProgressBar: the widget paints
+            // a fill percentage inside the bar, and text is exactly what
+            // this bar must not have -- the value column next to it is
+            // throttled, the bar itself is not.
+            let p = ui.cursor_screen_pos();
+            let w = ui.content_region_avail()[0];
+            let h = (unsafe { imgui::sys::igGetFontSize() } * 0.6).max(6.0);
+            dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], bar_bg)
+                .filled(true)
+                .build();
+            dl.add_rect([p[0], p[1]], [p[0] + w * frac as f32, p[1] + h], bar_fill)
+                .filled(true)
+                .build();
+            ui.dummy([w, h]);
         }
     }
 }
