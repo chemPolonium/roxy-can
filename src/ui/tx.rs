@@ -169,6 +169,55 @@ pub fn render(app: &mut App, ui: &Ui) {
                             app.tx_list[i].next_t_us = 0;
                         }
                     }
+                    // Transmit state as one scannable chip beside the
+                    // control that owns it: ON / OFF / MUTE. MUTE is the
+                    // replay silencing -- the checkbox keeps its state, but
+                    // an id the replayed log carries must not double-send
+                    // over it. Hover explains each; driven rows add BASE,
+                    // the hint that the data box alone is not the whole
+                    // payload.
+                    ui.same_line();
+                    let (chip, color, hint) = if !app.tx_list[i].active {
+                        (
+                            "OFF",
+                            [0.55, 0.58, 0.65, 1.0],
+                            "Not transmitting: the On checkbox is off.",
+                        )
+                    } else if matches!(app.mode, Mode::Replay)
+                        && app
+                            .replay_ids
+                            .contains(&(app.tx_list[i].channel, app.tx_list[i].id))
+                    {
+                        (
+                            "MUTE",
+                            [1.0, 0.65, 0.2, 1.0],
+                            "Silenced for this replay: the loaded log carries this id, and \
+                             a second sender would mix two streams of one signal into every \
+                             consumer. The On checkbox is untouched -- the entry transmits \
+                             again outside replay.",
+                        )
+                    } else {
+                        (
+                            "ON",
+                            [0.4, 0.95, 0.5, 1.0],
+                            "Transmitting now: the entry is active and nothing silences it.",
+                        )
+                    };
+                    ui.text_colored(color, chip);
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(hint);
+                    }
+                    if driven > 0 {
+                        ui.same_line();
+                        ui.text_colored([0.55, 0.75, 1.0, 1.0], "BASE");
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(
+                                "The data box holds the base payload only. Driven sources \
+                                 below write their signals on top of it before the frame \
+                                 goes out.",
+                            );
+                        }
+                    }
                     ui.same_line();
                     // Not an inline number box any more: dragging one edits its
                     // text in place, and every keystroke was applied, so dialing
@@ -218,27 +267,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                         // active sources are never cleared by a hex edit.
                         let text = app.tx_list[i].data_text.clone();
                         app.set_tx_hex(i, &text);
-                    }
-                    // The row's checkbox keeps its state, but during a replay
-                    // an id the log carries is silenced -- replaying a
-                    // recording of this same simulation must not mix two
-                    // senders of one signal into the plot. The wording states
-                    // consequence and reason: a bare "in log" read like a
-                    // this-message-is-recorded annotation instead of "this
-                    // row now sends nothing".
-                    if matches!(app.mode, Mode::Replay)
-                        && app
-                            .replay_ids
-                            .contains(&(app.tx_list[i].channel, app.tx_list[i].id))
-                    {
-                        ui.same_line();
-                        ui.text_disabled("muted: id in log");
-                    }
-                    if driven > 0 {
-                        // The box edits the base payload only; what goes out is
-                        // base plus the sources layered on top of it.
-                        ui.same_line();
-                        ui.text("base");
                     }
                     ui.same_line();
                     if ui.small_button(format!("x##{i}")) {
