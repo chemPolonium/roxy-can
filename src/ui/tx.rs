@@ -222,14 +222,17 @@ pub fn render(app: &mut App, ui: &Ui) {
                     // The row's checkbox keeps its state, but during a replay
                     // an id the log carries is silenced -- replaying a
                     // recording of this same simulation must not mix two
-                    // senders of one signal into the plot. Say so.
+                    // senders of one signal into the plot. The wording states
+                    // consequence and reason: a bare "in log" read like a
+                    // this-message-is-recorded annotation instead of "this
+                    // row now sends nothing".
                     if matches!(app.mode, Mode::Replay)
                         && app
                             .replay_ids
                             .contains(&(app.tx_list[i].channel, app.tx_list[i].id))
                     {
                         ui.same_line();
-                        ui.text_disabled("in log");
+                        ui.text_disabled("muted: id in log");
                     }
                     if driven > 0 {
                         // The box edits the base payload only; what goes out is
