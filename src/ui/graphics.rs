@@ -471,6 +471,36 @@ pub(crate) fn draw_plot_frame(dl: &imgui::DrawListMut<'_>, x0: f32, y0: f32, w: 
         .build();
 }
 
+/// Splits a curve's samples into index runs that may be drawn connected. A
+/// run breaks wherever consecutive samples sit further apart than four times
+/// the curve's own typical spacing -- traffic absent, not a value dipping.
+/// The threshold is relative to the curve, so a steady 100 ms frame stays
+/// one line while a 10 ms wave breaks after a short outage; below eight
+/// samples there is no typical spacing to speak of and the points stay
+/// connected.
+fn curve_runs(samples: &[(u64, f64)]) -> Vec<std::ops::Range<usize>> {
+    if samples.len() < 8 {
+        return std::iter::once(0..samples.len()).collect();
+    }
+    let mut gaps: Vec<u64> = samples.windows(2).map(|w| w[1].0 - w[0].0).collect();
+    gaps.sort_unstable();
+    let limit = gaps[gaps.len() / 2].saturating_mul(4).max(1);
+    let mut runs = Vec::new();
+    let mut start = 0;
+    for k in 1..samples.len() {
+        if samples[k].0 - samples[k - 1].0 > limit {
+            if k > start + 1 {
+                runs.push(start..k);
+            }
+            start = k;
+        }
+    }
+    if samples.len() > start + 1 {
+        runs.push(start..samples.len());
+    }
+    runs
+}
+
 fn fmt_val(v: f64) -> String {
     let a = v.abs();
     if a >= 1000.0 {
@@ -717,8 +747,14 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
                     .build();
             }
         }
-        if pts.len() >= 2 {
-            dl.add_polyline(pts, color).thickness(1.5).build();
+        // Where traffic was absent -- a generator switched off, a node gone
+        // quiet -- the curve breaks instead of bridging the hole with a
+        // straight line: a bridge would invent data the bus never carried.
+        for run in curve_runs(samples) {
+            let seg = &pts[run];
+            if seg.len() >= 2 {
+                dl.add_polyline(seg.to_vec(), color).thickness(1.5).build();
+            }
         }
     }
 
@@ -802,7 +838,7 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 mod tests {
     use super::{
         AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_RADIUS_PX, MAX_CURVE_POINTS, axis_inset,
-        bucket_extremes, zoom_offset, zoom_step,
+        bucket_extremes, curve_runs, zoom_offset, zoom_step,
     };
 
     #[test]
@@ -944,6 +980,32 @@ mod tests {
             .fold(f64::NEG_INFINITY, f64::max);
         assert_eq!(hi, 12_345.0, "the spike must survive");
         assert_eq!(lo, -9_876.0, "the dip must survive");
+    }
+
+    #[test]
+    fn a_traffic_hole_breaks_the_curve() {
+        // A signal at 1 ms until t=99, silent for 50 ms, then again at 1 ms:
+        // the generator-off gap must split the curve, not bridge it.
+        let mut samples: Vec<(u64, f64)> = (0..100u64).map(|k| (k * 1_000, 0.0)).collect();
+        samples.extend((150..250u64).map(|k| (k * 1_000, 0.0)));
+        let runs = curve_runs(&samples);
+        assert_eq!(runs, vec![0..100, 100..200], "one break across the gap");
+    }
+
+    #[test]
+    fn a_steady_sparse_cycle_stays_one_line() {
+        // A 100 ms frame is 4x coarser than a 25 ms sampling stride; that is
+        // the signal's own rhythm, not a hole, so nothing may break.
+        let samples: Vec<(u64, f64)> = (0..50u64).map(|k| (k * 100_000, 0.0)).collect();
+        assert_eq!(curve_runs(&samples), vec![0..50]);
+    }
+
+    #[test]
+    fn a_few_points_stay_connected_no_matter_what() {
+        // Below eight samples there is no typical spacing to compare against;
+        // two far-apart points still draw as one line, as they always did.
+        let samples = vec![(0, 0.0), (5_000_000, 1.0)];
+        assert_eq!(curve_runs(&samples), vec![0..2]);
     }
 
     #[test]
