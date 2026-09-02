@@ -169,6 +169,29 @@ pub(crate) fn zoom_step(tw: f64, notches: f32) -> f64 {
     TIME_STEPS[next as usize]
 }
 
+/// The pan offset a wheel zoom leaves behind, given the offset before it.
+///
+/// A view riding the live edge (`t_offset_s == 0`) stays there: the right
+/// edge keeps sitting on "now" while the window just grows or shrinks, the
+/// way a running measurement is expected to behave. Only a view already
+/// panned back anchors on the time point under the mouse, so whatever
+/// spike brought you here stays put under the cursor.
+pub(crate) fn zoom_offset(
+    t_offset_s: f64,
+    t_now: f64,
+    old_tw: f64,
+    new_tw: f64,
+    frac: f64,
+    max_off: f64,
+) -> f64 {
+    if t_offset_s <= 0.0 {
+        return 0.0;
+    }
+    let t_mouse = t_now - t_offset_s - old_tw * frac;
+    let new_right = t_mouse + new_tw * frac;
+    (t_now - new_right).clamp(0.0, max_off)
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.graphics.len();
     let disp_h = ui.io().display_size[1];
@@ -365,11 +388,9 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
             let new_tw = zoom_step(tw, io.mouse_wheel);
             if (new_tw - tw).abs() > 1e-9 {
                 let frac = ((mx - ix0) / iw) as f64;
-                let right = t_now - app.graphics[i].t_offset_s;
-                let t_mouse = right - tw * frac;
                 app.graphics[i].time_window_s = new_tw;
-                let new_right = t_mouse + new_tw * frac;
-                app.graphics[i].t_offset_s = (t_now - new_right).clamp(0.0, max_off);
+                app.graphics[i].t_offset_s =
+                    zoom_offset(app.graphics[i].t_offset_s, t_now, tw, new_tw, frac, max_off);
             }
         }
     }
@@ -784,7 +805,7 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 mod tests {
     use super::{
         AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_RADIUS_PX, MAX_CURVE_POINTS, axis_inset,
-        bucket_extremes, zoom_step,
+        bucket_extremes, zoom_offset, zoom_step,
     };
 
     #[test]
@@ -840,6 +861,40 @@ mod tests {
         assert_eq!(zoom_step(3600.0, -1.0), 3600.0, "clamped at 1 h");
         assert_eq!(zoom_step(12.0, -1.0), 20.0, "snaps to nearest step first");
         assert_eq!(zoom_step(10.0, 0.3), 10.0, "sub-notch deltas are ignored");
+    }
+
+    #[test]
+    fn wheel_zoom_at_live_stays_live() {
+        // The view rides the newest data; zooming may grow or shrink the
+        // window but must not drop the right edge behind "now" -- however
+        // far from the right edge the mouse sits.
+        for frac in [0.0, 0.25, 0.5, 0.9, 1.0] {
+            assert_eq!(
+                zoom_offset(0.0, 100.0, 1.0, 0.5, frac, 500.0),
+                0.0,
+                "live stays live at frac {frac}"
+            );
+        }
+    }
+
+    #[test]
+    fn wheel_zoom_when_panned_anchors_the_mouse_point() {
+        // Panned 2 s behind a playhead at 10 s, window 1 s -> 2 s with the
+        // mouse mid-plot: the point under the mouse (7.5 s) stays under it.
+        let off = zoom_offset(2.0, 10.0, 1.0, 2.0, 0.5, 500.0);
+        assert!((off - 1.5).abs() < 1e-9, "offset {off}");
+        let right = 10.0 - off;
+        let under_mouse = right - 2.0 * 0.5;
+        assert!((under_mouse - 7.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_panned_zoom_out_cannot_reach_past_live_or_the_history_head() {
+        // Zooming out from near-live clamps at the live edge instead of
+        // panning into the future...
+        assert_eq!(zoom_offset(0.2, 100.0, 1.0, 5.0, 0.5, 500.0), 0.0);
+        // ...and zooming out far back clamps at the oldest sample.
+        assert_eq!(zoom_offset(50.0, 100.0, 1.0, 5.0, 0.5, 30.0), 30.0);
     }
 
     fn ramp(n: usize) -> Vec<(u64, f64)> {
