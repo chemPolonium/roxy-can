@@ -1,4 +1,5 @@
 use crate::app::{App, PALETTE};
+use crate::observe::YMode;
 use imgui::{Condition, Ui};
 
 /// Zoom ladder: round, analysis-friendly window lengths from a close-up up
@@ -241,6 +242,20 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.same_line();
     ui.checkbox("Dots", &mut app.graphics[i].show_markers);
     ui.same_line();
+    // Value-axis scaling: fit the view, freeze it, grow-only, or the
+    // database's declared span.
+    let mode = app.graphics[i].y_mode;
+    let mut pick = mode as usize;
+    if ui.combo_simple_string(format!("Y##y{i}"), &mut pick, &YMode::LABELS) {
+        let next = YMode::from_u8(pick as u8);
+        if next != mode {
+            // Re-entering Lock re-captures whatever the axis shows then,
+            // so dropping the frozen ranges is the re-arm.
+            app.graphics[i].y_locks.clear();
+            app.graphics[i].y_mode = next;
+        }
+    }
+    ui.same_line();
     if ui.button("Live") {
         app.graphics[i].t_offset_s = 0.0;
     }
@@ -356,6 +371,10 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     // Every curve in this window writes the same draw list, so the budget is
     // shared out here rather than assumed per call.
     let budget = CurveBudget::split(keys.len(), iw, app.graphics[i].show_markers);
+    // The value range is resolved per pane out here, where the Y mode can
+    // read and freeze window state; the drawing only consumes it.
+    let vis_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
+    let vis_hi = (t_right.max(0.0) * 1e6) as u64;
     if keys.is_empty() {
         draw_plot_frame(&dl, x0, y0, w, h);
         dl.add_text(
@@ -367,6 +386,14 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         let ph = h / keys.len() as f32;
         let last = keys.len() - 1;
         for (k, key) in keys.iter().enumerate() {
+            let y_range = resolve_y_range(
+                app,
+                i,
+                &format!("{key:?}"),
+                std::slice::from_ref(key),
+                vis_lo,
+                vis_hi,
+            );
             draw_plot(
                 &dl,
                 app,
@@ -378,6 +405,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                     keys: std::slice::from_ref(key),
                     t_right,
                     tw,
+                    y_range,
                     budget,
                     // The time axis is shared, so labelling it once at the bottom
                     // is enough -- per pane it collided with the next pane's top
@@ -388,6 +416,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
             );
         }
     } else {
+        let y_range = resolve_y_range(app, i, "", &keys, vis_lo, vis_hi);
         draw_plot(
             &dl,
             app,
@@ -399,6 +428,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                 keys: &keys,
                 t_right,
                 tw,
+                y_range,
                 budget,
                 time_labels: true,
                 cursor,
@@ -438,9 +468,102 @@ struct PlotPane<'a> {
     keys: &'a [(u8, u32, String)],
     t_right: f64,
     tw: f64,
+    /// The value range this pane draws against, resolved by the window's
+    /// [`YMode`] before the call.
+    y_range: (f64, f64),
     budget: CurveBudget,
     time_labels: bool,
     cursor: Option<(f32, f64)>,
+}
+
+/// The value range one pane draws against, per the window's Y mode.
+///
+/// `lock_key` names the pane inside the window's lock table: the empty
+/// string for the shared overlay axis, one entry per signal in
+/// one-plot-per-signal mode. Locking captures the auto range the first
+/// frame it is needed, so a project restored straight into Lock mode waits
+/// for data instead of freezing the empty 0..1 placeholder.
+pub(crate) fn resolve_y_range(
+    app: &mut App,
+    gi: usize,
+    lock_key: &str,
+    keys: &[(u8, u32, String)],
+    lo_us: u64,
+    hi_us: u64,
+) -> (f64, f64) {
+    /// What the visible slice spans right now -- the behaviour of every
+    /// Graphics tool before the Y modes existed.
+    fn auto(app: &App, keys: &[(u8, u32, String)], lo_us: u64, hi_us: u64) -> (f64, f64) {
+        let (mut vmin, mut vmax) = (f64::INFINITY, f64::NEG_INFINITY);
+        for key in keys {
+            if let Some(sub) = app.subs.get(key) {
+                for &(_, v) in sub.history.range(lo_us, hi_us) {
+                    if v < vmin {
+                        vmin = v;
+                    }
+                    if v > vmax {
+                        vmax = v;
+                    }
+                }
+            }
+        }
+        if !vmin.is_finite() || !vmax.is_finite() {
+            (0.0, 1.0)
+        } else if vmax - vmin < 1e-9 {
+            (vmin, vmin + 1.0)
+        } else {
+            (vmin, vmax)
+        }
+    }
+
+    match app.graphics[gi].y_mode {
+        YMode::Auto => auto(app, keys, lo_us, hi_us),
+        YMode::Lock => {
+            if let Some(&r) = app.graphics[gi].y_locks.get(lock_key) {
+                r
+            } else {
+                let r = auto(app, keys, lo_us, hi_us);
+                app.graphics[gi].y_locks.insert(lock_key.to_string(), r);
+                r
+            }
+        }
+        YMode::FitAll => {
+            // The cumulative sampler stats are the run's whole envelope: they
+            // only ever widen, which is the point of this mode.
+            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+            for key in keys {
+                if let Some(sub) = app.subs.get(key) {
+                    lo = lo.min(sub.min);
+                    hi = hi.max(sub.max);
+                }
+            }
+            if !lo.is_finite() || !hi.is_finite() {
+                (0.0, 1.0)
+            } else if hi - lo < 1e-9 {
+                (lo, hi + 1.0)
+            } else {
+                (lo, hi)
+            }
+        }
+        YMode::Dbc => {
+            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+            for key in keys {
+                if let Some((a, b)) = app.declared_range(key).or_else(|| {
+                    // Undeclared signals still deserve a sane axis: their
+                    // observed extremes, once anything has been sampled.
+                    app.subs.get(key).map(|s| (s.min, s.max))
+                }) {
+                    lo = lo.min(a);
+                    hi = hi.max(b);
+                }
+            }
+            if !lo.is_finite() || !hi.is_finite() || hi - lo < 1e-9 {
+                (0.0, 1.0)
+            } else {
+                (lo, hi)
+            }
+        }
+    }
 }
 
 fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
@@ -452,6 +575,7 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         keys,
         t_right,
         tw,
+        y_range,
         budget,
         time_labels,
         cursor,
@@ -481,24 +605,12 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         })
         .collect();
 
-    let mut vmin = f64::INFINITY;
-    let mut vmax = f64::NEG_INFINITY;
-    for (_, pts) in &curves {
-        for &(_, v) in pts.iter() {
-            if v < vmin {
-                vmin = v;
-            }
-            if v > vmax {
-                vmax = v;
-            }
-        }
-    }
-    if !vmin.is_finite() {
+    // The pane's range was resolved by the window's Y mode before the call;
+    // the guard only keeps a degenerate value from wrecking the mapping.
+    let (mut vmin, mut vmax) = y_range;
+    if !vmin.is_finite() || !vmax.is_finite() || vmax - vmin < 1e-9 {
         vmin = 0.0;
         vmax = 1.0;
-    }
-    if vmax - vmin < 1e-9 {
-        vmax = vmin + 1.0;
     }
 
     // Labels live outside the curve rect: time labels centred under their

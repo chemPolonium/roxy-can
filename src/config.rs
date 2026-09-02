@@ -3,13 +3,14 @@
 //! layout are bundled in one JSON file. A small `roxy-can.meta.json`
 //! remembers the last opened project. The legacy `roxy-can.json` (no
 //! project path) is still read once as a migration fallback.
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::app::{
     App, Channel, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin,
-    TraceWin, WindowKind,
+    TraceWin, WindowKind, YMode,
 };
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::sim::{SrcKind, ValueSrc};
@@ -174,6 +175,9 @@ pub struct GfxCfg {
     pub zoom_enabled: bool,
     #[serde(default = "true_default")]
     pub show_markers: bool,
+    /// [`crate::observe::YMode`] code; unknown values load as Auto.
+    #[serde(default)]
+    pub y_mode: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -520,6 +524,7 @@ impl Config {
                     show_cursor: g.show_cursor,
                     zoom_enabled: g.zoom_enabled,
                     show_markers: g.show_markers,
+                    y_mode: g.y_mode.to_u8(),
                 })
                 .collect(),
             data_windows: app
@@ -743,6 +748,8 @@ impl Config {
                     show_cursor: g.show_cursor,
                     zoom_enabled: g.zoom_enabled,
                     show_markers: g.show_markers,
+                    y_mode: YMode::from_u8(g.y_mode),
+                    y_locks: HashMap::new(),
                 })
                 .collect();
         }

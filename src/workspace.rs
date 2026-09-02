@@ -1,7 +1,7 @@
 //! Window and desktop bookkeeping: the five observer-window models, the
 //! window-kind registry, and named desktops over them.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Which buses/messages an analysis window looks at.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -344,6 +344,8 @@ impl App {
             show_cursor: true,
             zoom_enabled: false,
             show_markers: true,
+            y_mode: crate::observe::YMode::Auto,
+            y_locks: HashMap::new(),
         });
     }
 

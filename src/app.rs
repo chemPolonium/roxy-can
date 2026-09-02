@@ -55,7 +55,7 @@ pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 use crate::generator::tx_payload;
 pub use crate::generator::{TX_CYCLE_MAX_MS, TxMsg, cycle_from_ms_text};
-pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, Subscription};
+pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, Subscription, YMode};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,

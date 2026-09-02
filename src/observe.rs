@@ -220,6 +220,39 @@ pub struct GfxSignal {
     pub visible: bool,
 }
 
+/// How a Graphics window scales its value axis.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum YMode {
+    /// Fit whatever the visible time window holds, every frame.
+    #[default]
+    Auto,
+    /// Freeze the axis at the range it shows when the mode is picked. New
+    /// data cannot move it until the mode is left and re-entered.
+    Lock,
+    /// Grow the range to contain every value the run has produced and never
+    /// shrink it back, so once a value has arrived it stays on the plot.
+    FitAll,
+    /// Scale against the database's declared min..max per signal; a signal
+    /// without declarations falls back to its observed extremes.
+    Dbc,
+}
+
+impl YMode {
+    /// Toolbar labels, in `YMode::ALL` order.
+    pub const LABELS: [&'static str; 4] = ["Auto", "Lock", "Fit all", "DBC range"];
+
+    pub const ALL: [YMode; 4] = [YMode::Auto, YMode::Lock, YMode::FitAll, YMode::Dbc];
+
+    /// Project-file code; unknown values load as [`YMode::Auto`].
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        Self::ALL.get(v as usize).copied().unwrap_or(YMode::Auto)
+    }
+}
+
 pub struct GraphicsWindow {
     pub name: String,
     pub signals: Vec<GfxSignal>,
@@ -232,6 +265,12 @@ pub struct GraphicsWindow {
     /// Draw a dot on each sample when the visible points are sparse enough to
     /// read individually.
     pub show_markers: bool,
+    pub y_mode: YMode,
+    /// Frozen ranges while [`YMode::Lock`] is active, keyed per plot pane:
+    /// the empty string for the shared overlay axis, the signal key's debug
+    /// text for each pane in one-plot-per-signal mode. Session state only --
+    /// leaving the mode clears it.
+    pub(crate) y_locks: HashMap<String, (f64, f64)>,
 }
 
 pub struct DataWindow {

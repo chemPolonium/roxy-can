@@ -4,6 +4,7 @@ use super::*;
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
 use crate::log::AscWriter;
+use crate::observe::YMode;
 use crate::sim::ValueSrc;
 use crate::trigger::{Trigger, TriggerAction, TriggerCond};
 
@@ -3262,4 +3263,182 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
         prev_count >= 80,
         "a 1 s window at 100 Hz holds ~100 points, ended at {prev_count}"
     );
+}
+
+/// Feed EngineSpeed the given (time µs, rpm) pairs in one scripted receive.
+fn feed_rpm(app: &mut App, pts: &[(u64, f64)]) {
+    let t = pts.last().map(|&(t, _)| t).unwrap_or(0) + 10_000;
+    receive(app, t, pts.iter().map(|&(t, v)| rpm_frame(t, v)).collect());
+}
+
+#[test]
+fn lock_freezes_the_value_axis_until_the_mode_is_re_entered() {
+    let mut app = quiet_app();
+    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+    app.graphics[0].opened = true;
+    feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 100.0),
+        "auto fits what the run has shown"
+    );
+
+    // Picking Lock captures the range on screen; later, taller values may
+    // not move it.
+    app.graphics[0].y_mode = YMode::Lock;
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 100.0),
+        "the capture takes the current view"
+    );
+    feed_rpm(&mut app, &[(300_000, 500.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 100.0),
+        "locked means locked: 500 rpm must not widen the axis"
+    );
+
+    // Leaving the mode disarms it, so re-entering re-captures afresh.
+    app.graphics[0].y_mode = YMode::Auto;
+    feed_rpm(&mut app, &[(400_000, 900.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 900.0),
+        "auto follows again"
+    );
+    app.stop();
+}
+
+#[test]
+fn fit_all_only_ever_widens_the_value_axis() {
+    let mut app = quiet_app();
+    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+    app.graphics[0].opened = true;
+    app.graphics[0].y_mode = YMode::FitAll;
+    feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 100.0)
+    );
+    feed_rpm(&mut app, &[(300_000, 250.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 250.0),
+        "a taller peak widens the axis"
+    );
+    feed_rpm(&mut app, &[(400_000, 30.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        (0.0, 250.0),
+        "quieter values never shrink it back -- everything seen stays visible"
+    );
+    app.stop();
+}
+
+#[test]
+fn dbc_mode_scales_by_the_declared_range() {
+    let mut app = quiet_app();
+    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+    app.graphics[0].opened = true;
+    app.graphics[0].y_mode = YMode::Dbc;
+    let declared = app
+        .declared_range(&key)
+        .expect("sample.dbc declares the range");
+    feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        declared,
+        "the axis is the database's word, not the traffic's"
+    );
+    // Even traffic beyond the declaration cannot stretch it: the curve
+    // clamps at the plot edge instead.
+    feed_rpm(&mut app, &[(300_000, 9_000.0)]);
+    assert_eq!(
+        crate::ui::graphics::resolve_y_range(
+            &mut app,
+            0,
+            "",
+            std::slice::from_ref(&key),
+            0,
+            1_000_000
+        ),
+        declared
+    );
+    app.stop();
+}
+
+#[test]
+fn the_y_mode_round_trips_through_a_project() {
+    let mut app = App::new();
+    app.graphics[0].y_mode = YMode::FitAll;
+    let path = std::env::temp_dir().join("roxy_can_ymode.rxproj");
+    assert!(app.save_project(Some(path.clone())));
+
+    let mut restored = App::new();
+    restored.open_project_path(&path);
+    assert_eq!(restored.graphics[0].y_mode, YMode::FitAll);
+    assert!(
+        restored.graphics[0].y_locks.is_empty(),
+        "frozen ranges are session state, never persisted"
+    );
+    std::fs::remove_file(&path).ok();
 }
