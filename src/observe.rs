@@ -325,8 +325,6 @@ pub struct DataWindow {
 use std::collections::HashMap;
 
 use crate::app::{App, MAX_SCAN_FRAMES};
-use crate::can::frame::CanFrame;
-use crate::dbc::DecodedSignal;
 
 impl GraphicsWindow {
     /// The throttled legend strings for `keys`, in the same order; an empty
@@ -443,30 +441,6 @@ impl App {
         for sub in self.subs.values_mut() {
             sub.resume_sampling_at(t_us);
         }
-    }
-
-    /// Decodes one frame into `(signal key, decoded signal)` pairs for the
-    /// signals that are currently subscribed. Shared by the playback loop and
-    /// the Graphics window backfill so the two cannot drift on what a signal's
-    /// value is.
-    pub(crate) fn subscribed_values(
-        &self,
-        f: &CanFrame,
-    ) -> Vec<((u8, u32, String), DecodedSignal)> {
-        let Some(db) = self
-            .channels
-            .get(f.channel as usize)
-            .and_then(|c| c.dbc.as_ref())
-        else {
-            return Vec::new();
-        };
-        db.decode_signals(f)
-            .into_iter()
-            .filter_map(|d| {
-                let key = (f.channel, f.id, d.name.clone());
-                self.subs.contains_key(&key).then_some((key, d))
-            })
-            .collect()
     }
 
     /// The display type the database declares for a subscribed signal, used

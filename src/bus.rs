@@ -13,6 +13,7 @@ use crate::aggregate::MessageAgg;
 use crate::app::{SAMPLE_INTERVAL_US, TRACE_LIMIT};
 use crate::can::frame::CanFrame;
 use crate::channel::Channel;
+use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::Subscription;
 
@@ -81,5 +82,110 @@ impl BusCore {
             sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
         }
+    }
+
+    /// Folds one accepted frame into every bus-side consumer: the trace
+    /// ring, the run counter, the per-bus load rollups, the per-message
+    /// aggregates and the subscribed-signal caches. `stride` is the sampling
+    /// period the frontend currently wants for signal history; everything
+    /// else this touches is the bus's own state.
+    pub(crate) fn ingest(&mut self, f: CanFrame, stride: u64) {
+        if self.trace.len() >= TRACE_LIMIT {
+            self.trace.pop_front();
+        }
+        self.frame_counter += 1;
+        // Error frames included: they occupy the bus and the load view
+        // counts them; per-message aggregation below skips them.
+        if let Some(load) = self.bus_loads.get_mut(f.channel as usize) {
+            let (arb, data) = {
+                let ch = &self.channels[f.channel as usize];
+                (ch.bitrate_kbps, ch.fd_data_kbps)
+            };
+            let wire = crate::load::wire_time_us(&f, arb, data);
+            load.note(&f, wire);
+        }
+        if f.is_error() {
+            // Error frames carry no identifier and no payload; they are
+            // intentionally kept out of per-message aggregation.
+            self.trace.push_back(f);
+            return;
+        }
+        let agg = self.aggs.entry((f.channel, f.id)).or_insert(MessageAgg {
+            id: f.id,
+            extended: f.extended,
+            channel: f.channel,
+            dir: f.dir,
+            count: 0,
+            last_t_us: 0,
+            cycle_us: 0.0,
+            min_us: f64::MAX,
+            max_us: 0.0,
+            len: f.len,
+            data: f.data,
+            flags: f.flags,
+        });
+        // Only a strictly later timestamp marks a real cycle. A backwards
+        // or repeated one is a discontinuity -- a seek, or an out-of-order
+        // log row -- and folding it in used to pin `min_us` at zero for the
+        // rest of the run. The running average keeps its pre-seek value and
+        // resumes blending at the next real interval.
+        if agg.count > 0 && f.t_us > agg.last_t_us {
+            let dt = (f.t_us - agg.last_t_us) as f64;
+            agg.cycle_us = if agg.count == 1 {
+                dt
+            } else {
+                agg.cycle_us * 0.9 + dt * 0.1
+            };
+            if dt < agg.min_us {
+                agg.min_us = dt;
+            }
+            if dt > agg.max_us {
+                agg.max_us = dt;
+            }
+        }
+        agg.count += 1;
+        agg.last_t_us = f.t_us;
+        agg.channel = f.channel;
+        agg.dir = f.dir;
+        agg.len = f.len;
+        agg.data = f.data;
+        agg.flags = f.flags;
+        for (key, d) in self.subscribed_values(&f) {
+            let Some(entry) = self.subs.get_mut(&key) else {
+                continue;
+            };
+            entry.latest = d.phys;
+            entry.last_raw = d.raw;
+            entry.unit = d.unit;
+            entry.type_tag = d.type_tag;
+            entry.label = d.label;
+            entry.last_update_us = f.t_us;
+            if f.t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
+                entry.push_sample(f.t_us, d.phys, stride);
+            }
+        }
+        self.trace.push_back(f);
+    }
+
+    /// The frames a frame carries for signals this run subscribes to, looked
+    /// up in the sending bus's database.
+    pub(crate) fn subscribed_values(
+        &self,
+        f: &CanFrame,
+    ) -> Vec<((u8, u32, String), DecodedSignal)> {
+        let Some(db) = self
+            .channels
+            .get(f.channel as usize)
+            .and_then(|c| c.dbc.as_ref())
+        else {
+            return Vec::new();
+        };
+        db.decode_signals(f)
+            .into_iter()
+            .filter_map(|d| {
+                let key = (f.channel, f.id, d.name.clone());
+                self.subs.contains_key(&key).then_some((key, d))
+            })
+            .collect()
     }
 }
