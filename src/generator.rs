@@ -113,16 +113,13 @@ impl App {
     /// Enables or disables every generator message of one bus; freshly
     /// enabled messages restart their cycle immediately.
     pub fn set_bus_tx(&mut self, ch: u8, on: bool) {
-        for i in 0..self.tx_list.len() {
-            if self.tx_list[i].channel == ch && self.tx_list[i].active != on {
-                self.set_tx_active(i, on);
-            }
-        }
+        self.send(crate::bus::BusCommand::SetBusTx { ch, on });
     }
 
     /// Ticks one entry's On checkbox. The anchoring semantics live with the
     /// command (`SetEntryActive`); this wrapper keeps the index-based call
     /// sites and tests working.
+    #[cfg(test)]
     pub fn set_tx_active(&mut self, i: usize, on: bool) {
         let Some(tx) = self.tx_list.get(i) else {
             return;
@@ -131,66 +128,19 @@ impl App {
         self.send(crate::bus::BusCommand::SetEntryActive { ch, id, on });
     }
 
-    /// Ticks or unticks a DBC node as one this tool transmits as.
-    ///
-    /// Ticking adds whatever generator entry the node is missing and switches
-    /// them on. The period of an entry that already exists is never rewritten,
-    /// so a value tuned by hand outlives the click. Unticking only stops
-    /// sending: entries keep their payload and waveforms, so ticking the node
-    /// again restores it exactly as it was.
+    /// Ticks or unticks a DBC node as one this tool transmits as. The
+    /// whole membership/activation semantics live with the command.
     pub fn set_node_sim(&mut self, channel: u8, node: &str, on: bool) {
         // `""` is what the parser writes for "no transmitter assigned", and
         // `node_tx_ids` matches it against every unassigned message at once.
         if node.is_empty() || channel as usize >= self.channels.len() {
             return;
         }
-        // The tick is recorded first and unconditionally: a node that sends
-        // nothing still has to remember that we mean to be it.
-        let list = &mut self.channels[channel as usize].sim_nodes;
-        if on {
-            if !list.iter().any(|n| n == node) {
-                list.push(node.to_string());
-            }
-        } else {
-            list.retain(|n| n != node);
-        }
-
-        // Membership comes from the live database, not from each entry's
-        // stamped `node`: loading another DBC does not rebuild the generator,
-        // so a stamp can name a message this node no longer owns.
-        let ids = self
-            .channel_dbc(channel)
-            .map(|db| db.node_tx_ids(node))
-            .unwrap_or_default();
-        if on {
-            for id in &ids {
-                self.add_tx(channel, *id);
-            }
-            for i in 0..self.tx_list.len() {
-                if self.tx_list[i].channel == channel
-                    && ids.contains(&self.tx_list[i].id)
-                    && !self.tx_list[i].active
-                {
-                    self.set_tx_active(i, true);
-                }
-            }
-        } else {
-            // The stamped name is included on the way out only, so unchecking
-            // still silences a node whose database has since been swapped or
-            // unloaded. "I unchecked it and it is still transmitting" is the
-            // one outcome a user cannot recover from by guessing.
-            for t in &mut self.tx_list {
-                if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
-                    t.active = false;
-                }
-            }
-        }
-        let bus = self.channel_name(channel);
-        self.status = if on {
-            format!("simulating {node} on {bus} ({} message(s))", ids.len())
-        } else {
-            format!("{node} stopped on {bus}")
-        };
+        self.send(crate::bus::BusCommand::SetNodeSim {
+            ch: channel,
+            node: node.to_string(),
+            on,
+        });
     }
 
     /// Whether this bus was told to transmit as `node`.

@@ -43,42 +43,27 @@ impl App {
             .unwrap_or_else(|| format!("CAN{}", ch + 1))
     }
 
-    /// Adds a new bus, loads its default DBC, and pre-populates the generator.
+    /// Adds a new bus, loads its default DBC, and pre-populates the
+    /// generator. All on the bus via the command.
     pub fn add_channel(&mut self) {
-        self.bus_counter += 1;
-        self.core.channels.push(Channel {
-            name: format!("CAN{}", self.bus_counter),
-            dbc: None,
-            dbc_path: "assets/sample.dbc".to_string(),
-            sim_nodes: Vec::new(),
-            bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-        });
-        self.bus_loads.push(crate::load::BusLoad::new());
-        let ch = self.core.channels.len() - 1;
-        self.load_channel(ch);
-        let ids: Vec<u32> = self.core.channels[ch]
-            .dbc
-            .as_ref()
-            .map(|db| db.order.clone())
-            .unwrap_or_default();
-        for id in ids {
-            self.add_tx(ch as u8, id);
-        }
+        self.send(crate::bus::BusCommand::AddChannel);
     }
 
-    /// Removes a bus and remaps every channel-indexed reference one step down.
+    /// Removes a bus and remaps every channel-indexed reference one step
+    /// down. The bus remaps its own state (command `RemoveChannel`); this
+    /// wrapper afterwards remaps the frontend's window state, so both
+    /// sides agree on the new indexing.
     pub fn remove_channel(&mut self, ch: usize) {
-        if self.channels.len() <= 1 {
+        // Mirror the command's refusal so the frontend never remaps when
+        // the bus did not.
+        if self.snap.channel_count <= 1 {
             self.status = "at least one bus is required".to_string();
             return;
         }
-        if ch >= self.channels.len() {
+        if ch >= self.snap.channel_count {
             return;
         }
-        let name = self.channels[ch].name.clone();
-        self.channels.remove(ch);
-        self.bus_loads.remove(ch);
+        self.send(crate::bus::BusCommand::RemoveChannel { ch });
         let remap = |c: u8| -> Option<u8> {
             if (c as usize) < ch {
                 Some(c)
@@ -88,22 +73,6 @@ impl App {
                 Some(c - 1)
             }
         };
-        self.aggs = self
-            .aggs
-            .drain()
-            .filter_map(|((c, id), mut a)| {
-                remap(c).map(|nc| {
-                    a.channel = nc;
-                    ((nc, id), a)
-                })
-            })
-            .collect();
-        self.subs = self
-            .subs
-            .drain()
-            .filter_map(|((c, id, sig), s)| remap(c).map(|nc| ((nc, id, sig), s)))
-            .collect();
-        self.spec.drop_channel(ch as u8);
         let remap_set = |set: &mut HashSet<(u8, u32)>| {
             *set = set
                 .drain()
@@ -118,18 +87,6 @@ impl App {
         }
         for w in &mut self.stats_windows {
             remap_set(&mut w.manual);
-        }
-        self.tx_list.retain(|t| t.channel as usize != ch);
-        for t in &mut self.tx_list {
-            if t.channel as usize > ch {
-                t.channel -= 1;
-            }
-        }
-        self.trace.retain(|f| f.channel as usize != ch);
-        for f in self.trace.iter_mut() {
-            if f.channel as usize > ch {
-                f.channel -= 1;
-            }
         }
         let remap_keys = |signals: &mut Vec<GfxSignal>| {
             signals.retain(|s| remap(s.key.0).is_some());
@@ -162,7 +119,7 @@ impl App {
             fix_scope(&mut w.scope);
         }
         self.net_selected = 0;
-        self.status = format!("bus {name} removed");
+        // The status line ("bus CANx removed") came from the command.
     }
 
     pub fn load_channel(&mut self, ch: usize) -> bool {

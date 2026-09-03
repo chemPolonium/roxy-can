@@ -210,7 +210,6 @@ pub struct App {
     pub(crate) stats_counter: usize,
     pub(crate) graphics_counter: usize,
     pub(crate) data_counter: usize,
-    pub(crate) bus_counter: usize,
 }
 
 impl std::ops::Deref for App {
@@ -323,7 +322,6 @@ impl App {
             stats_counter: 0,
             graphics_counter: 0,
             data_counter: 0,
-            bus_counter: 2,
         };
         app.load_dbcs();
         app.new_trace_window();

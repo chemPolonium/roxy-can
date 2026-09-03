@@ -45,6 +45,17 @@ pub enum BusCommand {
     ToggleRecord,
     /// Select the bus kind the next start will run (Simulation / Replay).
     SetRunMode(crate::app::Mode),
+    /// Add a bus with the sample DBC path, load it, and pre-populate its
+    /// generator.
+    AddChannel,
+    /// Remove bus `ch` and remap every channel-indexed reference one step
+    /// down. The frontend remaps its own window state in the same stroke.
+    RemoveChannel { ch: usize },
+    /// Enable/disable every generator entry of one bus; freshly enabled
+    /// entries anchor at the current clock.
+    SetBusTx { ch: u8, on: bool },
+    /// Tick or untick a DBC node as one this tool transmits as.
+    SetNodeSim { ch: u8, node: String, on: bool },
     /// Replay-speed multiplier applied to the log source. (The remembered
     /// choice for the next run and the combo's display stay frontend.)
     SetReplaySpeed(f64),
@@ -123,6 +134,8 @@ pub struct Snapshot {
     /// Replay playhead and log length in µs, when a log with a known
     /// position is loaded.
     pub replay: Option<(u64, u64)>,
+    /// How many buses exist (frontends key window state off this).
+    pub channel_count: usize,
     /// One record per (bus, id) seen this run, behind the Messages /
     /// Statistics views and their exports.
     pub aggs: Vec<MessageAgg>,
@@ -220,6 +233,8 @@ pub struct BusCore {
     /// mode, never persisted.
     pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
     pub(crate) channels: Vec<Channel>,
+    /// Counter for naming new buses (CAN3, CAN4, ...).
+    pub(crate) bus_counter: usize,
     /// The interactive generator's entries: what this tool transmits as.
     pub(crate) tx_list: Vec<TxMsg>,
     /// Simulation clock: accumulates only while measuring and unpaused.
@@ -285,6 +300,7 @@ impl BusCore {
             source: Box::new(crate::source::virtual_source::VirtualSource::new()),
             replay_ids: std::collections::HashSet::new(),
             channels: Vec::new(),
+            bus_counter: 2,
             tx_list: Vec::new(),
             sim_t_us: 0,
             sim_prev_us: 0,
@@ -318,6 +334,10 @@ impl BusCore {
             BusCommand::SetTracePaused(on) => self.trace_paused = on,
             BusCommand::ToggleRecord => self.toggle_record(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
+            BusCommand::AddChannel => self.add_channel(status),
+            BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
+            BusCommand::SetBusTx { ch, on } => self.set_bus_tx(ch, on),
+            BusCommand::SetNodeSim { ch, node, on } => self.set_node_sim(ch, &node, on, status),
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
             BusCommand::SetEntryActive { ch, id, on } => {
@@ -414,6 +434,7 @@ impl BusCore {
             trace: Arc::clone(&self.published_trace),
             sub_count: self.subs.len(),
             replay,
+            channel_count: self.channels.len(),
             mode: self.mode,
             run_mode: self.run_mode,
             measuring: self.measuring,
@@ -537,6 +558,187 @@ impl BusCore {
             .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
             .map(|s| s.type_tag.clone())
             .unwrap_or_default()
+    }
+
+    /// Adds a bus with the sample DBC path, loads it and pre-populates its
+    /// generator from the database.
+    fn add_channel(&mut self, status: &mut String) {
+        self.bus_counter += 1;
+        self.channels.push(Channel {
+            name: format!("CAN{}", self.bus_counter),
+            dbc: None,
+            dbc_path: "assets/sample.dbc".to_string(),
+            sim_nodes: Vec::new(),
+            bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
+        });
+        self.bus_loads.push(crate::load::BusLoad::new());
+        let ch = self.channels.len() - 1;
+        self.load_channel(ch, status);
+        let ids: Vec<u32> = self.channels[ch]
+            .dbc
+            .as_ref()
+            .map(|db| db.order.clone())
+            .unwrap_or_default();
+        for id in ids {
+            self.add_entry(ch as u8, id);
+        }
+    }
+
+    /// (Re)loads the database named by the bus's `dbc_path`.
+    fn load_channel(&mut self, ch: usize, status: &mut String) -> bool {
+        let Some(channel) = self.channels.get_mut(ch) else {
+            return false;
+        };
+        let name = channel.name.clone();
+        match std::fs::read_to_string(channel.dbc_path.trim()) {
+            Ok(content) => match crate::dbc::load_dbc_str(&content) {
+                Ok(table) => {
+                    *status = format!("{name} DBC loaded: {} messages", table.order.len());
+                    channel.dbc = Some(table);
+                    true
+                }
+                Err(e) => {
+                    *status = format!("{name} DBC error: {e}");
+                    false
+                }
+            },
+            Err(e) => {
+                *status = format!("{name} DBC read failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Removes bus `ch` and remaps every bus-side, channel-indexed
+    /// reference one step down. Window state is the frontend's to remap.
+    fn remove_channel(&mut self, ch: usize, status: &mut String) {
+        if self.channels.len() <= 1 {
+            *status = "at least one bus is required".to_string();
+            return;
+        }
+        if ch >= self.channels.len() {
+            return;
+        }
+        let name = self.channels[ch].name.clone();
+        self.channels.remove(ch);
+        self.bus_loads.remove(ch);
+        let remap = |c: u8| -> Option<u8> {
+            if (c as usize) < ch {
+                Some(c)
+            } else if (c as usize) == ch {
+                None
+            } else {
+                Some(c - 1)
+            }
+        };
+        self.aggs = self
+            .aggs
+            .drain()
+            .filter_map(|((c, id), mut a)| {
+                remap(c).map(|nc| {
+                    a.channel = nc;
+                    ((nc, id), a)
+                })
+            })
+            .collect();
+        self.subs = self
+            .subs
+            .drain()
+            .filter_map(|((c, id, sig), s)| remap(c).map(|nc| ((nc, id, sig), s)))
+            .collect();
+        self.spec.drop_channel(ch as u8);
+        self.tx_list.retain(|t| t.channel as usize != ch);
+        for t in &mut self.tx_list {
+            if t.channel as usize > ch {
+                t.channel -= 1;
+            }
+        }
+        self.trace.retain(|f| f.channel as usize != ch);
+        for f in self.trace.iter_mut() {
+            if f.channel as usize > ch {
+                f.channel -= 1;
+            }
+        }
+        self.publish_trace();
+        *status = format!("{name} removed");
+    }
+
+    /// Enables or disables every generator message of one bus; freshly
+    /// enabled messages restart their cycle immediately.
+    fn set_bus_tx(&mut self, ch: u8, on: bool) {
+        let sim = self.sim_t_us;
+        for t in &mut self.tx_list {
+            if t.channel == ch && t.active != on {
+                t.active = on;
+                if on {
+                    t.next_t_us = sim;
+                }
+            }
+        }
+    }
+
+    /// Ticks or unticks a DBC node as one this tool transmits as.
+    ///
+    /// Ticking adds whatever generator entry the node is missing and
+    /// switches them on. The period of an entry that already exists is
+    /// never rewritten, so a value tuned by hand outlives the click.
+    /// Unticking only stops sending: entries keep their payload and
+    /// waveforms, so ticking the node again restores it exactly as it was.
+    fn set_node_sim(&mut self, channel: u8, node: &str, on: bool, status: &mut String) {
+        if self.channels.get(channel as usize).is_none() {
+            return;
+        }
+        // The tick is recorded first and unconditionally: a node that sends
+        // nothing still has to remember that we mean to be it.
+        let list = &mut self.channels[channel as usize].sim_nodes;
+        if on {
+            if !list.iter().any(|n| n == node) {
+                list.push(node.to_string());
+            }
+        } else {
+            list.retain(|n| n != node);
+        }
+
+        // Membership comes from the live database, not from each entry's
+        // stamped `node`: loading another DBC does not rebuild the generator,
+        // so a stamp can name a message this node no longer owns.
+        let ids = self
+            .channel_dbc(channel)
+            .map(|db| db.node_tx_ids(node))
+            .unwrap_or_default();
+        if on {
+            for id in &ids {
+                self.add_entry(channel, *id);
+            }
+            let sim = self.sim_t_us;
+            for t in &mut self.tx_list {
+                if t.channel == channel && ids.contains(&t.id) && !t.active {
+                    t.active = true;
+                    t.next_t_us = sim;
+                }
+            }
+        } else {
+            // The stamped name is included on the way out only, so unchecking
+            // still silences a node whose database has since been swapped or
+            // unloaded. "I unchecked it and it is still transmitting" is the
+            // one outcome a user cannot recover from by guessing.
+            for t in &mut self.tx_list {
+                if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
+                    t.active = false;
+                }
+            }
+        }
+        let bus = self
+            .channels
+            .get(channel as usize)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", channel + 1));
+        *status = if on {
+            format!("simulating {node} on {bus} ({} message(s))", ids.len())
+        } else {
+            format!("{node} stopped on {bus}")
+        };
     }
 
     /// Adds the generator entry `(ch, id)` unless it already exists.
@@ -747,6 +949,8 @@ impl BusCore {
     /// 1:1 with the wall in Virtual). `None` means nothing is scheduled --
     /// the event loop may sleep until a command arrives. Paused or stopped
     /// buses are never due.
+    // Wired into the core thread's event loop (阶段 3).
+    #[allow(dead_code)]
     pub(crate) fn next_deadline(&self, now_us: u64) -> Option<u64> {
         if !self.measuring || self.trace_paused {
             return None;
@@ -788,6 +992,8 @@ impl BusCore {
     /// run one full step. `step` alone assumes the caller maintains the
     /// clocks (as the UI loop does); `step_to` is what a deadline-driven
     /// loop calls when it wakes.
+    // Wired into the core thread's event loop (阶段 3).
+    #[allow(dead_code)]
     pub(crate) fn step_to(
         &mut self,
         now_us: u64,
