@@ -24,6 +24,25 @@ use crate::trigger::{TriggerAction, TriggerCond};
 /// following steps. At 100 Hz one step covers ~10 s of missed timeline.
 pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
 
+/// What the frontend may ask the bus to do. One variant per transport
+/// action, deliberately carrying no UI state -- no picked file paths, no
+/// window selections; the frontend resolves those before asking. That is
+/// what lets the same enum cross a thread unchanged in stage 3.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BusCommand {
+    /// Fresh virtual run: swap in a new virtual source, blank every
+    /// run-scored counter, measure against the wall clock.
+    StartVirtual,
+    /// Stop measuring and close the recorder.
+    Stop,
+    /// Freeze or unfreeze the trace views; frozen arrivals stamp at the
+    /// freeze instant.
+    SetTracePaused(bool),
+    /// Toggle ASC recording. While stopped, the file is created by the
+    /// next start -- checking Record must not leave an empty file behind.
+    ToggleRecord,
+}
+
 /// The simulation half of the application. Fields move here from `App` in
 /// slices; during the migration `App` derefs to this, so existing field
 /// access keeps compiling. Crate-wide visibility is migration scaffolding --
@@ -124,6 +143,89 @@ impl BusCore {
             recorder: crate::recorder::Recorder::new(),
             triggers: Vec::new(),
             spec: crate::spec::Spec::default(),
+        }
+    }
+
+    /// Executes a command from the frontend. Single-threaded this is a
+    /// plain call (`App::send`); stage 3 sends the same enum over a
+    /// channel instead. Status text an action produces goes into `status`
+    /// -- the bus has no display of its own.
+    pub(crate) fn handle(&mut self, cmd: BusCommand, status: &mut String) {
+        match cmd {
+            BusCommand::StartVirtual => self.start_virtual(status),
+            BusCommand::Stop => self.stop_bus(status),
+            BusCommand::SetTracePaused(on) => self.trace_paused = on,
+            BusCommand::ToggleRecord => self.toggle_record(status),
+        }
+    }
+
+    /// Fresh virtual run: new source, blank run state, wall-clock
+    /// measuring.
+    fn start_virtual(&mut self, status: &mut String) {
+        self.recorder.close();
+        self.source = Box::new(crate::source::virtual_source::VirtualSource::new());
+        self.mode = Mode::Virtual;
+        self.run_mode = Mode::Virtual;
+        self.reset_run();
+        self.measuring = true;
+        *status = "measuring (virtual)".to_string();
+        if self.recorder.recording {
+            match self.recorder.open() {
+                Ok(path) => *status = format!("recording to {path}"),
+                Err(e) => *status = format!("record failed: {e}"),
+            }
+        }
+    }
+
+    /// Blanks every run-scored counter: rings, aggregates, loads, spec
+    /// memory, generator schedules, subscription measurement state.
+    pub(crate) fn reset_run(&mut self) {
+        self.sim_t_us = 0;
+        self.sim_prev_us = 0;
+        // A fresh start must not inherit the previous run's pause state.
+        self.trace_paused = false;
+        self.paused_at_us = None;
+        self.trace.clear();
+        self.frame_counter = 0;
+        self.aggs.clear();
+        for load in &mut self.bus_loads {
+            load.clear();
+        }
+        // Along with the aggregates it reads: keeping the previous run's
+        // interval memory would turn the first step of a new run into one
+        // enormous measured period.
+        self.spec = crate::spec::Spec::default();
+        self.sample_cover = None;
+        for tx in &mut self.tx_list {
+            tx.next_t_us = 0;
+        }
+        for sub in self.subs.values_mut() {
+            sub.reset_measurement();
+        }
+    }
+
+    fn stop_bus(&mut self, status: &mut String) {
+        self.measuring = false;
+        self.recorder.close();
+        *status = "stopped".to_string();
+    }
+
+    fn toggle_record(&mut self, status: &mut String) {
+        if self.recorder.recording {
+            self.recorder.close();
+            self.recorder.recording = false;
+        } else {
+            self.recorder.recording = true;
+            // While stopped, the file is created by the next start;
+            // checking Record must not leave an empty record file behind.
+            if self.measuring {
+                let opened = self.recorder.open();
+                self.recorder.recording = opened.is_ok();
+                match opened {
+                    Ok(path) => *status = format!("recording to {path}"),
+                    Err(e) => *status = format!("record failed: {e}"),
+                }
+            }
         }
     }
 

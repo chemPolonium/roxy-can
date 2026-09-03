@@ -4,7 +4,6 @@ use std::time::Instant;
 use crate::can::frame::{CanFrame, Direction, FrameFlags};
 use crate::log::open_stream;
 use crate::source::replay::ReplaySource;
-use crate::source::virtual_source::VirtualSource;
 use crate::source::{FrameSource, FrameStream};
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
@@ -350,20 +349,25 @@ impl App {
         self.t0.elapsed().as_micros() as u64
     }
 
-    pub fn start_virtual(&mut self) {
-        self.recorder.close();
-        self.source = Box::new(VirtualSource::new());
-        self.mode = Mode::Virtual;
-        self.run_mode = Mode::Virtual;
-        self.reset_time();
-        self.measuring = true;
-        self.status = "measuring (virtual)".to_string();
-        if self.recorder.recording {
-            match self.recorder.open() {
-                Ok(path) => self.status = format!("recording to {path}"),
-                Err(e) => self.status = format!("record failed: {e}"),
-            }
+    /// The frontend's post office to the bus. Single-threaded this applies
+    /// the command immediately and surfaces whatever status it produced;
+    /// stage 3 swaps the body for an mpsc push, and status comes back in
+    /// the snapshot instead. Every UI write action funnels through here --
+    /// that funnel is what makes the core movable.
+    pub fn send(&mut self, cmd: crate::bus::BusCommand) {
+        let mut status = String::new();
+        self.core.handle(cmd, &mut status);
+        if !status.is_empty() {
+            self.status = status;
         }
+    }
+
+    pub fn start_virtual(&mut self) {
+        // The wall-clock anchors are frontend state (`now_us` reads `t0`);
+        // everything the reset blanks on the bus itself is `reset_run`.
+        self.t0 = Instant::now();
+        self.last_tick_us = 0;
+        self.send(crate::bus::BusCommand::StartVirtual);
     }
 
     /// Starts measurement in the mode selected by the Simulation/Replay
@@ -401,56 +405,20 @@ impl App {
     }
 
     pub fn stop(&mut self) {
-        self.measuring = false;
-        self.recorder.close();
+        self.send(crate::bus::BusCommand::Stop);
+        // Set by `stop`: the next Play re-opens the log from zero instead
+        // of resuming wherever the scrub bar left the playhead.
         self.replay_reset_pending = true;
-        self.status = "stopped".to_string();
     }
 
     pub fn toggle_record(&mut self) {
-        if self.recorder.recording {
-            self.recorder.close();
-            self.recorder.recording = false;
-        } else {
-            self.recorder.recording = true;
-            // While stopped, the file is created by the next start_virtual;
-            // checking Record must not leave an empty record file behind.
-            if self.measuring {
-                let opened = self.recorder.open();
-                self.recorder.recording = opened.is_ok();
-                match opened {
-                    Ok(path) => self.status = format!("recording to {path}"),
-                    Err(e) => self.status = format!("record failed: {e}"),
-                }
-            }
-        }
+        self.send(crate::bus::BusCommand::ToggleRecord);
     }
 
     fn reset_time(&mut self) {
         self.t0 = Instant::now();
-        self.sim_t_us = 0;
-        self.sim_prev_us = 0;
         self.last_tick_us = 0;
-        self.frame_counter = 0;
-        // A fresh start must not inherit the previous run's pause state.
-        self.trace_paused = false;
-        self.paused_at_us = None;
-        self.trace.clear();
-        self.aggs.clear();
-        for load in &mut self.bus_loads {
-            load.clear();
-        }
-        // Along with the aggregates it reads: keeping the previous run's
-        // interval memory would turn the first step of a new run into one
-        // enormous measured period.
-        self.core.spec = crate::spec::Spec::default();
-        self.sample_cover = None;
-        for tx in &mut self.tx_list {
-            tx.next_t_us = 0;
-        }
-        for sub in self.subs.values_mut() {
-            sub.reset_measurement();
-        }
+        self.core.reset_run();
     }
 
     pub fn pick_log(&mut self) {

@@ -218,7 +218,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .selected(app.trace_paused)
                         .build()
                     {
-                        app.trace_paused = !app.trace_paused;
+                        app.send(crate::bus::BusCommand::SetTracePaused(!app.trace_paused));
                     }
                 });
                 ui.menu("View", || {
