@@ -785,8 +785,8 @@ impl App {
         if !self.text_fresh {
             return;
         }
-        let newest = self.trace.back().map(|f| f.t_us).unwrap_or(u64::MAX);
-        let shown = self.trace.len();
+        let newest = self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX);
+        let shown = self.snap.trace.len();
         let w = &mut self.trace_windows[i];
         w.shown_t_us = newest;
         w.shown_count = shown;
@@ -798,7 +798,8 @@ impl App {
         &'a self,
         w: &'a TraceWin,
     ) -> impl Iterator<Item = &'a CanFrame> {
-        self.trace
+        self.snap
+            .trace
             .iter()
             .rev()
             .skip_while(|f| f.t_us > w.shown_t_us)

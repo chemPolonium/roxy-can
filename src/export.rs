@@ -4,7 +4,7 @@ use crate::log::AscWriter;
 impl App {
     /// Exports the frames that pass the given Trace window's filter as ASC.
     pub fn export_trace(&mut self, win: usize, path: &str) {
-        if self.trace.is_empty() {
+        if self.snap.trace.is_empty() {
             self.status = "export: trace is empty".to_string();
             return;
         }
@@ -12,6 +12,7 @@ impl App {
             return;
         };
         let frames: Vec<CanFrame> = self
+            .snap
             .trace
             .iter()
             .copied()
@@ -30,7 +31,7 @@ impl App {
                 self.status = format!(
                     "exported {} of {} frames to {path}",
                     frames.len(),
-                    self.trace.len()
+                    self.snap.trace.len()
                 );
             }
             Err(e) => self.status = format!("export failed: {e}"),

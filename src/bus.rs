@@ -8,6 +8,7 @@
 //! stages 2 and 3.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use crate::aggregate::MessageAgg;
 use crate::app::{Mode, SAMPLE_INTERVAL_US, TRACE_LIMIT};
@@ -129,6 +130,10 @@ pub struct Snapshot {
     /// One entry per generator row: display state plus the bytes that
     /// actually go out at this frame's sim time.
     pub tx: Vec<TxView>,
+    /// The trace ring, published once per step that ingested frames and
+    /// shared by Arc: cloning the snapshot copies a pointer, not 50k
+    /// frames. Read-only for the frontend.
+    pub trace: std::sync::Arc<Vec<CanFrame>>,
 }
 
 /// One generator entry as the frontend sees it this frame. `muted` folds
@@ -219,6 +224,9 @@ pub struct BusCore {
     pub(crate) color_counter: usize,
     /// Frames received this run, capped at [`TRACE_LIMIT`] as a ring.
     pub(crate) trace: VecDeque<CanFrame>,
+    /// The ring as of the last publish, shared with snapshots. Rebuilt
+    /// only on steps that ingested frames -- an idle bus copies nothing.
+    pub(crate) published_trace: Arc<Vec<CanFrame>>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -272,6 +280,7 @@ impl BusCore {
             sim_prev_us: 0,
             color_counter: 0,
             trace: VecDeque::with_capacity(TRACE_LIMIT.min(8_192)),
+            published_trace: Arc::new(Vec::new()),
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -375,6 +384,13 @@ impl BusCore {
         }
     }
 
+    /// Republishes the shared ring view. Called on steps that ingested
+    /// frames (and on resets); the copy is the price of frontend reads
+    /// that never alias the live deque.
+    fn publish_trace(&mut self) {
+        self.published_trace = Arc::new(self.trace.iter().copied().collect());
+    }
+
     /// One frame-shaped read of the bus for the frontend.
     pub(crate) fn snapshot(&self) -> Snapshot {
         let replay = match (self.source.position(), self.source.duration()) {
@@ -384,6 +400,7 @@ impl BusCore {
         Snapshot {
             frame_counter: self.frame_counter,
             trace_len: self.trace.len(),
+            trace: Arc::clone(&self.published_trace),
             sub_count: self.subs.len(),
             replay,
             aggs: self.aggs.values().copied().collect(),
@@ -665,6 +682,7 @@ impl BusCore {
         self.trace_paused = false;
         self.paused_at_us = None;
         self.trace.clear();
+        self.publish_trace();
         self.frame_counter = 0;
         self.aggs.clear();
         for load in &mut self.bus_loads {
@@ -831,6 +849,9 @@ impl BusCore {
             self.eval_triggers(&f, status);
             self.recorder.write(&f);
             self.ingest(f, stride);
+        }
+        if i > 0 {
+            self.publish_trace();
         }
 
         // One sample of the windowed numbers per step feeds the Min/Max/Avg

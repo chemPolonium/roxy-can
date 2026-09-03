@@ -327,8 +327,8 @@ impl App {
             filter: String::new(),
             dir: 0,
             dbc_only: false,
-            shown_t_us: self.trace.back().map(|f| f.t_us).unwrap_or(u64::MAX),
-            shown_count: self.trace.len(),
+            shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
+            shown_count: self.snap.trace.len(),
         });
     }
 
