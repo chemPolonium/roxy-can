@@ -1,4 +1,3 @@
-use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -55,7 +54,7 @@ pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 use crate::generator::tx_payload;
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
-pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, Subscription, YMode};
+pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, YMode};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
@@ -114,10 +113,6 @@ pub struct App {
     pub run_mode: Mode,
     pub quit: bool,
     pub t0: Instant,
-    pub frame_counter: u64,
-    pub trace: VecDeque<CanFrame>,
-    pub trace_paused: bool,
-    paused_at_us: Option<u64>,
     pub status: String,
     /// Absolute path of the log currently loaded for replay (`.asc`, `.blf`).
     pub log_path: String,
@@ -129,15 +124,6 @@ pub struct App {
     /// and the plot read the mix as a dense sawtooth. Filled by
     /// [`App::replay`], consulted only in Replay mode, never persisted.
     pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
-    /// Contiguous log-time span whose frames have already been decoded into the
-    /// signal caches. A Graphics window asking for a range outside it triggers a
-    /// backfill scan.
-    pub(crate) sample_cover: Option<(u64, u64)>,
-    /// The sampling stride currently applied to the signal caches. When the
-    /// smallest Graphics window shrinks, the stride gets finer -- and spans
-    /// already scanned at the coarse stride must rescan, so `sample_cover`
-    /// is invalidated here too.
-    pub(crate) applied_stride_us: u64,
     pub recent_dbc: Vec<String>,
     pub recent_log: Vec<String>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
@@ -164,11 +150,6 @@ pub struct App {
     /// Set by `stop`: the next Play re-opens the log from zero instead of
     /// resuming wherever the scrub bar left the playhead.
     pub replay_reset_pending: bool,
-    pub subs: HashMap<(u8, u32, String), Subscription>,
-    pub aggs: HashMap<(u8, u32), MessageAgg>,
-    /// Per-bus load / frame-rate / error rolling state, one entry per
-    /// channel. Fed from the same frame loop as `aggs`.
-    pub bus_loads: Vec<crate::load::BusLoad>,
     pub triggers: Vec<crate::trigger::Trigger>,
     /// The trigger the Triggers window is editing, if any.
     pub trigger_sel: Option<usize>,
@@ -271,46 +252,39 @@ impl std::ops::DerefMut for App {
 
 impl App {
     pub fn new() -> Self {
-        let mut app = App {
-            core: crate::bus::BusCore {
-                channels: vec![
-                    Channel {
-                        name: "CAN1".to_string(),
-                        dbc: None,
-                        dbc_path: "assets/sample.dbc".to_string(),
-                        sim_nodes: Vec::new(),
-                        bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-                        fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-                    },
-                    Channel {
-                        name: "CAN2".to_string(),
-                        dbc: None,
-                        dbc_path: "assets/motbus.dbc".to_string(),
-                        sim_nodes: Vec::new(),
-                        bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-                        fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-                    },
-                ],
-                tx_list: Vec::new(),
-                sim_t_us: 0,
-                sim_prev_us: 0,
-                color_counter: 0,
+        let mut core = crate::bus::BusCore::new(vec![
+            crate::load::BusLoad::new(),
+            crate::load::BusLoad::new(),
+        ]);
+        core.channels = vec![
+            Channel {
+                name: "CAN1".to_string(),
+                dbc: None,
+                dbc_path: "assets/sample.dbc".to_string(),
+                sim_nodes: Vec::new(),
+                bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+                fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
             },
+            Channel {
+                name: "CAN2".to_string(),
+                dbc: None,
+                dbc_path: "assets/motbus.dbc".to_string(),
+                sim_nodes: Vec::new(),
+                bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+                fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
+            },
+        ];
+        let mut app = App {
+            core,
             measuring: false,
             recorder: crate::recorder::Recorder::new(),
             mode: Mode::Virtual,
             run_mode: Mode::Virtual,
             quit: false,
             t0: Instant::now(),
-            frame_counter: 0,
-            trace: VecDeque::new(),
-            trace_paused: false,
-            paused_at_us: None,
             status: "stopped".to_string(),
             log_path: String::new(),
             log_info: None,
-            sample_cover: None,
-            applied_stride_us: SAMPLE_INTERVAL_US,
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
             project_path: None,
@@ -327,9 +301,6 @@ impl App {
             replay_speed: 1.0,
             replay_reset_pending: false,
             replay_ids: std::collections::HashSet::new(),
-            subs: HashMap::new(),
-            aggs: HashMap::new(),
-            bus_loads: vec![crate::load::BusLoad::new(), crate::load::BusLoad::new()],
             triggers: Vec::new(),
             trigger_sel: None,
             trig_id_buf: String::new(),
@@ -936,9 +907,10 @@ impl App {
             return;
         }
         let newest = self.trace.back().map(|f| f.t_us).unwrap_or(u64::MAX);
+        let shown = self.trace.len();
         let w = &mut self.trace_windows[i];
         w.shown_t_us = newest;
-        w.shown_count = self.trace.len();
+        w.shown_count = shown;
     }
 
     /// Trace window `w`'s revealed frames, newest first: the whole buffer
@@ -1122,7 +1094,7 @@ impl App {
             self.frame_counter += 1;
             // Error frames included: they occupy the bus and the load view
             // counts them; per-message aggregation below skips them.
-            if let Some(load) = self.bus_loads.get_mut(f.channel as usize) {
+            if let Some(load) = self.core.bus_loads.get_mut(f.channel as usize) {
                 let (arb, data) = {
                     let ch = &self.core.channels[f.channel as usize];
                     (ch.bitrate_kbps, ch.fd_data_kbps)

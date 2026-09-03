@@ -5,6 +5,7 @@ use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
 use crate::generator::TxMsg;
 use crate::log::AscWriter;
+use crate::observe::Subscription;
 use crate::observe::YMode;
 use crate::sim::ValueSrc;
 use crate::trigger::{Trigger, TriggerAction, TriggerCond};
