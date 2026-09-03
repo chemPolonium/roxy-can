@@ -77,8 +77,9 @@ impl App {
         let scope = w.scope;
         let manual = &w.manual;
         let mut rows: Vec<&MessageAgg> = self
+            .snap
             .aggs
-            .values()
+            .iter()
             .filter(|a| Self::scope_match(scope, manual, a.channel, a.id))
             .collect();
         rows.sort_by_key(|a| (a.channel, a.id));
@@ -120,8 +121,9 @@ impl App {
         let dbc_only = w.dbc_only;
         let manual = &w.manual;
         let mut rows: Vec<MessageAgg> = self
+            .snap
             .aggs
-            .values()
+            .iter()
             .copied()
             .filter(|a| {
                 if !Self::scope_match(scope, manual, a.channel, a.id) {

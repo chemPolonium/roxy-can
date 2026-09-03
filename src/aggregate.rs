@@ -5,7 +5,7 @@ use crate::can::frame::{Direction, FrameFlags, MAX_CAN_FD_LEN};
 
 /// Per-(bus, id) aggregate. Copied freely so window snapshots never alias the
 /// live tallies.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct MessageAgg {
     pub id: u32,
     pub extended: bool,

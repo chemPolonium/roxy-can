@@ -107,10 +107,12 @@ fn draw_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base
             .build();
 
         let sel = app.net_selected == flat_base + i;
-        let active = ni
-            .tx
-            .iter()
-            .any(|(id, _)| app.aggs.get(&(ch as u8, *id)).is_some_and(|a| a.count > 0));
+        let active = ni.tx.iter().any(|(id, _)| {
+            app.snap
+                .aggs
+                .iter()
+                .any(|a| a.channel == ch as u8 && a.id == *id && a.count > 0)
+        });
         let bg = if sel {
             [0.16, 0.28, 0.42, 1.0]
         } else {
@@ -238,8 +240,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.text("Sent messages");
                     for (id, name) in &ni.tx {
                         let (count, cycle) = app
+                            .snap
                             .aggs
-                            .get(&(ch as u8, *id))
+                            .iter()
+                            .find(|a| a.channel == ch as u8 && a.id == *id)
                             .map(|a| (a.count, a.cycle_us / 1000.0))
                             .unwrap_or((0, 0.0));
                         let cycle_s = if count >= 2 {

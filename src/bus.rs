@@ -120,6 +120,9 @@ pub struct Snapshot {
     /// Replay playhead and log length in µs, when a log with a known
     /// position is loaded.
     pub replay: Option<(u64, u64)>,
+    /// One record per (bus, id) seen this run, behind the Messages /
+    /// Statistics views and their exports.
+    pub aggs: Vec<MessageAgg>,
 }
 
 /// Every (channel, id) the log file carries -- the twin-silencing set for
@@ -335,6 +338,7 @@ impl BusCore {
             trace_len: self.trace.len(),
             sub_count: self.subs.len(),
             replay,
+            aggs: self.aggs.values().copied().collect(),
         }
     }
 

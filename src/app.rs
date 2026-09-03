@@ -603,26 +603,22 @@ impl App {
             let w = &self.stats_windows[i];
             (w.scope, w.manual.clone())
         };
-        let mut keys: Vec<(u8, u32)> = self
+        // Aggregates come from this frame's snapshot, never the live map.
+        let mut aggs: Vec<&MessageAgg> = self
+            .snap
             .aggs
-            .keys()
-            .copied()
-            .filter(|&(ch, id)| App::scope_match(scope, &manual, ch, id))
+            .iter()
+            .filter(|a| App::scope_match(scope, &manual, a.channel, a.id))
             .collect();
-        keys.sort_unstable();
+        aggs.sort_by_key(|a| (a.channel, a.id));
+        let keys: Vec<(u8, u32)> = aggs.iter().map(|a| (a.channel, a.id)).collect();
         if self.stats_windows[i].text_keys == keys && !self.text_fresh {
             return;
         }
-        let total: u64 = keys
-            .iter()
-            .filter_map(|k| self.aggs.get(k))
-            .map(|a| a.count)
-            .sum();
-        let mut rows = Vec::with_capacity(keys.len());
-        for key in &keys {
-            let Some(agg) = self.aggs.get(key) else {
-                continue;
-            };
+        let total: u64 = aggs.iter().map(|a| a.count).sum();
+        let mut rows = Vec::with_capacity(aggs.len());
+        for agg in &aggs {
+            let agg = **agg;
             let id_str = if agg.extended {
                 format!("{:08X}x", agg.id)
             } else {
@@ -684,21 +680,21 @@ impl App {
                 w.filter.trim().to_lowercase(),
             )
         };
-        let mut keys: Vec<(u8, u32)> = self
+        let mut aggs: Vec<&MessageAgg> = self
+            .snap
             .aggs
-            .keys()
-            .copied()
-            .filter(|&(ch, id)| {
-                if !App::scope_match(scope, &manual, ch, id) {
+            .iter()
+            .filter(|a| {
+                if !App::scope_match(scope, &manual, a.channel, a.id) {
                     return false;
                 }
                 if dbc_only || !filter.is_empty() {
-                    let name = self.message_name(ch, id).unwrap_or("-");
+                    let name = self.message_name(a.channel, a.id).unwrap_or("-");
                     if dbc_only && name == "-" {
                         return false;
                     }
                     if !filter.is_empty() {
-                        let id_str = format!("{id:x}");
+                        let id_str = format!("{:x}", a.id);
                         if !name.to_lowercase().contains(&filter) && !id_str.contains(&filter) {
                             return false;
                         }
@@ -707,15 +703,14 @@ impl App {
                 true
             })
             .collect();
-        keys.sort_unstable();
+        aggs.sort_by_key(|a| (a.channel, a.id));
+        let keys: Vec<(u8, u32)> = aggs.iter().map(|a| (a.channel, a.id)).collect();
         if self.msg_windows[i].text_keys == keys && !self.text_fresh {
             return;
         }
-        let mut rows = Vec::with_capacity(keys.len());
-        for key in &keys {
-            let Some(agg) = self.aggs.get(key) else {
-                continue;
-            };
+        let mut rows = Vec::with_capacity(aggs.len());
+        for agg in &aggs {
+            let agg = **agg;
             let id_str = if agg.extended {
                 format!("{:08X}x", agg.id)
             } else {
