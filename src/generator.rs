@@ -133,12 +133,13 @@ impl App {
     /// touches only the flag, so payload, waveforms and schedule survive the
     /// pause.
     pub fn set_tx_active(&mut self, i: usize, on: bool) {
+        let sim = self.sim_t_us;
         let Some(tx) = self.tx_list.get_mut(i) else {
             return;
         };
         tx.active = on;
         if on {
-            tx.next_t_us = self.sim_t_us;
+            tx.next_t_us = sim;
         }
     }
 

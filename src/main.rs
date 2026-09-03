@@ -2,6 +2,7 @@
 
 mod aggregate;
 mod app;
+mod bus;
 mod can;
 mod channel;
 mod config;

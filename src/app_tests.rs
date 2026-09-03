@@ -3,6 +3,7 @@ use super::*;
 // ones app.rs itself no longer needs are imported directly here.
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
+use crate::generator::TxMsg;
 use crate::log::AscWriter;
 use crate::observe::YMode;
 use crate::sim::ValueSrc;

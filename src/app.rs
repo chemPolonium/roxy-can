@@ -54,7 +54,7 @@ pub const PALETTE: [[f32; 4]; 8] = [
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 use crate::generator::tx_payload;
-pub use crate::generator::{TX_CYCLE_MAX_MS, TxMsg, cycle_from_ms_text};
+pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, Subscription, YMode};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
@@ -103,6 +103,10 @@ pub enum Mode {
 }
 
 pub struct App {
+    /// The bus half (TODO.md 主线): simulation clock, channels, generator.
+    /// Fields migrate here slice by slice; the `Deref` below keeps them
+    /// visible at the old paths during the move.
+    pub core: crate::bus::BusCore,
     pub measuring: bool,
     /// ASC recording state: the checkbox intent plus the open file.
     pub recorder: crate::recorder::Recorder,
@@ -114,7 +118,6 @@ pub struct App {
     pub trace: VecDeque<CanFrame>,
     pub trace_paused: bool,
     paused_at_us: Option<u64>,
-    pub channels: Vec<Channel>,
     pub status: String,
     /// Absolute path of the log currently loaded for replay (`.asc`, `.blf`).
     pub log_path: String,
@@ -198,7 +201,6 @@ pub struct App {
     pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
     pub net_selected: usize,
-    pub tx_list: Vec<TxMsg>,
     pub tx_pick: usize,
     /// Generator row whose value-source parameters the modal is editing:
     /// index into `tx_list` plus the DBC signal name.
@@ -232,13 +234,6 @@ pub struct App {
     /// last throttled text refresh; the state and replay readouts beside it
     /// stay live. See [`App::sync_status_text`].
     pub(crate) status_counters: String,
-    /// Simulation clock: accumulates only while measuring and unpaused.
-    /// Generator frames are stamped on it and their signal values are evaluated
-    /// from it, so a pause freezes the bus in place instead of letting it jump
-    /// phase. Replay polling still uses the wall clock (`last_tick_us`).
-    pub sim_t_us: u64,
-    /// `now_us()` at the previous accepted tick, the reference for `sim_t_us`.
-    sim_prev_us: u64,
     pub frame_rate: f64,
     pub trace_windows: Vec<TraceWin>,
     pub msg_windows: Vec<MsgWin>,
@@ -251,16 +246,56 @@ pub struct App {
     pub(crate) graphics_counter: usize,
     pub(crate) data_counter: usize,
     pub(crate) bus_counter: usize,
-    pub(crate) color_counter: usize,
     pub(crate) source: Box<dyn FrameSource>,
     /// Frames polled this step, plus frames pushed by Send reactions;
     /// the tick loop walks it by index so late arrivals are processed.
     pub(crate) buf: Vec<CanFrame>,
 }
 
+impl std::ops::Deref for App {
+    type Target = crate::bus::BusCore;
+
+    /// Migration scaffolding (TODO.md 主线 阶段 1): bus fields moved to
+    /// `BusCore` stay reachable at `self.<field>` while the slices land.
+    /// The stage-2 command boundary starts unwinding this.
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl std::ops::DerefMut for App {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         let mut app = App {
+            core: crate::bus::BusCore {
+                channels: vec![
+                    Channel {
+                        name: "CAN1".to_string(),
+                        dbc: None,
+                        dbc_path: "assets/sample.dbc".to_string(),
+                        sim_nodes: Vec::new(),
+                        bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+                        fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
+                    },
+                    Channel {
+                        name: "CAN2".to_string(),
+                        dbc: None,
+                        dbc_path: "assets/motbus.dbc".to_string(),
+                        sim_nodes: Vec::new(),
+                        bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
+                        fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
+                    },
+                ],
+                tx_list: Vec::new(),
+                sim_t_us: 0,
+                sim_prev_us: 0,
+                color_counter: 0,
+            },
             measuring: false,
             recorder: crate::recorder::Recorder::new(),
             mode: Mode::Virtual,
@@ -271,24 +306,6 @@ impl App {
             trace: VecDeque::new(),
             trace_paused: false,
             paused_at_us: None,
-            channels: vec![
-                Channel {
-                    name: "CAN1".to_string(),
-                    dbc: None,
-                    dbc_path: "assets/sample.dbc".to_string(),
-                    sim_nodes: Vec::new(),
-                    bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-                    fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-                },
-                Channel {
-                    name: "CAN2".to_string(),
-                    dbc: None,
-                    dbc_path: "assets/motbus.dbc".to_string(),
-                    sim_nodes: Vec::new(),
-                    bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-                    fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-                },
-            ],
             status: "stopped".to_string(),
             log_path: String::new(),
             log_info: None,
@@ -337,7 +354,6 @@ impl App {
             popup_target: None,
             focus_title: None,
             net_selected: 0,
-            tx_list: Vec::new(),
             tx_pick: 0,
             src_edit: None,
             src_seq_buf: String::new(),
@@ -350,8 +366,6 @@ impl App {
             text_fresh: true,
             last_text_refresh: std::time::Instant::now(),
             status_counters: String::new(),
-            sim_t_us: 0,
-            sim_prev_us: 0,
             frame_rate: 0.0,
             trace_windows: Vec::new(),
             msg_windows: Vec::new(),
@@ -364,7 +378,6 @@ impl App {
             graphics_counter: 0,
             data_counter: 0,
             bus_counter: 2,
-            color_counter: 0,
             source: Box::new(VirtualSource::new()),
             buf: Vec::new(),
         };
@@ -1042,8 +1055,8 @@ impl App {
         // a recording of this same simulation interleaves two senders of one
         // signal and every consumer sees their mixed values. Only consulted
         // in Replay mode, so nothing to restore when the run ends.
-        let channels = &self.channels;
-        for tx in &mut self.tx_list {
+        let channels = &self.core.channels;
+        for tx in &mut self.core.tx_list {
             if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
                 // Log time has no slot zero: an entry picked up mid-log is
                 // anchored at the playhead instead of emitting one frame
@@ -1111,7 +1124,7 @@ impl App {
             // counts them; per-message aggregation below skips them.
             if let Some(load) = self.bus_loads.get_mut(f.channel as usize) {
                 let (arb, data) = {
-                    let ch = &self.channels[f.channel as usize];
+                    let ch = &self.core.channels[f.channel as usize];
                     (ch.bitrate_kbps, ch.fd_data_kbps)
                 };
                 let wire = crate::load::wire_time_us(&f, arb, data);

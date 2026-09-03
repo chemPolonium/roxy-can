@@ -50,7 +50,7 @@ impl App {
     /// Adds a new bus, loads its default DBC, and pre-populates the generator.
     pub fn add_channel(&mut self) {
         self.bus_counter += 1;
-        self.channels.push(Channel {
+        self.core.channels.push(Channel {
             name: format!("CAN{}", self.bus_counter),
             dbc: None,
             dbc_path: "assets/sample.dbc".to_string(),
@@ -59,9 +59,9 @@ impl App {
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
         });
         self.bus_loads.push(crate::load::BusLoad::new());
-        let ch = self.channels.len() - 1;
+        let ch = self.core.channels.len() - 1;
         self.load_channel(ch);
-        let ids: Vec<u32> = self.channels[ch]
+        let ids: Vec<u32> = self.core.channels[ch]
             .dbc
             .as_ref()
             .map(|db| db.order.clone())
@@ -170,7 +170,7 @@ impl App {
     }
 
     pub fn load_channel(&mut self, ch: usize) -> bool {
-        let Some(channel) = self.channels.get_mut(ch) else {
+        let Some(channel) = self.core.channels.get_mut(ch) else {
             return false;
         };
         let name = channel.name.clone();
