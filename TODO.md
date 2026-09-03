@@ -30,10 +30,13 @@
 
 落地：`src/bus.rs` 的 `BusCore` 收拢了全部总线状态（mode/run_mode、source、replay_ids、channels、tx_list、sim 时钟、trace 环、aggs、bus_loads、subs 与采样簿记、triggers、recorder、spec、buf、measuring）与全部总线方法（`step`＝轮询→发射→消化→负载采样→spec 检查→超时扫描→回放收尾，及 `ingest`/`eval_triggers`/`eval_timeout_triggers`/`check_spec`/`advance_clock`）。App 只剩前端状态，`tick` 四行（取采样密度→调 `step`→上状态行）；`stride`/`tol_pct`/`grace` 以参数传入，状态消息走出参——这就是命令边界前，前端策略与总线执行的最后一条缝。迁移靠 App→BusCore 的 Deref 脚手架逐刀完成（六刀，见 git log），跨界借用点改显式 `self.core.` 路径。原验收达成：全程 316 测试过，界面无可感知变化。
 
-### 阶段 2：命令/快照边界（仍单线程）
+### 阶段 2：命令/快照边界（仍单线程）——写侧完成，读侧大部（2026-09-03）
 
-要做：定义 `BusCommand`（条目勾选/增删、载荷与源编辑、加载/seek 日志、订阅信号、录制开关等最小集）与 `Snapshot`（TxMsg 列表、trace 尾部、聚合摘要、订阅元数据与采样缓存、计数器、回放位置、状态行）；UI 写操作全部改为发命令，读操作改读快照。
-验收：行为不变；新增**无头集成测试**——不开 UI 完整跑仿真 + 导出。这一步做完，第 12 项（headless CLI）近乎免费。
+已落地：`BusCommand` 18 个变体收编了 UI 对总线的**全部写操作**（启停/回放传输/录制、条目增删改与源编辑、订阅/退订、加载回放日志），经 `App::send` 单入口下发，`BusCore::handle` 派发；`Snapshot` 每帧发布（计数器、回放时间线、聚合表、订阅投影含采样历史），Messages/Statistics/网络图/Data/Graphics/导出均已改读快照，`send`/`tick` 末尾"写后重读"保证读写一致。验收的**无头集成测试已落地**（`headless_tests.rs` 四条：命令组合的完整仿真、录制回读、CSV 导出、日志回放+双发静音），不开 UI 全绿——第 12 项（headless CLI）的根基即此。
+
+读侧尚余两块，各有结构性原因，随阶段 3 的共享发布一并解决：`tx_list` 投影（`data_text` 既是持久化配置又是每帧输入框草稿，需先把编辑草稿态真正归前端）与 trace 环（50k 帧按帧拷贝不经济，需要脏标记/Arc 共享而非复制）。
+
+验收：行为不变（320 测试过）；新增**无头集成测试**——不开 UI 完整跑仿真 + 导出。这一步做完，第 12 项（headless CLI）近乎免费。
 
 ### 阶段 3：核心上线程
 

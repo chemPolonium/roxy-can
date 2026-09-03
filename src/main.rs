@@ -22,6 +22,11 @@ mod trigger;
 mod ui;
 mod workspace;
 
+/// 主线阶段 2 验收：不开 UI 跑完整仿真 + 录制 + 导出。
+#[cfg(test)]
+#[path = "headless_tests.rs"]
+mod headless_tests;
+
 use std::sync::Arc;
 use std::time::Instant;
 
