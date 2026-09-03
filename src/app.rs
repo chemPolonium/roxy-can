@@ -35,10 +35,6 @@ pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 /// Cycle a new generator entry gets when its DBC declares none. A declared
 /// value always wins; this is only the invention we fall back to.
 pub(crate) const DEFAULT_TX_CYCLE_US: u64 = 100_000;
-/// Slots one generator entry may backfill per tick after the clock jumped
-/// (a frozen UI, a seek). Bounds the burst; anything longer streams over the
-/// following ticks. At 100 Hz one tick covers ~10 s of missed timeline.
-pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
 
 pub const PALETTE: [[f32; 4]; 8] = [
     [0.30, 0.80, 1.00, 1.0],
@@ -52,7 +48,6 @@ pub const PALETTE: [[f32; 4]; 8] = [
 ];
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
-use crate::generator::tx_payload;
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, YMode};
 pub use crate::project::PendingAction;
@@ -106,8 +101,6 @@ pub struct App {
     /// Fields migrate here slice by slice; the `Deref` below keeps them
     /// visible at the old paths during the move.
     pub core: crate::bus::BusCore,
-    pub mode: Mode,
-    pub run_mode: Mode,
     pub quit: bool,
     pub t0: Instant,
     pub status: String,
@@ -115,12 +108,6 @@ pub struct App {
     pub log_path: String,
     /// One-line summary from the stream's `describe()`, e.g. "BLF4, 41.2 s".
     pub log_info: Option<String>,
-    /// Every (channel, id) the loaded log carries. While replaying, transmit
-    /// entries carrying one of these ids stand down -- replaying a recording
-    /// of this very simulation used to interleave two senders of one signal,
-    /// and the plot read the mix as a dense sawtooth. Filled by
-    /// [`App::replay`], consulted only in Replay mode, never persisted.
-    pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
     pub recent_dbc: Vec<String>,
     pub recent_log: Vec<String>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
@@ -223,7 +210,6 @@ pub struct App {
     pub(crate) graphics_counter: usize,
     pub(crate) data_counter: usize,
     pub(crate) bus_counter: usize,
-    pub(crate) source: Box<dyn FrameSource>,
 }
 
 impl std::ops::Deref for App {
@@ -269,8 +255,6 @@ impl App {
         ];
         let mut app = App {
             core,
-            mode: Mode::Virtual,
-            run_mode: Mode::Virtual,
             quit: false,
             t0: Instant::now(),
             status: "stopped".to_string(),
@@ -291,7 +275,6 @@ impl App {
             desktop_rename_buf: String::new(),
             replay_speed: 1.0,
             replay_reset_pending: false,
-            replay_ids: std::collections::HashSet::new(),
             trigger_sel: None,
             trig_id_buf: String::new(),
             trig_edit_sel: None,
@@ -339,7 +322,6 @@ impl App {
             graphics_counter: 0,
             data_counter: 0,
             bus_counter: 2,
-            source: Box::new(VirtualSource::new()),
         };
         app.load_dbcs();
         app.new_trace_window();
@@ -980,124 +962,16 @@ impl App {
     /// One step of the measurement loop, polled against wall clock `now_us`.
     /// Split out of [`Self::update`] so a test can run a single step at a time
     /// of its choosing; the generator reads `sim_t_us`, which `update` maintains.
+    /// The bus work itself is [`BusCore::step`]; what stays here is the
+    /// frontend's own policy: the sampling stride it wants, the spec check
+    /// it configured, and the status line it displays.
     pub fn tick(&mut self, now_us: u64) {
-        self.core.buf.clear();
-        self.source.poll(now_us, &mut self.core.buf);
-        let source_empty = self.core.buf.is_empty();
-
-        // The sampling stride follows the smallest open Graphics window:
-        // zooming in tight must reveal every signal update (the CANoe
-        // Graphics behaviour), while wide windows keep the coarse stride
-        // that bounds the cache. A change invalidates the scan cover -- a
-        // span read at 50 ms holds no 1 ms detail -- so the windows rescan
-        // at the finer gap and the merges interleave the new points.
         let stride = self.wanted_stride_us();
-        if stride != self.applied_stride_us {
-            self.sample_cover = None;
-            self.applied_stride_us = stride;
-        }
-
-        // The log clock is primary while replaying: `sim_t_us` follows the
-        // newest log frame's own stamp and holds between frames, so injected
-        // frames land on the same timeline the log carries and every
-        // consumer -- aggregates, plots, the spec check -- sees one clock.
-        // Live simulation keeps the wall-derived clock `update` maintains.
-        if matches!(self.mode, Mode::Replay)
-            && let Some(t) = self.buf.last().map(|f| f.t_us)
-        {
-            self.sim_t_us = t;
-        }
-        let sim = self.sim_t_us;
-
-        // Generators transmit in every running mode: an active entry during
-        // replay injects onto the log timeline, which is what makes
-        // "replay a real log and stir a few frames in" possible. One
-        // exception: an id the log itself carries stays silent, or replaying
-        // a recording of this same simulation interleaves two senders of one
-        // signal and every consumer sees their mixed values. Only consulted
-        // in Replay mode, so nothing to restore when the run ends.
-        let channels = &self.core.channels;
-        let mut emitted: Vec<CanFrame> = Vec::new();
-        for tx in &mut self.core.tx_list {
-            if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
-                // Log time has no slot zero: an entry picked up mid-log is
-                // anchored at the playhead instead of emitting one frame
-                // dated the epoch.
-                tx.next_t_us = sim;
-            }
-            let muted =
-                matches!(self.mode, Mode::Replay) && self.replay_ids.contains(&(tx.channel, tx.id));
-            // Every slot the clock has passed goes out at its own stamp.
-            // Skipping the backlog after a UI stall (the old policy) kept the
-            // tick cheap but punched a hole into the bus's own timeline --
-            // and at Graphics strides fine enough to show single updates,
-            // that hole reads as the curve being eaten while the plot
-            // slides on. Frames carry their slot's timestamp, so spacing
-            // stays exactly `cycle_us` even in the catch-up burst.
-            let mut budget = MAX_TX_CATCHUP;
-            while budget > 0 && tx.active && !muted && tx.cycle_us != 0 && tx.next_t_us <= sim {
-                budget -= 1;
-                // Values are read at the slot, not at `sim`: a frame stamped
-                // `slot` must carry the waveform's value at `slot`, or every
-                // payload would lead its own timestamp by up to a full cycle.
-                let slot = tx.next_t_us;
-                tx.next_t_us += tx.cycle_us;
-                let (data, len, flags) = tx_payload(channels, tx, slot);
-                emitted.push(CanFrame {
-                    t_us: slot,
-                    channel: tx.channel,
-                    id: tx.id,
-                    extended: tx.extended,
-                    len,
-                    data,
-                    dir: Direction::Tx,
-                    flags,
-                });
-            }
-        }
-        self.core.buf.extend(emitted);
-
-        let replay_done =
-            matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
-
-        // Index walk rather than `for &f in &self.buf`: a frame is
-        // copied out one at a time so `eval_triggers` can take `&mut
-        // self` without the iterator holding `buf` borrowed. A `while`,
-        // not a `for` over `0..len()`: the range freezes its end before
-        // the loop, and a Send reaction pushing onto `buf` mid-loop must
-        // be processed by this same tick, not wiped by the next one.
-        let mut i = 0;
-        let mut trigger_status = String::new();
-        while i < self.buf.len() {
-            let f = self.buf[i];
-            // Advance before anything else: the body has `continue`s
-            // (error frames skip aggregation, unsampled signals skip
-            // bookkeeping) and none of them may skip the increment.
-            i += 1;
-            // Triggers judge the frame before anything else consumes it,
-            // so a trigger that starts a recording captures the very
-            // frame that fired it.
-            self.core.eval_triggers(&f, &mut trigger_status);
-            self.recorder.write(&f);
-            self.core.ingest(f, stride);
-        }
-        if !trigger_status.is_empty() {
-            self.status = trigger_status;
-        }
-
-        // One sample of the windowed numbers per step feeds the Min/Max/Avg
-        // columns of the Bus Statistics window.
-        for load in &mut self.bus_loads {
-            load.sample();
-        }
-
+        let mut status = String::new();
+        self.core.step(now_us, stride, self.spec_grace, &mut status);
         self.check_spec();
-
-        if replay_done {
-            self.measuring = false;
-            self.recorder.close();
-            let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
-            self.status = format!("replay finished at {dur:.2}s");
+        if !status.is_empty() {
+            self.status = status;
         }
     }
 
@@ -1177,14 +1051,6 @@ impl App {
         }
         for (key, last_t_us) in seen {
             self.spec.note(key, last_t_us);
-        }
-        // Timeout triggers sweep on the same cadence and the same clock
-        // as the Missing verdict above, reusing its grace comparison.
-        let mut timeout_status = String::new();
-        self.core
-            .eval_timeout_triggers(now, self.spec_grace, &mut timeout_status);
-        if !timeout_status.is_empty() {
-            self.status = timeout_status;
         }
     }
 }

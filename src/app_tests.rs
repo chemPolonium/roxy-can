@@ -1,6 +1,7 @@
 use super::*;
 // The tests rely on the parent's imports through `use super::*`; the
 // ones app.rs itself no longer needs are imported directly here.
+use crate::bus::MAX_TX_CATCHUP;
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
 use crate::generator::TxMsg;

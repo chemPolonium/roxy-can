@@ -10,19 +10,38 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::aggregate::MessageAgg;
-use crate::app::{SAMPLE_INTERVAL_US, TRACE_LIMIT};
-use crate::can::frame::CanFrame;
+use crate::app::{Mode, SAMPLE_INTERVAL_US, TRACE_LIMIT};
+use crate::can::frame::{CanFrame, Direction};
 use crate::channel::Channel;
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::Subscription;
 use crate::trigger::{TriggerAction, TriggerCond};
 
+/// Slots one generator entry may backfill per step after the clock jumped
+/// (a frozen UI, a seek). Bounds the burst; anything longer streams over the
+/// following steps. At 100 Hz one step covers ~10 s of missed timeline.
+pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
+
 /// The simulation half of the application. Fields move here from `App` in
 /// slices; during the migration `App` derefs to this, so existing field
 /// access keeps compiling. Crate-wide visibility is migration scaffolding --
 /// the command/snapshot boundary (stage 2) replaces it.
 pub struct BusCore {
+    /// Which timeline the bus runs on: Virtual generates against the sim
+    /// clock, Replay follows a loaded log's own stamps.
+    pub(crate) mode: Mode,
+    /// The mode the current run started in; switching buses restores it.
+    pub(crate) run_mode: Mode,
+    /// The bus's frame input: the virtual idle bus, or the log being
+    /// replayed / scanned for backfill.
+    pub(crate) source: Box<dyn crate::source::FrameSource>,
+    /// Every (channel, id) the loaded log carries. While replaying,
+    /// generator entries carrying one of these ids stand down -- replaying
+    /// a recording of this very simulation used to interleave two senders
+    /// of one signal. Filled by [`App::replay`], consulted only in Replay
+    /// mode, never persisted.
+    pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
     pub(crate) channels: Vec<Channel>,
     /// The interactive generator's entries: what this tool transmits as.
     pub(crate) tx_list: Vec<TxMsg>,
@@ -78,6 +97,10 @@ impl BusCore {
     /// and the measurement start on top.
     pub(crate) fn new(bus_loads: Vec<crate::load::BusLoad>) -> Self {
         BusCore {
+            mode: Mode::Virtual,
+            run_mode: Mode::Virtual,
+            source: Box::new(crate::source::virtual_source::VirtualSource::new()),
+            replay_ids: std::collections::HashSet::new(),
             channels: Vec::new(),
             tx_list: Vec::new(),
             sim_t_us: 0,
@@ -97,6 +120,127 @@ impl BusCore {
             recorder: crate::recorder::Recorder::new(),
             triggers: Vec::new(),
         }
+    }
+
+    /// One full step of the bus against wall-clock `now_us`: poll the
+    /// source, let generators emit against the sim clock, walk the queue
+    /// through triggers / recorder / ingest, sample the load rollups, sweep
+    /// timeout triggers, and settle a finished replay. Returns true when a
+    /// replay finished this step. `stride` is the frontend's requested
+    /// sampling period for signal history and `grace` its missed-cycles
+    /// tolerance -- frontend policy the bus applies but does not own.
+    /// Status messages from trigger actions or the finish go into `status`
+    /// (last write wins; the status bar has one line).
+    pub(crate) fn step(
+        &mut self,
+        now_us: u64,
+        stride: u64,
+        grace: u64,
+        status: &mut String,
+    ) -> bool {
+        self.buf.clear();
+        self.source.poll(now_us, &mut self.buf);
+        let source_empty = self.buf.is_empty();
+        if stride != self.applied_stride_us {
+            self.sample_cover = None;
+            self.applied_stride_us = stride;
+        }
+
+        // The log clock is primary while replaying: `sim_t_us` follows the
+        // newest log frame's own stamp and holds between frames, so injected
+        // frames land on the same timeline the log carries and every
+        // consumer -- aggregates, plots, the spec check -- sees one clock.
+        // Live simulation keeps the wall-derived clock `update` maintains.
+        if matches!(self.mode, Mode::Replay)
+            && let Some(t) = self.buf.last().map(|f| f.t_us)
+        {
+            self.sim_t_us = t;
+        }
+        let sim = self.sim_t_us;
+
+        // Generators transmit in every running mode: an active entry during
+        // replay injects onto the log timeline, which is what makes
+        // "replay a real log and stir a few frames in" possible. One
+        // exception: an id the log itself carries stays silent, or replaying
+        // a recording of this same simulation interleaves two senders of one
+        // signal and every consumer sees their mixed values. Only consulted
+        // in Replay mode, so nothing to restore when the run ends.
+        let channels = &self.channels;
+        let mut emitted: Vec<CanFrame> = Vec::new();
+        for tx in &mut self.tx_list {
+            if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
+                // Log time has no slot zero: an entry picked up mid-log is
+                // anchored at the playhead instead of emitting one frame
+                // dated the epoch.
+                tx.next_t_us = sim;
+            }
+            let muted =
+                matches!(self.mode, Mode::Replay) && self.replay_ids.contains(&(tx.channel, tx.id));
+            // Every slot the clock has passed goes out at its own stamp.
+            // Skipping the backlog after a UI stall (the old policy) kept the
+            // tick cheap but punched a hole into the bus's own timeline --
+            // and at Graphics strides fine enough to show single updates,
+            // that hole reads as the curve being eaten while the plot
+            // slides on. Frames carry their slot's timestamp, so spacing
+            // stays exactly `cycle_us` even in the catch-up burst.
+            let mut budget = MAX_TX_CATCHUP;
+            while budget > 0 && tx.active && !muted && tx.cycle_us != 0 && tx.next_t_us <= sim {
+                budget -= 1;
+                // Values are read at the slot, not at `sim`: a frame stamped
+                // `slot` must carry the waveform's value at `slot`, or every
+                // payload would lead its own timestamp by up to a full cycle.
+                let slot = tx.next_t_us;
+                tx.next_t_us += tx.cycle_us;
+                let (data, len, flags) = crate::generator::tx_payload(channels, tx, slot);
+                emitted.push(CanFrame {
+                    t_us: slot,
+                    channel: tx.channel,
+                    id: tx.id,
+                    extended: tx.extended,
+                    len,
+                    data,
+                    dir: Direction::Tx,
+                    flags,
+                });
+            }
+        }
+        self.buf.extend(emitted);
+
+        let replay_done =
+            matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
+
+        // Index walk rather than `for f in &self.buf`: a frame is copied
+        // out one at a time, and a `while`, not a `for` over `0..len()`:
+        // the range freezes its end before the loop, and a Send reaction
+        // pushing onto `buf` mid-loop must be processed by this same step,
+        // not wiped by the next one.
+        let mut i = 0;
+        while i < self.buf.len() {
+            let f = self.buf[i];
+            i += 1;
+            // Triggers judge the frame before anything else consumes it,
+            // so a trigger that starts a recording captures the very
+            // frame that fired it.
+            self.eval_triggers(&f, status);
+            self.recorder.write(&f);
+            self.ingest(f, stride);
+        }
+
+        // One sample of the windowed numbers per step feeds the Min/Max/Avg
+        // columns of the Bus Statistics window.
+        for load in &mut self.bus_loads {
+            load.sample();
+        }
+
+        self.eval_timeout_triggers(now_us, grace, status);
+
+        if replay_done {
+            self.measuring = false;
+            self.recorder.close();
+            let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
+            *status = format!("replay finished at {dur:.2}s");
+        }
+        replay_done
     }
 
     /// The database loaded on bus `ch`, if any.
