@@ -16,6 +16,7 @@ use crate::channel::Channel;
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::Subscription;
+use crate::spec::{Kind, cycle_offender, dlc_offender, missing_offender};
 use crate::trigger::{TriggerAction, TriggerCond};
 
 /// Slots one generator entry may backfill per step after the clock jumped
@@ -90,6 +91,9 @@ pub struct BusCore {
     pub(crate) recorder: crate::recorder::Recorder,
     /// User rules judged per frame (edges) and per step (aggregate sweeps).
     pub(crate) triggers: Vec<crate::trigger::Trigger>,
+    /// Observed-versus-declared violations, recomputed on every step from
+    /// `aggs` and the loaded databases.
+    pub(crate) spec: crate::spec::Spec,
 }
 
 impl BusCore {
@@ -119,22 +123,25 @@ impl BusCore {
             buf: Vec::new(),
             recorder: crate::recorder::Recorder::new(),
             triggers: Vec::new(),
+            spec: crate::spec::Spec::default(),
         }
     }
 
     /// One full step of the bus against wall-clock `now_us`: poll the
     /// source, let generators emit against the sim clock, walk the queue
-    /// through triggers / recorder / ingest, sample the load rollups, sweep
-    /// timeout triggers, and settle a finished replay. Returns true when a
-    /// replay finished this step. `stride` is the frontend's requested
-    /// sampling period for signal history and `grace` its missed-cycles
-    /// tolerance -- frontend policy the bus applies but does not own.
-    /// Status messages from trigger actions or the finish go into `status`
-    /// (last write wins; the status bar has one line).
+    /// through triggers / recorder / ingest, sample the load rollups, check
+    /// the databases' promises, sweep timeout triggers, and settle a
+    /// finished replay. Returns true when a replay finished this step.
+    /// `stride` is the frontend's requested sampling period for signal
+    /// history; `tol_pct` and `grace` its spec tolerances -- frontend
+    /// policy the bus applies but does not own. Status messages from
+    /// trigger actions or the finish go into `status` (last write wins;
+    /// the status bar has one line).
     pub(crate) fn step(
         &mut self,
         now_us: u64,
         stride: u64,
+        tol_pct: u64,
         grace: u64,
         status: &mut String,
     ) -> bool {
@@ -232,6 +239,7 @@ impl BusCore {
             load.sample();
         }
 
+        self.check_spec(tol_pct, grace);
         self.eval_timeout_triggers(now_us, grace, status);
 
         if replay_done {
@@ -241,6 +249,86 @@ impl BusCore {
             *status = format!("replay finished at {dur:.2}s");
         }
         replay_done
+    }
+
+    /// Compare what arrived against what the databases promise.
+    ///
+    /// Once per step, not per frame: every verdict here is a claim about a
+    /// *message's* timing or identity, and the loop above has already folded the
+    /// frames into one aggregate per `(bus, id)`. Sweeping the aggregates turns a
+    /// step of two hundred frames into one verdict each instead of two hundred
+    /// latch writes, and it cannot read an aggregate mid-update the way a check
+    /// inside that loop would. `tol_pct` and `grace` are the frontend's
+    /// configured tolerances.
+    pub(crate) fn check_spec(&mut self, tol_pct: u64, grace: u64) {
+        let now = self.sim_t_us;
+        // "Dropped" is the only verdict that needs a present tense. Replay runs
+        // on the log's own timestamps, where "still going" has no meaning, so
+        // only live simulation may call a message gone; pausing is covered
+        // separately by the step not running at all. The other three are facts
+        // about frames already seen and stay on in every mode.
+        let live = matches!(self.mode, Mode::Virtual) && !self.trace_paused;
+        let mut hits: Vec<((u8, u32, Kind), f64, f64)> = Vec::new();
+        let mut seen: Vec<((u8, u32), u64)> = Vec::with_capacity(self.aggs.len());
+        for (&key, agg) in &self.aggs {
+            let (ch, id) = key;
+            seen.push((key, agg.last_t_us));
+            // No database on this bus means no opinion, not a clean bill.
+            let Some(db) = self.channel_dbc(ch) else {
+                continue;
+            };
+            let Some(m) = db.messages.get(&id) else {
+                hits.push(((ch, id, Kind::Unknown), 0.0, 0.0));
+                continue;
+            };
+            // A declaration of 0 is event-triggered, which the two timing
+            // predicates below reject on their own; `None` is the database
+            // saying nothing, and neither is a period to check against.
+            let declared = m.cycle_us;
+            // Our own frames are exempt from the length and period verdicts.
+            // Driving a signal that reaches past the base length widens the
+            // frame on purpose (see `tx_payload`), so judging a Tx frame by the
+            // declared DLC would convict a configuration chosen deliberately;
+            // and the generator row already offers to restore a hand-tuned
+            // period. Transmitting an id the database lacks is still reported.
+            if matches!(agg.dir, Direction::Rx) {
+                if dlc_offender(agg.len, m.dlc) {
+                    hits.push(((ch, id, Kind::Dlc), m.dlc as f64, f64::from(agg.len)));
+                }
+                // The interval since the previous step, never the running
+                // average in `agg.cycle_us`: an EMA reads a five-fold stall as
+                // 1.4x and takes twenty samples to converge, and `min_us` /
+                // `max_us` latch forever, so either would hide or keep a
+                // violation that a single real interval states plainly. A
+                // message with no previous step, or with a step that brought it
+                // no new frame, has no interval to judge yet.
+                let elapsed = self
+                    .spec
+                    .previous(key)
+                    .and_then(|from| agg.last_t_us.checked_sub(from))
+                    .filter(|i| *i > 0);
+                if let (Some(d), Some(interval)) = (declared, elapsed)
+                    && cycle_offender(interval, d, tol_pct)
+                {
+                    hits.push(((ch, id, Kind::Cycle), d as f64, interval as f64));
+                }
+            }
+            if let (true, Some(d)) = (live, declared)
+                && missing_offender(now, agg.last_t_us, d, grace)
+            {
+                hits.push((
+                    (ch, id, Kind::Missing),
+                    d as f64,
+                    now.saturating_sub(agg.last_t_us) as f64,
+                ));
+            }
+        }
+        for (key, declared, measured) in hits {
+            self.spec.record(key, now, declared, measured);
+        }
+        for (key, last_t_us) in seen {
+            self.spec.note(key, last_t_us);
+        }
     }
 
     /// The database loaded on bus `ch`, if any.

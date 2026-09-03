@@ -6,9 +6,7 @@ use crate::log::open_stream;
 use crate::source::replay::ReplaySource;
 use crate::source::virtual_source::VirtualSource;
 use crate::source::{FrameSource, FrameStream};
-use crate::spec::{
-    GRACE_CYCLES, Kind, Spec, TOLERANCE_PERCENT, cycle_offender, dlc_offender, missing_offender,
-};
+use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
 pub const TRACE_LIMIT: usize = 50_000;
 pub const TOOLBAR_H: f32 = 54.0;
@@ -138,9 +136,6 @@ pub struct App {
     pub trigger_sel: Option<usize>,
     pub(crate) trig_id_buf: String,
     pub(crate) trig_edit_sel: Option<usize>,
-    /// Observed-versus-declared violations, recomputed on every measurement
-    /// step from `aggs` and the loaded databases.
-    pub spec: Spec,
     /// Which violation kinds the report window lists, indexed by
     /// [`crate::spec::Kind::ALL`]. A noise control, deliberately not part of the
     /// project: hiding third-party traffic today should not hide it next week.
@@ -278,7 +273,6 @@ impl App {
             trigger_sel: None,
             trig_id_buf: String::new(),
             trig_edit_sel: None,
-            spec: Spec::default(),
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
@@ -449,7 +443,7 @@ impl App {
         // Along with the aggregates it reads: keeping the previous run's
         // interval memory would turn the first step of a new run into one
         // enormous measured period.
-        self.spec = Spec::default();
+        self.core.spec = crate::spec::Spec::default();
         self.sample_cover = None;
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
@@ -968,89 +962,15 @@ impl App {
     pub fn tick(&mut self, now_us: u64) {
         let stride = self.wanted_stride_us();
         let mut status = String::new();
-        self.core.step(now_us, stride, self.spec_grace, &mut status);
-        self.check_spec();
+        self.core.step(
+            now_us,
+            stride,
+            self.spec_tol_pct,
+            self.spec_grace,
+            &mut status,
+        );
         if !status.is_empty() {
             self.status = status;
-        }
-    }
-
-    /// Compare what arrived against what the databases promise.
-    ///
-    /// Once per step, not per frame: every verdict here is a claim about a
-    /// *message's* timing or identity, and the loop above has already folded the
-    /// frames into one aggregate per `(bus, id)`. Sweeping the aggregates turns a
-    /// step of two hundred frames into one verdict each instead of two hundred
-    /// latch writes, and it cannot read an aggregate mid-update the way a check
-    /// inside that loop would.
-    fn check_spec(&mut self) {
-        let now = self.sim_t_us;
-        // "Dropped" is the only verdict that needs a present tense. Replay runs
-        // on the log's own timestamps, where "still going" has no meaning, so
-        // only live simulation may call a message gone; pausing is covered
-        // separately by `tick` not running at all. The other three are facts
-        // about frames already seen and stay on in every mode.
-        let live = matches!(self.mode, Mode::Virtual) && !self.trace_paused;
-        let mut hits: Vec<((u8, u32, Kind), f64, f64)> = Vec::new();
-        let mut seen: Vec<((u8, u32), u64)> = Vec::with_capacity(self.aggs.len());
-        for (&key, agg) in &self.aggs {
-            let (ch, id) = key;
-            seen.push((key, agg.last_t_us));
-            // No database on this bus means no opinion, not a clean bill.
-            let Some(db) = self.channel_dbc(ch) else {
-                continue;
-            };
-            let Some(m) = db.messages.get(&id) else {
-                hits.push(((ch, id, Kind::Unknown), 0.0, 0.0));
-                continue;
-            };
-            // A declaration of 0 is event-triggered, which the two timing
-            // predicates below reject on their own; `None` is the database
-            // saying nothing, and neither is a period to check against.
-            let declared = m.cycle_us;
-            // Our own frames are exempt from the length and period verdicts.
-            // Driving a signal that reaches past the base length widens the
-            // frame on purpose (see `tx_payload`), so judging a Tx frame by the
-            // declared DLC would convict a configuration chosen deliberately;
-            // and the generator row already offers to restore a hand-tuned
-            // period. Transmitting an id the database lacks is still reported.
-            if matches!(agg.dir, Direction::Rx) {
-                if dlc_offender(agg.len, m.dlc) {
-                    hits.push(((ch, id, Kind::Dlc), m.dlc as f64, f64::from(agg.len)));
-                }
-                // The interval since the previous step, never the running
-                // average in `agg.cycle_us`: an EMA reads a five-fold stall as
-                // 1.4x and takes twenty samples to converge, and `min_us` /
-                // `max_us` latch forever, so either would hide or keep a
-                // violation that a single real interval states plainly. A
-                // message with no previous step, or with a step that brought it
-                // no new frame, has no interval to judge yet.
-                let elapsed = self
-                    .spec
-                    .previous(key)
-                    .and_then(|from| agg.last_t_us.checked_sub(from))
-                    .filter(|i| *i > 0);
-                if let (Some(d), Some(interval)) = (declared, elapsed)
-                    && cycle_offender(interval, d, self.spec_tol_pct)
-                {
-                    hits.push(((ch, id, Kind::Cycle), d as f64, interval as f64));
-                }
-            }
-            if let (true, Some(d)) = (live, declared)
-                && missing_offender(now, agg.last_t_us, d, self.spec_grace)
-            {
-                hits.push((
-                    (ch, id, Kind::Missing),
-                    d as f64,
-                    now.saturating_sub(agg.last_t_us) as f64,
-                ));
-            }
-        }
-        for (key, declared, measured) in hits {
-            self.spec.record(key, now, declared, measured);
-        }
-        for (key, last_t_us) in seen {
-            self.spec.note(key, last_t_us);
         }
     }
 }
