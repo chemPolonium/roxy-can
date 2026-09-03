@@ -25,10 +25,6 @@ pub struct TxMsg {
     /// `data` says. Applied on top of the base payload at emit time; `data`
     /// itself is never rewritten by them. See [`crate::sim`].
     pub srcs: Vec<ValueSrc>,
-    /// The bytes on the wire as of the last throttled text refresh -- the base
-    /// payload with every driven source's value laid over it. The generator
-    /// row renders this read-only; session state, never saved.
-    pub(crate) sent_text: String,
 }
 
 /// Whitespace-separated hex bytes, as typed in the generator's data box.
@@ -219,6 +215,8 @@ impl App {
     }
 
     /// Stops driving `name`, which leaves the base bytes in charge again.
+    /// Test convenience: the UI sends [`crate::bus::BusCommand::ClearEntrySource`].
+    #[cfg(test)]
     pub fn clear_source(&mut self, i: usize, name: &str) {
         let Some(tx) = self.tx_list.get(i) else {
             return;
@@ -235,6 +233,8 @@ impl App {
     /// dropping only its source: grabbing a moving slider means "hold here".
     /// The encode is validated read-only first so the command is only sent
     /// when it will succeed; the bus re-checks authoritatively.
+    /// Test convenience: the UI sends [`crate::bus::BusCommand::PinEntrySignal`].
+    #[cfg(test)]
     pub fn pin_signal(&mut self, i: usize, name: &str, phys: f64) -> bool {
         let Some(tx) = self.tx_list.get(i) else {
             return false;
@@ -258,6 +258,8 @@ impl App {
     /// Replaces the base payload from the generator's hex box. Active sources
     /// deliberately survive: correcting one byte must not throw away a whole
     /// stimulus setup. Returns false if the text is not whole hex bytes.
+    /// Test convenience: the UI sends [`crate::bus::BusCommand::SetEntryHex`].
+    #[cfg(test)]
     pub fn set_tx_hex(&mut self, i: usize, text: &str) -> bool {
         let parsed = parse_hex_bytes(text).is_some();
         if let Some(tx) = self.tx_list.get(i) {

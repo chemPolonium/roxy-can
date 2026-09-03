@@ -126,6 +126,32 @@ pub struct Snapshot {
     /// One entry per live subscription: the scalar stats the Data window
     /// draws and the sampled history the curves read.
     pub subs: Vec<SubView>,
+    /// One entry per generator row: display state plus the bytes that
+    /// actually go out at this frame's sim time.
+    pub tx: Vec<TxView>,
+}
+
+/// One generator entry as the frontend sees it this frame. `muted` folds
+/// the replay-silencing decision in -- the frontend renders the chip, the
+/// bus owns the policy. The `sent_*` fields are computed by the bus so
+/// "what you see is what the wire sees" holds without the frontend
+/// touching the databases or the clock.
+#[derive(Clone, Debug)]
+pub struct TxView {
+    pub channel: u8,
+    pub id: u32,
+    pub name: String,
+    pub active: bool,
+    pub fd: bool,
+    pub cycle_us: u64,
+    /// Base payload as hex text -- also the no-DBC message's editable box.
+    pub data_text: String,
+    /// The payload that goes out this frame: base with every driven
+    /// source laid over it.
+    pub sent_data: [u8; crate::can::frame::MAX_CAN_FD_LEN],
+    pub sent_text: String,
+    pub srcs: Vec<crate::sim::ValueSrc>,
+    pub muted: bool,
 }
 
 /// One subscribed signal as the frontend sees it this frame. The
@@ -377,6 +403,28 @@ impl BusCore {
                     color: s.color,
                 })
                 .collect(),
+            tx: self
+                .tx_list
+                .iter()
+                .map(|t| {
+                    let (sent_data, sent_len, _) =
+                        crate::generator::tx_payload(&self.channels, t, self.sim_t_us);
+                    TxView {
+                        channel: t.channel,
+                        id: t.id,
+                        name: t.name.clone(),
+                        active: t.active,
+                        fd: t.flags.contains(crate::can::frame::FrameFlags::FD),
+                        cycle_us: t.cycle_us,
+                        data_text: t.data_text.clone(),
+                        sent_data,
+                        sent_text: crate::generator::hex_text(&sent_data, sent_len),
+                        srcs: t.srcs.clone(),
+                        muted: matches!(self.mode, Mode::Replay)
+                            && self.replay_ids.contains(&(t.channel, t.id)),
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -504,7 +552,6 @@ impl BusCore {
             cycle_us,
             active: false,
             next_t_us: 0,
-            sent_text: String::new(),
         });
     }
 

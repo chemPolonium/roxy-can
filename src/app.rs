@@ -180,6 +180,11 @@ pub struct App {
     pub tx_cycle_edit: Option<usize>,
     /// Draft period in whole milliseconds for that row.
     pub tx_cycle_buf: String,
+    /// The generator's editable data box while it has focus: row index plus
+    /// the text typed so far. The live buffer is frontend draft state -- the
+    /// bus only sees the parsed payload once the edit commits (via
+    /// `SetEntryHex`).
+    pub tx_data_edit: Option<(usize, String)>,
     pub last_tick_us: u64,
     /// How often number readouts (Data values, Statistics, Messages, the
     /// status bar) re-render, in Hz; 0 follows the frame rate. Curves and
@@ -300,6 +305,7 @@ impl App {
             num_draft: crate::ui::Draft::default(),
             tx_cycle_edit: None,
             tx_cycle_buf: String::new(),
+            tx_data_edit: None,
             last_tick_us: 0,
             text_rate_hz: 10,
             text_fresh: true,

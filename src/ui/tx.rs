@@ -1,7 +1,5 @@
-use crate::app::{App, Mode, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
-use crate::can::frame::FrameFlags;
+use crate::app::{App, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::dbc::SignalInfo;
-use crate::generator::{hex_text, tx_payload};
 use crate::sim::{KINDS, SrcKind, ValueSrc};
 use crate::ui::help::popup_is_open;
 use imgui::{Condition, InputTextFlags, Key, Ui};
@@ -98,7 +96,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.same_line();
                 ui.text(format!(
                     "{} active",
-                    app.tx_list.iter().filter(|t| t.active).count()
+                    app.snap.tx.iter().filter(|t| t.active).count()
                 ));
                 ui.separator();
 
@@ -116,7 +114,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 let mut first_bus = true;
                 for ch in 0..app.channels.len() {
                     let ch8 = ch as u8;
-                    if !app.tx_list.iter().any(|t| t.channel == ch8) {
+                    if !app.snap.tx.iter().any(|t| t.channel == ch8) {
                         continue;
                     }
                     if !first_bus {
@@ -136,12 +134,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
 
                 let query = app.gen_search.trim().to_ascii_lowercase();
-                let n = app.tx_list.len();
-                let mut remove_idx: Option<usize> = None;
-                for i in 0..n {
-                    let id = app.tx_list[i].id;
-                    let ch = app.tx_list[i].channel;
-                    let name = app.tx_list[i].name.clone();
+                // The rows read this frame's snapshot, cloned once so the
+                // per-row widgets can send commands without aliasing.
+                let tx = app.snap.tx.clone();
+                let mut remove: Option<(u8, u32)> = None;
+                for (i, view) in tx.iter().enumerate() {
+                    let id = view.id;
+                    let ch = view.channel;
+                    let name = view.name.clone();
                     if !query.is_empty() {
                         let hay = format!("{} {} {:X}", app.channel_name(ch), name, id)
                             .to_ascii_lowercase();
@@ -154,18 +154,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .and_then(|db| db.messages.get(&id))
                         .map(|m| m.signals.clone())
                         .unwrap_or_default();
-                    let driven = app.tx_list[i].srcs.len();
+                    let driven = view.srcs.len();
                     // The transmit state rides the header line, so the whole
                     // list scans without expanding anything. MUTE is the
-                    // replay silencing: the checkbox keeps its state, but an
-                    // id the replayed log carries must not double-send.
-                    let (chip, color, hint) = if !app.tx_list[i].active {
+                    // replay silencing, precomputed by the bus: the checkbox
+                    // keeps its state, but an id the replayed log carries
+                    // must not double-send.
+                    let (chip, color, hint) = if !view.active {
                         ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：On 勾选框未勾选。")
-                    } else if matches!(app.mode, Mode::Replay)
-                        && app
-                            .replay_ids
-                            .contains(&(app.tx_list[i].channel, app.tx_list[i].id))
-                    {
+                    } else if view.muted {
                         (
                             "MUTE",
                             [1.0, 0.65, 0.2, 1.0],
@@ -193,20 +190,20 @@ pub fn render(app: &mut App, ui: &Ui) {
                         continue;
                     }
                     ui.indent();
-                    let mut act = app.tx_list[i].active;
+                    let mut act = view.active;
                     if ui.checkbox(format!("On##{i}"), &mut act) {
                         // Routes through the model: activating anchors the
                         // schedule at the current clock, so re-enabling an
                         // entry never re-emits frames dated across the time
                         // it was off.
-                        app.set_tx_active(i, act);
+                        app.send(crate::bus::BusCommand::SetEntryActive { ch, id, on: act });
                     }
                     ui.same_line();
                     // Not an inline number box any more: dragging one edits its
                     // text in place, and every keystroke was applied, so dialing
                     // in 100 put the message on the wire at 1 ms first. The
                     // dialog drafts it and only writes on Apply.
-                    let cycle = app.tx_list[i].cycle_us;
+                    let cycle = view.cycle_us;
                     let cyc = if cycle == 0 {
                         "event".to_string()
                     } else {
@@ -217,16 +214,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.tx_cycle_buf = (cycle / 1000).to_string();
                     }
                     ui.same_line();
-                    let mut fd = app.tx_list[i].flags.contains(FrameFlags::FD);
+                    let mut fd = view.fd;
                     if ui.checkbox(format!("FD##{i}"), &mut fd) {
-                        let (ech, eid) = (app.tx_list[i].channel, app.tx_list[i].id);
-                        app.send(crate::bus::BusCommand::SetEntryFd { ch: ech, id: eid, fd });
+                        app.send(crate::bus::BusCommand::SetEntryFd { ch, id, fd });
                     }
                     // Only ever shown when the two disagree, so a row that
                     // matches its database stays exactly as wide as before.
-                    let off = app
-                        .dbc_cycle_us(ch, id)
-                        .filter(|d| *d != app.tx_list[i].cycle_us);
+                    let off = app.dbc_cycle_us(ch, id).filter(|d| *d != cycle);
                     if let Some(declared) = off {
                         ui.same_line();
                         let label = if declared == 0 {
@@ -246,50 +240,53 @@ pub fn render(app: &mut App, ui: &Ui) {
                     // Values are edited through the signal handles below. For
                     // a message the database knows, the box only shows the
                     // bytes that actually go out -- base payload with every
-                    // driven source's value already laid over it -- refreshed
-                    // on the text gate like every number readout. Only a
-                    // message without DBC signals keeps an editable box,
-                    // because it has no handles to edit instead.
+                    // driven source's value already laid over it, computed by
+                    // the bus into this frame's snapshot. Only a message
+                    // without DBC signals keeps an editable box, because it
+                    // has no handles to edit instead.
                     if sigs.is_empty() {
+                        // The live edit buffer is frontend draft state: while
+                        // the box has focus the text lives in `tx_data_edit`,
+                        // and the bus only sees the payload when the edit
+                        // commits. Decoding waits for the box to be left --
+                        // parsing each keystroke meant retyping "11 22 33"
+                        // briefly put a one-byte frame on the bus.
+                        let editing = matches!(&app.tx_data_edit, Some((r, _)) if *r == i);
+                        let mut buf = match &app.tx_data_edit {
+                            Some((r, s)) if *r == i => s.clone(),
+                            _ => view.data_text.clone(),
+                        };
                         ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
-                        ui.input_text(format!("##data{i}"), &mut app.tx_list[i].data_text)
-                            .build();
+                        ui.input_text(format!("##data{i}"), &mut buf).build();
+                        if ui.is_item_active() {
+                            app.tx_data_edit = Some((i, buf.clone()));
+                        }
                         if ui.is_item_deactivated_after_edit() {
-                            // Decoding waits for the box to be left. Parsing
-                            // each keystroke meant retyping "11 22 33" briefly
-                            // put a one-byte frame on the bus, and a length the
-                            // row never asked for. Bad text still simply stays
-                            // unapplied, and active sources are never cleared
-                            // by a hex edit.
-                            let text = app.tx_list[i].data_text.clone();
-                            app.set_tx_hex(i, &text);
+                            app.tx_data_edit = None;
+                            app.send(crate::bus::BusCommand::SetEntryHex { ch, id, text: buf });
+                        } else if editing && !ui.is_item_active() {
+                            app.tx_data_edit = None;
                         }
                     } else {
-                        if app.text_fresh || app.tx_list[i].sent_text.is_empty() {
-                            let (data, len, _) =
-                                tx_payload(&app.channels, &app.tx_list[i], app.sim_t_us);
-                            app.tx_list[i].sent_text = hex_text(&data, len);
-                        }
-                        ui.text_disabled(&app.tx_list[i].sent_text);
+                        ui.text_disabled(&view.sent_text);
                     }
                     ui.same_line();
                     if ui.small_button(format!("x##{i}")) {
-                        remove_idx = Some(i);
+                        remove = Some((ch, id));
                     }
 
                     if sigs.is_empty() {
                         ui.text("(no signals in DBC)");
                     }
-                    let data = app.tx_list[i].data;
-                    let sim = app.sim_t_us;
                     // The bytes that actually go out this instant: base with
-                    // every driven source laid over them. Driven rows read
-                    // their displayed value back out of these, so what you
-                    // see is what the bus sees -- byte-width truncation and
-                    // all. The raw computed number never reaches the wire.
-                    let (sent_data, _, _) = tx_payload(&app.channels, &app.tx_list[i], sim);
+                    // every driven source laid over them, from the snapshot.
+                    // Driven rows read their displayed value back out of
+                    // these, so what you see is what the bus sees --
+                    // byte-width truncation and all. The raw computed number
+                    // never reaches the wire.
+                    let data = view.sent_data;
                     for s in &sigs {
-                        let held = app.tx_list[i]
+                        let held = view
                             .srcs
                             .iter()
                             .find(|x| x.name == s.name)
@@ -308,7 +305,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let model_shown = match held.as_ref() {
                             Some(_) => {
                                 let raw = crate::decode::extract_raw(
-                                    &sent_data,
+                                    &data,
                                     s.start_bit,
                                     s.size,
                                     s.big_endian,
@@ -347,7 +344,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                         );
                         drop(_read_only);
                         if let Some(val) = committed {
-                            app.pin_signal(i, &s.name, val);
+                            // Fire-and-forget from the UI: whether the
+                            // database can encode the value is the bus's
+                            // call, and a failed pin simply changes nothing.
+                            app.send(crate::bus::BusCommand::PinEntrySignal {
+                                ch,
+                                id,
+                                name: s.name.clone(),
+                                phys: val,
+                            });
                             shown = val as f32;
                         }
                         ui.same_line();
@@ -359,7 +364,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                         if ui.combo_simple_string(format!("##src{i}_{}", s.name), &mut pick, &kinds)
                         {
                             if pick == 0 {
-                                app.clear_source(i, &s.name);
+                                app.send(crate::bus::BusCommand::ClearEntrySource {
+                                    ch,
+                                    id,
+                                    name: s.name.clone(),
+                                });
                             } else {
                                 let kind = KINDS[pick - 1];
                                 // Enabling snapshots lo/hi from the DBC range;
@@ -369,7 +378,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                                     Some(h) => ValueSrc { kind, ..h.clone() },
                                     None => ValueSrc::new(&s.name, kind, lo as f64, hi as f64),
                                 };
-                                app.set_source(i, src);
+                                app.send(crate::bus::BusCommand::SetEntrySource { ch, id, src });
                             }
                         }
                         if let Some(h) = &held {
@@ -393,8 +402,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     ui.unindent();
                 }
-                if let Some(i) = remove_idx {
-                    let (ch, id) = (app.tx_list[i].channel, app.tx_list[i].id);
+                if let Some((ch, id)) = remove {
                     app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
                 }
             });
@@ -441,7 +449,7 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
     let Some(row) = app.tx_cycle_edit else {
         return;
     };
-    let Some(tx) = app.tx_list.get(row) else {
+    let Some(tx) = app.snap.tx.get(row) else {
         app.tx_cycle_edit = None;
         return;
     };
@@ -556,7 +564,8 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     let mut src = match app.src_draft.clone() {
         Some(d) if d.name == sig => d,
         _ => match app
-            .tx_list
+            .snap
+            .tx
             .get(row)
             .and_then(|t| t.srcs.iter().find(|s| s.name == sig).cloned())
         {
@@ -568,7 +577,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             }
         },
     };
-    let desc = app.tx_list.get(row).and_then(|t| {
+    let desc = app.snap.tx.get(row).and_then(|t| {
         app.channel_dbc(t.channel)
             .and_then(|db| db.messages.get(&t.id))
             .and_then(|m| m.signals.iter().find(|s| s.name == sig))
