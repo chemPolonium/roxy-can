@@ -16,7 +16,7 @@ use crate::trigger::{Trigger, TriggerAction, TriggerCond};
 fn record_survives_start_and_writes_frames() {
     let mut app = App::new();
     let path = std::env::temp_dir().join("roxy_can_record_test.asc");
-    app.recorder.record_path = path.to_string_lossy().to_string();
+    app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
     assert!(app.recorder.recording);
     assert!(
@@ -62,7 +62,7 @@ fn record_survives_start_and_writes_frames() {
 fn replay_after_recorded_simulation_creates_no_second_file() {
     let mut app = App::new();
     let path = std::env::temp_dir().join("roxy_can_replay_rec_test.asc");
-    app.recorder.record_path = path.to_string_lossy().to_string();
+    app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
     for tx in &mut app.tx_list {
         tx.active = true;
@@ -91,7 +91,7 @@ fn replay_after_recorded_simulation_creates_no_second_file() {
 fn loading_log_does_not_start_replay() {
     let mut app = App::new();
     let path = std::env::temp_dir().join("roxy_can_load_asc_test.asc");
-    app.recorder.record_path = path.to_string_lossy().to_string();
+    app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
     for tx in &mut app.tx_list {
         tx.active = true;
@@ -1141,7 +1141,7 @@ fn channels_can_be_added_removed_and_renamed() {
 fn replay_position_tracks_playback() {
     let mut app = App::new();
     let path = std::env::temp_dir().join("roxy_can_seek_test.asc");
-    app.recorder.record_path = path.to_string_lossy().to_string();
+    app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
     for tx in &mut app.tx_list {
         tx.active = true;
@@ -1445,7 +1445,7 @@ fn app_with_replayable_recording(name: &str, iters: usize) -> (App, (u8, u32, St
     };
     app.subscribe(key.clone());
     let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
-    app.recorder.record_path = out.to_string_lossy().to_string();
+    app.record_path_buf = out.to_string_lossy().to_string();
     app.toggle_record();
     for tx in &mut app.tx_list {
         tx.active = true;
@@ -2161,7 +2161,7 @@ fn recording_captures_generator_data_faithfully() {
     let mut payload = [0u8; MAX_CAN_FD_LEN];
     payload[..8].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
     app.tx_list[0].data = payload;
-    app.recorder.record_path = "target/test_record".to_string();
+    app.record_path_buf = "target/test_record".to_string();
     app.toggle_record();
     app.start_virtual();
     for _ in 0..8 {
@@ -2869,7 +2869,7 @@ fn rpm_frame(t_us: u64, rpm: f64) -> CanFrame {
 fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
     let mut app = quiet_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_cross.asc");
-    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.record_path_buf = base.to_string_lossy().to_string();
     app.triggers.push(Trigger::new(
         TriggerCond::SignalCross {
             ch: 0,
@@ -2915,7 +2915,7 @@ fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
 fn an_id_present_trigger_latches_and_can_stop_a_recording() {
     let mut app = quiet_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_id.asc");
-    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.record_path_buf = base.to_string_lossy().to_string();
     app.triggers.push(Trigger::new(
         TriggerCond::IdPresent { ch: 0, id: 0x777 },
         TriggerAction::StopRecording,
@@ -2955,7 +2955,7 @@ fn an_id_present_trigger_latches_and_can_stop_a_recording() {
 fn an_error_frame_trigger_latches_once_per_run() {
     let mut app = quiet_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_err.asc");
-    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.record_path_buf = base.to_string_lossy().to_string();
     app.triggers.push(Trigger::new(
         TriggerCond::ErrorFrame { ch: 0 },
         TriggerAction::StartRecording,
@@ -3036,7 +3036,7 @@ fn adding_a_signal_trigger_picks_the_first_database_signal() {
 fn a_cycle_timeout_trigger_fires_on_each_dropout() {
     let mut app = spec_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_timeout.asc");
-    app.recorder.record_path = base.to_string_lossy().to_string();
+    app.record_path_buf = base.to_string_lossy().to_string();
     app.triggers.push(Trigger::new(
         TriggerCond::CycleTimeout { ch: 0, id: 100 },
         TriggerAction::StartRecording,

@@ -113,7 +113,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
 fn a_headless_recording_writes_a_readable_log() {
     let mut app = App::new();
     let path = std::env::temp_dir().join("roxy_can_headless_record.asc");
-    app.recorder.record_path = path.to_string_lossy().to_string();
+    app.record_path_buf = path.to_string_lossy().to_string();
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,

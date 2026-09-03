@@ -398,7 +398,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.text("to");
                 ui.same_line();
                 ui.set_next_item_width(130.0);
-                ui.input_text("##record", &mut app.recorder.record_path)
+                // The stem is a frontend draft; the recorder receives a
+                // copy when Record is ticked (see `App::toggle_record`),
+                // so a half-typed path never reaches the bus otherwise.
+                ui.input_text("##record", &mut app.record_path_buf)
                     .hint("record")
                     .build();
                 ui.same_line();

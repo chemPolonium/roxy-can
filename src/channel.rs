@@ -146,32 +146,21 @@ impl App {
         // The status line ("bus CANx removed") came from the command.
     }
 
-    pub fn load_channel(&mut self, ch: usize) -> bool {
-        let Some(channel) = self.core.channels.get_mut(ch) else {
-            return false;
-        };
-        let name = channel.name.clone();
-        match std::fs::read_to_string(channel.dbc_path.trim()) {
-            Ok(content) => match crate::dbc::load_dbc_str(&content) {
-                Ok(table) => {
-                    self.status = format!("{name} DBC loaded: {} messages", table.order.len());
-                    channel.dbc = Some(std::sync::Arc::new(table));
-                    true
-                }
-                Err(e) => {
-                    self.status = format!("{name} DBC error: {e}");
-                    false
-                }
-            },
-            Err(e) => {
-                self.status = format!("{name} DBC read failed: {e}");
-                false
-            }
-        }
+    /// Re-parses a bus's database from its current path. The outcome
+    /// lands in the snapshot: the table (or its absence after a failed
+    /// load) and the status line.
+    pub fn load_channel(&mut self, ch: usize) {
+        let path = self
+            .snap
+            .channels
+            .get(ch)
+            .map(|c| c.dbc_path.clone())
+            .unwrap_or_default();
+        self.send(crate::bus::BusCommand::LoadDbc { ch: ch as u8, path });
     }
 
     pub fn load_dbcs(&mut self) {
-        for ch in 0..self.channels.len() {
+        for ch in 0..self.snap.channel_count {
             self.load_channel(ch);
         }
     }
@@ -201,12 +190,14 @@ impl App {
     }
 
     /// Sets a bus's DBC path and loads it; successful parses are recorded
-    /// in the recent list.
+    /// in the recent list. "Table present after the load" is the success
+    /// signal -- a failed load leaves no table behind.
     pub fn open_dbc_for(&mut self, ch: usize, path: String) {
-        if let Some(channel) = self.channels.get_mut(ch) {
-            channel.dbc_path = path.clone();
-        }
-        if self.load_channel(ch) {
+        self.send(crate::bus::BusCommand::LoadDbc {
+            ch: ch as u8,
+            path: path.clone(),
+        });
+        if self.snap.channels.get(ch).is_some_and(|c| c.dbc.is_some()) {
             self.push_recent_dbc(path);
         }
     }
@@ -235,11 +226,7 @@ impl App {
         }
     }
 
-    pub fn bus_counter(&self) -> usize {
-        self.bus_counter
-    }
-
     pub fn set_bus_counter(&mut self, n: usize) {
-        self.bus_counter = n;
+        self.send(crate::bus::BusCommand::SetBusCounter(n));
     }
 }

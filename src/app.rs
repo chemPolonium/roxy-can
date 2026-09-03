@@ -198,6 +198,13 @@ pub struct App {
     /// bus only sees the parsed payload once the edit commits (via
     /// `SetEntryHex`).
     pub tx_data_edit: Option<(usize, String)>,
+    /// Buses-window rename draft: `(row, text)` while the field has
+    /// focus, committed as a `SetChannelConfig` command on focus loss.
+    pub bus_name_edit: Option<(usize, String)>,
+    /// The record file's stem as the input box shows it -- frontend
+    /// draft state; the recorder receives a copy via `SetRecordPath`
+    /// when recording arms.
+    pub record_path_buf: String,
     pub last_tick_us: u64,
     /// How often number readouts (Data values, Statistics, Messages, the
     /// status bar) re-render, in Hz; 0 follows the frame rate. Curves and
@@ -323,6 +330,12 @@ impl App {
             tx_cycle_edit: None,
             tx_cycle_buf: String::new(),
             tx_data_edit: None,
+            // Buses-window rename draft: (row, text) while the field is
+            // being typed in, committed as a command on focus loss.
+            bus_name_edit: None,
+            // The record file's stem, as the input box shows it. The
+            // recorder gets a copy when recording arms.
+            record_path_buf: String::new(),
             last_tick_us: 0,
             text_rate_hz: 10,
             text_fresh: true,
@@ -340,7 +353,11 @@ impl App {
             graphics_counter: 0,
             data_counter: 0,
         };
-        app.load_dbcs();
+        // Bootstrap before the first publish: databases parse and the
+        // generator pre-populates while the bus is still a plain struct
+        // on this thread. The command-based `load_dbcs` is for runtime
+        // restores, which have a frontend to report to.
+        app.core.bootstrap_dbcs();
         app.new_trace_window();
         app.new_msg_window();
         app.new_stats_window();
@@ -494,6 +511,11 @@ impl App {
     }
 
     pub fn toggle_record(&mut self) {
+        // The path the recorder derives its file from is whatever the
+        // input box shows right now, committed or not.
+        self.send(crate::bus::BusCommand::SetRecordPath(
+            self.record_path_buf.clone(),
+        ));
         self.send(crate::bus::BusCommand::ToggleRecord);
     }
 

@@ -31,7 +31,7 @@ fn content(app: &mut App, ui: &Ui) {
         app.add_channel();
     }
     ui.same_line();
-    ui.text(format!("{} bus(es)", app.channels.len()));
+    ui.text(format!("{} bus(es)", app.snap.channel_count));
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -42,7 +42,6 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::SCROLL_Y
         | TableFlags::SIZING_STRETCH_PROP;
     let mut remove: Option<usize> = None;
-    let n = app.channels.len();
     {
         let Some(_table) = ui.begin_table_with_flags("bus_table", 4, flags) else {
             return;
@@ -69,16 +68,53 @@ fn content(app: &mut App, ui: &Ui) {
         });
         ui.table_headers_row();
 
-        for i in 0..n {
+        // The rows render from the snapshot; edits are frontend drafts
+        // that commit as commands.
+        let views: Vec<(String, String, u32, u32)> = app
+            .snap
+            .channels
+            .iter()
+            .map(|c| {
+                (
+                    c.name.clone(),
+                    c.dbc_path.clone(),
+                    c.bitrate_kbps,
+                    c.fd_data_kbps,
+                )
+            })
+            .collect();
+        for (i, (name, path, arb_kbps, data_kbps)) in views.into_iter().enumerate() {
             ui.table_next_row();
             if !ui.table_next_column() {
                 continue;
             }
             ui.set_next_item_width(-1.0);
-            ui.input_text(format!("##busname{i}"), &mut app.channels[i].name)
+            // The rename draft lives in `bus_name_edit` while the box has
+            // focus; the bus sees the new name when the edit commits.
+            let editing = matches!(&app.bus_name_edit, Some((r, _)) if *r == i);
+            let mut name_buf = match &app.bus_name_edit {
+                Some((r, s)) if *r == i => s.clone(),
+                _ => name,
+            };
+            ui.input_text(format!("##busname{i}"), &mut name_buf)
                 .build();
+            if ui.is_item_active() {
+                app.bus_name_edit = Some((i, name_buf.clone()));
+            }
+            if ui.is_item_deactivated_after_edit() {
+                app.bus_name_edit = None;
+                app.send(crate::bus::BusCommand::SetChannelConfig {
+                    ch: i as u8,
+                    name: Some(name_buf),
+                    dbc_path: None,
+                    bitrate_kbps: None,
+                    fd_data_kbps: None,
+                    sim_nodes: None,
+                });
+            } else if editing && !ui.is_item_active() {
+                app.bus_name_edit = None;
+            }
             ui.table_next_column();
-            let path = app.channels[i].dbc_path.clone();
             ui.align_text_to_frame_padding();
             ui.text(if path.trim().is_empty() {
                 "(none)".to_string()
@@ -92,27 +128,43 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             // The load view divides wire bits by these; there is no hardware
             // behind the simulation, so the values are declarations about the
-            // bus being analysed, not device settings.
+            // bus being analysed, not device settings. Each accepted step is
+            // its own command -- there is no draft state worth the trouble
+            // for two integers.
             ui.set_next_item_width(56.0);
-            let mut arb = app.channels[i].bitrate_kbps as i32;
+            let mut arb = arb_kbps as i32;
             if ui
                 .input_int(format!("##busarb{i}"), &mut arb)
                 .step(50)
                 .step_fast(500)
                 .build()
             {
-                app.channels[i].bitrate_kbps = arb.max(1) as u32;
+                app.send(crate::bus::BusCommand::SetChannelConfig {
+                    ch: i as u8,
+                    name: None,
+                    dbc_path: None,
+                    bitrate_kbps: Some(arb.max(1) as u32),
+                    fd_data_kbps: None,
+                    sim_nodes: None,
+                });
             }
             ui.same_line();
             ui.set_next_item_width(56.0);
-            let mut data = app.channels[i].fd_data_kbps as i32;
+            let mut data = data_kbps as i32;
             if ui
                 .input_int(format!("##busdata{i}"), &mut data)
                 .step(100)
                 .step_fast(1000)
                 .build()
             {
-                app.channels[i].fd_data_kbps = data.max(1) as u32;
+                app.send(crate::bus::BusCommand::SetChannelConfig {
+                    ch: i as u8,
+                    name: None,
+                    dbc_path: None,
+                    bitrate_kbps: None,
+                    fd_data_kbps: Some(data.max(1) as u32),
+                    sim_nodes: None,
+                });
             }
             ui.table_next_column();
             if ui.small_button(format!("x##busrm{i}")) {

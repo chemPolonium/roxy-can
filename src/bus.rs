@@ -115,6 +115,40 @@ pub enum BusCommand {
     /// from the playhead. `speed` is the frontend's remembered
     /// multiplier, for the status line.
     ResumeReplay { speed: f64 },
+    /// Static per-bus declarations from the Buses window / project
+    /// restore: rename, bitrate figures, the DBC path (without loading
+    /// it -- pair with `LoadDbc`), or the simulated-node list.
+    SetChannelConfig {
+        ch: u8,
+        name: Option<String>,
+        dbc_path: Option<String>,
+        bitrate_kbps: Option<u32>,
+        fd_data_kbps: Option<u32>,
+        sim_nodes: Option<Vec<String>>,
+    },
+    /// Point a bus at `path` and parse the file (empty path = drop the
+    /// database). A failed load leaves no table behind: what the
+    /// snapshot then shows is what the bus will actually use.
+    LoadDbc { ch: u8, path: String },
+    /// Rewind the bus-name counter used to mint "CAN{n}" for new buses;
+    /// project restore pins it so the next added bus keeps counting from
+    /// where the project left off.
+    SetBusCounter(usize),
+    /// The dated ASC file the recorder derives its name from. Only read
+    /// when recording actually arms.
+    SetRecordPath(String),
+    /// Restore one generator row wholesale from a saved project. `None`
+    /// data_text keeps the row's current base payload. Rows the bus does
+    /// not know are ignored -- the database decides which messages exist.
+    SetEntryConfig {
+        ch: u8,
+        id: u32,
+        active: bool,
+        cycle_us: u64,
+        fd: bool,
+        data_text: Option<String>,
+        srcs: Vec<crate::sim::ValueSrc>,
+    },
 }
 
 /// What the frontend may see of the bus: one immutable, frame-shaped
@@ -136,6 +170,9 @@ pub struct Snapshot {
     pub replay: Option<(u64, u64)>,
     /// How many buses exist (frontends key window state off this).
     pub channel_count: usize,
+    /// The bus-name counter used to mint "CAN{n}" for new buses; the
+    /// frontend reads it for saves and pins it back on project restore.
+    pub bus_counter: usize,
     /// One entry per bus: identity, timing declarations and the shared
     /// (immutable) database. Static configuration as of this frame.
     pub channels: Vec<ChannelView>,
@@ -469,6 +506,26 @@ impl BusCore {
                 self.measuring = true;
                 *status = format!("resumed at {speed}x");
             }
+            BusCommand::SetChannelConfig {
+                ch,
+                name,
+                dbc_path,
+                bitrate_kbps,
+                fd_data_kbps,
+                sim_nodes,
+            } => self.set_channel_config(ch, name, dbc_path, bitrate_kbps, fd_data_kbps, sim_nodes),
+            BusCommand::LoadDbc { ch, path } => self.load_dbc(ch, path, status),
+            BusCommand::SetBusCounter(n) => self.bus_counter = n,
+            BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
+            BusCommand::SetEntryConfig {
+                ch,
+                id,
+                active,
+                cycle_us,
+                fd,
+                data_text,
+                srcs,
+            } => self.set_entry_config(ch, id, active, cycle_us, fd, data_text, srcs),
         }
     }
 
@@ -500,6 +557,7 @@ impl BusCore {
             sub_count: self.subs.len(),
             replay,
             channel_count: self.channels.len(),
+            bus_counter: self.bus_counter,
             channels: self
                 .channels
                 .iter()
@@ -663,11 +721,18 @@ impl BusCore {
         }
     }
 
-    /// (Re)loads the database named by the bus's `dbc_path`.
+    /// (Re)loads the database named by the bus's `dbc_path`. A failed or
+    /// empty path drops any previous table, so the snapshot never shows a
+    /// database the bus would not actually use. An empty path is silent:
+    /// a bus deliberately configured without a database is not an error.
     fn load_channel(&mut self, ch: usize, status: &mut String) -> bool {
         let Some(channel) = self.channels.get_mut(ch) else {
             return false;
         };
+        if channel.dbc_path.trim().is_empty() {
+            channel.dbc = None;
+            return false;
+        }
         let name = channel.name.clone();
         match std::fs::read_to_string(channel.dbc_path.trim()) {
             Ok(content) => match crate::dbc::load_dbc_str(&content) {
@@ -678,13 +743,106 @@ impl BusCore {
                 }
                 Err(e) => {
                     *status = format!("{name} DBC error: {e}");
+                    channel.dbc = None;
                     false
                 }
             },
             Err(e) => {
                 *status = format!("{name} DBC read failed: {e}");
+                channel.dbc = None;
                 false
             }
+        }
+    }
+
+    /// Points the bus at `path` and parses it in the same stroke -- the
+    /// path is not really set until its file has been accepted.
+    fn load_dbc(&mut self, ch: u8, path: String, status: &mut String) {
+        let Some(channel) = self.channels.get_mut(ch as usize) else {
+            return;
+        };
+        channel.dbc_path = path;
+        self.load_channel(ch as usize, status);
+    }
+
+    /// Static per-bus declarations: rename, bitrate figures, the DBC
+    /// path (without loading it -- that is [`Self::load_dbc`]'s job), or
+    /// the simulated-node list.
+    fn set_channel_config(
+        &mut self,
+        ch: u8,
+        name: Option<String>,
+        dbc_path: Option<String>,
+        bitrate_kbps: Option<u32>,
+        fd_data_kbps: Option<u32>,
+        sim_nodes: Option<Vec<String>>,
+    ) {
+        let Some(c) = self.channels.get_mut(ch as usize) else {
+            return;
+        };
+        if let Some(name) = name {
+            c.name = name;
+        }
+        if let Some(p) = dbc_path {
+            c.dbc_path = p;
+        }
+        if let Some(k) = bitrate_kbps {
+            c.bitrate_kbps = k.max(1);
+        }
+        if let Some(k) = fd_data_kbps {
+            c.fd_data_kbps = k.max(1);
+        }
+        if let Some(nodes) = sim_nodes {
+            c.sim_nodes = nodes;
+        }
+    }
+
+    /// Restores one generator row wholesale from a saved project, with
+    /// every field's own convention applied: FD flag, the anti-typo
+    /// period floor is the sender's to apply first, `None` payload keeps
+    /// the row's current base bytes, and the schedule restarts now.
+    // The signature mirrors the `SetEntryConfig` command one-to-one; a
+    // payload struct would just relocate the field list.
+    #[allow(clippy::too_many_arguments)]
+    fn set_entry_config(
+        &mut self,
+        ch: u8,
+        id: u32,
+        active: bool,
+        cycle_us: u64,
+        fd: bool,
+        data_text: Option<String>,
+        srcs: Vec<crate::sim::ValueSrc>,
+    ) {
+        let Some(tx) = self.entry_mut(ch, id) else {
+            return;
+        };
+        tx.active = active;
+        tx.cycle_us = cycle_us;
+        tx.next_t_us = 0;
+        tx.flags = if fd {
+            crate::can::frame::FrameFlags::FD
+        } else {
+            crate::can::frame::FrameFlags::NONE
+        };
+        if let Some(text) = data_text
+            && let Some(bytes) = crate::generator::parse_hex_bytes(&text)
+        {
+            let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+            data[..bytes.len()].copy_from_slice(&bytes);
+            crate::generator::set_tx_base(tx, data, bytes.len() as u8);
+        }
+        tx.srcs = srcs;
+    }
+
+    /// Loads every bus's declared database in one go. This is bootstrap
+    /// work, run before the first publish (and before the core thread
+    /// ever starts), not a command: there is no frontend yet to receive
+    /// the status lines.
+    pub(crate) fn bootstrap_dbcs(&mut self) {
+        for ch in 0..self.channels.len() {
+            let mut status = String::new();
+            self.load_channel(ch, &mut status);
         }
     }
 

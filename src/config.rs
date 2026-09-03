@@ -9,10 +9,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::app::{
-    App, Channel, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin,
-    TraceWin, WindowKind, YMode,
+    App, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin,
+    WindowKind, YMode,
 };
-use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::sim::{SrcKind, ValueSrc};
 use crate::trigger::{TriggerAction, TriggerCond};
 
@@ -461,8 +460,11 @@ fn sig_keys(signals: Vec<SignalCfg>) -> Vec<GfxSignal> {
 
 impl Config {
     pub fn from_app(app: &App, base: Option<&Path>) -> Self {
+        // Bus-side reads go through the snapshot, like every other
+        // frontend read of the bus.
         Config {
             channels: app
+                .snap
                 .channels
                 .iter()
                 .map(|c| ChannelCfg {
@@ -476,7 +478,7 @@ impl Config {
                     fd_data_kbps: c.fd_data_kbps,
                 })
                 .collect(),
-            bus_counter: app.bus_counter(),
+            bus_counter: app.snap.bus_counter,
             show_tx: app.show_tx,
             show_network: app.show_network,
             show_measurement: app.show_measurement,
@@ -546,16 +548,17 @@ impl Config {
                 })
                 .collect(),
             tx: app
-                .tx_list
+                .snap
+                .tx
                 .iter()
                 .map(|t| TxCfg {
                     channel: t.channel,
                     id: t.id,
                     active: t.active,
                     data_text: t.data_text.clone(),
-                    data: t.data[..t.len as usize].to_vec(),
+                    data: crate::generator::parse_hex_bytes(&t.data_text).unwrap_or_default(),
                     cycle_us: t.cycle_us,
-                    fd: t.flags.contains(FrameFlags::FD),
+                    fd: t.fd,
                     srcs: t.srcs.iter().map(src_cfg).collect(),
                 })
                 .collect(),
@@ -634,30 +637,44 @@ impl Config {
     }
 
     /// Overwrites the freshly built defaults with the saved workspace.
+    /// Bus-side state moves entirely through commands (so the same code
+    /// works once the core runs on its own thread); the handful of
+    /// mid-restore reads go through the snapshot, which every `send`
+    /// re-publishes.
     pub fn apply(self, app: &mut App) {
         if !self.channels.is_empty() {
-            app.channels = self
-                .channels
-                .into_iter()
-                .map(|c| Channel {
-                    name: c.name,
-                    dbc: None,
-                    dbc_path: c.dbc_path,
-                    // Intent only. What transmits is decided by each TxCfg's
-                    // `active` below, so a restored project never starts
-                    // traffic that was stopped when it was saved.
-                    sim_nodes: c.sim_nodes,
-                    bitrate_kbps: c.bitrate_kbps,
-                    fd_data_kbps: c.fd_data_kbps,
-                })
-                .collect();
-            app.set_bus_counter(self.bus_counter.max(app.channels.len()));
+            // Grow or shrink the fresh app's two default buses to the
+            // saved count, then overlay the saved declarations on top.
+            while app.snap.channel_count > self.channels.len() {
+                app.remove_channel(app.snap.channel_count - 1);
+            }
+            while app.snap.channel_count < self.channels.len() {
+                app.add_channel();
+            }
+            for (i, c) in self.channels.iter().enumerate() {
+                app.send(crate::bus::BusCommand::SetChannelConfig {
+                    ch: i as u8,
+                    name: Some(c.name.clone()),
+                    dbc_path: Some(c.dbc_path.clone()),
+                    bitrate_kbps: Some(c.bitrate_kbps),
+                    fd_data_kbps: Some(c.fd_data_kbps),
+                    sim_nodes: Some(c.sim_nodes.clone()),
+                });
+            }
+            // Intent only. What transmits is decided by each TxCfg's
+            // `active` below, so a restored project never starts
+            // traffic that was stopped when it was saved.
+            app.set_bus_counter(self.bus_counter.max(self.channels.len()));
             app.load_dbcs();
         }
         // The generator is rebuilt from the (possibly new) DBCs, then the
         // saved per-message state is overlaid.
-        app.tx_list.clear();
+        let stale: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
+        for (ch, id) in stale {
+            app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
+        }
         let ids: Vec<(u8, u32)> = app
+            .snap
             .channels
             .iter()
             .enumerate()
@@ -673,34 +690,27 @@ impl Config {
             app.add_tx(ch, id);
         }
         for t in self.tx {
-            if let Some(m) = app
-                .tx_list
-                .iter_mut()
-                .find(|m| m.channel == t.channel && m.id == t.id)
-            {
-                m.active = t.active;
-                // 0 is a real state now: a DBC-declared event-triggered
-                // message. Everything else keeps the anti-typo floor.
-                m.cycle_us = if t.cycle_us == 0 {
-                    0
-                } else {
-                    t.cycle_us.max(1_000)
-                };
-                m.flags = if t.fd {
-                    FrameFlags::FD
-                } else {
-                    FrameFlags::NONE
-                };
-                if !t.data_text.is_empty() {
-                    m.data_text = t.data_text;
-                    let n = t.data.len().min(MAX_CAN_FD_LEN);
-                    let mut data = [0u8; MAX_CAN_FD_LEN];
-                    data[..n].copy_from_slice(&t.data[..n]);
-                    m.data = data;
-                    m.len = n as u8;
-                }
-                m.srcs = t.srcs.into_iter().filter_map(value_src).collect();
-            }
+            // 0 is a real state now: a DBC-declared event-triggered
+            // message. Everything else keeps the anti-typo floor.
+            let cycle_us = if t.cycle_us == 0 {
+                0
+            } else {
+                t.cycle_us.max(1_000)
+            };
+            let data_text = if t.data_text.is_empty() {
+                None
+            } else {
+                Some(t.data_text)
+            };
+            app.send(crate::bus::BusCommand::SetEntryConfig {
+                ch: t.channel,
+                id: t.id,
+                active: t.active,
+                cycle_us,
+                fd: t.fd,
+                data_text,
+                srcs: t.srcs.into_iter().filter_map(value_src).collect(),
+            });
         }
         if !self.trace_windows.is_empty() {
             app.trace_windows = self
@@ -920,6 +930,7 @@ mod tests {
         app.trace_windows[0].manual.insert((1, 0x123));
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 50_000;
+        app.refresh_snapshot();
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::new();
@@ -1033,6 +1044,7 @@ mod tests {
             .position(|t| t.channel == 0 && t.id == 0x200)
             .expect("VehicleState entry");
         app.tx_list[j].cycle_us = 500;
+        app.refresh_snapshot();
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::new();
@@ -1061,6 +1073,7 @@ mod tests {
     fn simulated_nodes_round_trip_without_starting_traffic() {
         let mut app = App::new();
         app.channels[1].sim_nodes = vec!["ABS".to_string(), "GearBox".to_string()];
+        app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::new();
         serde_json::from_str::<Config>(&json)
@@ -1100,6 +1113,7 @@ mod tests {
         let mut app = App::new();
         app.channels[0].bitrate_kbps = 1_000;
         app.channels[0].fd_data_kbps = 5_000;
+        app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::new();
         serde_json::from_str::<Config>(&json)
