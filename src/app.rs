@@ -925,24 +925,10 @@ impl App {
             return;
         }
         let now = self.now_us();
-        if let Some(t) = self.paused_at_us.take() {
-            // Skip the paused interval so replay resumes in place
-            // instead of fast-forwarding through it.
-            self.source.shift_time(now.saturating_sub(t));
-            // The simulation clock must skip it too, or every generator's
-            // schedule and waveform phase jumps by the paused span.
-            self.sim_prev_us = now;
-        }
-        // In replay the simulation clock is owned by `tick`, which reads it
-        // off the log frames; adding wall time here would let the generator
-        // march on while the log is quiet and snap back on the next frame.
-        if !matches!(self.mode, Mode::Replay) {
-            self.sim_t_us += now.saturating_sub(self.sim_prev_us);
-        }
-        self.sim_prev_us = now;
+        self.core.advance_clock(now);
         if self.last_tick_us > 0 && now > self.last_tick_us {
             let dt_s = (now - self.last_tick_us) as f64 / 1e6;
-            let inst = (self.buf.len() as f64) / dt_s;
+            let inst = (self.core.buf.len() as f64) / dt_s;
             self.frame_rate = if self.frame_rate == 0.0 {
                 inst
             } else {

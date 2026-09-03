@@ -127,6 +127,25 @@ impl BusCore {
         }
     }
 
+    /// Advance the bus's own clocks to wall-clock `now_us`, before a step.
+    /// A span spent frozen is skipped rather than accumulated: replay
+    /// resumes in place instead of fast-forwarding through it, and the
+    /// generator's schedule and waveform phase do not jump by the paused
+    /// span. In Replay the sim clock is owned by [`Self::step`] instead,
+    /// which reads it off the log frames; adding wall time here would let
+    /// the generator march on while the log is quiet and snap back on the
+    /// next frame.
+    pub(crate) fn advance_clock(&mut self, now_us: u64) {
+        if let Some(t) = self.paused_at_us.take() {
+            self.source.shift_time(now_us.saturating_sub(t));
+            self.sim_prev_us = now_us;
+        }
+        if !matches!(self.mode, Mode::Replay) {
+            self.sim_t_us += now_us.saturating_sub(self.sim_prev_us);
+        }
+        self.sim_prev_us = now_us;
+    }
+
     /// One full step of the bus against wall-clock `now_us`: poll the
     /// source, let generators emit against the sim clock, walk the queue
     /// through triggers / recorder / ingest, sample the load rollups, check

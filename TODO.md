@@ -26,10 +26,9 @@
 
 **远期放弃的常数**：落后超过"预算 × 周期 × 若干"时不再无限补发（常数阶段 3 定）；主要场景——重新激活从当前时钟起发——已在 `set_tx_active` 源头解决。
 
-### 阶段 1：抽出总线核心（纯重构，不开线程）
+### 阶段 1：抽出总线核心（纯重构，不开线程）——✅ 已完成（2026-09-03）
 
-要做：从 App 拆出 `BusCore`（上面核心清单 + `step()` 方法），App 只留前端状态并持有 BusCore；总线逻辑全部改为 BusCore 方法。策略：**先借 Deref 过渡**——App 对 BusCore 实现 Deref/DerefMut，字段与方法经自动解耦继续可见，UI 与测试一行不改；随后按块把 `impl App` 里的总线方法搬成 `impl BusCore`，搬完一块删一块的过渡依赖。Deref 是脚手架，阶段 2 立命令边界时开始拆除。
-验收：全部测试过，界面无可感知变化。
+落地：`src/bus.rs` 的 `BusCore` 收拢了全部总线状态（mode/run_mode、source、replay_ids、channels、tx_list、sim 时钟、trace 环、aggs、bus_loads、subs 与采样簿记、triggers、recorder、spec、buf、measuring）与全部总线方法（`step`＝轮询→发射→消化→负载采样→spec 检查→超时扫描→回放收尾，及 `ingest`/`eval_triggers`/`eval_timeout_triggers`/`check_spec`/`advance_clock`）。App 只剩前端状态，`tick` 四行（取采样密度→调 `step`→上状态行）；`stride`/`tol_pct`/`grace` 以参数传入，状态消息走出参——这就是命令边界前，前端策略与总线执行的最后一条缝。迁移靠 App→BusCore 的 Deref 脚手架逐刀完成（六刀，见 git log），跨界借用点改显式 `self.core.` 路径。原验收达成：全程 316 测试过，界面无可感知变化。
 
 ### 阶段 2：命令/快照边界（仍单线程）
 
