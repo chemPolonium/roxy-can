@@ -111,7 +111,7 @@ pub(crate) fn tx_payload(
     (data, len, flags)
 }
 
-use crate::app::{App, DEFAULT_TX_CYCLE_US};
+use crate::app::App;
 
 impl App {
     /// Enables or disables every generator message of one bus; freshly
@@ -204,93 +204,55 @@ impl App {
             .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
     }
 
+    /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
-        if self
-            .tx_list
-            .iter()
-            .any(|t| t.channel == channel && t.id == id)
-        {
-            return;
-        }
-        let (name, node, len, cycle_us) = self
-            .channel_dbc(channel)
-            .and_then(|db| db.messages.get(&id))
-            .map(|m| {
-                (
-                    m.name.clone(),
-                    m.transmitter.clone(),
-                    m.dlc.min(MAX_CAN_FD_LEN as u64) as u8,
-                    // A declared 0 is event-triggered, so `unwrap_or` rather
-                    // than `unwrap_or_default` on the Option: only "the DBC
-                    // said nothing" gets our invented period.
-                    m.cycle_us.unwrap_or(DEFAULT_TX_CYCLE_US),
-                )
-            })
-            .unwrap_or_else(|| (format!("{id:X}"), String::new(), 8, DEFAULT_TX_CYCLE_US));
-        let data_text = vec!["00"; len as usize].join(" ");
-        self.tx_list.push(TxMsg {
-            channel,
-            id,
-            srcs: Vec::new(),
-            extended: id > 0x7FF,
-            name,
-            node,
-            len,
-            data: [0; MAX_CAN_FD_LEN],
-            flags: if len > 8 {
-                FrameFlags::FD
-            } else {
-                FrameFlags::NONE
-            },
-            data_text,
-            cycle_us,
-            active: false,
-            next_t_us: 0,
-            sent_text: String::new(),
-        });
+        self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });
     }
 
     /// Adds or replaces the source driving `src.name` on generator `i`.
     pub fn set_source(&mut self, i: usize, src: ValueSrc) {
-        let Some(tx) = self.tx_list.get_mut(i) else {
+        let Some(tx) = self.tx_list.get(i) else {
             return;
         };
-        match tx.srcs.iter_mut().find(|s| s.name == src.name) {
-            Some(held) => *held = src,
-            None => tx.srcs.push(src),
-        }
+        let (ch, id) = (tx.channel, tx.id);
+        self.send(crate::bus::BusCommand::SetEntrySource { ch, id, src });
     }
 
     /// Stops driving `name`, which leaves the base bytes in charge again.
     pub fn clear_source(&mut self, i: usize, name: &str) {
-        if let Some(tx) = self.tx_list.get_mut(i) {
-            tx.srcs.retain(|s| s.name != name);
-        }
+        let Some(tx) = self.tx_list.get(i) else {
+            return;
+        };
+        let (ch, id) = (tx.channel, tx.id);
+        self.send(crate::bus::BusCommand::ClearEntrySource {
+            ch,
+            id,
+            name: name.to_string(),
+        });
     }
 
     /// Writes a physical value into the base payload and pins that signal by
     /// dropping only its source: grabbing a moving slider means "hold here".
+    /// The encode is validated read-only first so the command is only sent
+    /// when it will succeed; the bus re-checks authoritatively.
     pub fn pin_signal(&mut self, i: usize, name: &str, phys: f64) -> bool {
         let Some(tx) = self.tx_list.get(i) else {
             return false;
         };
-        let (channel, id, mut data) = (tx.channel, tx.id, tx.data);
-        let Some(table) = self.channel_dbc(channel) else {
-            return false;
-        };
-        if !table.encode_signal(id, name, phys, &mut data) {
-            return false;
+        let (ch, id) = (tx.channel, tx.id);
+        let mut probe = tx.data;
+        let encodable = self
+            .channel_dbc(ch)
+            .is_some_and(|table| table.encode_signal(id, name, phys, &mut probe));
+        if encodable {
+            self.send(crate::bus::BusCommand::PinEntrySignal {
+                ch,
+                id,
+                name: name.to_string(),
+                phys,
+            });
         }
-        let msg_size = table
-            .messages
-            .get(&id)
-            .map(|m| m.dlc.min(MAX_CAN_FD_LEN as u64) as u8)
-            .unwrap_or(0);
-        let tx = &mut self.tx_list[i];
-        tx.srcs.retain(|s| s.name != name);
-        let len = tx.len.max(msg_size);
-        set_tx_base(tx, data, len);
-        true
+        encodable
     }
 
     /// Replaces the base payload from the generator's hex box. Active sources

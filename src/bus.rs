@@ -62,6 +62,26 @@ pub enum BusCommand {
     SetEntryHex { ch: u8, id: u32, text: String },
     /// Drop the entry, payload, sources and schedule with it.
     RemoveEntry { ch: u8, id: u32 },
+    /// Add the entry `(ch, id)` unless it exists. Name, node, length and
+    /// period come from the bus's database when it knows the message.
+    AddEntry { ch: u8, id: u32 },
+    /// Add or replace the source driving one signal on the entry.
+    SetEntrySource {
+        ch: u8,
+        id: u32,
+        src: crate::sim::ValueSrc,
+    },
+    /// Stop driving one signal; the base bytes take over again.
+    ClearEntrySource { ch: u8, id: u32, name: String },
+    /// Write a physical value into the base payload and pin that signal
+    /// by dropping only its source: grabbing a moving slider means
+    /// "hold here".
+    PinEntrySignal {
+        ch: u8,
+        id: u32,
+        name: String,
+        phys: f64,
+    },
 }
 
 /// The simulation half of the application. Fields move here from `App` in
@@ -219,7 +239,100 @@ impl BusCore {
             BusCommand::RemoveEntry { ch, id } => {
                 self.tx_list.retain(|t| !(t.channel == ch && t.id == id));
             }
+            BusCommand::AddEntry { ch, id } => self.add_entry(ch, id),
+            BusCommand::SetEntrySource { ch, id, src } => {
+                if let Some(tx) = self.entry_mut(ch, id) {
+                    match tx.srcs.iter_mut().find(|s| s.name == src.name) {
+                        Some(held) => *held = src,
+                        None => tx.srcs.push(src),
+                    }
+                }
+            }
+            BusCommand::ClearEntrySource { ch, id, name } => {
+                if let Some(tx) = self.entry_mut(ch, id) {
+                    tx.srcs.retain(|s| s.name != name);
+                }
+            }
+            BusCommand::PinEntrySignal { ch, id, name, phys } => {
+                self.pin_entry_signal(ch, id, &name, phys);
+            }
         }
+    }
+
+    /// Adds the generator entry `(ch, id)` unless it already exists.
+    fn add_entry(&mut self, ch: u8, id: u32) {
+        if self.tx_list.iter().any(|t| t.channel == ch && t.id == id) {
+            return;
+        }
+        let (name, node, len, cycle_us) = self
+            .channel_dbc(ch)
+            .and_then(|db| db.messages.get(&id))
+            .map(|m| {
+                (
+                    m.name.clone(),
+                    m.transmitter.clone(),
+                    m.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8,
+                    // A declared 0 is event-triggered, so `unwrap_or` rather
+                    // than `unwrap_or_default` on the Option: only "the DBC
+                    // said nothing" gets our invented period.
+                    m.cycle_us.unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    format!("{id:X}"),
+                    String::new(),
+                    8,
+                    crate::app::DEFAULT_TX_CYCLE_US,
+                )
+            });
+        let data_text = vec!["00"; len as usize].join(" ");
+        self.tx_list.push(TxMsg {
+            channel: ch,
+            id,
+            srcs: Vec::new(),
+            extended: id > 0x7FF,
+            name,
+            node,
+            len,
+            data: [0; crate::can::frame::MAX_CAN_FD_LEN],
+            flags: if len > 8 {
+                crate::can::frame::FrameFlags::FD
+            } else {
+                crate::can::frame::FrameFlags::NONE
+            },
+            data_text,
+            cycle_us,
+            active: false,
+            next_t_us: 0,
+            sent_text: String::new(),
+        });
+    }
+
+    /// Writes a physical value into the base payload and pins that signal
+    /// by dropping only its source: grabbing a moving slider means "hold
+    /// here". Returns false when the database cannot encode it.
+    fn pin_entry_signal(&mut self, ch: u8, id: u32, name: &str, phys: f64) -> bool {
+        let mut data = match self.entry_mut(ch, id) {
+            Some(tx) => tx.data,
+            None => return false,
+        };
+        let Some(table) = self.channel_dbc(ch) else {
+            return false;
+        };
+        if !table.encode_signal(id, name, phys, &mut data) {
+            return false;
+        }
+        let msg_size = table
+            .messages
+            .get(&id)
+            .map(|m| m.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8)
+            .unwrap_or(0);
+        let tx = self.entry_mut(ch, id).expect("entry checked above");
+        tx.srcs.retain(|s| s.name != name);
+        let len = tx.len.max(msg_size);
+        crate::generator::set_tx_base(tx, data, len);
+        true
     }
 
     /// The generator entry `(ch, id)`, if present.
