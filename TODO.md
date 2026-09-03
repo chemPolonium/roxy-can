@@ -50,6 +50,17 @@
 
 仍属例外（等 Arc 配置设计，阶段 3 后收编）：总线窗口的名称/波特率编辑、`record_path` 输入框、`load_channel` 写活表及其结果反馈、config.rs 序列化直读核心。
 
+### 阶段 3 第一刀：管子铺好（mpsc + 信箱，2026-09-04）
+
+命令与快照的传输介质换成上线程后的最终形态，循环体先手动摇：
+
+- **命令走 mpsc**：`App::send` 只往 `inbox_tx` 推，`drain_inbox` 在核心侧 `try_recv` 排干、逐条 `handle`；本刀发送端与接收端都在 App 上（接收端就是未来线程的入口）。`BusCommand` 加了 `Send` 静态断言。
+- **快照走信箱**：`SnapshotMailbox = Arc<Mutex<Arc<Snapshot>>>`，核心每圈 `publish_snapshot` 覆写，前端 `peek_mailbox` 用 `try_lock` 取新——拿不到就沿用上一帧，读总线永不阻塞等总线；`Arc::ptr_eq` 守住"同一帧不重复刷状态"。`App.snap` 变为 `Arc<Snapshot>`，UI 读法不变。
+- **状态搭乘快照**：`Snapshot.status: Option<String>` 单发字段——drain 出的状态随下一次发布送达状态栏，随后清空（状态是新闻不是状态量）；`send`/`tick` 不再有独立的回传通道。`Snapshot` 加 `Send + Sync` 静态断言。
+- **循环体成形**：`tick` 即未来核心线程的一圈——drain → step（步幅/容差/宽限仍是前端策略参数）→ publish；`update` 帧首只做一次 `read_snapshot`。`refresh_snapshot`（publish+read）留给 `send` 与直改核心的测试。
+
+验收：行为不变（327 测试过，新增 2 条——信箱争用时读侧退回上一帧且事后追平、命令状态搭乘快照一次性送达）。
+
 ### 阶段 3：核心上线程
 
 要做：BusCore 搬进独立线程，跑"核心线程与时钟模型"定案的事件驱动循环（死线等待 → drain 命令 → step → 发布快照）；命令走 mpsc，快照用 Arc 换手（UI `try_lock`，拿不到沿用上一帧快照，永不阻塞）。发生器槽位在事件死线上精确调度——`MAX_TX_CATCHUP` 预算与激活锚定大半自然消失，相关测试搬到核心的时钟语义上。
