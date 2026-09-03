@@ -742,6 +742,29 @@ impl BusCore {
         }
     }
 
+    /// The wall-clock instant the bus next has work due: the next replay
+    /// frame, or the next generator slot against the sim clock (which runs
+    /// 1:1 with the wall in Virtual). `None` means nothing is scheduled --
+    /// the event loop may sleep until a command arrives. Paused or stopped
+    /// buses are never due.
+    pub(crate) fn next_deadline(&self, now_us: u64) -> Option<u64> {
+        if !self.measuring || self.trace_paused {
+            return None;
+        }
+        match self.mode {
+            Mode::Replay => self.source.next_deadline(now_us),
+            Mode::Virtual => {
+                let min_next = self
+                    .tx_list
+                    .iter()
+                    .filter(|t| t.active && t.cycle_us != 0)
+                    .map(|t| t.next_t_us)
+                    .min()?;
+                Some(now_us + min_next.saturating_sub(self.sim_t_us))
+            }
+        }
+    }
+
     /// Advance the bus's own clocks to wall-clock `now_us`, before a step.
     /// A span spent frozen is skipped rather than accumulated: replay
     /// resumes in place instead of fast-forwarding through it, and the
@@ -759,6 +782,22 @@ impl BusCore {
             self.sim_t_us += now_us.saturating_sub(self.sim_prev_us);
         }
         self.sim_prev_us = now_us;
+    }
+
+    /// The event loop's unit of work: advance the clocks to `now_us`, then
+    /// run one full step. `step` alone assumes the caller maintains the
+    /// clocks (as the UI loop does); `step_to` is what a deadline-driven
+    /// loop calls when it wakes.
+    pub(crate) fn step_to(
+        &mut self,
+        now_us: u64,
+        stride: u64,
+        tol_pct: u64,
+        grace: u64,
+        status: &mut String,
+    ) -> bool {
+        self.advance_clock(now_us);
+        self.step(now_us, stride, tol_pct, grace, status)
     }
 
     /// One full step of the bus against wall-clock `now_us`: poll the

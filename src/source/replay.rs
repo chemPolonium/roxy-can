@@ -18,23 +18,34 @@ pub struct ReplaySource {
     /// Latched when the underlying stream reports EOF via `peek_t`. Held as
     /// a flag because `is_done(&self)` cannot call the `&mut self` peek.
     done: bool,
+    /// The log time of the next undelivered frame, cached so the event
+    /// loop's `next_deadline` can read it without `&mut` access to the
+    /// stream. Refreshed everywhere the playhead moves.
+    next_t: Option<u64>,
 }
 
 impl ReplaySource {
     pub fn new(stream: Box<dyn FrameStream>) -> Self {
-        ReplaySource {
+        let mut src = ReplaySource {
             stream,
             last: None,
             pos_us: 0.0,
             speed: 1.0,
             done: false,
-        }
+            next_t: None,
+        };
+        src.refresh_next();
+        src
     }
 
     /// Convenience constructor for tests and small in-memory captures.
     #[allow(dead_code)]
     pub fn from_frames(frames: Vec<CanFrame>) -> Self {
         Self::new(Box::new(VecStream::new(frames)))
+    }
+
+    fn refresh_next(&mut self) {
+        self.next_t = self.stream.peek_t();
     }
 }
 
@@ -60,6 +71,7 @@ impl FrameSource for ReplaySource {
                 }
             }
         }
+        self.refresh_next();
     }
 
     fn is_done(&self) -> bool {
@@ -92,6 +104,7 @@ impl FrameSource for ReplaySource {
         // nothing, and playback continues from the landing point. Without
         // this the seek itself is credited as elapsed playback time.
         self.last = None;
+        self.refresh_next();
         Some(landed)
     }
 
@@ -128,11 +141,23 @@ impl FrameSource for ReplaySource {
         self.stream.seek_to_us(playhead);
         self.done = false;
         self.last = None;
+        self.refresh_next();
         complete
     }
 
     fn duration(&self) -> Option<u64> {
         self.stream.duration_us()
+    }
+
+    fn next_deadline(&self, now_us: u64) -> Option<u64> {
+        if self.done {
+            return None;
+        }
+        let next_log = self.next_t?;
+        // Log time accrues at `speed` wall microseconds per log microsecond:
+        // the wall wait for the next frame is the remaining log span, scaled.
+        let remaining = ((next_log as f64 - self.pos_us).max(0.0)) / self.speed;
+        Some(self.last.unwrap_or(now_us) + remaining as u64)
     }
 }
 
@@ -310,5 +335,38 @@ mod tests {
         let before = src.position();
         assert_eq!(src.set_position_us(9_000_000), None, "past the end");
         assert_eq!(src.position(), before, "a rejected seek is a no-op");
+    }
+
+    #[test]
+    fn next_deadline_tracks_the_next_frame_in_log_time() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
+        // Never polled: the anchor is "now", and the t=0 frame is due now.
+        assert_eq!(src.next_deadline(0), Some(0));
+        let mut out = Vec::new();
+        src.poll(1_000_000, &mut out);
+        // The 100 ms frame is due 100 ms after the poll that re-anchored.
+        assert_eq!(src.next_deadline(1_000_000), Some(1_100_000));
+    }
+
+    #[test]
+    fn next_deadline_scales_with_speed() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000)]);
+        src.set_speed(2.0);
+        let mut out = Vec::new();
+        src.poll(1_000_000, &mut out);
+        // 100 ms of log time at 2x: half the wall wait.
+        assert_eq!(src.next_deadline(1_000_000), Some(1_050_000));
+    }
+
+    #[test]
+    fn next_deadline_is_none_after_eof() {
+        let mut src = ReplaySource::from_frames(vec![frame(0)]);
+        let mut out = Vec::new();
+        src.poll(1_000_000, &mut out);
+        src.poll(2_000_000, &mut out);
+        assert_eq!(src.next_deadline(2_000_000), None);
+        // A seek back relights the schedule.
+        assert_eq!(src.set_position_us(0), Some(0));
+        assert!(src.next_deadline(2_000_000).is_some());
     }
 }

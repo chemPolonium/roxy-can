@@ -192,3 +192,58 @@ fn a_headless_replay_runs_the_log_and_mutes_the_twin() {
     let (pos, _dur) = app.replay_position().expect("replay has a timeline");
     assert!(pos > 0.5, "playhead advanced, at {pos} s");
 }
+
+#[test]
+fn the_deadline_follows_the_next_generator_slot() {
+    let mut app = App::new();
+    app.start_virtual();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    // 0x100 runs on the default 100 ms period, anchored at sim 0: the
+    // first slot is due immediately.
+    assert_eq!(app.core.next_deadline(1_000_000), Some(1_000_000));
+    // Run 50 ms of steps; the next slot then sits 50 ms out.
+    let mut now = 0;
+    for _ in 0..50 {
+        now += 1_000;
+        app.core.advance_clock(now);
+        app.tick(now);
+    }
+    assert_eq!(app.core.next_deadline(now), Some(now + 50_000));
+    // An idle (all-off) bus has no deadline at all.
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: false,
+    });
+    assert_eq!(app.core.next_deadline(now), None);
+}
+
+#[test]
+fn step_to_advances_the_clocks_and_the_bus() {
+    let mut app = App::new();
+    app.start_virtual();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    let mut now = 0;
+    let mut status = String::new();
+    // One wake per second, as an event loop would: six wakes, each step_to
+    // must still emit every slot the wall clock passed.
+    for _ in 0..6 {
+        now += 1_000_000;
+        let stride = app.wanted_stride_us();
+        let done = app
+            .core
+            .step_to(now, stride, app.spec_tol_pct, app.spec_grace, &mut status);
+        assert!(!done);
+        app.snap = app.core.snapshot();
+    }
+    // Slots at 0, 100k .. 6_000k = 61 frames across six 1 s wakes.
+    assert_eq!(app.snap.frame_counter, 61, "{}", app.snap.frame_counter);
+}

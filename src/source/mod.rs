@@ -83,4 +83,12 @@ pub trait FrameSource {
     fn duration(&self) -> Option<u64> {
         None
     }
+
+    /// Wall-clock instant (same clock as `poll`'s `now_us`) at which this
+    /// source's next frame becomes due. `None` means nothing scheduled --
+    /// the event loop may sleep until a command arrives. Sources with no
+    /// timeline of their own are never due.
+    fn next_deadline(&self, _now_us: u64) -> Option<u64> {
+        None
+    }
 }
