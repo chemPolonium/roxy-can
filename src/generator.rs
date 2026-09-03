@@ -145,7 +145,8 @@ impl App {
 
     /// Whether this bus was told to transmit as `node`.
     pub fn is_node_simulated(&self, ch: u8, node: &str) -> bool {
-        self.channels
+        self.snap
+            .channels
             .get(ch as usize)
             .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
     }

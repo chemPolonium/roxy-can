@@ -380,7 +380,9 @@ BO_ 768 WideMsg: 16 ECU
 /// carries `(t as f64 / 1e6) * hi`.
 fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App {
     let mut app = App::new();
-    app.channels[0].dbc = Some(crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"));
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
+    ));
     app.add_tx(0, 0x300);
     let tx = app.tx_list.last_mut().expect("tx entry added");
     tx.cycle_us = 20_000;
@@ -576,7 +578,9 @@ fn new_generator_entries_inherit_the_declared_cycle() {
 #[test]
 fn an_event_triggered_message_is_never_auto_sent() {
     let mut app = App::new();
-    app.channels[0].dbc = Some(crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap());
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
+    ));
     app.tx_list.retain(|t| t.channel != 0);
     app.add_tx(0, 4096);
     app.add_tx(0, 4097);
@@ -729,6 +733,7 @@ fn unticking_still_silences_a_node_after_its_dbc_is_gone() {
     app.set_node_sim(1, "ABS", true);
     assert_eq!(active_ids(&app, 1).len(), 3);
     app.channels[1].dbc = None;
+    app.refresh_snapshot();
     app.set_node_sim(1, "ABS", false);
     assert!(
         active_ids(&app, 1).is_empty(),
@@ -772,7 +777,10 @@ fn the_declared_cycle_survives_a_hand_tuned_row() {
         "not whatever the row currently says"
     );
 
-    app.channels[0].dbc = Some(crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap());
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
+    ));
+    app.refresh_snapshot();
     assert_eq!(
         app.dbc_cycle_us(0, 4096),
         Some(0),
@@ -813,7 +821,9 @@ BO_ 4096 Orphan: 8 Vector__XXX
 #[test]
 fn a_node_with_no_name_simulates_nothing() {
     let mut app = App::new();
-    app.channels[0].dbc = Some(crate::dbc::load_dbc_str(NO_OWNER_DBC).unwrap());
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(NO_OWNER_DBC).unwrap(),
+    ));
     app.tx_list.retain(|t| t.channel != 0);
     app.add_tx(0, 4096);
     assert_eq!(entry_of(&app, 0, 4096).node, "", "unassigned");
@@ -1078,6 +1088,7 @@ fn channels_can_be_added_removed_and_renamed() {
     let mut app = App::new();
     assert_eq!(app.channels.len(), 2);
     app.channels[0].name = "Powertrain".to_string();
+    app.refresh_snapshot();
     assert_eq!(app.channel_name(0), "Powertrain");
 
     app.add_channel();
@@ -2168,7 +2179,9 @@ BA_ "GenMsgCycleTime" BO_ 300 0;
 /// arrived through `receive`.
 fn spec_app() -> App {
     let mut app = App::new();
-    app.channels[0].dbc = Some(crate::dbc::load_dbc_str(SPEC_DBC).unwrap());
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(SPEC_DBC).unwrap(),
+    ));
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     app
@@ -2234,6 +2247,7 @@ fn an_identifier_the_database_lacks_is_reported_unknown() {
 fn a_bus_with_no_database_reports_nothing_at_all() {
     let mut app = spec_app();
     app.channels[0].dbc = None;
+    app.refresh_snapshot();
     assert!(app.channel_dbc(0).is_none(), "test setup: no database");
     receive(&mut app, 0, vec![frame_at(0, 0x777, 3, Direction::Rx)]);
     receive(&mut app, 900_000, vec![]);
@@ -2605,7 +2619,9 @@ BO_ 400 Muxed: 8 ECU
 
 fn mux_app() -> App {
     let mut app = App::new();
-    app.channels[0].dbc = Some(crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap());
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap(),
+    ));
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     app

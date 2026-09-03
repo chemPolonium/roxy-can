@@ -356,6 +356,12 @@ impl App {
         self.t0.elapsed().as_micros() as u64
     }
 
+    /// Re-reads the snapshot. The frame loop calls this via `update`/`tick`
+    /// /`send`; tests that poke core state directly call it explicitly.
+    pub(crate) fn refresh_snapshot(&mut self) {
+        self.snap = self.core.snapshot();
+    }
+
     /// The frontend's post office to the bus. Single-threaded this applies
     /// the command immediately and surfaces whatever status it produced;
     /// stage 3 swaps the body for an mpsc push, and status comes back in
@@ -369,7 +375,7 @@ impl App {
         }
         // Re-read after every write, so code that acts right after a
         // command sees the post-command bus, never a stale snapshot.
-        self.snap = self.core.snapshot();
+        self.refresh_snapshot();
     }
 
     pub fn start_virtual(&mut self) {
@@ -877,7 +883,7 @@ impl App {
         }
         // Post-step re-read: the snapshot must never be staler than the
         // last step, whether it ran from the frame loop or a test.
-        self.snap = self.core.snapshot();
+        self.refresh_snapshot();
     }
 }
 

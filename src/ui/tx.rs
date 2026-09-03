@@ -61,7 +61,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 let (ids, names): (Vec<(u8, u32)>, Vec<String>) = {
                     let mut ids = Vec::new();
                     let mut names = Vec::new();
-                    for (ch, channel) in app.channels.iter().enumerate() {
+                    for (ch, channel) in app.snap.channels.iter().enumerate() {
                         let Some(db) = &channel.dbc else {
                             continue;
                         };
@@ -112,7 +112,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // Per-bus bulk switches: one click enables or disables
                 // every message of that bus.
                 let mut first_bus = true;
-                for ch in 0..app.channels.len() {
+                for ch in 0..app.snap.channel_count {
                     let ch8 = ch as u8;
                     if !app.snap.tx.iter().any(|t| t.channel == ch8) {
                         continue;

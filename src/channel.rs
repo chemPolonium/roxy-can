@@ -1,13 +1,17 @@
 //! One CAN bus: user identity, its DBC, and the bitrate declarations the
 //! load view divides wire bits by.
 
+use std::sync::Arc;
+
 use crate::dbc::SymbolTable;
 
 /// One CAN bus: user-defined name, a DBC database, the path it came from, and
-/// the DBC nodes this tool transmits as.
+/// the DBC nodes this tool transmits as. The parsed database is shared as an
+/// `Arc`: it is immutable once loaded, and snapshots hand the frontend the
+/// same allocation instead of a copy.
 pub struct Channel {
     pub name: String,
-    pub dbc: Option<SymbolTable>,
+    pub dbc: Option<Arc<SymbolTable>>,
     pub dbc_path: String,
     /// Names of the DBC nodes marked as simulated on this bus. Kept on the
     /// channel itself so deleting or renumbering a bus takes its nodes along
@@ -32,12 +36,32 @@ use crate::app::App;
 use crate::observe::GfxSignal;
 use crate::workspace::SigScope;
 impl App {
+    /// The bus's database, from this frame's snapshot. This inherent method
+    /// shadows the live-table lookup on `BusCore` for every `App` receiver,
+    /// so the frontend's DBC reads never touch bus state directly.
+    pub fn channel_dbc(&self, ch: u8) -> Option<&SymbolTable> {
+        self.snap
+            .channels
+            .get(ch as usize)
+            .and_then(|c| c.dbc.as_deref())
+    }
+
+    /// What the database declares for this message: `Some(0)` for an
+    /// event-triggered one, `None` when it says nothing at all. Snapshot
+    /// read (shadows the `BusCore` lookup).
+    pub fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
+        self.channel_dbc(ch)
+            .and_then(|db| db.messages.get(&id))
+            .and_then(|m| m.cycle_us)
+    }
+
     pub fn message_name(&self, ch: u8, id: u32) -> Option<&str> {
         self.channel_dbc(ch).and_then(|db| db.message_name(id))
     }
 
     pub fn channel_name(&self, ch: u8) -> String {
-        self.channels
+        self.snap
+            .channels
             .get(ch as usize)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("CAN{}", ch + 1))
@@ -131,7 +155,7 @@ impl App {
             Ok(content) => match crate::dbc::load_dbc_str(&content) {
                 Ok(table) => {
                     self.status = format!("{name} DBC loaded: {} messages", table.order.len());
-                    channel.dbc = Some(table);
+                    channel.dbc = Some(std::sync::Arc::new(table));
                     true
                 }
                 Err(e) => {

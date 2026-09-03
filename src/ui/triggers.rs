@@ -135,7 +135,7 @@ fn editor(app: &mut App, ui: &Ui) {
     let mut changed = false;
     let cond_bus = cond.bus();
 
-    let bus_names: Vec<String> = app.channels.iter().map(|c| c.name.clone()).collect();
+    let bus_names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
     let bus_refs: Vec<&str> = bus_names.iter().map(|s| s.as_str()).collect();
     let mut bus = (cond.bus() as usize).min(bus_refs.len() - 1);
     ui.set_next_item_width(90.0);

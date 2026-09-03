@@ -14,7 +14,7 @@ struct NodeInfo {
 /// Per channel: the DBC node infos of that bus.
 fn collect(app: &App) -> Vec<Vec<NodeInfo>> {
     let mut dbc_nodes = Vec::new();
-    for channel in app.channels.iter() {
+    for channel in app.snap.channels.iter() {
         let infos: Vec<NodeInfo> = channel
             .dbc
             .as_ref()

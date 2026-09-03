@@ -26,7 +26,7 @@ pub fn scope_combo(
     target: PopupTarget,
 ) -> SigScope {
     let mut items: Vec<String> = vec!["All buses".to_string()];
-    for ch in 0..app.channels.len() {
+    for ch in 0..app.snap.channel_count {
         items.push(format!("Bus: {}", app.channel_name(ch as u8)));
     }
     let n = app.win_manual(target).map(|m| m.len()).unwrap_or(0);
@@ -161,7 +161,7 @@ fn message_content(app: &mut App, ui: &Ui) {
     if ui.small_button("Select all matching") {
         let q = app.id_filter_search.trim().to_ascii_uppercase();
         let mut keys: Vec<(u8, u32)> = Vec::new();
-        for (ch, channel) in app.channels.iter().enumerate() {
+        for (ch, channel) in app.snap.channels.iter().enumerate() {
             let Some(db) = &channel.dbc else {
                 continue;
             };
@@ -194,7 +194,7 @@ fn message_content(app: &mut App, ui: &Ui) {
 
     // Clone the message/signal layout first so the checkbox callbacks can
     // mutate the window's manual set without borrow conflicts.
-    let channel_names: Vec<String> = (0..app.channels.len())
+    let channel_names: Vec<String> = (0..app.snap.channel_count)
         .map(|ch| app.channel_name(ch as u8))
         .collect();
     let per_channel: Vec<Vec<MsgEntry>> = app
@@ -298,7 +298,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
 
     let q = app.symbol_search.trim().to_ascii_uppercase();
     let sel: HashSet<(u8, u32, String)> = selected.into_iter().collect();
-    let bus_names: Vec<String> = (0..app.channels.len())
+    let bus_names: Vec<String> = (0..app.snap.channel_count)
         .map(|ch| app.channel_name(ch as u8))
         .collect();
 

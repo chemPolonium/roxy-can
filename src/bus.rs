@@ -136,6 +136,9 @@ pub struct Snapshot {
     pub replay: Option<(u64, u64)>,
     /// How many buses exist (frontends key window state off this).
     pub channel_count: usize,
+    /// One entry per bus: identity, timing declarations and the shared
+    /// (immutable) database. Static configuration as of this frame.
+    pub channels: Vec<ChannelView>,
     /// One record per (bus, id) seen this run, behind the Messages /
     /// Statistics views and their exports.
     pub aggs: Vec<MessageAgg>,
@@ -157,6 +160,33 @@ pub struct Snapshot {
     pub measuring: bool,
     pub trace_paused: bool,
     pub recording: bool,
+}
+
+/// The frontend's view of one bus. The database travels as an `Arc` the
+/// bus and frontend share; loads are rare, reads are per-frame.
+#[derive(Clone)]
+pub struct ChannelView {
+    pub name: String,
+    pub dbc_path: String,
+    pub bitrate_kbps: u32,
+    pub fd_data_kbps: u32,
+    pub sim_nodes: Vec<String>,
+    pub dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
+}
+
+impl std::fmt::Debug for ChannelView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The shared table has no Debug of its own; its presence is what
+        // matters here.
+        f.debug_struct("ChannelView")
+            .field("name", &self.name)
+            .field("dbc_path", &self.dbc_path)
+            .field("bitrate_kbps", &self.bitrate_kbps)
+            .field("fd_data_kbps", &self.fd_data_kbps)
+            .field("sim_nodes", &self.sim_nodes)
+            .field("dbc_loaded", &self.dbc.is_some())
+            .finish()
+    }
 }
 
 /// One generator entry as the frontend sees it this frame. `muted` folds
@@ -435,6 +465,18 @@ impl BusCore {
             sub_count: self.subs.len(),
             replay,
             channel_count: self.channels.len(),
+            channels: self
+                .channels
+                .iter()
+                .map(|c| ChannelView {
+                    name: c.name.clone(),
+                    dbc_path: c.dbc_path.clone(),
+                    bitrate_kbps: c.bitrate_kbps,
+                    fd_data_kbps: c.fd_data_kbps,
+                    sim_nodes: c.sim_nodes.clone(),
+                    dbc: c.dbc.clone(),
+                })
+                .collect(),
             mode: self.mode,
             run_mode: self.run_mode,
             measuring: self.measuring,
@@ -595,7 +637,7 @@ impl BusCore {
             Ok(content) => match crate::dbc::load_dbc_str(&content) {
                 Ok(table) => {
                     *status = format!("{name} DBC loaded: {} messages", table.order.len());
-                    channel.dbc = Some(table);
+                    channel.dbc = Some(std::sync::Arc::new(table));
                     true
                 }
                 Err(e) => {
@@ -1215,7 +1257,9 @@ impl BusCore {
 
     /// The database loaded on bus `ch`, if any.
     pub(crate) fn channel_dbc(&self, ch: u8) -> Option<&crate::dbc::SymbolTable> {
-        self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
+        self.channels
+            .get(ch as usize)
+            .and_then(|c| c.dbc.as_deref())
     }
 
     /// What the database declares for this message: `Some(0)` for an
