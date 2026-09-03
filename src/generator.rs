@@ -212,14 +212,6 @@ impl App {
             .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
     }
 
-    /// What the database declares for this message: `Some(0)` for an
-    /// event-triggered one, `None` when it says nothing at all.
-    pub fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
-        self.channel_dbc(ch)
-            .and_then(|db| db.messages.get(&id))
-            .and_then(|m| m.cycle_us)
-    }
-
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         if self
             .tx_list

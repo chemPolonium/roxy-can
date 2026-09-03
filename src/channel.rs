@@ -32,10 +32,6 @@ use crate::app::App;
 use crate::observe::GfxSignal;
 use crate::workspace::SigScope;
 impl App {
-    pub fn channel_dbc(&self, ch: u8) -> Option<&SymbolTable> {
-        self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
-    }
-
     pub fn message_name(&self, ch: u8, id: u32) -> Option<&str> {
         self.channel_dbc(ch).and_then(|db| db.message_name(id))
     }

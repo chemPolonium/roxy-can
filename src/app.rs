@@ -106,9 +106,6 @@ pub struct App {
     /// Fields migrate here slice by slice; the `Deref` below keeps them
     /// visible at the old paths during the move.
     pub core: crate::bus::BusCore,
-    pub measuring: bool,
-    /// ASC recording state: the checkbox intent plus the open file.
-    pub recorder: crate::recorder::Recorder,
     pub mode: Mode,
     pub run_mode: Mode,
     pub quit: bool,
@@ -150,7 +147,6 @@ pub struct App {
     /// Set by `stop`: the next Play re-opens the log from zero instead of
     /// resuming wherever the scrub bar left the playhead.
     pub replay_reset_pending: bool,
-    pub triggers: Vec<crate::trigger::Trigger>,
     /// The trigger the Triggers window is editing, if any.
     pub trigger_sel: Option<usize>,
     pub(crate) trig_id_buf: String,
@@ -228,9 +224,6 @@ pub struct App {
     pub(crate) data_counter: usize,
     pub(crate) bus_counter: usize,
     pub(crate) source: Box<dyn FrameSource>,
-    /// Frames polled this step, plus frames pushed by Send reactions;
-    /// the tick loop walks it by index so late arrivals are processed.
-    pub(crate) buf: Vec<CanFrame>,
 }
 
 impl std::ops::Deref for App {
@@ -276,8 +269,6 @@ impl App {
         ];
         let mut app = App {
             core,
-            measuring: false,
-            recorder: crate::recorder::Recorder::new(),
             mode: Mode::Virtual,
             run_mode: Mode::Virtual,
             quit: false,
@@ -301,7 +292,6 @@ impl App {
             replay_speed: 1.0,
             replay_reset_pending: false,
             replay_ids: std::collections::HashSet::new(),
-            triggers: Vec::new(),
             trigger_sel: None,
             trig_id_buf: String::new(),
             trig_edit_sel: None,
@@ -350,7 +340,6 @@ impl App {
             data_counter: 0,
             bus_counter: 2,
             source: Box::new(VirtualSource::new()),
-            buf: Vec::new(),
         };
         app.load_dbcs();
         app.new_trace_window();
@@ -992,9 +981,9 @@ impl App {
     /// Split out of [`Self::update`] so a test can run a single step at a time
     /// of its choosing; the generator reads `sim_t_us`, which `update` maintains.
     pub fn tick(&mut self, now_us: u64) {
-        self.buf.clear();
-        self.source.poll(now_us, &mut self.buf);
-        let source_empty = self.buf.is_empty();
+        self.core.buf.clear();
+        self.source.poll(now_us, &mut self.core.buf);
+        let source_empty = self.core.buf.is_empty();
 
         // The sampling stride follows the smallest open Graphics window:
         // zooming in tight must reveal every signal update (the CANoe
@@ -1028,6 +1017,7 @@ impl App {
         // signal and every consumer sees their mixed values. Only consulted
         // in Replay mode, so nothing to restore when the run ends.
         let channels = &self.core.channels;
+        let mut emitted: Vec<CanFrame> = Vec::new();
         for tx in &mut self.core.tx_list {
             if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
                 // Log time has no slot zero: an entry picked up mid-log is
@@ -1053,7 +1043,7 @@ impl App {
                 let slot = tx.next_t_us;
                 tx.next_t_us += tx.cycle_us;
                 let (data, len, flags) = tx_payload(channels, tx, slot);
-                self.buf.push(CanFrame {
+                emitted.push(CanFrame {
                     t_us: slot,
                     channel: tx.channel,
                     id: tx.id,
@@ -1065,6 +1055,7 @@ impl App {
                 });
             }
         }
+        self.core.buf.extend(emitted);
 
         let replay_done =
             matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
@@ -1076,6 +1067,7 @@ impl App {
         // the loop, and a Send reaction pushing onto `buf` mid-loop must
         // be processed by this same tick, not wiped by the next one.
         let mut i = 0;
+        let mut trigger_status = String::new();
         while i < self.buf.len() {
             let f = self.buf[i];
             // Advance before anything else: the body has `continue`s
@@ -1085,9 +1077,12 @@ impl App {
             // Triggers judge the frame before anything else consumes it,
             // so a trigger that starts a recording captures the very
             // frame that fired it.
-            self.eval_triggers(&f);
+            self.core.eval_triggers(&f, &mut trigger_status);
             self.recorder.write(&f);
             self.core.ingest(f, stride);
+        }
+        if !trigger_status.is_empty() {
+            self.status = trigger_status;
         }
 
         // One sample of the windowed numbers per step feeds the Min/Max/Avg
@@ -1185,7 +1180,12 @@ impl App {
         }
         // Timeout triggers sweep on the same cadence and the same clock
         // as the Missing verdict above, reusing its grace comparison.
-        self.eval_timeout_triggers(now);
+        let mut timeout_status = String::new();
+        self.core
+            .eval_timeout_triggers(now, self.spec_grace, &mut timeout_status);
+        if !timeout_status.is_empty() {
+            self.status = timeout_status;
+        }
     }
 }
 

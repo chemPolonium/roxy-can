@@ -16,6 +16,7 @@ use crate::channel::Channel;
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::Subscription;
+use crate::trigger::{TriggerAction, TriggerCond};
 
 /// The simulation half of the application. Fields move here from `App` in
 /// slices; during the migration `App` derefs to this, so existing field
@@ -60,6 +61,16 @@ pub struct BusCore {
     /// already scanned at the coarse stride must rescan, so `sample_cover`
     /// is invalidated here too.
     pub(crate) applied_stride_us: u64,
+    /// True while the measurement runs: the clock advances, generators
+    /// emit, replay polls. A pause stops all of it in place.
+    pub(crate) measuring: bool,
+    /// Frames polled this step, plus frames pushed by Send reactions;
+    /// the tick loop walks it by index so late arrivals are processed.
+    pub(crate) buf: Vec<CanFrame>,
+    /// ASC recording state: the checkbox intent plus the open file.
+    pub(crate) recorder: crate::recorder::Recorder,
+    /// User rules judged per frame (edges) and per step (aggregate sweeps).
+    pub(crate) triggers: Vec<crate::trigger::Trigger>,
 }
 
 impl BusCore {
@@ -81,7 +92,24 @@ impl BusCore {
             subs: HashMap::new(),
             sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
+            measuring: false,
+            buf: Vec::new(),
+            recorder: crate::recorder::Recorder::new(),
+            triggers: Vec::new(),
         }
+    }
+
+    /// The database loaded on bus `ch`, if any.
+    pub(crate) fn channel_dbc(&self, ch: u8) -> Option<&crate::dbc::SymbolTable> {
+        self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
+    }
+
+    /// What the database declares for this message: `Some(0)` for an
+    /// event-triggered one, `None` when it says nothing at all.
+    pub(crate) fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
+        self.channel_dbc(ch)
+            .and_then(|db| db.messages.get(&id))
+            .and_then(|m| m.cycle_us)
     }
 
     /// Folds one accepted frame into every bus-side consumer: the trace
@@ -187,5 +215,185 @@ impl BusCore {
                 self.subs.contains_key(&key).then_some((key, d))
             })
             .collect()
+    }
+
+    /// Folds one frame into every enabled trigger and acts on edges.
+    /// Runs as the first thing that happens to a received frame, so a
+    /// trigger that starts a recording still captures the frame that
+    /// fired it. Status messages an action wants to show go into
+    /// `status` (last write wins, as the status bar only has one line).
+    pub(crate) fn eval_triggers(&mut self, f: &CanFrame, status: &mut String) {
+        if self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
+        for i in 0..self.triggers.len() {
+            // Observe under shared borrows first: acting on an edge
+            // needs `self` exclusively, and the two cannot overlap.
+            let now = {
+                let t = &self.triggers[i];
+                if !t.enabled {
+                    continue;
+                }
+                match &t.cond {
+                    TriggerCond::SignalCross {
+                        ch,
+                        id,
+                        signal,
+                        threshold,
+                        rising,
+                    } => {
+                        if f.channel != *ch || f.id != *id || f.is_error() {
+                            // Not this message's frame: the level holds.
+                            continue;
+                        }
+                        let Some(db) = self.channel_dbc(*ch) else {
+                            continue; // no database on the bus, no opinion
+                        };
+                        match db.decode_signals(f).into_iter().find(|d| d.name == *signal) {
+                            Some(d) => {
+                                if *rising {
+                                    d.phys >= *threshold
+                                } else {
+                                    d.phys <= *threshold
+                                }
+                            }
+                            // The condition names a signal the database
+                            // lacks -- same courtesy as a missing db.
+                            None => continue,
+                        }
+                    }
+                    TriggerCond::IdPresent { ch, id } => {
+                        if f.channel != *ch || f.id != *id || f.is_error() {
+                            continue;
+                        }
+                        true // latch: once seen, it stays seen
+                    }
+                    TriggerCond::ErrorFrame { ch } => {
+                        if f.channel != *ch || !f.is_error() {
+                            continue;
+                        }
+                        true
+                    }
+                    // Not a frame condition: swept once per step against
+                    // the aggregates in `eval_timeout_triggers`.
+                    TriggerCond::CycleTimeout { .. } => continue,
+                }
+            };
+            let t = &mut self.triggers[i];
+            let was = t.level;
+            t.level = now;
+            if now && !was {
+                t.fired += 1;
+                t.last_fire_t_us = f.t_us;
+                fired.push((t.action, f.t_us));
+            }
+        }
+        self.run_actions(fired, status);
+    }
+
+    /// Sweep conditions: evaluated once per measurement step against the
+    /// aggregates, not per frame. A message only convicts after it has
+    /// been seen once (the Missing verdict takes the same stance), and
+    /// the level clears when traffic resumes, so every new dropout is a
+    /// fresh edge. `grace` is the spec's missed-cycles tolerance, a
+    /// frontend setting the bus does not own.
+    pub(crate) fn eval_timeout_triggers(&mut self, now_us: u64, grace: u64, status: &mut String) {
+        if self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
+        for i in 0..self.triggers.len() {
+            let (ch, id) = match &self.triggers[i].cond {
+                TriggerCond::CycleTimeout { ch, id } => (*ch, *id),
+                _ => continue,
+            };
+            if !self.triggers[i].enabled {
+                continue;
+            }
+            let silent = self.timeout_silent(ch, id, now_us, grace);
+            let t = &mut self.triggers[i];
+            let was = t.level;
+            t.level = silent;
+            if silent && !was {
+                t.fired += 1;
+                t.last_fire_t_us = now_us;
+                fired.push((t.action, now_us));
+            }
+        }
+        self.run_actions(fired, status);
+    }
+
+    /// The spec's own grace comparison decides silence, so a trigger and
+    /// the Dropped verdict can never disagree about the same message.
+    fn timeout_silent(&self, ch: u8, id: u32, now_us: u64, grace: u64) -> bool {
+        let Some(agg) = self.aggs.get(&(ch, id)) else {
+            return false; // never seen: no opinion, not a dropout
+        };
+        let Some(declared) = self.dbc_cycle_us(ch, id) else {
+            return false; // no database, message, or declared period
+        };
+        crate::spec::missing_offender(now_us, agg.last_t_us, declared, grace)
+    }
+
+    fn run_actions(&mut self, fired: Vec<(TriggerAction, u64)>, status: &mut String) {
+        for (action, at_us) in fired {
+            match action {
+                TriggerAction::StartRecording => {
+                    if self.measuring && !self.recorder.recording {
+                        self.recorder.recording = true;
+                        let opened = self.recorder.open();
+                        self.recorder.recording = opened.is_ok();
+                        *status = match opened {
+                            Ok(path) => format!("trigger started recording to {path}"),
+                            Err(e) => format!("trigger record failed: {e}"),
+                        };
+                    }
+                }
+                TriggerAction::StopRecording => {
+                    if self.recorder.recording {
+                        self.recorder.close();
+                        self.recorder.recording = false;
+                        *status = "trigger stopped recording".to_string();
+                    }
+                }
+                TriggerAction::Send { ch, id } => {
+                    self.send_one_shot(ch, id, at_us);
+                }
+            }
+        }
+    }
+
+    /// Transmits one frame from the generator entry `(ch, id)`, stamped
+    /// `at_us`. The frame goes onto `buf`, so the running tick processes
+    /// it exactly like received traffic -- trace, aggregates, load,
+    /// recording -- and the trigger evaluator sees it too. That is safe:
+    /// every frame-driven condition latches on the frame it matched, so
+    /// a rule reacting to its own output cannot loop.
+    fn send_one_shot(&mut self, ch: u8, id: u32, at_us: u64) {
+        let Some(i) = self
+            .tx_list
+            .iter()
+            .position(|t| t.channel == ch && t.id == id)
+        else {
+            return; // the generator row is gone: the rule idles
+        };
+        let (data, len, flags) =
+            crate::generator::tx_payload(&self.channels, &self.tx_list[i], at_us);
+        let (tch, tid, ext) = (
+            self.tx_list[i].channel,
+            self.tx_list[i].id,
+            self.tx_list[i].extended,
+        );
+        self.buf.push(CanFrame {
+            t_us: at_us,
+            channel: tch,
+            id: tid,
+            extended: ext,
+            len,
+            data,
+            dir: crate::can::frame::Direction::Tx,
+            flags,
+        });
     }
 }
