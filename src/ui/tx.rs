@@ -219,7 +219,8 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.same_line();
                     let mut fd = app.tx_list[i].flags.contains(FrameFlags::FD);
                     if ui.checkbox(format!("FD##{i}"), &mut fd) {
-                        app.tx_list[i].flags = if fd { FrameFlags::FD } else { FrameFlags::NONE };
+                        let (ech, eid) = (app.tx_list[i].channel, app.tx_list[i].id);
+                        app.send(crate::bus::BusCommand::SetEntryFd { ch: ech, id: eid, fd });
                     }
                     // Only ever shown when the two disagree, so a row that
                     // matches its database stays exactly as wide as before.
@@ -234,8 +235,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                             format!("DBC {}ms", declared / 1000)
                         };
                         if ui.small_button(format!("{label}##dbc{i}")) {
-                            app.tx_list[i].cycle_us = declared;
-                            app.tx_list[i].next_t_us = 0;
+                            app.send(crate::bus::BusCommand::SetEntryCycle {
+                                ch,
+                                id,
+                                cycle_us: declared,
+                            });
                         }
                     }
                     ui.same_line();
@@ -390,7 +394,8 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.unindent();
                 }
                 if let Some(i) = remove_idx {
-                    app.tx_list.remove(i);
+                    let (ch, id) = (app.tx_list[i].channel, app.tx_list[i].id);
+                    app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
                 }
             });
     }
@@ -529,13 +534,12 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         }
     });
     min.pop();
-    if let Some(us) = confirmed
-        && let Some(t) = app.tx_list.get_mut(row)
-    {
-        t.cycle_us = us;
-        // Same convention as every other way of switching a message on: the
-        // new schedule starts now rather than at the end of the old one.
-        t.next_t_us = 0;
+    if let Some(us) = confirmed {
+        app.send(crate::bus::BusCommand::SetEntryCycle {
+            ch,
+            id,
+            cycle_us: us,
+        });
     }
     if !open || dismissed || confirmed.is_some() {
         app.tx_cycle_edit = None;

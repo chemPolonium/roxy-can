@@ -124,23 +124,15 @@ impl App {
         }
     }
 
-    /// Ticks one entry's On checkbox. Activating anchors the schedule at the
-    /// current clock: `next_t_us` still sits at the last slot before the
-    /// entry was switched off, and letting the catch-up loop run from there
-    /// would re-emit frames dated across the whole off period -- rewriting
-    /// the gap in every plot with waveform values computed at those stale
-    /// stamps. A re-enabled entry starts sending from now. Deactivating
-    /// touches only the flag, so payload, waveforms and schedule survive the
-    /// pause.
+    /// Ticks one entry's On checkbox. The anchoring semantics live with the
+    /// command (`SetEntryActive`); this wrapper keeps the index-based call
+    /// sites and tests working.
     pub fn set_tx_active(&mut self, i: usize, on: bool) {
-        let sim = self.sim_t_us;
-        let Some(tx) = self.tx_list.get_mut(i) else {
+        let Some(tx) = self.tx_list.get(i) else {
             return;
         };
-        tx.active = on;
-        if on {
-            tx.next_t_us = sim;
-        }
+        let (ch, id) = (tx.channel, tx.id);
+        self.send(crate::bus::BusCommand::SetEntryActive { ch, id, on });
     }
 
     /// Ticks or unticks a DBC node as one this tool transmits as.
@@ -297,7 +289,7 @@ impl App {
         let tx = &mut self.tx_list[i];
         tx.srcs.retain(|s| s.name != name);
         let len = tx.len.max(msg_size);
-        Self::set_tx_base(tx, data, len);
+        set_tx_base(tx, data, len);
         true
     }
 
@@ -305,28 +297,27 @@ impl App {
     /// deliberately survive: correcting one byte must not throw away a whole
     /// stimulus setup. Returns false if the text is not whole hex bytes.
     pub fn set_tx_hex(&mut self, i: usize, text: &str) -> bool {
-        let Some(bytes) = parse_hex_bytes(text) else {
-            return false;
-        };
-        let Some(tx) = self.tx_list.get_mut(i) else {
-            return false;
-        };
-        let mut data = [0u8; MAX_CAN_FD_LEN];
-        data[..bytes.len()].copy_from_slice(&bytes);
-        let len = bytes.len() as u8;
-        Self::set_tx_base(tx, data, len);
-        true
-    }
-
-    /// Installs base bytes and keeps length, the FD flag and the hex text in
-    /// step with them.
-    fn set_tx_base(tx: &mut TxMsg, data: [u8; MAX_CAN_FD_LEN], len: u8) {
-        let len = len.min(MAX_CAN_FD_LEN as u8);
-        tx.data = data;
-        tx.len = len;
-        if len > 8 {
-            tx.flags = tx.flags.union(FrameFlags::FD);
+        let parsed = parse_hex_bytes(text).is_some();
+        if let Some(tx) = self.tx_list.get(i) {
+            let (ch, id) = (tx.channel, tx.id);
+            self.send(crate::bus::BusCommand::SetEntryHex {
+                ch,
+                id,
+                text: text.to_string(),
+            });
         }
-        tx.data_text = hex_text(&data, len);
+        parsed
     }
+}
+
+/// Installs base bytes and keeps length, the FD flag and the hex text in
+/// step with them.
+pub(crate) fn set_tx_base(tx: &mut TxMsg, data: [u8; MAX_CAN_FD_LEN], len: u8) {
+    let len = len.min(MAX_CAN_FD_LEN as u8);
+    tx.data = data;
+    tx.len = len;
+    if len > 8 {
+        tx.flags = tx.flags.union(FrameFlags::FD);
+    }
+    tx.data_text = hex_text(&data, len);
 }

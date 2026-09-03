@@ -48,6 +48,20 @@ pub enum BusCommand {
     /// duration. Works while running, paused, or stopped after the log
     /// ran out; a scrub past the right edge lands on the last frame.
     SeekReplay(f64),
+    /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
+    /// dedupes on that pair, so the key is stable where an index would
+    /// shift under the sender's feet.
+    SetEntryActive { ch: u8, id: u32, on: bool },
+    /// Toggle the entry's CAN FD flag.
+    SetEntryFd { ch: u8, id: u32, fd: bool },
+    /// Set the send period in µs (0 = event-triggered); the schedule
+    /// restarts now rather than at the end of the old one.
+    SetEntryCycle { ch: u8, id: u32, cycle_us: u64 },
+    /// Replace the base payload from hex text. Active sources deliberately
+    /// survive: correcting one byte must not throw away a stimulus setup.
+    SetEntryHex { ch: u8, id: u32, text: String },
+    /// Drop the entry, payload, sources and schedule with it.
+    RemoveEntry { ch: u8, id: u32 },
 }
 
 /// The simulation half of the application. Fields move here from `App` in
@@ -165,7 +179,71 @@ impl BusCore {
             BusCommand::ToggleRecord => self.toggle_record(status),
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
+            BusCommand::SetEntryActive { ch, id, on } => {
+                // Activating anchors the schedule at the current clock:
+                // `next_t_us` still sits at the last slot before the entry
+                // was switched off, and letting the catch-up loop run from
+                // there would re-emit frames dated across the whole off
+                // period. A re-enabled entry starts sending from now.
+                // Deactivating touches only the flag, so payload, waveforms
+                // and schedule survive the pause.
+                let sim = self.sim_t_us;
+                if let Some(tx) = self.entry_mut(ch, id) {
+                    tx.active = on;
+                    if on {
+                        tx.next_t_us = sim;
+                    }
+                }
+            }
+            BusCommand::SetEntryFd { ch, id, fd } => {
+                if let Some(tx) = self.entry_mut(ch, id) {
+                    tx.flags = if fd {
+                        crate::can::frame::FrameFlags::FD
+                    } else {
+                        crate::can::frame::FrameFlags::NONE
+                    };
+                }
+            }
+            BusCommand::SetEntryCycle { ch, id, cycle_us } => {
+                if let Some(tx) = self.entry_mut(ch, id) {
+                    tx.cycle_us = cycle_us;
+                    // Same convention as every other way of switching a
+                    // message on: the new schedule starts now rather than
+                    // at the end of the old one.
+                    tx.next_t_us = 0;
+                }
+            }
+            BusCommand::SetEntryHex { ch, id, text } => {
+                self.set_entry_hex(ch, id, &text);
+            }
+            BusCommand::RemoveEntry { ch, id } => {
+                self.tx_list.retain(|t| !(t.channel == ch && t.id == id));
+            }
         }
+    }
+
+    /// The generator entry `(ch, id)`, if present.
+    fn entry_mut(&mut self, ch: u8, id: u32) -> Option<&mut TxMsg> {
+        self.tx_list
+            .iter_mut()
+            .find(|t| t.channel == ch && t.id == id)
+    }
+
+    /// Replaces the base payload from the generator's hex box. Returns
+    /// false if the text is not whole hex bytes or no entry carries the
+    /// key.
+    fn set_entry_hex(&mut self, ch: u8, id: u32, text: &str) -> bool {
+        let Some(bytes) = crate::generator::parse_hex_bytes(text) else {
+            return false;
+        };
+        let Some(tx) = self.entry_mut(ch, id) else {
+            return false;
+        };
+        let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+        data[..bytes.len()].copy_from_slice(&bytes);
+        let len = bytes.len() as u8;
+        crate::generator::set_tx_base(tx, data, len);
+        true
     }
 
     /// Moves the replay playhead to `t_s` seconds. The log's own duration
