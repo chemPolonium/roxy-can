@@ -16,6 +16,7 @@ use crate::channel::Channel;
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::Subscription;
+use crate::source::FrameSource;
 use crate::spec::{Kind, cycle_offender, dlc_offender, missing_offender};
 use crate::trigger::{TriggerAction, TriggerCond};
 
@@ -89,6 +90,24 @@ pub enum BusCommand {
     /// Drop the subscription. The frontend only asks after none of its
     /// windows references the signal anymore.
     Unsubscribe { key: (u8, u32, String) },
+    /// Open `path` and replay it: generators stand down for the ids the
+    /// log carries, a fresh replay source replaces the old input at
+    /// `speed`, and run-scored state resets. `speed` is the frontend's
+    /// remembered multiplier, passed at start like the other policy
+    /// knobs.
+    StartReplay { path: String, speed: f64 },
+}
+
+/// Every (channel, id) the log file carries -- the twin-silencing set for
+/// replay. A plain full read of a temporary stream: parsing is the cost of
+/// one open, paid once per replay, never per frame.
+fn scan_log_ids(path: &std::path::Path) -> Option<std::collections::HashSet<(u8, u32)>> {
+    let mut stream = crate::log::open_stream(path).ok()?;
+    let mut ids = std::collections::HashSet::new();
+    while let Some(f) = stream.next_frame() {
+        ids.insert((f.channel, f.id));
+    }
+    Some(ids)
 }
 
 /// The simulation half of the application. Fields move here from `App` in
@@ -267,7 +286,43 @@ impl BusCore {
             BusCommand::Unsubscribe { key } => {
                 self.subs.remove(&key);
             }
+            BusCommand::StartReplay { path, speed } => self.start_replay(&path, speed, status),
         }
+    }
+
+    /// Opens `path` and starts replaying it. File open and the silence-set
+    /// scan are the two deliberate blocking costs of a replay start; they
+    /// run once per start, never per frame.
+    fn start_replay(&mut self, path: &str, speed: f64, status: &mut String) {
+        let stream = match crate::log::open_stream(std::path::Path::new(path)) {
+            Ok(stream) => stream,
+            Err(e) => {
+                *status = format!("replay failed [{path}]: {e}");
+                return;
+            }
+        };
+        // Collect the log's ids once at open, from a temporary second
+        // stream, so the generators can stand down for the ids the replay
+        // itself covers. Draining here, never per frame.
+        self.replay_ids = scan_log_ids(std::path::Path::new(path)).unwrap_or_default();
+        let info = stream.describe();
+        self.recorder.close();
+        // Replay just re-emits an existing log; recording it would only
+        // duplicate the file, so drop the Record state.
+        self.recorder.recording = false;
+        let mut source = crate::source::replay::ReplaySource::new(stream);
+        source.set_speed(speed);
+        self.source = Box::new(source);
+        self.mode = Mode::Replay;
+        self.run_mode = Mode::Replay;
+        self.reset_run();
+        self.measuring = true;
+        let tag = if info.is_empty() {
+            String::new()
+        } else {
+            format!(" [{info}]")
+        };
+        *status = format!("replaying{tag} at {speed}x");
     }
 
     /// Starts caching one signal: a fresh [`Subscription`] gets the next

@@ -9,6 +9,7 @@ use crate::log::AscWriter;
 use crate::observe::Subscription;
 use crate::observe::YMode;
 use crate::sim::ValueSrc;
+use crate::source::FrameSource;
 use crate::trigger::{Trigger, TriggerAction, TriggerCond};
 
 #[test]
@@ -2773,7 +2774,7 @@ fn restarting_measurement_clears_the_bus_windows() {
         vec![rx_frame(1_000, 0x100, 8, FrameFlags::NONE)],
     );
     assert!(app.bus_loads[0].load() > 0.0);
-    app.reset_time();
+    app.core.reset_run();
     assert_eq!(app.bus_loads[0].load(), 0.0);
     assert_eq!(app.bus_loads[0].errors, 0);
 }

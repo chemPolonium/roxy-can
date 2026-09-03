@@ -1,10 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::can::frame::{CanFrame, Direction, FrameFlags};
 use crate::log::open_stream;
-use crate::source::replay::ReplaySource;
-use crate::source::{FrameSource, FrameStream};
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
 pub const TRACE_LIMIT: usize = 50_000;
@@ -415,12 +413,6 @@ impl App {
         self.send(crate::bus::BusCommand::ToggleRecord);
     }
 
-    fn reset_time(&mut self) {
-        self.t0 = Instant::now();
-        self.last_tick_us = 0;
-        self.core.reset_run();
-    }
-
     pub fn pick_log(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
             .set_title("Open CAN log")
@@ -472,6 +464,11 @@ impl App {
         }
     }
 
+    /// Starts playback of the selected log (the path the user loaded, or
+    /// the last recording as a fallback). The open, the silence-set scan
+    /// and the source swap live in the command; what stays here is the
+    /// frontend's own memory: which path it selected, the wall-clock
+    /// anchors, and the not-a-resume mark.
     pub fn replay(&mut self) {
         let path = {
             let p = self.log_path.trim();
@@ -485,50 +482,13 @@ impl App {
             self.status = "replay: no log selected".to_string();
             return;
         }
-        match open_stream(Path::new(&path)) {
-            Ok(stream) => {
-                // Collect the log's ids once at open, from a temporary second
-                // stream, so the generators can stand down for the ids the
-                // replay itself covers. Draining here, never per frame.
-                self.replay_ids = Self::scan_log_ids(Path::new(&path)).unwrap_or_default();
-                self.start_replay(stream);
-            }
-            Err(e) => self.status = format!("replay failed [{path}]: {e}"),
-        }
-    }
-
-    /// Every (channel, id) the log file carries -- the twin-silencing set for
-    /// [`App::replay`]. A plain full read of a temporary stream: parsing is
-    /// the cost of one open, paid once per replay, never per frame.
-    fn scan_log_ids(path: &Path) -> Option<std::collections::HashSet<(u8, u32)>> {
-        let mut stream = open_stream(path).ok()?;
-        let mut ids = std::collections::HashSet::new();
-        while let Some(f) = stream.next_frame() {
-            ids.insert((f.channel, f.id));
-        }
-        Some(ids)
-    }
-
-    fn start_replay(&mut self, stream: Box<dyn FrameStream>) {
-        let info = stream.describe();
-        self.recorder.close();
-        // Replay just re-emits an existing log; recording it would
-        // only duplicate the file, so drop the Record state.
-        self.recorder.recording = false;
-        let mut source = ReplaySource::new(stream);
-        source.set_speed(self.replay_speed);
-        self.source = Box::new(source);
-        self.mode = Mode::Replay;
-        self.run_mode = Mode::Replay;
+        self.t0 = Instant::now();
+        self.last_tick_us = 0;
         self.replay_reset_pending = false;
-        self.reset_time();
-        self.measuring = true;
-        let tag = if info.is_empty() {
-            String::new()
-        } else {
-            format!(" [{info}]")
-        };
-        self.status = format!("replaying{tag} at {}x", self.replay_speed);
+        self.send(crate::bus::BusCommand::StartReplay {
+            path,
+            speed: self.replay_speed,
+        });
     }
 
     /// Changes replay speed; takes effect immediately if a replay is
