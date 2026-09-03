@@ -82,6 +82,13 @@ pub enum BusCommand {
         name: String,
         phys: f64,
     },
+    /// Start caching one signal: a fresh subscription gets the next
+    /// palette color and the database's display type. An existing
+    /// subscription for the key is left untouched.
+    Subscribe { key: (u8, u32, String) },
+    /// Drop the subscription. The frontend only asks after none of its
+    /// windows references the signal anymore.
+    Unsubscribe { key: (u8, u32, String) },
 }
 
 /// The simulation half of the application. Fields move here from `App` in
@@ -256,7 +263,54 @@ impl BusCore {
             BusCommand::PinEntrySignal { ch, id, name, phys } => {
                 self.pin_entry_signal(ch, id, &name, phys);
             }
+            BusCommand::Subscribe { key } => self.subscribe_signal(key),
+            BusCommand::Unsubscribe { key } => {
+                self.subs.remove(&key);
+            }
         }
+    }
+
+    /// Starts caching one signal: a fresh [`Subscription`] gets the next
+    /// palette color and the database's display type. An existing
+    /// subscription for the key is left untouched.
+    pub(crate) fn subscribe_signal(&mut self, key: (u8, u32, String)) {
+        if !self.subs.contains_key(&key) {
+            let color = self.color_counter;
+            self.color_counter += 1;
+            let type_tag = self.signal_meta(&key);
+            self.subs.insert(
+                key,
+                Subscription {
+                    latest: 0.0,
+                    last_raw: 0,
+                    unit: String::new(),
+                    label: None,
+                    type_tag,
+                    min: f64::INFINITY,
+                    max: f64::NEG_INFINITY,
+                    avg: 0.0,
+                    sum: 0.0,
+                    n: 0,
+                    last_update_us: 0,
+                    last_sample_us: 0,
+                    history: crate::observe::SampleCache::default(),
+                    color,
+                },
+            );
+        }
+    }
+
+    /// The display type the database declares for a subscribed signal, used
+    /// until the first frame refreshes it -- and forever when no database
+    /// names it.
+    fn signal_meta(&self, key: &(u8, u32, String)) -> String {
+        self.channels
+            .get(key.0 as usize)
+            .and_then(|c| c.dbc.as_ref())
+            .and_then(|db| db.messages.get(&key.1))
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .map(|s| s.type_tag.clone())
+            .unwrap_or_default()
     }
 
     /// Adds the generator entry `(ch, id)` unless it already exists.

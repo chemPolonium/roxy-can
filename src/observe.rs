@@ -435,19 +435,6 @@ impl App {
         }
     }
 
-    /// The display type the database declares for a subscribed signal, used
-    /// until the first frame refreshes it -- and forever when no database
-    /// names it.
-    fn signal_meta(&self, key: &(u8, u32, String)) -> String {
-        self.channels
-            .get(key.0 as usize)
-            .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.messages.get(&key.1))
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
-            .map(|s| s.type_tag.clone())
-            .unwrap_or_default()
-    }
-
     /// The database's declared min..max for a signal -- the scale the Data
     /// window's bar draws against. None when no database names the signal
     /// or declares a usable range on it.
@@ -529,34 +516,15 @@ impl App {
         win.legend = legend;
     }
 
+    /// Starts caching one signal on the bus (command `Subscribe`; the
+    /// creation semantics live there now).
     pub fn subscribe(&mut self, key: (u8, u32, String)) {
-        if !self.subs.contains_key(&key) {
-            let color = self.color_counter;
-            self.color_counter += 1;
-            let type_tag = self.signal_meta(&key);
-            self.subs.insert(
-                key,
-                Subscription {
-                    latest: 0.0,
-                    last_raw: 0,
-                    unit: String::new(),
-                    label: None,
-                    type_tag,
-                    min: f64::INFINITY,
-                    max: f64::NEG_INFINITY,
-                    avg: 0.0,
-                    sum: 0.0,
-                    n: 0,
-                    last_update_us: 0,
-                    last_sample_us: 0,
-                    history: SampleCache::default(),
-                    color,
-                },
-            );
-        }
+        self.send(crate::bus::BusCommand::Subscribe { key });
     }
 
     /// Drops the subscription if no Data/Graphics window references the signal anymore.
+    /// The "still referenced" judgement is frontend policy; the removal itself
+    /// goes through the command so the bus owns its own map.
     pub fn prune_signal(&mut self, key: &(u8, u32, String)) {
         let in_use = self
             .graphics
@@ -567,7 +535,7 @@ impl App {
                 .iter()
                 .any(|d| d.signals.iter().any(|s| &s.key == key));
         if !in_use {
-            self.subs.remove(key);
+            self.send(crate::bus::BusCommand::Unsubscribe { key: key.clone() });
         }
     }
 }
