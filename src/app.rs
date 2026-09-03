@@ -97,9 +97,21 @@ pub struct App {
     /// Fields migrate here slice by slice; the `Deref` below keeps them
     /// visible at the old paths during the move.
     pub core: crate::bus::BusCore,
-    /// The bus as of this frame's one snapshot read; UI rendering never
-    /// touches `core` state directly, only this copy.
-    pub snap: crate::bus::Snapshot,
+    /// The bus as of this frame's one mailbox read; UI rendering never
+    /// touches `core` state directly, only this shared copy.
+    pub snap: std::sync::Arc<crate::bus::Snapshot>,
+    /// Command pipe to the core: `send` pushes here, the core side
+    /// drains. Both ends live on the App this slice; the core-thread
+    /// slice moves the receiver into the thread and this stays as the
+    /// UI's only remaining handle on the bus.
+    inbox_tx: std::sync::mpsc::Sender<crate::bus::BusCommand>,
+    inbox_rx: std::sync::mpsc::Receiver<crate::bus::BusCommand>,
+    /// Where the core publishes snapshots and the frontend picks them up,
+    /// never by waiting.
+    mail: crate::bus::SnapshotMailbox,
+    /// Text from the last drained commands, riding the next published
+    /// snapshot to the status line.
+    pending_status: Option<String>,
     pub quit: bool,
     pub t0: Instant,
     pub status: String,
@@ -253,9 +265,14 @@ impl App {
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
             },
         ];
+        let (inbox_tx, inbox_rx) = std::sync::mpsc::channel();
         let mut app = App {
             core,
-            snap: crate::bus::Snapshot::default(),
+            inbox_tx,
+            inbox_rx,
+            mail: crate::bus::new_mailbox(),
+            pending_status: None,
+            snap: std::sync::Arc::new(crate::bus::Snapshot::default()),
             quit: false,
             t0: Instant::now(),
             status: "stopped".to_string(),
@@ -356,25 +373,74 @@ impl App {
         self.t0.elapsed().as_micros() as u64
     }
 
-    /// Re-reads the snapshot. The frame loop calls this via `update`/`tick`
-    /// /`send`; tests that poke core state directly call it explicitly.
-    pub(crate) fn refresh_snapshot(&mut self) {
-        self.snap = self.core.snapshot();
+    /// Frontend side of the mailbox: pick up the newest snapshot without
+    /// ever waiting. If the writer holds the mailbox this frame, last
+    /// frame's copy renders -- one frame of staleness beats a blocked UI.
+    /// Re-surfacing a snapshot's status is guarded by pointer identity, so
+    /// a carried text flushes once, not every frame it stays on screen.
+    fn read_snapshot(&mut self) {
+        if let Some(fresh) = Self::peek_mailbox(&self.mail, &self.snap) {
+            if let Some(msg) = &fresh.status {
+                self.status = msg.clone();
+            }
+            self.snap = fresh;
+        }
     }
 
-    /// The frontend's post office to the bus. Single-threaded this applies
-    /// the command immediately and surfaces whatever status it produced;
-    /// stage 3 swaps the body for an mpsc push, and status comes back in
-    /// the snapshot instead. Every UI write action funnels through here --
-    /// that funnel is what makes the core movable.
-    pub fn send(&mut self, cmd: crate::bus::BusCommand) {
-        let mut status = String::new();
-        self.core.handle(cmd, &mut status);
-        if !status.is_empty() {
-            self.status = status;
+    /// The mailbox read as a pure lookup: the newest snapshot, or `None`
+    /// when the writer holds the lock or nothing has been published since
+    /// `current`. Split out so the never-blocks rule is testable under a
+    /// held lock.
+    fn peek_mailbox(
+        mail: &crate::bus::SnapshotMailbox,
+        current: &std::sync::Arc<crate::bus::Snapshot>,
+    ) -> Option<std::sync::Arc<crate::bus::Snapshot>> {
+        let latest = mail.try_lock().ok()?.clone();
+        if std::sync::Arc::ptr_eq(&latest, current) {
+            None
+        } else {
+            Some(latest)
         }
-        // Re-read after every write, so code that acts right after a
-        // command sees the post-command bus, never a stale snapshot.
+    }
+
+    /// Core side of the mailbox: hand the frontend the latest frame. The
+    /// pending status rides along once and clears -- news, not state.
+    fn publish_snapshot(&mut self) {
+        let status = self.pending_status.take();
+        let snap = std::sync::Arc::new(self.core.snapshot_with_status(status));
+        *self.mail.lock().expect("snapshot mailbox poisoned") = snap;
+    }
+
+    /// Core side of the pipe: apply every queued command, keeping the
+    /// last status any of them produced for the next publish.
+    fn drain_inbox(&mut self) {
+        while let Ok(cmd) = self.inbox_rx.try_recv() {
+            let mut status = String::new();
+            self.core.handle(cmd, &mut status);
+            if !status.is_empty() {
+                self.pending_status = Some(status);
+            }
+        }
+    }
+
+    /// Publish + read. The frame loop's read path is `read_snapshot` alone
+    /// -- publishing is the core's job -- but `send` acts right after a
+    /// write and tests poke core state directly, so both need the fuller
+    /// form to see the post-command bus.
+    pub(crate) fn refresh_snapshot(&mut self) {
+        self.publish_snapshot();
+        self.read_snapshot();
+    }
+
+    /// The frontend's post office to the bus: push the command, then run
+    /// the core's wake-up work by hand. Stage 3 keeps the push and moves
+    /// the drain-publish lap into the core thread, with status reaching
+    /// the UI inside the snapshot instead of a return channel. Every UI
+    /// write action funnels through here -- that funnel is what makes the
+    /// core movable.
+    pub fn send(&mut self, cmd: crate::bus::BusCommand) {
+        let _ = self.inbox_tx.send(cmd);
+        self.drain_inbox();
         self.refresh_snapshot();
     }
 
@@ -834,10 +900,11 @@ impl App {
         if self.text_fresh {
             self.last_text_refresh = std::time::Instant::now();
         }
-        // One snapshot per frame, before anything can early-return: every
-        // frontend read of the bus goes through it, so the rendering code
-        // cannot tell a same-thread bus from the threaded one of stage 3.
-        self.snap = self.core.snapshot();
+        // One mailbox read per frame, before anything can early-return:
+        // every frontend read of the bus goes through the snapshot, so the
+        // rendering code cannot tell a hand-cranked bus from the threaded
+        // one of stage 3.
+        self.read_snapshot();
         if !self.measuring {
             return;
         }
@@ -865,10 +932,12 @@ impl App {
     /// One step of the measurement loop, polled against wall clock `now_us`.
     /// Split out of [`Self::update`] so a test can run a single step at a time
     /// of its choosing; the generator reads `sim_t_us`, which `update` maintains.
-    /// The bus work itself is [`BusCore::step`]; what stays here is the
-    /// frontend's own policy: the sampling stride it wants, the spec check
-    /// it configured, and the status line it displays.
+    /// This is also one lap of the future core-thread loop -- drain the
+    /// inbox, step the bus, publish -- hand-cranked until the thread
+    /// slice. What stays frontend-side is policy only: the sampling
+    /// stride, the spec check, and the status line.
     pub fn tick(&mut self, now_us: u64) {
+        self.drain_inbox();
         let stride = self.wanted_stride_us();
         let mut status = String::new();
         self.core.step(
@@ -879,10 +948,10 @@ impl App {
             &mut status,
         );
         if !status.is_empty() {
-            self.status = status;
+            self.pending_status = Some(status);
         }
-        // Post-step re-read: the snapshot must never be staler than the
-        // last step, whether it ran from the frame loop or a test.
+        // Post-step publish: the mailbox must never hold something staler
+        // than the last step, whether it ran from the frame loop or a test.
         self.refresh_snapshot();
     }
 }

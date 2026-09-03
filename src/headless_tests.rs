@@ -242,7 +242,7 @@ fn step_to_advances_the_clocks_and_the_bus() {
             .core
             .step_to(now, stride, app.spec_tol_pct, app.spec_grace, &mut status);
         assert!(!done);
-        app.snap = app.core.snapshot();
+        app.refresh_snapshot();
     }
     // Slots at 0, 100k .. 6_000k = 61 frames across six 1 s wakes.
     assert_eq!(app.snap.frame_counter, 61, "{}", app.snap.frame_counter);

@@ -160,7 +160,34 @@ pub struct Snapshot {
     pub measuring: bool,
     pub trace_paused: bool,
     pub recording: bool,
+    /// One-shot text from the commands drained since the last publish;
+    /// `None` on routine frame publishes. Status is news, not state: the
+    /// frontend surfaces it once and the next publish clears it.
+    pub status: Option<String>,
 }
+
+/// The hand-off between core and frontend: the latest published snapshot
+/// behind a mutex. The core overwrites it after every drain/step lap; the
+/// frontend `try_lock`s the newest copy out and keeps last frame's copy
+/// when the writer is mid-publish -- reading the bus must never wait on
+/// the bus.
+pub(crate) type SnapshotMailbox = std::sync::Arc<std::sync::Mutex<std::sync::Arc<Snapshot>>>;
+
+pub(crate) fn new_mailbox() -> SnapshotMailbox {
+    std::sync::Arc::new(std::sync::Mutex::new(std::sync::Arc::new(
+        Snapshot::default(),
+    )))
+}
+
+// The mailbox plan: commands cross threads, snapshots are shared by Arc.
+// Asserting here means a future non-Send/Sync field fails at the struct
+// that caused it, not at the `thread::spawn` of the core-thread slice.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send::<BusCommand>();
+    assert_send_sync::<Snapshot>();
+};
 
 /// The frontend's view of one bus. The database travels as an `Arc` the
 /// bus and frontend share; loads are rare, reads are per-frame.
@@ -452,6 +479,14 @@ impl BusCore {
         self.published_trace = Arc::new(self.trace.iter().copied().collect());
     }
 
+    /// The frame read plus the text the just-drained commands produced.
+    /// This is the form the publisher hands to the mailbox.
+    pub(crate) fn snapshot_with_status(&self, status: Option<String>) -> Snapshot {
+        let mut snap = self.snapshot();
+        snap.status = status;
+        snap
+    }
+
     /// One frame-shaped read of the bus for the frontend.
     pub(crate) fn snapshot(&self) -> Snapshot {
         let replay = match (self.source.position(), self.source.duration()) {
@@ -482,6 +517,7 @@ impl BusCore {
             measuring: self.measuring,
             trace_paused: self.trace_paused,
             recording: self.recorder.recording,
+            status: None,
             aggs: self.aggs.values().copied().collect(),
             subs: self
                 .subs

@@ -2013,6 +2013,66 @@ fn delete_desktop_keeps_at_least_one() {
 }
 
 #[test]
+fn a_contended_mailbox_keeps_last_frames_snapshot() {
+    let mut app = App::new();
+    assert_eq!(app.channel_name(0), "CAN1");
+    app.channels[0].name = "Renamed".to_string();
+    app.refresh_snapshot();
+    assert_eq!(app.channel_name(0), "Renamed");
+
+    // A newer snapshot is published while the reader is mid-read: the
+    // try-read bows out (None) instead of waiting on the bus.
+    app.channels[0].name = "Renamed again".to_string();
+    let newer = std::sync::Arc::new(app.core.snapshot());
+    let mut guard = app.mail.lock().unwrap();
+    *guard = newer;
+    assert!(
+        App::peek_mailbox(&app.mail, &app.snap).is_none(),
+        "a held mailbox reads as no-new-snapshot, never as a wait"
+    );
+    drop(guard);
+
+    // Released, the same read picks the fresh frame up and the regular
+    // path lands it in `app.snap`.
+    let fresh = App::peek_mailbox(&app.mail, &app.snap)
+        .expect("the release makes the newest frame visible");
+    assert_eq!(fresh.channels[0].name, "Renamed again");
+    app.read_snapshot();
+    assert_eq!(app.channel_name(0), "Renamed again");
+}
+
+#[test]
+fn a_command_status_rides_the_next_snapshot() {
+    let mut app = App::new();
+    app.send(crate::bus::BusCommand::StartReplay {
+        path: "no/such/log.asc".to_string(),
+        speed: 1.0,
+    });
+    assert!(
+        app.status.contains("replay failed"),
+        "the drained command's text reached the status line: {:?}",
+        app.status
+    );
+    assert!(
+        app.snap.status.is_some(),
+        "and it travelled inside the snapshot that carried it"
+    );
+
+    // Status is news, not state: a publish without fresh text carries
+    // None and the status line keeps the old message.
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 9,
+        id: 0x999,
+        on: true,
+    });
+    assert!(app.snap.status.is_none(), "routine publishes carry no text");
+    assert!(
+        app.status.contains("replay failed"),
+        "an empty-handed command leaves the old status standing"
+    );
+}
+
+#[test]
 fn new_project_resets_to_single_desktop() {
     let mut app = App::new();
     app.add_desktop();
