@@ -27,8 +27,8 @@ pub fn render(app: &App, ui: &Ui) {
             let wrap = ui.push_text_wrap_pos_with_pos(-1.0);
             ui.text_colored([0.8, 0.85, 1.0, 1.0], app.display_name());
             ui.same_line();
-            let (state, color): (&str, [f32; 4]) = if app.measuring {
-                match app.mode {
+            let (state, color): (&str, [f32; 4]) = if app.snap.measuring {
+                match app.snap.mode {
                     Mode::Virtual => ("MEASURING (virtual)", [0.4, 0.95, 0.5, 1.0]),
                     Mode::Replay => ("REPLAYING", [0.3, 0.8, 1.0, 1.0]),
                 }
@@ -41,13 +41,13 @@ pub fn render(app: &App, ui: &Ui) {
             // `sync_status_text`, so the digits hold still long enough to
             // read instead of flickering with every frame.
             ui.text(&app.status_counters);
-            if app.recorder.recording {
+            if app.snap.recording {
                 ui.same_line();
                 ui.text_colored([1.0, 0.4, 0.4, 1.0], "| REC");
             }
             // Not gated on `measuring`: after a log runs out the source keeps
             // its timeline, and the scrub bar needs the readout to stay put.
-            if matches!(app.mode, Mode::Replay)
+            if matches!(app.snap.mode, Mode::Replay)
                 && let Some((pos_s, dur_s)) = app.replay_position()
             {
                 ui.same_line();

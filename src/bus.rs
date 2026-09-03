@@ -43,6 +43,8 @@ pub enum BusCommand {
     /// Toggle ASC recording. While stopped, the file is created by the
     /// next start -- checking Record must not leave an empty file behind.
     ToggleRecord,
+    /// Select the bus kind the next start will run (Simulation / Replay).
+    SetRunMode(crate::app::Mode),
     /// Replay-speed multiplier applied to the log source. (The remembered
     /// choice for the next run and the combo's display stay frontend.)
     SetReplaySpeed(f64),
@@ -134,6 +136,14 @@ pub struct Snapshot {
     /// shared by Arc: cloning the snapshot copies a pointer, not 50k
     /// frames. Read-only for the frontend.
     pub trace: std::sync::Arc<Vec<CanFrame>>,
+    /// Which timeline the bus runs on this frame.
+    pub mode: Mode,
+    /// The bus kind selected for the next start (Simulation / Replay).
+    pub run_mode: Mode,
+    /// Measurement running / trace views frozen / recorder armed.
+    pub measuring: bool,
+    pub trace_paused: bool,
+    pub recording: bool,
 }
 
 /// One generator entry as the frontend sees it this frame. `muted` folds
@@ -307,6 +317,7 @@ impl BusCore {
             BusCommand::Stop => self.stop_bus(status),
             BusCommand::SetTracePaused(on) => self.trace_paused = on,
             BusCommand::ToggleRecord => self.toggle_record(status),
+            BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
             BusCommand::SetEntryActive { ch, id, on } => {
@@ -403,6 +414,11 @@ impl BusCore {
             trace: Arc::clone(&self.published_trace),
             sub_count: self.subs.len(),
             replay,
+            mode: self.mode,
+            run_mode: self.run_mode,
+            measuring: self.measuring,
+            trace_paused: self.trace_paused,
+            recording: self.recorder.recording,
             aggs: self.aggs.values().copied().collect(),
             subs: self
                 .subs

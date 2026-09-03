@@ -24,7 +24,7 @@ pub(crate) fn file_name(p: &str) -> String {
 /// playing. `App::load_log` refuses too; this only stops the UI from offering
 /// what it would reject.
 fn log_switch_blocked(app: &App) -> bool {
-    app.measuring && matches!(app.mode, Mode::Replay)
+    app.snap.measuring && matches!(app.snap.mode, Mode::Replay)
 }
 
 /// Global shortcuts dispatched from winit key events (see `crate::CMD`):
@@ -42,7 +42,7 @@ fn shortcuts(app: &mut App, ui: &Ui) {
     }
     match cmd {
         1 => {
-            if app.measuring {
+            if app.snap.measuring {
                 app.stop();
             } else {
                 app.play();
@@ -200,7 +200,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui
                         .menu_item_config("Start")
                         .shortcut("F9")
-                        .enabled(!app.measuring)
+                        .enabled(!app.snap.measuring)
                         .build()
                     {
                         app.start_selected();
@@ -208,17 +208,19 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui
                         .menu_item_config("Stop")
                         .shortcut("F9")
-                        .enabled(app.measuring)
+                        .enabled(app.snap.measuring)
                         .build()
                     {
                         app.stop();
                     }
                     if ui
                         .menu_item_config("Pause Trace")
-                        .selected(app.trace_paused)
+                        .selected(app.snap.trace_paused)
                         .build()
                     {
-                        app.send(crate::bus::BusCommand::SetTracePaused(!app.trace_paused));
+                        app.send(crate::bus::BusCommand::SetTracePaused(
+                            !app.snap.trace_paused,
+                        ));
                     }
                 });
                 ui.menu("View", || {
@@ -282,7 +284,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 });
             });
 
-            let mut mode_pick = match app.run_mode {
+            let mut mode_pick = match app.snap.run_mode {
                 Mode::Virtual => 0,
                 Mode::Replay => 1,
             };
@@ -295,7 +297,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             vsep(ui);
             // Player-style transport: slower | play/pause | faster | stop.
-            let slower = ui.begin_disabled(!matches!(app.mode, Mode::Replay));
+            let slower = ui.begin_disabled(!matches!(app.snap.mode, Mode::Replay));
             if ui.button("<<") {
                 app.step_replay_speed(-1);
             }
@@ -304,7 +306,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             // Fixed width so toggling Play/Pause never shifts the buttons
             // behind it. App::toggle_play decides between resuming a scrubbed
             // replay and re-opening the log.
-            let label = if app.measuring && !app.trace_paused {
+            let label = if app.snap.measuring && !app.snap.trace_paused {
                 "Pause"
             } else {
                 "Play"
@@ -313,13 +315,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                 app.toggle_play();
             }
             ui.same_line();
-            let faster = ui.begin_disabled(!matches!(app.mode, Mode::Replay));
+            let faster = ui.begin_disabled(!matches!(app.snap.mode, Mode::Replay));
             if ui.button(">>") {
                 app.step_replay_speed(1);
             }
             faster.end();
             ui.same_line();
-            let stop = ui.begin_disabled(!app.measuring);
+            let stop = ui.begin_disabled(!app.snap.measuring);
             if ui.button("Stop") {
                 app.stop();
             }
@@ -327,7 +329,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             // The speed ladder drives only the replay clock -- VirtualSource
             // ignores it -- so simulation mode hides it instead of offering
             // a control that does nothing.
-            if matches!(app.mode, Mode::Replay) {
+            if matches!(app.snap.mode, Mode::Replay) {
                 ui.same_line();
                 let labels = ["0.5x", "1x", "2x", "4x"];
                 let mut pick = REPLAY_SPEEDS
@@ -362,7 +364,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             // Scrub bar. Live whenever a replay source with a known length
             // exists -- running, paused, or stopped after the log ran out.
-            if matches!(app.mode, Mode::Replay) {
+            if matches!(app.snap.mode, Mode::Replay) {
                 vsep(ui);
                 let timeline = app.replay_position();
                 let scrub = ui.begin_disabled(timeline.is_none());
@@ -385,9 +387,9 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
                 scrub.end();
             }
-            if matches!(app.run_mode, Mode::Virtual) {
+            if matches!(app.snap.run_mode, Mode::Virtual) {
                 vsep(ui);
-                let mut rec = app.recorder.recording;
+                let mut rec = app.snap.recording;
                 if ui.checkbox("Record", &mut rec) {
                     app.toggle_record();
                 }
@@ -403,7 +405,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.align_text_to_frame_padding();
                 ui.text("_<date>.asc");
             }
-            if matches!(app.run_mode, Mode::Replay) {
+            if matches!(app.snap.run_mode, Mode::Replay) {
                 vsep(ui);
                 let open = ui.begin_disabled(log_switch_blocked(app));
                 if ui.button("Open Log...") {

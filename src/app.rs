@@ -85,8 +85,9 @@ pub struct MsgRowText {
     pub signals: Vec<(String, String)>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Mode {
+    #[default]
     Virtual,
     Replay,
 }
@@ -402,13 +403,13 @@ impl App {
     /// Switches between simulation and replay; a running measurement is
     /// stopped first so the transport never outlives its source.
     pub fn switch_run_mode(&mut self, mode: Mode) {
-        if mode == self.run_mode {
+        if mode == self.snap.run_mode {
             return;
         }
-        if self.measuring {
+        if self.snap.measuring {
             self.stop();
         }
-        self.run_mode = mode;
+        self.send(crate::bus::BusCommand::SetRunMode(mode));
     }
 
     fn can_replay(&self) -> bool {
