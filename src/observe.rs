@@ -13,7 +13,7 @@ use crate::app::{HISTORY_SPAN_US, MIN_STRIDE_US, SAMPLE_INTERVAL_US, STRIDE_POIN
 /// 16 bytes with no per-node allocation, which matters because an hour of
 /// coarse-stride sampling is 72 000 points per signal (the stride tightens
 /// while a Graphics window is zoomed in, trading cache size for detail).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SampleCache {
     pub(crate) points: Vec<(u64, f64)>,
 }
@@ -463,7 +463,7 @@ impl App {
         }
         let mut rows = Vec::with_capacity(keys.len());
         for key in &keys {
-            let Some(sub) = self.subs.get(key) else {
+            let Some(sub) = self.sub_view(key) else {
                 continue;
             };
             rows.push([
@@ -495,7 +495,7 @@ impl App {
         }
         let legend = keys
             .iter()
-            .map(|key| match self.subs.get(key) {
+            .map(|key| match self.sub_view(key) {
                 Some(sub) => {
                     format!(
                         "{} = {}",
@@ -520,6 +520,12 @@ impl App {
     /// creation semantics live there now).
     pub fn subscribe(&mut self, key: (u8, u32, String)) {
         self.send(crate::bus::BusCommand::Subscribe { key });
+    }
+
+    /// This frame's snapshot view of subscribed signal `key`. All frontend
+    /// reads of subscription state go through here, never the live map.
+    pub(crate) fn sub_view(&self, key: &(u8, u32, String)) -> Option<&crate::bus::SubView> {
+        self.snap.subs.iter().find(|s| &s.key == key)
     }
 
     /// Drops the subscription if no Data/Graphics window references the signal anymore.

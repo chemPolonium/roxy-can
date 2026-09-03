@@ -41,8 +41,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
     for j in 0..n {
         let key = signals_mut(app, kind)[j].key.clone();
         let color = app
-            .subs
-            .get(&key)
+            .sub_view(&key)
             .map(|s| PALETTE[s.color % PALETTE.len()])
             .unwrap_or([0.5, 0.5, 0.5, 1.0]);
         let p = ui.cursor_screen_pos();

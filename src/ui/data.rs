@@ -110,7 +110,7 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         let bar_bg = ui.style_color(StyleColor::FrameBg);
         let bar_fill = ui.style_color(StyleColor::PlotHistogram);
         for (key, text) in keys.iter().zip(cache.iter()) {
-            let Some(sub) = app.subs.get(key) else {
+            let Some(sub) = app.sub_view(key) else {
                 continue;
             };
             ui.table_next_row();

@@ -338,7 +338,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     // Never pan or zoom further back than the oldest stored sample.
     let mut oldest = f64::INFINITY;
     for key in &keys {
-        if let Some(sub) = app.subs.get(key)
+        if let Some(sub) = app.sub_view(key)
             && let Some((t, _)) = sub.history.first()
         {
             oldest = oldest.min(t as f64 / 1e6);
@@ -586,7 +586,7 @@ fn resolve_signal_range(
     fn auto(app: &App, key: &(u8, u32, String), lo_us: u64, hi_us: u64) -> (f64, f64) {
         let mut vmin = f64::INFINITY;
         let mut vmax = f64::NEG_INFINITY;
-        if let Some(sub) = app.subs.get(key) {
+        if let Some(sub) = app.sub_view(key) {
             for &(_, v) in sub.history.range(lo_us, hi_us) {
                 if v < vmin {
                     vmin = v;
@@ -619,7 +619,7 @@ fn resolve_signal_range(
         YMode::FitAll => {
             // The cumulative sampler stats are the run's whole envelope: they
             // only ever widen, which is the point of this mode.
-            match app.subs.get(key) {
+            match app.sub_view(key) {
                 Some(sub) if sub.min.is_finite() && sub.max.is_finite() => {
                     if sub.max - sub.min < 1e-9 {
                         (sub.min, sub.max + 1.0)
@@ -675,7 +675,7 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
     let curves: Vec<Curve> = keys
         .iter()
         .filter_map(|key| {
-            let sub = app.subs.get(key)?;
+            let sub = app.sub_view(key)?;
             let color = PALETTE[sub.color % PALETTE.len()];
             Some((
                 color,
@@ -764,7 +764,7 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         .iter()
         .enumerate()
         .filter_map(|(n, key)| {
-            let sub = app.subs.get(key)?;
+            let sub = app.sub_view(key)?;
             Some((PALETTE[sub.color % PALETTE.len()], legend[n].clone()))
         })
         .collect();
@@ -804,7 +804,7 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         let t_us = ct * 1e6;
         let mut row = 0;
         for key in keys {
-            let Some(sub) = app.subs.get(key) else {
+            let Some(sub) = app.sub_view(key) else {
                 continue;
             };
             let txt = match value_at(&sub.history, t_us) {

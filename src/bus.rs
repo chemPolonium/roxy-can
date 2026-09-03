@@ -123,6 +123,28 @@ pub struct Snapshot {
     /// One record per (bus, id) seen this run, behind the Messages /
     /// Statistics views and their exports.
     pub aggs: Vec<MessageAgg>,
+    /// One entry per live subscription: the scalar stats the Data window
+    /// draws and the sampled history the curves read.
+    pub subs: Vec<SubView>,
+}
+
+/// One subscribed signal as the frontend sees it this frame. The
+/// run-internal sampler bookkeeping (`sum`/`n`/`last_sample_us`) stays
+/// on the bus; this is the display-facing projection.
+#[derive(Clone, Debug)]
+pub struct SubView {
+    pub key: (u8, u32, String),
+    pub latest: f64,
+    pub last_raw: i64,
+    pub unit: String,
+    pub label: Option<String>,
+    pub type_tag: String,
+    pub min: f64,
+    pub max: f64,
+    /// Sampled history at the frame's stride, for the curve windows.
+    pub history: crate::observe::SampleCache,
+    /// Palette row assigned at subscribe time.
+    pub color: usize,
 }
 
 /// Every (channel, id) the log file carries -- the twin-silencing set for
@@ -339,6 +361,22 @@ impl BusCore {
             sub_count: self.subs.len(),
             replay,
             aggs: self.aggs.values().copied().collect(),
+            subs: self
+                .subs
+                .iter()
+                .map(|(key, s)| SubView {
+                    key: key.clone(),
+                    latest: s.latest,
+                    last_raw: s.last_raw,
+                    unit: s.unit.clone(),
+                    label: s.label.clone(),
+                    type_tag: s.type_tag.clone(),
+                    min: s.min,
+                    max: s.max,
+                    history: s.history.clone(),
+                    color: s.color,
+                })
+                .collect(),
         }
     }
 
