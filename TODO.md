@@ -34,9 +34,21 @@
 
 已落地：`BusCommand` 18 个变体收编了 UI 对总线的**全部写操作**（启停/回放传输/录制、条目增删改与源编辑、订阅/退订、加载回放日志），经 `App::send` 单入口下发，`BusCore::handle` 派发；`Snapshot` 每帧发布（计数器、回放时间线、聚合表、订阅投影含采样历史），Messages/Statistics/网络图/Data/Graphics/导出均已改读快照，`send`/`tick` 末尾"写后重读"保证读写一致。验收的**无头集成测试已落地**（`headless_tests.rs` 四条：命令组合的完整仿真、录制回读、CSV 导出、日志回放+双发静音），不开 UI 全绿——第 12 项（headless CLI）的根基即此。
 
-读侧尚余两块，各有结构性原因，随阶段 3 的共享发布一并解决：`tx_list` 投影（`data_text` 既是持久化配置又是每帧输入框草稿，需先把编辑草稿态真正归前端）与 trace 环（50k 帧按帧拷贝不经济，需要脏标记/Arc 共享而非复制）。
+读侧尚余两块，各有结构性原因，随阶段 3 的共享发布一并解决：`tx_list` 投影（`data_text` 既是持久化配置又是每帧输入框草稿，需先把编辑草稿态真正归前端）与 trace 环（50k 帧按帧拷贝不经济，需要脏标记/Arc 共享而非复制）——已于"阶段 3 预备"中全部落地，见下节。
 
-验收：行为不变（320 测试过）；新增**无头集成测试**——不开 UI 完整跑仿真 + 导出。这一步做完，第 12 项（headless CLI）近乎免费。
+验收：行为不变（325 测试过）；新增**无头集成测试**——不开 UI 完整跑仿真 + 导出。这一步做完，第 12 项（headless CLI）近乎免费。
+
+### 阶段 3 预备：把读侧清干净、给核心上好发条（2026-09-03）
+
+阶段 2 遗留的"读侧尚余两块"至此全部落地，另加了三件为上线程铺路的准备：
+
+- **`tx_list` 投影**：`TxView` 入快照（含 `data_text`/`sent_text` 投影），发送窗口整表读快照；数据框编辑草稿 `tx_data_edit` 归前端，提交才走命令。源编辑（pin/set/clear）全部改为按 `(channel, id)` 键的命令。
+- **trace 环 Arc 共享**：仅在真正吞了帧的 step 里重建 `Arc<Vec<CanFrame>>` 发布，空闲帧零拷贝；UI 与无头测试读同一份。
+- **标志类读取**：`measuring`/`run_mode`/`trace_paused`/`recording` 等入快照，工具条/状态条改读快照。
+- **事件死线**：`FrameSource::next_deadline(now)` + `BusCore::step_to(now, ...)`（= advance_clock + step），回放源按速度换算下次到期时刻；无头测试验证死线跟随发生器槽位、`step_to` 按次唤醒推进。
+- **通道配置 Arc 化**：`Channel.dbc` 改为 `Arc<SymbolTable>`，`ChannelView`（含 DBC 表的 Arc 克隆）入快照；`channel_dbc`/`dbc_cycle_us`/`message_name`/`channel_name` 及各窗口的通道遍历全部改读快照。固有方法遮蔽 BusCore 的同名活表查询，调用方无感。
+
+仍属例外（等 Arc 配置设计，阶段 3 后收编）：总线窗口的名称/波特率编辑、`record_path` 输入框、`load_channel` 写活表及其结果反馈、config.rs 序列化直读核心。
 
 ### 阶段 3：核心上线程
 
