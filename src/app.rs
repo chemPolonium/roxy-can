@@ -96,6 +96,9 @@ pub struct App {
     /// Fields migrate here slice by slice; the `Deref` below keeps them
     /// visible at the old paths during the move.
     pub core: crate::bus::BusCore,
+    /// The bus as of this frame's one snapshot read; UI rendering never
+    /// touches `core` state directly, only this copy.
+    pub snap: crate::bus::Snapshot,
     pub quit: bool,
     pub t0: Instant,
     pub status: String,
@@ -247,6 +250,7 @@ impl App {
         ];
         let mut app = App {
             core,
+            snap: crate::bus::Snapshot::default(),
             quit: false,
             t0: Instant::now(),
             status: "stopped".to_string(),
@@ -358,6 +362,9 @@ impl App {
         if !status.is_empty() {
             self.status = status;
         }
+        // Re-read after every write, so code that acts right after a
+        // command sees the post-command bus, never a stale snapshot.
+        self.snap = self.core.snapshot();
     }
 
     pub fn start_virtual(&mut self) {
@@ -524,18 +531,15 @@ impl App {
             && self.source.position().is_some()
     }
 
-    /// Restarts the wall clock without touching captured history, so playback
-    /// continues from the scrubbed position. `reset_time` is deliberately not
-    /// used: it would wipe the trace and aggregates the user just scrubbed
-    /// through. The stale `last` in the replay source is harmless because the
-    /// poll clock uses `saturating_sub` against the new, smaller `now_us`.
+    /// Resumes a scrubbed replay in place: the wall clock restarts here on
+    /// the frontend, the bus unfreezes and resumes measuring via the
+    /// command. Captured history is untouched, so playback continues from
+    /// the scrubbed position.
     fn resume_replay(&mut self) {
         self.t0 = Instant::now();
-        self.sim_prev_us = 0;
-        self.trace_paused = false;
-        self.paused_at_us = None;
-        self.measuring = true;
-        self.status = format!("resumed at {}x", self.replay_speed);
+        self.send(crate::bus::BusCommand::ResumeReplay {
+            speed: self.replay_speed,
+        });
     }
 
     /// Starts playback, resuming a scrubbed replay in place when there is one.
@@ -558,11 +562,10 @@ impl App {
     }
 
     /// Current replay position and total duration in seconds (None when
-    /// the active source has no timeline).
+    /// the active source has no timeline). Reads this frame's snapshot.
     pub fn replay_position(&self) -> Option<(f64, f64)> {
-        let pos = self.source.position()? as f64 / 1e6;
-        let dur = self.source.duration()? as f64 / 1e6;
-        Some((pos, dur))
+        let (pos, dur) = self.snap.replay?;
+        Some((pos as f64 / 1e6, dur as f64 / 1e6))
     }
 
     /// Time in seconds the plotting windows should treat as "now".
@@ -807,12 +810,11 @@ impl App {
         if !self.text_fresh {
             return;
         }
+        // Counters come from the snapshot, the f/s figure is the
+        // frontend's own EMA.
         self.status_counters = format!(
             "| frames: {:>8}  | {:7.0} f/s  | trace: {:>6}  | signals: {:>4}",
-            self.frame_counter,
-            self.frame_rate,
-            self.trace.len(),
-            self.subs.len()
+            self.snap.frame_counter, self.frame_rate, self.snap.trace_len, self.snap.sub_count
         );
     }
 
@@ -825,6 +827,10 @@ impl App {
         if self.text_fresh {
             self.last_text_refresh = std::time::Instant::now();
         }
+        // One snapshot per frame, before anything can early-return: every
+        // frontend read of the bus goes through it, so the rendering code
+        // cannot tell a same-thread bus from the threaded one of stage 3.
+        self.snap = self.core.snapshot();
         if !self.measuring {
             return;
         }
@@ -868,6 +874,9 @@ impl App {
         if !status.is_empty() {
             self.status = status;
         }
+        // Post-step re-read: the snapshot must never be staler than the
+        // last step, whether it ran from the frame loop or a test.
+        self.snap = self.core.snapshot();
     }
 }
 

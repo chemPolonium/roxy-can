@@ -96,6 +96,30 @@ pub enum BusCommand {
     /// remembered multiplier, passed at start like the other policy
     /// knobs.
     StartReplay { path: String, speed: f64 },
+    /// Resume a scrubbed replay in place: measurement restarts with the
+    /// trace unfrozen, captured history untouched, so playback continues
+    /// from the playhead. `speed` is the frontend's remembered
+    /// multiplier, for the status line.
+    ResumeReplay { speed: f64 },
+}
+
+/// What the frontend may see of the bus: one immutable, frame-shaped
+/// bundle of the read-only facts. Single-threaded it is a plain copy
+/// taken once per UI frame; stage 3 publishes it behind an Arc swap
+/// instead. Frontend reads go through the snapshot, never the live
+/// state, so the same rendering code works across the coming thread
+/// boundary.
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    /// Frames received this run.
+    pub frame_counter: u64,
+    /// Current trace-ring length.
+    pub trace_len: usize,
+    /// Live signal subscriptions.
+    pub sub_count: usize,
+    /// Replay playhead and log length in µs, when a log with a known
+    /// position is loaded.
+    pub replay: Option<(u64, u64)>,
 }
 
 /// Every (channel, id) the log file carries -- the twin-silencing set for
@@ -287,6 +311,30 @@ impl BusCore {
                 self.subs.remove(&key);
             }
             BusCommand::StartReplay { path, speed } => self.start_replay(&path, speed, status),
+            BusCommand::ResumeReplay { speed } => {
+                // The poll clock uses `saturating_sub`, so rewinding
+                // `sim_prev_us` to zero is harmless; the frontend restarts
+                // its own wall clock (`t0`) alongside this command.
+                self.sim_prev_us = 0;
+                self.trace_paused = false;
+                self.paused_at_us = None;
+                self.measuring = true;
+                *status = format!("resumed at {speed}x");
+            }
+        }
+    }
+
+    /// One frame-shaped read of the bus for the frontend.
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        let replay = match (self.source.position(), self.source.duration()) {
+            (Some(p), Some(d)) => Some((p, d)),
+            _ => None,
+        };
+        Snapshot {
+            frame_counter: self.frame_counter,
+            trace_len: self.trace.len(),
+            sub_count: self.subs.len(),
+            replay,
         }
     }
 
