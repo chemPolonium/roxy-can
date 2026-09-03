@@ -41,6 +41,13 @@ pub enum BusCommand {
     /// Toggle ASC recording. While stopped, the file is created by the
     /// next start -- checking Record must not leave an empty file behind.
     ToggleRecord,
+    /// Replay-speed multiplier applied to the log source. (The remembered
+    /// choice for the next run and the combo's display stay frontend.)
+    SetReplaySpeed(f64),
+    /// Move the replay playhead to `t_s` seconds, clamped to the log's
+    /// duration. Works while running, paused, or stopped after the log
+    /// ran out; a scrub past the right edge lands on the last frame.
+    SeekReplay(f64),
 }
 
 /// The simulation half of the application. Fields move here from `App` in
@@ -156,6 +163,41 @@ impl BusCore {
             BusCommand::Stop => self.stop_bus(status),
             BusCommand::SetTracePaused(on) => self.trace_paused = on,
             BusCommand::ToggleRecord => self.toggle_record(status),
+            BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
+            BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
+        }
+    }
+
+    /// Moves the replay playhead to `t_s` seconds. The log's own duration
+    /// bounds the request so a drag past the right edge lands on the last
+    /// frame.
+    fn seek_replay(&mut self, t_s: f64, status: &mut String) {
+        if !matches!(self.mode, Mode::Replay) {
+            return;
+        }
+        let dur_us = self.source.duration();
+        let target = match dur_us {
+            Some(d) => ((t_s.max(0.0) * 1e6) as u64).min(d),
+            None => (t_s.max(0.0) * 1e6) as u64,
+        };
+        match self.source.set_position_us(target) {
+            Some(landed) => {
+                self.rewind_samples_to(landed);
+                let dur = dur_us.map(|d| d as f64 / 1e6);
+                *status = match dur {
+                    Some(d) => format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d),
+                    None => format!("seek {:.2} s", landed as f64 / 1e6),
+                };
+            }
+            None => *status = "seek: past end of log".to_string(),
+        }
+    }
+
+    /// Lets every signal's sampler resume at a scrubbed playhead. Retained
+    /// samples are left in place; see [`Subscription::resume_sampling_at`].
+    pub(crate) fn rewind_samples_to(&mut self, t_us: u64) {
+        for sub in self.subs.values_mut() {
+            sub.resume_sampling_at(t_us);
         }
     }
 

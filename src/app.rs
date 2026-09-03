@@ -532,10 +532,12 @@ impl App {
     }
 
     /// Changes replay speed; takes effect immediately if a replay is
-    /// running.
+    /// running. The remembered choice is frontend state -- the combo
+    /// displays it and a fresh replay starts at it -- while the applied
+    /// rate belongs to the bus's source.
     pub fn set_replay_speed(&mut self, speed: f64) {
         self.replay_speed = speed;
-        self.source.set_speed(speed);
+        self.send(crate::bus::BusCommand::SetReplaySpeed(speed));
     }
 
     /// Moves one notch along REPLAY_SPEEDS; negative slows down, positive
@@ -549,29 +551,9 @@ impl App {
         self.set_replay_speed(REPLAY_SPEEDS[next]);
     }
 
-    /// Moves the replay playhead to `t_s` seconds. Works while running,
-    /// paused, or stopped after the log ran out; the log's own duration bounds
-    /// the request so a drag past the right edge lands on the last frame.
+    /// Moves the replay playhead to `t_s` seconds.
     pub fn seek_replay_seconds(&mut self, t_s: f64) {
-        if !matches!(self.mode, Mode::Replay) {
-            return;
-        }
-        let dur_us = self.source.duration();
-        let target = match dur_us {
-            Some(d) => ((t_s.max(0.0) * 1e6) as u64).min(d),
-            None => (t_s.max(0.0) * 1e6) as u64,
-        };
-        match self.source.set_position_us(target) {
-            Some(landed) => {
-                self.rewind_samples_to(landed);
-                let dur = dur_us.map(|d| d as f64 / 1e6);
-                self.status = match dur {
-                    Some(d) => format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d),
-                    None => format!("seek {:.2} s", landed as f64 / 1e6),
-                };
-            }
-            None => self.status = "seek: past end of log".to_string(),
-        }
+        self.send(crate::bus::BusCommand::SeekReplay(t_s));
     }
 
     /// True when a scrubbed replay is parked mid-log and Play should pick up
@@ -609,7 +591,7 @@ impl App {
     /// F9 so the resume rule lives in exactly one place.
     pub fn toggle_play(&mut self) {
         if self.measuring {
-            self.trace_paused = !self.trace_paused;
+            self.send(crate::bus::BusCommand::SetTracePaused(!self.trace_paused));
         } else {
             self.play();
         }

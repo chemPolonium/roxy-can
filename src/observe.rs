@@ -435,14 +435,6 @@ impl App {
         }
     }
 
-    /// Lets every signal's sampler resume at a scrubbed playhead. Retained
-    /// samples are left in place; see [`Subscription::resume_sampling_at`].
-    pub(crate) fn rewind_samples_to(&mut self, t_us: u64) {
-        for sub in self.subs.values_mut() {
-            sub.resume_sampling_at(t_us);
-        }
-    }
-
     /// The display type the database declares for a subscribed signal, used
     /// until the first frame refreshes it -- and forever when no database
     /// names it.
