@@ -103,6 +103,16 @@ impl State {
                 .unwrap(),
         );
         window.set_ime_allowed(true);
+        // Windows cascades default placement toward the bottom-right of the
+        // monitor, where the taskbar and screen edge crowd it out. Bring the
+        // window to the center of whatever monitor the OS dropped it on.
+        if let Some(monitor) = window.current_monitor() {
+            window.set_outer_position(centered_position(
+                window.outer_size(),
+                monitor.position(),
+                monitor.size(),
+            ));
+        }
         let size = window.inner_size();
         let dpi = window.scale_factor();
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -418,6 +428,20 @@ impl ApplicationHandler for Program {
     }
 }
 
+/// The top-left position (physical pixels) that centers a window of `win`
+/// inside the monitor at `monitor_pos` spanning `monitor`, clamped to the
+/// monitor's top-left corner so a window larger than the monitor still
+/// starts fully reachable.
+fn centered_position(
+    win: winit::dpi::PhysicalSize<u32>,
+    monitor_pos: winit::dpi::PhysicalPosition<i32>,
+    monitor: winit::dpi::PhysicalSize<u32>,
+) -> winit::dpi::PhysicalPosition<i32> {
+    let slack_w = (monitor.width as i32 - win.width as i32).max(0) / 2;
+    let slack_h = (monitor.height as i32 - win.height as i32).max(0) / 2;
+    winit::dpi::PhysicalPosition::new(monitor_pos.x + slack_w, monitor_pos.y + slack_h)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match cli::parse_args(&args) {
@@ -448,4 +472,41 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut Program::default()).unwrap();
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::centered_position;
+    use winit::dpi::{PhysicalPosition, PhysicalSize};
+
+    #[test]
+    fn a_window_lands_in_the_middle_of_its_monitor() {
+        let pos = centered_position(
+            PhysicalSize::new(1280, 800),
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(1920, 1080),
+        );
+        assert_eq!(pos, PhysicalPosition::new(320, 140));
+    }
+
+    #[test]
+    fn the_monitor_origin_counts() {
+        // A monitor left of / above the primary keeps the window on itself.
+        let pos = centered_position(
+            PhysicalSize::new(1280, 800),
+            PhysicalPosition::new(-2560, -1440),
+            PhysicalSize::new(2560, 1440),
+        );
+        assert_eq!(pos, PhysicalPosition::new(-1920, -1120));
+    }
+
+    #[test]
+    fn a_window_bigger_than_the_monitor_parks_at_its_corner() {
+        let pos = centered_position(
+            PhysicalSize::new(4000, 2000),
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(1920, 1080),
+        );
+        assert_eq!(pos, PhysicalPosition::new(0, 0));
+    }
 }
