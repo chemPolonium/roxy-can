@@ -415,3 +415,115 @@ fn the_threaded_core_records_to_the_dated_file() {
     drop(app);
     std::fs::remove_file(&actual).ok();
 }
+
+/// 阶段 4 验收探针：满载下"发布一帧快照"要花多久。Not a pass/fail
+/// test -- run it explicitly and read the numbers:
+///
+/// `cargo test --release perf_snapshot_publish_under_load -- --ignored --nocapture`
+///
+/// The load: every signal the sample database declares (six), each history
+/// filled with 72 000 points (an hour at the coarse stride), and the trace
+/// ring at its full 50 000-frame limit. It times three things per round:
+/// what the pre-stage-4 design paid per publish (deep-copy every history,
+/// rebuild the flat trace vector), what the current design pays on a lap
+/// where every cache gained samples (worst case), and one where nothing
+/// changed (idle bus).
+#[test]
+#[ignore = "measurement probe"]
+fn perf_snapshot_publish_under_load() {
+    let mut app = App::headless();
+    app.start_virtual();
+
+    // Every signal the sample database declares, taken in table order.
+    let mut keys: Vec<(u8, u32, String)> = Vec::new();
+    let db = app.channel_dbc(0).expect("sample.dbc loaded");
+    for id in &db.order {
+        let msg = db.messages.get(id).expect("message table");
+        for s in &msg.signals {
+            keys.push((0, *id, s.name.clone()));
+        }
+    }
+    assert!(keys.len() >= 4, "need a handful of signals to subscribe");
+    for key in &keys {
+        app.subscribe(key.clone());
+    }
+
+    // Fill every history: 72 000 points, 1 ms apart.
+    const POINTS: u64 = 72_000;
+    for (i, key) in keys.iter().enumerate() {
+        let sub = app.subs.get_mut(key).expect("subscribed");
+        for k in 0..POINTS {
+            sub.push_sample(k * 1_000, (k % 97) as f64 + i as f64, 1_000);
+        }
+    }
+    // Fill the trace ring to the cap.
+    for i in 0..crate::app::TRACE_LIMIT {
+        app.trace.push(crate::can::frame::CanFrame {
+            t_us: i as u64 * 1_000,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 8,
+            data: [0; crate::can::frame::MAX_CAN_FD_LEN],
+            dir: crate::can::frame::Direction::Rx,
+            flags: crate::can::frame::FrameFlags::NONE,
+        });
+    }
+    // One lap settles the first publish (empty view -> full view).
+    app.tick(1_000_000);
+
+    const ROUNDS: u64 = 200;
+
+    // The old design, reproduced: what snapshot() deep-copied per publish
+    // before the chunked storage existed.
+    let t0 = std::time::Instant::now();
+    for _ in 0..ROUNDS {
+        let mut sink = 0usize;
+        for key in &keys {
+            let sub = app.subs.get(key).unwrap();
+            let flat: Vec<(u64, f64)> = sub.history.iter().copied().collect();
+            sink += flat.len();
+        }
+        let flat_trace: Vec<crate::can::frame::CanFrame> = app.trace.iter().copied().collect();
+        sink += flat_trace.len();
+        std::hint::black_box(sink);
+    }
+    let old_publish_us = t0.elapsed().as_micros() as f64 / ROUNDS as f64;
+
+    // Current design, worst case: every cache resampled this lap.
+    let mut now = 1_000_000u64;
+    let t0 = std::time::Instant::now();
+    for _ in 0..ROUNDS {
+        now += 20_000;
+        for key in &keys {
+            if let Some(s) = app.subs.get_mut(key) {
+                s.history_dirty = true;
+            }
+        }
+        app.tick(now);
+    }
+    let dirty_lap_us = t0.elapsed().as_micros() as f64 / ROUNDS as f64;
+
+    // Current design, idle: nothing resampled, publish is pure sharing.
+    let t0 = std::time::Instant::now();
+    for _ in 0..ROUNDS {
+        now += 20_000;
+        app.tick(now);
+    }
+    let idle_lap_us = t0.elapsed().as_micros() as f64 / ROUNDS as f64;
+
+    eprintln!();
+    eprintln!(
+        "=== snapshot publish under load ({} points/curve, {} curves, {}-frame trace) ===",
+        POINTS,
+        keys.len(),
+        crate::app::TRACE_LIMIT
+    );
+    eprintln!("old design, deep copy per publish : {old_publish_us:8.1} us");
+    eprintln!("now, worst case (all caches dirty): {dirty_lap_us:8.1} us");
+    eprintln!("now, idle (nothing resampled)     : {idle_lap_us:8.1} us");
+    eprintln!(
+        "worst-case ratio vs old design    : {:8.1}x cheaper",
+        old_publish_us / dirty_lap_us.max(0.001)
+    );
+}
