@@ -86,7 +86,7 @@
 - **引导收敛**：`build_core()`（默认总线 + `bootstrap_dbcs` + `populate_generator`）在 spawn 前同步跑完并预发布首帧快照，baseline 与首个 UI 帧看到的都是完整总线；`reset_to_defaults` 按原驱动重建。
 - **编译期收编**：`FrameSource: Send`、`FrameStream: Send`——核心整体过线程边界从此由类型保证。
 
-排查记要：冒烟测试（真线程 + 实时轮询帧流）当场抓住 `update` 里经 Deref 读 `measuring` 的 panic——正是它存在的意义；暂停直写类测试补 `refresh_snapshot` 与手摇盖章即可。
+排查记要：冒烟测试（真线程 + 实时轮询帧流）当场抓住 `update` 里经 Deref 读 `measuring` 的 panic——正是它存在的意义；暂停直写类测试补 `refresh_snapshot` 与手摇盖章即可。上线后首次实跑即抓住第二处：启动时的自动恢复工程走 `Config::apply`，触发器列表仍直写核心——触发器整簇（窗口读写 + 编辑器 + 恢复）随之全部收编（`AddTrigger`/`RemoveTrigger`/`SetTriggerEnabled`/`EditTrigger`/`SetTriggers`），GUI 启动验证通过。教训：双驱动下每个产品路径都要过一遍"读经快照、写经命令"，冒烟测试应逐步覆盖启动与恢复路径。
 
 验收：328 测试过，其中新增**真线程冒烟测试**——`App::new` 起线程、发命令、实时轮询到帧流、drop 后线程随断线退出。阶段 3 剩余验收项：GUI 实测拖窗口/开模态/卡鼠标时波形不断流（需要跑起来看），以及 backfill 阻塞核心线程的观察与后续挪移。
 
