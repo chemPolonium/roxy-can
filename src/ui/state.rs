@@ -137,6 +137,7 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                     });
                 } else {
                     w.rules.remove(&key);
+                    purge_band_slots(w, &key);
                 }
                 mode = chosen;
             }
@@ -242,6 +243,16 @@ fn custom_panel(
     ui.separator();
     if ui.small_button("Clear##srclear") {
         w.rules.remove(key);
+        purge_band_slots(w, key);
+    }
+}
+
+/// Drops a signal's band slot entries once its rule is gone: they would
+/// otherwise count as taken and shove the value auto-colors down the
+/// palette.
+fn purge_band_slots(w: &mut StateWin, key: &(u8, u32, String)) {
+    if let Some(m) = w.color_slots.get_mut(key) {
+        m.retain(|k, _| *k < BAND_KEY_BASE);
     }
 }
 
@@ -298,7 +309,7 @@ fn default_panel(
         let pinned = w.overrides.get(key).and_then(|m| m.get(bits)).copied();
         let swatch = pinned.unwrap_or_else(|| {
             let slots = w.color_slots.entry(key.clone()).or_default();
-            let p = PALETTE[slot_for(slots, f64::from_bits(*bits), PALETTE.len())];
+            let p = BAND_PALETTE[slot_for(slots, f64::from_bits(*bits), BAND_PALETTE.len())];
             [p[0], p[1], p[2]]
         });
         if ui.color_button(
@@ -570,13 +581,14 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         }
 
         // State colors: with few distinct values visible, every state gets
-        // its own palette slot -- gear 5 and gear 1 read apart at a glance.
-        // Slots are remembered per value (see `slot_for`), so the same
-        // value keeps its color across the whole run. A pinned override
-        // (default-mode color picked in the editor) beats the slot, and a
-        // busy analog with more visible states than the palette gets
-        // CANoe's plain neutral band: the value label does the talking.
-        let per_state = rule.is_none() && states.len() <= PALETTE.len();
+        // its own slot in the muted default palette -- gear 5 and gear 1
+        // read apart at a glance without shouting. Slots are remembered
+        // per value (see `slot_for`), so the same value keeps its color
+        // across the whole run. A pinned override (default-mode color
+        // picked in the editor) beats the slot, and a busy analog with
+        // more visible states than the palette gets CANoe's plain neutral
+        // band: the value label does the talking.
+        let per_state = rule.is_none() && states.len() <= BAND_PALETTE.len();
         let win = &mut app.state_trackers[i];
         let overrides = win.overrides.get(&key).cloned();
         let slots = win.color_slots.entry(key.clone()).or_default();
@@ -599,19 +611,20 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
                 let bits = bits_of(seg.value);
                 match overrides.as_ref().and_then(|m| m.get(&bits)) {
                     Some(c) => [c[0], c[1], c[2], 0.92],
-                    None if per_state => PALETTE[slot_for(slots, seg.value, PALETTE.len())],
+                    None if per_state => {
+                        let p = BAND_PALETTE[slot_for(slots, seg.value, BAND_PALETTE.len())];
+                        [p[0], p[1], p[2], 0.92]
+                    }
                     _ => NEUTRAL_FILL,
                 }
             };
-            // Per-state mode needs no outlines: neighbouring segments
-            // always differ in value and color, so the boundary reads by
-            // itself -- an outline anti-aliased against the bright fills
-            // just grows a fuzzy halo. In the uniform fallback, same-
-            // colored neighbours are separated by a 1px gap instead.
-            let (fx0, fx1) = if per_state {
-                (sx0, sx1)
+            // A 1px gap on each side separates neighbouring segments in
+            // every mode; too-narrow segments skip the inset so they do
+            // not vanish entirely.
+            let (fx0, fx1) = if sx1 - sx0 > 3.0 {
+                (sx0 + 1.0, sx1 - 1.0)
             } else {
-                ((sx0 + 1.0).min(sx1), (sx1 - 1.0).max(sx0))
+                (sx0, sx1)
             };
             dl.add_rect(
                 [fx0, ry + 2.0],
