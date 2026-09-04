@@ -19,6 +19,7 @@ mod recorder;
 mod sim;
 mod source;
 mod spec;
+mod trace;
 mod trigger;
 mod ui;
 mod workspace;

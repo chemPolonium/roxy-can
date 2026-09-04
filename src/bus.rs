@@ -7,7 +7,7 @@
 //! UI thread; the command/snapshot boundary and the dedicated thread are
 //! stages 2 and 3.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::aggregate::MessageAgg;
@@ -237,7 +237,7 @@ pub struct Snapshot {
     /// The trace ring, published once per step that ingested frames and
     /// shared by Arc: cloning the snapshot copies a pointer, not 50k
     /// frames. Read-only for the frontend.
-    pub trace: std::sync::Arc<Vec<CanFrame>>,
+    pub trace: std::sync::Arc<crate::trace::TraceView>,
     /// Which timeline the bus runs on this frame.
     pub mode: Mode,
     /// The bus kind selected for the next start (Simulation / Replay).
@@ -393,10 +393,11 @@ pub struct BusCore {
     /// Next palette index handed to a new subscription.
     pub(crate) color_counter: usize,
     /// Frames received this run, capped at [`TRACE_LIMIT`] as a ring.
-    pub(crate) trace: VecDeque<CanFrame>,
+    pub(crate) trace: crate::trace::TraceRing,
     /// The ring as of the last publish, shared with snapshots. Rebuilt
-    /// only on steps that ingested frames -- an idle bus copies nothing.
-    pub(crate) published_trace: Arc<Vec<CanFrame>>,
+    /// only on steps that ingested frames -- an idle bus copies nothing,
+    /// and even then only refcounts plus one sealed tail.
+    pub(crate) published_trace: Arc<crate::trace::TraceView>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -454,8 +455,8 @@ impl BusCore {
             sim_t_us: 0,
             sim_prev_us: 0,
             color_counter: 0,
-            trace: VecDeque::with_capacity(TRACE_LIMIT.min(8_192)),
-            published_trace: Arc::new(Vec::new()),
+            trace: crate::trace::TraceRing::default(),
+            published_trace: Arc::new(crate::trace::TraceView::default()),
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -636,10 +637,10 @@ impl BusCore {
     }
 
     /// Republishes the shared ring view. Called on steps that ingested
-    /// frames (and on resets); the copy is the price of frontend reads
-    /// that never alias the live deque.
+    /// frames (and on resets); the copy is one sealed tail plus chunk
+    /// refcounts -- the ring itself is shared, never deep-copied.
     fn publish_trace(&mut self) {
-        self.published_trace = Arc::new(self.trace.iter().copied().collect());
+        self.published_trace = self.trace.publish();
     }
 
     /// The frame read plus the text the just-drained commands produced.
@@ -1076,12 +1077,15 @@ impl BusCore {
                 t.channel -= 1;
             }
         }
-        self.trace.retain(|f| f.channel as usize != ch);
-        for f in self.trace.iter_mut() {
+        self.trace.rewrite(|f| {
+            if f.channel as usize == ch {
+                return false;
+            }
             if f.channel as usize > ch {
                 f.channel -= 1;
             }
-        }
+            true
+        });
         self.publish_trace();
         *status = format!("{name} removed");
     }
@@ -1658,9 +1662,6 @@ impl BusCore {
     /// period the frontend currently wants for signal history; everything
     /// else this touches is the bus's own state.
     pub(crate) fn ingest(&mut self, f: CanFrame, stride: u64) {
-        if self.trace.len() >= TRACE_LIMIT {
-            self.trace.pop_front();
-        }
         self.frame_counter += 1;
         // Error frames included: they occupy the bus and the load view
         // counts them; per-message aggregation below skips them.
@@ -1675,7 +1676,8 @@ impl BusCore {
         if f.is_error() {
             // Error frames carry no identifier and no payload; they are
             // intentionally kept out of per-message aggregation.
-            self.trace.push_back(f);
+            self.trace.push(f);
+            self.trace.enforce_limit(TRACE_LIMIT);
             return;
         }
         let agg = self.aggs.entry((f.channel, f.id)).or_insert(MessageAgg {
@@ -1732,7 +1734,8 @@ impl BusCore {
                 entry.push_sample(f.t_us, d.phys, stride);
             }
         }
-        self.trace.push_back(f);
+        self.trace.push(f);
+        self.trace.enforce_limit(TRACE_LIMIT);
     }
 
     /// The frames a frame carries for signals this run subscribes to, looked

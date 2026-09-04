@@ -3928,3 +3928,60 @@ fn re_activating_a_generator_starts_from_now_not_from_history() {
     );
     app.stop();
 }
+
+#[test]
+fn the_trace_ring_wraps_and_keeps_the_newest_limit_frames() {
+    let mut app = App::headless();
+    app.start_virtual();
+    let extra = 100u64;
+    let total: u64 = (crate::app::TRACE_LIMIT + extra as usize) as u64;
+    let frames: Vec<CanFrame> = (0..total)
+        .map(|i| frame_at(i * 1_000, 0x100, 2, Direction::Rx))
+        .collect();
+    receive(&mut app, total * 1_000, frames);
+    assert_eq!(
+        app.trace.len(),
+        crate::app::TRACE_LIMIT,
+        "the ring is capped"
+    );
+    assert_eq!(
+        app.trace.iter().next().unwrap().t_us,
+        extra * 1_000,
+        "the frames beyond the cap are dropped from the front"
+    );
+    assert_eq!(app.trace.back().unwrap().t_us, (total - 1) * 1_000);
+    // Chunked storage must not break reverse iteration of the view.
+    let newest_two: Vec<u64> = app
+        .snap
+        .trace
+        .iter()
+        .rev()
+        .take(2)
+        .map(|f| f.t_us)
+        .collect();
+    assert_eq!(
+        newest_two,
+        vec![(total - 1) * 1_000, (total - 2) * 1_000],
+        "the view's newest frames sit at the back, sealed chunks notwithstanding"
+    );
+}
+
+#[test]
+fn a_published_trace_view_stays_frozen_while_the_ring_moves_on() {
+    let mut app = App::headless();
+    app.start_virtual();
+    receive(&mut app, 1_000, vec![frame_at(0, 0x100, 2, Direction::Rx)]);
+    let view = app.snap.trace.clone();
+    assert_eq!(view.len(), 1);
+
+    // The run goes on: the ring grows, the published view does not --
+    // the UI keeps reading a stable instant while the bus advances.
+    receive(
+        &mut app,
+        2_000,
+        vec![frame_at(1_000, 0x100, 2, Direction::Rx)],
+    );
+    assert_eq!(view.len(), 1, "the published view is frozen at its instant");
+    assert_eq!(app.trace.len(), 2);
+    assert_eq!(app.snap.trace.len(), 2, "the next snapshot sees the growth");
+}
