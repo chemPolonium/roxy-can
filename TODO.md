@@ -98,6 +98,8 @@
 ### 阶段 4：历史数据共享与性能
 
 要做：SampleCache 跨线程共享（Arc 换手，不深拷贝）、trace 尾部流式供给 UI（有界交接）；跑性能对比（多曲线 + Trace 1000 行 + 多窗口）。
+
+**第一刀已落地（2026-09-04）**：`Subscription` 增加 `published: Arc<SampleCache>` + 脏标记，`refresh_sub_histories()` 在 step 吞帧后、backfill 合并后、reset 后各调一次——脏了才重建 Arc，否则纯指针克隆；`SubView.history` 变为 `Arc<SampleCache>`，曲线/导出经自动解引用零改动。空闲与暂停帧的发布不再拷贝任何采样点；播放中仍按"有变化即拷贝"逐帧拷贝活跃缓存——量级削减留给"分块流式缓存"（历史改为 Arc 分块追加，发布只换外层指针）这一后续刀。
 验收：CPU 占用不高于单线程版；慢机器上 UI 也拖不慢总线。
 
 ### 阶段 5：硬件源落地（适配器选型后启动）
