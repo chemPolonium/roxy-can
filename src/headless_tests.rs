@@ -275,3 +275,143 @@ fn the_threaded_core_serves_frames_on_its_own_thread() {
     // here is the contract the loop implements.
     drop(app);
 }
+
+/// The crash the first threaded launch actually produced: startup
+/// restores the last project, and the restore path must cross the thread
+/// boundary too. A distinctive workspace is saved from the manual drive,
+/// then restored into a threaded one.
+#[test]
+fn the_threaded_core_restores_a_saved_project_at_startup() {
+    let mut saved = App::headless();
+    saved.channels[0].name = "Powertrain".to_string();
+    saved.refresh_snapshot();
+    saved.add_signal_trigger();
+    let path = std::env::temp_dir().join("roxy_can_threaded_restore.rxproj");
+    assert!(
+        saved.save_project(Some(path.clone())),
+        "save writes the file"
+    );
+
+    let mut app = App::new();
+    app.open_project_path(&path);
+    app.settle();
+    assert_eq!(
+        app.channel_name(0),
+        "Powertrain",
+        "bus declarations ride the restore"
+    );
+    assert_eq!(
+        app.snap.triggers.len(),
+        1,
+        "the trigger rule list is on the bus side, so it must arrive via SetTriggers"
+    );
+    drop(app);
+    std::fs::remove_file(&path).ok();
+}
+
+/// Replay on the threaded drive, including the pause edge: the thread's
+/// pause stamping must freeze the log (playhead and frame flow) and
+/// resume it without losing the position.
+#[test]
+fn the_threaded_core_replays_a_log_and_survives_a_pause() {
+    // Replay material: a short recorded log from the manual drive.
+    let mut src = App::headless();
+    src.record_path_buf = std::env::temp_dir()
+        .join("roxy_can_threaded_replay_src")
+        .to_string_lossy()
+        .to_string();
+    src.toggle_record();
+    src.start_virtual();
+    src.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    // Six seconds of log: enough that pausing after ~1 s still leaves
+    // plenty of tail for the resume phase to keep playing.
+    let mut now = 0;
+    for _ in 0..3000 {
+        now += 2_000;
+        step(&mut src, now);
+    }
+    src.stop();
+    let log = src.recorder.last_record.clone();
+    assert!(!log.is_empty(), "the source log was recorded");
+
+    let mut app = App::new();
+    app.load_log(&log);
+    app.replay();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while std::time::Instant::now() < deadline && app.snap.frame_counter < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.update();
+    }
+    assert!(
+        app.snap.frame_counter >= 10,
+        "the threaded replay never produced frames: {}",
+        app.snap.frame_counter
+    );
+
+    // Pause: the frame flow stops (an in-flight frame or two may land
+    // after the command crosses, hence the tolerance).
+    app.send(crate::bus::BusCommand::SetTracePaused(true));
+    let frozen = app.snap.frame_counter;
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    app.update();
+    let paused_at = app.snap.frame_counter;
+    assert!(
+        paused_at >= frozen && paused_at <= frozen + 2,
+        "pause must stop the replay: {frozen} -> {paused_at}"
+    );
+
+    // Resume: playback continues from where it stood.
+    app.send(crate::bus::BusCommand::SetTracePaused(false));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && app.snap.frame_counter < paused_at + 10 {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.update();
+    }
+    assert!(
+        app.snap.frame_counter >= paused_at + 10,
+        "resume never continued the replay: {} (paused at {paused_at})",
+        app.snap.frame_counter
+    );
+    drop(app);
+    std::fs::remove_file(&log).ok();
+}
+
+/// Recording on the threaded drive: the draft stem must cross via
+/// `SetRecordPath` before `ToggleRecord` lands, and the dated file must
+/// re-open as a readable log.
+#[test]
+fn the_threaded_core_records_to_the_dated_file() {
+    let mut app = App::new();
+    let base = std::env::temp_dir().join("roxy_can_threaded_record");
+    app.record_path_buf = base.to_string_lossy().to_string();
+    app.toggle_record();
+    app.start_virtual();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && app.snap.frame_counter < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.update();
+    }
+    app.stop();
+    app.settle();
+
+    let actual = app.snap.last_record.clone();
+    assert!(
+        actual.contains("roxy_can_threaded_record"),
+        "the draft stem must reach the recorder through SetRecordPath: {actual}"
+    );
+    let mut stream =
+        crate::log::open_stream(std::path::Path::new(&actual)).expect("the recorded file reopens");
+    let frames = std::iter::from_fn(|| stream.next_frame()).count();
+    assert!(frames >= 10, "expected frames on disk, got {frames}");
+    drop(app);
+    std::fs::remove_file(&actual).ok();
+}
