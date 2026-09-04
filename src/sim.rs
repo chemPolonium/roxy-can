@@ -18,10 +18,26 @@ pub enum SrcKind {
     Step,
     /// Uniform in `[lo, hi]`, redrawn every [`ValueSrc::redraw_us`].
     Random,
+    /// Up to `hi` at half period and back down to `lo`. Descending when
+    /// `hi < lo`.
+    Triangle,
+    /// Rolling counter: whole steps from `lo` through `hi` (inclusive), one
+    /// step per equal fraction of the period, wrapping at the end. Steps down
+    /// when `hi < lo`. The alive counter every real ECU carries.
+    Counter,
 }
 
-/// Combo-box order, so the UI and the persisted `u8` agree.
-pub const KINDS: [SrcKind; 4] = [SrcKind::Ramp, SrcKind::Sine, SrcKind::Step, SrcKind::Random];
+/// Combo-box order, so the UI and the persisted `u8` agree. New shapes
+/// append: the code is the index, and a project saved by a newer build must
+/// keep loading on an older one (unknown codes drop their source).
+pub const KINDS: [SrcKind; 6] = [
+    SrcKind::Ramp,
+    SrcKind::Sine,
+    SrcKind::Step,
+    SrcKind::Random,
+    SrcKind::Triangle,
+    SrcKind::Counter,
+];
 
 impl SrcKind {
     pub fn label(self) -> &'static str {
@@ -30,6 +46,8 @@ impl SrcKind {
             SrcKind::Sine => "Sine",
             SrcKind::Step => "Step",
             SrcKind::Random => "Random",
+            SrcKind::Triangle => "Triangle",
+            SrcKind::Counter => "Counter",
         }
     }
 
@@ -126,6 +144,25 @@ pub fn eval_phys(src: &ValueSrc, t_us: u64) -> f64 {
             let hold = src.redraw_us.max(1);
             let mut state = src.seed ^ (t_us / hold);
             src.lo + span * (splitmix64(&mut state) as f64 / u64::MAX as f64)
+        }
+        SrcKind::Triangle => {
+            let f = frac(src, t_us);
+            // 1 - |2f - 1| rises 0..1 over the first half and falls over the
+            // second; a negative span mirrors the whole shape below `lo`.
+            let tri = 1.0 - (2.0 * f - 1.0).abs();
+            src.lo + span * tri
+        }
+        SrcKind::Counter => {
+            // floor(span) + 1 distinct whole values, one per equal fraction of
+            // the period. A fractional span just stops at the last whole step;
+            // a negative span counts down from `lo` toward `hi`.
+            let n = (span.abs().floor() + 1.0).max(1.0);
+            let step = (frac(src, t_us) * n).floor().min(n - 1.0);
+            if span >= 0.0 {
+                src.lo + step
+            } else {
+                src.lo - step
+            }
         }
     }
 }
@@ -271,6 +308,53 @@ mod tests {
             assert_eq!(usize::from(k.to_u8()), i, "the code is the combo index");
         }
         assert_eq!(SrcKind::from_u8(KINDS.len() as u8), None, "unknown code");
+    }
+
+    #[test]
+    fn triangle_peaks_at_half_and_returns() {
+        let s = src(SrcKind::Triangle, 0.0, 100.0, 1_000_000);
+        assert_eq!(eval_phys(&s, 0), 0.0);
+        assert_eq!(eval_phys(&s, 250_000), 50.0, "halfway up at quarter");
+        assert_eq!(eval_phys(&s, 500_000), 100.0, "peak at half");
+        assert_eq!(eval_phys(&s, 750_000), 50.0, "halfway down");
+        assert_eq!(eval_phys(&s, 1_000_000), 0.0, "wraps at the period");
+    }
+
+    #[test]
+    fn triangle_descends_when_hi_is_below_lo() {
+        let s = src(SrcKind::Triangle, 100.0, 0.0, 1_000_000);
+        assert_eq!(eval_phys(&s, 0), 100.0);
+        assert_eq!(eval_phys(&s, 500_000), 0.0, "dips to hi at half");
+        assert_eq!(eval_phys(&s, 1_000_000), 100.0);
+    }
+
+    #[test]
+    fn counter_walks_lo_to_hi_and_wraps() {
+        let s = src(SrcKind::Counter, 0.0, 15.0, 1_600_000);
+        assert_eq!(eval_phys(&s, 0), 0.0);
+        assert_eq!(eval_phys(&s, 99_999), 0.0);
+        assert_eq!(eval_phys(&s, 100_000), 1.0, "one step per 1/16 period");
+        assert_eq!(eval_phys(&s, 1_500_000), 15.0);
+        assert_eq!(eval_phys(&s, 1_599_999), 15.0);
+        assert_eq!(eval_phys(&s, 1_600_000), 0.0, "wraps to lo");
+    }
+
+    #[test]
+    fn counter_descends_when_hi_is_below_lo() {
+        let s = src(SrcKind::Counter, 15.0, 0.0, 1_600_000);
+        assert_eq!(eval_phys(&s, 0), 15.0);
+        assert_eq!(eval_phys(&s, 100_000), 14.0);
+        assert_eq!(eval_phys(&s, 1_500_000), 0.0);
+    }
+
+    #[test]
+    fn counter_stays_whole_inside_a_fractional_span() {
+        let s = src(SrcKind::Counter, 0.0, 2.5, 300_000);
+        for t in (0..300_000).step_by(1_000) {
+            let v = eval_phys(&s, t);
+            assert!((0.0..=2.5).contains(&v), "out of range at t={t}: {v}");
+            assert_eq!(v, v.trunc(), "counters step in whole values");
+        }
     }
 
     #[test]
