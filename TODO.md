@@ -114,6 +114,8 @@
 
 **待查（偶发）→ 已破案（2026-09-04）**：全量测试偶发"单个测试挂、重跑即绿"，八连跑抓到现场——`a_signal_crossing_fires_on_the_crossing_not_the_level` 在读录制文件时报 NotFound。根因是并行碰撞的老家族漏网：四个触发动作类测试把路径写进前端草稿 `record_path_buf`，但录制是由**触发动作**在核心侧开的，核心的 `record_path` 从未收到 `SetRecordPath`，为空 → 派生出 CWD 的 `record_<日期>.asc`，与并行测试同一秒同文件名互相删文件。修法：四个测试改发 `SetRecordPath` 命令（路径进 temp 且各用独立名）。仓库根出现的无名 `record_*.asc` 都是这个产生的测试残留。
 
+**仿真波形补全（2026-09-04）**：`SrcKind` 新增 **Triangle**（半周期升到 hi、半周期降回 lo，hi<lo 时整体向下镜像）与 **Counter**（滚动计数器：lo..=hi 逐周期整数步进、周期末回卷，hi<lo 时倒着数，小数跨度只在整数点停留）——真实 ECU 的 alive counter 从此不用手打 Step 序列。纯函数求值不变式保持（`eval_phys(src, t)`），枚举码追加在 `KINDS` 末尾，旧工程不受影响、新码被旧版本读取时按既有约定丢源。UI 的 Shape 下拉与工程持久化自动长出新形状，零改动。356 测试过（+5：三角关键点/镜像、计数正反/回卷/取整）。
+
 **Triggers 编辑器重做（2026-09-04，用户反馈）**：行内编辑器撤掉——触发器一多就要滚到最底下改，且每改一个控件就实时下发命令。改成 Send-cycle 式弹出编辑器：点行打开，Bus/Message/Signal/Threshold/Direction/Action/Entry 两列对齐排布，`%g` 自动数字格式（不再固定三位小数），Apply 一次性 `EditTrigger`、Cancel/Esc 丢弃；窗口最小宽度 460（弹窗 380）。`falling→rising` 改不动的问题随行内实时回写一起消失（草稿在本地，不再被快照回灌），补了模型层双向翻转测试。新状态 `trig_draft: Option<TrigDraft>`（index+cond+action+id_buf 一体），顶掉 `trigger_sel`/`trig_id_buf`/`trig_edit_sel` 三个散字段；删行时编辑器随行关闭或跟行上移。350 测试过。
 
 ### 阶段 5：硬件源落地（适配器选型后启动）
