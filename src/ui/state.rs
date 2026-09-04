@@ -139,9 +139,10 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                 rule.add_cut(next);
             }
             ui.separator();
-            // Band rows: range, color swatch, name. The swatch opens the
-            // Word-style picker (auto + defaults + full palette) rendered
-            // below the window.
+            // Band rows: range, color swatch, name. The swatch shows the
+            // band's real color (an automatic band displays the palette
+            // slot it resolves to, not a placeholder) and opens the
+            // Word-style picker.
             for bi in 0..rule.names.len() {
                 let lo = bi.checked_sub(1).and_then(|p| rule.cuts.get(p).copied());
                 let hi = rule.cuts.get(bi).copied();
@@ -153,7 +154,16 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                 };
                 ui.text(&range);
                 ui.same_line_with_pos(110.0);
-                let swatch = rule.colors[bi].unwrap_or([0.35, 0.35, 0.40]);
+                let swatch = match rule.colors[bi] {
+                    Some(c) => c,
+                    None => {
+                        // Same slot lookup the band view runs, so the
+                        // editor shows exactly what gets drawn.
+                        let slots = w.color_slots.entry(key.clone()).or_default();
+                        let p = PALETTE[slot_for(slots, band_slot_key(bi))];
+                        [p[0], p[1], p[2]]
+                    }
+                };
                 if ui.color_button(
                     format!("##srcol{bi}"),
                     [swatch[0], swatch[1], swatch[2], 1.0],
@@ -175,11 +185,14 @@ fn rule_editor(app: &mut App, ui: &Ui) {
             if ui.small_button("Clear##srclear") {
                 w.rules.remove(&key);
             }
+            // Must render inside this window's ID scope: OpenPopup hashed
+            // "##srpick" against it, and a popup begun outside would look
+            // for a different ID and never show.
+            color_picker_popup(app, ui);
         });
     if !open {
         app.state_rule_edit = None;
     }
-    color_picker_popup(app, ui);
 }
 
 /// The Word-style color picker for one custom band: 自动 plus a short row
