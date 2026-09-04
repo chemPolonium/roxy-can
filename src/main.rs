@@ -5,6 +5,7 @@ mod app;
 mod bus;
 mod can;
 mod channel;
+mod cli;
 mod config;
 mod core_loop;
 mod dbc;
@@ -418,6 +419,32 @@ impl ApplicationHandler for Program {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match cli::parse_args(&args) {
+        Ok(cli::Cli::Gui) => {}
+        Ok(cli::Cli::Help(text)) => {
+            cli::attach_parent_console();
+            println!("{text}");
+            return;
+        }
+        Ok(cli::Cli::Run(opts)) => {
+            cli::attach_parent_console();
+            match cli::run(&opts) {
+                Ok(report) => println!("{report}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            // Printed the report; do not fall through into the window.
+            return;
+        }
+        Err(msg) => {
+            cli::attach_parent_console();
+            eprintln!("{msg}\n\n{}", cli::usage());
+            std::process::exit(2);
+        }
+    }
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut Program::default()).unwrap();
