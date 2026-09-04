@@ -173,24 +173,43 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // band, not just the instant of its sample.
         let held = sub.history.at(lo_us).map(quantize);
         let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
-        for seg in state_segments(held, &pts, lo_us, hi_us) {
+        let segs = state_segments(held, &pts, lo_us, hi_us);
+        // State colors: with few distinct values visible, every state gets
+        // its own palette color, so gear 5 and gear 1 read apart at a
+        // glance. A busy analog with more states than the palette keeps
+        // the signal's own color for the whole band.
+        let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
+        states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        states.dedup();
+        for seg in segs {
             let sx0 = x_of(bx0, bx1, t_left, span_s, seg.t0_us as f64 / 1e6).max(bx0);
             let sx1 = x_of(bx0, bx1, t_left, span_s, seg.t1_us as f64 / 1e6).min(bx1);
             if sx1 - sx0 < 1.0 {
                 continue;
             }
+            let fill = seg_fill(seg.value, &states, color);
             dl.add_rect(
                 [sx0, ry + 2.0],
                 [sx1, ry + ROW_H - 2.0],
-                [color[0], color[1], color[2], 0.92],
+                [fill[0], fill[1], fill[2], 0.92],
             )
             .filled(true)
+            .build();
+            // A dark outline is what actually separates two neighbouring
+            // states of the same hue; without it the band reads as one
+            // strip no matter the labels.
+            dl.add_rect(
+                [sx0, ry + 2.0],
+                [sx1, ry + ROW_H - 2.0],
+                [0.06, 0.06, 0.08, 1.0],
+            )
+            .thickness(1.0)
             .build();
             let tsz = ui.calc_text_size(&seg.label);
             if tsz[0] + 8.0 <= sx1 - sx0 {
                 dl.add_text(
                     [(sx0 + sx1 - tsz[0]) * 0.5, ry + (ROW_H - tsz[1]) * 0.5],
-                    [0.06, 0.06, 0.08, 1.0],
+                    text_on(fill),
                     &seg.label,
                 );
             }
@@ -221,6 +240,8 @@ fn nice_step(span_s: f64) -> f64 {
 pub(crate) struct StateSeg {
     pub t0_us: u64,
     pub t1_us: u64,
+    /// The quantized value itself, for state-color assignment.
+    pub value: f64,
     pub label: String,
 }
 
@@ -279,6 +300,7 @@ pub(crate) fn state_segments(
                 out.push(StateSeg {
                     t0_us: *t0,
                     t1_us: t,
+                    value: *qv,
                     label: std::mem::take(label),
                 });
                 *qv = q;
@@ -288,14 +310,43 @@ pub(crate) fn state_segments(
             None => cur = Some((q, fmt_val(q), t.max(lo_us))),
         }
     }
-    if let Some((_q, label, t0)) = cur {
+    if let Some((q, label, t0)) = cur {
         out.push(StateSeg {
             t0_us: t0,
             t1_us: hi_us.max(t0),
+            value: q,
             label,
         });
     }
     out
+}
+
+/// The fill color of one band segment. With few distinct states visible
+/// (`states`, ascending, deduped) each state gets its own palette color --
+/// CANoe-style state colors, assigned by sorted order so the mapping is
+/// stable while the visible state set is. More states than palette slots
+/// means a busy analog signal: every band keeps the signal's own color,
+/// and the outline alone separates neighbours.
+pub(crate) fn seg_fill(value: f64, states: &[f64], signal_color: [f32; 4]) -> [f32; 4] {
+    if states.len() > PALETTE.len() {
+        return signal_color;
+    }
+    let idx = states
+        .iter()
+        .position(|s| *s == value)
+        .unwrap_or(0)
+        .min(PALETTE.len() - 1);
+    PALETTE[idx]
+}
+
+/// Dark or light label text, by the fill's relative luminance.
+pub(crate) fn text_on(fill: [f32; 4]) -> [f32; 4] {
+    let lum = 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2];
+    if lum > 0.55 {
+        [0.06, 0.06, 0.08, 1.0]
+    } else {
+        [0.92, 0.93, 0.95, 1.0]
+    }
 }
 
 #[cfg(test)]
@@ -360,5 +411,26 @@ mod tests {
         assert_eq!(fmt_val(2.5), "2.5");
         assert_eq!(fmt_val(-3400.0), "-3400");
         assert_eq!(fmt_val(0.0), "0");
+    }
+
+    #[test]
+    fn few_states_get_distinct_colors_busy_ones_fall_back() {
+        let states = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let c0 = seg_fill(0.0, &states, [0.5, 0.5, 0.5, 1.0]);
+        let c5 = seg_fill(5.0, &states, [0.5, 0.5, 0.5, 1.0]);
+        assert_ne!(c0, c5, "gear 0 and gear 5 must not share a color");
+
+        // More distinct states than palette slots: everything wears the
+        // signal's own color; the outline does the separating.
+        let busy: Vec<f64> = (0..12).map(f64::from).collect();
+        let fallback = [0.2, 0.8, 0.4, 1.0];
+        assert_eq!(seg_fill(3.0, &busy, fallback), fallback);
+        assert_eq!(seg_fill(9.0, &busy, fallback), fallback);
+    }
+
+    #[test]
+    fn label_text_contrasts_with_the_fill() {
+        assert_eq!(text_on([0.95, 0.95, 0.2, 1.0])[0], 0.06, "dark on bright");
+        assert_eq!(text_on([0.1, 0.2, 0.8, 1.0])[0], 0.92, "light on dark");
     }
 }
