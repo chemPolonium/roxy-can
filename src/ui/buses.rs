@@ -115,19 +115,15 @@ fn content(app: &mut App, ui: &Ui) {
                 app.bus_name_edit = None;
             }
             ui.table_next_column();
-            // Aligning the label to the frame baseline leaves the cursor a
-            // few pixels low; without re-anchoring, the Open button after
-            // `same_line` draws visibly below the row's input widgets.
-            let cell_top = ui.cursor_pos()[1];
-            ui.align_text_to_frame_padding();
+            // No baseline alignment: the small button is text-height, so
+            // label and button sit level on their own, and aligning would
+            // push the `same_line` button a step below the row.
             ui.text(if path.trim().is_empty() {
                 "(none)".to_string()
             } else {
                 file_name(&path)
             });
             ui.same_line();
-            let p = ui.cursor_pos();
-            ui.set_cursor_pos([p[0], cell_top]);
             if ui.small_button(format!("Open...##busdbc{i}")) {
                 app.pick_dbc_for(i);
             }

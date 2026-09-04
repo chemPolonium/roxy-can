@@ -110,13 +110,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
 
                 // Per-bus bulk switches: one click enables or disables
-                // every message of that bus. All groups share one row, and
-                // each group after the first re-anchors to the row's frame
-                // top: aligning the bus name's text baseline leaves the
-                // cursor a few pixels low, and a plain `same_line` inherits
-                // that low position, stacking every later group's buttons
-                // visibly beneath the first group's.
-                let mut row_top: Option<f32> = None;
+                // every message of that bus. Small buttons are exactly
+                // text-height, so the bus name needs no baseline alignment
+                // here -- aligning would leave the cursor low, and each
+                // later group's `same_line` would inherit that low line,
+                // stacking its buttons a step beneath the first group's.
                 let mut first_bus = true;
                 for ch in 0..app.snap.channel_count {
                     let ch8 = ch as u8;
@@ -125,12 +123,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     if !first_bus {
                         ui.same_line();
-                        if let Some(top) = row_top {
-                            let p = ui.cursor_pos();
-                            ui.set_cursor_pos([p[0], top]);
-                        }
-                    } else {
-                        row_top = Some(ui.cursor_pos()[1]);
                     }
                     first_bus = false;
                     if ui.small_button(format!("All On##gon{ch}")) {
@@ -141,7 +133,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.set_bus_tx(ch8, false);
                     }
                     ui.same_line();
-                    ui.align_text_to_frame_padding();
                     ui.text(app.channel_name(ch8));
                 }
 
