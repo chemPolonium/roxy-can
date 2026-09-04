@@ -50,6 +50,14 @@ fn band_slot_key(band: usize) -> f64 {
     f64::from_bits(u64::MAX - 1_000_000 + band as u64)
 }
 
+/// The automatic color of custom band `band`: the next free slot in the
+/// muted default palette -- the same list the picker offers -- stable per
+/// band for the whole session.
+fn band_auto_color(slots: &mut HashMap<u64, usize>, band: usize) -> [f32; 3] {
+    let p = BAND_PALETTE[slot_for(slots, band_slot_key(band), BAND_PALETTE.len())];
+    [p[0], p[1], p[2]]
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.state_trackers.len();
     let disp_h = ui.io().display_size[1];
@@ -160,8 +168,7 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                         // Same slot lookup the band view runs, so the
                         // editor shows exactly what gets drawn.
                         let slots = w.color_slots.entry(key.clone()).or_default();
-                        let p = PALETTE[slot_for(slots, band_slot_key(bi))];
-                        [p[0], p[1], p[2]]
+                        band_auto_color(slots, bi)
                     }
                 };
                 if ui.color_button(
@@ -433,10 +440,13 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
                 let b = rule.band(seg.value);
                 match rule.colors[b] {
                     Some(c) => [c[0], c[1], c[2], 0.92],
-                    None => PALETTE[slot_for(slots, band_slot_key(b))],
+                    None => {
+                        let p = band_auto_color(slots, b);
+                        [p[0], p[1], p[2], 0.92]
+                    }
                 }
             } else if per_state {
-                PALETTE[slot_for(slots, seg.value)]
+                PALETTE[slot_for(slots, seg.value, PALETTE.len())]
             } else {
                 NEUTRAL_FILL
             };
@@ -662,12 +672,14 @@ pub(crate) fn state_segments(
 }
 
 /// The palette slot of one state value, stable for the whole session: the
-/// first time a value is seen it takes the lowest free slot, and it keeps
+/// first time a key is seen it takes the lowest free slot, and it keeps
 /// that slot even after leaving the view, so colors never reshuffle as
-/// the run goes on. Once every slot is spoken for, a brand-new value
+/// the run goes on. Once every slot is spoken for, a brand-new key
 /// hashes into the palette and accepts a possible collision -- the
-/// alternative, reassigning slots, is what made colors drift.
-pub(crate) fn slot_for(slots: &mut HashMap<u64, usize>, v: f64) -> usize {
+/// alternative, reassigning slots, is what made colors drift. `palette`
+/// is the color set slots index into: the main palette for values, the
+/// muted defaults for custom bands.
+pub(crate) fn slot_for(slots: &mut HashMap<u64, usize>, v: f64, palette_len: usize) -> usize {
     // -0.0 and 0.0 print the same label; they share a slot.
     let bits = if v == 0.0 {
         0.0f64.to_bits()
@@ -680,14 +692,14 @@ pub(crate) fn slot_for(slots: &mut HashMap<u64, usize>, v: f64) -> usize {
     let mut used: Vec<usize> = slots.values().copied().collect();
     used.sort_unstable();
     used.dedup();
-    let slot = (0..PALETTE.len())
+    let slot = (0..palette_len)
         .find(|s| !used.contains(s))
         .unwrap_or_else(|| {
             let mut h = bits;
             h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
             h = (h ^ (h >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             h ^= h >> 31;
-            (h % PALETTE.len() as u64) as usize
+            (h % palette_len as u64) as usize
         });
     slots.insert(bits, slot);
     slot
@@ -778,14 +790,18 @@ mod tests {
     #[test]
     fn a_value_keeps_its_color_slot_as_others_come_and_go() {
         let mut slots = HashMap::new();
-        let gear5 = slot_for(&mut slots, 5.0);
+        let gear5 = slot_for(&mut slots, 5.0, PALETTE.len());
         for v in [1.0, 3.0, 6.0, 0.0, 2.0, 4.0] {
-            slot_for(&mut slots, v);
+            slot_for(&mut slots, v, PALETTE.len());
         }
-        assert_eq!(slot_for(&mut slots, 5.0), gear5, "the first slot sticks");
         assert_eq!(
-            slot_for(&mut slots, 3.0),
-            slot_for(&mut slots, 3.0),
+            slot_for(&mut slots, 5.0, PALETTE.len()),
+            gear5,
+            "the first slot sticks"
+        );
+        assert_eq!(
+            slot_for(&mut slots, 3.0, PALETTE.len()),
+            slot_for(&mut slots, 3.0, PALETTE.len()),
             "repeated lookups are free and stable"
         );
         let distinct: std::collections::HashSet<usize> = slots.values().copied().collect();
@@ -795,8 +811,8 @@ mod tests {
     #[test]
     fn zero_and_negative_zero_share_a_slot() {
         let mut slots = HashMap::new();
-        let a = slot_for(&mut slots, 0.0);
-        let b = slot_for(&mut slots, -0.0);
+        let a = slot_for(&mut slots, 0.0, PALETTE.len());
+        let b = slot_for(&mut slots, -0.0, PALETTE.len());
         assert_eq!(a, b);
     }
 
@@ -804,9 +820,22 @@ mod tests {
     fn an_overflowing_value_still_lands_in_the_palette() {
         let mut slots = HashMap::new();
         for v in 0..12 {
-            slot_for(&mut slots, f64::from(v));
+            slot_for(&mut slots, f64::from(v), PALETTE.len());
         }
-        assert!(slot_for(&mut slots, 99.0) < PALETTE.len());
+        assert!(slot_for(&mut slots, 99.0, PALETTE.len()) < PALETTE.len());
+    }
+
+    #[test]
+    fn band_automatic_colors_come_from_the_muted_defaults() {
+        let mut slots = HashMap::new();
+        let b0 = band_auto_color(&mut slots, 0);
+        let b1 = band_auto_color(&mut slots, 1);
+        assert_ne!(b0, b1, "neighbouring bands get different defaults");
+        assert!(
+            BAND_PALETTE.contains(&b0) && BAND_PALETTE.contains(&b1),
+            "automatic band colors are defaults, not the main palette"
+        );
+        assert_eq!(band_auto_color(&mut slots, 0), b0, "the slot sticks");
     }
 
     #[test]
