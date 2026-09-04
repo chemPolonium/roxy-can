@@ -481,18 +481,6 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
             .flags(InputTextFlags::CHARS_DECIMAL | InputTextFlags::AUTO_SELECT_ALL)
             .enter_returns_true(true)
             .build();
-        // Still draggable for a coarse sweep, but it writes the same draft.
-        ui.same_line();
-        ui.set_next_item_width(220.0);
-        let mut sweep = cycle_from_ms_text(&app.tx_cycle_buf).unwrap_or(0) as f32 / 1000.0;
-        if imgui::Drag::new("##cycsweep")
-            .display_format("%g")
-            .speed(1.0)
-            .range(0.0f32, TX_CYCLE_MAX_MS as f32)
-            .build(ui, &mut sweep)
-        {
-            app.tx_cycle_buf = (sweep.round().max(0.0) as u64).to_string();
-        }
         let draft = cycle_from_ms_text(&app.tx_cycle_buf);
         match draft {
             Some(0) => {
