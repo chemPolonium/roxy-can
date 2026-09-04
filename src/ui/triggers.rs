@@ -1,16 +1,54 @@
 use crate::app::App;
-use crate::trigger::TriggerCond;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use crate::trigger::{TriggerAction, TriggerCond};
+use crate::ui::help::popup_is_open;
+use imgui::{Condition, Key, StyleVar, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
-/// Trigger management: the armed condition list plus the editor for the
-/// selected trigger. The evaluation itself lives in `trigger.rs`; this
-/// window only shapes `App.triggers`.
+/// Draft state of the trigger editor popup: which row it edits plus the
+/// not-yet-applied shape of the condition and action. Nothing reaches the
+/// bus until Apply, so a half-edited rule never runs, and the row being
+/// edited no longer has to stay selected underneath the growing list.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TrigDraft {
+    pub index: usize,
+    pub cond: TriggerCond,
+    pub action: TriggerAction,
+    pub id_buf: String,
+}
+
+impl TrigDraft {
+    pub(crate) fn new(index: usize, cond: TriggerCond, action: TriggerAction) -> Self {
+        let id_buf = match &cond {
+            TriggerCond::SignalCross { id, .. }
+            | TriggerCond::IdPresent { id, .. }
+            | TriggerCond::CycleTimeout { id, .. } => format!("{id:X}"),
+            TriggerCond::ErrorFrame { .. } => String::new(),
+        };
+        TrigDraft {
+            index,
+            cond,
+            action,
+            id_buf,
+        }
+    }
+
+    fn for_index(app: &App, i: usize) -> Option<Self> {
+        let t = app.snap.triggers.get(i)?;
+        Some(Self::new(i, t.cond.clone(), t.action))
+    }
+}
+
+/// Trigger management: the armed condition list plus a popup editor. The
+/// evaluation itself lives in `trigger.rs`; this window only shapes
+/// `App.triggers`.
 pub fn render(app: &mut App, ui: &Ui) {
     if !app.show_triggers {
         return;
     }
     let io = ui.io();
     let mut open = app.show_triggers;
+    // The table cannot compress below its own columns; a floor keeps the
+    // drag handle from folding everything into unreadability.
+    let min = ui.push_style_var(StyleVar::WindowMinSize([460.0, 200.0]));
     ui.window("Triggers")
         .opened(&mut open)
         .position(
@@ -19,6 +57,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         )
         .size([560.0, 320.0], Condition::FirstUseEver)
         .build(|| content(app, ui));
+    min.pop();
     app.show_triggers = open;
 }
 
@@ -89,11 +128,13 @@ fn content(app: &mut App, ui: &Ui) {
                 continue;
             }
             let summary = app.trigger_summary(i);
+            // Clicking the row opens the editor popup for it; the list
+            // itself stays a list instead of growing an inline editor.
             if ui
                 .selectable_config(format!("{summary}##trigsel{i}"))
                 .build()
             {
-                app.trigger_sel = Some(i);
+                app.trig_draft = TrigDraft::for_index(app, i);
             }
             ui.table_next_column();
             let mut on = app.snap.triggers[i].enabled;
@@ -102,9 +143,9 @@ fn content(app: &mut App, ui: &Ui) {
             }
             ui.table_next_column();
             let action_text = match app.snap.triggers[i].action {
-                crate::trigger::TriggerAction::StartRecording => "start rec".to_string(),
-                crate::trigger::TriggerAction::StopRecording => "stop rec".to_string(),
-                crate::trigger::TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
+                TriggerAction::StartRecording => "start rec".to_string(),
+                TriggerAction::StopRecording => "stop rec".to_string(),
+                TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
             };
             ui.text(action_text);
             ui.table_next_column();
@@ -119,160 +160,229 @@ fn content(app: &mut App, ui: &Ui) {
         app.remove_trigger(i);
     }
 
-    editor(app, ui);
+    editor_modal(app, ui);
 }
 
-/// The editor for the selected trigger. The condition is cloned out,
-/// edited against local widgets (the DBC picker needs `&self` while the
-/// row is being shaped) and written back once.
-fn editor(app: &mut App, ui: &Ui) {
-    let Some(sel) = app.trigger_sel.filter(|s| *s < app.snap.triggers.len()) else {
+/// The editor popup for one trigger. Drafted like the send-cycle modal:
+/// the widgets shape a local copy, Apply crosses it to the bus in one
+/// command, Cancel or Escape throws it away. Nothing here writes while it
+/// edits, and the list position of the row is irrelevant.
+fn editor_modal(app: &mut App, ui: &Ui) {
+    const ID: &str = "Edit trigger##trigmodal";
+    let Some(mut draft) = app.trig_draft.clone() else {
         return;
     };
-    ui.separator();
-    let mut cond = app.snap.triggers[sel].cond.clone();
-    let mut action = app.snap.triggers[sel].action;
-    let mut changed = false;
-    let cond_bus = cond.bus();
-
-    let bus_names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
-    let bus_refs: Vec<&str> = bus_names.iter().map(|s| s.as_str()).collect();
-    let mut bus = (cond.bus() as usize).min(bus_refs.len() - 1);
-    ui.set_next_item_width(90.0);
-    if ui.combo_simple_string("##trigbus", &mut bus, &bus_refs) {
-        set_bus(&mut cond, bus as u8);
-        changed = true;
+    if !popup_is_open(ui, ID) {
+        ui.open_popup(ID);
     }
-
-    match &mut cond {
-        TriggerCond::SignalCross {
-            id,
-            signal,
-            threshold,
-            rising,
-            ..
-        } => {
-            sync_id_buf(app, sel, *id);
-            if id_field(app, ui, id) {
-                changed = true;
-                // The old signal may not exist on the new message; keep
-                // it (evaluation just reports nothing) until picked.
-                let _ = signal;
-            }
-            ui.same_line();
-            let names = app.signal_names(cond_bus, *id);
-            if names.is_empty() {
-                ui.set_next_item_width(150.0);
-                let mut s = signal.clone();
-                if ui.input_text("##trigsignal", &mut s).build() {
-                    *signal = s;
-                    changed = true;
-                }
-            } else {
-                let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                let mut pick = refs.iter().position(|n| n == &signal.as_str()).unwrap_or(0);
-                ui.set_next_item_width(150.0);
-                if ui.combo_simple_string("##trigsignal", &mut pick, &refs) {
-                    *signal = names[pick].clone();
-                    changed = true;
-                }
-            }
-            ui.same_line();
-            ui.set_next_item_width(110.0);
-            let mut th = *threshold as f32;
-            if ui.input_float("##trigth", &mut th).build() {
-                *threshold = th as f64;
-                changed = true;
-            }
-            ui.same_line();
-            let mut dir = *rising as usize;
-            if ui.combo_simple_string("##trigdir", &mut dir, &["rising", "falling"]) {
-                *rising = dir == 0;
-                changed = true;
-            }
-        }
-        TriggerCond::IdPresent { id, .. } => {
-            sync_id_buf(app, sel, *id);
-            if id_field(app, ui, id) {
-                changed = true;
-            }
-        }
-        TriggerCond::CycleTimeout { id, .. } => {
-            sync_id_buf(app, sel, *id);
-            if id_field(app, ui, id) {
-                changed = true;
-            }
-            ui.same_line();
-            ui.text("silent past the grace window");
-        }
-        TriggerCond::ErrorFrame { .. } => {
-            ui.text("any error frame on the bus");
-        }
-    }
-
-    let mut act = match action {
-        crate::trigger::TriggerAction::StartRecording => 0,
-        crate::trigger::TriggerAction::StopRecording => 1,
-        crate::trigger::TriggerAction::Send { .. } => 2,
-    };
-    ui.set_next_item_width(150.0);
-    if ui.combo_simple_string(
-        "##trigaction",
-        &mut act,
-        &["Start recording", "Stop recording", "Send generator entry"],
-    ) {
-        action = match act {
-            0 => crate::trigger::TriggerAction::StartRecording,
-            1 => crate::trigger::TriggerAction::StopRecording,
-            // Coming back to Send keeps whatever target was last set.
-            _ => match action {
-                crate::trigger::TriggerAction::Send { ch, id } => {
-                    crate::trigger::TriggerAction::Send { ch, id }
-                }
-                _ => crate::trigger::TriggerAction::Send { ch: 0, id: 0x100 },
-            },
+    let mut open = true;
+    let mut dismissed = false;
+    let mut confirmed = false;
+    let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
+    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+        let kind = match draft.cond {
+            TriggerCond::SignalCross { .. } => "signal cross",
+            TriggerCond::IdPresent { .. } => "id present",
+            TriggerCond::CycleTimeout { .. } => "cycle timeout",
+            TriggerCond::ErrorFrame { .. } => "error frames",
         };
-        changed = true;
-    }
-
-    // The entry picker only means something while the action is Send.
-    if matches!(action, crate::trigger::TriggerAction::Send { .. }) && !app.snap.tx.is_empty() {
-        let names: Vec<String> = app
-            .snap
-            .tx
-            .iter()
-            .map(|t| format!("{} 0x{:03X} {}", app.channel_name(t.channel), t.id, t.name))
-            .collect();
-        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-        let mut pick = app
-            .snap
-            .tx
-            .iter()
-            .position(|t| {
-                matches!(action, crate::trigger::TriggerAction::Send { ch, id }
-                    if t.channel == ch && t.id == id)
-            })
-            .unwrap_or(0);
-        ui.set_next_item_width(220.0);
-        if ui.combo_simple_string("##trigsend", &mut pick, &refs) {
-            let t = &app.snap.tx[pick];
-            action = crate::trigger::TriggerAction::Send {
-                ch: t.channel,
-                id: t.id,
-            };
-            changed = true;
+        ui.text(format!(
+            "trigger {} of {} -- {kind}",
+            draft.index + 1,
+            app.snap.triggers.len()
+        ));
+        ui.separator();
+        if ui.is_window_appearing() {
+            ui.set_keyboard_focus_here();
         }
-    }
+        let Some(_grid) = ui.begin_table_with_flags(
+            "##trigedit",
+            2,
+            TableFlags::BORDERS_INNER_V | TableFlags::SIZING_STRETCH_PROP,
+        ) else {
+            return;
+        };
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 84.0,
+            ..TableColumnSetup::new("")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_STRETCH,
+            init_width_or_weight: 1.0,
+            ..TableColumnSetup::new("")
+        });
 
-    if changed {
-        // The whole reshaped rule crosses as one command; the edge level
-        // resets on the bus side.
+        row(ui, "Bus", |ui| {
+            let names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
+            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+            let mut bus = (draft.cond.bus() as usize).min(refs.len().saturating_sub(1));
+            ui.set_next_item_width(-1.0);
+            if ui.combo_simple_string("##trigbus", &mut bus, &refs) {
+                set_bus(&mut draft.cond, bus as u8);
+            }
+        });
+        let cond_bus = draft.cond.bus();
+        match &mut draft.cond {
+            TriggerCond::SignalCross {
+                id,
+                signal,
+                threshold,
+                rising,
+                ..
+            } => {
+                row(ui, "Message", |ui| {
+                    id_field(ui, &mut draft.id_buf, id);
+                });
+                row(ui, "Signal", |ui| {
+                    let names = app.signal_names(cond_bus, *id);
+                    ui.set_next_item_width(-1.0);
+                    if names.is_empty() {
+                        // No database for the id: keep the name editable by
+                        // hand, evaluation just reports nothing until it
+                        // names something decodable.
+                        let mut s = signal.clone();
+                        if ui.input_text("##trigsignal", &mut s).build() {
+                            *signal = s;
+                        }
+                    } else {
+                        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                        let mut pick = refs.iter().position(|n| n == &signal.as_str()).unwrap_or(0);
+                        if ui.combo_simple_string("##trigsignal", &mut pick, &refs) {
+                            *signal = names[pick].clone();
+                        }
+                    }
+                });
+                row(ui, "Threshold", |ui| {
+                    let mut th = *threshold as f32;
+                    if ui
+                        .input_float("##trigth", &mut th)
+                        .display_format("%g")
+                        .build()
+                    {
+                        *threshold = th as f64;
+                    }
+                });
+                row(ui, "Direction", |ui| {
+                    let mut dir = *rising as usize;
+                    if ui.combo_simple_string("##trigdir", &mut dir, &["rising", "falling"]) {
+                        *rising = dir == 0;
+                    }
+                });
+            }
+            TriggerCond::IdPresent { id, .. } => {
+                row(ui, "Message", |ui| {
+                    id_field(ui, &mut draft.id_buf, id);
+                });
+            }
+            TriggerCond::CycleTimeout { id, .. } => {
+                row(ui, "Message", |ui| {
+                    id_field(ui, &mut draft.id_buf, id);
+                });
+                row(ui, "Note", |ui| {
+                    ui.text("fires once each time it goes silent");
+                });
+            }
+            TriggerCond::ErrorFrame { .. } => {
+                row(ui, "Watches", |ui| {
+                    ui.text("any error frame on the bus");
+                });
+            }
+        }
+
+        let act = match draft.action {
+            TriggerAction::StartRecording => 0,
+            TriggerAction::StopRecording => 1,
+            TriggerAction::Send { .. } => 2,
+        };
+        row(ui, "Action", |ui| {
+            let mut act = act;
+            ui.set_next_item_width(-1.0);
+            if ui.combo_simple_string(
+                "##trigaction",
+                &mut act,
+                &["Start recording", "Stop recording", "Send generator entry"],
+            ) {
+                draft.action = match act {
+                    0 => TriggerAction::StartRecording,
+                    1 => TriggerAction::StopRecording,
+                    // Coming back to Send keeps whatever target was last
+                    // set; a fresh Send starts from the first entry.
+                    _ => match draft.action {
+                        TriggerAction::Send { ch, id } => TriggerAction::Send { ch, id },
+                        _ => match app.snap.tx.first() {
+                            Some(t) => TriggerAction::Send {
+                                ch: t.channel,
+                                id: t.id,
+                            },
+                            None => TriggerAction::Send { ch: 0, id: 0x100 },
+                        },
+                    },
+                };
+            }
+        });
+        // The entry picker only means something while the action is Send.
+        if matches!(draft.action, TriggerAction::Send { .. }) && !app.snap.tx.is_empty() {
+            row(ui, "Entry", |ui| {
+                let names: Vec<String> = app
+                    .snap
+                    .tx
+                    .iter()
+                    .map(|t| format!("{} 0x{:03X} {}", app.channel_name(t.channel), t.id, t.name))
+                    .collect();
+                let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                let mut pick = app
+                    .snap
+                    .tx
+                    .iter()
+                    .position(|t| {
+                        matches!(draft.action, TriggerAction::Send { ch, id }
+                            if t.channel == ch && t.id == id)
+                    })
+                    .unwrap_or(0);
+                ui.set_next_item_width(-1.0);
+                if ui.combo_simple_string("##trigsend", &mut pick, &refs) {
+                    let t = &app.snap.tx[pick];
+                    draft.action = TriggerAction::Send {
+                        ch: t.channel,
+                        id: t.id,
+                    };
+                }
+            });
+        }
+        ui.separator();
+        if ui.is_key_pressed(Key::Escape) {
+            dismissed = true;
+        }
+        if ui.button_with_size("Apply", [90.0, 0.0]) {
+            confirmed = true;
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button_with_size("Cancel", [90.0, 0.0]) {
+            dismissed = true;
+        }
+    });
+    min.pop();
+    if confirmed {
         app.send(crate::bus::BusCommand::EditTrigger {
-            index: sel,
-            cond,
-            action,
+            index: draft.index,
+            cond: draft.cond,
+            action: draft.action,
         });
     }
+    if confirmed || dismissed || !open {
+        app.trig_draft = None;
+    }
+}
+
+/// One label/widget line of the editor grid.
+fn row(ui: &Ui, label: &str, body: impl FnOnce(&Ui)) {
+    ui.table_next_row();
+    ui.table_next_column();
+    ui.text(label);
+    ui.table_next_column();
+    body(ui);
 }
 
 fn set_bus(cond: &mut TriggerCond, ch: u8) {
@@ -284,20 +394,11 @@ fn set_bus(cond: &mut TriggerCond, ch: u8) {
     }
 }
 
-/// Keeps the hex edit buffer on the selected trigger's id; switching
-/// selection resets it from the model instead of fighting the typist.
-fn sync_id_buf(app: &mut App, sel: usize, id: u32) {
-    if app.trig_edit_sel != Some(sel) {
-        app.trig_id_buf = format!("{id:X}");
-        app.trig_edit_sel = Some(sel);
-    }
-}
-
-fn id_field(app: &mut App, ui: &Ui, id: &mut u32) -> bool {
-    ui.set_next_item_width(70.0);
+fn id_field(ui: &Ui, buf: &mut String, id: &mut u32) -> bool {
+    ui.set_next_item_width(-1.0);
     let mut changed = false;
-    if ui.input_text("##trigid", &mut app.trig_id_buf).build()
-        && let Some(v) = parse_hex(&app.trig_id_buf)
+    if ui.input_text("##trigid", buf).build()
+        && let Some(v) = parse_hex(buf)
     {
         *id = v;
         changed = true;

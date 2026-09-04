@@ -849,8 +849,7 @@ impl Config {
             .collect();
         app.send(crate::bus::BusCommand::SetTriggers(triggers));
         app.settle();
-        app.trigger_sel = None;
-        app.trig_edit_sel = None;
+        app.trig_draft = None;
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);

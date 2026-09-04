@@ -169,13 +169,15 @@ impl App {
     }
 
     fn push_trigger(&mut self, cond: TriggerCond) {
-        // The new rule's index is the list's length *before* the append.
+        // The new rule's index is the list's length *before* the append;
+        // its editor opens straight away.
         let index = self.snap.triggers.len();
+        let action = TriggerAction::StartRecording;
         self.send(crate::bus::BusCommand::AddTrigger {
-            cond,
-            action: TriggerAction::StartRecording,
+            cond: cond.clone(),
+            action,
         });
-        self.trigger_sel = Some(index);
+        self.trig_draft = Some(crate::ui::triggers::TrigDraft::new(index, cond, action));
         self.show_triggers = true;
     }
 
@@ -183,13 +185,12 @@ impl App {
         if i < self.snap.triggers.len() {
             self.send(crate::bus::BusCommand::RemoveTrigger { index: i });
         }
-        if self
-            .trigger_sel
-            .is_some_and(|s| s >= self.snap.triggers.len())
-        {
-            self.trigger_sel = None;
+        // An editor pointing at the removed row closes; one pointing past
+        // it follows the row up.
+        match &mut self.trig_draft {
+            Some(d) if d.index == i => self.trig_draft = None,
+            Some(d) if d.index > i => d.index -= 1,
+            _ => {}
         }
-        // The editor's hex buffer names a trigger that may be gone.
-        self.trig_edit_sel = None;
     }
 }

@@ -148,10 +148,9 @@ pub struct App {
     /// Set by `stop`: the next Play re-opens the log from zero instead of
     /// resuming wherever the scrub bar left the playhead.
     pub replay_reset_pending: bool,
-    /// The trigger the Triggers window is editing, if any.
-    pub trigger_sel: Option<usize>,
-    pub(crate) trig_id_buf: String,
-    pub(crate) trig_edit_sel: Option<usize>,
+    /// The Triggers window's editor popup, if open: the row it edits plus
+    /// the not-yet-applied shape. `None` while the popup is closed.
+    pub(crate) trig_draft: Option<crate::ui::triggers::TrigDraft>,
     /// Which violation kinds the report window lists, indexed by
     /// [`crate::spec::Kind::ALL`]. A noise control, deliberately not part of the
     /// project: hiding third-party traffic today should not hide it next week.
@@ -338,9 +337,7 @@ impl App {
             desktop_rename_buf: String::new(),
             replay_speed: 1.0,
             replay_reset_pending: false,
-            trigger_sel: None,
-            trig_id_buf: String::new(),
-            trig_edit_sel: None,
+            trig_draft: None,
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,

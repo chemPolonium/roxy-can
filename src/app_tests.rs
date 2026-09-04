@@ -3121,7 +3121,11 @@ fn adding_a_signal_trigger_picks_the_first_database_signal() {
     let mut app = quiet_app();
     app.add_signal_trigger();
     assert_eq!(app.triggers.len(), 1);
-    assert_eq!(app.trigger_sel, Some(0), "the new row is up for editing");
+    let draft = app
+        .trig_draft
+        .as_ref()
+        .expect("the new row is up for editing");
+    assert_eq!(draft.index, 0);
     match &app.triggers[0].cond {
         TriggerCond::SignalCross {
             ch,
@@ -3139,21 +3143,87 @@ fn adding_a_signal_trigger_picks_the_first_database_signal() {
     }
 
     app.add_error_trigger();
-    assert_eq!(app.trigger_sel, Some(1), "the newest row is selected");
-    app.trigger_sel = Some(0);
+    assert_eq!(
+        app.trig_draft.as_ref().map(|d| d.index),
+        Some(1),
+        "the newest row is up for editing"
+    );
+    if let Some(d) = &mut app.trig_draft {
+        d.index = 0;
+    }
     app.remove_trigger(1);
     assert_eq!(
-        app.trigger_sel,
+        app.trig_draft.as_ref().map(|d| d.index),
         Some(0),
-        "deleting another row keeps the selection"
+        "deleting another row keeps the editor"
     );
     app.remove_trigger(0);
-    assert_eq!(app.trigger_sel, None, "nothing left to select");
+    assert_eq!(app.trig_draft, None, "nothing left to edit");
     assert_eq!(
         app.trigger_summary(0),
         "",
         "a summary for a missing row is empty, not a panic"
     );
+}
+
+/// The editor's one Apply lands as one `EditTrigger`: flipping the crossing
+/// direction -- the change the old inline editor could not make stick --
+/// updates the row in place, both ways.
+#[test]
+fn a_trigger_edit_flips_the_crossing_direction() {
+    let mut app = quiet_app();
+    app.add_signal_trigger();
+    assert!(matches!(
+        &app.triggers[0].cond,
+        TriggerCond::SignalCross { rising: true, .. }
+    ));
+    let action = app.triggers[0].action;
+    app.send(crate::bus::BusCommand::EditTrigger {
+        index: 0,
+        cond: TriggerCond::SignalCross {
+            ch: 0,
+            id: 0x100,
+            signal: "EngineSpeed".to_string(),
+            threshold: 500.0,
+            rising: false,
+        },
+        action,
+    });
+    match &app.triggers[0].cond {
+        TriggerCond::SignalCross {
+            threshold, rising, ..
+        } => {
+            assert!(!*rising, "falling sticks");
+            assert_eq!(*threshold, 500.0);
+        }
+        other => panic!("expected a signal trigger, got {other:?}"),
+    }
+    let action = app.triggers[0].action;
+    let cond = match &app.triggers[0].cond {
+        TriggerCond::SignalCross {
+            ch,
+            id,
+            signal,
+            threshold,
+            ..
+        } => TriggerCond::SignalCross {
+            ch: *ch,
+            id: *id,
+            signal: signal.clone(),
+            threshold: *threshold,
+            rising: true,
+        },
+        other => panic!("expected a signal trigger, got {other:?}"),
+    };
+    app.send(crate::bus::BusCommand::EditTrigger {
+        index: 0,
+        cond,
+        action,
+    });
+    assert!(matches!(
+        &app.triggers[0].cond,
+        TriggerCond::SignalCross { rising: true, .. }
+    ));
 }
 
 /// The timeout condition rides the spec's grace: message 100 in `SPEC_DBC`
@@ -3305,7 +3375,7 @@ fn triggers_round_trip_through_a_project() {
         TriggerAction::Send { ch: 1, id: 0x300 },
         "the send target survives as data, not an index"
     );
-    assert_eq!(restored.trigger_sel, None, "runtime selection does not");
+    assert_eq!(restored.trig_draft, None, "runtime editor state does not");
     std::fs::remove_file(&path).ok();
 }
 
