@@ -198,27 +198,27 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
             } else {
                 color
             };
+            // Per-state mode needs no outlines: neighbouring segments
+            // always differ in value and color, so the boundary reads by
+            // itself -- an outline anti-aliased against the bright fills
+            // just grows a fuzzy halo. In the uniform fallback, same-
+            // colored neighbours are separated by a 1px gap instead.
+            let (fx0, fx1) = if per_state {
+                (sx0, sx1)
+            } else {
+                ((sx0 + 1.0).min(sx1), (sx1 - 1.0).max(sx0))
+            };
             dl.add_rect(
-                [sx0, ry + 2.0],
-                [sx1, ry + ROW_H - 2.0],
+                [fx0, ry + 2.0],
+                [fx1, ry + ROW_H - 2.0],
                 [fill[0], fill[1], fill[2], 0.92],
             )
             .filled(true)
             .build();
-            // A dark outline is what actually separates two neighbouring
-            // states of the same hue; without it the band reads as one
-            // strip no matter the labels.
-            dl.add_rect(
-                [sx0, ry + 2.0],
-                [sx1, ry + ROW_H - 2.0],
-                [0.06, 0.06, 0.08, 1.0],
-            )
-            .thickness(1.0)
-            .build();
             let tsz = ui.calc_text_size(&seg.label);
-            if tsz[0] + 8.0 <= sx1 - sx0 {
+            if tsz[0] + 8.0 <= fx1 - fx0 {
                 dl.add_text(
-                    [(sx0 + sx1 - tsz[0]) * 0.5, ry + (ROW_H - tsz[1]) * 0.5],
+                    [(fx0 + fx1 - tsz[0]) * 0.5, ry + (ROW_H - tsz[1]) * 0.5],
                     text_on(fill),
                     &seg.label,
                 );
