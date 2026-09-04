@@ -135,10 +135,13 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             // A plain filled rect instead of ProgressBar: the widget paints
             // a fill percentage inside the bar, and text is exactly what
             // this bar must not have -- the value column next to it is
-            // throttled, the bar itself is not.
+            // throttled, the bar itself is not. The bar fills the cell's
+            // whole content height, so it lines up with the text columns
+            // instead of floating between margins.
             let p = ui.cursor_screen_pos();
-            let w = ui.content_region_avail()[0];
-            let h = (unsafe { imgui::sys::igGetFontSize() } * 0.6).max(6.0);
+            let avail = ui.content_region_avail();
+            let w = avail[0];
+            let h = avail[1].max(6.0);
             dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], bar_bg)
                 .filled(true)
                 .build();
