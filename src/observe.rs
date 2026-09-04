@@ -501,6 +501,43 @@ pub struct DataWindow {
     pub(crate) text_cache: Vec<[String; 3]>,
 }
 
+/// One tracked row of the State Tracker: a subscription key plus its
+/// visibility. The band itself renders from the subscription's sampled
+/// history; nothing else is stored per row.
+pub struct TrackedSignal {
+    pub key: (u8, u32, String),
+    pub visible: bool,
+}
+
+/// The State Tracker window: signals rendered as constant-value state
+/// bands over a live trailing window, CANoe-style. Session state only --
+/// the window is not saved with the project yet.
+pub struct StateTrackerWindow {
+    pub opened: bool,
+    pub signals: Vec<TrackedSignal>,
+    /// Width of the live trailing window in seconds. The tracker always
+    /// rides the live edge; panning and scrubbing belong to the curve
+    /// windows.
+    pub time_window_s: f64,
+    /// Signal-picker draft: bus index, message id, signal index.
+    pub pick_bus: usize,
+    pub pick_id: u32,
+    pub pick_signal: usize,
+}
+
+impl Default for StateTrackerWindow {
+    fn default() -> Self {
+        Self {
+            opened: false,
+            signals: Vec::new(),
+            time_window_s: 20.0,
+            pick_bus: 0,
+            pick_id: 0,
+            pick_signal: 0,
+        }
+    }
+}
+
 use std::collections::HashMap;
 
 use crate::app::App;
@@ -671,9 +708,10 @@ impl App {
         self.snap.subs.iter().find(|s| &s.key == key)
     }
 
-    /// Drops the subscription if no Data/Graphics window references the signal anymore.
-    /// The "still referenced" judgement is frontend policy; the removal itself
-    /// goes through the command so the bus owns its own map.
+    /// Drops the subscription if no Data/Graphics window or State Tracker
+    /// row references the signal anymore. The "still referenced" judgement
+    /// is frontend policy; the removal itself goes through the command so
+    /// the bus owns its own map.
     pub fn prune_signal(&mut self, key: &(u8, u32, String)) {
         let in_use = self
             .graphics
@@ -682,7 +720,8 @@ impl App {
             || self
                 .data_windows
                 .iter()
-                .any(|d| d.signals.iter().any(|s| &s.key == key));
+                .any(|d| d.signals.iter().any(|s| &s.key == key))
+            || self.state_tracker.signals.iter().any(|s| &s.key == key);
         if !in_use {
             self.send(crate::bus::BusCommand::Unsubscribe { key: key.clone() });
         }

@@ -12,6 +12,7 @@ pub mod network;
 pub mod project_modal;
 pub mod siglist;
 pub mod spec;
+pub mod state;
 pub mod stats;
 pub mod statusbar;
 pub mod toolbar;
@@ -60,6 +61,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     spec::render(app, ui);
     data::render(app, ui);
     graphics::render(app, ui);
+    state::render(app, ui);
     statusbar::render(app, ui);
     desktops::render(app, ui);
     project_modal::render(app, ui);

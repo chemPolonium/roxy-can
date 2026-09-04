@@ -44,7 +44,9 @@ pub const PALETTE: [[f32; 4]; 8] = [
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
-pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, YMode};
+pub use crate::observe::{
+    DataWindow, GfxSignal, GraphicsWindow, SampleCache, StateTrackerWindow, TrackedSignal, YMode,
+};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
@@ -226,6 +228,7 @@ pub struct App {
     pub stats_windows: Vec<StatsWin>,
     pub graphics: Vec<GraphicsWindow>,
     pub data_windows: Vec<DataWindow>,
+    pub state_tracker: StateTrackerWindow,
     pub(crate) trace_counter: usize,
     pub(crate) msg_counter: usize,
     pub(crate) stats_counter: usize,
@@ -382,6 +385,7 @@ impl App {
             stats_windows: Vec::new(),
             graphics: Vec::new(),
             data_windows: Vec::new(),
+            state_tracker: StateTrackerWindow::default(),
             trace_counter: 0,
             msg_counter: 0,
             stats_counter: 0,
