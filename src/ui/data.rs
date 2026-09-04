@@ -1,5 +1,5 @@
 use crate::app::{App, TOOLBAR_H};
-use imgui::{Condition, StyleColor, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
 
 const PANEL_W: f32 = 190.0;
 
@@ -106,9 +106,6 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             ..TableColumnSetup::new("Bar")
         });
         ui.table_headers_row();
-        let dl = ui.get_window_draw_list();
-        let bar_bg = ui.style_color(StyleColor::FrameBg);
-        let bar_fill = ui.style_color(StyleColor::PlotHistogram);
         for (key, text) in keys.iter().zip(cache.iter()) {
             let Some(sub) = app.sub_view(key) else {
                 continue;
@@ -132,28 +129,14 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
                 }
                 None => 0.0,
             };
-            // A plain filled rect instead of ProgressBar: the widget paints
-            // a fill percentage inside the bar, and text is exactly what
-            // this bar must not have -- the value column next to it is
-            // throttled, the bar itself is not. The bar covers the cell
-            // edge to edge -- text height plus the cell padding above and
-            // below -- so no strip of background peeks out around it. The
-            // layout footprint stays text-height: the row keeps the same
-            // height the other columns gave it.
-            let p = ui.cursor_screen_pos();
-            let font = unsafe { imgui::sys::igGetFontSize() };
-            let pad = unsafe { (*imgui::sys::igGetStyle()).CellPadding.y };
-            let avail = ui.content_region_avail();
-            let w = avail[0];
-            let y = p[1] - pad;
-            let h = font + pad * 2.0;
-            dl.add_rect([p[0], y], [p[0] + w, y + h], bar_bg)
-                .filled(true)
-                .build();
-            dl.add_rect([p[0], y], [p[0] + w * frac as f32, y + h], bar_fill)
-                .filled(true)
-                .build();
-            ui.dummy([w, font]);
+            // The widget's default size is what this cell wants: the width
+            // fills the column and the height is the standard frame height.
+            // The overlay percentage is silenced -- the value column next
+            // to it is throttled, so a live number on the bar would read
+            // as truth while the text column lags behind.
+            imgui::ProgressBar::new(frac as f32)
+                .overlay_text("")
+                .build(ui);
         }
     }
 }
