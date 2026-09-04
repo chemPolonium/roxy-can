@@ -6,6 +6,7 @@ use imgui::{MouseButton, Ui};
 pub enum ListKind {
     Graphics(usize),
     Data(usize),
+    State(usize),
 }
 
 static DRAG: std::sync::Mutex<Option<(ListKind, usize)>> = std::sync::Mutex::new(None);
@@ -16,14 +17,15 @@ fn signals_mut(app: &mut App, kind: ListKind) -> &mut Vec<GfxSignal> {
     match kind {
         ListKind::Graphics(i) => &mut app.graphics[i].signals,
         ListKind::Data(i) => &mut app.data_windows[i].signals,
+        ListKind::State(i) => &mut app.state_trackers[i].signals,
     }
 }
 
-/// Shared selected-signal list of Graphics/Data windows. Supports
-/// visibility toggles, "show all", drag reordering with an insertion
-/// line indicator, and -- for Graphics lists only -- each signal's own
-/// value-axis policy badge. Adding/removing signals happens in the Signal
-/// Selection popup (Measurement Setup).
+/// Shared selected-signal list of Graphics/Data/State Tracker windows.
+/// Supports visibility toggles, "show all", drag reordering with an
+/// insertion line indicator, and -- for Graphics lists only -- each
+/// signal's own value-axis policy badge. Adding/removing signals happens
+/// in the Signal Selection popup (Measurement Setup).
 pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
     if ui.small_button("Show all") {
         for s in signals_mut(app, kind).iter_mut() {

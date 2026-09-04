@@ -50,6 +50,10 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.small_button("+ Data") {
         app.new_data_window();
     }
+    ui.same_line();
+    if ui.small_button("+ State Tracker") {
+        app.new_state_window();
+    }
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -64,6 +68,7 @@ fn content(app: &mut App, ui: &Ui) {
     let mut rm_stats: Option<usize> = None;
     let mut rm_graphics: Option<usize> = None;
     let mut rm_data: Option<usize> = None;
+    let mut rm_state: Option<usize> = None;
     {
         let Some(_table) = ui.begin_table_with_flags("meas_table", 6, flags) else {
             return;
@@ -74,10 +79,10 @@ fn content(app: &mut App, ui: &Ui) {
             init_width_or_weight: 32.0,
             ..TableColumnSetup::new("Open")
         });
-        // longest type label is "Statistics"
+        // longest type label is "State Tracker"
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 74.0,
+            init_width_or_weight: 96.0,
             ..TableColumnSetup::new("Type")
         });
         ui.table_setup_column_with(TableColumnSetup {
@@ -120,6 +125,9 @@ fn content(app: &mut App, ui: &Ui) {
         for i in 0..app.data_windows.len() {
             data_row(app, ui, i, &mut rm_data);
         }
+        for i in 0..app.state_trackers.len() {
+            state_row(app, ui, i, &mut rm_state);
+        }
     }
 
     if let Some(i) = rm_trace {
@@ -158,11 +166,23 @@ fn content(app: &mut App, ui: &Ui) {
         }
         app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 4));
     }
+    if let Some(i) = rm_state {
+        let keys: Vec<_> = app.state_trackers[i]
+            .signals
+            .iter()
+            .map(|s| s.key.clone())
+            .collect();
+        app.state_trackers.remove(i);
+        for k in keys {
+            app.prune_signal(&k);
+        }
+        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 5));
+    }
 }
 
 /// Keeps the Filter Selection popup pointing at the right window after an
 /// observer row is deleted. `which`: 0 = Trace, 1 = Messages, 2 = Statistics,
-/// 3 = Graphics, 4 = Data.
+/// 3 = Graphics, 4 = Data, 5 = State Tracker.
 fn popup_after_remove(t: PopupTarget, removed: usize, which: u8) -> Option<PopupTarget> {
     match t {
         PopupTarget::Trace(i) if which == 0 => match i.cmp(&removed) {
@@ -188,6 +208,11 @@ fn popup_after_remove(t: PopupTarget, removed: usize, which: u8) -> Option<Popup
         PopupTarget::Data(i) if which == 4 => match i.cmp(&removed) {
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(PopupTarget::Data(i - 1)),
+            std::cmp::Ordering::Less => Some(t),
+        },
+        PopupTarget::State(i) if which == 5 => match i.cmp(&removed) {
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Greater => Some(PopupTarget::State(i - 1)),
             std::cmp::Ordering::Less => Some(t),
         },
         _ => Some(t),
@@ -318,11 +343,21 @@ fn signal_cell(app: &mut App, ui: &Ui, kind: ListKind) {
                 w.signals.len(),
             )
         }
+        ListKind::State(i) => {
+            let w = &app.state_trackers[i];
+            (
+                i,
+                "st",
+                w.signals.iter().filter(|s| s.visible).count(),
+                w.signals.len(),
+            )
+        }
     };
     if ui.small_button(format!("…##selsig{prefix}{i}")) {
         app.popup_target = Some(match kind {
             ListKind::Graphics(i) => PopupTarget::Graphics(i),
             ListKind::Data(i) => PopupTarget::Data(i),
+            ListKind::State(i) => PopupTarget::State(i),
         });
         app.show_id_filter = true;
     }
@@ -380,6 +415,32 @@ fn data_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     }
     ui.table_next_column();
     if ui.small_button(format!("x##d{i}")) {
+        *rm = Some(i);
+    }
+}
+
+/// The State Tracker row mirrors Data: signal-level selection, no CSV
+/// export yet (the band view has nothing tabular to write).
+fn state_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    if goto_button(ui, &format!("st{i}")) {
+        app.state_trackers[i].opened = true;
+        app.focus_title = Some(target_name(app, PopupTarget::State(i)));
+    }
+    ui.table_next_column();
+    ui.text("State Tracker");
+    ui.table_next_column();
+    ui.set_next_item_width(-1.0);
+    ui.input_text(format!("##name_st{i}"), &mut app.state_trackers[i].name)
+        .build();
+    ui.table_next_column();
+    signal_cell(app, ui, ListKind::State(i));
+    ui.table_next_column();
+    ui.table_next_column();
+    if ui.small_button(format!("x##st{i}")) {
         *rm = Some(i);
     }
 }

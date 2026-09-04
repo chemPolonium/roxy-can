@@ -3806,6 +3806,29 @@ fn the_y_mode_round_trips_through_a_project() {
 }
 
 #[test]
+fn the_state_tracker_round_trips_through_a_project() {
+    let mut app = App::headless();
+    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    app.state_trackers[0].signals.push(GfxSignal {
+        key: key.clone(),
+        visible: true,
+        y_mode: YMode::Auto,
+    });
+    app.state_trackers[0].time_window_s = 60.0;
+    app.subscribe(key.clone());
+    let path = std::env::temp_dir().join("roxy_can_state.rxproj");
+    assert!(app.save_project(Some(path.clone())));
+
+    let mut restored = App::headless();
+    restored.open_project_path(&path);
+    assert_eq!(restored.state_trackers[0].time_window_s, 60.0);
+    assert_eq!(restored.state_trackers[0].signals[0].key, key);
+    // A restored signal must be resubscribed, or the band draws no data.
+    assert!(restored.subs.contains_key(&key));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn the_text_gate_fires_on_its_cadence() {
     let mut app = quiet_app();
     app.text_rate_hz = 10;

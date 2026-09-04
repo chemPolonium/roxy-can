@@ -190,6 +190,20 @@ pub struct DataCfg {
     pub signals: Vec<SignalCfg>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct StateCfg {
+    pub name: String,
+    pub opened: bool,
+    #[serde(default)]
+    pub signals: Vec<SignalCfg>,
+    #[serde(default = "twenty_default")]
+    pub time_window_s: f64,
+}
+
+fn twenty_default() -> f64 {
+    20.0
+}
+
 /// One driven signal's parameters. `kind` is [`crate::sim::SrcKind::to_u8`];
 /// an unknown code drops the whole entry on load rather than guessing a shape.
 #[derive(Serialize, Deserialize)]
@@ -275,6 +289,8 @@ pub struct Counters {
     pub graphics: usize,
     #[serde(default)]
     pub data: usize,
+    #[serde(default)]
+    pub state: usize,
 }
 
 fn tolerance_default() -> u64 {
@@ -367,6 +383,8 @@ pub struct Config {
     pub graphics: Vec<GfxCfg>,
     #[serde(default)]
     pub data_windows: Vec<DataCfg>,
+    #[serde(default)]
+    pub state_trackers: Vec<StateCfg>,
     #[serde(default)]
     pub tx: Vec<TxCfg>,
     #[serde(default)]
@@ -545,6 +563,16 @@ impl Config {
                     name: d.name.clone(),
                     opened: d.opened,
                     signals: sig_cfgs(&d.signals),
+                })
+                .collect(),
+            state_trackers: app
+                .state_trackers
+                .iter()
+                .map(|w| StateCfg {
+                    name: w.name.clone(),
+                    opened: w.opened,
+                    signals: sig_cfgs(&w.signals),
+                    time_window_s: w.time_window_s,
                 })
                 .collect(),
             tx: app
@@ -804,6 +832,18 @@ impl Config {
                 })
                 .collect();
         }
+        if !self.state_trackers.is_empty() {
+            app.state_trackers = self
+                .state_trackers
+                .into_iter()
+                .map(|w| crate::observe::StateWin {
+                    name: w.name,
+                    opened: w.opened,
+                    signals: sig_keys(w.signals),
+                    time_window_s: w.time_window_s,
+                })
+                .collect();
+        }
         app.show_tx = self.show_tx;
         app.show_network = self.show_network;
         app.show_measurement = self.show_measurement;
@@ -866,6 +906,11 @@ impl Config {
                 app.data_windows
                     .iter()
                     .flat_map(|d| d.signals.iter().map(|s| s.key.clone())),
+            )
+            .chain(
+                app.state_trackers
+                    .iter()
+                    .flat_map(|w| w.signals.iter().map(|s| s.key.clone())),
             )
             .collect();
         for key in keys {

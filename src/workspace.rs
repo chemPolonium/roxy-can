@@ -19,6 +19,7 @@ pub enum PopupTarget {
     Stats(usize),
     Graphics(usize),
     Data(usize),
+    State(usize),
 }
 
 #[derive(Clone)]
@@ -77,6 +78,7 @@ pub enum WindowKind {
     Statistics,
     Graphics,
     Data,
+    StateTracker,
 }
 
 impl WindowKind {
@@ -87,6 +89,7 @@ impl WindowKind {
             WindowKind::Statistics => 2,
             WindowKind::Graphics => 3,
             WindowKind::Data => 4,
+            WindowKind::StateTracker => 5,
         }
     }
 
@@ -97,6 +100,7 @@ impl WindowKind {
             2 => Some(WindowKind::Statistics),
             3 => Some(WindowKind::Graphics),
             4 => Some(WindowKind::Data),
+            5 => Some(WindowKind::StateTracker),
             _ => None,
         }
     }
@@ -151,6 +155,11 @@ impl App {
                 open_windows.push((WindowKind::Data, w.name.clone()));
             }
         }
+        for w in &self.state_trackers {
+            if w.opened {
+                open_windows.push((WindowKind::StateTracker, w.name.clone()));
+            }
+        }
         Desktop {
             name: String::new(),
             layout: self.layout_cache.clone(),
@@ -185,6 +194,9 @@ impl App {
         }
         for w in &mut self.data_windows {
             w.opened = has(WindowKind::Data, &w.name);
+        }
+        for w in &mut self.state_trackers {
+            w.opened = has(WindowKind::StateTracker, &w.name);
         }
         self.show_tx = d.show_tx;
         self.show_network = d.show_network;
@@ -292,6 +304,7 @@ impl App {
         let signals: Option<&mut Vec<GfxSignal>> = match target {
             PopupTarget::Graphics(i) => self.graphics.get_mut(i).map(|w| &mut w.signals),
             PopupTarget::Data(i) => self.data_windows.get_mut(i).map(|w| &mut w.signals),
+            PopupTarget::State(i) => self.state_trackers.get_mut(i).map(|w| &mut w.signals),
             _ => None,
         };
         let Some(signals) = signals else {
@@ -389,6 +402,16 @@ impl App {
         });
     }
 
+    pub fn new_state_window(&mut self) {
+        self.state_counter += 1;
+        self.state_trackers.push(crate::observe::StateWin {
+            name: format!("State Tracker {}", self.state_counter),
+            opened: true,
+            signals: Vec::new(),
+            time_window_s: 20.0,
+        });
+    }
+
     /// Scope check shared by all analysis windows: All passes everything,
     /// Bus passes one channel, Manual uses that window's own selection set.
     pub fn scope_match(scope: SigScope, manual: &HashSet<(u8, u32)>, channel: u8, id: u32) -> bool {
@@ -459,6 +482,7 @@ impl App {
             stats: self.stats_counter,
             graphics: self.graphics_counter,
             data: self.data_counter,
+            state: self.state_counter,
         }
     }
 
@@ -468,5 +492,6 @@ impl App {
         self.stats_counter = c.stats.max(self.stats_windows.len());
         self.graphics_counter = c.graphics.max(self.graphics.len());
         self.data_counter = c.data.max(self.data_windows.len());
+        self.state_counter = c.state.max(self.state_trackers.len());
     }
 }

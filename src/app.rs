@@ -44,9 +44,7 @@ pub const PALETTE: [[f32; 4]; 8] = [
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
-pub use crate::observe::{
-    DataWindow, GfxSignal, GraphicsWindow, SampleCache, StateTrackerWindow, TrackedSignal, YMode,
-};
+pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, StateWin, YMode};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
@@ -228,12 +226,13 @@ pub struct App {
     pub stats_windows: Vec<StatsWin>,
     pub graphics: Vec<GraphicsWindow>,
     pub data_windows: Vec<DataWindow>,
-    pub state_tracker: StateTrackerWindow,
+    pub state_trackers: Vec<StateWin>,
     pub(crate) trace_counter: usize,
     pub(crate) msg_counter: usize,
     pub(crate) stats_counter: usize,
     pub(crate) graphics_counter: usize,
     pub(crate) data_counter: usize,
+    pub(crate) state_counter: usize,
 }
 
 /// Which side of the stage-3 split the bus is on.
@@ -385,12 +384,13 @@ impl App {
             stats_windows: Vec::new(),
             graphics: Vec::new(),
             data_windows: Vec::new(),
-            state_tracker: StateTrackerWindow::default(),
+            state_trackers: Vec::new(),
             trace_counter: 0,
             msg_counter: 0,
             stats_counter: 0,
             graphics_counter: 0,
             data_counter: 0,
+            state_counter: 0,
         };
         // The bootstrap published its first frame into the mailbox before
         // the thread (if any) exists, so the workspace baseline and the
@@ -401,6 +401,7 @@ impl App {
         app.new_stats_window();
         app.new_graphics_window();
         app.new_data_window();
+        app.new_state_window();
         let mut first = app.desktop_snapshot();
         first.name = "Desktop 1".to_string();
         app.desktops = vec![first];

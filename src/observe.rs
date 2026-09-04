@@ -501,39 +501,28 @@ pub struct DataWindow {
     pub(crate) text_cache: Vec<[String; 3]>,
 }
 
-/// One tracked row of the State Tracker: a subscription key plus its
-/// visibility. The band itself renders from the subscription's sampled
-/// history; nothing else is stored per row.
-pub struct TrackedSignal {
-    pub key: (u8, u32, String),
-    pub visible: bool,
-}
-
 /// The State Tracker window: signals rendered as constant-value state
-/// bands over a live trailing window, CANoe-style. Session state only --
-/// the window is not saved with the project yet.
-pub struct StateTrackerWindow {
+/// bands over a live trailing window, CANoe-style. An observer like
+/// Graphics/Data: rows share their signal model so the selection popup,
+/// the shared list, and persistence treat all three alike (the value-axis
+/// policy is dead weight here but harmless).
+pub struct StateWin {
+    pub name: String,
     pub opened: bool,
-    pub signals: Vec<TrackedSignal>,
+    pub signals: Vec<GfxSignal>,
     /// Width of the live trailing window in seconds. The tracker always
     /// rides the live edge; panning and scrubbing belong to the curve
     /// windows.
     pub time_window_s: f64,
-    /// Signal-picker draft: bus index, message id, signal index.
-    pub pick_bus: usize,
-    pub pick_id: u32,
-    pub pick_signal: usize,
 }
 
-impl Default for StateTrackerWindow {
+impl Default for StateWin {
     fn default() -> Self {
         Self {
+            name: String::new(),
             opened: false,
             signals: Vec::new(),
             time_window_s: 20.0,
-            pick_bus: 0,
-            pick_id: 0,
-            pick_signal: 0,
         }
     }
 }
@@ -721,7 +710,10 @@ impl App {
                 .data_windows
                 .iter()
                 .any(|d| d.signals.iter().any(|s| &s.key == key))
-            || self.state_tracker.signals.iter().any(|s| &s.key == key);
+            || self
+                .state_trackers
+                .iter()
+                .any(|w| w.signals.iter().any(|s| &s.key == key));
         if !in_use {
             self.send(crate::bus::BusCommand::Unsubscribe { key: key.clone() });
         }

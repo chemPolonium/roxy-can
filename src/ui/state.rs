@@ -1,15 +1,16 @@
-//! State Tracker: tracked signals rendered as horizontal state bands --
-//! a logic-analyzer view over the same sampled histories the curve
+//! State Tracker: an observer window (Measurement Setup registry, like
+//! Graphics/Data) rendering its tracked signals as horizontal state bands
+//! -- a logic-analyzer view over the same sampled histories the curve
 //! windows draw. A *state* is a maximal stretch over which the signal's
 //! value, rounded to six significant digits, stays put, and the band
 //! carries the value as its label: a 0/1 signal shows its toggling cells,
 //! while a smooth analog collapses into a few readable ranges instead of
 //! one segment per sample.
 
-use crate::app::{App, PALETTE, TrackedSignal};
+use crate::app::{App, PALETTE};
 use imgui::Ui;
 
-const PANEL_W: f32 = 210.0;
+const PANEL_W: f32 = 190.0;
 const NAME_W: f32 = 120.0;
 const ROW_H: f32 = 26.0;
 const ROW_GAP: f32 = 3.0;
@@ -26,166 +27,76 @@ const TW_CHOICES: [(f64, &str); 5] = [
 ];
 
 pub fn render(app: &mut App, ui: &Ui) {
-    if !app.state_tracker.opened {
-        return;
-    }
-    let mut open = app.state_tracker.opened;
+    let n = app.state_trackers.len();
     let disp_h = ui.io().display_size[1];
-    ui.window("State Tracker###sttracker")
-        .opened(&mut open)
-        .position([16.0, disp_h * 0.08], imgui::Condition::FirstUseEver)
-        .size([720.0, 340.0], imgui::Condition::FirstUseEver)
-        .build(|| window_content(app, ui));
-    app.state_tracker.opened = open;
+    for i in 0..n {
+        let mut open = app.state_trackers[i].opened;
+        if !open {
+            continue;
+        }
+        let raw = app.state_trackers[i].name.clone();
+        let name = if raw.trim().is_empty() {
+            format!("State Tracker {}", i + 1)
+        } else {
+            raw
+        };
+        if app.focus_title.as_deref() == Some(name.as_str()) {
+            unsafe { imgui::sys::igSetNextWindowFocus() };
+            app.focus_title = None;
+        }
+        ui.window(format!("{name}###st{i}"))
+            .opened(&mut open)
+            .position(
+                [16.0 + i as f32 * 30.0, disp_h * 0.08],
+                imgui::Condition::FirstUseEver,
+            )
+            .size([720.0, 340.0], imgui::Condition::FirstUseEver)
+            .build(|| {
+                window_content(app, ui, i);
+            });
+        app.state_trackers[i].opened = open;
+    }
 }
 
-fn window_content(app: &mut App, ui: &Ui) {
+fn window_content(app: &mut App, ui: &Ui, i: usize) {
     for (val, label) in TW_CHOICES {
-        let selected = (app.state_tracker.time_window_s - val).abs() < 1e-9;
+        let selected = (app.state_trackers[i].time_window_s - val).abs() < 1e-9;
         let text = if selected {
-            format!("[{label}]##stw")
+            format!("[{label}]##stw{i}")
         } else {
-            format!("{label}##stw")
+            format!("{label}##stw{i}")
         };
         if ui.small_button(text) {
-            app.state_tracker.time_window_s = val;
+            app.state_trackers[i].time_window_s = val;
         }
         ui.same_line();
     }
     ui.text_colored([0.6, 0.85, 1.0, 1.0], "live");
     ui.separator();
     let avail = ui.content_region_avail();
-    ui.child_window("st_panel")
+    ui.child_window(format!("st_panel{i}"))
         .size([PANEL_W, avail[1]])
-        .build(|| left_panel(app, ui));
+        .build(|| {
+            ui.text("Tracked signals");
+            crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::State(i));
+        });
     ui.same_line();
-    ui.child_window("st_bands")
+    ui.child_window(format!("st_bands{i}"))
         .size([0.0, avail[1]])
-        .build(|| bands_area(app, ui));
-}
-
-/// Left panel: pick a signal out of the databases and manage the tracked
-/// rows. Adding goes straight through `subscribe` -- this window is not
-/// in the Measurement Setup registry, so it carries its own picker.
-fn left_panel(app: &mut App, ui: &Ui) {
-    ui.text("Tracked signals");
-    picker(app, ui);
-    ui.separator();
-    let mut rm = None;
-    for j in 0..app.state_tracker.signals.len() {
-        let key = app.state_tracker.signals[j].key.clone();
-        let color = app
-            .sub_view(&key)
-            .map(|s| PALETTE[s.color % PALETTE.len()])
-            .unwrap_or([0.5, 0.5, 0.5, 1.0]);
-        let p = ui.cursor_screen_pos();
-        let dl = ui.get_window_draw_list();
-        dl.add_rect([p[0], p[1] + 4.0], [p[0] + 10.0, p[1] + 14.0], color)
-            .filled(true)
-            .build();
-        ui.dummy([14.0, 0.0]);
-        ui.same_line();
-        let mut vis = app.state_tracker.signals[j].visible;
-        if ui.checkbox(format!("##stvis{j}"), &mut vis) {
-            app.state_tracker.signals[j].visible = vis;
-        }
-        ui.same_line();
-        ui.text(&key.2);
-        ui.same_line_with_pos(PANEL_W - 22.0);
-        if ui.small_button(format!("x##strm{j}")) {
-            rm = Some(j);
-        }
-    }
-    if let Some(j) = rm {
-        let key = app.state_tracker.signals.remove(j).key;
-        app.prune_signal(&key);
-    }
-}
-
-fn picker(app: &mut App, ui: &Ui) {
-    let db = app
-        .snap
-        .channels
-        .get(app.state_tracker.pick_bus)
-        .and_then(|c| c.dbc.as_deref());
-    let bus_names: Vec<&str> = app.snap.channels.iter().map(|c| c.name.as_str()).collect();
-    let st = &mut app.state_tracker;
-    ui.set_next_item_width(-1.0);
-    if ui.combo_simple_string("##stbus", &mut st.pick_bus, &bus_names) {
-        // A new bus needs a message its own database actually carries.
-        st.pick_id = db.and_then(|d| d.order.first()).copied().unwrap_or(0);
-        st.pick_signal = 0;
-    }
-    let add_key = 'pick: {
-        let Some(db) = db else {
-            ui.text_disabled("no database on this bus");
-            break 'pick None;
-        };
-        let msgs: Vec<String> = db
-            .order
-            .iter()
-            .map(|id| {
-                let name = db.messages.get(id).map(|m| m.name.as_str()).unwrap_or("?");
-                format!("0x{id:03X} {name}")
-            })
-            .collect();
-        let refs: Vec<&str> = msgs.iter().map(|s| s.as_str()).collect();
-        let mut pick = db
-            .order
-            .iter()
-            .position(|id| *id == st.pick_id)
-            .unwrap_or(0);
-        ui.set_next_item_width(-1.0);
-        if ui.combo_simple_string("##stmsg", &mut pick, &refs) {
-            st.pick_id = db.order[pick];
-            st.pick_signal = 0;
-        }
-        let sigs: Vec<String> = db
-            .messages
-            .get(&st.pick_id)
-            .map(|m| m.signals.iter().map(|s| s.name.clone()).collect())
-            .unwrap_or_default();
-        if sigs.is_empty() {
-            ui.text_disabled("message has no signals");
-            break 'pick None;
-        }
-        let srefs: Vec<&str> = sigs.iter().map(|s| s.as_str()).collect();
-        let mut spick = st.pick_signal.min(srefs.len() - 1);
-        ui.set_next_item_width(-1.0);
-        if ui.combo_simple_string("##stsig", &mut spick, &srefs) {
-            st.pick_signal = spick;
-        }
-        let key = (
-            st.pick_bus as u8,
-            st.pick_id,
-            sigs[st.pick_signal.min(sigs.len() - 1)].clone(),
-        );
-        if ui.button("Track##stadd") && !st.signals.iter().any(|s| s.key == key) {
-            break 'pick Some(key);
-        }
-        None
-    };
-    if let Some(key) = add_key {
-        // The draft borrow is gone by here, so the subscribe command and
-        // the new row can go through the model together.
-        app.subscribe(key.clone());
-        app.state_tracker
-            .signals
-            .push(TrackedSignal { key, visible: true });
-    }
+        .build(|| bands_area(app, ui, i));
 }
 
 /// Right area: the time ruler and one state band per tracked row. Names
 /// and bands share one draw list, so a row's label and its band cannot
 /// drift apart the way separately-laid-out widgets can.
-fn bands_area(app: &mut App, ui: &Ui) {
+fn bands_area(app: &mut App, ui: &Ui, i: usize) {
     let avail = ui.content_region_avail();
     let w = avail[0].max(NAME_W + 60.0);
     let h = avail[1].max(RULER_H + ROW_H);
     let [x0, y0] = ui.cursor_screen_pos();
     let dl = ui.get_window_draw_list();
 
-    let tw = app.state_tracker.time_window_s;
+    let tw = app.state_trackers[i].time_window_s;
     // Always live: the right edge is the plot clock, which follows the
     // replay playhead in replay, so the bands track scrubbing too.
     let t_right = app.plot_now_s();
@@ -217,20 +128,20 @@ fn bands_area(app: &mut App, ui: &Ui) {
         t += step;
     }
 
-    if app.state_tracker.signals.is_empty() {
+    if app.state_trackers[i].signals.is_empty() {
         dl.add_text(
             [x0 + 8.0, y0 + RULER_H + 8.0],
             [0.6, 0.6, 0.65, 1.0],
-            "Track a signal from the panel on the left.",
+            "Select signals for this window in Measurement Setup.",
         );
     }
     // Rows that do not fit the window height are left out; the window can
     // be resized. Tracking dozens of signals wants a scrolling pane, not
     // this clip.
     let fit = (((h - RULER_H) / (ROW_H + ROW_GAP)).floor() as usize).max(1);
-    for j in 0..app.state_tracker.signals.len().min(fit) {
-        let key = app.state_tracker.signals[j].key.clone();
-        let visible = app.state_tracker.signals[j].visible;
+    for j in 0..app.state_trackers[i].signals.len().min(fit) {
+        let key = app.state_trackers[i].signals[j].key.clone();
+        let visible = app.state_trackers[i].signals[j].visible;
         let ry = y0 + RULER_H + j as f32 * (ROW_H + ROW_GAP);
         let bg = if j % 2 == 0 {
             [0.13, 0.13, 0.16, 1.0]

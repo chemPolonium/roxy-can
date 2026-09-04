@@ -63,7 +63,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     let mut open = app.show_id_filter;
     let signal_level = matches!(
         app.popup_target,
-        Some(PopupTarget::Graphics(_)) | Some(PopupTarget::Data(_))
+        Some(PopupTarget::Graphics(_)) | Some(PopupTarget::Data(_)) | Some(PopupTarget::State(_))
     );
     let title = match app.popup_target {
         Some(t) => format!(
@@ -121,6 +121,10 @@ pub fn target_name(app: &App, t: PopupTarget) -> String {
         PopupTarget::Data(i) => or_fallback(
             app.data_windows.get(i).map(|w| w.name.as_str()),
             format!("Data {}", i + 1),
+        ),
+        PopupTarget::State(i) => or_fallback(
+            app.state_trackers.get(i).map(|w| w.name.as_str()),
+            format!("State Tracker {}", i + 1),
         ),
     }
 }
@@ -277,6 +281,12 @@ fn signal_content(app: &mut App, ui: &Ui) {
         }
         PopupTarget::Data(i) => {
             let Some(w) = app.data_windows.get(i) else {
+                return;
+            };
+            w.signals.iter().map(|s| s.key.clone()).collect()
+        }
+        PopupTarget::State(i) => {
+            let Some(w) = app.state_trackers.get(i) else {
                 return;
             };
             w.signals.iter().map(|s| s.key.clone()).collect()
