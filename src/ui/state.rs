@@ -9,6 +9,7 @@
 
 use crate::app::{App, PALETTE};
 use imgui::Ui;
+use std::collections::HashMap;
 
 const PANEL_W: f32 = 190.0;
 const NAME_W: f32 = 120.0;
@@ -175,19 +176,28 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
         let segs = state_segments(held, &pts, lo_us, hi_us);
         // State colors: with few distinct values visible, every state gets
-        // its own palette color, so gear 5 and gear 1 read apart at a
-        // glance. A busy analog with more states than the palette keeps
-        // the signal's own color for the whole band.
+        // its own palette slot -- gear 5 and gear 1 read apart at a glance.
+        // Slots are remembered per value (see `slot_for`), so the same
+        // value keeps its color across the whole run. A busy analog with
+        // more visible states than the palette keeps the signal's own
+        // color for the whole band.
         let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
         states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         states.dedup();
+        let per_state = states.len() <= PALETTE.len();
+        let win = &mut app.state_trackers[i];
+        let slots = win.color_slots.entry(key.clone()).or_default();
         for seg in segs {
             let sx0 = x_of(bx0, bx1, t_left, span_s, seg.t0_us as f64 / 1e6).max(bx0);
             let sx1 = x_of(bx0, bx1, t_left, span_s, seg.t1_us as f64 / 1e6).min(bx1);
             if sx1 - sx0 < 1.0 {
                 continue;
             }
-            let fill = seg_fill(seg.value, &states, color);
+            let fill = if per_state {
+                PALETTE[slot_for(slots, seg.value)]
+            } else {
+                color
+            };
             dl.add_rect(
                 [sx0, ry + 2.0],
                 [sx1, ry + ROW_H - 2.0],
@@ -321,22 +331,36 @@ pub(crate) fn state_segments(
     out
 }
 
-/// The fill color of one band segment. With few distinct states visible
-/// (`states`, ascending, deduped) each state gets its own palette color --
-/// CANoe-style state colors, assigned by sorted order so the mapping is
-/// stable while the visible state set is. More states than palette slots
-/// means a busy analog signal: every band keeps the signal's own color,
-/// and the outline alone separates neighbours.
-pub(crate) fn seg_fill(value: f64, states: &[f64], signal_color: [f32; 4]) -> [f32; 4] {
-    if states.len() > PALETTE.len() {
-        return signal_color;
+/// The palette slot of one state value, stable for the whole session: the
+/// first time a value is seen it takes the lowest free slot, and it keeps
+/// that slot even after leaving the view, so colors never reshuffle as
+/// the run goes on. Once every slot is spoken for, a brand-new value
+/// hashes into the palette and accepts a possible collision -- the
+/// alternative, reassigning slots, is what made colors drift.
+pub(crate) fn slot_for(slots: &mut HashMap<u64, usize>, v: f64) -> usize {
+    // -0.0 and 0.0 print the same label; they share a slot.
+    let bits = if v == 0.0 {
+        0.0f64.to_bits()
+    } else {
+        v.to_bits()
+    };
+    if let Some(&s) = slots.get(&bits) {
+        return s;
     }
-    let idx = states
-        .iter()
-        .position(|s| *s == value)
-        .unwrap_or(0)
-        .min(PALETTE.len() - 1);
-    PALETTE[idx]
+    let mut used: Vec<usize> = slots.values().copied().collect();
+    used.sort_unstable();
+    used.dedup();
+    let slot = (0..PALETTE.len())
+        .find(|s| !used.contains(s))
+        .unwrap_or_else(|| {
+            let mut h = bits;
+            h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            h = (h ^ (h >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            h ^= h >> 31;
+            (h % PALETTE.len() as u64) as usize
+        });
+    slots.insert(bits, slot);
+    slot
 }
 
 /// Dark or light label text, by the fill's relative luminance.
@@ -414,18 +438,37 @@ mod tests {
     }
 
     #[test]
-    fn few_states_get_distinct_colors_busy_ones_fall_back() {
-        let states = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
-        let c0 = seg_fill(0.0, &states, [0.5, 0.5, 0.5, 1.0]);
-        let c5 = seg_fill(5.0, &states, [0.5, 0.5, 0.5, 1.0]);
-        assert_ne!(c0, c5, "gear 0 and gear 5 must not share a color");
+    fn a_value_keeps_its_color_slot_as_others_come_and_go() {
+        let mut slots = HashMap::new();
+        let gear5 = slot_for(&mut slots, 5.0);
+        for v in [1.0, 3.0, 6.0, 0.0, 2.0, 4.0] {
+            slot_for(&mut slots, v);
+        }
+        assert_eq!(slot_for(&mut slots, 5.0), gear5, "the first slot sticks");
+        assert_eq!(
+            slot_for(&mut slots, 3.0),
+            slot_for(&mut slots, 3.0),
+            "repeated lookups are free and stable"
+        );
+        let distinct: std::collections::HashSet<usize> = slots.values().copied().collect();
+        assert_eq!(distinct.len(), 7, "each of the 7 states owns a slot");
+    }
 
-        // More distinct states than palette slots: everything wears the
-        // signal's own color; the outline does the separating.
-        let busy: Vec<f64> = (0..12).map(f64::from).collect();
-        let fallback = [0.2, 0.8, 0.4, 1.0];
-        assert_eq!(seg_fill(3.0, &busy, fallback), fallback);
-        assert_eq!(seg_fill(9.0, &busy, fallback), fallback);
+    #[test]
+    fn zero_and_negative_zero_share_a_slot() {
+        let mut slots = HashMap::new();
+        let a = slot_for(&mut slots, 0.0);
+        let b = slot_for(&mut slots, -0.0);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn an_overflowing_value_still_lands_in_the_palette() {
+        let mut slots = HashMap::new();
+        for v in 0..12 {
+            slot_for(&mut slots, f64::from(v));
+        }
+        assert!(slot_for(&mut slots, 99.0) < PALETTE.len());
     }
 
     #[test]

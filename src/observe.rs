@@ -514,6 +514,11 @@ pub struct StateWin {
     /// rides the live edge; panning and scrubbing belong to the curve
     /// windows.
     pub time_window_s: f64,
+    /// Session memory of one palette slot per state value, keyed by signal
+    /// then by the value's bits: a value keeps the slot it first drew
+    /// with, so the same value keeps the same color as the run goes on
+    /// and new states never reshuffle the old ones. Not persisted.
+    pub(crate) color_slots: HashMap<(u8, u32, String), HashMap<u64, usize>>,
 }
 
 impl Default for StateWin {
@@ -523,6 +528,7 @@ impl Default for StateWin {
             opened: false,
             signals: Vec::new(),
             time_window_s: 20.0,
+            color_slots: HashMap::new(),
         }
     }
 }

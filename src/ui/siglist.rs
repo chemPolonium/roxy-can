@@ -42,17 +42,25 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
 
     for j in 0..n {
         let key = signals_mut(app, kind)[j].key.clone();
-        let color = app
-            .sub_view(&key)
-            .map(|s| PALETTE[s.color % PALETTE.len()])
-            .unwrap_or([0.5, 0.5, 0.5, 1.0]);
+        // The chip shows the curve color for Graphics/Data. A State Tracker
+        // colors by state value, not per signal, so its rows stay bare.
+        let chip = !matches!(kind, ListKind::State(_));
+        let color = if chip {
+            app.sub_view(&key)
+                .map(|s| PALETTE[s.color % PALETTE.len()])
+                .unwrap_or([0.5, 0.5, 0.5, 1.0])
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        };
         let p = ui.cursor_screen_pos();
         tops.push(p[1]);
         if j == 0 {
             list_x = p[0];
         }
-        ui.dummy([14.0, 0.0]);
-        ui.same_line();
+        if chip {
+            ui.dummy([14.0, 0.0]);
+            ui.same_line();
+        }
         let mut vis = signals_mut(app, kind)[j].visible;
         if ui.checkbox(format!("##sigvis{j}"), &mut vis) {
             signals_mut(app, kind)[j].visible = vis;
@@ -104,9 +112,11 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                 }
             });
         }
-        dl.add_rect([p[0], p[1] + 4.0], [p[0] + 10.0, p[1] + 14.0], color)
-            .filled(true)
-            .build();
+        if chip {
+            dl.add_rect([p[0], p[1] + 4.0], [p[0] + 10.0, p[1] + 14.0], color)
+                .filled(true)
+                .build();
+        }
     }
 
     let drag = *DRAG.lock().unwrap();

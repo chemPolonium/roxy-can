@@ -841,6 +841,7 @@ impl Config {
                     opened: w.opened,
                     signals: sig_keys(w.signals),
                     time_window_s: w.time_window_s,
+                    color_slots: HashMap::new(),
                 })
                 .collect();
         }
