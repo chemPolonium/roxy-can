@@ -394,9 +394,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                     app.toggle_record();
                 }
                 ui.same_line();
+                // The baseline-aligned "to" leaves the cursor low; re-anchor
+                // so the path input stays level with the Record checkbox.
+                let row_top = ui.cursor_pos()[1];
                 ui.align_text_to_frame_padding();
                 ui.text("to");
                 ui.same_line();
+                let p = ui.cursor_pos();
+                ui.set_cursor_pos([p[0], row_top]);
                 ui.set_next_item_width(130.0);
                 // The stem is a frontend draft; the recorder receives a
                 // copy when Record is ticked (see `App::toggle_record`),
