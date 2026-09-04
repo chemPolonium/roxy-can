@@ -649,8 +649,7 @@ fn resolve_signal_range(
             // The database's word wins; an undeclared signal falls back to
             // its observed extremes once anything has been sampled.
             let declared = app.declared_range(key).or_else(|| {
-                app.subs
-                    .get(key)
+                app.sub_view(key)
                     .map(|s| (s.min, s.max))
                     .filter(|(a, b)| a.is_finite() && b.is_finite() && b - a >= 1e-9)
             });

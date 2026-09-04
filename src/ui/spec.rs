@@ -28,6 +28,7 @@ fn content(app: &mut App, ui: &Ui) {
     // event-triggered, and this line is the difference between "the bus is
     // clean" and "there was nothing to check".
     let periodic: usize = app
+        .snap
         .channels
         .iter()
         .filter_map(|c| c.dbc.as_ref())
@@ -66,11 +67,12 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.same_line();
     if ui.small_button("Clear##spec") {
-        app.spec.clear();
+        app.send(crate::bus::BusCommand::ClearSpec);
     }
     ui.separator();
 
     let rows: Vec<((u8, u32, Kind), Latch)> = app
+        .snap
         .spec
         .rows
         .iter()

@@ -96,6 +96,7 @@ impl CoreLoop {
     /// Publishes the current frame into the mailbox; pending status rides
     /// along once and clears. Status is news, not state.
     pub(crate) fn publish(&mut self) {
+        self.core.publish_loads();
         let status = self.pending_status.take();
         let snap = Arc::new(self.core.snapshot_with_status(status));
         *self.mail.lock().expect("snapshot mailbox poisoned") = snap;

@@ -98,6 +98,10 @@ pub const BURST_GAP_US: u64 = 1_000;
 /// CAN statistics rows (per-class rates and totals, send distance, bursts),
 /// and error frames. Updated from the same frame stream the aggregates
 /// read, so a frame never reaches one and not the other.
+///
+/// `Clone` backs the snapshot publish: the Bus Statistics window reads a
+/// shared copy, and the live state is re-cloned only when a step changed it.
+#[derive(Clone)]
 pub struct BusLoad {
     recent: VecDeque<(u64, f64, usize)>,
     window_wire_us: f64,
@@ -152,6 +156,16 @@ pub const WINDOW_US: u64 = 1_000_000;
 pub const BUCKET_US: u64 = 100_000;
 /// How many buckets the history keeps: 60 x 100 ms = the last minute.
 pub const HISTORY_BUCKETS: usize = 60;
+
+/// Debug names the headline numbers; the rolling internals stay unnamed.
+impl std::fmt::Debug for BusLoad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BusLoad")
+            .field("load", &self.load())
+            .field("errors", &self.errors)
+            .finish_non_exhaustive()
+    }
+}
 
 impl BusLoad {
     pub fn new() -> Self {

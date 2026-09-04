@@ -527,3 +527,34 @@ fn perf_snapshot_publish_under_load() {
         old_publish_us / dirty_lap_us.max(0.001)
     );
 }
+
+/// The Bus Statistics window reads its rollups from the snapshot like every
+/// other window: traffic on a bus must show up as per-class totals and a
+/// nonzero load figure without touching live bus state.
+#[test]
+fn the_bus_statistics_read_the_snapshot() {
+    let mut app = App::headless();
+    app.start_virtual();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    let mut now = 1_000;
+    for _ in 0..500 {
+        now += 2_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+    let load = app
+        .snap
+        .bus_loads
+        .first()
+        .expect("bus 0 has rollups in the snapshot");
+    assert!(
+        load.class_total(crate::load::FrameClass::StdData) > 0,
+        "generated frames reached the load rollups"
+    );
+    assert!(load.load() > 0.0, "wire time shows up in the windowed load");
+    app.stop();
+}

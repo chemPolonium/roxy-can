@@ -66,7 +66,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.table_headers_row();
 
     for (i, ch) in app.snap.channels.iter().enumerate() {
-        let Some(load) = app.bus_loads.get(i) else {
+        let Some(load) = app.snap.bus_loads.get(i) else {
             continue;
         };
         ui.table_next_row();

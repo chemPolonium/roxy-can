@@ -2607,6 +2607,62 @@ fn one_bad_interval_is_counted_once_and_never_forgotten() {
 }
 
 #[test]
+fn the_spec_clear_forgets_the_latches_without_a_new_run() {
+    let mut app = spec_app();
+    receive(&mut app, 0, vec![frame_at(0, 100, 8, Direction::Rx)]);
+    receive(
+        &mut app,
+        200_000,
+        vec![frame_at(200_000, 100, 8, Direction::Rx)],
+    );
+    assert_eq!(verdict(&app, 0, 100, Kind::Cycle).count, 1);
+
+    app.send(crate::bus::BusCommand::ClearSpec);
+    assert!(
+        app.snap.spec.rows.is_empty(),
+        "clear empties the report in place"
+    );
+    // The interval memory went with the rows: the next arrival is a first
+    // sample again, so a clean frame does not re-convict.
+    receive(
+        &mut app,
+        300_000,
+        vec![frame_at(300_000, 100, 8, Direction::Rx)],
+    );
+    assert!(
+        app.snap.spec.rows.is_empty(),
+        "a clean interval after clear stays clean"
+    );
+    app.stop();
+}
+
+#[test]
+fn an_entry_config_can_pin_the_exact_frame_flags() {
+    let mut app = App::headless();
+    app.add_tx(0, 0x100);
+    // A trace row added to the generator keeps the flags it was seen with,
+    // even when they disagree with the fd checkbox's derived default.
+    app.send(crate::bus::BusCommand::SetEntryConfig {
+        ch: 0,
+        id: 0x100,
+        active: true,
+        cycle_us: 100_000,
+        fd: false,
+        flags: Some(crate::can::frame::FrameFlags::FD),
+        data_text: None,
+        srcs: Vec::new(),
+    });
+    let view = app
+        .snap
+        .tx
+        .iter()
+        .find(|t| t.id == 0x100)
+        .expect("the entry exists");
+    assert!(view.fd, "explicit flags win over the fd-derived ones");
+    app.stop();
+}
+
+#[test]
 fn the_first_sample_of_a_message_is_never_a_cycle_violation() {
     let mut app = spec_app();
     // Arrives five periods late, so the only thing standing between this and

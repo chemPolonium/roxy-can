@@ -292,24 +292,39 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             .enabled(addable)
             .build()
         {
-            let was_len = app.tx_list.len();
+            // Add, then re-shape the fresh row via command: keep the flags
+            // it was seen with, and for an id no database declares, keep
+            // the observed payload. `add_tx` skips a duplicate row, so the
+            // length compare tells a fresh add from an existing one.
+            let was_len = app.snap.tx.len();
             app.add_tx(f.channel, f.id);
-            if app.tx_list.len() > was_len {
+            if app.snap.tx.len() > was_len {
                 let known = app
                     .channel_dbc(f.channel)
                     .is_some_and(|db| db.messages.contains_key(&f.id));
-                if let Some(t) = app.tx_list.last_mut() {
-                    t.flags = f.flags;
-                    if !known {
-                        t.len = f.len;
-                        t.data = f.data;
-                        t.data_text = f.data[..f.len as usize]
+                let data_text = if known {
+                    None
+                } else {
+                    Some(
+                        f.data[..f.len as usize]
                             .iter()
                             .map(|b| format!("{b:02X}"))
                             .collect::<Vec<_>>()
-                            .join(" ");
-                    }
-                }
+                            .join(" "),
+                    )
+                };
+                app.send(crate::bus::BusCommand::SetEntryConfig {
+                    ch: f.channel,
+                    id: f.id,
+                    active: true,
+                    cycle_us: app
+                        .dbc_cycle_us(f.channel, f.id)
+                        .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
+                    fd: f.flags.contains(crate::can::frame::FrameFlags::FD),
+                    flags: Some(f.flags),
+                    data_text,
+                    srcs: Vec::new(),
+                });
             }
         }
         ui.separator();

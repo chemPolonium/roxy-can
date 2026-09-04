@@ -140,12 +140,15 @@ pub enum BusCommand {
     /// Restore one generator row wholesale from a saved project. `None`
     /// data_text keeps the row's current base payload. Rows the bus does
     /// not know are ignored -- the database decides which messages exist.
+    /// `Some` flags overrides the FD-derived ones wholesale (a trace row
+    /// added to the generator keeps the exact flags it was seen with).
     SetEntryConfig {
         ch: u8,
         id: u32,
         active: bool,
         cycle_us: u64,
         fd: bool,
+        flags: Option<crate::can::frame::FrameFlags>,
         data_text: Option<String>,
         srcs: Vec<crate::sim::ValueSrc>,
     },
@@ -162,6 +165,9 @@ pub enum BusCommand {
     /// Blank every bus's database and drop the generator and the signal
     /// subscriptions with it -- the bus half of "new project".
     ClearDatabases,
+    /// Latch-free the specification report: every row forgets it fired.
+    /// The next run replaces the rows anyway; this is the in-run reset.
+    ClearSpec,
     /// Replace the trigger rule list wholesale -- the project-restore
     /// shape of trigger editing.
     SetTriggers(Vec<crate::trigger::Trigger>),
@@ -216,6 +222,9 @@ pub struct Snapshot {
     pub sample_cover: Option<(u64, u64)>,
     /// The violation monitor's latched rows, for the report export.
     pub spec: crate::spec::Spec,
+    /// Per-bus load rollups as of the last publish; the Bus Statistics
+    /// window's whole data source.
+    pub bus_loads: Arc<Vec<crate::load::BusLoad>>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -410,6 +419,12 @@ pub struct BusCore {
     pub(crate) aggs: HashMap<(u8, u32), MessageAgg>,
     /// Per-bus load / frame-rate / error rolling state, one entry per channel.
     pub(crate) bus_loads: Vec<crate::load::BusLoad>,
+    /// The load rollups as of the last publish. Rebuilt only when a step
+    /// (or a channel add/remove) touched them; the Bus Statistics window
+    /// reads this, never the live state.
+    pub(crate) published_loads: Arc<Vec<crate::load::BusLoad>>,
+    /// True when `bus_loads` changed since `published_loads` was built.
+    pub(crate) loads_dirty: bool,
     /// Subscribed signals: latest value, min/max/avg, sampled history.
     pub(crate) subs: HashMap<(u8, u32, String), Subscription>,
     /// Contiguous log-time span whose frames have already been decoded into
@@ -444,6 +459,7 @@ impl BusCore {
     /// Empty bus state; `App::new` layers the sample channel configuration
     /// and the measurement start on top.
     pub(crate) fn new(bus_loads: Vec<crate::load::BusLoad>) -> Self {
+        let published_loads = Arc::new(bus_loads.clone());
         BusCore {
             mode: Mode::Virtual,
             run_mode: Mode::Virtual,
@@ -462,6 +478,8 @@ impl BusCore {
             frame_counter: 0,
             aggs: HashMap::new(),
             bus_loads,
+            published_loads,
+            loads_dirty: false,
             subs: HashMap::new(),
             sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
@@ -582,9 +600,10 @@ impl BusCore {
                 active,
                 cycle_us,
                 fd,
+                flags,
                 data_text,
                 srcs,
-            } => self.set_entry_config(ch, id, active, cycle_us, fd, data_text, srcs),
+            } => self.set_entry_config(ch, id, active, cycle_us, fd, flags, data_text, srcs),
             BusCommand::Backfill {
                 from_us,
                 to_us,
@@ -598,6 +617,7 @@ impl BusCore {
                 self.tx_list.clear();
                 self.subs.clear();
             }
+            BusCommand::ClearSpec => self.spec.clear(),
             BusCommand::SetTriggers(triggers) => self.triggers = triggers,
             BusCommand::AddTrigger { cond, action } => {
                 self.triggers
@@ -643,6 +663,16 @@ impl BusCore {
         self.published_trace = self.trace.publish();
     }
 
+    /// Republishes the load rollups after a step (or a channel add/remove)
+    /// touched them. The rollup state itself is a deep copy -- bounded by
+    /// one window of frames per bus -- so it only re-clones when changed.
+    pub(crate) fn publish_loads(&mut self) {
+        if self.loads_dirty {
+            self.published_loads = Arc::new(self.bus_loads.clone());
+            self.loads_dirty = false;
+        }
+    }
+
     /// The frame read plus the text the just-drained commands produced.
     /// This is the form the publisher hands to the mailbox.
     pub(crate) fn snapshot_with_status(&self, status: Option<String>) -> Snapshot {
@@ -669,6 +699,7 @@ impl BusCore {
             sim_t_us: self.sim_t_us,
             sample_cover: self.sample_cover,
             spec: self.spec.clone(),
+            bus_loads: Arc::clone(&self.published_loads),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self
@@ -824,6 +855,7 @@ impl BusCore {
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
         });
         self.bus_loads.push(crate::load::BusLoad::new());
+        self.loads_dirty = true;
         let ch = self.channels.len() - 1;
         self.load_channel(ch, status);
         let ids: Vec<u32> = self.channels[ch]
@@ -926,6 +958,7 @@ impl BusCore {
         active: bool,
         cycle_us: u64,
         fd: bool,
+        flags: Option<crate::can::frame::FrameFlags>,
         data_text: Option<String>,
         srcs: Vec<crate::sim::ValueSrc>,
     ) {
@@ -935,11 +968,11 @@ impl BusCore {
         tx.active = active;
         tx.cycle_us = cycle_us;
         tx.next_t_us = 0;
-        tx.flags = if fd {
+        tx.flags = flags.unwrap_or(if fd {
             crate::can::frame::FrameFlags::FD
         } else {
             crate::can::frame::FrameFlags::NONE
-        };
+        });
         if let Some(text) = data_text
             && let Some(bytes) = crate::generator::parse_hex_bytes(&text)
         {
@@ -1046,6 +1079,7 @@ impl BusCore {
         let name = self.channels[ch].name.clone();
         self.channels.remove(ch);
         self.bus_loads.remove(ch);
+        self.loads_dirty = true;
         let remap = |c: u8| -> Option<u8> {
             if (c as usize) < ch {
                 Some(c)
@@ -1451,6 +1485,9 @@ impl BusCore {
         grace: u64,
         status: &mut String,
     ) -> bool {
+        // Every step moves the clock, so the load windows drain and resample
+        // whether or not a frame arrived; publish the rollups after it.
+        self.loads_dirty = true;
         self.buf.clear();
         self.source.poll(now_us, &mut self.buf);
         let source_empty = self.buf.is_empty();

@@ -717,6 +717,7 @@ impl Config {
                 active: t.active,
                 cycle_us,
                 fd: t.fd,
+                flags: None,
                 data_text,
                 srcs: t.srcs.into_iter().filter_map(value_src).collect(),
             });
