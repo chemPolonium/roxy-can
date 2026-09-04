@@ -92,7 +92,7 @@ fn content(app: &mut App, ui: &Ui) {
     let mut remove: Option<usize> = None;
     let n = app.snap.triggers.len();
     {
-        let Some(_table) = ui.begin_table_with_flags("trig_table", 5, flags) else {
+        let Some(_table) = ui.begin_table_with_flags("trig_table", 6, flags) else {
             return;
         };
         ui.table_setup_column_with(TableColumnSetup {
@@ -117,6 +117,11 @@ fn content(app: &mut App, ui: &Ui) {
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 42.0,
+            ..TableColumnSetup::new("Edit")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
             init_width_or_weight: 18.0,
             ..TableColumnSetup::new("")
         });
@@ -128,14 +133,11 @@ fn content(app: &mut App, ui: &Ui) {
                 continue;
             }
             let summary = app.trigger_summary(i);
-            // Clicking the row opens the editor popup for it; the list
-            // itself stays a list instead of growing an inline editor.
-            if ui
-                .selectable_config(format!("{summary}##trigsel{i}"))
-                .build()
-            {
-                app.trig_draft = TrigDraft::for_index(app, i);
-            }
+            // The checkbox in the next column gives the row its height;
+            // without the baseline alignment the plain text would float at
+            // the top of the taller row.
+            ui.align_text_to_frame_padding();
+            ui.text(summary);
             ui.table_next_column();
             let mut on = app.snap.triggers[i].enabled;
             if ui.checkbox(format!("##trigon{i}"), &mut on) {
@@ -147,9 +149,15 @@ fn content(app: &mut App, ui: &Ui) {
                 TriggerAction::StopRecording => "stop rec".to_string(),
                 TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
             };
+            ui.align_text_to_frame_padding();
             ui.text(action_text);
             ui.table_next_column();
+            ui.align_text_to_frame_padding();
             ui.text(format!("{}", app.snap.triggers[i].fired));
+            ui.table_next_column();
+            if ui.small_button(format!("edit##triged{i}")) {
+                app.trig_draft = TrigDraft::for_index(app, i);
+            }
             ui.table_next_column();
             if ui.small_button(format!("x##trigrm{i}")) {
                 remove = Some(i);
