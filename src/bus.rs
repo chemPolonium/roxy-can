@@ -338,8 +338,10 @@ pub struct SubView {
     pub type_tag: String,
     pub min: f64,
     pub max: f64,
-    /// Sampled history at the frame's stride, for the curve windows.
-    pub history: crate::observe::SampleCache,
+    /// Sampled history at the frame's stride, for the curve windows --
+    /// shared by Arc and rebuilt only when the cache actually changed,
+    /// never deep-copied per frame.
+    pub history: std::sync::Arc<crate::observe::SampleCache>,
     /// Palette row assigned at subscribe time.
     pub color: usize,
 }
@@ -624,6 +626,15 @@ impl BusCore {
         }
     }
 
+    /// Republishes changed signal caches for the next snapshot; pointer
+    /// clones otherwise. One call per step (and after backfills and
+    /// resets), never per frame.
+    fn refresh_sub_histories(&mut self) {
+        for sub in self.subs.values_mut() {
+            sub.refresh_published_history();
+        }
+    }
+
     /// Republishes the shared ring view. Called on steps that ingested
     /// frames (and on resets); the copy is the price of frontend reads
     /// that never alias the live deque.
@@ -690,7 +701,7 @@ impl BusCore {
                     type_tag: s.type_tag.clone(),
                     min: s.min,
                     max: s.max,
-                    history: s.history.clone(),
+                    history: s.published.clone(),
                     color: s.color,
                 })
                 .collect(),
@@ -778,6 +789,8 @@ impl BusCore {
                     last_update_us: 0,
                     last_sample_us: 0,
                     history: crate::observe::SampleCache::default(),
+                    published: std::sync::Arc::new(crate::observe::SampleCache::default()),
+                    history_dirty: false,
                     color,
                 },
             );
@@ -964,8 +977,10 @@ impl BusCore {
                 for v in taken {
                     sub.observe(v);
                 }
+                sub.history_dirty = true;
             }
         }
+        self.refresh_sub_histories();
         // Claim the span that was *asked for*, not merely what was read. Repeating
         // an unsatisfied request every frame would rescan the same stretch
         // forever; a scan stopped by the frame cap can therefore leave the tail of
@@ -1324,6 +1339,7 @@ impl BusCore {
         for sub in self.subs.values_mut() {
             sub.reset_measurement();
         }
+        self.refresh_sub_histories();
     }
 
     fn stop_bus(&mut self, status: &mut String) {
@@ -1521,6 +1537,7 @@ impl BusCore {
         if i > 0 {
             self.publish_trace();
         }
+        self.refresh_sub_histories();
 
         // One sample of the windowed numbers per step feeds the Min/Max/Avg
         // columns of the Bus Statistics window.

@@ -3,6 +3,7 @@
 //! window signal lists that pick what to observe.
 
 use crate::app::{HISTORY_SPAN_US, MIN_STRIDE_US, SAMPLE_INTERVAL_US, STRIDE_POINTS_PER_WINDOW};
+use std::sync::Arc;
 
 /// Signal samples, kept ascending by timestamp.
 ///
@@ -148,6 +149,12 @@ pub struct Subscription {
     pub last_update_us: u64,
     pub last_sample_us: u64,
     pub history: SampleCache,
+    /// The published view of `history`, shared with the frontend by Arc
+    /// and rebuilt only when sampling or a backfill actually changed the
+    /// cache -- the same discipline as the trace ring's `publish_trace`.
+    /// Core-side only; the snapshot carries `published`.
+    pub(crate) published: Arc<SampleCache>,
+    pub(crate) history_dirty: bool,
     pub color: usize,
 }
 
@@ -166,6 +173,7 @@ impl Subscription {
         self.last_sample_us = t_us;
         self.observe(v);
         self.history.trim_oldest(HISTORY_SPAN_US);
+        self.history_dirty = true;
     }
 
     /// Folds one sampled value into the running statistics.
@@ -190,6 +198,17 @@ impl Subscription {
     pub(crate) fn reset_measurement(&mut self) {
         self.history.clear();
         self.clear_accumulators();
+        self.history_dirty = true;
+    }
+
+    /// Rebuilds the published Arc when the working cache changed; a
+    /// pointer clone otherwise. Called once per step (and after backfills
+    /// and resets), never per frame.
+    pub(crate) fn refresh_published_history(&mut self) {
+        if self.history_dirty {
+            self.published = Arc::new(self.history.clone());
+            self.history_dirty = false;
+        }
     }
 
     pub(crate) fn clear_accumulators(&mut self) {
