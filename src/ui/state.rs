@@ -95,7 +95,7 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
     let w = avail[0].max(NAME_W + 60.0);
     let h = avail[1].max(RULER_H + ROW_H);
     let [x0, y0] = ui.cursor_screen_pos();
-    let dl = ui.get_window_draw_list();
+    let mut dl = ui.get_window_draw_list();
 
     let tw = app.state_trackers[i].time_window_s;
     // Always live: the right edge is the plot clock, which follows the
@@ -104,15 +104,34 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
     let t_left = (t_right - tw).max(0.0);
     let lo_us = (t_left * 1e6) as u64;
     let hi_us = (t_right * 1e6) as u64;
-    let bx0 = x0 + NAME_W;
-    let bx1 = x0 + w;
-    let span_s = (t_right - t_left).max(1e-6);
+    let geo = BandGeo {
+        bx0: x0 + NAME_W,
+        bx1: x0 + w,
+        t_left,
+        span_s: (t_right - t_left).max(1e-6),
+        ry: 0.0,
+    };
 
-    // Ruler: pick the finest tick spacing that still leaves ~12 labels.
-    let step = nice_step(span_s);
-    let mut t = (t_left / step).ceil() * step;
+    // Ruler: minor ticks at a fifth of the label step first, then labeled
+    // major ticks over them -- CANoe's axis reads absolute time at a
+    // glance this way.
+    let step = nice_step(geo.span_s);
+    let minor = step / 5.0;
+    let mut tm = (geo.t_left / minor).ceil() * minor;
+    while tm <= t_right {
+        let x = geo.x_of(tm);
+        dl.add_line(
+            [x, y0 + RULER_H - 3.0],
+            [x, y0 + RULER_H],
+            [0.32, 0.32, 0.38, 1.0],
+        )
+        .thickness(1.0)
+        .build();
+        tm += minor;
+    }
+    let mut t = (geo.t_left / step).ceil() * step;
     while t <= t_right {
-        let x = bx0 + (((t - t_left) / span_s) as f32) * (bx1 - bx0);
+        let x = geo.x_of(t);
         dl.add_line(
             [x, y0 + RULER_H - 5.0],
             [x, y0 + RULER_H],
@@ -144,6 +163,7 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         let key = app.state_trackers[i].signals[j].key.clone();
         let visible = app.state_trackers[i].signals[j].visible;
         let ry = y0 + RULER_H + j as f32 * (ROW_H + ROW_GAP);
+        let geo = BandGeo { ry, ..geo };
         let bg = if j % 2 == 0 {
             [0.13, 0.13, 0.16, 1.0]
         } else {
@@ -159,9 +179,13 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
             [0.45, 0.45, 0.5, 1.0]
         };
         dl.add_text([x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5], name_col, &key.2);
-        dl.add_rect([bx0, ry], [bx1, ry + ROW_H], [0.07, 0.07, 0.09, 1.0])
-            .filled(true)
-            .build();
+        dl.add_rect(
+            [geo.bx0, ry],
+            [geo.bx1, ry + ROW_H],
+            [0.07, 0.07, 0.09, 1.0],
+        )
+        .filled(true)
+        .build();
         if !visible {
             continue;
         }
@@ -174,29 +198,39 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // band, not just the instant of its sample.
         let held = sub.history.at(lo_us).map(quantize);
         let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
-        let segs = state_segments(held, &pts, lo_us, hi_us);
+        let segs = state_segments(held, &pts, lo_us, hi_us, |v| {
+            table_label(app, &key, v).unwrap_or_else(|| fmt_val(v))
+        });
+        let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
+        states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        states.dedup();
+
+        // CANoe's Binary rendering: a signal whose whole visible world is
+        // 0/1 draws as a square wave instead of filled bands.
+        if is_binary(&states) {
+            draw_wave(ui, &mut dl, &segs, &geo, color);
+            continue;
+        }
+
         // State colors: with few distinct values visible, every state gets
         // its own palette slot -- gear 5 and gear 1 read apart at a glance.
         // Slots are remembered per value (see `slot_for`), so the same
         // value keeps its color across the whole run. A busy analog with
-        // more visible states than the palette keeps the signal's own
-        // color for the whole band.
-        let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
-        states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        states.dedup();
+        // more visible states than the palette gets CANoe's plain neutral
+        // band: the value label does the talking.
         let per_state = states.len() <= PALETTE.len();
         let win = &mut app.state_trackers[i];
         let slots = win.color_slots.entry(key.clone()).or_default();
         for seg in segs {
-            let sx0 = x_of(bx0, bx1, t_left, span_s, seg.t0_us as f64 / 1e6).max(bx0);
-            let sx1 = x_of(bx0, bx1, t_left, span_s, seg.t1_us as f64 / 1e6).min(bx1);
+            let sx0 = geo.x_of(seg.t0_us as f64 / 1e6).max(geo.bx0);
+            let sx1 = geo.x_of(seg.t1_us as f64 / 1e6).min(geo.bx1);
             if sx1 - sx0 < 1.0 {
                 continue;
             }
             let fill = if per_state {
                 PALETTE[slot_for(slots, seg.value)]
             } else {
-                color
+                NEUTRAL_FILL
             };
             // Per-state mode needs no outlines: neighbouring segments
             // always differ in value and color, so the boundary reads by
@@ -227,8 +261,89 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
     }
 }
 
-fn x_of(bx0: f32, bx1: f32, t_left: f64, span_s: f64, t_s: f64) -> f32 {
-    bx0 + (((t_s - t_left) / span_s) as f32) * (bx1 - bx0)
+/// Pixel geometry shared by the band drawing helpers: the track's screen
+/// span, the visible time span, and the row's top edge. `x_of` maps a
+/// sample time onto the track.
+struct BandGeo {
+    bx0: f32,
+    bx1: f32,
+    t_left: f64,
+    span_s: f64,
+    ry: f32,
+}
+
+impl BandGeo {
+    fn x_of(&self, t_s: f64) -> f32 {
+        self.bx0 + (((t_s - self.t_left) / self.span_s) as f32) * (self.bx1 - self.bx0)
+    }
+}
+
+/// The plain band CANoe paints for signals without usable state coloring.
+const NEUTRAL_FILL: [f32; 4] = [0.86, 0.86, 0.89, 0.92];
+
+/// CANoe's Binary rendering applies to signals whose states are just 0
+/// and 1 -- detected from the visible states, not configured.
+pub(crate) fn is_binary(states: &[f64]) -> bool {
+    states.iter().all(|&s| s == 0.0 || s == 1.0)
+}
+
+/// The Binary rendering itself: the high state runs along the top of the
+/// row, the low state along the bottom, every transition drops a vertical
+/// edge, and the label sits mid-cell -- the FlashLight row of the CANoe
+/// screenshot.
+fn draw_wave(
+    ui: &Ui,
+    dl: &mut imgui::DrawListMut,
+    segs: &[StateSeg],
+    geo: &BandGeo,
+    color: [f32; 4],
+) {
+    let ry = geo.ry;
+    let high_y = ry + 5.0;
+    let low_y = ry + ROW_H - 6.0;
+    let mut prev_y: Option<f32> = None;
+    for seg in segs {
+        let sx0 = geo.x_of(seg.t0_us as f64 / 1e6).max(geo.bx0);
+        let sx1 = geo.x_of(seg.t1_us as f64 / 1e6).min(geo.bx1);
+        if sx1 - sx0 < 1.0 {
+            continue;
+        }
+        let y = if seg.value == 1.0 { high_y } else { low_y };
+        if let Some(py) = prev_y {
+            dl.add_line([sx0, py], [sx0, y], color)
+                .thickness(1.5)
+                .build();
+        }
+        dl.add_line([sx0, y], [sx1, y], color)
+            .thickness(1.5)
+            .build();
+        prev_y = Some(y);
+        let tsz = ui.calc_text_size(&seg.label);
+        if tsz[0] + 8.0 <= sx1 - sx0 {
+            dl.add_text(
+                [(sx0 + sx1 - tsz[0]) * 0.5, ry + (ROW_H - tsz[1]) * 0.5],
+                [0.88, 0.89, 0.92, 1.0],
+                &seg.label,
+            );
+        }
+    }
+}
+
+/// The DBC value-table label for physical state value `v` of signal
+/// `key` -- CANoe shows `NM_STATE_NORMAL_OPERATION`, not the raw number.
+/// Physical maps back to raw through the signal's own factor/offset;
+/// None when there is no table or no entry for that raw value.
+fn table_label(app: &App, key: &(u8, u32, String), v: f64) -> Option<String> {
+    let db = app.snap.channels.get(key.0 as usize)?.dbc.as_deref()?;
+    let sig = db
+        .messages
+        .get(&key.1)?
+        .signals
+        .iter()
+        .find(|s| s.name == key.2)?;
+    let raw = ((v - sig.offset) / sig.factor).round() as i64;
+    let table = db.value_tables.get(&(key.1, key.2.clone()))?;
+    table.get(&raw).cloned()
 }
 
 fn nice_step(span_s: f64) -> f64 {
@@ -290,15 +405,18 @@ pub(crate) fn fmt_val(v: f64) -> String {
 /// `[lo_us, hi_us]`. `held` is the value carried in by the last sample
 /// before the window (piecewise-constant hold semantics -- a CAN signal
 /// keeps its value between updates); `pts` are the in-window samples.
+/// `label_of` names a state: the DBC value-table label when one exists,
+/// the `%g` number otherwise.
 pub(crate) fn state_segments(
     held: Option<f64>,
     pts: &[(u64, f64)],
     lo_us: u64,
     hi_us: u64,
+    mut label_of: impl FnMut(f64) -> String,
 ) -> Vec<StateSeg> {
     let mut cur = held.map(|v| {
         let q = quantize(v);
-        (q, fmt_val(q), lo_us)
+        (q, label_of(q), lo_us)
     });
     let mut out = Vec::new();
     for &(t, v) in pts {
@@ -314,10 +432,10 @@ pub(crate) fn state_segments(
                     label: std::mem::take(label),
                 });
                 *qv = q;
-                *label = fmt_val(q);
+                *label = label_of(q);
                 *t0 = t;
             }
-            None => cur = Some((q, fmt_val(q), t.max(lo_us))),
+            None => cur = Some((q, label_of(q), t.max(lo_us))),
         }
     }
     if let Some((q, label, t0)) = cur {
@@ -380,7 +498,7 @@ mod tests {
     #[test]
     fn discrete_toggles_get_one_segment_per_cell() {
         let pts = [(10_000, 0.0), (20_000, 1.0), (30_000, 0.0), (40_000, 1.0)];
-        let segs = state_segments(Some(1.0), &pts, 5_000, 45_000);
+        let segs = state_segments(Some(1.0), &pts, 5_000, 45_000, fmt_val);
         assert_eq!(segs.len(), 5, "{segs:?}");
         assert_eq!(
             segs[0].t0_us, 5_000,
@@ -408,7 +526,7 @@ mod tests {
             (30_000, 3400.0001),
             (40_000, 3100.0),
         ];
-        let segs = state_segments(None, &pts, 0, 50_000);
+        let segs = state_segments(None, &pts, 0, 50_000, fmt_val);
         assert_eq!(segs.len(), 2, "{segs:?}");
         assert_eq!((segs[0].t0_us, segs[0].label.as_str()), (10_000, "3400"));
         assert_eq!((segs[1].t0_us, segs[1].label.as_str()), (40_000, "3100"));
@@ -416,7 +534,7 @@ mod tests {
 
     #[test]
     fn a_value_seen_before_the_window_holds_across_the_left_edge() {
-        let segs = state_segments(Some(2.5), &[], 100_000, 200_000);
+        let segs = state_segments(Some(2.5), &[], 100_000, 200_000, fmt_val);
         assert_eq!(segs.len(), 1, "{segs:?}");
         assert_eq!((segs[0].t0_us, segs[0].t1_us), (100_000, 200_000));
         assert_eq!(segs[0].label, "2.5");
@@ -424,7 +542,7 @@ mod tests {
 
     #[test]
     fn nothing_seen_means_nothing_drawn() {
-        assert!(state_segments(None, &[], 0, 1000).is_empty());
+        assert!(state_segments(None, &[], 0, 1000, fmt_val).is_empty());
     }
 
     #[test]
@@ -475,5 +593,58 @@ mod tests {
     fn label_text_contrasts_with_the_fill() {
         assert_eq!(text_on([0.95, 0.95, 0.2, 1.0])[0], 0.06, "dark on bright");
         assert_eq!(text_on([0.1, 0.2, 0.8, 1.0])[0], 0.92, "light on dark");
+    }
+
+    #[test]
+    fn segment_labels_come_from_the_labeller() {
+        let pts = [(10_000, 1.0), (20_000, 2.0)];
+        let segs = state_segments(None, &pts, 0, 30_000, |v| format!("S{v}"));
+        assert_eq!(segs[0].label, "S1");
+        assert_eq!(segs[1].label, "S2");
+    }
+
+    #[test]
+    fn binary_rendering_applies_only_to_0_1_signals() {
+        assert!(is_binary(&[0.0, 1.0]));
+        assert!(is_binary(&[1.0]));
+        assert!(!is_binary(&[0.0, 1.0, 2.0]), "a third state is an enum");
+        assert!(!is_binary(&[-1.0, 1.0]), "signed values are not the pair");
+    }
+
+    const VAL_DBC: &str = r#"VERSION "roxy-can state val test"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 410 Enums: 8 ECU
+ SG_ Gear : 0|8@1+ (1,0) [0|0] "" ECU
+ SG_ Free : 16|8@1+ (1,0) [0|0] "" ECU
+
+VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
+"#;
+
+    #[test]
+    fn state_labels_prefer_the_dbc_value_table() {
+        let mut app = App::headless();
+        app.channels[0].dbc = Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(VAL_DBC).unwrap(),
+        ));
+        // table_label reads the snapshot's view of the channels.
+        app.refresh_snapshot();
+        let gear = (0u8, 410u32, "Gear".to_string());
+        assert_eq!(table_label(&app, &gear, 2.0).as_deref(), Some("Gear_2"));
+        assert_eq!(table_label(&app, &gear, 0.0).as_deref(), Some("Neutral"));
+        assert_eq!(
+            table_label(&app, &gear, 7.0),
+            None,
+            "a raw value with no entry stays numeric"
+        );
+        let free = (0u8, 410u32, "Free".to_string());
+        assert_eq!(
+            table_label(&app, &free, 1.0),
+            None,
+            "a signal with no table stays numeric"
+        );
     }
 }
