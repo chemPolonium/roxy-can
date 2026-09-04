@@ -162,6 +162,26 @@ pub enum BusCommand {
     /// Blank every bus's database and drop the generator and the signal
     /// subscriptions with it -- the bus half of "new project".
     ClearDatabases,
+    /// Replace the trigger rule list wholesale -- the project-restore
+    /// shape of trigger editing.
+    SetTriggers(Vec<crate::trigger::Trigger>),
+    /// Append a trigger rule (the Triggers window's "+ <shape>" buttons).
+    AddTrigger {
+        cond: crate::trigger::TriggerCond,
+        action: crate::trigger::TriggerAction,
+    },
+    /// Drop trigger `index`.
+    RemoveTrigger { index: usize },
+    /// Flip one trigger's enable checkbox.
+    SetTriggerEnabled { index: usize, on: bool },
+    /// Replace trigger `index`'s condition and action -- the editor's
+    /// Apply. The edge level resets: it belonged to the old condition,
+    /// and a reshaped trigger starts from a clean edge.
+    EditTrigger {
+        index: usize,
+        cond: crate::trigger::TriggerCond,
+        action: crate::trigger::TriggerAction,
+    },
 }
 
 /// What the frontend may see of the bus: one immutable, frame-shaped
@@ -574,6 +594,32 @@ impl BusCore {
                 }
                 self.tx_list.clear();
                 self.subs.clear();
+            }
+            BusCommand::SetTriggers(triggers) => self.triggers = triggers,
+            BusCommand::AddTrigger { cond, action } => {
+                self.triggers
+                    .push(crate::trigger::Trigger::new(cond, action));
+            }
+            BusCommand::RemoveTrigger { index } => {
+                if index < self.triggers.len() {
+                    self.triggers.remove(index);
+                }
+            }
+            BusCommand::SetTriggerEnabled { index, on } => {
+                if let Some(t) = self.triggers.get_mut(index) {
+                    t.enabled = on;
+                }
+            }
+            BusCommand::EditTrigger {
+                index,
+                cond,
+                action,
+            } => {
+                if let Some(t) = self.triggers.get_mut(index) {
+                    t.cond = cond;
+                    t.action = action;
+                    t.level = false;
+                }
             }
         }
     }

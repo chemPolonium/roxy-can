@@ -51,7 +51,7 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SIZING_STRETCH_PROP;
     let mut remove: Option<usize> = None;
-    let n = app.triggers.len();
+    let n = app.snap.triggers.len();
     {
         let Some(_table) = ui.begin_table_with_flags("trig_table", 5, flags) else {
             return;
@@ -96,19 +96,19 @@ fn content(app: &mut App, ui: &Ui) {
                 app.trigger_sel = Some(i);
             }
             ui.table_next_column();
-            let mut on = app.triggers[i].enabled;
+            let mut on = app.snap.triggers[i].enabled;
             if ui.checkbox(format!("##trigon{i}"), &mut on) {
-                app.triggers[i].enabled = on;
+                app.send(crate::bus::BusCommand::SetTriggerEnabled { index: i, on });
             }
             ui.table_next_column();
-            let action_text = match app.triggers[i].action {
+            let action_text = match app.snap.triggers[i].action {
                 crate::trigger::TriggerAction::StartRecording => "start rec".to_string(),
                 crate::trigger::TriggerAction::StopRecording => "stop rec".to_string(),
                 crate::trigger::TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
             };
             ui.text(action_text);
             ui.table_next_column();
-            ui.text(format!("{}", app.triggers[i].fired));
+            ui.text(format!("{}", app.snap.triggers[i].fired));
             ui.table_next_column();
             if ui.small_button(format!("x##trigrm{i}")) {
                 remove = Some(i);
@@ -126,12 +126,12 @@ fn content(app: &mut App, ui: &Ui) {
 /// edited against local widgets (the DBC picker needs `&self` while the
 /// row is being shaped) and written back once.
 fn editor(app: &mut App, ui: &Ui) {
-    let Some(sel) = app.trigger_sel.filter(|s| *s < app.triggers.len()) else {
+    let Some(sel) = app.trigger_sel.filter(|s| *s < app.snap.triggers.len()) else {
         return;
     };
     ui.separator();
-    let mut cond = app.triggers[sel].cond.clone();
-    let mut action = app.triggers[sel].action;
+    let mut cond = app.snap.triggers[sel].cond.clone();
+    let mut action = app.snap.triggers[sel].action;
     let mut changed = false;
     let cond_bus = cond.bus();
 
@@ -236,15 +236,17 @@ fn editor(app: &mut App, ui: &Ui) {
     }
 
     // The entry picker only means something while the action is Send.
-    if matches!(action, crate::trigger::TriggerAction::Send { .. }) && !app.tx_list.is_empty() {
+    if matches!(action, crate::trigger::TriggerAction::Send { .. }) && !app.snap.tx.is_empty() {
         let names: Vec<String> = app
-            .tx_list
+            .snap
+            .tx
             .iter()
             .map(|t| format!("{} 0x{:03X} {}", app.channel_name(t.channel), t.id, t.name))
             .collect();
         let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         let mut pick = app
-            .tx_list
+            .snap
+            .tx
             .iter()
             .position(|t| {
                 matches!(action, crate::trigger::TriggerAction::Send { ch, id }
@@ -253,7 +255,7 @@ fn editor(app: &mut App, ui: &Ui) {
             .unwrap_or(0);
         ui.set_next_item_width(220.0);
         if ui.combo_simple_string("##trigsend", &mut pick, &refs) {
-            let t = &app.tx_list[pick];
+            let t = &app.snap.tx[pick];
             action = crate::trigger::TriggerAction::Send {
                 ch: t.channel,
                 id: t.id,
@@ -263,11 +265,13 @@ fn editor(app: &mut App, ui: &Ui) {
     }
 
     if changed {
-        app.triggers[sel].cond = cond;
-        app.triggers[sel].action = action;
-        // The level belongs to the old condition; a reshaped trigger
-        // starts from a clean edge.
-        app.triggers[sel].level = false;
+        // The whole reshaped rule crosses as one command; the edge level
+        // resets on the bus side.
+        app.send(crate::bus::BusCommand::EditTrigger {
+            index: sel,
+            cond,
+            action,
+        });
     }
 }
 

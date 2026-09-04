@@ -813,8 +813,10 @@ impl Config {
         app.show_id_filter = self.show_id_filter;
         app.text_rate_hz = self.text_rate_hz;
         // An unknown kind code (a project from a future version) drops
-        // only that trigger; the rest load.
-        app.triggers = self
+        // only that trigger; the rest load. The list belongs to the bus,
+        // so it crosses as a command; restore reads the list back below
+        // (the project's clean baseline), hence the settle.
+        let triggers: Vec<crate::trigger::Trigger> = self
             .triggers
             .iter()
             .filter_map(|c| {
@@ -844,6 +846,8 @@ impl Config {
                 Some(t)
             })
             .collect();
+        app.send(crate::bus::BusCommand::SetTriggers(triggers));
+        app.settle();
         app.trigger_sel = None;
         app.trig_edit_sel = None;
         app.spec_tol_pct = self.spec.tolerance_percent;

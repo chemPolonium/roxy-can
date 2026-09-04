@@ -60,7 +60,7 @@ pub enum TriggerAction {
 }
 
 /// One armed condition plus its edge state and fire history.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Trigger {
     pub cond: TriggerCond,
     pub action: TriggerAction,
@@ -119,9 +119,10 @@ impl TriggerCond {
 
 impl App {
     /// One-line description of trigger `i` for the list: bus name plus
-    /// the condition's own summary.
+    /// the condition's own summary. Reads the snapshot: the rules live
+    /// on the bus, the window only shapes them.
     pub fn trigger_summary(&self, i: usize) -> String {
-        match self.triggers.get(i) {
+        match self.snap.triggers.get(i) {
             Some(t) => format!("{}  {}", self.channel_name(t.cond.bus()), t.cond.short()),
             None => String::new(),
         }
@@ -139,7 +140,7 @@ impl App {
     pub fn add_signal_trigger(&mut self) {
         // Default to the database's first message and signal so the row
         // starts watching something real instead of a blind id.
-        let db = self.channels.first().and_then(|c| c.dbc.as_ref());
+        let db = self.snap.channels.first().and_then(|c| c.dbc.as_deref());
         let id = db.and_then(|db| db.order.first()).copied().unwrap_or(0x100);
         let signal = db
             .and_then(|db| db.messages.get(&id))
@@ -168,17 +169,24 @@ impl App {
     }
 
     fn push_trigger(&mut self, cond: TriggerCond) {
-        self.triggers
-            .push(Trigger::new(cond, TriggerAction::StartRecording));
-        self.trigger_sel = Some(self.triggers.len() - 1);
+        // The new rule's index is the list's length *before* the append.
+        let index = self.snap.triggers.len();
+        self.send(crate::bus::BusCommand::AddTrigger {
+            cond,
+            action: TriggerAction::StartRecording,
+        });
+        self.trigger_sel = Some(index);
         self.show_triggers = true;
     }
 
     pub fn remove_trigger(&mut self, i: usize) {
-        if i < self.triggers.len() {
-            self.triggers.remove(i);
+        if i < self.snap.triggers.len() {
+            self.send(crate::bus::BusCommand::RemoveTrigger { index: i });
         }
-        if self.trigger_sel.is_some_and(|s| s >= self.triggers.len()) {
+        if self
+            .trigger_sel
+            .is_some_and(|s| s >= self.snap.triggers.len())
+        {
             self.trigger_sel = None;
         }
         // The editor's hex buffer names a trigger that may be gone.
