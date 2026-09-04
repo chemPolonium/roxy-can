@@ -110,6 +110,8 @@
 **收尾已落地（2026-09-04）**：满载对比探针 `perf_snapshot_publish_under_load`（`#[ignore]`，release 手动跑）——6 路订阅 × 72 000 点/路 + 5 万帧满环，三口径各 200 轮：旧设计（每次发布深拷贝全部历史 + 重建扁平 trace）**4 511.6 µs**；现状最坏（当轮所有缓存都脏）**12.4 µs**；现状空闲（无重采样，纯指针换手）**3.7 µs**——最坏情况 **362×** 便宜，旧设计光发布一帧就吃掉 60 FPS 帧预算的 27%，现在千分之几。测试 338 过 + 1 探针（ignored）。阶段 4 剩余验收：用户实测拖窗口 / 多曲线窗口 / Trace 滚动时总线不断流。
 验收：CPU 占用不高于单线程版；慢机器上 UI 也拖不慢总线。
 
+**收尾后补漏（2026-09-04）**：用户实测打开 Specification 窗口程序直接退出——阶段 3 的直读清扫漏了四个"不常打开就走不到"的路径，全部带 Deref panic：spec 窗口（读 `channels`/`spec`、Clear 直写）、Bus Statistics 窗口（`bus_loads` 根本不在快照里，现补：核心加脏标记 + `publish_loads()`，`Snapshot.bus_loads` 走 `Arc<Vec<BusLoad>>`，仅 step/增删总线后重克隆）、Graphics 的 Dbc 纵轴回退（读 `subs`，改走 `sub_view`）、Trace 右键"加入发生器"（直改 `tx_list`，改走 `SetEntryConfig`，命令新增 `flags: Option<FrameFlags>` 让回放里见到的帧按原样入列）。Clear 按钮落成 `ClearSpec` 命令（清账后下一帧算首采样，不会立即再挂账）。教训：窗口级清扫要按"打开每个窗口 + 点开每个右键菜单"逐一眼见为实，编译期逼不出来的是没人打开过的窗口。349 测试过（+3：ClearSpec、flags 覆盖、快照 loads）。
+
 ### 阶段 5：硬件源落地（适配器选型后启动）
 
 要做：适配器作为核心的又一个 `FrameSource`——RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器；信道 UI 加适配器选择、连接状态、bus-off 恢复。分期：只收（2-4 天）→ 发送（约 1 周）→ CAN FD 与错误状态（数周）。
