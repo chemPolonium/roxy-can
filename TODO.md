@@ -114,6 +114,8 @@
 
 **待查（偶发）**：全量测试今天两次出现"单个测试挂、原样重跑即绿"，都紧跟着一次编译之后。六连跑未能复现。下次再挂：先保留输出抓 `failures:` 块里的测试名再动手，优先怀疑真实墙钟类测试（如 `record_survives_start_and_writes_frames` 的 11 ms sleep 循环，Windows 默认定时粒度 ~15 ms 会造成少帧）。
 
+**Triggers 编辑器重做（2026-09-04，用户反馈）**：行内编辑器撤掉——触发器一多就要滚到最底下改，且每改一个控件就实时下发命令。改成 Send-cycle 式弹出编辑器：点行打开，Bus/Message/Signal/Threshold/Direction/Action/Entry 两列对齐排布，`%g` 自动数字格式（不再固定三位小数），Apply 一次性 `EditTrigger`、Cancel/Esc 丢弃；窗口最小宽度 460（弹窗 380）。`falling→rising` 改不动的问题随行内实时回写一起消失（草稿在本地，不再被快照回灌），补了模型层双向翻转测试。新状态 `trig_draft: Option<TrigDraft>`（index+cond+action+id_buf 一体），顶掉 `trigger_sel`/`trig_id_buf`/`trig_edit_sel` 三个散字段；删行时编辑器随行关闭或跟行上移。350 测试过。
+
 ### 阶段 5：硬件源落地（适配器选型后启动）
 
 要做：适配器作为核心的又一个 `FrameSource`——RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器；信道 UI 加适配器选择、连接状态、bus-off 恢复。分期：只收（2-4 天）→ 发送（约 1 周）→ CAN FD 与错误状态（数周）。
