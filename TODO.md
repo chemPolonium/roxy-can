@@ -75,6 +75,21 @@
 
 验收：行为不变（327 测试过）。至此 spawn 核心线程不再有编译期障碍；配置类例外仅剩"序列化未来改为读快照"一项自然消失。
 
+### 阶段 3 第三刀：核心线程上线（2026-09-04）
+
+`src/core_loop.rs` 落地，`App::new` 起 `bus-core` 线程，总线从此自己跑：
+
+- **CoreLoop**：核心 + 命令收件箱 + 快照信箱的可运行单元，`drain`/`publish`/`step_lap` 一圈三件套。**线程体**：`recv_timeout(next_deadline, 封顶 10ms)` 等命令或死线 → drain → 仅在 measuring 且未暂停时 `step_to`（时钟是线程自己的，`StartVirtual` 重锚 `clock_zero`，暂停边沿盖章 `paused_at_us`，与原 UI 循环语义一致）→ publish；空闲但有命令也发布（命令结果必须回到快照）。断线（前端丢弃发送端）即退出。
+- **双驱动**：`CoreDrive::Threaded`（产品，`App::new`）与 `Manual(Box<CoreLoop>)`（测试/未来 headless CLI，`App::headless()`，send 同步、tick 手摇）。`Deref` 仅在 Manual 下交出核心，Threaded 下 panic——把隐式核心访问在编译期逼出来。`refresh_snapshot` 转为 `#[cfg(test)]`（产品流程没人再需要"发布+读"）。
+- **策略旋钮**：`BusKnobs`（stride/tol/grace 原子量）——前端每帧写、线程每圈读；连续量走旋钮，事件走命令，边界记录在类型文档里。
+- **快照补齐**（把产品路径上最后的隐式核心读清零）：`sim_t_us`、`sample_cover`、`spec`、`triggers`、`last_record`、`laps`（命令进度，线程追赶检测用）；start/load/replay/plot_now/toggle_play 等改读快照。**Backfill** 与 **ClearDatabases** 变成命令——绘图的历史回填（扫描日志源属核心）与"新建工程"的总线清空都改走管道；`settle()` 供工程恢复等"发一批、读回来"的流程在线程驱动下等待追赶（圈计数静止即认为追平，2s 封顶）。帧率 EMA 改由快照帧计数差算出，与驱动方式无关。
+- **引导收敛**：`build_core()`（默认总线 + `bootstrap_dbcs` + `populate_generator`）在 spawn 前同步跑完并预发布首帧快照，baseline 与首个 UI 帧看到的都是完整总线；`reset_to_defaults` 按原驱动重建。
+- **编译期收编**：`FrameSource: Send`、`FrameStream: Send`——核心整体过线程边界从此由类型保证。
+
+排查记要：冒烟测试（真线程 + 实时轮询帧流）当场抓住 `update` 里经 Deref 读 `measuring` 的 panic——正是它存在的意义；暂停直写类测试补 `refresh_snapshot` 与手摇盖章即可。
+
+验收：328 测试过，其中新增**真线程冒烟测试**——`App::new` 起线程、发命令、实时轮询到帧流、drop 后线程随断线退出。阶段 3 剩余验收项：GUI 实测拖窗口/开模态/卡鼠标时波形不断流（需要跑起来看），以及 backfill 阻塞核心线程的观察与后续挪移。
+
 ### 阶段 3：核心上线程
 
 要做：BusCore 搬进独立线程，跑"核心线程与时钟模型"定案的事件驱动循环（死线等待 → drain 命令 → step → 发布快照）；命令走 mpsc，快照用 Arc 换手（UI `try_lock`，拿不到沿用上一帧快照，永不阻塞）。发生器槽位在事件死线上精确调度——`MAX_TX_CATCHUP` 预算与激活锚定大半自然消失，相关测试搬到核心的时钟语义上。
