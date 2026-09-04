@@ -179,6 +179,9 @@ pub struct App {
     /// The State Tracker row whose custom state bands are being edited:
     /// window index plus signal key. Session state only.
     pub state_rule_edit: Option<(usize, (u8, u32, String))>,
+    /// The band currently picking a color in that editor: window index,
+    /// signal key, band index. Session state only.
+    pub state_rule_pick: Option<(usize, (u8, u32, String), usize)>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Generator row whose value-source parameters the modal is editing:
@@ -364,6 +367,7 @@ impl App {
             popup_target: None,
             focus_title: None,
             state_rule_edit: None,
+            state_rule_pick: None,
             net_selected: 0,
             tx_pick: 0,
             src_edit: None,

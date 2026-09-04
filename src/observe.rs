@@ -505,12 +505,13 @@ pub struct DataWindow {
 /// rows. Ascending cut points split the value axis into bands; band i
 /// holds `cuts[i-1] <= v < cuts[i]` (the first from -inf, the last to
 /// +inf, and a cut value itself belongs to the band above it). Every
-/// band carries its own name and fill color.
+/// band carries its own name and fill color; `None` means automatic --
+/// the band takes a stable palette slot like auto-colored values do.
 #[derive(Clone)]
 pub struct StateRule {
     pub cuts: Vec<f64>,
     pub names: Vec<String>,
-    pub colors: Vec<[f32; 3]>,
+    pub colors: Vec<Option<[f32; 3]>>,
 }
 
 impl StateRule {
@@ -524,10 +525,8 @@ impl StateRule {
     pub fn add_cut(&mut self, c: f64) {
         let i = self.cuts.partition_point(|&x| x < c);
         self.cuts.insert(i, c);
-        let k = self.names.len();
-        self.names.insert(i, format!("State {k}"));
-        let c = crate::app::PALETTE[k % crate::app::PALETTE.len()];
-        self.colors.insert(i, [c[0], c[1], c[2]]);
+        self.names.insert(i, format!("State {}", self.names.len()));
+        self.colors.insert(i, None);
     }
 
     /// Removes cut `i`, merging the band below the boundary with the one

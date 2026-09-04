@@ -27,6 +27,29 @@ const TW_CHOICES: [(f64, &str); 5] = [
     (1800.0, "30 min"),
 ];
 
+/// Word-style default picks for custom bands: low-saturation so a row of
+/// neighbours never turns into a shouting match on the dark background.
+const BAND_PALETTE: [[f32; 3]; 12] = [
+    [0.62, 0.68, 0.78], // 灰蓝
+    [0.58, 0.70, 0.60], // 灰绿
+    [0.76, 0.58, 0.54], // 灰红
+    [0.80, 0.74, 0.58], // 米黄
+    [0.65, 0.58, 0.74], // 灰紫
+    [0.52, 0.68, 0.70], // 灰青
+    [0.76, 0.66, 0.52], // 暖沙
+    [0.74, 0.60, 0.66], // 灰粉
+    [0.64, 0.67, 0.49], // 橄榄
+    [0.50, 0.55, 0.68], // 靛灰
+    [0.60, 0.60, 0.62], // 中灰
+    [0.70, 0.62, 0.52], // 褐灰
+];
+
+/// Synthetic slot keys for band auto-colors, laid in the NaN bit range so
+/// no real value's bits can ever collide with them.
+fn band_slot_key(band: usize) -> f64 {
+    f64::from_bits(u64::MAX - 1_000_000 + band as u64)
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.state_trackers.len();
     let disp_h = ui.io().display_size[1];
@@ -86,7 +109,7 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                         StateRule {
                             cuts: vec![],
                             names: vec!["all".to_string()],
-                            colors: vec![[0.30, 0.50, 0.90]],
+                            colors: vec![None],
                         },
                     );
                 }
@@ -116,7 +139,9 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                 rule.add_cut(next);
             }
             ui.separator();
-            // Band rows: range, color swatch, name.
+            // Band rows: range, color swatch, name. The swatch opens the
+            // Word-style picker (auto + defaults + full palette) rendered
+            // below the window.
             for bi in 0..rule.names.len() {
                 let lo = bi.checked_sub(1).and_then(|p| rule.cuts.get(p).copied());
                 let hi = rule.cuts.get(bi).copied();
@@ -128,9 +153,16 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                 };
                 ui.text(&range);
                 ui.same_line_with_pos(110.0);
-                let mut col = rule.colors[bi];
-                if ui.color_edit3(format!("##srcol{bi}"), &mut col) {
-                    rule.colors[bi] = col;
+                let swatch = rule.colors[bi].unwrap_or([0.35, 0.35, 0.40]);
+                if ui.color_button(
+                    format!("##srcol{bi}"),
+                    [swatch[0], swatch[1], swatch[2], 1.0],
+                ) {
+                    ui.open_popup("##srpick");
+                    app.state_rule_pick = Some((wi, key.clone(), bi));
+                }
+                if ui.is_item_hovered() && rule.colors[bi].is_none() {
+                    ui.tooltip_text("automatic");
                 }
                 ui.same_line();
                 let mut name = rule.names[bi].clone();
@@ -147,6 +179,56 @@ fn rule_editor(app: &mut App, ui: &Ui) {
     if !open {
         app.state_rule_edit = None;
     }
+    color_picker_popup(app, ui);
+}
+
+/// The Word-style color picker for one custom band: 自动 plus a short row
+/// of low-saturation defaults, with a full palette (and RGB inputs) at
+/// the bottom for the rare case nothing default fits. Selecting applies
+/// immediately and closes.
+fn color_picker_popup(app: &mut App, ui: &Ui) {
+    let Some((wi, key, band)) = app.state_rule_pick.clone() else {
+        return;
+    };
+    ui.popup("##srpick", || {
+        let Some(w) = app.state_trackers.get_mut(wi) else {
+            return;
+        };
+        let Some(rule) = w.rules.get_mut(&key) else {
+            return;
+        };
+        if band >= rule.colors.len() {
+            return;
+        }
+        if ui.selectable_config("自动").build() {
+            rule.colors[band] = None;
+            ui.close_current_popup();
+            app.state_rule_pick = None;
+            return;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("配色跟随自动机制，与其他状态同样稳定");
+        }
+        ui.separator();
+        ui.text_disabled("默认颜色");
+        for (idx, c) in BAND_PALETTE.iter().enumerate() {
+            if idx % 6 > 0 {
+                ui.same_line();
+            }
+            if ui.color_button(format!("##srpal{idx}"), [c[0], c[1], c[2], 1.0]) {
+                rule.colors[band] = Some(*c);
+                ui.close_current_popup();
+                app.state_rule_pick = None;
+                return;
+            }
+        }
+        ui.separator();
+        ui.text_disabled("其他颜色");
+        let mut col = rule.colors[band].unwrap_or([0.80, 0.80, 0.80]);
+        if ui.color_picker3("##srccustom", &mut col) {
+            rule.colors[band] = Some(col);
+        }
+    });
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
@@ -335,8 +417,11 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
                 continue;
             }
             let fill = if let Some(rule) = &rule {
-                let c = rule.colors[rule.band(seg.value)];
-                [c[0], c[1], c[2], 0.92]
+                let b = rule.band(seg.value);
+                match rule.colors[b] {
+                    Some(c) => [c[0], c[1], c[2], 0.92],
+                    None => PALETTE[slot_for(slots, band_slot_key(b))],
+                }
             } else if per_state {
                 PALETTE[slot_for(slots, seg.value)]
             } else {
@@ -778,7 +863,7 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
         let mut r = StateRule {
             cuts: vec![],
             names: vec!["all".to_string()],
-            colors: vec![[0.5, 0.5, 0.5]],
+            colors: vec![None],
         };
         r.add_cut(1000.0);
         assert_eq!(r.band(999.0), 0);
@@ -788,6 +873,10 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
             "the cut itself belongs to the upper band"
         );
         assert_eq!(r.names.len(), 2, "one cut means two bands");
+        assert!(
+            r.colors.iter().all(|c| c.is_none()),
+            "new bands start automatic"
+        );
         r.add_cut(500.0);
         assert_eq!(r.cuts, vec![500.0, 1000.0], "cuts stay sorted");
         assert_eq!(r.names.len(), 3);
@@ -801,7 +890,7 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
         let rule = StateRule {
             cuts: vec![1000.0],
             names: vec!["low".to_string(), "high".to_string()],
-            colors: vec![[0.1, 0.2, 0.9], [0.9, 0.8, 0.1]],
+            colors: vec![Some([0.1, 0.2, 0.9]), Some([0.9, 0.8, 0.1])],
         };
         let pts = [
             (10_000, 500.0),

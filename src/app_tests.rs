@@ -3820,7 +3820,7 @@ fn the_state_tracker_round_trips_through_a_project() {
         crate::observe::StateRule {
             cuts: vec![1000.0],
             names: vec!["low".to_string(), "high".to_string()],
-            colors: vec![[0.2, 0.2, 0.8], [0.9, 0.9, 0.2]],
+            colors: vec![Some([0.2, 0.2, 0.8]), None],
         },
     );
     app.subscribe(key.clone());
@@ -3837,6 +3837,8 @@ fn the_state_tracker_round_trips_through_a_project() {
         .expect("custom bands ride the project file");
     assert_eq!(rule.cuts, vec![1000.0]);
     assert_eq!(rule.names, vec!["low", "high"]);
+    assert_eq!(rule.colors[0], Some([0.2, 0.2, 0.8]));
+    assert_eq!(rule.colors[1], None, "automatic survives the round trip");
     // A restored signal must be resubscribed, or the band draws no data.
     assert!(restored.subs.contains_key(&key));
     std::fs::remove_file(&path).ok();

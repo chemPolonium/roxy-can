@@ -168,12 +168,13 @@ pub struct SignalCfg {
     pub state_rule: Option<RuleCfg>,
 }
 
-/// One signal's custom state bands, CANoe's Value Definition rows.
+/// One signal's custom state bands, CANoe's Value Definition rows. A
+/// `None` color means automatic.
 #[derive(Serialize, Deserialize)]
 pub struct RuleCfg {
     pub cuts: Vec<f64>,
     pub names: Vec<String>,
-    pub colors: Vec<[f32; 3]>,
+    pub colors: Vec<Option<[f32; 3]>>,
 }
 
 #[derive(Serialize, Deserialize)]
