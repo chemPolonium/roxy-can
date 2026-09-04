@@ -112,6 +112,8 @@
 
 **收尾后补漏（2026-09-04）**：用户实测打开 Specification 窗口程序直接退出——阶段 3 的直读清扫漏了四个"不常打开就走不到"的路径，全部带 Deref panic：spec 窗口（读 `channels`/`spec`、Clear 直写）、Bus Statistics 窗口（`bus_loads` 根本不在快照里，现补：核心加脏标记 + `publish_loads()`，`Snapshot.bus_loads` 走 `Arc<Vec<BusLoad>>`，仅 step/增删总线后重克隆）、Graphics 的 Dbc 纵轴回退（读 `subs`，改走 `sub_view`）、Trace 右键"加入发生器"（直改 `tx_list`，改走 `SetEntryConfig`，命令新增 `flags: Option<FrameFlags>` 让回放里见到的帧按原样入列）。Clear 按钮落成 `ClearSpec` 命令（清账后下一帧算首采样，不会立即再挂账）。教训：窗口级清扫要按"打开每个窗口 + 点开每个右键菜单"逐一眼见为实，编译期逼不出来的是没人打开过的窗口。349 测试过（+3：ClearSpec、flags 覆盖、快照 loads）。
 
+**待查（偶发）**：全量测试今天两次出现"单个测试挂、原样重跑即绿"，都紧跟着一次编译之后。六连跑未能复现。下次再挂：先保留输出抓 `failures:` 块里的测试名再动手，优先怀疑真实墙钟类测试（如 `record_survives_start_and_writes_frames` 的 11 ms sleep 循环，Windows 默认定时粒度 ~15 ms 会造成少帧）。
+
 ### 阶段 5：硬件源落地（适配器选型后启动）
 
 要做：适配器作为核心的又一个 `FrameSource`——RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器；信道 UI 加适配器选择、连接状态、bus-off 恢复。分期：只收（2-4 天）→ 发送（约 1 周）→ CAN FD 与错误状态（数周）。
