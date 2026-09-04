@@ -198,6 +198,7 @@ fn message_content(app: &mut App, ui: &Ui) {
         .map(|ch| app.channel_name(ch as u8))
         .collect();
     let per_channel: Vec<Vec<MsgEntry>> = app
+        .snap
         .channels
         .iter()
         .map(|channel| {
@@ -305,6 +306,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
     // Clone the bus/message/signal layout first so toggle actions can be
     // applied afterwards without borrow conflicts.
     let layout: Vec<Vec<TreeMsg>> = app
+        .snap
         .channels
         .iter()
         .map(|channel| {
