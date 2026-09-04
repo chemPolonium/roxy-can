@@ -112,7 +112,7 @@
 
 **收尾后补漏（2026-09-04）**：用户实测打开 Specification 窗口程序直接退出——阶段 3 的直读清扫漏了四个"不常打开就走不到"的路径，全部带 Deref panic：spec 窗口（读 `channels`/`spec`、Clear 直写）、Bus Statistics 窗口（`bus_loads` 根本不在快照里，现补：核心加脏标记 + `publish_loads()`，`Snapshot.bus_loads` 走 `Arc<Vec<BusLoad>>`，仅 step/增删总线后重克隆）、Graphics 的 Dbc 纵轴回退（读 `subs`，改走 `sub_view`）、Trace 右键"加入发生器"（直改 `tx_list`，改走 `SetEntryConfig`，命令新增 `flags: Option<FrameFlags>` 让回放里见到的帧按原样入列）。Clear 按钮落成 `ClearSpec` 命令（清账后下一帧算首采样，不会立即再挂账）。教训：窗口级清扫要按"打开每个窗口 + 点开每个右键菜单"逐一眼见为实，编译期逼不出来的是没人打开过的窗口。349 测试过（+3：ClearSpec、flags 覆盖、快照 loads）。
 
-**待查（偶发）**：全量测试今天两次出现"单个测试挂、原样重跑即绿"，都紧跟着一次编译之后。六连跑未能复现。下次再挂：先保留输出抓 `failures:` 块里的测试名再动手，优先怀疑真实墙钟类测试（如 `record_survives_start_and_writes_frames` 的 11 ms sleep 循环，Windows 默认定时粒度 ~15 ms 会造成少帧）。
+**待查（偶发）→ 已破案（2026-09-04）**：全量测试偶发"单个测试挂、重跑即绿"，八连跑抓到现场——`a_signal_crossing_fires_on_the_crossing_not_the_level` 在读录制文件时报 NotFound。根因是并行碰撞的老家族漏网：四个触发动作类测试把路径写进前端草稿 `record_path_buf`，但录制是由**触发动作**在核心侧开的，核心的 `record_path` 从未收到 `SetRecordPath`，为空 → 派生出 CWD 的 `record_<日期>.asc`，与并行测试同一秒同文件名互相删文件。修法：四个测试改发 `SetRecordPath` 命令（路径进 temp 且各用独立名）。仓库根出现的无名 `record_*.asc` 都是这个产生的测试残留。
 
 **Triggers 编辑器重做（2026-09-04，用户反馈）**：行内编辑器撤掉——触发器一多就要滚到最底下改，且每改一个控件就实时下发命令。改成 Send-cycle 式弹出编辑器：点行打开，Bus/Message/Signal/Threshold/Direction/Action/Entry 两列对齐排布，`%g` 自动数字格式（不再固定三位小数），Apply 一次性 `EditTrigger`、Cancel/Esc 丢弃；窗口最小宽度 460（弹窗 380）。`falling→rising` 改不动的问题随行内实时回写一起消失（草稿在本地，不再被快照回灌），补了模型层双向翻转测试。新状态 `trig_draft: Option<TrigDraft>`（index+cond+action+id_buf 一体），顶掉 `trigger_sel`/`trig_id_buf`/`trig_edit_sel` 三个散字段；删行时编辑器随行关闭或跟行上移。350 测试过。
 
