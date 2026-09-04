@@ -74,12 +74,28 @@ pub enum Op {
 }
 
 /// A compiled body of code: chunk 0 is the program main, the rest are
-/// user functions.
+/// user functions and event handler bodies.
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
     pub arity: usize,
     pub code: Vec<Op>,
+}
+
+/// One compiled event handler: what triggers it and which chunk runs.
+#[derive(Debug)]
+pub struct Handler {
+    pub kind: HandlerKind,
+    pub chunk: u16,
+}
+
+/// The event kinds a node can react to. The node runtime (S2) feeds
+/// these; the language only compiles the bodies.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HandlerKind {
+    Start,
+    Message { id: u32 },
+    Timer { period_ms: u64 },
 }
 
 /// A compiled script, ready for the VM. Immutable after compilation --
@@ -90,6 +106,9 @@ pub struct Script {
     /// Global variable names, ordered by slot.
     pub globals: Vec<String>,
     pub functions: Vec<Function>,
+    /// Event handlers in declaration order; the node runtime dispatches
+    /// events against this table.
+    pub handlers: Vec<Handler>,
     /// Host function names, ordered by id (mirrors [`HOST_FNS`] plus any
     /// future external registrations).
     pub host_fns: Vec<String>,
@@ -258,5 +277,104 @@ mod tests {
         let mut vm = Vm::new(script);
         let e = vm.run().expect_err("recursion must be capped");
         assert!(e.to_string().contains("recursion"), "{e}");
+    }
+
+    #[test]
+    fn event_handlers_compile_into_a_table() {
+        let script = compile(
+            r#"
+                on start { print("start"); }
+                on message 0x100 { print("eng"); }
+                on timer 100 { print("tick"); }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(script.handlers.len(), 3);
+        assert_eq!(script.handlers[0].kind, HandlerKind::Start);
+        assert_eq!(script.handlers[1].kind, HandlerKind::Message { id: 0x100 });
+        assert_eq!(
+            script.handlers[2].kind,
+            HandlerKind::Timer { period_ms: 100 }
+        );
+        // Each body is its own chunk (main is chunk 0, handlers follow in
+        // declaration order), invokable against the live state.
+        let mut vm = Vm::new(script);
+        for chunk in 1..=3u16 {
+            vm.run_handler(chunk).unwrap();
+        }
+        assert_eq!(vm.output, ["start", "eng", "tick"]);
+    }
+
+    #[test]
+    fn handler_bodies_run_against_shared_globals() {
+        let script = compile(
+            r#"
+                let seen = 0;
+                on message 0x200 { seen = seen + 1; print("seen", seen); }
+            "#,
+        )
+        .unwrap();
+        let chunk = script_chunk(&script, HandlerKind::Message { id: 0x200 });
+        let mut vm = Vm::new(script);
+        // The node runtime order: main once (globals initialize), then
+        // handlers per event.
+        vm.run().unwrap();
+        vm.run_handler(chunk).unwrap();
+        vm.run_handler(chunk).unwrap();
+        assert_eq!(vm.output, ["seen 1", "seen 2"]);
+    }
+
+    /// Finds the compiled chunk of the first handler matching `kind`.
+    fn script_chunk(script: &Script, kind: HandlerKind) -> u16 {
+        script
+            .handlers
+            .iter()
+            .find(|h| h.kind == kind)
+            .map(|h| h.chunk)
+            .expect("handler present")
+    }
+
+    #[test]
+    fn handler_sanity_is_enforced() {
+        assert!(
+            compile("on start { } on start { }")
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate 'on start'")
+        );
+        assert!(
+            compile("on message 0x100 { } on message 0x100 { }")
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate")
+        );
+        assert!(
+            compile("on message 0x800 { }")
+                .unwrap_err()
+                .to_string()
+                .contains("11-bit")
+        );
+        assert!(
+            compile("on timer 0 { }")
+                .unwrap_err()
+                .to_string()
+                .contains("positive")
+        );
+        assert!(
+            compile("fn f() { on start { } }")
+                .unwrap_err()
+                .to_string()
+                .contains("top level")
+        );
+    }
+
+    #[test]
+    fn hex_ids_lex_into_handler_kinds() {
+        let script = compile("on message 0x7FF { }").unwrap();
+        assert_eq!(
+            script.handlers[0].kind,
+            HandlerKind::Message { id: 0x7FF },
+            "the top of the standard id range"
+        );
     }
 }

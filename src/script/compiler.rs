@@ -2,9 +2,9 @@
 //! function defined later in the file), then bodies. Top-level `let`s
 //! become globals; function bodies use stack locals with block scopes.
 
-use super::parser::{BinOp, Expr, FnDecl, Item, Program, Stmt, UnOp};
-use super::{Function, HOST_FNS, Op, Script, ScriptError, Value};
-use std::collections::HashMap;
+use super::parser::{BinOp, Expr, FnDecl, Item, OnDecl, OnKind, Program, Stmt, UnOp};
+use super::{Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value};
+use std::collections::{HashMap, HashSet};
 
 const MAX_LOCALS: usize = u8::MAX as usize;
 const MAX_ARGS: usize = u8::MAX as usize;
@@ -19,6 +19,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
             code: Vec::new(),
         }],
         fn_index: HashMap::new(),
+        handlers: Vec::new(),
         code: Vec::new(),
         locals: Vec::new(),
         depth: 0,
@@ -44,10 +45,33 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         }
     }
 
+    // Handler sanity: one on start, one handler per message id.
+    let mut seen_start = false;
+    let mut seen_ids: HashSet<u32> = HashSet::new();
+    for item in &program.items {
+        if let Item::On(on) = item {
+            match &on.kind {
+                OnKind::Start => {
+                    if seen_start {
+                        return c.err_at(on.line, "duplicate 'on start' handler");
+                    }
+                    seen_start = true;
+                }
+                OnKind::Message { id } => {
+                    if !seen_ids.insert(*id) {
+                        return c.err_at(on.line, &format!("duplicate handler for id {id:#x}"));
+                    }
+                }
+                OnKind::Timer { .. } => {}
+            }
+        }
+    }
+
     // Pass 2: bodies and the main flow.
     for item in program.items {
         match item {
             Item::Fn(f) => c.compile_fn(f)?,
+            Item::On(on) => c.compile_handler(on)?,
             Item::Stmt(s) => c.stmt(&s)?,
         }
     }
@@ -60,6 +84,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         constants: c.constants,
         globals: c.globals,
         functions: c.functions,
+        handlers: c.handlers,
         host_fns: HOST_FNS.iter().map(|(n, _, _)| n.to_string()).collect(),
     })
 }
@@ -68,6 +93,7 @@ struct Comp {
     constants: Vec<Value>,
     globals: Vec<String>,
     functions: Vec<Function>,
+    handlers: Vec<Handler>,
     fn_index: HashMap<String, u16>,
     /// Code of the chunk currently being compiled.
     code: Vec<Op>,
@@ -104,6 +130,13 @@ impl Comp {
         }
         self.globals.push(name.to_string());
         (self.globals.len() - 1) as u16
+    }
+
+    fn err_at<T>(&self, line: u32, msg: &str) -> Result<T, ScriptError> {
+        Err(ScriptError {
+            line,
+            msg: msg.to_string(),
+        })
     }
 
     fn resolve_local(&self, name: &str) -> Option<u8> {
@@ -392,6 +425,47 @@ impl Comp {
         self.emit(Op::Const(nil));
         self.emit(Op::Return);
         self.functions[idx].code = std::mem::take(&mut self.code);
+        self.code = saved_code;
+        self.locals = saved_locals;
+        self.depth = saved_depth;
+        self.in_fn = saved_in_fn;
+        Ok(())
+    }
+
+    /// Compiles one event handler body into its own chunk and registers
+    /// it in the handler table. Bodies behave like zero-argument
+    /// functions: locals, globals access, early return.
+    fn compile_handler(&mut self, on: OnDecl) -> Result<(), ScriptError> {
+        let kind = match &on.kind {
+            OnKind::Start => HandlerKind::Start,
+            OnKind::Message { id } => HandlerKind::Message { id: *id },
+            OnKind::Timer { period_ms } => HandlerKind::Timer {
+                period_ms: *period_ms,
+            },
+        };
+        let saved_code = std::mem::take(&mut self.code);
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_depth = self.depth;
+        let saved_in_fn = self.in_fn;
+        self.code = Vec::new();
+        self.in_fn = true;
+        self.depth = 1;
+        self.block(&on.body)?;
+        let nil = self.constant(Value::Nil);
+        self.emit(Op::Const(nil));
+        self.emit(Op::Return);
+        let chunk = self.functions.len() as u16;
+        let label = match &kind {
+            HandlerKind::Start => "<on start>".to_string(),
+            HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+            HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
+        };
+        self.functions.push(Function {
+            name: label,
+            arity: 0,
+            code: std::mem::take(&mut self.code),
+        });
+        self.handlers.push(Handler { kind, chunk });
         self.code = saved_code;
         self.locals = saved_locals;
         self.depth = saved_depth;

@@ -13,7 +13,27 @@ pub struct Program {
 #[derive(Debug)]
 pub enum Item {
     Fn(FnDecl),
+    On(OnDecl),
     Stmt(Stmt),
+}
+
+/// An event handler declaration. The body runs when the node runtime (S2)
+/// delivers the event; here it only needs to compile.
+#[derive(Debug)]
+pub struct OnDecl {
+    pub kind: OnKind,
+    pub body: Vec<Stmt>,
+    pub line: u32,
+}
+
+#[derive(Debug)]
+pub enum OnKind {
+    /// Measurement start, once.
+    Start,
+    /// A frame with this identifier arrived on the node's channel.
+    Message { id: u32 },
+    /// A periodic tick every `period_ms` milliseconds.
+    Timer { period_ms: u64 },
 }
 
 #[derive(Debug)]
@@ -93,6 +113,8 @@ pub fn parse(toks: Vec<Token>) -> Result<Program, ScriptError> {
     while !p.at(&Tok::Eof) {
         if p.at(&Tok::Fn) {
             items.push(Item::Fn(p.fn_decl()?));
+        } else if p.at(&Tok::On) {
+            items.push(Item::On(p.on_decl()?));
         } else {
             items.push(Item::Stmt(p.stmt()?));
         }
@@ -185,6 +207,66 @@ impl P {
         Ok(FnDecl { name, params, body })
     }
 
+    /// `on start { }` / `on message 0x100 { }` / `on timer 100 { }` -- a
+    /// node's event handlers. The event word is matched by text so that
+    /// `message` and `timer` stay usable as ordinary variable names.
+    fn on_decl(&mut self) -> Result<OnDecl, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        self.expect(&Tok::On, "'on'")?;
+        let word = self.ident("'start', 'message' or 'timer'")?;
+        let kind = match word.as_str() {
+            "start" => OnKind::Start,
+            "message" => {
+                let id = self.id_literal()?;
+                OnKind::Message { id }
+            }
+            "timer" => {
+                let period_ms = self.period_literal()?;
+                OnKind::Timer { period_ms }
+            }
+            other => {
+                return self.err(&format!("unknown event '{other}' (start, message, timer)"));
+            }
+        };
+        self.fn_depth += 1;
+        let body = self.block()?;
+        self.fn_depth -= 1;
+        Ok(OnDecl { kind, body, line })
+    }
+
+    /// A CAN identifier: a non-negative integer fitting in 29 bits of a
+    /// standard id (extended ids come with extended frame support).
+    fn id_literal(&mut self) -> Result<u32, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+            Some(Tok::Int(n)) if (0..=0x7FF).contains(&n) => {
+                self.advance();
+                Ok(n as u32)
+            }
+            Some(Tok::Int(n)) => Err(ScriptError {
+                line,
+                msg: format!("id {n:#x} out of the standard 11-bit range"),
+            }),
+            _ => self.err("expected a message id"),
+        }
+    }
+
+    /// A timer period in milliseconds: a positive integer.
+    fn period_literal(&mut self) -> Result<u64, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+            Some(Tok::Int(n)) if n > 0 => {
+                self.advance();
+                Ok(n as u64)
+            }
+            Some(Tok::Int(0)) => Err(ScriptError {
+                line,
+                msg: "timer period must be positive".to_string(),
+            }),
+            _ => self.err("expected a timer period in milliseconds"),
+        }
+    }
+
     fn block(&mut self) -> Result<Vec<Stmt>, ScriptError> {
         self.expect(&Tok::LBrace, "'{'")?;
         let mut stmts = Vec::new();
@@ -192,8 +274,8 @@ impl P {
             if self.at(&Tok::Eof) {
                 return self.err("unexpected end of input inside a block");
             }
-            if self.at(&Tok::Fn) {
-                return self.err("functions may only be declared at top level");
+            if self.at(&Tok::Fn) || self.at(&Tok::On) {
+                return self.err("declarations may only appear at top level");
             }
             stmts.push(self.stmt()?);
         }

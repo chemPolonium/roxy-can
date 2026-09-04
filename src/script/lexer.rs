@@ -20,6 +20,10 @@ pub enum Tok {
     Return,
     True,
     False,
+    /// Event handler introducer (`on start` / `on message 0x100` /
+    /// `on timer 100`). The event word itself stays an identifier so
+    /// ordinary variables may still be called `message` or `timer`.
+    On,
     // Punctuation and operators.
     LParen,
     RParen,
@@ -62,6 +66,7 @@ fn keyword(word: &str) -> Option<Tok> {
         "return" => Tok::Return,
         "true" => Tok::True,
         "false" => Tok::False,
+        "on" => Tok::On,
         _ => return None,
     })
 }
@@ -116,6 +121,27 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ScriptError> {
                 }
             }
             '0'..='9' => {
+                // Hex literals (0x1F) -- CAN identifiers are written in
+                // hex everywhere, so the lexer speaks them natively.
+                if c == '0' && matches!(chars.get(i + 1), Some('x') | Some('X')) {
+                    let open_line = line;
+                    i += 2;
+                    let start = i;
+                    while i < chars.len() && chars[i].is_ascii_hexdigit() {
+                        i += 1;
+                    }
+                    let text: String = chars[start..i].iter().collect();
+                    if text.is_empty() {
+                        return Err(err(open_line, "malformed hex literal"));
+                    }
+                    let n = i64::from_str_radix(&text, 16)
+                        .map_err(|_| err(open_line, "hex literal out of range"))?;
+                    toks.push(Token {
+                        tok: Tok::Int(n),
+                        line,
+                    });
+                    continue;
+                }
                 let start = i;
                 while i < chars.len() && chars[i].is_ascii_digit() {
                     i += 1;

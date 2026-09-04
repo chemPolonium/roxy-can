@@ -68,8 +68,19 @@ impl Vm {
     /// Runs the script main to completion. Re-running after an error is
     /// not supported (the state is left as the error hit it).
     pub fn run(&mut self) -> Result<(), VmError> {
+        self.run_from(0)
+    }
+
+    /// Runs one handler chunk against the current VM state: globals keep
+    /// their values between events, the value stack starts fresh. This is
+    /// how the node runtime will deliver events in S2.
+    pub fn run_handler(&mut self, chunk: u16) -> Result<(), VmError> {
+        self.run_from(chunk as usize)
+    }
+
+    fn run_from(&mut self, chunk: usize) -> Result<(), VmError> {
         self.frames = vec![Frame {
-            chunk: 0,
+            chunk,
             ip: 0,
             base: 0,
         }];
