@@ -324,7 +324,7 @@ pub struct DataWindow {
 
 use std::collections::HashMap;
 
-use crate::app::{App, MAX_SCAN_FRAMES};
+use crate::app::App;
 
 impl GraphicsWindow {
     /// The throttled legend strings for `keys`, in the same order; an empty
@@ -359,13 +359,17 @@ impl App {
         (min_window_us / STRIDE_POINTS_PER_WINDOW).clamp(MIN_STRIDE_US, SAMPLE_INTERVAL_US)
     }
 
-    /// Decodes whatever frames cover `[t_from_us, t_to_us]` into the signal
-    /// caches, unless an earlier scan already read that span.
+    /// Requests that whatever frames cover `[t_from_us, t_to_us]` be
+    /// decoded into the signal caches, unless an earlier scan already read
+    /// that span.
     ///
     /// This is what makes the plot independent of the playback cursor. Deriving
     /// samples only as playback walks past them meant a Graphics window showing
     /// ground the cursor had not reached contained no points at all -- which is
-    /// exactly what a forward scrub looked like.
+    /// exactly what a forward scrub looked like. The scan itself is core work
+    /// (it owns the log source), so it goes through as a command; the filled
+    /// history arrives in a later snapshot. Cover tracking rides the snapshot
+    /// too, so an in-flight request is not re-sent.
     pub fn ensure_samples_in(&mut self, t_from_us: u64, t_to_us: u64) {
         if t_to_us <= t_from_us {
             return;
@@ -374,7 +378,7 @@ impl App {
         // the visible window slides forward by tens of milliseconds every frame,
         // and re-reading the whole window each time would both cost that much
         // again and overwrite the cache's spacing.
-        let (cov_lo, cov_hi) = self.sample_cover.unwrap_or((t_from_us, t_from_us));
+        let (cov_lo, cov_hi) = self.snap.sample_cover.unwrap_or((t_from_us, t_from_us));
         let mut edges = Vec::new();
         if t_from_us < cov_lo {
             edges.push((t_from_us, t_to_us.min(cov_lo)));
@@ -382,56 +386,15 @@ impl App {
         if t_to_us > cov_hi {
             edges.push((cov_hi.max(t_from_us), t_to_us));
         }
+        let stride = self.wanted_stride_us();
         for (from, to) in edges {
             if to > from {
-                self.backfill(from, to);
+                self.send(crate::bus::BusCommand::Backfill {
+                    from_us: from,
+                    to_us: to,
+                    stride_us: stride,
+                });
             }
-        }
-    }
-
-    /// One scan + merge over a span known to be uncovered.
-    fn backfill(&mut self, t_from_us: u64, t_to_us: u64) {
-        let stride = self.wanted_stride_us();
-        let mut frames = Vec::new();
-        let capped = !self
-            .source
-            .scan_range(t_from_us, t_to_us, MAX_SCAN_FRAMES, &mut frames);
-        // A scan-local stride: the shared per-signal baseline sits at the
-        // playhead and would reject every point that lies behind it.
-        let mut stride_map: HashMap<(u8, u32, String), u64> = HashMap::new();
-        let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
-        for f in &frames {
-            for (key, d) in self.subscribed_values(f) {
-                if stride_map.get(&key).is_some_and(|&lt| f.t_us < lt + stride) {
-                    continue;
-                }
-                stride_map.insert(key.clone(), f.t_us);
-                batches.entry(key).or_default().push((f.t_us, d.phys));
-            }
-        }
-        for (key, pts) in batches {
-            if let Some(sub) = self.subs.get_mut(&key) {
-                let taken = sub.history.merge(&pts, stride);
-                for v in taken {
-                    sub.observe(v);
-                }
-            }
-        }
-        // Claim the span that was *asked for*, not merely what was read. Repeating
-        // an unsatisfied request every frame would rescan the same stretch
-        // forever; a scan stopped by the frame cap can therefore leave the tail of
-        // a very dense window thin until the view moves enough to ask again.
-        self.sample_cover = match self.sample_cover {
-            Some((lo, hi)) if t_from_us <= hi && t_to_us >= lo => {
-                Some((lo.min(t_from_us), hi.max(t_to_us)))
-            }
-            _ => Some((t_from_us, t_to_us)),
-        };
-        if capped {
-            self.status = format!(
-                "plot: window too dense to decode fully ({} frames)",
-                MAX_SCAN_FRAMES
-            );
         }
     }
 
@@ -439,9 +402,10 @@ impl App {
     /// window's bar draws against. None when no database names the signal
     /// or declares a usable range on it.
     pub(crate) fn declared_range(&self, key: &(u8, u32, String)) -> Option<(f64, f64)> {
-        self.channels
+        self.snap
+            .channels
             .get(key.0 as usize)
-            .and_then(|c| c.dbc.as_ref())
+            .and_then(|c| c.dbc.as_deref())
             .and_then(|db| db.messages.get(&key.1))
             .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
             .and_then(|s| (s.max > s.min).then_some((s.min, s.max)))

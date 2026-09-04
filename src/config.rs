@@ -582,6 +582,7 @@ impl Config {
                 grace_cycles: app.spec_grace,
             },
             triggers: app
+                .snap
                 .triggers
                 .iter()
                 .map(|t| {
@@ -639,17 +640,22 @@ impl Config {
     /// Overwrites the freshly built defaults with the saved workspace.
     /// Bus-side state moves entirely through commands (so the same code
     /// works once the core runs on its own thread); the handful of
-    /// mid-restore reads go through the snapshot, which every `send`
-    /// re-publishes.
+    /// mid-restore reads go through the snapshot, settling first on the
+    /// threaded drive so the reads see applied commands.
     pub fn apply(self, app: &mut App) {
         if !self.channels.is_empty() {
             // Grow or shrink the fresh app's two default buses to the
             // saved count, then overlay the saved declarations on top.
-            while app.snap.channel_count > self.channels.len() {
-                app.remove_channel(app.snap.channel_count - 1);
+            // The count is stepped locally -- on the threaded drive the
+            // snapshot lags the commands by a lap.
+            let mut count = app.snap.channel_count;
+            while count > self.channels.len() {
+                app.remove_channel(count - 1);
+                count -= 1;
             }
-            while app.snap.channel_count < self.channels.len() {
+            while count < self.channels.len() {
                 app.add_channel();
+                count += 1;
             }
             for (i, c) in self.channels.iter().enumerate() {
                 app.send(crate::bus::BusCommand::SetChannelConfig {
@@ -665,7 +671,9 @@ impl Config {
             // `active` below, so a restored project never starts
             // traffic that was stopped when it was saved.
             app.set_bus_counter(self.bus_counter.max(self.channels.len()));
+            app.settle();
             app.load_dbcs();
+            app.settle();
         }
         // The generator is rebuilt from the (possibly new) DBCs, then the
         // saved per-message state is overlaid.
@@ -689,6 +697,7 @@ impl Config {
         for (ch, id) in ids {
             app.add_tx(ch, id);
         }
+        app.settle();
         for t in self.tx {
             // 0 is a real state now: a DBC-declared event-triggered
             // message. Everything else keeps the anti-typo floor.
@@ -922,7 +931,7 @@ mod tests {
 
     #[test]
     fn config_round_trips_through_json() {
-        let mut app = App::new();
+        let mut app = App::headless();
         app.show_id_filter = true;
         app.replay_speed = 2.0;
         app.trace_windows[0].filter = "Motor".to_string();
@@ -933,7 +942,7 @@ mod tests {
         app.refresh_snapshot();
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
@@ -952,7 +961,7 @@ mod tests {
     /// kind of loss a project file exists to prevent.
     #[test]
     fn tx_value_sources_round_trip() {
-        let mut app = App::new();
+        let mut app = App::headless();
         app.set_source(
             0,
             ValueSrc {
@@ -979,7 +988,7 @@ mod tests {
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         assert!(json.contains(r#""srcs""#), "the key is written");
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
@@ -990,7 +999,7 @@ mod tests {
     /// nothing driven, which is exactly how those generators behave today.
     #[test]
     fn legacy_tx_entry_without_srcs_stays_flat() {
-        let mut restored = App::new();
+        let mut restored = App::headless();
         let legacy = r#"{"tx":[{"channel":0,"id":256,"active":true,"cycle_us":20000,
                                "data_text":"01 02","data":[1,2]}]}"#;
         serde_json::from_str::<Config>(legacy)
@@ -1010,7 +1019,7 @@ mod tests {
     /// come back as some other shape.
     #[test]
     fn an_unknown_kind_code_drops_only_that_source() {
-        let mut restored = App::new();
+        let mut restored = App::headless();
         let json = r#"{"tx":[{"channel":0,"id":256,"srcs":[{"name":"EngineSpeed","kind":1,"lo":0.0,"hi":8000.0,"period_us":2000000},{"name":"GearPosition","kind":200}]}]}"#;
         serde_json::from_str::<Config>(json)
             .unwrap()
@@ -1031,7 +1040,7 @@ mod tests {
     /// genuinely bogus small values.
     #[test]
     fn an_event_triggered_cycle_survives_a_project_round_trip() {
-        let mut app = App::new();
+        let mut app = App::headless();
         let i = app
             .tx_list
             .iter()
@@ -1047,7 +1056,7 @@ mod tests {
         app.refresh_snapshot();
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
@@ -1071,11 +1080,11 @@ mod tests {
     /// not, however, start any traffic by itself.
     #[test]
     fn simulated_nodes_round_trip_without_starting_traffic() {
-        let mut app = App::new();
+        let mut app = App::headless();
         app.channels[1].sim_nodes = vec!["ABS".to_string(), "GearBox".to_string()];
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
@@ -1110,12 +1119,12 @@ mod tests {
     /// them must come back exactly.
     #[test]
     fn bitrates_round_trip() {
-        let mut app = App::new();
+        let mut app = App::headless();
         app.channels[0].bitrate_kbps = 1_000;
         app.channels[0].fd_data_kbps = 5_000;
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
@@ -1149,11 +1158,11 @@ mod tests {
     /// strictly to read the database, so they must survive a save.
     #[test]
     fn spec_settings_survive_a_project_round_trip() {
-        let mut app = App::new();
+        let mut app = App::headless();
         app.spec_tol_pct = 25;
         app.spec_grace = 8;
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
@@ -1167,7 +1176,7 @@ mod tests {
     /// the current step, so the floor is applied on the way in.
     #[test]
     fn an_old_project_without_a_spec_block_loads_the_defaults() {
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(r#"{"channels":[]}"#)
             .unwrap()
             .apply(&mut restored);
@@ -1181,7 +1190,7 @@ mod tests {
             "the key that was not written keeps its own default"
         );
 
-        let mut zeroed = App::new();
+        let mut zeroed = App::headless();
         serde_json::from_str::<Config>(r#"{"spec":{"grace_cycles":0}}"#)
             .unwrap()
             .apply(&mut zeroed);
@@ -1204,7 +1213,7 @@ mod tests {
     /// save must migrate it forward rather than keep emitting the old key.
     #[test]
     fn legacy_recent_asc_key_migrates_to_recent_log() {
-        let mut restored = App::new();
+        let mut restored = App::headless();
         serde_json::from_str::<Config>(r#"{"recent_asc":["old1.asc","old2.asc"]}"#)
             .unwrap()
             .apply(&mut restored);
@@ -1270,7 +1279,7 @@ mod tests {
 
     #[test]
     fn project_file_round_trips_layout_and_config() {
-        let app = App::new();
+        let app = App::headless();
         let proj = ProjectFile {
             version: 1,
             layout: "[Window][Trace 1]\nPos=10,20\n[Docking][Data]\n".to_string(),

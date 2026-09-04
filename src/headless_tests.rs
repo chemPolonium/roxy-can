@@ -12,7 +12,7 @@ use crate::sim::{SrcKind, ValueSrc};
 /// What `update` does for the frame loop, minus the imgui-facing text
 /// gate: advance the bus clock to synthetic `now`, then run one step.
 fn step(app: &mut App, now: u64) {
-    app.core.advance_clock(now);
+    app.advance_clock(now);
     app.tick(now);
 }
 
@@ -45,7 +45,7 @@ fn write_test_log(name: &str, frames: usize, step_us: u64) -> std::path::PathBuf
 
 #[test]
 fn a_full_virtual_run_composes_through_commands_and_snapshots() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     // Drive one DBC-known entry by a sine, subscribe its signal, all via
     // the command path. 0x100 EngineSpeed: factor 0.25, range 0..8000.
@@ -111,7 +111,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
 
 #[test]
 fn a_headless_recording_writes_a_readable_log() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_headless_record.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
     app.start_virtual();
@@ -144,7 +144,7 @@ fn a_headless_recording_writes_a_readable_log() {
 
 #[test]
 fn a_headless_export_reports_the_run() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -168,7 +168,7 @@ fn a_headless_export_reports_the_run() {
 fn a_headless_replay_runs_the_log_and_mutes_the_twin() {
     let log = write_test_log("roxy_can_headless_replay.asc", 100, 10_000);
 
-    let mut app = App::new();
+    let mut app = App::headless();
     // The generator entry for 0x100 is on -- the log carries the same id,
     // so replay must silence it and deliver exactly the log's frames.
     app.send(crate::bus::BusCommand::SetEntryActive {
@@ -195,7 +195,7 @@ fn a_headless_replay_runs_the_log_and_mutes_the_twin() {
 
 #[test]
 fn the_deadline_follows_the_next_generator_slot() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -204,27 +204,27 @@ fn the_deadline_follows_the_next_generator_slot() {
     });
     // 0x100 runs on the default 100 ms period, anchored at sim 0: the
     // first slot is due immediately.
-    assert_eq!(app.core.next_deadline(1_000_000), Some(1_000_000));
+    assert_eq!(app.next_deadline(1_000_000), Some(1_000_000));
     // Run 50 ms of steps; the next slot then sits 50 ms out.
     let mut now = 0;
     for _ in 0..50 {
         now += 1_000;
-        app.core.advance_clock(now);
+        app.advance_clock(now);
         app.tick(now);
     }
-    assert_eq!(app.core.next_deadline(now), Some(now + 50_000));
+    assert_eq!(app.next_deadline(now), Some(now + 50_000));
     // An idle (all-off) bus has no deadline at all.
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
         id: 0x100,
         on: false,
     });
-    assert_eq!(app.core.next_deadline(now), None);
+    assert_eq!(app.next_deadline(now), None);
 }
 
 #[test]
 fn step_to_advances_the_clocks_and_the_bus() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -238,12 +238,40 @@ fn step_to_advances_the_clocks_and_the_bus() {
     for _ in 0..6 {
         now += 1_000_000;
         let stride = app.wanted_stride_us();
-        let done = app
-            .core
-            .step_to(now, stride, app.spec_tol_pct, app.spec_grace, &mut status);
+        let (tol, grace) = (app.spec_tol_pct, app.spec_grace);
+        let done = app.step_to(now, stride, tol, grace, &mut status);
         assert!(!done);
         app.refresh_snapshot();
     }
     // Slots at 0, 100k .. 6_000k = 61 frames across six 1 s wakes.
     assert_eq!(app.snap.frame_counter, 61, "{}", app.snap.frame_counter);
+}
+
+/// The real deal: `App::new` runs the core on its own thread, driven by
+/// nothing but wall time and the commands it is sent. The polling loop
+/// tolerates any scheduling; the assertions are about liveness.
+#[test]
+fn the_threaded_core_serves_frames_on_its_own_thread() {
+    let mut app = App::new();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.start_virtual();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && app.snap.frame_counter < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.update();
+    }
+    assert!(
+        app.snap.frame_counter >= 10,
+        "the threaded core never produced frames: {}",
+        app.snap.frame_counter
+    );
+    // Dropping the app drops the command sender, which is the core
+    // thread's signal to exit. Nothing to assert directly -- a leaked
+    // thread would only surface under a leak checker -- but releasing
+    // here is the contract the loop implements.
+    drop(app);
 }

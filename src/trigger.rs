@@ -60,6 +60,7 @@ pub enum TriggerAction {
 }
 
 /// One armed condition plus its edge state and fire history.
+#[derive(Clone, Debug)]
 pub struct Trigger {
     pub cond: TriggerCond,
     pub action: TriggerAction,

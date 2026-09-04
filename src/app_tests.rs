@@ -14,7 +14,7 @@ use crate::trigger::{Trigger, TriggerAction, TriggerCond};
 
 #[test]
 fn record_survives_start_and_writes_frames() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_record_test.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
@@ -60,7 +60,7 @@ fn record_survives_start_and_writes_frames() {
 
 #[test]
 fn replay_after_recorded_simulation_creates_no_second_file() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_replay_rec_test.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
@@ -89,7 +89,7 @@ fn replay_after_recorded_simulation_creates_no_second_file() {
 
 #[test]
 fn loading_log_does_not_start_replay() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_load_asc_test.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
@@ -116,7 +116,7 @@ fn loading_log_does_not_start_replay() {
 
 #[test]
 fn loading_blf_does_not_start_replay() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_load_blf_test.blf");
     let bytes = crate::log::blf::tests::minimal_file();
     std::fs::write(&path, &bytes).unwrap();
@@ -136,7 +136,7 @@ fn loading_blf_does_not_start_replay() {
 
 #[test]
 fn open_dropped_reports_unsupported_for_mf4() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.open_dropped(std::path::Path::new("/tmp/does-not-exist.mf4"));
     assert!(
         app.status.contains("unsupported format: MF4"),
@@ -147,7 +147,7 @@ fn open_dropped_reports_unsupported_for_mf4() {
 
 #[test]
 fn aggregates_frames_per_message_id() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let tx = app
         .tx_list
         .iter_mut()
@@ -194,7 +194,7 @@ fn slots_of(app: &App, id: u32) -> Vec<u64> {
 
 #[test]
 fn generator_frames_are_spaced_exactly_one_cycle() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_tx(0, 0x777);
     let tx = app.tx_list.last_mut().unwrap();
     tx.cycle_us = 20_000;
@@ -214,7 +214,7 @@ fn generator_frames_are_spaced_exactly_one_cycle() {
 
 #[test]
 fn a_tick_exactly_on_a_slot_does_not_drop_a_cycle() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_tx(0, 0x779);
     let tx = app.tx_list.last_mut().unwrap();
     tx.cycle_us = 20_000;
@@ -234,7 +234,7 @@ fn a_tick_exactly_on_a_slot_does_not_drop_a_cycle() {
 
 #[test]
 fn a_stalled_ui_backfills_the_slots_it_missed() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_tx(0, 0x778);
     let tx = app.tx_list.last_mut().unwrap();
     tx.cycle_us = 20_000;
@@ -263,7 +263,7 @@ fn a_stalled_ui_backfills_the_slots_it_missed() {
 
 #[test]
 fn a_stall_backfill_is_bounded_per_tick() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_tx(0, 0x778);
     let tx = app.tx_list.last_mut().unwrap();
     tx.cycle_us = 1_000;
@@ -295,7 +295,7 @@ fn a_stall_backfill_is_bounded_per_tick() {
 
 #[test]
 fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0];
@@ -341,7 +341,7 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
 
 #[test]
 fn a_pause_freezes_the_simulation_clock_and_its_phase() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     app.update();
     let before = app.sim_t_us;
@@ -349,10 +349,12 @@ fn a_pause_freezes_the_simulation_clock_and_its_phase() {
     // the simulation clock neither moves during the pause nor absorbs the
     // paused span afterwards.
     app.trace_paused = true;
+    app.refresh_snapshot();
     app.t0 = Instant::now() - std::time::Duration::from_millis(400);
     app.update();
     assert_eq!(app.sim_t_us, before, "a paused clock must not advance");
     app.trace_paused = false;
+    app.refresh_snapshot();
     app.update();
     assert!(
         app.sim_t_us - before < 50_000,
@@ -379,7 +381,7 @@ BO_ 768 WideMsg: 16 ECU
 /// default period is one second, so a slot `t` microseconds into the run
 /// carries `(t as f64 / 1e6) * hi`.
 fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
     ));
@@ -559,7 +561,7 @@ BA_ "GenMsgCycleTime" BO_ 4096 0;
 
 #[test]
 fn new_generator_entries_inherit_the_declared_cycle() {
-    let app = App::new();
+    let app = App::headless();
     let cycle = |ch: u8, id: u32| {
         app.tx_list
             .iter()
@@ -577,7 +579,7 @@ fn new_generator_entries_inherit_the_declared_cycle() {
 
 #[test]
 fn an_event_triggered_message_is_never_auto_sent() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
     ));
@@ -613,7 +615,7 @@ fn an_event_triggered_message_is_never_auto_sent() {
 
 #[test]
 fn simulated_node_state_follows_the_bus_it_lives_on() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.channels[0].sim_nodes.push("EngineECU".to_string());
     app.channels[1].sim_nodes.push("ABS".to_string());
     app.remove_channel(0);
@@ -645,7 +647,7 @@ fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
 
 #[test]
 fn ticking_a_node_activates_only_its_own_messages() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.set_node_sim(1, "ABS", true);
     // assets/motbus.dbc:31,35,54 -- ABS owns these three, nobody else.
     assert_eq!(active_ids(&app, 1), [199, 200, 201]);
@@ -663,7 +665,7 @@ fn ticking_a_node_activates_only_its_own_messages() {
 
 #[test]
 fn ticking_a_node_creates_the_entries_it_lacks() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.tx_list.clear();
     app.set_node_sim(1, "ABS", true);
     assert_eq!(
@@ -678,7 +680,7 @@ fn ticking_a_node_creates_the_entries_it_lacks() {
 
 #[test]
 fn ticking_a_node_never_overwrites_a_tuned_cycle() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let tuned = entry_of(&app, 1, 201).cycle_us;
     assert_eq!(tuned, 50_000, "what the DBC declares");
     let i = app
@@ -697,7 +699,7 @@ fn ticking_a_node_never_overwrites_a_tuned_cycle() {
 
 #[test]
 fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.set_node_sim(1, "ABS", true);
     let i = app
         .tx_list
@@ -729,7 +731,7 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
 /// only thing left to go by is the node stamped on each entry.
 #[test]
 fn unticking_still_silences_a_node_after_its_dbc_is_gone() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.set_node_sim(1, "ABS", true);
     assert_eq!(active_ids(&app, 1).len(), 3);
     app.channels[1].dbc = None;
@@ -744,7 +746,7 @@ fn unticking_still_silences_a_node_after_its_dbc_is_gone() {
 
 #[test]
 fn a_receive_only_node_can_still_be_ticked() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.set_node_sim(1, "DashBoard", true);
     assert!(active_ids(&app, 1).is_empty(), "it has no messages to send");
     assert!(
@@ -757,7 +759,7 @@ fn a_receive_only_node_can_still_be_ticked() {
 /// database's own opinion even after the row disagrees with it.
 #[test]
 fn the_declared_cycle_survives_a_hand_tuned_row() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert_eq!(app.dbc_cycle_us(1, 0xC9), Some(50_000), "ABSdata");
     assert_eq!(
         app.dbc_cycle_us(0, 0x100),
@@ -820,7 +822,7 @@ BO_ 4096 Orphan: 8 Vector__XXX
 
 #[test]
 fn a_node_with_no_name_simulates_nothing() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(NO_OWNER_DBC).unwrap(),
     ));
@@ -841,7 +843,7 @@ fn a_node_with_no_name_simulates_nothing() {
 
 #[test]
 fn tx_generator_emits_frames() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_tx(0, 0x777);
     let tx = app.tx_list.last_mut().expect("tx entry added");
     assert_eq!(tx.id, 0x777);
@@ -866,7 +868,7 @@ fn tx_generator_emits_frames() {
 
 #[test]
 fn export_trace_writes_parseable_asc() {
-    let mut app = App::new();
+    let mut app = App::headless();
     for tx in &mut app.tx_list {
         tx.active = true;
         tx.cycle_us = 10_000;
@@ -894,7 +896,7 @@ fn export_trace_writes_parseable_asc() {
 /// at a different threshold setting and cannot be re-checked.
 #[test]
 fn the_spec_report_export_includes_its_premises_and_rows() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     app.tx_list.retain(|t| t.channel != 0);
     receive(
@@ -934,7 +936,7 @@ fn the_spec_report_export_includes_its_premises_and_rows() {
 
 #[test]
 fn two_channels_aggregate_separately() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert_eq!(app.channels.len(), 2);
     for (ch, c) in app.channels.iter().enumerate() {
         assert!(c.dbc.is_some(), "CAN{} should load its DBC", ch + 1);
@@ -965,7 +967,7 @@ fn two_channels_aggregate_separately() {
 
 #[test]
 fn csv_exports_match_window_state() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
     let id = db.order[0];
     let sig = db.messages[&id].signals[0].name.clone();
@@ -1019,7 +1021,7 @@ fn csv_exports_match_window_state() {
 
 #[test]
 fn trace_filter_matches_by_name_id_and_direction() {
-    let app = App::new();
+    let app = App::headless();
     let rx = CanFrame {
         t_us: 0,
         channel: 0,
@@ -1085,7 +1087,7 @@ fn trace_filter_matches_by_name_id_and_direction() {
 
 #[test]
 fn channels_can_be_added_removed_and_renamed() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert_eq!(app.channels.len(), 2);
     app.channels[0].name = "Powertrain".to_string();
     app.refresh_snapshot();
@@ -1139,7 +1141,7 @@ fn channels_can_be_added_removed_and_renamed() {
 
 #[test]
 fn replay_position_tracks_playback() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_seek_test.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
     app.toggle_record();
@@ -1199,7 +1201,7 @@ fn write_timed_asc(name: &str, n: u32, step_us: u64) -> std::path::PathBuf {
 
 #[test]
 fn seek_replay_moves_the_playhead() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = write_timed_asc("roxy_can_scrub.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
     app.replay();
@@ -1229,7 +1231,7 @@ fn seek_replay_moves_the_playhead() {
 
 #[test]
 fn play_after_a_scrub_resumes_in_place() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = write_timed_asc("roxy_can_scrub_resume.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
     app.replay();
@@ -1259,7 +1261,7 @@ fn play_after_a_scrub_resumes_in_place() {
 
 #[test]
 fn stop_makes_the_next_play_restart_from_zero() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = write_timed_asc("roxy_can_scrub_stop.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
     app.replay();
@@ -1278,7 +1280,7 @@ fn stop_makes_the_next_play_restart_from_zero() {
 
 #[test]
 fn the_plot_clock_follows_the_replay_playhead() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = write_timed_asc("roxy_can_plot_clock.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
     app.replay();
@@ -1300,7 +1302,7 @@ fn the_plot_clock_follows_the_replay_playhead() {
 
 #[test]
 fn loading_another_log_mid_replay_is_refused() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let a = write_timed_asc("roxy_can_guard_a.asc", 50, 10_000);
     let b = write_timed_asc("roxy_can_guard_b.asc", 50, 10_000);
     app.load_log(&a.to_string_lossy());
@@ -1340,7 +1342,7 @@ fn loading_another_log_mid_replay_is_refused() {
 
 #[test]
 fn play_after_choosing_a_new_log_opens_that_log() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let a = write_timed_asc("roxy_can_switch_a.asc", 100, 10_000);
     let b = write_timed_asc("roxy_can_switch_b.asc", 20, 10_000);
     app.load_log(&a.to_string_lossy());
@@ -1437,7 +1439,7 @@ fn retention_backs_the_widest_plot_window() {
 /// not yet playing. The traffic has to be DBC-decodable for the Graphics
 /// history to fill, so a hand-written fixture will not do.
 fn app_with_replayable_recording(name: &str, iters: usize) -> (App, (u8, u32, String), String) {
-    let mut app = App::new();
+    let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0];
@@ -1760,7 +1762,7 @@ fn a_second_replay_run_samples_from_the_top() {
 
 #[test]
 fn replay_injection_lands_on_the_log_timeline() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let file = write_timed_asc("roxy_can_inject.asc", 3, 100_000);
     app.load_log(&file.to_string_lossy());
     // An id the log does NOT carry: a log-carried id stands down during
@@ -1813,7 +1815,7 @@ fn replay_injection_lands_on_the_log_timeline() {
 
 #[test]
 fn replay_speed_steps_along_the_ladder() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert_eq!(app.replay_speed, 1.0);
     app.step_replay_speed(1);
     assert_eq!(app.replay_speed, 2.0, "one notch faster");
@@ -1828,7 +1830,7 @@ fn replay_speed_steps_along_the_ladder() {
 
 #[test]
 fn starting_clears_the_previous_pause() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     app.trace_paused = true;
     app.stop();
@@ -1840,7 +1842,7 @@ fn starting_clears_the_previous_pause() {
 
 #[test]
 fn switching_run_mode_stops_a_running_measurement() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     assert!(app.measuring);
     app.switch_run_mode(Mode::Replay);
@@ -1852,7 +1854,7 @@ fn switching_run_mode_stops_a_running_measurement() {
 
 #[test]
 fn recent_lists_dedup_and_cap() {
-    let mut app = App::new();
+    let mut app = App::headless();
     for i in 0..10 {
         app.push_recent_dbc(format!("f{i}.dbc"));
     }
@@ -1869,7 +1871,7 @@ fn recent_lists_dedup_and_cap() {
 
 #[test]
 fn dropping_a_dbc_loads_it_into_the_first_bus() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
     assert_eq!(app.channels[0].dbc_path, "assets/motbus.dbc");
     assert!(
@@ -1881,7 +1883,7 @@ fn dropping_a_dbc_loads_it_into_the_first_bus() {
 
 #[test]
 fn jump_to_live_resets_plot_offsets() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.graphics[0].t_offset_s = -42.0;
     app.jump_to_live();
     assert_eq!(app.graphics[0].t_offset_s, 0.0);
@@ -1889,7 +1891,7 @@ fn jump_to_live_resets_plot_offsets() {
 
 #[test]
 fn reset_restores_the_default_workspace() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.new_trace_window();
     app.push_recent_dbc("keep.dbc".to_string());
     app.start_virtual();
@@ -1902,7 +1904,7 @@ fn reset_restores_the_default_workspace() {
 
 #[test]
 fn new_project_starts_completely_empty() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.new_project();
     assert!(
         app.channels
@@ -1922,12 +1924,12 @@ fn new_project_starts_completely_empty() {
 
 #[test]
 fn untouched_workspace_quits_without_prompting() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.request_quit();
     assert!(app.quit, "clean untitled workspace quits silently");
     assert!(app.pending_action.is_none());
 
-    let mut app = App::new();
+    let mut app = App::headless();
     app.new_trace_window();
     app.request_quit();
     assert!(!app.quit, "modified workspace must confirm first");
@@ -1936,14 +1938,14 @@ fn untouched_workspace_quits_without_prompting() {
 
 #[test]
 fn autosave_round_trips_the_workspace() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_autosave.rxproj");
     assert!(app.save_project(Some(path.clone())));
     app.trace_windows[0].filter = "Motor".to_string();
     app.layout_cache = "[Window][Dockspace]\n".to_string();
     app.write_autosave();
 
-    let mut restored = App::new();
+    let mut restored = App::headless();
     assert!(restored.load_autosave());
     assert_eq!(restored.project_path.as_deref(), Some(path.as_path()));
     assert_eq!(restored.trace_windows[0].filter, "Motor");
@@ -1958,7 +1960,7 @@ fn autosave_round_trips_the_workspace() {
 
 #[test]
 fn desktop_switching_restores_window_visibility() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert!(app.trace_windows[0].opened);
     assert!(app.show_network);
     app.add_desktop();
@@ -1975,12 +1977,12 @@ fn desktop_switching_restores_window_visibility() {
 
 #[test]
 fn desktops_round_trip_through_config() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_desktop();
     app.switch_desktop(0);
     app.show_bus_stats = true;
     let cfg = Config::from_app(&app, None);
-    let mut restored = App::new();
+    let mut restored = App::headless();
     cfg.apply(&mut restored);
     assert_eq!(restored.desktops.len(), 2);
     assert_eq!(restored.desktops[0].name, "Desktop 1");
@@ -1998,7 +2000,7 @@ fn desktops_round_trip_through_config() {
 
 #[test]
 fn delete_desktop_keeps_at_least_one() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.delete_desktop(0);
     assert_eq!(app.desktops.len(), 1, "the last desktop cannot be deleted");
     app.add_desktop();
@@ -2014,7 +2016,7 @@ fn delete_desktop_keeps_at_least_one() {
 
 #[test]
 fn a_contended_mailbox_keeps_last_frames_snapshot() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert_eq!(app.channel_name(0), "CAN1");
     app.channels[0].name = "Renamed".to_string();
     app.refresh_snapshot();
@@ -2023,7 +2025,7 @@ fn a_contended_mailbox_keeps_last_frames_snapshot() {
     // A newer snapshot is published while the reader is mid-read: the
     // try-read bows out (None) instead of waiting on the bus.
     app.channels[0].name = "Renamed again".to_string();
-    let newer = std::sync::Arc::new(app.core.snapshot());
+    let newer = std::sync::Arc::new(app.snapshot());
     let mut guard = app.mail.lock().unwrap();
     *guard = newer;
     assert!(
@@ -2043,7 +2045,7 @@ fn a_contended_mailbox_keeps_last_frames_snapshot() {
 
 #[test]
 fn a_command_status_rides_the_next_snapshot() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.send(crate::bus::BusCommand::StartReplay {
         path: "no/such/log.asc".to_string(),
         speed: 1.0,
@@ -2074,7 +2076,7 @@ fn a_command_status_rides_the_next_snapshot() {
 
 #[test]
 fn new_project_resets_to_single_desktop() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_desktop();
     app.rename_desktop(1, "Analysis".to_string());
     app.new_project();
@@ -2085,13 +2087,13 @@ fn new_project_resets_to_single_desktop() {
 
 #[test]
 fn project_round_trips_through_an_rxproj_file() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.trace_windows[0].filter = "Motor".to_string();
     let path = std::env::temp_dir().join("roxy_can_test.rxproj");
     assert!(app.save_project(Some(path.clone())), "save writes the file");
     assert_eq!(app.project_path.as_deref(), Some(path.as_path()));
 
-    let mut restored = App::new();
+    let mut restored = App::headless();
     restored.open_project_path(&path);
     assert_eq!(restored.project_path.as_deref(), Some(path.as_path()));
     assert_eq!(restored.trace_windows[0].filter, "Motor");
@@ -2102,7 +2104,7 @@ fn project_round_trips_through_an_rxproj_file() {
 
 #[test]
 fn signal_stats_track_min_avg_max() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0];
@@ -2130,7 +2132,7 @@ fn signal_stats_track_min_avg_max() {
 
 #[test]
 fn restored_signals_are_resubscribed() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0];
@@ -2144,7 +2146,7 @@ fn restored_signals_are_resubscribed() {
     });
     let path = std::env::temp_dir().join("roxy_can_resub.rxproj");
     assert!(app.save_project(Some(path.clone())));
-    let mut restored = App::new();
+    let mut restored = App::headless();
     restored.open_project_path(&path);
     assert!(
         restored.subs.contains_key(&key),
@@ -2155,7 +2157,7 @@ fn restored_signals_are_resubscribed() {
 
 #[test]
 fn recording_captures_generator_data_faithfully() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.tx_list[0].active = true;
     app.tx_list[0].cycle_us = 10_000;
     let mut payload = [0u8; MAX_CAN_FD_LEN];
@@ -2188,7 +2190,7 @@ fn recording_captures_generator_data_faithfully() {
 
 #[test]
 fn set_bus_tx_toggles_a_whole_bus() {
-    let mut app = App::new();
+    let mut app = App::headless();
     assert!(app.tx_list.iter().all(|t| !t.active));
     app.set_bus_tx(0, true);
     assert!(
@@ -2238,7 +2240,7 @@ BA_ "GenMsgCycleTime" BO_ 300 0;
 /// A virtual bus with a silent generator, so everything the monitor sees
 /// arrived through `receive`.
 fn spec_app() -> App {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(SPEC_DBC).unwrap(),
     ));
@@ -2678,7 +2680,7 @@ BO_ 400 Muxed: 8 ECU
 "#;
 
 fn mux_app() -> App {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap(),
     ));
@@ -2747,7 +2749,7 @@ fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
 }
 
 fn quiet_app() -> App {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.start_virtual();
     // Only frames built by the test may reach the bus statistics.
     app.tx_list.retain(|t| t.channel != 0);
@@ -2850,7 +2852,7 @@ fn restarting_measurement_clears_the_bus_windows() {
         vec![rx_frame(1_000, 0x100, 8, FrameFlags::NONE)],
     );
     assert!(app.bus_loads[0].load() > 0.0);
-    app.core.reset_run();
+    app.reset_run();
     assert_eq!(app.bus_loads[0].load(), 0.0);
     assert_eq!(app.bus_loads[0].errors, 0);
 }
@@ -3124,7 +3126,7 @@ fn shrinking_the_window_forgets_the_scan_cover() {
 
 #[test]
 fn triggers_round_trip_through_a_project() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.add_signal_trigger();
     if let TriggerCond::SignalCross {
         threshold, rising, ..
@@ -3141,9 +3143,10 @@ fn triggers_round_trip_through_a_project() {
     app.triggers[2].action = TriggerAction::Send { ch: 1, id: 0x300 };
 
     let path = std::env::temp_dir().join("roxy_can_trig_roundtrip.rxproj");
+    app.refresh_snapshot();
     assert!(app.save_project(Some(path.clone())), "save writes the file");
 
-    let mut restored = App::new();
+    let mut restored = App::headless();
     restored.open_project_path(&path);
     assert_eq!(restored.triggers.len(), 3, "all three shapes come back");
     match &restored.triggers[0].cond {
@@ -3307,7 +3310,7 @@ fn the_replay_curve_holds_still_at_a_one_second_window() {
 
 #[test]
 fn the_sim_curve_holds_still_at_a_one_second_window() {
-    let mut app = App::new();
+    let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0];
@@ -3500,7 +3503,7 @@ fn the_y_mode_round_trips_through_a_project() {
     let path = std::env::temp_dir().join("roxy_can_ymode.rxproj");
     assert!(app.save_project(Some(path.clone())));
 
-    let mut restored = App::new();
+    let mut restored = App::headless();
     restored.open_project_path(&path);
     assert_eq!(
         restored.graphics[0].signals[0].y_mode,
@@ -3574,12 +3577,12 @@ fn data_values_hold_still_until_the_text_gate_fires() {
 
 #[test]
 fn the_text_rate_round_trips_through_a_project() {
-    let mut app = App::new();
+    let mut app = App::headless();
     app.text_rate_hz = 5;
     let path = std::env::temp_dir().join("roxy_can_textrate.rxproj");
     assert!(app.save_project(Some(path.clone())));
 
-    let mut restored = App::new();
+    let mut restored = App::headless();
     restored.open_project_path(&path);
     assert_eq!(restored.text_rate_hz, 5);
     std::fs::remove_file(&path).ok();
@@ -3755,7 +3758,7 @@ fn a_log_id_stays_silent_during_replay_and_returns_in_simulation() {
     // an id the log lacks keeps injecting, so "stir a few frames in"
     // survives.
     let path = write_timed_asc("roxy_can_mute_twin.asc", 20, 100_000);
-    let mut app = App::new();
+    let mut app = App::headless();
     // The sample config pre-populates a generator entry for the log's 0x100;
     // add one id the log lacks as the stirring control.
     let twin = app

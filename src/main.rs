@@ -6,6 +6,7 @@ mod bus;
 mod can;
 mod channel;
 mod config;
+mod core_loop;
 mod dbc;
 mod decode;
 mod export;

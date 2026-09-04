@@ -202,7 +202,7 @@ impl App {
         let mut s = String::from("time_us,bus,signal,value\n");
         let mut n = 0usize;
         for key in &keys {
-            let Some(sub) = self.subs.get(key) else {
+            let Some(sub) = self.sub_view(key) else {
                 continue;
             };
             let bus = self.channel_name(key.0);
@@ -246,7 +246,7 @@ impl App {
             .collect();
         let mut s = String::from("bus,signal,value,unit,type,label\n");
         for key in &keys {
-            let Some(sub) = self.subs.get(key) else {
+            let Some(sub) = self.sub_view(key) else {
                 continue;
             };
             let bus = self.channel_name(key.0);
@@ -267,7 +267,7 @@ impl App {
     /// something else at ±5% and grace 2.
     pub fn export_spec_csv(&mut self, path: &str) {
         let mut s = String::new();
-        for c in &self.channels {
+        for c in &self.snap.channels {
             let dbc = if c.dbc_path.trim().is_empty() {
                 "(none)".to_string()
             } else {
@@ -278,9 +278,10 @@ impl App {
         s.push_str(&format!("# tolerance,+/-{}%\n", self.spec_tol_pct));
         s.push_str(&format!("# grace,{}x declared period\n", self.spec_grace));
         let periodic: usize = self
+            .snap
             .channels
             .iter()
-            .filter_map(|c| c.dbc.as_ref())
+            .filter_map(|c| c.dbc.as_deref())
             .map(|db| {
                 db.messages
                     .values()
@@ -290,7 +291,7 @@ impl App {
             .sum();
         s.push_str(&format!("# periodic messages declared,{periodic}\n"));
         s.push_str("bus,id,name,rule,declared,measured,count,first_s,last_s\n");
-        for ((ch, id, kind), l) in &self.spec.rows {
+        for ((ch, id, kind), l) in &self.snap.spec.rows {
             let name = self.message_name(*ch, *id).unwrap_or("not in database");
             s.push_str(&format!(
                 "{},{:X},{},{},{},{},{},{:.3},{:.3}\n",

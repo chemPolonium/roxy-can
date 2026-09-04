@@ -7,7 +7,12 @@ use crate::can::frame::CanFrame;
 /// has no clock — `ReplaySource` owns the pacing and pulls one frame at a
 /// time via `peek_t`/`next_frame`. Keeping the split lets big files stream
 /// straight out of an mmap without ever materializing a `Vec<CanFrame>`.
-pub trait FrameStream {
+/// Sequential iterator over decoded log frames. Unlike `FrameSource` this
+/// has no clock — `ReplaySource` owns the pacing and pulls one frame at a
+/// time via `peek_t`/`next_frame`. Keeping the split lets big files stream
+/// straight out of an mmap without ever materializing a `Vec<CanFrame>`.
+/// `Send` for the same reason as `FrameSource`: the core moves threads.
+pub trait FrameStream: Send {
     /// Timestamp of the next frame without consuming it; `None` at EOF.
     /// Implementations may decompress a chunk to service this call.
     fn peek_t(&mut self) -> Option<u64>;
@@ -37,7 +42,9 @@ pub trait FrameStream {
     }
 }
 
-pub trait FrameSource {
+/// One bus input. `Send` because stage 3 moves the whole core -- sources
+/// included -- onto the bus thread; sources are plain data.
+pub trait FrameSource: Send {
     fn poll(&mut self, now_us: u64, out: &mut Vec<CanFrame>);
 
     fn is_done(&self) -> bool {

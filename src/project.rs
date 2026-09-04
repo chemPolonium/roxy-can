@@ -37,7 +37,15 @@ impl App {
         let recent_log = std::mem::take(&mut self.recent_log);
         let recent_projects = std::mem::take(&mut self.recent_projects);
         let default_layout = std::mem::take(&mut self.default_layout);
-        *self = App::new();
+        // Rebuild on the same drive the workspace was on: the GUI's reset
+        // replaces the core thread (the old one exits with its dropped
+        // sender), tests rebuild their hand-cranked core.
+        let threaded = matches!(self.drive, crate::app::CoreDrive::Threaded);
+        *self = if threaded {
+            App::new()
+        } else {
+            App::headless()
+        };
         self.recent_dbc = recent_dbc;
         self.recent_log = recent_log;
         self.recent_projects = recent_projects;
@@ -234,17 +242,15 @@ impl App {
     /// observer windows, no generator entries, default layout.
     pub fn new_project(&mut self) {
         self.reset_to_defaults();
-        for c in &mut self.channels {
-            c.dbc_path.clear();
-            c.dbc = None;
-        }
+        // The bus half of "empty" is a command; wait for it to land so
+        // the baseline below describes the emptied workspace.
+        self.send(crate::bus::BusCommand::ClearDatabases);
+        self.settle();
         self.trace_windows.clear();
         self.msg_windows.clear();
         self.stats_windows.clear();
         self.graphics.clear();
         self.data_windows.clear();
-        self.tx_list.clear();
-        self.subs.clear();
         self.baseline = self.config_snapshot();
         if !self.default_layout.is_empty() {
             self.pending_layout = Some(self.default_layout.clone());

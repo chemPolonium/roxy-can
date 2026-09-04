@@ -74,7 +74,7 @@ pub struct Latch {
 
 /// The monitor's whole state: the latched rows plus just enough memory of the
 /// previous step to measure an interval.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Spec {
     pub rows: BTreeMap<(u8, u32, Kind), Latch>,
     /// `last_t_us` of each message as of the previous step. Kept here rather

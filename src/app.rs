@@ -93,25 +93,28 @@ pub enum Mode {
 }
 
 pub struct App {
-    /// The bus half (TODO.md 主线): simulation clock, channels, generator.
-    /// Fields migrate here slice by slice; the `Deref` below keeps them
-    /// visible at the old paths during the move.
-    pub core: crate::bus::BusCore,
+    /// Where the bus actually lives. `Threaded` -- the production drive:
+    /// the core runs on its own thread and only commands and snapshots
+    /// cross. `Manual` -- tests and the future headless CLI keep the core
+    /// here and crank its loop by hand, with `send` staying synchronous.
+    pub(crate) drive: CoreDrive,
     /// The bus as of this frame's one mailbox read; UI rendering never
-    /// touches `core` state directly, only this shared copy.
+    /// touches core state directly, only this shared copy.
     pub snap: std::sync::Arc<crate::bus::Snapshot>,
-    /// Command pipe to the core: `send` pushes here, the core side
-    /// drains. Both ends live on the App this slice; the core-thread
-    /// slice moves the receiver into the thread and this stays as the
-    /// UI's only remaining handle on the bus.
+    /// Command pipe to the core: `send` pushes here; the receiving end
+    /// is the core thread's inbox (or the manual lane's).
     inbox_tx: std::sync::mpsc::Sender<crate::bus::BusCommand>,
-    inbox_rx: std::sync::mpsc::Receiver<crate::bus::BusCommand>,
     /// Where the core publishes snapshots and the frontend picks them up,
     /// never by waiting.
     mail: crate::bus::SnapshotMailbox,
-    /// Text from the last drained commands, riding the next published
-    /// snapshot to the status line.
-    pending_status: Option<String>,
+    /// The stepping policy the frontend keeps retuning; the core thread
+    /// reads it every lap. (Manual drives pass the same numbers straight
+    /// into their lap.)
+    knobs: std::sync::Arc<crate::core_loop::BusKnobs>,
+    /// Previous `(frame counter, tick instant)` for the frame-rate EMA,
+    /// which now reads snapshot deltas: frames arrive on the core's
+    /// clock, whatever drive is underneath.
+    ema_prev: Option<(u64, u64)>,
     pub quit: bool,
     pub t0: Instant,
     pub status: String,
@@ -231,25 +234,50 @@ pub struct App {
     pub(crate) data_counter: usize,
 }
 
+/// Which side of the stage-3 split the bus is on.
+pub(crate) enum CoreDrive {
+    /// The core runs on its own thread (`App::new`); this App holds only
+    /// the command sender and the mailbox reader.
+    Threaded,
+    /// The core is a plain value here (`App::headless`): tests and the
+    /// future headless CLI crank the same loop laps by hand, with
+    /// synchronous `send`.
+    Manual(Box<crate::core_loop::CoreLoop>),
+}
+
 impl std::ops::Deref for App {
     type Target = crate::bus::BusCore;
 
-    /// Migration scaffolding (TODO.md 主线 阶段 1): bus fields moved to
-    /// `BusCore` stay reachable at `self.<field>` while the slices land.
-    /// The stage-2 command boundary starts unwinding this.
+    /// The bus as a plain value. Manual drives hand out their local core,
+    /// so test setup can poke it directly (with a `refresh_snapshot`
+    /// afterwards); the threaded drive has nothing to hand out -- the
+    /// core lives on its thread, and only commands and snapshots cross.
     fn deref(&self) -> &Self::Target {
-        &self.core
+        match &self.drive {
+            CoreDrive::Manual(lane) => &lane.core,
+            CoreDrive::Threaded => {
+                panic!("the bus core runs on its own thread; use commands and snapshots")
+            }
+        }
     }
 }
 
 impl std::ops::DerefMut for App {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.core
+        match &mut self.drive {
+            CoreDrive::Manual(lane) => &mut lane.core,
+            CoreDrive::Threaded => {
+                panic!("the bus core runs on its own thread; use commands and snapshots")
+            }
+        }
     }
 }
 
 impl App {
-    pub fn new() -> Self {
+    /// The bus every drive starts from: default buses with their sample
+    /// databases loaded and the generator pre-populated. Pure bootstrap,
+    /// finished before any thread exists or any snapshot is published.
+    fn build_core() -> crate::bus::BusCore {
         let mut core = crate::bus::BusCore::new(vec![
             crate::load::BusLoad::new(),
             crate::load::BusLoad::new(),
@@ -272,14 +300,24 @@ impl App {
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
             },
         ];
-        let (inbox_tx, inbox_rx) = std::sync::mpsc::channel();
+        core.bootstrap_dbcs();
+        core.populate_generator();
+        core
+    }
+
+    fn shell(
+        drive: CoreDrive,
+        inbox_tx: std::sync::mpsc::Sender<crate::bus::BusCommand>,
+        mail: crate::bus::SnapshotMailbox,
+        knobs: std::sync::Arc<crate::core_loop::BusKnobs>,
+    ) -> Self {
         let mut app = App {
-            core,
+            drive,
             inbox_tx,
-            inbox_rx,
-            mail: crate::bus::new_mailbox(),
-            pending_status: None,
+            mail,
+            knobs,
             snap: std::sync::Arc::new(crate::bus::Snapshot::default()),
+            ema_prev: None,
             quit: false,
             t0: Instant::now(),
             status: "stopped".to_string(),
@@ -353,37 +391,47 @@ impl App {
             graphics_counter: 0,
             data_counter: 0,
         };
-        // Bootstrap before the first publish: databases parse and the
-        // generator pre-populates while the bus is still a plain struct
-        // on this thread. The command-based `load_dbcs` is for runtime
-        // restores, which have a frontend to report to.
-        app.core.bootstrap_dbcs();
+        // The bootstrap published its first frame into the mailbox before
+        // the thread (if any) exists, so the workspace baseline and the
+        // first UI frame see the full bus, not an empty placeholder.
+        app.read_snapshot();
         app.new_trace_window();
         app.new_msg_window();
         app.new_stats_window();
         app.new_graphics_window();
         app.new_data_window();
-        let msgs: Vec<(u8, u32)> = app
-            .channels
-            .iter()
-            .enumerate()
-            .flat_map(|(ch, c)| {
-                c.dbc
-                    .as_ref()
-                    .map(|db| db.order.iter().map(move |&id| (ch as u8, id)))
-                    .into_iter()
-                    .flatten()
-            })
-            .collect();
-        for (ch, id) in msgs {
-            app.add_tx(ch, id);
-        }
         let mut first = app.desktop_snapshot();
         first.name = "Desktop 1".to_string();
         app.desktops = vec![first];
         app.active_desktop = 0;
         app.baseline = app.config_snapshot();
         app
+    }
+
+    /// The production drive: the core boots here, then moves to its own
+    /// thread. The UI keeps the command sender and the mailbox reader.
+    pub fn new() -> Self {
+        let core = Self::build_core();
+        let (inbox_tx, inbox_rx) = std::sync::mpsc::channel();
+        let mail = crate::bus::new_mailbox();
+        let knobs = std::sync::Arc::new(crate::core_loop::BusKnobs::default());
+        let mut lane = crate::core_loop::CoreLoop::new(core, inbox_rx, mail.clone());
+        lane.publish();
+        crate::core_loop::spawn_lane(lane, knobs.clone());
+        Self::shell(CoreDrive::Threaded, inbox_tx, mail, knobs)
+    }
+
+    /// The manual drive: the same booted core stays a plain value on this
+    /// thread, and `send`/`tick` crank its loop by hand. Deterministic
+    /// clocks, synchronous commands -- what tests and a headless CLI want.
+    pub fn headless() -> Self {
+        let core = Self::build_core();
+        let (inbox_tx, inbox_rx) = std::sync::mpsc::channel();
+        let mail = crate::bus::new_mailbox();
+        let knobs = std::sync::Arc::new(crate::core_loop::BusKnobs::default());
+        let mut lane = crate::core_loop::CoreLoop::new(core, inbox_rx, mail.clone());
+        lane.publish();
+        Self::shell(CoreDrive::Manual(Box::new(lane)), inbox_tx, mail, knobs)
     }
 
     pub fn now_us(&self) -> u64 {
@@ -420,45 +468,58 @@ impl App {
         }
     }
 
-    /// Core side of the mailbox: hand the frontend the latest frame. The
-    /// pending status rides along once and clears -- news, not state.
-    fn publish_snapshot(&mut self) {
-        let status = self.pending_status.take();
-        let snap = std::sync::Arc::new(self.core.snapshot_with_status(status));
-        *self.mail.lock().expect("snapshot mailbox poisoned") = snap;
+    /// Publish + read. Production flows never need this -- `send` and
+    /// `tick` publish as part of their laps, and the threaded drive can't
+    /// publish from here at all -- but tests that poke core state
+    /// directly call it to make the poke visible to snapshot reads.
+    #[cfg(test)]
+    pub(crate) fn refresh_snapshot(&mut self) {
+        if let CoreDrive::Manual(lane) = &mut self.drive {
+            lane.publish();
+        }
+        self.read_snapshot();
     }
 
-    /// Core side of the pipe: apply every queued command, keeping the
-    /// last status any of them produced for the next publish.
-    fn drain_inbox(&mut self) {
-        while let Ok(cmd) = self.inbox_rx.try_recv() {
-            let mut status = String::new();
-            self.core.handle(cmd, &mut status);
-            if !status.is_empty() {
-                self.pending_status = Some(status);
+    /// Waits for the core thread to catch up with what was sent so far
+    /// (threaded drives only): blocks until the snapshot's lap counter
+    /// goes quiet, then returns with the freshest state. Manual drives
+    /// are always settled. Used by flows that read the bus back
+    /// mid-sequence -- project restore -- which is rare and user-paced,
+    /// so a bounded block is the honest shape.
+    pub(crate) fn settle(&mut self) {
+        if matches!(self.drive, CoreDrive::Threaded) {
+            let deadline = Instant::now() + std::time::Duration::from_millis(2_000);
+            let mut last = self.snap.laps;
+            let mut quiet = 0;
+            while Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                self.read_snapshot();
+                if self.snap.laps == last {
+                    quiet += 1;
+                    if quiet >= 3 {
+                        break;
+                    }
+                } else {
+                    quiet = 0;
+                }
+                last = self.snap.laps;
             }
         }
     }
 
-    /// Publish + read. The frame loop's read path is `read_snapshot` alone
-    /// -- publishing is the core's job -- but `send` acts right after a
-    /// write and tests poke core state directly, so both need the fuller
-    /// form to see the post-command bus.
-    pub(crate) fn refresh_snapshot(&mut self) {
-        self.publish_snapshot();
-        self.read_snapshot();
-    }
-
-    /// The frontend's post office to the bus: push the command, then run
-    /// the core's wake-up work by hand. Stage 3 keeps the push and moves
-    /// the drain-publish lap into the core thread, with status reaching
-    /// the UI inside the snapshot instead of a return channel. Every UI
-    /// write action funnels through here -- that funnel is what makes the
-    /// core movable.
+    /// The frontend's post office to the bus. On the manual drive the
+    /// push is followed by the core's wake-up work, so callers act on the
+    /// post-command bus immediately; on the threaded drive the push is
+    /// the whole story, and callers see the effect one published snapshot
+    /// later. Every UI write action funnels through here -- that funnel
+    /// is what made the core movable.
     pub fn send(&mut self, cmd: crate::bus::BusCommand) {
         let _ = self.inbox_tx.send(cmd);
-        self.drain_inbox();
-        self.refresh_snapshot();
+        if let CoreDrive::Manual(lane) = &mut self.drive {
+            lane.drain();
+            lane.publish();
+        }
+        self.read_snapshot();
     }
 
     pub fn start_virtual(&mut self) {
@@ -472,7 +533,7 @@ impl App {
     /// Starts measurement in the mode selected by the Simulation/Replay
     /// dropdown; replay falls back to a file picker when no log is loaded.
     pub fn start_selected(&mut self) {
-        match self.run_mode {
+        match self.snap.run_mode {
             Mode::Virtual => self.start_virtual(),
             Mode::Replay => {
                 if !self.can_replay() {
@@ -500,7 +561,7 @@ impl App {
     }
 
     fn can_replay(&self) -> bool {
-        !self.log_path.trim().is_empty() || !self.recorder.last_record.trim().is_empty()
+        !self.log_path.trim().is_empty() || !self.snap.last_record.trim().is_empty()
     }
 
     pub fn stop(&mut self) {
@@ -537,7 +598,7 @@ impl App {
     /// scrub bar's length would describe the new file while the live source
     /// keeps streaming the old one.
     pub fn load_log(&mut self, path: &str) {
-        if self.measuring && matches!(self.mode, Mode::Replay) {
+        if self.snap.measuring && matches!(self.snap.mode, Mode::Replay) {
             self.status = "stop the replay before loading another log".to_string();
             return;
         }
@@ -579,7 +640,7 @@ impl App {
         let path = {
             let p = self.log_path.trim();
             if p.is_empty() {
-                self.recorder.last_record.clone()
+                self.snap.last_record.clone()
             } else {
                 p.to_string()
             }
@@ -625,9 +686,9 @@ impl App {
     /// True when a scrubbed replay is parked mid-log and Play should pick up
     /// from there instead of re-opening the file at zero.
     fn can_resume_replay(&self) -> bool {
-        matches!(self.mode, Mode::Replay)
+        matches!(self.snap.mode, Mode::Replay)
             && !self.replay_reset_pending
-            && self.source.position().is_some()
+            && self.snap.replay.is_some()
     }
 
     /// Resumes a scrubbed replay in place: the wall clock restarts here on
@@ -653,8 +714,10 @@ impl App {
     /// Play/pause as a single action, shared by the toolbar button, Space and
     /// F9 so the resume rule lives in exactly one place.
     pub fn toggle_play(&mut self) {
-        if self.measuring {
-            self.send(crate::bus::BusCommand::SetTracePaused(!self.trace_paused));
+        if self.snap.measuring {
+            self.send(crate::bus::BusCommand::SetTracePaused(
+                !self.snap.trace_paused,
+            ));
         } else {
             self.play();
         }
@@ -677,12 +740,12 @@ impl App {
     /// While simulating it is `sim_t_us`, which stops during a pause; the wall
     /// clock does not, so a paused window used to drift its own curve away.
     pub fn plot_now_s(&self) -> f64 {
-        if matches!(self.mode, Mode::Replay)
-            && let Some(pos) = self.source.position()
+        if matches!(self.snap.mode, Mode::Replay)
+            && let Some((pos, _)) = self.snap.replay
         {
             return pos as f64 / 1e6;
         }
-        self.sim_t_us as f64 / 1e6
+        self.snap.sim_t_us as f64 / 1e6
     }
 
     /// Resets the pan offsets of all plot windows back to the live edge.
@@ -922,59 +985,71 @@ impl App {
         if self.text_fresh {
             self.last_text_refresh = std::time::Instant::now();
         }
+        // The frontend's stepping policy, retuned every frame; the core
+        // thread reads the knobs on each of its laps.
+        self.knobs
+            .set(self.wanted_stride_us(), self.spec_tol_pct, self.spec_grace);
         // One mailbox read per frame, before anything can early-return:
         // every frontend read of the bus goes through the snapshot, so the
         // rendering code cannot tell a hand-cranked bus from the threaded
-        // one of stage 3.
+        // one.
         self.read_snapshot();
-        if !self.measuring {
+        if !self.snap.measuring {
             return;
         }
-        if self.trace_paused {
-            if self.paused_at_us.is_none() {
-                self.paused_at_us = Some(self.now_us());
+        if self.snap.trace_paused {
+            // Pause/resume bookkeeping lives with whoever runs the bus:
+            // the manual drive stamps here, the core thread stamps on its
+            // own pause edge.
+            let stamp = self.now_us();
+            if let CoreDrive::Manual(lane) = &mut self.drive
+                && lane.core.paused_at_us.is_none()
+            {
+                lane.core.paused_at_us = Some(stamp);
             }
             return;
         }
         let now = self.now_us();
-        self.core.advance_clock(now);
-        if self.last_tick_us > 0 && now > self.last_tick_us {
-            let dt_s = (now - self.last_tick_us) as f64 / 1e6;
-            let inst = (self.core.buf.len() as f64) / dt_s;
-            self.frame_rate = if self.frame_rate == 0.0 {
-                inst
-            } else {
-                self.frame_rate * 0.9 + inst * 0.1
-            };
+        // The f/s figure comes from snapshot deltas, so it reads the same
+        // whether the frames were stepped on this thread or the core's.
+        let frames = self.snap.frame_counter;
+        if let Some((prev_frames, prev_t)) = self.ema_prev {
+            let dt_us = now.saturating_sub(prev_t);
+            if dt_us > 0 {
+                let inst = (frames.saturating_sub(prev_frames)) as f64 * 1e6 / dt_us as f64;
+                self.frame_rate = if self.frame_rate == 0.0 {
+                    inst
+                } else {
+                    self.frame_rate * 0.9 + inst * 0.1
+                };
+            }
         }
+        self.ema_prev = Some((frames, now));
         self.last_tick_us = now;
-        self.tick(now);
+        // Only the manual drive is stepped from here; the threaded core
+        // steps itself, on its own clock, inside its own laps.
+        if matches!(self.drive, CoreDrive::Manual(_)) {
+            self.advance_clock(now);
+            self.tick(now);
+        }
     }
 
     /// One step of the measurement loop, polled against wall clock `now_us`.
     /// Split out of [`Self::update`] so a test can run a single step at a time
     /// of its choosing; the generator reads `sim_t_us`, which `update` maintains.
-    /// This is also one lap of the future core-thread loop -- drain the
-    /// inbox, step the bus, publish -- hand-cranked until the thread
-    /// slice. What stays frontend-side is policy only: the sampling
-    /// stride, the spec check, and the status line.
+    /// This is one lap of the loop body -- drain the inbox, step the bus,
+    /// publish -- hand-cranked on the manual drive; the threaded core runs
+    /// the same shape on its own thread. What stays frontend-side is
+    /// policy only: the sampling stride, the spec check, and the status
+    /// line.
     pub fn tick(&mut self, now_us: u64) {
-        self.drain_inbox();
         let stride = self.wanted_stride_us();
-        let mut status = String::new();
-        self.core.step(
-            now_us,
-            stride,
-            self.spec_tol_pct,
-            self.spec_grace,
-            &mut status,
-        );
-        if !status.is_empty() {
-            self.pending_status = Some(status);
-        }
-        // Post-step publish: the mailbox must never hold something staler
-        // than the last step, whether it ran from the frame loop or a test.
-        self.refresh_snapshot();
+        let (tol, grace) = (self.spec_tol_pct, self.spec_grace);
+        let CoreDrive::Manual(lane) = &mut self.drive else {
+            return;
+        };
+        lane.step_lap(now_us, stride, tol, grace);
+        self.read_snapshot();
     }
 }
 

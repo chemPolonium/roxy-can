@@ -133,7 +133,7 @@ impl App {
     pub fn set_node_sim(&mut self, channel: u8, node: &str, on: bool) {
         // `""` is what the parser writes for "no transmitter assigned", and
         // `node_tx_ids` matches it against every unassigned message at once.
-        if node.is_empty() || channel as usize >= self.channels.len() {
+        if node.is_empty() || channel as usize >= self.snap.channel_count {
             return;
         }
         self.send(crate::bus::BusCommand::SetNodeSim {
@@ -158,7 +158,7 @@ impl App {
 
     /// Adds or replaces the source driving `src.name` on generator `i`.
     pub fn set_source(&mut self, i: usize, src: ValueSrc) {
-        let Some(tx) = self.tx_list.get(i) else {
+        let Some(tx) = self.snap.tx.get(i) else {
             return;
         };
         let (ch, id) = (tx.channel, tx.id);
