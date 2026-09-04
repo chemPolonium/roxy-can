@@ -103,33 +103,48 @@ type Curve = ([f32; 4], Vec<(u64, f64)>);
 /// Collapses an ascending slice to at most `cap` points, keeping each bucket's
 /// minimum *and* maximum in timestamp order. Stride decimation would alias away
 /// narrow spikes, which is the whole reason a bus trace is worth plotting.
-fn bucket_extremes(pts: &[(u64, f64)], cap: usize) -> Vec<(u64, f64)> {
-    if pts.len() <= cap {
-        return pts.to_vec();
+fn bucket_extremes(pts: impl ExactSizeIterator<Item = (u64, f64)>, cap: usize) -> Vec<(u64, f64)> {
+    let len = pts.len();
+    if len <= cap {
+        return pts.collect();
     }
     let buckets = (cap / 2).max(1);
-    let per = pts.len().div_ceil(buckets);
+    let per = len.div_ceil(buckets);
     let mut out = Vec::with_capacity(buckets * 2);
-    for chunk in pts.chunks(per) {
-        let lo = chunk
-            .iter()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .copied()
-            .unwrap();
-        let hi = chunk
-            .iter()
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .copied()
-            .unwrap();
-        if lo.0 == hi.0 {
-            out.push(lo);
-        } else if lo.0 < hi.0 {
-            out.extend_from_slice(&[lo, hi]);
-        } else {
-            out.extend_from_slice(&[hi, lo]);
+    let mut cur: Vec<(u64, f64)> = Vec::with_capacity(per);
+    for p in pts {
+        cur.push(p);
+        if cur.len() == per {
+            flush_bucket(&mut out, &mut cur);
         }
     }
+    if !cur.is_empty() {
+        flush_bucket(&mut out, &mut cur);
+    }
     out
+}
+
+/// Emits one bucket's minimum *and* maximum in timestamp order and clears
+/// the bucket for reuse.
+fn flush_bucket(out: &mut Vec<(u64, f64)>, cur: &mut Vec<(u64, f64)>) {
+    let lo = cur
+        .iter()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .copied()
+        .unwrap();
+    let hi = cur
+        .iter()
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .copied()
+        .unwrap();
+    if lo.0 == hi.0 {
+        out.push(lo);
+    } else if lo.0 < hi.0 {
+        out.extend_from_slice(&[lo, hi]);
+    } else {
+        out.extend_from_slice(&[hi, lo]);
+    }
+    cur.clear();
 }
 
 /// Direct-select window lengths: the whole TIME_STEPS ladder as a button
@@ -679,7 +694,7 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
             let color = PALETTE[sub.color % PALETTE.len()];
             Some((
                 color,
-                bucket_extremes(sub.history.range(lo_us, hi_us), budget.points),
+                bucket_extremes(sub.history.range(lo_us, hi_us).copied(), budget.points),
             ))
         })
         .collect();
@@ -957,7 +972,7 @@ mod tests {
         // This is the imgui guard: one window cannot submit more than 65 536
         // vertices, and several curves plus their markers share it.
         let pts = ramp(72_000);
-        let folded = bucket_extremes(&pts, MAX_CURVE_POINTS);
+        let folded = bucket_extremes(pts.iter().copied(), MAX_CURVE_POINTS);
         assert!(
             folded.len() <= MAX_CURVE_POINTS,
             "folded to {} points, over the {MAX_CURVE_POINTS} cap",
@@ -972,7 +987,7 @@ mod tests {
         let mut pts: Vec<(u64, f64)> = (0..72_000u64).map(|i| (i * 50_000, 0.0)).collect();
         pts[50_000].1 = 12_345.0;
         pts[1234].1 = -9_876.0;
-        let folded = bucket_extremes(&pts, MAX_CURVE_POINTS);
+        let folded = bucket_extremes(pts.iter().copied(), MAX_CURVE_POINTS);
         let lo = folded.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
         let hi = folded
             .iter()
@@ -1010,7 +1025,7 @@ mod tests {
 
     #[test]
     fn folding_preserves_time_order() {
-        let folded = bucket_extremes(&ramp(9_000), MAX_CURVE_POINTS);
+        let folded = bucket_extremes(ramp(9_000).iter().copied(), MAX_CURVE_POINTS);
         assert!(
             folded
                 .iter()
@@ -1023,6 +1038,6 @@ mod tests {
     #[test]
     fn short_curves_are_left_alone() {
         let pts = ramp(10);
-        assert_eq!(bucket_extremes(&pts, MAX_CURVE_POINTS), pts);
+        assert_eq!(bucket_extremes(pts.iter().copied(), MAX_CURVE_POINTS), pts);
     }
 }

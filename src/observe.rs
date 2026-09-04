@@ -7,16 +7,39 @@ use std::sync::Arc;
 
 /// Signal samples, kept ascending by timestamp.
 ///
+/// Storage is chunked so that publishing a snapshot to the frontend never
+/// copies the whole buffer: sealed chunks are immutable and shared by
+/// `Arc` (a clone bumps refcounts), only the live tail is copied, and a
+/// tail that outgrows [`SEAL_POINTS`] is sealed by move -- zero point
+/// copies. Mutation of a shared chunk goes through `Arc::make_mut`, so
+/// the working cache never disturbs a view the UI is still reading.
+///
 /// A `VecDeque` sufficed while samples only ever arrived through the playback
 /// stream. Window backfill also decodes the stretch *behind* the playhead, so
 /// insertion must work from either end: the hot streaming path still appends in
-/// O(1), and out-of-order points fall back to a search + splice. Entries stay
-/// 16 bytes with no per-node allocation, which matters because an hour of
-/// coarse-stride sampling is 72 000 points per signal (the stride tightens
-/// while a Graphics window is zoomed in, trading cache size for detail).
-#[derive(Clone, Debug, Default)]
+/// O(1), and out-of-order points fall back to a flatten-merge-rechunk (the
+/// same O(total) the flat buffer always paid).
+#[derive(Debug, Default)]
 pub struct SampleCache {
-    pub(crate) points: Vec<(u64, f64)>,
+    chunks: Vec<std::sync::Arc<Vec<(u64, f64)>>>,
+    tail: Vec<(u64, f64)>,
+    total: usize,
+}
+
+/// Live points are promoted into an immutable shared chunk once the tail
+/// reaches this size, bounding every publish's copy to one tail.
+pub(crate) const SEAL_POINTS: usize = 512;
+
+impl Clone for SampleCache {
+    fn clone(&self) -> Self {
+        // Chunks are shared, not copied; only the tail (bounded by
+        // SEAL_POINTS) is a real copy.
+        Self {
+            chunks: self.chunks.clone(),
+            tail: self.tail.clone(),
+            total: self.total,
+        }
+    }
 }
 
 impl SampleCache {
@@ -24,23 +47,58 @@ impl SampleCache {
     /// accessor belongs with the rest of the slice API and the tests use it.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.points.len()
+        self.total
     }
 
     pub fn is_empty(&self) -> bool {
-        self.points.is_empty()
+        self.total == 0
     }
 
     pub fn first(&self) -> Option<(u64, f64)> {
-        self.points.first().copied()
+        if let Some(c) = self.chunks.first() {
+            return c.first().copied();
+        }
+        self.tail.first().copied()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, (u64, f64)> {
-        self.points.iter()
+    pub fn iter(&self) -> impl Iterator<Item = &(u64, f64)> {
+        self.chunks
+            .iter()
+            .flat_map(|c| c.iter())
+            .chain(self.tail.iter())
     }
 
     pub fn clear(&mut self) {
-        self.points.clear();
+        self.chunks.clear();
+        self.tail.clear();
+        self.total = 0;
+    }
+
+    /// Stamp of the newest point, wherever it lives.
+    fn last_t(&self) -> Option<u64> {
+        self.tail
+            .last()
+            .or_else(|| self.chunks.last().and_then(|c| c.last()))
+            .map(|p| p.0)
+    }
+
+    fn push_point(&mut self, p: (u64, f64)) {
+        self.tail.push(p);
+        self.total += 1;
+        if self.tail.len() >= SEAL_POINTS {
+            let sealed = std::sync::Arc::new(std::mem::take(&mut self.tail));
+            self.chunks.push(sealed);
+        }
+    }
+
+    /// Replaces the whole contents with an ascending buffer, re-chunked.
+    fn install(&mut self, points: Vec<(u64, f64)>) {
+        self.total = points.len();
+        self.chunks = points
+            .chunks(SEAL_POINTS)
+            .map(|c| std::sync::Arc::new(c.to_vec()))
+            .collect();
+        self.tail = Vec::new();
     }
 
     /// Merges an ascending batch, keeping the buffer sorted and rejecting any
@@ -58,75 +116,177 @@ impl SampleCache {
             return Vec::new();
         }
         // Fast path: the batch starts beyond everything held, so nothing can
-        // collide except its own first element.
+        // collide except its own first element. This is the live sampling
+        // path -- append-only, no existing point is touched.
         if self
-            .points
-            .last()
-            .is_none_or(|&(last_t, _)| batch[0].0 >= last_t + gap)
+            .last_t()
+            .is_none_or(|last_t| batch[0].0 >= last_t + gap)
         {
             let taken = batch.iter().map(|&(_, v)| v).collect();
-            self.points.extend_from_slice(batch);
+            for &p in batch {
+                self.push_point(p);
+            }
             return taken;
         }
-        let mut out = Vec::with_capacity(self.points.len() + batch.len());
+        // Overlap or rewind: flatten, merge, re-chunk. The same O(total)
+        // the flat buffer always paid on this path.
+        let mut old: Vec<(u64, f64)> = Vec::with_capacity(self.total);
+        for c in &self.chunks {
+            old.extend_from_slice(c);
+        }
+        old.extend_from_slice(&self.tail);
+
+        let mut merged: Vec<(u64, f64)> = Vec::with_capacity(old.len() + batch.len());
         let mut taken = Vec::with_capacity(batch.len());
         let mut last_emitted: Option<u64> = None;
         let mut j = 0usize;
-        for &(et, ev) in &self.points {
+        for &(et, ev) in &old {
             while j < batch.len() && batch[j].0 < et {
                 let (bt, bv) = batch[j];
                 j += 1;
                 let after_prev = last_emitted.is_none_or(|lt| bt >= lt + gap);
                 let before_next = bt.saturating_add(gap) <= et;
                 if after_prev && before_next {
-                    out.push((bt, bv));
+                    merged.push((bt, bv));
                     taken.push(bv);
                     last_emitted = Some(bt);
                 }
             }
-            out.push((et, ev));
+            merged.push((et, ev));
             last_emitted = Some(et);
         }
         while j < batch.len() {
             let (bt, bv) = batch[j];
             j += 1;
             if last_emitted.is_none_or(|lt| bt >= lt + gap) {
-                out.push((bt, bv));
+                merged.push((bt, bv));
                 taken.push(bv);
                 last_emitted = Some(bt);
             }
         }
-        self.points = out;
+        self.install(merged);
         taken
     }
 
     /// Samples inside `[t_from, t_to]`, ascending. This is the only view the
     /// plotter needs: the visible window is a query, not a mutable buffer.
-    pub fn range(&self, t_from: u64, t_to: u64) -> &[(u64, f64)] {
-        let lo = self.points.partition_point(|(t, _)| *t < t_from);
-        let hi = self.points.partition_point(|(t, _)| *t <= t_to);
-        &self.points[lo..hi]
+    /// Chunk-level bounds skip whole chunks; only the window's edges pay a
+    /// binary search.
+    pub fn range(&self, t_from: u64, t_to: u64) -> Samples<'_> {
+        let mut segs: Vec<&[(u64, f64)]> = Vec::new();
+        let mut remaining = 0usize;
+        for c in &self.chunks {
+            // Stamps ascend across chunks, so scanning can stop for good.
+            if c.last().is_none_or(|p| p.0 < t_from) {
+                continue;
+            }
+            if c.first().is_some_and(|p| p.0 > t_to) {
+                break;
+            }
+            let lo = c.partition_point(|(t, _)| *t < t_from);
+            let hi = c.partition_point(|(t, _)| *t <= t_to);
+            if hi > lo {
+                segs.push(&c[lo..hi]);
+                remaining += hi - lo;
+            }
+        }
+        let lo = self.tail.partition_point(|(t, _)| *t < t_from);
+        let hi = self.tail.partition_point(|(t, _)| *t <= t_to);
+        if hi > lo {
+            segs.push(&self.tail[lo..hi]);
+            remaining += hi - lo;
+        }
+        Samples {
+            segs: segs.into_iter(),
+            cur: &[],
+            remaining,
+        }
     }
 
     /// Value of the most recent sample at or before `t_us`.
     pub fn at(&self, t_us: u64) -> Option<f64> {
-        let idx = self.points.partition_point(|&(ts, _)| ts <= t_us);
-        idx.checked_sub(1).map(|i| self.points[i].1)
+        let full = self
+            .chunks
+            .partition_point(|c| c.last().is_some_and(|p| p.0 <= t_us));
+        if full < self.chunks.len() {
+            let c = &self.chunks[full];
+            let pos = c.partition_point(|&(ts, _)| ts <= t_us);
+            if pos > 0 {
+                return Some(c[pos - 1].1);
+            }
+            if full > 0 {
+                return self.chunks[full - 1].last().map(|p| p.1);
+            }
+            return None;
+        }
+        let pos = self.tail.partition_point(|&(ts, _)| ts <= t_us);
+        if pos > 0 {
+            return Some(self.tail[pos - 1].1);
+        }
+        self.chunks.last().and_then(|c| c.last()).map(|p| p.1)
     }
 
     /// Drops the oldest samples until what remains fits inside `span_us` of the
     /// newest point.
     pub fn trim_oldest(&mut self, span_us: u64) {
-        let Some(&(newest, _)) = self.points.last() else {
+        let Some(horizon) = self.last_t().map(|newest| newest.saturating_sub(span_us)) else {
             return;
         };
-        let horizon = newest.saturating_sub(span_us);
-        let stale = self.points.partition_point(|(t, _)| *t < horizon);
+        while self
+            .chunks
+            .first()
+            .is_some_and(|c| c.last().is_some_and(|p| p.0 < horizon))
+        {
+            let dropped = self.chunks.remove(0);
+            self.total -= dropped.len();
+        }
+        if let Some(c) = self.chunks.first_mut() {
+            let stale = c.partition_point(|(t, _)| *t < horizon);
+            if stale > 0 {
+                // COW: a published view may still hold this chunk.
+                let c = std::sync::Arc::make_mut(c);
+                c.drain(..stale);
+                self.total -= stale;
+            }
+            return;
+        }
+        let stale = self.tail.partition_point(|(t, _)| *t < horizon);
         if stale > 0 {
-            self.points.drain(..stale);
+            self.tail.drain(..stale);
+            self.total -= stale;
         }
     }
 }
+
+/// One ascending window of samples, borrowed from a [`SampleCache`]'s
+/// chunks. Knows its exact length so the plotter can size its fold
+/// without a first pass.
+pub struct Samples<'a> {
+    segs: std::vec::IntoIter<&'a [(u64, f64)]>,
+    cur: &'a [(u64, f64)],
+    remaining: usize,
+}
+
+impl<'a> Iterator for Samples<'a> {
+    type Item = &'a (u64, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some((p, rest)) = self.cur.split_first() {
+                self.cur = rest;
+                self.remaining -= 1;
+                return Some(p);
+            }
+            self.cur = self.segs.next()?;
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for Samples<'_> {}
 
 pub struct Subscription {
     pub latest: f64,

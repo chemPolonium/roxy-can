@@ -1560,6 +1560,75 @@ fn sample_cache_stays_ascending_when_filled_from_either_end() {
 }
 
 #[test]
+fn the_published_cache_view_stays_still_while_the_run_goes_on() {
+    let mut c = SampleCache::default();
+    c.merge(
+        &(0..4u64)
+            .map(|i| (i * 10_000, i as f64))
+            .collect::<Vec<_>>(),
+        10_000,
+    );
+    let published = c.clone(); // what a snapshot hands the UI
+
+    // More samples arrive and the retention span trims the oldest away;
+    // neither may disturb the view the UI is still reading.
+    c.merge(
+        &(10..12u64)
+            .map(|i| (i * 10_000, i as f64))
+            .collect::<Vec<_>>(),
+        10_000,
+    );
+    c.trim_oldest(50_000);
+
+    assert_eq!(
+        published.len(),
+        4,
+        "the published view is frozen at its publish instant"
+    );
+    assert_eq!(published.first().unwrap().0, 0);
+    assert_eq!(
+        c.first().unwrap().0,
+        100_000,
+        "the working cache trims independently (50 000 span keeps two points)"
+    );
+    assert_eq!(c.len(), 2);
+}
+
+#[test]
+fn merging_across_sealed_chunks_keeps_order_and_gap_rules() {
+    let mut c = SampleCache::default();
+    let n = crate::observe::SEAL_POINTS * 3 + 5;
+    c.merge(
+        &(0..n as u64)
+            .map(|i| (i * 1_000, i as f64))
+            .collect::<Vec<_>>(),
+        1_000,
+    );
+    assert_eq!(c.len(), n);
+
+    // Both candidates sit inside the gap of their neighbours: rejected,
+    // and the ascending order across three sealed chunks survives.
+    let back: Vec<(u64, f64)> = [3_500u64, 7_500].iter().map(|&t| (t, t as f64)).collect();
+    let taken = c.merge(&back, 1_000);
+    assert!(taken.is_empty(), "in-gap candidates are rejected");
+    assert!(
+        c.iter().zip(c.iter().skip(1)).all(|(a, b)| a.0 < b.0),
+        "a merge spanning sealed chunks keeps the order"
+    );
+    assert_eq!(c.at(3_599), Some(3.0), "3_500 was rejected; 3_000 answers");
+
+    // Trimming to a 500 ms span drops the first two sealed chunks whole
+    // and trims the third at the horizon: 1_540_000 - 500_000.
+    c.trim_oldest(500_000);
+    assert_eq!(
+        c.first().unwrap().0,
+        1_040_000,
+        "stale head chunks are dropped wholesale, the head chunk is trimmed in place"
+    );
+    assert_eq!(c.at(1_100_000), Some(1_100.0));
+}
+
+#[test]
 fn sample_cache_range_and_lookup_are_inclusive_and_ordered() {
     let mut c = SampleCache::default();
     c.merge(
@@ -1570,7 +1639,7 @@ fn sample_cache_range_and_lookup_are_inclusive_and_ordered() {
     );
     let win = c.range(2_000, 5_000);
     assert_eq!(
-        win.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        win.map(|(t, _)| *t).collect::<Vec<_>>(),
         vec![2_000, 3_000, 4_000, 5_000],
         "both ends of the window are included"
     );
@@ -1690,14 +1759,13 @@ fn a_plot_window_decodes_without_waiting_for_playback() {
             "the window must decode on demand, got {} points",
             win.len()
         );
+        let stamps: Vec<u64> = win.map(|(t, _)| *t).collect();
         assert!(
-            win.iter()
-                .zip(win.iter().skip(1))
-                .all(|(a, b)| b.0 - a.0 >= SAMPLE_INTERVAL_US),
+            stamps.windows(2).all(|w| w[1] - w[0] >= SAMPLE_INTERVAL_US),
             "a backfill must honour the sampling stride"
         );
         assert!(
-            win.first().unwrap().0 >= 200_000 && win.last().unwrap().0 <= 400_000,
+            stamps.first().unwrap() >= &200_000 && stamps.last().unwrap() <= &400_000,
             "returned points must lie inside the request"
         );
     }
@@ -3261,8 +3329,9 @@ fn visible_curve(app: &mut App, key: &(u8, u32, String)) -> (f64, usize, f64) {
         .expect("subscribed")
         .history
         .range(lo_us, hi_us);
+    let count = pts.len();
     let right = pts.last().map(|&(t, _)| t as f64 / 1e6).unwrap_or(f64::NAN);
-    (t_now, pts.len(), right)
+    (t_now, count, right)
 }
 
 #[test]
