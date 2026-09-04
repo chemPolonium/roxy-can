@@ -3823,6 +3823,16 @@ fn the_state_tracker_round_trips_through_a_project() {
             colors: vec![Some([0.2, 0.2, 0.8]), None],
         },
     );
+    // A default-mode override pinned on the signal's second key (the one
+    // whose value is exactly 3000.0 in the sample database's scale).
+    let bits = {
+        let q = 3000.0f64;
+        let q = if q == 0.0 { 0.0 } else { q };
+        q.to_bits()
+    };
+    app.state_trackers[0]
+        .overrides
+        .insert(key.clone(), [(bits, [0.9, 0.5, 0.1])].into_iter().collect());
     app.subscribe(key.clone());
     let path = std::env::temp_dir().join("roxy_can_state.rxproj");
     assert!(app.save_project(Some(path.clone())));
@@ -3839,6 +3849,16 @@ fn the_state_tracker_round_trips_through_a_project() {
     assert_eq!(rule.names, vec!["low", "high"]);
     assert_eq!(rule.colors[0], Some([0.2, 0.2, 0.8]));
     assert_eq!(rule.colors[1], None, "automatic survives the round trip");
+    let restored_ov = restored.state_trackers[0]
+        .overrides
+        .get(&key)
+        .and_then(|m| m.get(&bits))
+        .copied();
+    assert_eq!(
+        restored_ov,
+        Some([0.9, 0.5, 0.1]),
+        "default-mode overrides ride the project file too"
+    );
     // A restored signal must be resubscribed, or the band draws no data.
     assert!(restored.subs.contains_key(&key));
     std::fs::remove_file(&path).ok();

@@ -541,6 +541,15 @@ impl StateRule {
     }
 }
 
+/// Which swatch of a State Tracker editor the color picker is editing.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PickTarget {
+    /// A custom band, by index into the rule's color list.
+    Band(usize),
+    /// A default-mode state, by the normalized bits of its value.
+    Value(u64),
+}
+
 /// The State Tracker window: signals rendered as constant-value state
 /// bands over a live trailing window, CANoe-style. An observer like
 /// Graphics/Data: rows share their signal model so the selection popup,
@@ -560,8 +569,14 @@ pub struct StateWin {
     /// and new states never reshuffle the old ones. Not persisted.
     pub(crate) color_slots: HashMap<(u8, u32, String), HashMap<u64, usize>>,
     /// Custom state bands per signal key (CANoe's Value Definition). When
-    /// present, a rule drives both the band labels and the fill colors.
+    /// present, the signal is in custom mode and the rule drives both the
+    /// band labels and the fill colors. Absent means default mode: states
+    /// come from the VAL_ table or observed values.
     pub rules: HashMap<(u8, u32, String), StateRule>,
+    /// Default-mode color overrides per signal key, keyed by the state
+    /// value's normalized bits: an entry pins one state's color while the
+    /// rest stay automatic.
+    pub overrides: HashMap<(u8, u32, String), HashMap<u64, [f32; 3]>>,
 }
 
 impl Default for StateWin {
@@ -573,6 +588,7 @@ impl Default for StateWin {
             time_window_s: 20.0,
             color_slots: HashMap::new(),
             rules: HashMap::new(),
+            overrides: HashMap::new(),
         }
     }
 }

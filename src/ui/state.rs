@@ -7,7 +7,8 @@
 //! while a smooth analog collapses into a few readable ranges instead of
 //! one segment per sample.
 
-use crate::app::{App, PALETTE, StateRule};
+use crate::app::{App, PALETTE, PickTarget, StateRule};
+use crate::observe::StateWin;
 use imgui::Ui;
 use std::collections::HashMap;
 
@@ -46,8 +47,18 @@ const BAND_PALETTE: [[f32; 3]; 12] = [
 
 /// Synthetic slot keys for band auto-colors, laid in the NaN bit range so
 /// no real value's bits can ever collide with them.
+const BAND_KEY_BASE: u64 = u64::MAX - 1_000_000;
+
 fn band_slot_key(band: usize) -> f64 {
-    f64::from_bits(u64::MAX - 1_000_000 + band as u64)
+    f64::from_bits(BAND_KEY_BASE + band as u64)
+}
+
+/// The map key of a state value: quantize, pin -0.0 onto 0.0, then take
+/// the bits. The band view, the editor, and persistence all key states
+/// through this one function.
+fn bits_of(v: f64) -> u64 {
+    let q = quantize(v);
+    if q == 0.0 { 0.0 } else { q }.to_bits()
 }
 
 /// The automatic color of custom band `band`: the next free slot in the
@@ -109,88 +120,36 @@ fn rule_editor(app: &mut App, ui: &Ui) {
             let Some(w) = app.state_trackers.get_mut(wi) else {
                 return;
             };
-            let Some(rule) = w.rules.get_mut(&key) else {
-                ui.text_disabled("No custom bands: values color and label themselves.");
-                if ui.small_button("Define bands##srnew") {
-                    w.rules.insert(
-                        key.clone(),
-                        StateRule {
-                            cuts: vec![],
-                            names: vec!["all".to_string()],
-                            colors: vec![None],
-                        },
-                    );
+            // Two modes per signal, CANoe's Rectangle-with-definitions vs
+            // the raw view: default states come from the VAL_ table or
+            // observed values, custom bands from explicit cuts.
+            let mut mode = if w.rules.contains_key(&key) { 1 } else { 0 };
+            let mut chosen = mode;
+            ui.radio_button("默认", &mut chosen, 0);
+            ui.same_line();
+            ui.radio_button("自定义", &mut chosen, 1);
+            if chosen != mode {
+                if chosen == 1 {
+                    w.rules.entry(key.clone()).or_insert_with(|| StateRule {
+                        cuts: vec![],
+                        names: vec!["all".to_string()],
+                        colors: vec![None],
+                    });
+                } else {
+                    w.rules.remove(&key);
                 }
-                return;
-            };
-            // Cut rows: the boundaries between bands.
-            let mut rm_cut = None;
-            for (ci, cut) in rule.cuts.iter_mut().enumerate() {
-                let mut c = *cut as f32;
-                if ui
-                    .input_float(format!("cut##srcut{ci}"), &mut c)
-                    .display_format("%g")
-                    .build()
-                {
-                    *cut = c as f64;
-                }
-                ui.same_line();
-                if ui.small_button(format!("x##srcutrm{ci}")) {
-                    rm_cut = Some(ci);
-                }
-            }
-            if let Some(ci) = rm_cut {
-                rule.remove_cut(ci);
-            }
-            if ui.small_button("Add cut##sradd") {
-                let next = rule.cuts.last().copied().unwrap_or(0.0) + 1.0;
-                rule.add_cut(next);
+                mode = chosen;
             }
             ui.separator();
-            // Band rows: range, color swatch, name. The swatch shows the
-            // band's real color (an automatic band displays the palette
-            // slot it resolves to, not a placeholder) and opens the
-            // Word-style picker.
-            for bi in 0..rule.names.len() {
-                let lo = bi.checked_sub(1).and_then(|p| rule.cuts.get(p).copied());
-                let hi = rule.cuts.get(bi).copied();
-                let range = match (lo, hi) {
-                    (None, Some(h)) => format!("< {h}"),
-                    (Some(l), None) => format!(">= {l}"),
-                    (Some(l), Some(h)) => format!("{l} .. {h}"),
-                    (None, None) => "all".to_string(),
-                };
-                ui.text(&range);
-                ui.same_line_with_pos(110.0);
-                let swatch = match rule.colors[bi] {
-                    Some(c) => c,
-                    None => {
-                        // Same slot lookup the band view runs, so the
-                        // editor shows exactly what gets drawn.
-                        let slots = w.color_slots.entry(key.clone()).or_default();
-                        band_auto_color(slots, bi)
-                    }
-                };
-                if ui.color_button(
-                    format!("##srcol{bi}"),
-                    [swatch[0], swatch[1], swatch[2], 1.0],
-                ) {
-                    ui.open_popup("##srpick");
-                    app.state_rule_pick = Some((wi, key.clone(), bi));
-                }
-                if ui.is_item_hovered() && rule.colors[bi].is_none() {
-                    ui.tooltip_text("automatic");
-                }
-                ui.same_line();
-                let mut name = rule.names[bi].clone();
-                ui.set_next_item_width(-1.0);
-                if ui.input_text(format!("##srname{bi}"), &mut name).build() {
-                    rule.names[bi] = name;
-                }
-            }
-            ui.separator();
-            if ui.small_button("Clear##srclear") {
-                w.rules.remove(&key);
+            let dbc = app
+                .snap
+                .channels
+                .get(key.0 as usize)
+                .and_then(|c| c.dbc.clone());
+            if mode == 0 {
+                default_panel(ui, dbc.as_deref(), w, &key, &mut app.state_rule_pick, wi);
+            } else {
+                custom_panel(ui, w, &key, &mut app.state_rule_pick, wi);
             }
             // Must render inside this window's ID scope: OpenPopup hashed
             // "##srpick" against it, and a popup begun outside would look
@@ -202,51 +161,242 @@ fn rule_editor(app: &mut App, ui: &Ui) {
     }
 }
 
-/// The Word-style color picker for one custom band: 自动 plus a short row
-/// of low-saturation defaults, with a full palette (and RGB inputs) at
-/// the bottom for the rare case nothing default fits. Selecting applies
-/// immediately and closes.
+/// Custom mode: explicit cuts split the value axis into bands, and every
+/// band carries its own name and color.
+fn custom_panel(
+    ui: &Ui,
+    w: &mut StateWin,
+    key: &(u8, u32, String),
+    pick: &mut Option<(usize, (u8, u32, String), PickTarget)>,
+    wi: usize,
+) {
+    let Some(rule) = w.rules.get_mut(key) else {
+        return;
+    };
+    // Cut rows: the boundaries between bands.
+    let mut rm_cut = None;
+    for (ci, cut) in rule.cuts.iter_mut().enumerate() {
+        let mut c = *cut as f32;
+        if ui
+            .input_float(format!("cut##srcut{ci}"), &mut c)
+            .display_format("%g")
+            .build()
+        {
+            *cut = c as f64;
+        }
+        ui.same_line();
+        ui.text("cut");
+        ui.same_line();
+        if ui.small_button(format!("x##srcutrm{ci}")) {
+            rm_cut = Some(ci);
+        }
+    }
+    if let Some(ci) = rm_cut {
+        rule.remove_cut(ci);
+    }
+    if ui.small_button("Add cut##sradd") {
+        let next = rule.cuts.last().copied().unwrap_or(0.0) + 1.0;
+        rule.add_cut(next);
+    }
+    ui.separator();
+    // Band rows: range, color swatch, name. The swatch shows the band's
+    // real color (an automatic band displays the palette slot it resolves
+    // to, not a placeholder) and opens the Word-style picker.
+    for bi in 0..rule.names.len() {
+        let lo = bi.checked_sub(1).and_then(|p| rule.cuts.get(p).copied());
+        let hi = rule.cuts.get(bi).copied();
+        let range = match (lo, hi) {
+            (None, Some(h)) => format!("< {h}"),
+            (Some(l), None) => format!(">= {l}"),
+            (Some(l), Some(h)) => format!("{l} .. {h}"),
+            (None, None) => "all".to_string(),
+        };
+        ui.text(&range);
+        ui.same_line_with_pos(110.0);
+        let swatch = match rule.colors[bi] {
+            Some(c) => c,
+            None => {
+                // Same slot lookup the band view runs, so the editor
+                // shows exactly what gets drawn.
+                let slots = w.color_slots.entry(key.clone()).or_default();
+                band_auto_color(slots, bi)
+            }
+        };
+        if ui.color_button(
+            format!("##srcol{bi}"),
+            [swatch[0], swatch[1], swatch[2], 1.0],
+        ) {
+            ui.open_popup("##srpick");
+            *pick = Some((wi, key.clone(), PickTarget::Band(bi)));
+        }
+        if ui.is_item_hovered() && rule.colors[bi].is_none() {
+            ui.tooltip_text("automatic");
+        }
+        ui.same_line();
+        let mut name = rule.names[bi].clone();
+        ui.set_next_item_width(-1.0);
+        if ui.input_text(format!("##srname{bi}"), &mut name).build() {
+            rule.names[bi] = name;
+        }
+    }
+    ui.separator();
+    if ui.small_button("Clear##srclear") {
+        w.rules.remove(key);
+    }
+}
+
+/// Default mode: one row per state the signal has -- VAL_ table entries
+/// when the database defines them, the observed values otherwise. Every
+/// swatch shows the state's live color and can pin an override.
+fn default_panel(
+    ui: &Ui,
+    dbc: Option<&crate::dbc::SymbolTable>,
+    w: &mut StateWin,
+    key: &(u8, u32, String),
+    pick: &mut Option<(usize, (u8, u32, String), PickTarget)>,
+    wi: usize,
+) {
+    let mut states: Vec<(u64, String)> = Vec::new();
+    if let Some(db) = dbc {
+        let sig = db
+            .messages
+            .get(&key.1)
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.2));
+        let table = db.value_tables.get(&(key.1, key.2.clone()));
+        if let (Some(sig), Some(table)) = (sig, table) {
+            let mut entries: Vec<(i64, &String)> = table.iter().map(|(r, l)| (*r, l)).collect();
+            entries.sort_by_key(|(r, _)| *r);
+            for (raw, label) in entries {
+                let v = raw as f64 * sig.factor + sig.offset;
+                states.push((bits_of(v), label.clone()));
+            }
+        }
+    }
+    if states.is_empty() {
+        let mut observed: Vec<f64> = w
+            .color_slots
+            .get(key)
+            .map(|m| {
+                m.keys()
+                    .filter(|k| **k < BAND_KEY_BASE)
+                    .map(|k| f64::from_bits(*k))
+                    .collect()
+            })
+            .unwrap_or_default();
+        observed.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        for v in observed {
+            states.push((bits_of(v), format!("{v:.6}")));
+        }
+    }
+
+    if states.is_empty() {
+        ui.text_disabled("暂无状态：等总线出现取值，或让数据库带 VAL_ 值表。");
+    }
+    for (bits, label) in &states {
+        ui.text(label);
+        ui.same_line_with_pos(150.0);
+        let pinned = w.overrides.get(key).and_then(|m| m.get(bits)).copied();
+        let swatch = pinned.unwrap_or_else(|| {
+            let slots = w.color_slots.entry(key.clone()).or_default();
+            let p = PALETTE[slot_for(slots, f64::from_bits(*bits), PALETTE.len())];
+            [p[0], p[1], p[2]]
+        });
+        if ui.color_button(
+            format!("##srdcol{bits}"),
+            [swatch[0], swatch[1], swatch[2], 1.0],
+        ) {
+            ui.open_popup("##srpick");
+            *pick = Some((wi, key.clone(), PickTarget::Value(*bits)));
+        }
+        if ui.is_item_hovered() && pinned.is_none() {
+            ui.tooltip_text("automatic");
+        }
+    }
+    if ui.small_button("清除颜色##srdclear") {
+        w.overrides.remove(key);
+    }
+}
+
+/// The Word-style color picker for one swatch -- a custom band or a
+/// default-mode state: 自动 plus a short row of low-saturation defaults,
+/// with a full palette (and RGB inputs) at the bottom for the rare case
+/// nothing default fits. Selecting applies immediately and closes.
 fn color_picker_popup(app: &mut App, ui: &Ui) {
-    let Some((wi, key, band)) = app.state_rule_pick.clone() else {
+    let Some((wi, key, target)) = app.state_rule_pick.clone() else {
         return;
     };
     ui.popup("##srpick", || {
         let Some(w) = app.state_trackers.get_mut(wi) else {
             return;
         };
-        let Some(rule) = w.rules.get_mut(&key) else {
-            return;
-        };
-        if band >= rule.colors.len() {
-            return;
-        }
-        if ui.selectable_config("自动").build() {
-            rule.colors[band] = None;
-            ui.close_current_popup();
-            app.state_rule_pick = None;
-            return;
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("配色跟随自动机制，与其他状态同样稳定");
-        }
-        ui.separator();
-        ui.text_disabled("默认颜色");
-        for (idx, c) in BAND_PALETTE.iter().enumerate() {
-            if idx % 6 > 0 {
-                ui.same_line();
+        match target {
+            PickTarget::Band(band) => {
+                let Some(rule) = w.rules.get_mut(&key) else {
+                    return;
+                };
+                if band >= rule.colors.len() {
+                    return;
+                }
+                if ui.selectable_config("自动").build() {
+                    rule.colors[band] = None;
+                    ui.close_current_popup();
+                    app.state_rule_pick = None;
+                    return;
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("配色跟随自动机制，与其他状态同样稳定");
+                }
+                ui.separator();
+                ui.text_disabled("默认颜色");
+                for (idx, c) in BAND_PALETTE.iter().enumerate() {
+                    if idx % 6 > 0 {
+                        ui.same_line();
+                    }
+                    if ui.color_button(format!("##srpal{idx}"), [c[0], c[1], c[2], 1.0]) {
+                        rule.colors[band] = Some(*c);
+                        ui.close_current_popup();
+                        app.state_rule_pick = None;
+                        return;
+                    }
+                }
+                ui.separator();
+                ui.text_disabled("其他颜色");
+                let mut col = rule.colors[band].unwrap_or([0.80, 0.80, 0.80]);
+                if ui.color_picker3("##srccustom", &mut col) {
+                    rule.colors[band] = Some(col);
+                }
             }
-            if ui.color_button(format!("##srpal{idx}"), [c[0], c[1], c[2], 1.0]) {
-                rule.colors[band] = Some(*c);
-                ui.close_current_popup();
-                app.state_rule_pick = None;
-                return;
+            PickTarget::Value(bits) => {
+                let ov = w.overrides.entry(key.clone()).or_default();
+                if ui.selectable_config("自动").build() {
+                    ov.remove(&bits);
+                    ui.close_current_popup();
+                    app.state_rule_pick = None;
+                    return;
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("配色跟随自动机制，与其他状态同样稳定");
+                }
+                ui.separator();
+                ui.text_disabled("默认颜色");
+                for (idx, c) in BAND_PALETTE.iter().enumerate() {
+                    if idx % 6 > 0 {
+                        ui.same_line();
+                    }
+                    if ui.color_button(format!("##srpal{idx}"), [c[0], c[1], c[2], 1.0]) {
+                        ov.insert(bits, *c);
+                        ui.close_current_popup();
+                        app.state_rule_pick = None;
+                        return;
+                    }
+                }
+                ui.separator();
+                ui.text_disabled("其他颜色");
+                let mut col = ov.get(&bits).copied().unwrap_or([0.80, 0.80, 0.80]);
+                if ui.color_picker3("##srccustom", &mut col) {
+                    ov.insert(bits, col);
+                }
             }
-        }
-        ui.separator();
-        ui.text_disabled("其他颜色");
-        let mut col = rule.colors[band].unwrap_or([0.80, 0.80, 0.80]);
-        if ui.color_picker3("##srccustom", &mut col) {
-            rule.colors[band] = Some(col);
         }
     });
 }
@@ -401,11 +551,9 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
             })
         } else {
             state_segments(held, &pts, lo_us, hi_us, |v| {
-                let q = quantize(v);
-                let q = if q == 0.0 { 0.0 } else { q };
                 (
-                    q.to_bits(),
-                    table_label(app, &key, q).unwrap_or_else(|| fmt_val(q)),
+                    bits_of(v),
+                    table_label(app, &key, v).unwrap_or_else(|| fmt_val(v)),
                 )
             })
         };
@@ -424,11 +572,13 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // State colors: with few distinct values visible, every state gets
         // its own palette slot -- gear 5 and gear 1 read apart at a glance.
         // Slots are remembered per value (see `slot_for`), so the same
-        // value keeps its color across the whole run. A busy analog with
-        // more visible states than the palette gets CANoe's plain neutral
-        // band: the value label does the talking.
+        // value keeps its color across the whole run. A pinned override
+        // (default-mode color picked in the editor) beats the slot, and a
+        // busy analog with more visible states than the palette gets
+        // CANoe's plain neutral band: the value label does the talking.
         let per_state = rule.is_none() && states.len() <= PALETTE.len();
         let win = &mut app.state_trackers[i];
+        let overrides = win.overrides.get(&key).cloned();
         let slots = win.color_slots.entry(key.clone()).or_default();
         for seg in segs {
             let sx0 = geo.x_of(seg.t0_us as f64 / 1e6).max(geo.bx0);
@@ -445,10 +595,13 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
                         [p[0], p[1], p[2], 0.92]
                     }
                 }
-            } else if per_state {
-                PALETTE[slot_for(slots, seg.value, PALETTE.len())]
             } else {
-                NEUTRAL_FILL
+                let bits = bits_of(seg.value);
+                match overrides.as_ref().and_then(|m| m.get(&bits)) {
+                    Some(c) => [c[0], c[1], c[2], 0.92],
+                    None if per_state => PALETTE[slot_for(slots, seg.value, PALETTE.len())],
+                    _ => NEUTRAL_FILL,
+                }
             };
             // Per-state mode needs no outlines: neighbouring segments
             // always differ in value and color, so the boundary reads by

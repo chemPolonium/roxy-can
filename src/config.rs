@@ -163,9 +163,22 @@ pub struct SignalCfg {
     #[serde(default)]
     pub y_mode: u8,
     /// State Tracker only: the signal's custom state bands (ascending
-    /// cuts with per-band names and colors).
+    /// cuts with per-band names and colors). Present means custom mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_rule: Option<RuleCfg>,
+    /// State Tracker only: default-mode color overrides, one per state
+    /// value (its physical value, matched back through the same
+    /// quantization the bands render with).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_overrides: Option<Vec<StateOverrideCfg>>,
+}
+
+/// One default-mode color override: the state's physical value and its
+/// pinned color.
+#[derive(Serialize, Deserialize)]
+pub struct StateOverrideCfg {
+    pub value: f64,
+    pub color: [f32; 3],
 }
 
 /// One signal's custom state bands, CANoe's Value Definition rows. A
@@ -426,6 +439,7 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
             visible: s.visible,
             y_mode: s.y_mode.to_u8(),
             state_rule: None,
+            state_overrides: None,
         })
         .collect()
 }
@@ -599,6 +613,14 @@ impl Config {
                                 cuts: r.cuts.clone(),
                                 names: r.names.clone(),
                                 colors: r.colors.clone(),
+                            }),
+                            state_overrides: w.overrides.get(&s.key).map(|m| {
+                                m.iter()
+                                    .map(|(bits, c)| StateOverrideCfg {
+                                        value: f64::from_bits(*bits),
+                                        color: *c,
+                                    })
+                                    .collect()
                             }),
                         })
                         .collect(),
@@ -868,6 +890,7 @@ impl Config {
                 .map(|w| {
                     let signals = sig_keys(&w.signals);
                     let mut rules = HashMap::new();
+                    let mut overrides = HashMap::new();
                     for (s, cfg) in signals.iter().zip(&w.signals) {
                         if let Some(r) = &cfg.state_rule {
                             rules.insert(
@@ -879,6 +902,17 @@ impl Config {
                                 },
                             );
                         }
+                        if let Some(list) = &cfg.state_overrides {
+                            // The map keys by the value's normalized bits,
+                            // the same key the band view classifies with.
+                            let mut m = HashMap::new();
+                            for o in list {
+                                let q = o.value;
+                                let q = if q == 0.0 { 0.0 } else { q };
+                                m.insert(q.to_bits(), o.color);
+                            }
+                            overrides.insert(s.key.clone(), m);
+                        }
                     }
                     crate::observe::StateWin {
                         name: w.name,
@@ -887,6 +921,7 @@ impl Config {
                         time_window_s: w.time_window_s,
                         color_slots: HashMap::new(),
                         rules,
+                        overrides,
                     }
                 })
                 .collect();

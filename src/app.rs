@@ -45,7 +45,7 @@ pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
 pub use crate::observe::{
-    DataWindow, GfxSignal, GraphicsWindow, SampleCache, StateRule, StateWin, YMode,
+    DataWindow, GfxSignal, GraphicsWindow, PickTarget, SampleCache, StateRule, StateWin, YMode,
 };
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
@@ -176,12 +176,13 @@ pub struct App {
     pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
-    /// The State Tracker row whose custom state bands are being edited:
-    /// window index plus signal key. Session state only.
+    /// The State Tracker row whose state editor is open: window index plus
+    /// signal key. Session state only.
     pub state_rule_edit: Option<(usize, (u8, u32, String))>,
-    /// The band currently picking a color in that editor: window index,
-    /// signal key, band index. Session state only.
-    pub state_rule_pick: Option<(usize, (u8, u32, String), usize)>,
+    /// The swatch currently picking a color in that editor: window index,
+    /// signal key, and the target -- a custom band, or a default-mode
+    /// state value (normalized bits). Session state only.
+    pub state_rule_pick: Option<(usize, (u8, u32, String), PickTarget)>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Generator row whose value-source parameters the modal is editing:

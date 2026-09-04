@@ -322,7 +322,7 @@ impl App {
             });
         } else {
             signals.retain(|s| s.key != key);
-            // Session color memory and custom state bands of a removed
+            // Session color memory and per-signal state state of a removed
             // State Tracker row are dead weight; a re-added signal starts
             // fresh.
             if let PopupTarget::State(i) = target
@@ -330,6 +330,7 @@ impl App {
             {
                 w.color_slots.remove(&key);
                 w.rules.remove(&key);
+                w.overrides.remove(&key);
             }
         }
         if on {
@@ -420,6 +421,7 @@ impl App {
             time_window_s: 20.0,
             color_slots: HashMap::new(),
             rules: HashMap::new(),
+            overrides: HashMap::new(),
         });
     }
 
