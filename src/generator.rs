@@ -107,6 +107,40 @@ pub(crate) fn tx_payload(
     (data, len, flags)
 }
 
+/// Encodes `value` into `data` for signal `name` of message `id` and widens
+/// `len` to fit, snapping past-8 lengths to an FD length exactly like
+/// [`tx_payload`] does. Returns false -- leaving payload and length alone --
+/// when the message has no such signal or the value is not representable.
+pub(crate) fn encode_mirror(
+    table: &crate::dbc::SymbolTable,
+    id: u32,
+    name: &str,
+    value: f64,
+    data: &mut [u8; MAX_CAN_FD_LEN],
+    len: &mut u8,
+    flags: &mut FrameFlags,
+) -> bool {
+    let Some(s) = table
+        .messages
+        .get(&id)
+        .and_then(|m| m.signals.iter().find(|s| s.name == name))
+    else {
+        return false;
+    };
+    if !table.encode_signal(id, name, value, data) {
+        return false;
+    }
+    let needed = ((s.start_bit + s.size) as usize)
+        .div_ceil(8)
+        .min(MAX_CAN_FD_LEN);
+    *len = (*len).max(needed as u8);
+    if *len > 8 {
+        *len = dlc2len(len2dlc(*len));
+        *flags = flags.union(FrameFlags::FD);
+    }
+    true
+}
+
 use crate::app::App;
 
 impl App {

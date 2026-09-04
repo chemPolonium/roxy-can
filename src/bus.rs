@@ -168,6 +168,11 @@ pub enum BusCommand {
     /// Latch-free the specification report: every row forgets it fired.
     /// The next run replaces the rows anyway; this is the in-run reset.
     ClearSpec,
+    /// Transmit a single frame from the generator entry `(ch, id)` right
+    /// now: its own base bytes and waveform values, its schedule and
+    /// active flag untouched. Delivered on the next step of a running bus;
+    /// a request made while stopped is dropped.
+    SendNow { ch: u8, id: u32 },
     /// Replace the trigger rule list wholesale -- the project-restore
     /// shape of trigger editing.
     SetTriggers(Vec<crate::trigger::Trigger>),
@@ -419,6 +424,10 @@ pub struct BusCore {
     pub(crate) aggs: HashMap<(u8, u32), MessageAgg>,
     /// Per-bus load / frame-rate / error rolling state, one entry per channel.
     pub(crate) bus_loads: Vec<crate::load::BusLoad>,
+    /// Send-now requests recorded by commands, built into frames at the
+    /// next step. Kept apart from `buf` because `step` clears `buf` before
+    /// polling its source.
+    pub(crate) injected: Vec<(u8, u32)>,
     /// The load rollups as of the last publish. Rebuilt only when a step
     /// (or a channel add/remove) touched them; the Bus Statistics window
     /// reads this, never the live state.
@@ -478,6 +487,7 @@ impl BusCore {
             frame_counter: 0,
             aggs: HashMap::new(),
             bus_loads,
+            injected: Vec::new(),
             published_loads,
             loads_dirty: false,
             subs: HashMap::new(),
@@ -618,6 +628,14 @@ impl BusCore {
                 self.subs.clear();
             }
             BusCommand::ClearSpec => self.spec.clear(),
+            BusCommand::SendNow { ch, id } => {
+                // Only a running bus delivers: a stopped one would hold the
+                // request until some future run, which is never what the
+                // button means.
+                if self.measuring {
+                    self.injected.push((ch, id));
+                }
+            }
             BusCommand::SetTriggers(triggers) => self.triggers = triggers,
             BusCommand::AddTrigger { cond, action } => {
                 self.triggers
@@ -1371,6 +1389,9 @@ impl BusCore {
         // enormous measured period.
         self.spec = crate::spec::Spec::default();
         self.sample_cover = None;
+        // Send-now intents recorded while the old run was winding down
+        // belong to it, not to the fresh one.
+        self.injected.clear();
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
         }
@@ -1490,6 +1511,13 @@ impl BusCore {
         self.loads_dirty = true;
         self.buf.clear();
         self.source.poll(now_us, &mut self.buf);
+        // Send-now requests are intents recorded by commands; building the
+        // frames here stamps them with this step's clock, so a request that
+        // waited out a pause never sends a pre-pause timestamp.
+        let injected: Vec<(u8, u32)> = self.injected.drain(..).collect();
+        for (ch, id) in injected {
+            self.send_one_shot(ch, id, now_us, &HashMap::new());
+        }
         let source_empty = self.buf.is_empty();
         if stride != self.applied_stride_us {
             self.sample_cover = None;
@@ -1869,7 +1897,20 @@ impl BusCore {
                 fired.push((t.action, f.t_us));
             }
         }
-        self.run_actions(fired, status);
+        // A reaction send mirrors the triggering frame: decode it once, and
+        // every same-named signal of the target entry's message is encoded
+        // over the sent payload.
+        let mut mirror: HashMap<String, f64> = HashMap::new();
+        if fired
+            .iter()
+            .any(|(a, _)| matches!(a, TriggerAction::Send { .. }))
+            && let Some(db) = self.channel_dbc(f.channel)
+        {
+            for d in db.decode_signals(f) {
+                mirror.insert(d.name, d.phys);
+            }
+        }
+        self.run_actions(fired, &mirror, status);
     }
 
     /// Sweep conditions: evaluated once per measurement step against the
@@ -1901,7 +1942,9 @@ impl BusCore {
                 fired.push((t.action, now_us));
             }
         }
-        self.run_actions(fired, status);
+        // A timeout has no triggering frame, so a reaction send it fires
+        // carries nothing to mirror.
+        self.run_actions(fired, &HashMap::new(), status);
     }
 
     /// The spec's own grace comparison decides silence, so a trigger and
@@ -1916,7 +1959,12 @@ impl BusCore {
         crate::spec::missing_offender(now_us, agg.last_t_us, declared, grace)
     }
 
-    fn run_actions(&mut self, fired: Vec<(TriggerAction, u64)>, status: &mut String) {
+    fn run_actions(
+        &mut self,
+        fired: Vec<(TriggerAction, u64)>,
+        mirror: &HashMap<String, f64>,
+        status: &mut String,
+    ) {
         for (action, at_us) in fired {
             match action {
                 TriggerAction::StartRecording => {
@@ -1938,7 +1986,7 @@ impl BusCore {
                     }
                 }
                 TriggerAction::Send { ch, id } => {
-                    self.send_one_shot(ch, id, at_us);
+                    self.send_one_shot(ch, id, at_us, mirror);
                 }
             }
         }
@@ -1950,7 +1998,13 @@ impl BusCore {
     /// recording -- and the trigger evaluator sees it too. That is safe:
     /// every frame-driven condition latches on the frame it matched, so
     /// a rule reacting to its own output cannot loop.
-    fn send_one_shot(&mut self, ch: u8, id: u32, at_us: u64) {
+    ///
+    /// `mirror` carries the triggering frame's decoded signal values: every
+    /// entry whose name matches a signal of the target message is encoded
+    /// over the payload, turning a reaction send into a gateway hop. A
+    /// periodic send of the same entry passes an empty map and keeps its
+    /// own base bytes and waveforms.
+    fn send_one_shot(&mut self, ch: u8, id: u32, at_us: u64, mirror: &HashMap<String, f64>) {
         let Some(i) = self
             .tx_list
             .iter()
@@ -1958,13 +2012,22 @@ impl BusCore {
         else {
             return; // the generator row is gone: the rule idles
         };
-        let (data, len, flags) =
+        let (mut data, mut len, mut flags) =
             crate::generator::tx_payload(&self.channels, &self.tx_list[i], at_us);
         let (tch, tid, ext) = (
             self.tx_list[i].channel,
             self.tx_list[i].id,
             self.tx_list[i].extended,
         );
+        if !mirror.is_empty()
+            && let Some(table) = self.channels.get(tch as usize).and_then(|c| c.dbc.as_ref())
+        {
+            for (name, value) in mirror {
+                crate::generator::encode_mirror(
+                    table, tid, name, *value, &mut data, &mut len, &mut flags,
+                );
+            }
+        }
         self.buf.push(CanFrame {
             t_us: at_us,
             channel: tch,

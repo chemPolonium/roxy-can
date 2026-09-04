@@ -558,3 +558,50 @@ fn the_bus_statistics_read_the_snapshot() {
     assert!(load.load() > 0.0, "wire time shows up in the windowed load");
     app.stop();
 }
+
+/// The Send-now button: one frame off the schedule. The entry keeps its
+/// active flag, nothing further is sent by it, and a request made while
+/// stopped is dropped rather than shelved for some future run.
+#[test]
+fn send_now_fires_exactly_one_frame_off_the_schedule() {
+    let mut app = App::headless();
+    app.start_virtual();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: false,
+    });
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 5, &mut now);
+    assert_eq!(app.snap.frame_counter, 0, "the entry is off: silence");
+
+    app.send(crate::bus::BusCommand::SendNow { ch: 0, id: 0x100 });
+    laps(&mut app, 1, &mut now);
+    assert_eq!(app.snap.frame_counter, 1, "exactly one frame went out");
+    laps(&mut app, 5, &mut now);
+    assert_eq!(app.snap.frame_counter, 1, "no schedule picks up afterwards");
+    assert!(
+        !app.snap.tx.iter().any(|t| t.id == 0x100 && t.active),
+        "send-now never flips the entry on"
+    );
+
+    // While stopped the request is dropped, not shelved for the next run.
+    app.stop();
+    app.send(crate::bus::BusCommand::SendNow { ch: 0, id: 0x100 });
+    laps(&mut app, 2, &mut now);
+    assert_eq!(app.snap.frame_counter, 1, "a stopped bus drops the request");
+    app.start_virtual();
+    laps(&mut app, 3, &mut now);
+    assert_eq!(
+        app.snap.frame_counter, 0,
+        "nothing fires into the fresh run either"
+    );
+    app.stop();
+}

@@ -221,6 +221,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.checkbox(format!("FD##{i}"), &mut fd) {
                         app.send(crate::bus::BusCommand::SetEntryFd { ch, id, fd });
                     }
+                    ui.same_line();
+                    // One frame now, off the schedule: base bytes and
+                    // waveforms as they stand, without touching the active
+                    // flag. A stopped bus drops the request silently.
+                    if ui.small_button(format!("Send now##now{i}")) {
+                        app.send(crate::bus::BusCommand::SendNow { ch, id });
+                    }
                     // Only ever shown when the two disagree, so a row that
                     // matches its database stays exactly as wide as before.
                     let off = app.dbc_cycle_us(ch, id).filter(|d| *d != cycle);

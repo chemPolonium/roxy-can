@@ -3445,6 +3445,86 @@ fn a_send_action_transmits_one_generator_frame() {
     );
 }
 
+/// Two messages that share a signal name: the reaction Send action copies
+/// every same-named signal from the triggering frame into the target
+/// entry's payload (a gateway hop), leaving signals without a counterpart
+/// -- here `FaultBits` -- at the entry's base value.
+const MIRROR_DBC: &str = r#"VERSION "roxy-can mirror test"
+
+NS_ :
+
+BU_: ECU
+
+BO_ 256 MotorStatus: 8 ECU
+ SG_ EngineSpeed : 0|16@1+ (0.25,0) [0|8000] "" ECU
+
+BO_ 512 DashMirror: 8 ECU
+ SG_ EngineSpeed : 0|16@1+ (0.25,0) [0|8000] "" ECU
+ SG_ FaultBits : 16|8@1+ (1,0) [0|255] "" ECU
+"#;
+
+#[test]
+fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
+    let mut app = App::headless();
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(MIRROR_DBC).unwrap(),
+    ));
+    app.tx_list.retain(|t| t.channel != 0);
+    app.start_virtual();
+    // The reaction target, inactive so only the reaction itself emits it;
+    // its base payload is all zeroes.
+    app.add_tx(0, 0x200);
+    let key = (0u8, 0x200u32, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+    app.triggers.push(Trigger::new(
+        TriggerCond::SignalCross {
+            ch: 0,
+            id: 0x100,
+            signal: "EngineSpeed".to_string(),
+            threshold: 3000.0,
+            rising: true,
+        },
+        TriggerAction::Send { ch: 0, id: 0x200 },
+    ));
+
+    receive(&mut app, 10_000, vec![rpm_frame(10_000, 1000.0)]);
+    assert_eq!(app.triggers[0].fired, 0, "below threshold: no reaction");
+    assert_eq!(
+        app.subs.get(&key).expect("subscribed").latest,
+        0.0,
+        "no 0x200 traffic before the crossing"
+    );
+
+    receive(&mut app, 20_000, vec![rpm_frame(20_000, 4000.0)]);
+    assert_eq!(app.triggers[0].fired, 1, "the crossing fires");
+    let sent: Vec<CanFrame> = app
+        .trace
+        .iter()
+        .filter(|f| f.id == 0x200 && matches!(f.dir, Direction::Tx))
+        .copied()
+        .collect();
+    assert_eq!(sent.len(), 1, "exactly one reaction frame");
+    assert_eq!(
+        sent[0].t_us, 20_000,
+        "stamped with the triggering frame's clock"
+    );
+    assert_eq!(
+        &sent[0].data[..2],
+        &[0x80, 0x3E],
+        "raw 16000 little-endian: the trigger frame's 4000 rpm"
+    );
+    assert_eq!(
+        sent[0].data[2], 0,
+        "FaultBits has no counterpart on 0x100: base value stands"
+    );
+    assert_eq!(
+        app.subs.get(&key).expect("subscribed").latest,
+        4000.0,
+        "the reaction mirrors the trigger frame's value"
+    );
+    app.stop();
+}
+
 /// What a one-second Graphics window would draw right now: asks for the
 /// view's data exactly the way `draw_plot` does (view request, then a cache
 /// slice), and reports the plot clock plus the visible slice's point count
