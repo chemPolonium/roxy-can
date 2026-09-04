@@ -7,7 +7,7 @@
 //! while a smooth analog collapses into a few readable ranges instead of
 //! one segment per sample.
 
-use crate::app::{App, PALETTE};
+use crate::app::{App, PALETTE, StateRule};
 use imgui::Ui;
 use std::collections::HashMap;
 
@@ -56,6 +56,96 @@ pub fn render(app: &mut App, ui: &Ui) {
                 window_content(app, ui, i);
             });
         app.state_trackers[i].opened = open;
+    }
+    rule_editor(app, ui);
+}
+
+/// CANoe's Value Definition editor for one tracked signal: ascending cut
+/// values split the axis into bands (`< c0`, `c0 .. c1`, `>= cN`), and
+/// every band gets its own name and fill color. Edits land directly in
+/// the window's rule map -- rules are frontend state, so nothing feeds
+/// back to fight the keystrokes.
+fn rule_editor(app: &mut App, ui: &Ui) {
+    let Some((wi, key)) = app.state_rule_edit.clone() else {
+        return;
+    };
+    let title = format!("State bands \u{2014} {}###srules{wi}{}", key.2, key.1);
+    let mut open = true;
+    ui.window(title)
+        .opened(&mut open)
+        .size([410.0, 0.0], imgui::Condition::Appearing)
+        .build(|| {
+            let Some(w) = app.state_trackers.get_mut(wi) else {
+                return;
+            };
+            let Some(rule) = w.rules.get_mut(&key) else {
+                ui.text_disabled("No custom bands: values color and label themselves.");
+                if ui.small_button("Define bands##srnew") {
+                    w.rules.insert(
+                        key.clone(),
+                        StateRule {
+                            cuts: vec![],
+                            names: vec!["all".to_string()],
+                            colors: vec![[0.30, 0.50, 0.90]],
+                        },
+                    );
+                }
+                return;
+            };
+            // Cut rows: the boundaries between bands.
+            let mut rm_cut = None;
+            for (ci, cut) in rule.cuts.iter_mut().enumerate() {
+                let mut c = *cut as f32;
+                if ui
+                    .input_float(format!("cut##srcut{ci}"), &mut c)
+                    .display_format("%g")
+                    .build()
+                {
+                    *cut = c as f64;
+                }
+                ui.same_line();
+                if ui.small_button(format!("x##srcutrm{ci}")) {
+                    rm_cut = Some(ci);
+                }
+            }
+            if let Some(ci) = rm_cut {
+                rule.remove_cut(ci);
+            }
+            if ui.small_button("Add cut##sradd") {
+                let next = rule.cuts.last().copied().unwrap_or(0.0) + 1.0;
+                rule.add_cut(next);
+            }
+            ui.separator();
+            // Band rows: range, color swatch, name.
+            for bi in 0..rule.names.len() {
+                let lo = bi.checked_sub(1).and_then(|p| rule.cuts.get(p).copied());
+                let hi = rule.cuts.get(bi).copied();
+                let range = match (lo, hi) {
+                    (None, Some(h)) => format!("< {h}"),
+                    (Some(l), None) => format!(">= {l}"),
+                    (Some(l), Some(h)) => format!("{l} .. {h}"),
+                    (None, None) => "all".to_string(),
+                };
+                ui.text(&range);
+                ui.same_line_with_pos(110.0);
+                let mut col = rule.colors[bi];
+                if ui.color_edit3(format!("##srcol{bi}"), &mut col) {
+                    rule.colors[bi] = col;
+                }
+                ui.same_line();
+                let mut name = rule.names[bi].clone();
+                ui.set_next_item_width(-1.0);
+                if ui.input_text(format!("##srname{bi}"), &mut name).build() {
+                    rule.names[bi] = name;
+                }
+            }
+            ui.separator();
+            if ui.small_button("Clear##srclear") {
+                w.rules.remove(&key);
+            }
+        });
+    if !open {
+        app.state_rule_edit = None;
     }
 }
 
@@ -198,16 +288,33 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // band, not just the instant of its sample.
         let held = sub.history.at(lo_us).map(quantize);
         let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
-        let segs = state_segments(held, &pts, lo_us, hi_us, |v| {
-            table_label(app, &key, v).unwrap_or_else(|| fmt_val(v))
-        });
+        // Custom state bands (CANoe's Value Definition) own both labels
+        // and colors when present; otherwise states are quantized values
+        // labeled from the DBC value table.
+        let rule = app.state_trackers[i].rules.get(&key).cloned();
+        let segs = if let Some(rule) = &rule {
+            state_segments(held, &pts, lo_us, hi_us, |v| {
+                let b = rule.band(v);
+                (b as u64, rule.names[b].clone())
+            })
+        } else {
+            state_segments(held, &pts, lo_us, hi_us, |v| {
+                let q = quantize(v);
+                let q = if q == 0.0 { 0.0 } else { q };
+                (
+                    q.to_bits(),
+                    table_label(app, &key, q).unwrap_or_else(|| fmt_val(q)),
+                )
+            })
+        };
         let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
         states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         states.dedup();
 
         // CANoe's Binary rendering: a signal whose whole visible world is
-        // 0/1 draws as a square wave instead of filled bands.
-        if is_binary(&states) {
+        // 0/1 draws as a square wave instead of filled bands -- but a
+        // custom rule owns the palette, so it wins.
+        if rule.is_none() && is_binary(&states) {
             draw_wave(ui, &mut dl, &segs, &geo, color);
             continue;
         }
@@ -218,7 +325,7 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // value keeps its color across the whole run. A busy analog with
         // more visible states than the palette gets CANoe's plain neutral
         // band: the value label does the talking.
-        let per_state = states.len() <= PALETTE.len();
+        let per_state = rule.is_none() && states.len() <= PALETTE.len();
         let win = &mut app.state_trackers[i];
         let slots = win.color_slots.entry(key.clone()).or_default();
         for seg in segs {
@@ -227,7 +334,10 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
             if sx1 - sx0 < 1.0 {
                 continue;
             }
-            let fill = if per_state {
+            let fill = if let Some(rule) = &rule {
+                let c = rule.colors[rule.band(seg.value)];
+                [c[0], c[1], c[2], 0.92]
+            } else if per_state {
                 PALETTE[slot_for(slots, seg.value)]
             } else {
                 NEUTRAL_FILL
@@ -401,48 +511,52 @@ pub(crate) fn fmt_val(v: f64) -> String {
     }
 }
 
-/// Folds ascending samples into maximal constant-value stretches over
+/// Folds ascending samples into maximal stretches of one state over
 /// `[lo_us, hi_us]`. `held` is the value carried in by the last sample
 /// before the window (piecewise-constant hold semantics -- a CAN signal
 /// keeps its value between updates); `pts` are the in-window samples.
-/// `label_of` names a state: the DBC value-table label when one exists,
-/// the `%g` number otherwise.
+/// `classify` decides what "same state" means and names it: quantized
+/// value + DBC label for auto coloring, or custom band index + band name
+/// when a rule owns the signal.
 pub(crate) fn state_segments(
     held: Option<f64>,
     pts: &[(u64, f64)],
     lo_us: u64,
     hi_us: u64,
-    mut label_of: impl FnMut(f64) -> String,
+    mut classify: impl FnMut(f64) -> (u64, String),
 ) -> Vec<StateSeg> {
+    // The run carries the representative value it opened with: the sample
+    // that closes a run belongs to the next one.
     let mut cur = held.map(|v| {
-        let q = quantize(v);
-        (q, label_of(q), lo_us)
+        let (k, label) = classify(v);
+        (k, label, lo_us, v)
     });
     let mut out = Vec::new();
     for &(t, v) in pts {
-        let q = quantize(v);
+        let (k, label) = classify(v);
         match &mut cur {
             // Same state continues.
-            Some((qv, _, _)) if q == *qv => {}
-            Some((qv, label, t0)) => {
+            Some((ck, _, _, _)) if k == *ck => {}
+            Some((ck, clabel, t0, cv)) => {
                 out.push(StateSeg {
                     t0_us: *t0,
                     t1_us: t,
-                    value: *qv,
-                    label: std::mem::take(label),
+                    value: *cv,
+                    label: std::mem::take(clabel),
                 });
-                *qv = q;
-                *label = label_of(q);
+                *ck = k;
+                *clabel = label;
                 *t0 = t;
+                *cv = v;
             }
-            None => cur = Some((q, label_of(q), t.max(lo_us))),
+            None => cur = Some((k, label, t.max(lo_us), v)),
         }
     }
-    if let Some((q, label, t0)) = cur {
+    if let Some((_, label, t0, cv)) = cur {
         out.push(StateSeg {
             t0_us: t0,
             t1_us: hi_us.max(t0),
-            value: q,
+            value: cv,
             label,
         });
     }
@@ -495,10 +609,18 @@ pub(crate) fn text_on(fill: [f32; 4]) -> [f32; 4] {
 mod tests {
     use super::*;
 
+    /// The unruled classification the bands draw with: quantize, then key
+    /// by the value's bits and label with `%g`.
+    fn auto(v: f64) -> (u64, String) {
+        let q = quantize(v);
+        let q = if q == 0.0 { 0.0 } else { q };
+        (q.to_bits(), fmt_val(q))
+    }
+
     #[test]
     fn discrete_toggles_get_one_segment_per_cell() {
         let pts = [(10_000, 0.0), (20_000, 1.0), (30_000, 0.0), (40_000, 1.0)];
-        let segs = state_segments(Some(1.0), &pts, 5_000, 45_000, fmt_val);
+        let segs = state_segments(Some(1.0), &pts, 5_000, 45_000, auto);
         assert_eq!(segs.len(), 5, "{segs:?}");
         assert_eq!(
             segs[0].t0_us, 5_000,
@@ -526,7 +648,7 @@ mod tests {
             (30_000, 3400.0001),
             (40_000, 3100.0),
         ];
-        let segs = state_segments(None, &pts, 0, 50_000, fmt_val);
+        let segs = state_segments(None, &pts, 0, 50_000, auto);
         assert_eq!(segs.len(), 2, "{segs:?}");
         assert_eq!((segs[0].t0_us, segs[0].label.as_str()), (10_000, "3400"));
         assert_eq!((segs[1].t0_us, segs[1].label.as_str()), (40_000, "3100"));
@@ -534,7 +656,7 @@ mod tests {
 
     #[test]
     fn a_value_seen_before_the_window_holds_across_the_left_edge() {
-        let segs = state_segments(Some(2.5), &[], 100_000, 200_000, fmt_val);
+        let segs = state_segments(Some(2.5), &[], 100_000, 200_000, auto);
         assert_eq!(segs.len(), 1, "{segs:?}");
         assert_eq!((segs[0].t0_us, segs[0].t1_us), (100_000, 200_000));
         assert_eq!(segs[0].label, "2.5");
@@ -542,7 +664,7 @@ mod tests {
 
     #[test]
     fn nothing_seen_means_nothing_drawn() {
-        assert!(state_segments(None, &[], 0, 1000, fmt_val).is_empty());
+        assert!(state_segments(None, &[], 0, 1000, auto).is_empty());
     }
 
     #[test]
@@ -598,7 +720,10 @@ mod tests {
     #[test]
     fn segment_labels_come_from_the_labeller() {
         let pts = [(10_000, 1.0), (20_000, 2.0)];
-        let segs = state_segments(None, &pts, 0, 30_000, |v| format!("S{v}"));
+        let segs = state_segments(None, &pts, 0, 30_000, |v| {
+            let k = v.to_bits();
+            (k, format!("S{v}"))
+        });
         assert_eq!(segs[0].label, "S1");
         assert_eq!(segs[1].label, "S2");
     }
@@ -646,5 +771,51 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
             None,
             "a signal with no table stays numeric"
         );
+    }
+
+    #[test]
+    fn rule_cuts_split_and_merge_bands() {
+        let mut r = StateRule {
+            cuts: vec![],
+            names: vec!["all".to_string()],
+            colors: vec![[0.5, 0.5, 0.5]],
+        };
+        r.add_cut(1000.0);
+        assert_eq!(r.band(999.0), 0);
+        assert_eq!(
+            r.band(1000.0),
+            1,
+            "the cut itself belongs to the upper band"
+        );
+        assert_eq!(r.names.len(), 2, "one cut means two bands");
+        r.add_cut(500.0);
+        assert_eq!(r.cuts, vec![500.0, 1000.0], "cuts stay sorted");
+        assert_eq!(r.names.len(), 3);
+        r.remove_cut(0);
+        assert_eq!(r.cuts, vec![1000.0]);
+        assert_eq!(r.names.len(), 2, "removing a cut merges its bands");
+    }
+
+    #[test]
+    fn a_rule_groups_values_into_bands_with_its_own_names() {
+        let rule = StateRule {
+            cuts: vec![1000.0],
+            names: vec!["low".to_string(), "high".to_string()],
+            colors: vec![[0.1, 0.2, 0.9], [0.9, 0.8, 0.1]],
+        };
+        let pts = [
+            (10_000, 500.0),
+            (20_000, 800.0),
+            (30_000, 1200.0),
+            (40_000, 900.0),
+        ];
+        let segs = state_segments(None, &pts, 0, 50_000, |v| {
+            let b = rule.band(v);
+            (b as u64, rule.names[b].clone())
+        });
+        assert_eq!(segs.len(), 3, "{segs:?}");
+        assert_eq!(segs[0].label, "low", "500 and 800 share the low band");
+        assert_eq!(segs[1].label, "high");
+        assert_eq!(segs[2].label, "low", "900 drops back into the low band");
     }
 }

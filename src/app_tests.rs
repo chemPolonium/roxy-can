@@ -3815,6 +3815,14 @@ fn the_state_tracker_round_trips_through_a_project() {
         y_mode: YMode::Auto,
     });
     app.state_trackers[0].time_window_s = 60.0;
+    app.state_trackers[0].rules.insert(
+        key.clone(),
+        crate::observe::StateRule {
+            cuts: vec![1000.0],
+            names: vec!["low".to_string(), "high".to_string()],
+            colors: vec![[0.2, 0.2, 0.8], [0.9, 0.9, 0.2]],
+        },
+    );
     app.subscribe(key.clone());
     let path = std::env::temp_dir().join("roxy_can_state.rxproj");
     assert!(app.save_project(Some(path.clone())));
@@ -3823,6 +3831,12 @@ fn the_state_tracker_round_trips_through_a_project() {
     restored.open_project_path(&path);
     assert_eq!(restored.state_trackers[0].time_window_s, 60.0);
     assert_eq!(restored.state_trackers[0].signals[0].key, key);
+    let rule = restored.state_trackers[0]
+        .rules
+        .get(&key)
+        .expect("custom bands ride the project file");
+    assert_eq!(rule.cuts, vec![1000.0]);
+    assert_eq!(rule.names, vec!["low", "high"]);
     // A restored signal must be resubscribed, or the band draws no data.
     assert!(restored.subs.contains_key(&key));
     std::fs::remove_file(&path).ok();

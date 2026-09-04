@@ -44,7 +44,9 @@ pub const PALETTE: [[f32; 4]; 8] = [
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::Channel;
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
-pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, SampleCache, StateWin, YMode};
+pub use crate::observe::{
+    DataWindow, GfxSignal, GraphicsWindow, SampleCache, StateRule, StateWin, YMode,
+};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
@@ -174,6 +176,9 @@ pub struct App {
     pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
+    /// The State Tracker row whose custom state bands are being edited:
+    /// window index plus signal key. Session state only.
+    pub state_rule_edit: Option<(usize, (u8, u32, String))>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Generator row whose value-source parameters the modal is editing:
@@ -358,6 +363,7 @@ impl App {
             gen_search: String::new(),
             popup_target: None,
             focus_title: None,
+            state_rule_edit: None,
             net_selected: 0,
             tx_pick: 0,
             src_edit: None,

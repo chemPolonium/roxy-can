@@ -322,12 +322,14 @@ impl App {
             });
         } else {
             signals.retain(|s| s.key != key);
-            // Session color memory of a removed State Tracker row is dead
-            // weight; a re-added signal starts its slots fresh.
+            // Session color memory and custom state bands of a removed
+            // State Tracker row are dead weight; a re-added signal starts
+            // fresh.
             if let PopupTarget::State(i) = target
                 && let Some(w) = self.state_trackers.get_mut(i)
             {
                 w.color_slots.remove(&key);
+                w.rules.remove(&key);
             }
         }
         if on {
@@ -417,6 +419,7 @@ impl App {
             signals: Vec::new(),
             time_window_s: 20.0,
             color_slots: HashMap::new(),
+            rules: HashMap::new(),
         });
     }
 

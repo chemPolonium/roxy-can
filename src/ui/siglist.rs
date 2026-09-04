@@ -70,6 +70,17 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         }
         ui.same_line();
         ui.text(&key.2);
+        // A State Tracker row's badge opens its custom state-band editor
+        // (CANoe's Value Definition); Graphics rows keep the Y-axis badge.
+        if let ListKind::State(wi) = kind {
+            ui.same_line_with_pos(super::graphics::PANEL_W - 30.0);
+            if ui.small_button(format!("S##srule{j}")) {
+                app.state_rule_edit = Some((wi, key.clone()));
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Custom state bands: cuts, names, colors");
+            }
+        }
         // Each Graphics signal scales its own value axis; the badge shows
         // the policy's initial and opens the mode menu. A Data table has no
         // axis, so its rows stay bare.

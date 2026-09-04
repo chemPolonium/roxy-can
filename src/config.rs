@@ -162,6 +162,18 @@ pub struct SignalCfg {
     /// [`crate::observe::YMode`] code; unknown values load as Auto.
     #[serde(default)]
     pub y_mode: u8,
+    /// State Tracker only: the signal's custom state bands (ascending
+    /// cuts with per-band names and colors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_rule: Option<RuleCfg>,
+}
+
+/// One signal's custom state bands, CANoe's Value Definition rows.
+#[derive(Serialize, Deserialize)]
+pub struct RuleCfg {
+    pub cuts: Vec<f64>,
+    pub names: Vec<String>,
+    pub colors: Vec<[f32; 3]>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -412,6 +424,7 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
             signal: s.key.2.clone(),
             visible: s.visible,
             y_mode: s.y_mode.to_u8(),
+            state_rule: None,
         })
         .collect()
 }
@@ -465,11 +478,11 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
     }
 }
 
-fn sig_keys(signals: Vec<SignalCfg>) -> Vec<GfxSignal> {
+fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
     signals
-        .into_iter()
+        .iter()
         .map(|s| GfxSignal {
-            key: (s.ch, s.id, s.signal),
+            key: (s.ch, s.id, s.signal.clone()),
             visible: s.visible,
             y_mode: YMode::from_u8(s.y_mode),
         })
@@ -571,8 +584,23 @@ impl Config {
                 .map(|w| StateCfg {
                     name: w.name.clone(),
                     opened: w.opened,
-                    signals: sig_cfgs(&w.signals),
                     time_window_s: w.time_window_s,
+                    signals: w
+                        .signals
+                        .iter()
+                        .map(|s| SignalCfg {
+                            ch: s.key.0,
+                            id: s.key.1,
+                            signal: s.key.2.clone(),
+                            visible: s.visible,
+                            y_mode: s.y_mode.to_u8(),
+                            state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
+                                cuts: r.cuts.clone(),
+                                names: r.names.clone(),
+                                colors: r.colors.clone(),
+                            }),
+                        })
+                        .collect(),
                 })
                 .collect(),
             tx: app
@@ -805,7 +833,7 @@ impl Config {
                 .into_iter()
                 .map(|g| GraphicsWindow {
                     name: g.name,
-                    signals: sig_keys(g.signals),
+                    signals: sig_keys(&g.signals),
                     time_window_s: g.time_window_s.clamp(0.1, 3600.0),
                     stacked: g.stacked,
                     opened: g.opened,
@@ -825,7 +853,7 @@ impl Config {
                 .into_iter()
                 .map(|d| DataWindow {
                     name: d.name,
-                    signals: sig_keys(d.signals),
+                    signals: sig_keys(&d.signals),
                     opened: d.opened,
                     text_keys: Vec::new(),
                     text_cache: Vec::new(),
@@ -836,12 +864,29 @@ impl Config {
             app.state_trackers = self
                 .state_trackers
                 .into_iter()
-                .map(|w| crate::observe::StateWin {
-                    name: w.name,
-                    opened: w.opened,
-                    signals: sig_keys(w.signals),
-                    time_window_s: w.time_window_s,
-                    color_slots: HashMap::new(),
+                .map(|w| {
+                    let signals = sig_keys(&w.signals);
+                    let mut rules = HashMap::new();
+                    for (s, cfg) in signals.iter().zip(&w.signals) {
+                        if let Some(r) = &cfg.state_rule {
+                            rules.insert(
+                                s.key.clone(),
+                                crate::observe::StateRule {
+                                    cuts: r.cuts.clone(),
+                                    names: r.names.clone(),
+                                    colors: r.colors.clone(),
+                                },
+                            );
+                        }
+                    }
+                    crate::observe::StateWin {
+                        name: w.name,
+                        opened: w.opened,
+                        signals,
+                        time_window_s: w.time_window_s,
+                        color_slots: HashMap::new(),
+                        rules,
+                    }
                 })
                 .collect();
         }

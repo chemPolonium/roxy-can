@@ -501,6 +501,47 @@ pub struct DataWindow {
     pub(crate) text_cache: Vec<[String; 3]>,
 }
 
+/// A signal's custom state definitions -- CANoe's "Value Definition"
+/// rows. Ascending cut points split the value axis into bands; band i
+/// holds `cuts[i-1] <= v < cuts[i]` (the first from -inf, the last to
+/// +inf, and a cut value itself belongs to the band above it). Every
+/// band carries its own name and fill color.
+#[derive(Clone)]
+pub struct StateRule {
+    pub cuts: Vec<f64>,
+    pub names: Vec<String>,
+    pub colors: Vec<[f32; 3]>,
+}
+
+impl StateRule {
+    /// The band index holding `v`.
+    pub fn band(&self, v: f64) -> usize {
+        self.cuts.partition_point(|&c| c <= v)
+    }
+
+    /// Inserts a cut, growing names/colors with generated entries so the
+    /// band bookkeeping stays consistent.
+    pub fn add_cut(&mut self, c: f64) {
+        let i = self.cuts.partition_point(|&x| x < c);
+        self.cuts.insert(i, c);
+        let k = self.names.len();
+        self.names.insert(i, format!("State {k}"));
+        let c = crate::app::PALETTE[k % crate::app::PALETTE.len()];
+        self.colors.insert(i, [c[0], c[1], c[2]]);
+    }
+
+    /// Removes cut `i`, merging the band below the boundary with the one
+    /// above it (the lower band's name and color survive).
+    pub fn remove_cut(&mut self, i: usize) {
+        if i >= self.cuts.len() {
+            return;
+        }
+        self.cuts.remove(i);
+        self.names.remove(i + 1);
+        self.colors.remove(i + 1);
+    }
+}
+
 /// The State Tracker window: signals rendered as constant-value state
 /// bands over a live trailing window, CANoe-style. An observer like
 /// Graphics/Data: rows share their signal model so the selection popup,
@@ -519,6 +560,9 @@ pub struct StateWin {
     /// with, so the same value keeps the same color as the run goes on
     /// and new states never reshuffle the old ones. Not persisted.
     pub(crate) color_slots: HashMap<(u8, u32, String), HashMap<u64, usize>>,
+    /// Custom state bands per signal key (CANoe's Value Definition). When
+    /// present, a rule drives both the band labels and the fill colors.
+    pub rules: HashMap<(u8, u32, String), StateRule>,
 }
 
 impl Default for StateWin {
@@ -529,6 +573,7 @@ impl Default for StateWin {
             signals: Vec::new(),
             time_window_s: 20.0,
             color_slots: HashMap::new(),
+            rules: HashMap::new(),
         }
     }
 }
