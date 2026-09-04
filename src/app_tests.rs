@@ -2997,7 +2997,12 @@ fn rpm_frame(t_us: u64, rpm: f64) -> CanFrame {
 fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
     let mut app = quiet_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_cross.asc");
-    app.record_path_buf = base.to_string_lossy().to_string();
+    // The recorder opens through the trigger action, so the core's record
+    // path must be set by command: the frontend draft alone would leave it
+    // empty, and the derived CWD name collides with parallel tests.
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
     app.triggers.push(Trigger::new(
         TriggerCond::SignalCross {
             ch: 0,
@@ -3043,7 +3048,9 @@ fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
 fn an_id_present_trigger_latches_and_can_stop_a_recording() {
     let mut app = quiet_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_id.asc");
-    app.record_path_buf = base.to_string_lossy().to_string();
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
     app.triggers.push(Trigger::new(
         TriggerCond::IdPresent { ch: 0, id: 0x777 },
         TriggerAction::StopRecording,
@@ -3083,7 +3090,9 @@ fn an_id_present_trigger_latches_and_can_stop_a_recording() {
 fn an_error_frame_trigger_latches_once_per_run() {
     let mut app = quiet_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_err.asc");
-    app.record_path_buf = base.to_string_lossy().to_string();
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
     app.triggers.push(Trigger::new(
         TriggerCond::ErrorFrame { ch: 0 },
         TriggerAction::StartRecording,
@@ -3234,7 +3243,9 @@ fn a_trigger_edit_flips_the_crossing_direction() {
 fn a_cycle_timeout_trigger_fires_on_each_dropout() {
     let mut app = spec_app();
     let base = std::env::temp_dir().join("roxy_can_trigger_timeout.asc");
-    app.record_path_buf = base.to_string_lossy().to_string();
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
     app.triggers.push(Trigger::new(
         TriggerCond::CycleTimeout { ch: 0, id: 100 },
         TriggerAction::StartRecording,

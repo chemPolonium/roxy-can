@@ -15,8 +15,11 @@ pub(crate) const PANEL_W: f32 = 190.0;
 #[cfg(test)]
 pub(crate) const MAX_TIME_WINDOW_S: f64 = TIME_STEPS[TIME_STEPS.len() - 1];
 
-/// Radius of the dot drawn on each sample while `Dots` is enabled.
-const MARKER_RADIUS_PX: f32 = 2.2;
+/// Side of the square marker drawn on each sample while `Dots` is on,
+/// centered on the sample. A square is a quad -- four vertices against the
+/// thirteen a twelve-segment circle costs -- and at this size reads just as
+/// well.
+const MARKER_SIDE_PX: f32 = 4.4;
 
 /// Vertex budget for a single curve. ImGui indexes a window's draw list with
 /// 16-bit indices, so one window cannot exceed 65 536 vertices -- and several
@@ -30,14 +33,19 @@ const MAX_CURVE_POINTS: usize = 2_048;
 /// stacked mode draws every curve into it.
 const WINDOW_VERTEX_BUDGET: usize = 40_000;
 
-/// ImGui tessellates a filled circle from twelve segments.
-const CIRCLE_VERTS: usize = 13;
+/// Vertices one square marker costs.
+const DOT_VERTS: usize = 4;
 
-/// Least pixels two adjacent sample dots may keep apart. This must be at least
-/// the dot's diameter: closer than that, consecutive filled circles overlap and
-/// merge into a band about three times the line weight, which reads as the curve
-/// having inexplicably become thick rather than as points on a line.
-const DOT_MIN_SPACING_PX: f32 = MARKER_RADIUS_PX * 2.0;
+/// Least pixels two adjacent sample dots may keep apart. This must be at
+/// least the dot's side: closer than that, consecutive markers overlap and
+/// merge into a band about three times the line weight, which reads as the
+/// curve having inexplicably become thick rather than as points on a line.
+const DOT_MIN_SPACING_PX: f32 = MARKER_SIDE_PX;
+
+/// Markers read as points only when they are clearly separated. If the dots
+/// a curve would draw land closer than this -- three sides apart, where they
+/// smear into a band anyway -- none are drawn at all.
+const DOT_MIN_GAP_PX: f32 = MARKER_SIDE_PX * 3.0;
 
 /// What one curve may submit this frame, after the window's budget has been
 /// shared out between all the curves drawn into the same draw list.
@@ -54,7 +62,7 @@ impl CurveBudget {
         // Markers dominate the cost, so when they are on they get the larger
         // half and the polyline gives up the rest.
         let (points, dots) = if dots_enabled {
-            (share * 2 / 5, Some(share * 3 / 5 / CIRCLE_VERTS))
+            (share * 2 / 5, Some(share * 3 / 5 / DOT_VERTS))
         } else {
             (share, None)
         };
@@ -68,8 +76,22 @@ impl CurveBudget {
     /// Worst-case vertices this curve can submit. Read only by the budget test.
     #[cfg(test)]
     fn vertices(&self) -> usize {
-        self.points + self.dots.unwrap_or(0) * CIRCLE_VERTS
+        self.points + self.dots.unwrap_or(0) * DOT_VERTS
     }
+}
+
+/// Whether the markers a curve of `count` folded points would draw (at most
+/// `cap` of them, across a plot `w` pixels wide) land far enough apart to
+/// read as individual points. Dense curves draw no markers at all: past
+/// roughly three sides of spacing they smear into a band along the curve,
+/// and the polyline already says that.
+fn dots_readable(count: usize, cap: usize, w: f32) -> bool {
+    if count <= 1 {
+        return true;
+    }
+    let stride = (count / cap.max(1)) + 1;
+    let drawn = count.div_ceil(stride);
+    w / (drawn - 1) as f32 >= DOT_MIN_GAP_PX
 }
 
 /// Width held at the left of a plot for its value labels, and height held along
@@ -749,16 +771,23 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
                 [x, y]
             })
             .collect();
-        if let Some(max_dots) = budget.dots {
-            // One circle costs about thirteen vertices, so markers are the
-            // expensive half of the budget. Points closer together than a pixel
-            // column share that column anyway: the stride drops duplicates, not
-            // information.
-            let stride = (pts.len() / max_dots.max(1)) + 1;
-            for &p in pts.iter().step_by(stride) {
-                dl.add_circle(p, MARKER_RADIUS_PX, color)
+        if let Some(cap) = budget.dots {
+            // A square costs four vertices; the readability rule below, not
+            // the vertex budget, is what usually limits dots now. Points
+            // closer together than a pixel column share that column anyway:
+            // the stride drops duplicates, not information.
+            if dots_readable(pts.len(), cap, w) {
+                let half = MARKER_SIDE_PX / 2.0;
+                let stride = (pts.len() / cap.max(1)) + 1;
+                for &p in pts.iter().step_by(stride) {
+                    dl.add_rect(
+                        [p[0] - half, p[1] - half],
+                        [p[0] + half, p[1] + half],
+                        color,
+                    )
                     .filled(true)
                     .build();
+                }
             }
         }
         // Where traffic was absent -- a generator switched off, a node gone
@@ -851,8 +880,8 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_RADIUS_PX, MAX_CURVE_POINTS, axis_inset,
-        bucket_extremes, curve_runs, zoom_offset, zoom_step,
+        AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_SIDE_PX, MAX_CURVE_POINTS, axis_inset,
+        bucket_extremes, curve_runs, dots_readable, zoom_offset, zoom_step,
     };
 
     #[test]
@@ -950,13 +979,13 @@ mod tests {
 
     #[test]
     fn dots_cannot_outnumber_the_columns_that_fit_their_own_diameter() {
-        // Markers closer together than their diameter overlap and read as a
+        // Markers closer together than their side overlap and read as a
         // thick line rather than points, so the budget must stay under
-        // width / (2 * radius) whatever the curve count.
+        // width / side whatever the curve count.
         for curves in [1usize, 4, 16] {
             for width in [400.0f32, 1920.0, 3840.0] {
                 let b = CurveBudget::split(curves, width, true);
-                let room = (width / (2.0 * MARKER_RADIUS_PX)) as usize;
+                let room = (width / MARKER_SIDE_PX) as usize;
                 assert!(
                     b.dots.unwrap() <= room.max(1),
                     "{curves} curves at {width}px allow {} dots into {room} columns",
@@ -964,6 +993,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dense_curves_draw_no_dots_and_sparse_ones_do() {
+        // A folded hour-wide curve on a desktop-width plot: its markers
+        // would land roughly a pixel apart -- far below the three-sides
+        // minimum -- so the dense case draws none at all.
+        assert!(!dots_readable(2_048, 1_846, 1_200.0));
+        // Fifty points across the same plot are a marker every ~24 px.
+        assert!(dots_readable(50, 1_846, 1_200.0));
+        // A single point is always readable, whatever the cap.
+        assert!(dots_readable(1, 1, 100.0));
     }
 
     #[test]
