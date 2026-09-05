@@ -192,6 +192,63 @@ impl Vm {
                 Op::Le => self.compare(|o| o != std::cmp::Ordering::Greater)?,
                 Op::Gt => self.compare(|o| o == std::cmp::Ordering::Greater)?,
                 Op::Ge => self.compare(|o| o != std::cmp::Ordering::Less)?,
+                Op::GetIndex => {
+                    // (container, index) on the stack: byte buffers only.
+                    let idx = self.pop()?;
+                    let container = self.pop()?;
+                    let Value::Bytes(b) = container else {
+                        return Err(VmError("indexing needs a byte buffer".into()));
+                    };
+                    let Value::Int(i) = idx else {
+                        return Err(VmError("index must be an int".into()));
+                    };
+                    let b = b.lock().expect("buffer poisoned");
+                    let i = usize::try_from(i).unwrap_or(usize::MAX);
+                    let byte = *b
+                        .get(i)
+                        .ok_or_else(|| VmError(format!("index {i} outside 0..{}", b.len())))?;
+                    self.stack.push(Value::Int(byte as i64));
+                }
+                Op::SetIndex => {
+                    // (container, index, value) on the stack.
+                    let value = self.pop()?;
+                    let idx = self.pop()?;
+                    let container = self.pop()?;
+                    let Value::Bytes(b) = container else {
+                        return Err(VmError("indexing needs a byte buffer".into()));
+                    };
+                    let Value::Int(i) = idx else {
+                        return Err(VmError("index must be an int".into()));
+                    };
+                    let Value::Int(byte) = value else {
+                        return Err(VmError("buffer elements must be ints".into()));
+                    };
+                    if !(0..=255).contains(&byte) {
+                        return Err(VmError(format!(
+                            "buffer elements must be 0..255, got {byte}"
+                        )));
+                    }
+                    let mut b = b.lock().expect("buffer poisoned");
+                    let i = usize::try_from(i).unwrap_or(usize::MAX);
+                    if i >= b.len() {
+                        return Err(VmError(format!("index {i} outside 0..{}", b.len())));
+                    }
+                    b[i] = byte as u8;
+                }
+                Op::Len => {
+                    let v = self.pop()?;
+                    let n = match v {
+                        Value::Bytes(b) => b.lock().expect("buffer poisoned").len(),
+                        Value::Str(s) => s.chars().count(),
+                        other => {
+                            return Err(VmError(format!(
+                                "len needs a buffer or string, got {}",
+                                kind(&other)
+                            )));
+                        }
+                    };
+                    self.stack.push(Value::Int(n as i64));
+                }
                 Op::Jump(t) => {
                     self.frames.last_mut().expect("frame").ip = t as usize;
                 }
@@ -310,10 +367,10 @@ impl Vm {
                 return Ok(());
             }
             "send" => {
-                // send(id, b0, b1, ...): one classic-frame payload. The
-                // host decides what "send" means; here it only lands in
-                // the outbox, well-formed or not. An id above 0x7FF
-                // travels as an extended frame.
+                // send(id, b0, b1, ...) or send(id, buf): the payload is
+                // either literal bytes or one byte buffer. The host
+                // decides what "send" means; here it only lands in the
+                // outbox. An id above 0x7FF travels extended.
                 let id = match &args[0] {
                     Value::Int(n) if (0..=0x1FF_FFFF).contains(n) => *n as u32,
                     other => {
@@ -323,21 +380,30 @@ impl Vm {
                         )));
                     }
                 };
-                if args.len() - 1 > 8 {
-                    return Err(VmError("send: at most 8 data bytes".into()));
-                }
-                let mut data = Vec::with_capacity(args.len() - 1);
-                for b in &args[1..] {
-                    match b {
-                        Value::Int(n) if (0..=255).contains(n) => data.push(*n as u8),
-                        other => {
-                            return Err(VmError(format!(
-                                "send: data byte must be 0..255, got {}",
-                                kind(other)
-                            )));
+                let data = if args.len() == 2 && matches!(args[1], Value::Bytes(_)) {
+                    // Single-buffer form: the buffer IS the payload.
+                    match &args[1] {
+                        Value::Bytes(b) => b.lock().expect("buffer poisoned").clone(),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    if args.len() - 1 > 8 {
+                        return Err(VmError("send: at most 8 data bytes".into()));
+                    }
+                    let mut data = Vec::with_capacity(args.len() - 1);
+                    for b in &args[1..] {
+                        match b {
+                            Value::Int(n) if (0..=255).contains(n) => data.push(*n as u8),
+                            other => {
+                                return Err(VmError(format!(
+                                    "send: data byte must be 0..255, got {}",
+                                    kind(other)
+                                )));
+                            }
                         }
                     }
-                }
+                    data
+                };
                 self.outbox.push((id, data));
             }
             // Stimulus math: floats in and out; `now()` reads the same
@@ -391,6 +457,40 @@ impl Vm {
                 self.stack.push(Value::Float(v.clamp(lo, hi)));
                 return Ok(());
             }
+            "bytes" => {
+                // bytes(n): a zero-filled byte buffer. Buffers carry
+                // reference semantics -- the value pushed shares the
+                // stored buffer.
+                let Value::Int(n) = &args[0] else {
+                    return Err(VmError("bytes(n) needs an int".into()));
+                };
+                if !(0..=65_536).contains(n) {
+                    return Err(VmError(format!("bytes: size {n} out of 0..65536")));
+                }
+                self.stack
+                    .push(Value::Bytes(std::sync::Arc::new(std::sync::Mutex::new(
+                        vec![0u8; *n as usize],
+                    ))));
+                return Ok(());
+            }
+            "len" => match &args[0] {
+                Value::Bytes(b) => {
+                    let n = b.lock().expect("buffer poisoned").len() as i64;
+                    self.stack.push(Value::Int(n));
+                    return Ok(());
+                }
+                Value::Str(s) => {
+                    let n = s.chars().count() as i64;
+                    self.stack.push(Value::Int(n));
+                    return Ok(());
+                }
+                other => {
+                    return Err(VmError(format!(
+                        "len needs a buffer or string, got {}",
+                        kind(other)
+                    )));
+                }
+            },
             other => return Err(VmError(format!("host function '{other}' not implemented"))),
         }
         self.stack.push(Value::Nil);
@@ -405,6 +505,7 @@ fn kind(v: &Value) -> &'static str {
         Value::Int(_) => "int",
         Value::Float(_) => "float",
         Value::Str(_) => "string",
+        Value::Bytes(_) => "buffer",
     }
 }
 
@@ -413,6 +514,9 @@ fn values_eq(a: &Value, b: &Value) -> bool {
         // Ints and floats compare across their types: 1 == 1.0.
         (Value::Int(_) | Value::Float(_), Value::Int(_) | Value::Float(_)) => {
             as_float(a) == as_float(b)
+        }
+        (Value::Bytes(x), Value::Bytes(y)) => {
+            *x.lock().expect("buffer poisoned") == *y.lock().expect("buffer poisoned")
         }
         _ => a == b,
     }
@@ -558,6 +662,47 @@ mod tests {
         let mut vm = Vm::new(script);
         let e = vm.run().unwrap_err();
         assert!(e.to_string().contains("number"), "{e}");
+    }
+
+    #[test]
+    fn byte_buffers_are_reference_typed_and_indexable() {
+        let src = r#"
+            let buf = bytes(8);
+            buf[0] = 0xAB;
+            buf[7] = 255;
+            print(buf[0], buf[7], len(buf));
+            send(0x300, buf);
+        "#;
+        let script = compile(src).unwrap();
+        let mut vm = Vm::new(script);
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["171 255 8"]);
+        assert_eq!(
+            vm.outbox,
+            [(0x300, vec![0xAB, 0, 0, 0, 0, 0, 0, 255])],
+            "the whole buffer goes out as the payload"
+        );
+    }
+
+    #[test]
+    fn buffer_indexing_bounds_are_checked() {
+        let script = compile("let b = bytes(2); print(b[5]);").unwrap();
+        let mut vm = Vm::new(script);
+        let e = vm.run().unwrap_err();
+        assert!(e.to_string().contains("outside"), "{e}");
+    }
+
+    #[test]
+    fn buffers_passed_to_functions_share_their_contents() {
+        let src = r#"
+            let buf = bytes(2);
+            fn poke() {
+                buf[1] = 9;
+            }
+            poke();
+            print(buf[0], buf[1]);
+        "#;
+        assert_eq!(out(src), ["0 9"]);
     }
 
     #[test]

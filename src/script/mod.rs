@@ -26,13 +26,35 @@ mod vm;
 pub use vm::Vm;
 
 /// A runtime value of the script language.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Nil,
     Bool(bool),
     Int(i64),
     Float(f64),
     Str(String),
+    /// A byte buffer with reference semantics: assignments and calls
+    /// share the one buffer (like CANoe's message arrays), so `buf[0] = x`
+    /// through any alias is visible everywhere. Arc + Mutex because the
+    /// VM runs on the core thread and the value must stay Send.
+    Bytes(std::sync::Arc<std::sync::Mutex<Vec<u8>>>),
+}
+
+impl PartialEq for Value {
+    /// Bytes buffers compare by contents; everything else structurally.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Nil, Value::Nil) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Bytes(a), Value::Bytes(b)) => {
+                *a.lock().expect("buffer poisoned") == *b.lock().expect("buffer poisoned")
+            }
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for Value {
@@ -44,6 +66,16 @@ impl std::fmt::Display for Value {
             // Debug keeps a ".0" on whole floats so 3.0 never prints as 3.
             Value::Float(x) => write!(f, "{x:?}"),
             Value::Str(s) => write!(f, "{s}"),
+            // Hex, the CAN-native reading of payload bytes.
+            Value::Bytes(b) => {
+                let b = b.lock().expect("buffer poisoned");
+                let hex = b
+                    .iter()
+                    .map(|x| format!("{x:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "[{hex}]")
+            }
         }
     }
 }
@@ -75,6 +107,9 @@ pub enum Op {
     JumpIfFalse(u16),
     Call(u16, u8),
     CallHost(u16, u8),
+    GetIndex,
+    SetIndex,
+    Len,
     Pop,
     Return,
 }
@@ -130,6 +165,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("send", 1, 9),
     ("now", 0, 0),
     ("sig", 2, 2),
+    ("bytes", 1, 1),
+    ("len", 1, 1),
     // Stimulus math: pure functions over floats, radians for trig.
     ("abs", 1, 1),
     ("floor", 1, 1),

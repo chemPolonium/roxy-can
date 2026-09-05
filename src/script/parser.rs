@@ -47,6 +47,10 @@ pub struct FnDecl {
 pub enum Stmt {
     Let(String, Expr),
     Assign(String, Expr),
+    /// `name[i] = v` -- byte-buffer element assignment. The container is
+    /// a plain variable; buffers carry reference semantics, so the store
+    /// mutates the one shared buffer.
+    AssignIndex(String, Expr, Expr),
     If {
         cond: Expr,
         then: Vec<Stmt>,
@@ -75,6 +79,8 @@ pub enum Expr {
     Bool(bool),
     Str(String),
     Ident(String),
+    /// `container[index]` -- byte buffers for now.
+    Index(Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
@@ -323,6 +329,7 @@ impl P {
             return Ok(Stmt::Block(self.block()?));
         }
         // Assignment or a bare expression, told apart by the next token.
+        // `name[i] = v` (buffer element store) is a third shape.
         if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
             && matches!(
                 self.toks.get(self.pos + 1).map(|t| &t.tok),
@@ -334,6 +341,21 @@ impl P {
             let expr = self.expr()?;
             self.expect(&Tok::Semi, "';'")?;
             return Ok(Stmt::Assign(name, expr));
+        }
+        if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::LBracket)
+            )
+        {
+            let name = self.ident("variable name")?;
+            self.advance();
+            let idx = self.expr()?;
+            self.expect(&Tok::RBracket, "']'")?;
+            self.expect(&Tok::Assign, "'='")?;
+            let value = self.expr()?;
+            self.expect(&Tok::Semi, "';'")?;
+            return Ok(Stmt::AssignIndex(name, idx, value));
         }
         let expr = self.expr()?;
         self.expect(&Tok::Semi, "';'")?;
@@ -510,25 +532,37 @@ impl P {
     }
 
     fn call(&mut self) -> Result<Expr, ScriptError> {
-        let e = self.primary()?;
-        let Expr::Ident(name) = e else {
-            return Ok(e);
-        };
-        if !self.at(&Tok::LParen) {
-            return Ok(Expr::Ident(name));
-        }
-        self.advance();
-        let mut args = Vec::new();
-        if !self.at(&Tok::RParen) {
-            loop {
-                args.push(self.expr()?);
-                if !self.eat(&Tok::Comma) {
-                    break;
+        let mut e = self.primary()?;
+        // Postfix: calls and byte-buffer indexing chain off a primary.
+        loop {
+            match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+                Some(Tok::LParen) => {
+                    let Expr::Ident(name) = e else {
+                        return self.err("only named functions can be called");
+                    };
+                    self.advance();
+                    let mut args = Vec::new();
+                    if !self.at(&Tok::RParen) {
+                        loop {
+                            args.push(self.expr()?);
+                            if !self.eat(&Tok::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect(&Tok::RParen, "')' after the arguments")?;
+                    e = Expr::Call(name, args);
                 }
+                Some(Tok::LBracket) => {
+                    self.advance();
+                    let idx = self.expr()?;
+                    self.expect(&Tok::RBracket, "']'")?;
+                    e = Expr::Index(Box::new(e), Box::new(idx));
+                }
+                _ => break,
             }
         }
-        self.expect(&Tok::RParen, "')' after the arguments")?;
-        Ok(Expr::Call(name, args))
+        Ok(e)
     }
 
     fn primary(&mut self) -> Result<Expr, ScriptError> {

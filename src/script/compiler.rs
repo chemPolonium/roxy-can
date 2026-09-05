@@ -177,6 +177,22 @@ impl Comp {
                     return self.err(name, "assignment to an undeclared variable");
                 }
             }
+            Stmt::AssignIndex(name, index, value) => {
+                // Stack order (top down): value, index, container --
+                // exactly what `SetIndex` consumes. The container must be
+                // a plain variable holding the shared buffer.
+                if let Some(idx) = self.resolve_local(name) {
+                    self.emit(Op::GetLocal(idx));
+                } else if self.globals.iter().any(|g| g == name) {
+                    let slot = self.global_slot(name);
+                    self.emit(Op::GetGlobal(slot));
+                } else {
+                    return self.err(name, "assignment to an undeclared variable");
+                }
+                self.expr(index)?;
+                self.expr(value)?;
+                self.emit(Op::SetIndex);
+            }
             Stmt::If { cond, then, els } => {
                 self.expr(cond)?;
                 let j_else = self.emit_jump(Op::JumpIfFalse);
@@ -316,6 +332,13 @@ impl Comp {
                 } else {
                     return self.err(name, "unknown variable");
                 }
+            }
+            Expr::Index(container, index) => {
+                // The container must be a plain variable: buffers have
+                // reference semantics, so the read shares the stored one.
+                self.expr(container)?;
+                self.expr(index)?;
+                self.emit(Op::GetIndex);
             }
             Expr::Unary(op, e) => {
                 self.expr(e)?;
