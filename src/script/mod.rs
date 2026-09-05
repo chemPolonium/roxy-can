@@ -209,6 +209,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("len", 1, 1),
     ("set_period", 1, 1),
     ("stop_timer", 0, 0),
+    ("frame_byte", 1, 1),
+    ("frame_dlc", 0, 0),
     ("random", 2, 2),
     ("srand", 1, 1),
     // Stimulus math: pure functions over floats, radians for trig.

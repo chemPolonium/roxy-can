@@ -75,6 +75,9 @@ pub struct Vm {
     /// running handler. The node runtime drains and applies these after
     /// the run.
     pub timer_ops: Vec<TimerOp>,
+    /// The triggering frame's payload bytes, set by the node runtime
+    /// before `on message` handlers run. Empty outside of frame events.
+    pub frame_bytes: Vec<u8>,
     /// xorshift64 state for `random()`; re-seedable via `srand`.
     pub rng: u64,
 }
@@ -94,6 +97,7 @@ impl Vm {
             host_input: HostInput::default(),
             host_extern: None,
             timer_ops: Vec::new(),
+            frame_bytes: Vec::new(),
             rng: 0x9E37_79B9_7F4A_7C15,
         }
     }
@@ -577,6 +581,26 @@ impl Vm {
             }
             "stop_timer" => {
                 self.timer_ops.push(TimerOp::Stop);
+            }
+            "frame_byte" => {
+                let Value::Int(n) = args[0] else {
+                    return Err(VmError("frame_byte needs an int index".into()));
+                };
+                let n = usize::try_from(n).unwrap_or(usize::MAX);
+                match self.frame_bytes.get(n) {
+                    Some(b) => self.stack.push(Value::Int(*b as i64)),
+                    None => {
+                        return Err(VmError(format!(
+                            "frame_byte: index {n} outside 0..{}",
+                            self.frame_bytes.len()
+                        )));
+                    }
+                }
+                return Ok(());
+            }
+            "frame_dlc" => {
+                self.stack.push(Value::Int(self.frame_bytes.len() as i64));
+                return Ok(());
             }
             "random" => {
                 let lo = as_float(&args[0]);

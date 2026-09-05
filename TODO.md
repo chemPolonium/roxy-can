@@ -31,6 +31,8 @@
 
 **信号读写内建 + S4 缝落地（2026-09-06）**：VM 加 `host_extern` 扩展钩子（`HostExternFn`：按名分发、参数数组进出、`Ok(None)`=不归我管）——编译器把既非脚本函数又非内建的调用编译成 `CallExtern(名字常量, argc)` **运行时解析**，这正是外部库架构缝的实现形态：外部仿真元件注册进钩子即可，语言与编译器零改动。节点运行时经此注册 `set_sig(buf, id, "Name", value)`（DBC `encode_signal` 编入缓冲，不足 8 字节自动补齐）与 `get_sig(buf, id, "Name")`（`decode_signals` 解出物理值），信号读写从此进字节缓冲自由组合，`send(id, buf)` 出帧——CAPL 式"组包"完整闭环。
 
+**帧数据访问内建（2026-09-06）**：`frame_byte(n)`（读触发帧第 n 字节，越界报错）与 `frame_dlc()`（读触发帧 DLC）——`on message` 处理器从此能根据请求内容构造应答，实现诊断应答等场景。`frame_bytes` 每次分发前由节点运行时注入 VM。
+
 **随机与定时器控制内建（2026-09-06）**：`random(lo, hi)`（xorshift64 均匀浮点，确定序——同 seed 同序列可复现）与 `srand(seed)`（重播子）；`set_period(ms)` / `stop_timer()`（on timer 处理器内动态改周期/自停，经 VM `timer_ops` 请求队列由运行时落账，`stopped` 槽位不再武装）。**通用坑记录**：`call_host` 的产出型内建（now/sig/random 等）必须 `return Ok(())` 跳过尾部 Nil 补推，否则返回值被盖成 nil——已两次踩中。
 
 - **S2 余项**：一次性定时器。

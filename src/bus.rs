@@ -956,8 +956,9 @@ impl BusCore {
     /// queue are returned for the step loop to append to the buffer.
     fn dispatch_node_frame(&mut self, f: &CanFrame, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
+        let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
-            out.extend(node.dispatch_frame(f.channel, f.id, input));
+            out.extend(node.dispatch_frame(f.channel, f.id, data, input));
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }

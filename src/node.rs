@@ -220,11 +220,14 @@ impl ScriptNode {
 
     /// Delivers one bus frame: handlers for this id on this channel run,
     /// in declaration order. `input` is what `now()`/`sig()` read.
+    /// `data` is the triggering frame's payload, exposed to `on message`
+    /// handlers via `frame_byte(n)` / `frame_dlc()`.
     /// Returns the frames the script queued.
     pub fn dispatch_frame(
         &mut self,
         channel: u8,
         id: u32,
+        data: &[u8],
         input: &HostInput,
     ) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
@@ -234,6 +237,7 @@ impl ScriptNode {
         if !self.enabled || self.errored || channel != self.channel {
             return out;
         }
+        rt.vm.frame_bytes = data.to_vec();
         let matches: Vec<u16> = rt
             .handlers
             .iter()
@@ -439,7 +443,7 @@ mod tests {
         assert_eq!(n.log_snapshot(), ["hello"]);
 
         // A watched frame queues the reaction payload.
-        let out = n.dispatch_frame(0, 0x100, &HostInput::default());
+        let out = n.dispatch_frame(0, 0x100, &[], &HostInput::default());
         assert_eq!(out, vec![(0x200, vec![1, 2])]);
 
         // Timers arm lazily one period out (armed at 50 ms -> first due
@@ -454,10 +458,10 @@ mod tests {
         // An error in a handler stops the node until restart.
         let mut bad = node("on message 0x100 { print(1 / 0); }");
         bad.start(None);
-        bad.dispatch_frame(0, 0x100, &HostInput::default());
+        bad.dispatch_frame(0, 0x100, &[], &HostInput::default());
         assert!(bad.errored());
         assert!(
-            bad.dispatch_frame(0, 0x100, &HostInput::default())
+            bad.dispatch_frame(0, 0x100, &[], &HostInput::default())
                 .is_empty(),
             "errored nodes stay quiet"
         );
@@ -529,10 +533,14 @@ mod tests {
         let mut n = node("on message 0x100 { send(0x200); }");
         n.start(None);
         assert!(
-            n.dispatch_frame(1, 0x100, &HostInput::default()).is_empty(),
+            n.dispatch_frame(1, 0x100, &[], &HostInput::default())
+                .is_empty(),
             "other channel"
         );
-        assert_eq!(n.dispatch_frame(0, 0x100, &HostInput::default()).len(), 1);
+        assert_eq!(
+            n.dispatch_frame(0, 0x100, &[], &HostInput::default()).len(),
+            1
+        );
     }
 
     #[test]
@@ -550,13 +558,13 @@ mod tests {
             now_s: 1.5,
             signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
         };
-        n.dispatch_frame(0, 0x100, &input);
+        n.dispatch_frame(0, 0x100, &[], &input);
         assert_eq!(n.log_snapshot(), ["1.5", "2400.0"]);
 
         // An unseen signal is a runtime error, not a silent zero.
         let mut n2 = node(r#"on message 0x100 { print(sig(0x100, "Nope")); }"#);
         n2.start(None);
-        n2.dispatch_frame(0, 0x100, &HostInput::default());
+        n2.dispatch_frame(0, 0x100, &[], &HostInput::default());
         assert!(n2.errored(), "a missing signal must not read as zero");
     }
 
@@ -566,7 +574,7 @@ mod tests {
         // flag from its size when building the frame.
         let mut n = node("on message 0x100 { send(0x18FF10, 1); }");
         n.start(None);
-        let out = n.dispatch_frame(0, 0x100, &HostInput::default());
+        let out = n.dispatch_frame(0, 0x100, &[], &HostInput::default());
         assert_eq!(out, vec![(0x18FF10, vec![1])]);
     }
 
@@ -604,7 +612,7 @@ BO_ 512 Status: 8 ECU
         // A later frame flushes the on-start send: the composed buffer
         // leaves as the payload, little-endian raw 4000 (1000 / 0.25) in
         // bytes 0-1.
-        let out = n.dispatch_frame(0, 0x1, &HostInput::default());
+        let out = n.dispatch_frame(0, 0x1, &[], &HostInput::default());
         assert_eq!(out, vec![(0x200, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]);
     }
 }
