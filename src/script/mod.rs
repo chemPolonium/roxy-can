@@ -3,11 +3,44 @@
 //! scripts are pure code plus host calls; the node runtime (S2) wires
 //! them into the core loop.
 //!
+//! # Language reference (v1)
+//!
+//! ```text
+//! // Globals, functions, event handlers -- any order.
+//! let base = 800;                     // int / float / bool / string
+//!
+//! fn limit(v) {                       // user functions, recursion OK
+//!     if (v > 5000) { return 5000; }
+//!     return v;
+//! }
+//!
+//! on start { print("node up"); }      // once per measurement start
+//!
+//! on message 0x100 {                  // frame with this id arrives
+//!     let rpm = sig(0x100, "RPM");    // latest published value (error if unseen)
+//!     send(0x200, rpm * 2);           // raw payload: int bytes 0..255
+//! }
+//!
+//! on timer 100 {                      // every 100 ms
+//!     let buf = bytes(8);             // zero-filled byte buffer
+//!     buf[0] = 0xAB;                  // element store (0..255)
+//!     set_sig(buf, 0x200, "RPM", 1000 + random(0, 50));  // DBC encode
+//!     send(0x200, buf);               // buffer as payload
+//!     print("t", now(), limit(buf[0]));                  // text log
+//! }
+//! ```
+//!
+//! Types: int, float, bool, string, bytes (reference semantics). Math is
+//! int-exact / float-promoting; `+` with a string concatenates. Control
+//! flow: `if (..) .. else ..`, `while (..) ..`, `for (init; cond; step) ..`,
+//! early `return` inside functions. Bytecode: constants + ops, stack VM
+//! with per-callback instruction budget and frame-depth cap.
+//!
 //! Architecture seam for external libraries: host functions live in one
 //! table ([`HOST_FNS`]) that the compiler resolves to `Op::CallHost(id)`
-//! and the VM dispatches by the same index. External simulation
-//! components will register extra entries in that table; nothing else in
-//! the language changes.
+//! and the VM dispatches by the same index; anything else resolves at
+//! runtime through the [`HostExternFn`] hook, which external simulation
+//! components register. Neither seam changes the bytecode format.
 
 // S2 (the node runtime) is what calls into this module from the product
 // path; until it lands the module is reachable only from tests, which is
@@ -21,8 +54,6 @@ mod lexer;
 mod parser;
 mod vm;
 
-// The node runtime holds the VM per script node; the rest of the module
-// is reachable only through it until the product path grows further uses.
 pub use vm::{TimerOp, Vm};
 
 /// A runtime value of the script language.
