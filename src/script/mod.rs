@@ -374,6 +374,29 @@ mod tests {
     }
 
     #[test]
+    fn language_reference_example_compiles_and_runs() {
+        // The doc-comment example at the top of this module, verbatim:
+        // if this drifts, the reference is lying.
+        let src = r#"
+            let base = 800;
+
+            fn limit(v) {
+                if (v > 5000) { return 5000; }
+                return v;
+            }
+
+            on start { print("node up"); }
+        "#;
+        let script = compile(src).unwrap();
+        assert_eq!(script.handlers.len(), 1, "one on start handler");
+        let start_chunk = script.handlers[0].chunk;
+        let mut vm = Vm::new(script);
+        vm.run().unwrap();
+        vm.run_handler(start_chunk).unwrap();
+        assert_eq!(vm.output, ["node up"]);
+    }
+
+    #[test]
     fn runtime_errors_name_the_source_line() {
         let src = "let a = 1;\nlet b = 2;\nprint(a / (b - b));";
         let e = err(src);
