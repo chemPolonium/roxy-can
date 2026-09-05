@@ -75,6 +75,8 @@ pub struct Vm {
     /// running handler. The node runtime drains and applies these after
     /// the run.
     pub timer_ops: Vec<TimerOp>,
+    /// xorshift64 state for `random()`; re-seedable via `srand`.
+    pub rng: u64,
 }
 
 impl Vm {
@@ -92,6 +94,7 @@ impl Vm {
             host_input: HostInput::default(),
             host_extern: None,
             timer_ops: Vec::new(),
+            rng: 0x9E37_79B9_7F4A_7C15,
         }
     }
 
@@ -575,6 +578,27 @@ impl Vm {
             "stop_timer" => {
                 self.timer_ops.push(TimerOp::Stop);
             }
+            "random" => {
+                let lo = as_float(&args[0]);
+                let hi = as_float(&args[1]);
+                if hi < lo {
+                    return Err(VmError(format!("random needs lo <= hi, got {lo}..{hi}")));
+                }
+                // xorshift64: deterministic for a given call sequence, so
+                // a stimulus stays reproducible run over run.
+                self.rng ^= self.rng << 13;
+                self.rng ^= self.rng >> 7;
+                self.rng ^= self.rng << 17;
+                let unit = (self.rng >> 11) as f64 / (1u64 << 53) as f64;
+                self.stack.push(Value::Float(lo + unit * (hi - lo)));
+                return Ok(());
+            }
+            "srand" => {
+                let Value::Int(seed) = args[0] else {
+                    return Err(VmError("srand needs an int".into()));
+                };
+                self.rng = seed as u64;
+            }
             other => {
                 // Not a builtin: the host's extension hook (external
                 // simulation components, node-runtime functions) gets the
@@ -732,6 +756,23 @@ mod tests {
         vm.run()
             .unwrap_or_else(|e| panic!("script '{src}' failed: {e}"));
         vm.output
+    }
+
+    #[test]
+    fn random_stays_in_range_and_srand_replays() {
+        let src = "srand(42); print(random(0, 10)); print(random(0, 10));";
+        let a = out(src);
+        let b = out(src);
+        assert_eq!(a, b, "same seed, same sequence");
+        for v in &a {
+            let x: f64 = v
+                .parse()
+                .unwrap_or_else(|e| panic!("random output '{v}' not numeric: {e}"));
+            assert!(
+                (0.0..=10.0).contains(&x),
+                "random output {x} outside the range"
+            );
+        }
     }
 
     #[test]
