@@ -340,6 +340,57 @@ impl Vm {
                 }
                 self.outbox.push((id, data));
             }
+            // Stimulus math: floats in and out; `now()` reads the same
+            // clock, so e.g. sin(now()) animates with the bus.
+            "abs" | "floor" | "ceil" | "round" | "sin" | "cos" => {
+                let x = as_float(&args[0]);
+                if !is_num(&args[0]) {
+                    return Err(VmError(format!(
+                        "{name} needs a number, got {}",
+                        kind(&args[0])
+                    )));
+                }
+                let r = match name.as_str() {
+                    "abs" => x.abs(),
+                    "floor" => x.floor(),
+                    "ceil" => x.ceil(),
+                    "round" => x.round(),
+                    "sin" => x.sin(),
+                    _ => x.cos(),
+                };
+                self.stack.push(Value::Float(r));
+                return Ok(());
+            }
+            "min" | "max" => {
+                if !is_num(&args[0]) || !is_num(&args[1]) {
+                    return Err(VmError(format!(
+                        "{name} needs numbers, got {} and {}",
+                        kind(&args[0]),
+                        kind(&args[1])
+                    )));
+                }
+                let (x, y) = (as_float(&args[0]), as_float(&args[1]));
+                let r = if name == "min" { x.min(y) } else { x.max(y) };
+                self.stack.push(Value::Float(r));
+                return Ok(());
+            }
+            "clamp" => {
+                // (v, lo, hi), in source order on the stack.
+                if !is_num(&args[0]) || !is_num(&args[1]) || !is_num(&args[2]) {
+                    return Err(VmError(format!(
+                        "clamp needs numbers, got {}, {}, {}",
+                        kind(&args[0]),
+                        kind(&args[1]),
+                        kind(&args[2])
+                    )));
+                }
+                let (v, lo, hi) = (as_float(&args[0]), as_float(&args[1]), as_float(&args[2]));
+                if hi < lo {
+                    return Err(VmError(format!("clamp needs lo <= hi, got {lo}..{hi}")));
+                }
+                self.stack.push(Value::Float(v.clamp(lo, hi)));
+                return Ok(());
+            }
             other => return Err(VmError(format!("host function '{other}' not implemented"))),
         }
         self.stack.push(Value::Nil);
@@ -466,17 +517,47 @@ fn arith(a: Value, b: Value, op: Arith) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::super::compile;
+    use super::*;
 
     fn out(src: &str) -> Vec<String> {
         let script = compile(src).unwrap();
         let mut vm = super::Vm::new(script);
-        vm.run().unwrap();
+        vm.run()
+            .unwrap_or_else(|e| panic!("script '{src}' failed: {e}"));
         vm.output
     }
 
     #[test]
     fn print_joins_arguments_with_spaces() {
         assert_eq!(out("print(\"a\", 1, 2.5, true);"), ["a 1 2.5 true"]);
+    }
+
+    #[test]
+    fn stimulus_math_builtins_work_and_string_plus_concatenates() {
+        assert_eq!(out("print(abs(0 - 2.5));"), ["2.5"]);
+        assert_eq!(
+            out("print(min(3, 1.5), max(3, 1.5));"),
+            ["1.5 3.0"],
+            "math builtins answer in floats"
+        );
+        // All math builtins answer in floats (the honest type for a
+        // stimulus language; printing keeps the ".0").
+        assert_eq!(
+            out("print(floor(1.9), ceil(1.1), round(1.5));"),
+            ["1.0 2.0 2.0"]
+        );
+        assert_eq!(out("print(clamp(3500, 0, 3000));"), ["3000.0"]);
+        assert_eq!(out("print(\"rpm: \" + 1200);"), ["rpm: 1200"]);
+        assert_eq!(out("print(1 + \" rpm\");"), ["1 rpm"]);
+        assert_eq!(out("print(sin(0));"), ["0.0"]);
+    }
+
+    #[test]
+    fn math_builtins_reject_non_numbers() {
+        let script = compile("print(abs(\"x\"));").unwrap();
+        let mut vm = Vm::new(script);
+        let e = vm.run().unwrap_err();
+        assert!(e.to_string().contains("number"), "{e}");
     }
 
     #[test]

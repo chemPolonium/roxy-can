@@ -130,6 +130,16 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("send", 1, 9),
     ("now", 0, 0),
     ("sig", 2, 2),
+    // Stimulus math: pure functions over floats, radians for trig.
+    ("abs", 1, 1),
+    ("floor", 1, 1),
+    ("ceil", 1, 1),
+    ("round", 1, 1),
+    ("sin", 1, 1),
+    ("cos", 1, 1),
+    ("min", 2, 2),
+    ("max", 2, 2),
+    ("clamp", 3, 3),
 ];
 
 /// What the host publishes for a script to read between events: the bus
