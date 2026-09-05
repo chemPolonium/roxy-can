@@ -276,6 +276,71 @@ fn the_threaded_core_serves_frames_on_its_own_thread() {
     drop(app);
 }
 
+/// Script nodes on the THREADED drive: the node runtime runs inside the
+/// core thread, so prints and sends must cross the snapshot boundary back
+/// to the frontend. Same shape as the headless test, live clock.
+#[test]
+fn the_threaded_core_runs_script_nodes() {
+    let mut app = App::new();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "beacon".into(),
+        channel: 0,
+    });
+    // Commands are async on the threaded drive: wait for the core to
+    // apply the add and publish the node before addressing it by id.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.snap.nodes.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.update();
+    }
+    assert!(
+        !app.snap.nodes.is_empty(),
+        "node never appeared in the snapshot"
+    );
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            let n = 0;
+            on start { print("up"); }
+            on timer 50 {
+                n = n + 1;
+                print("tick", n);
+                send(0x123, n);
+            }
+        "#
+        .to_string(),
+    });
+    app.start_virtual();
+
+    // The core thread arms the timer on its own clock; poll until at
+    // least two ticks have been printed and two frames sent.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.update();
+        let node = app.snap.nodes.iter().find(|n| n.id == id);
+        let Some(node) = node else { continue };
+        let ticks = node.log.iter().filter(|l| l.starts_with("tick ")).count();
+        if ticks >= 2 {
+            break;
+        }
+    }
+    let node = &app.snap.nodes.iter().find(|n| n.id == id).expect("node");
+    assert!(!node.errored, "node errored: {:?}", node.log);
+    assert_eq!(node.log[0], "up");
+    let ticks = node.log.iter().filter(|l| l.starts_with("tick ")).count();
+    assert!(ticks >= 2, "expected periodic ticks: {:?}", node.log);
+    let sent = app
+        .snap
+        .trace
+        .iter()
+        .filter(|f| f.id == 0x123 && matches!(f.dir, Direction::Tx))
+        .count();
+    assert!(sent >= 2, "timer frames hit the bus: {sent}");
+    app.stop();
+}
+
 /// The script node end to end, headless: add, edit source, start, and
 /// watch `print` land in the log and `send` land on the bus -- including
 /// the node reacting to its own frame.
