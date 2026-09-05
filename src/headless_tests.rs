@@ -276,6 +276,77 @@ fn the_threaded_core_serves_frames_on_its_own_thread() {
     drop(app);
 }
 
+/// The script node end to end, headless: add, edit source, start, and
+/// watch `print` land in the log and `send` land on the bus -- including
+/// the node reacting to its own frame.
+#[test]
+fn a_script_node_prints_sends_and_keeps_time() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gen".into(),
+        channel: 0,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            let n = 0;
+            on start { print("up"); }
+            on timer 50 {
+                n = n + 1;
+                print("tick", n);
+                send(0x123, 0xAB);
+            }
+            on message 0x123 { print("echo"); }
+        "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+
+    let mut now = 1_000;
+    for _ in 0..10 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+
+    let node = &app.snap.nodes[0];
+    assert_eq!(node.name, "gen");
+    assert!(node.running, "the node compiled and started");
+    assert_eq!(node.log[0], "up");
+    assert!(
+        node.log.iter().any(|l| l == "tick 1"),
+        "the timer fired: {:?}",
+        node.log
+    );
+    assert!(
+        node.log.iter().any(|l| l == "echo"),
+        "the node saw its own frame: {:?}",
+        node.log
+    );
+    // Node frames are real bus traffic: aggregated and counted.
+    let sent = app
+        .trace
+        .iter()
+        .filter(|f| f.id == 0x123 && matches!(f.dir, Direction::Tx))
+        .count();
+    assert!(sent >= 2, "timer frames hit the bus: {sent}");
+    assert!(app.aggs.contains_key(&(0, 0x123)));
+
+    // Disabling silences the node without removing it.
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: false });
+    let before = app.snap.frame_counter;
+    now += 100_000;
+    app.advance_clock(now);
+    app.tick(now);
+    assert_eq!(
+        app.snap.frame_counter, before,
+        "a disabled node stays quiet"
+    );
+    app.stop();
+}
+
 /// The crash the first threaded launch actually produced: startup
 /// restores the last project, and the restore path must cross the thread
 /// boundary too. A distinctive workspace is saved from the manual drive,

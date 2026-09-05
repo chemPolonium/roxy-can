@@ -19,6 +19,10 @@ mod lexer;
 mod parser;
 mod vm;
 
+// The node runtime holds the VM per script node; the rest of the module
+// is reachable only through it until the product path grows further uses.
+pub use vm::Vm;
+
 /// A runtime value of the script language.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -83,7 +87,7 @@ pub struct Function {
 }
 
 /// One compiled event handler: what triggers it and which chunk runs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Handler {
     pub kind: HandlerKind,
     pub chunk: u16,
@@ -121,6 +125,7 @@ pub struct Script {
 pub const HOST_FNS: &[(&str, usize, usize)] = &[
     // (name, min_args, max_args)
     ("print", 1, 16),
+    ("send", 1, 9),
 ];
 
 /// A compile-time error, positioned at the offending source line.

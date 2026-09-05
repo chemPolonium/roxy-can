@@ -50,12 +50,21 @@ pub enum BusCommand {
     AddChannel,
     /// Remove bus `ch` and remap every channel-indexed reference one step
     /// down. The frontend remaps its own window state in the same stroke.
-    RemoveChannel { ch: usize },
+    RemoveChannel {
+        ch: usize,
+    },
     /// Enable/disable every generator entry of one bus; freshly enabled
     /// entries anchor at the current clock.
-    SetBusTx { ch: u8, on: bool },
+    SetBusTx {
+        ch: u8,
+        on: bool,
+    },
     /// Tick or untick a DBC node as one this tool transmits as.
-    SetNodeSim { ch: u8, node: String, on: bool },
+    SetNodeSim {
+        ch: u8,
+        node: String,
+        on: bool,
+    },
     /// Replay-speed multiplier applied to the log source. (The remembered
     /// choice for the next run and the combo's display stay frontend.)
     SetReplaySpeed(f64),
@@ -66,20 +75,42 @@ pub enum BusCommand {
     /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
     /// dedupes on that pair, so the key is stable where an index would
     /// shift under the sender's feet.
-    SetEntryActive { ch: u8, id: u32, on: bool },
+    SetEntryActive {
+        ch: u8,
+        id: u32,
+        on: bool,
+    },
     /// Toggle the entry's CAN FD flag.
-    SetEntryFd { ch: u8, id: u32, fd: bool },
+    SetEntryFd {
+        ch: u8,
+        id: u32,
+        fd: bool,
+    },
     /// Set the send period in µs (0 = event-triggered); the schedule
     /// restarts now rather than at the end of the old one.
-    SetEntryCycle { ch: u8, id: u32, cycle_us: u64 },
+    SetEntryCycle {
+        ch: u8,
+        id: u32,
+        cycle_us: u64,
+    },
     /// Replace the base payload from hex text. Active sources deliberately
     /// survive: correcting one byte must not throw away a stimulus setup.
-    SetEntryHex { ch: u8, id: u32, text: String },
+    SetEntryHex {
+        ch: u8,
+        id: u32,
+        text: String,
+    },
     /// Drop the entry, payload, sources and schedule with it.
-    RemoveEntry { ch: u8, id: u32 },
+    RemoveEntry {
+        ch: u8,
+        id: u32,
+    },
     /// Add the entry `(ch, id)` unless it exists. Name, node, length and
     /// period come from the bus's database when it knows the message.
-    AddEntry { ch: u8, id: u32 },
+    AddEntry {
+        ch: u8,
+        id: u32,
+    },
     /// Add or replace the source driving one signal on the entry.
     SetEntrySource {
         ch: u8,
@@ -87,7 +118,11 @@ pub enum BusCommand {
         src: crate::sim::ValueSrc,
     },
     /// Stop driving one signal; the base bytes take over again.
-    ClearEntrySource { ch: u8, id: u32, name: String },
+    ClearEntrySource {
+        ch: u8,
+        id: u32,
+        name: String,
+    },
     /// Write a physical value into the base payload and pin that signal
     /// by dropping only its source: grabbing a moving slider means
     /// "hold here".
@@ -100,21 +135,30 @@ pub enum BusCommand {
     /// Start caching one signal: a fresh subscription gets the next
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
-    Subscribe { key: (u8, u32, String) },
+    Subscribe {
+        key: (u8, u32, String),
+    },
     /// Drop the subscription. The frontend only asks after none of its
     /// windows references the signal anymore.
-    Unsubscribe { key: (u8, u32, String) },
+    Unsubscribe {
+        key: (u8, u32, String),
+    },
     /// Open `path` and replay it: generators stand down for the ids the
     /// log carries, a fresh replay source replaces the old input at
     /// `speed`, and run-scored state resets. `speed` is the frontend's
     /// remembered multiplier, passed at start like the other policy
     /// knobs.
-    StartReplay { path: String, speed: f64 },
+    StartReplay {
+        path: String,
+        speed: f64,
+    },
     /// Resume a scrubbed replay in place: measurement restarts with the
     /// trace unfrozen, captured history untouched, so playback continues
     /// from the playhead. `speed` is the frontend's remembered
     /// multiplier, for the status line.
-    ResumeReplay { speed: f64 },
+    ResumeReplay {
+        speed: f64,
+    },
     /// Static per-bus declarations from the Buses window / project
     /// restore: rename, bitrate figures, the DBC path (without loading
     /// it -- pair with `LoadDbc`), or the simulated-node list.
@@ -129,7 +173,10 @@ pub enum BusCommand {
     /// Point a bus at `path` and parse the file (empty path = drop the
     /// database). A failed load leaves no table behind: what the
     /// snapshot then shows is what the bus will actually use.
-    LoadDbc { ch: u8, path: String },
+    LoadDbc {
+        ch: u8,
+        path: String,
+    },
     /// Rewind the bus-name counter used to mint "CAN{n}" for new buses;
     /// project restore pins it so the next added bus keeps counting from
     /// where the project left off.
@@ -137,6 +184,41 @@ pub enum BusCommand {
     /// The dated ASC file the recorder derives its name from. Only read
     /// when recording actually arms.
     SetRecordPath(String),
+    /// Add a script node bound to one channel; it starts with the next
+    /// measurement (or immediately, if one is running).
+    AddNode {
+        name: String,
+        channel: u8,
+    },
+    /// Remove a node wholesale: source, runtime, log.
+    RemoveNode {
+        id: u64,
+    },
+    SetNodeName {
+        id: u64,
+        name: String,
+    },
+    SetNodeChannel {
+        id: u64,
+        channel: u8,
+    },
+    /// Replace a node's source. While measuring the node recompiles and
+    /// restarts in place; while stopped the edit simply waits.
+    SetNodeSource {
+        id: u64,
+        source: String,
+    },
+    /// Enabled nodes run with the measurement; disabled ones sit idle.
+    SetNodeEnabled {
+        id: u64,
+        on: bool,
+    },
+    /// Replace the node list wholesale -- the project-restore shape. Ids
+    /// are minted fresh; the frontend's drafts are keyed by id and simply
+    /// detach, matching the removed sources.
+    SetNodes {
+        nodes: Vec<crate::config::NodeCfg>,
+    },
     /// Restore one generator row wholesale from a saved project. `None`
     /// data_text keeps the row's current base payload. Rows the bus does
     /// not know are ignored -- the database decides which messages exist.
@@ -172,7 +254,10 @@ pub enum BusCommand {
     /// now: its own base bytes and waveform values, its schedule and
     /// active flag untouched. Delivered on the next step of a running bus;
     /// a request made while stopped is dropped.
-    SendNow { ch: u8, id: u32 },
+    SendNow {
+        ch: u8,
+        id: u32,
+    },
     /// Replace the trigger rule list wholesale -- the project-restore
     /// shape of trigger editing.
     SetTriggers(Vec<crate::trigger::Trigger>),
@@ -182,9 +267,14 @@ pub enum BusCommand {
         action: crate::trigger::TriggerAction,
     },
     /// Drop trigger `index`.
-    RemoveTrigger { index: usize },
+    RemoveTrigger {
+        index: usize,
+    },
     /// Flip one trigger's enable checkbox.
-    SetTriggerEnabled { index: usize, on: bool },
+    SetTriggerEnabled {
+        index: usize,
+        on: bool,
+    },
     /// Replace trigger `index`'s condition and action -- the editor's
     /// Apply. The edge level resets: it belonged to the old condition,
     /// and a reshaped trigger starts from a clean edge.
@@ -193,6 +283,24 @@ pub enum BusCommand {
         cond: crate::trigger::TriggerCond,
         action: crate::trigger::TriggerAction,
     },
+}
+
+/// One simulation node as of this frame: identity, source, runtime state
+/// and the log ring. The Nodes window's data source and the project
+/// save; edits go through commands keyed by `id`.
+#[derive(Clone, Debug)]
+pub struct NodeView {
+    pub id: u64,
+    pub name: String,
+    pub channel: u8,
+    pub source: String,
+    pub enabled: bool,
+    /// Runtime present and error-free (while measuring).
+    pub running: bool,
+    /// A handler failed: the node is stopped until restart or edit.
+    pub errored: bool,
+    /// Oldest-first log lines (print output and errors).
+    pub log: Vec<String>,
 }
 
 /// What the frontend may see of the bus: one immutable, frame-shaped
@@ -230,6 +338,9 @@ pub struct Snapshot {
     /// Per-bus load rollups as of the last publish; the Bus Statistics
     /// window's whole data source.
     pub bus_loads: Arc<Vec<crate::load::BusLoad>>,
+    /// Simulation nodes as of the last publish: identity, source, state
+    /// and log. The Nodes window's data source and the project save.
+    pub nodes: Arc<Vec<NodeView>>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -462,6 +573,17 @@ pub struct BusCore {
     /// frontend can tell whether the core has caught up with what it
     /// sent. Never resets -- it is progress, not state.
     pub(crate) laps: u64,
+    /// Simulation nodes: scripts that react to bus events and emit
+    /// frames. Runtime state lives here in the core; the frontend sees
+    /// [`NodeView`]s through the snapshot.
+    pub(crate) nodes: Vec<crate::node::ScriptNode>,
+    /// Counter minting stable node ids; never resets.
+    pub(crate) node_counter: u64,
+    /// The node views as of the last publish. Rebuilt only when a command
+    /// or a script print changed something.
+    pub(crate) published_nodes: Arc<Vec<NodeView>>,
+    /// True when `nodes` changed since `published_nodes` was built.
+    pub(crate) nodes_dirty: bool,
 }
 
 impl BusCore {
@@ -499,6 +621,10 @@ impl BusCore {
             triggers: Vec::new(),
             spec: crate::spec::Spec::default(),
             laps: 0,
+            nodes: Vec::new(),
+            node_counter: 0,
+            published_nodes: Arc::new(Vec::new()),
+            nodes_dirty: false,
         }
     }
 
@@ -519,6 +645,61 @@ impl BusCore {
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
             BusCommand::SetBusTx { ch, on } => self.set_bus_tx(ch, on),
             BusCommand::SetNodeSim { ch, node, on } => self.set_node_sim(ch, &node, on, status),
+            BusCommand::AddNode { name, channel } => {
+                self.node_counter += 1;
+                let id = self.node_counter;
+                self.nodes
+                    .push(crate::node::ScriptNode::new(id, name, channel));
+                if self.measuring {
+                    self.nodes.last_mut().expect("just added").start();
+                }
+                self.nodes_dirty = true;
+            }
+            BusCommand::RemoveNode { id } => {
+                self.nodes.retain(|n| n.id != id);
+                self.nodes_dirty = true;
+            }
+            BusCommand::SetNodeName { id, name } => {
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+                    n.name = name;
+                    self.nodes_dirty = true;
+                }
+            }
+            BusCommand::SetNodeChannel { id, channel } => {
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+                    n.channel = channel;
+                    self.nodes_dirty = true;
+                }
+            }
+            BusCommand::SetNodeSource { id, source } => {
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+                    n.set_source(source, self.measuring);
+                    self.nodes_dirty = true;
+                }
+            }
+            BusCommand::SetNodeEnabled { id, on } => {
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+                    n.set_enabled(on, self.measuring);
+                    self.nodes_dirty = true;
+                }
+            }
+            BusCommand::SetNodes { nodes } => {
+                self.nodes = nodes
+                    .into_iter()
+                    .map(|cfg| {
+                        self.node_counter += 1;
+                        let mut n =
+                            crate::node::ScriptNode::new(self.node_counter, cfg.name, cfg.channel);
+                        n.source = cfg.source;
+                        n.enabled = cfg.enabled;
+                        if self.measuring && n.enabled {
+                            n.start();
+                        }
+                        n
+                    })
+                    .collect();
+                self.nodes_dirty = true;
+            }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
             BusCommand::SetEntryActive { ch, id, on } => {
@@ -691,6 +872,84 @@ impl BusCore {
         }
     }
 
+    /// Republishes the node views after a command or a script print
+    /// changed something.
+    pub(crate) fn publish_nodes(&mut self) {
+        if self.nodes_dirty {
+            self.published_nodes = Arc::new(
+                self.nodes
+                    .iter()
+                    .map(|n| NodeView {
+                        id: n.id,
+                        name: n.name.clone(),
+                        channel: n.channel,
+                        source: n.source.clone(),
+                        enabled: n.enabled,
+                        running: n.running(),
+                        errored: n.errored(),
+                        log: n.log_snapshot(),
+                    })
+                    .collect(),
+            );
+            self.nodes_dirty = false;
+        }
+    }
+
+    /// Arms every enabled node for a measurement: recompile from source,
+    /// run the main chunk, fire `on start`.
+    fn nodes_start(&mut self) {
+        for node in &mut self.nodes {
+            if node.enabled {
+                node.start();
+            }
+        }
+        self.nodes_dirty = true;
+    }
+
+    /// Node timer handlers that are due at wall clock `now_us`; their
+    /// queued frames join this step's buffer.
+    fn run_node_timers(&mut self, now_us: u64) {
+        for node in &mut self.nodes {
+            for (id, data) in node.run_timers(now_us) {
+                self.buf
+                    .push(Self::node_frame(node.channel, id, &data, self.sim_t_us));
+            }
+            if node.take_log_if_dirty().is_some() {
+                self.nodes_dirty = true;
+            }
+        }
+    }
+
+    /// Delivers one frame to the matching node handlers; the frames they
+    /// queue are returned for the step loop to append to the buffer.
+    fn dispatch_node_frame(&mut self, f: &CanFrame) -> Vec<(u32, Vec<u8>)> {
+        let mut out = Vec::new();
+        for node in &mut self.nodes {
+            out.extend(node.dispatch_frame(f.channel, f.id));
+            if node.take_log_if_dirty().is_some() {
+                self.nodes_dirty = true;
+            }
+        }
+        out
+    }
+
+    /// Frames the script queued: one classic frame, `dir` Tx, stamped on
+    /// the bus's own timeline.
+    fn node_frame(channel: u8, id: u32, data: &[u8], t_us: u64) -> CanFrame {
+        let mut buf = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+        buf[..data.len()].copy_from_slice(data);
+        CanFrame {
+            t_us,
+            channel,
+            id,
+            extended: false,
+            len: data.len() as u8,
+            data: buf,
+            dir: Direction::Tx,
+            flags: crate::can::frame::FrameFlags::NONE,
+        }
+    }
+
     /// The frame read plus the text the just-drained commands produced.
     /// This is the form the publisher hands to the mailbox.
     pub(crate) fn snapshot_with_status(&self, status: Option<String>) -> Snapshot {
@@ -718,6 +977,7 @@ impl BusCore {
             sample_cover: self.sample_cover,
             spec: self.spec.clone(),
             bus_loads: Arc::clone(&self.published_loads),
+            nodes: Arc::clone(&self.published_nodes),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self
@@ -807,6 +1067,7 @@ impl BusCore {
         self.run_mode = Mode::Replay;
         self.reset_run();
         self.measuring = true;
+        self.nodes_start();
         let tag = if info.is_empty() {
             String::new()
         } else {
@@ -1360,6 +1621,7 @@ impl BusCore {
         self.run_mode = Mode::Virtual;
         self.reset_run();
         self.measuring = true;
+        self.nodes_start();
         *status = "measuring (virtual)".to_string();
         if self.recorder.recording {
             match self.recorder.open() {
@@ -1404,6 +1666,10 @@ impl BusCore {
     fn stop_bus(&mut self, status: &mut String) {
         self.measuring = false;
         self.recorder.close();
+        for node in &mut self.nodes {
+            node.stop();
+        }
+        self.nodes_dirty = true;
         *status = "stopped".to_string();
     }
 
@@ -1437,7 +1703,7 @@ impl BusCore {
         if !self.measuring || self.trace_paused {
             return None;
         }
-        match self.mode {
+        let bus_due = match self.mode {
             Mode::Replay => self.source.next_deadline(now_us),
             Mode::Virtual => {
                 let min_next = self
@@ -1448,6 +1714,20 @@ impl BusCore {
                     .min()?;
                 Some(now_us + min_next.saturating_sub(self.sim_t_us))
             }
+        };
+        // Node timers are absolute wall-clock dues and never delay the
+        // bus past its own work, but the loop must wake for them.
+        let node_due = self
+            .nodes
+            .iter()
+            .filter(|n| n.running())
+            .flat_map(|n| n.timer_dues())
+            .min();
+        match (bus_due, node_due) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
         }
     }
 
@@ -1584,6 +1864,11 @@ impl BusCore {
         }
         self.buf.extend(emitted);
 
+        // Node timers fire before the ingest walk so the frames they
+        // queue join this same step. Their clock is the step's wall
+        // clock: periodic node behaviour keeps its cadence in replay too.
+        self.run_node_timers(now_us);
+
         let replay_done =
             matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
 
@@ -1600,6 +1885,13 @@ impl BusCore {
             // so a trigger that starts a recording captures the very
             // frame that fired it.
             self.eval_triggers(&f, status);
+            // Node handlers see the frame next; a send they queue joins
+            // `buf` behind this frame and is processed by this same step.
+            let queued = self.dispatch_node_frame(&f);
+            for (id, data) in queued {
+                self.buf
+                    .push(Self::node_frame(f.channel, id, &data, f.t_us));
+            }
             self.recorder.write(&f);
             self.ingest(f, stride);
         }

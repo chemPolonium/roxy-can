@@ -14,6 +14,7 @@ mod export;
 mod generator;
 mod load;
 mod log;
+mod node;
 mod observe;
 mod project;
 mod recorder;

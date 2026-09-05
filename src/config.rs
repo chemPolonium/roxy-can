@@ -216,6 +216,18 @@ pub struct DataCfg {
     pub signals: Vec<SignalCfg>,
 }
 
+/// One simulation node: identity-free (ids are minted fresh on restore),
+/// bound to a channel by index.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NodeCfg {
+    pub name: String,
+    pub channel: u8,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default = "true_default")]
+    pub enabled: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct StateCfg {
     pub name: String,
@@ -287,6 +299,8 @@ pub struct DesktopCfg {
     pub show_network: bool,
     #[serde(default = "true_default")]
     pub show_measurement: bool,
+    #[serde(default)]
+    pub show_nodes: bool,
     #[serde(default)]
     pub show_buses: bool,
     #[serde(default)]
@@ -384,6 +398,8 @@ pub struct Config {
     #[serde(default = "true_default")]
     pub show_measurement: bool,
     #[serde(default)]
+    pub show_nodes: bool,
+    #[serde(default)]
     pub show_buses: bool,
     #[serde(default)]
     pub show_triggers: bool,
@@ -411,6 +427,8 @@ pub struct Config {
     pub data_windows: Vec<DataCfg>,
     #[serde(default)]
     pub state_trackers: Vec<StateCfg>,
+    #[serde(default)]
+    pub nodes: Vec<NodeCfg>,
     #[serde(default)]
     pub tx: Vec<TxCfg>,
     #[serde(default)]
@@ -485,6 +503,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_tx: d.show_tx,
         show_network: d.show_network,
         show_measurement: d.show_measurement,
+        show_nodes: d.show_nodes,
         show_buses: d.show_buses,
         show_triggers: d.show_triggers,
         show_bus_stats: d.show_bus_stats,
@@ -528,6 +547,7 @@ impl Config {
             show_tx: app.show_tx,
             show_network: app.show_network,
             show_measurement: app.show_measurement,
+            show_nodes: app.show_nodes,
             show_buses: app.show_buses,
             show_triggers: app.show_triggers,
             show_bus_stats: app.show_bus_stats,
@@ -624,6 +644,17 @@ impl Config {
                             }),
                         })
                         .collect(),
+                })
+                .collect(),
+            nodes: app
+                .snap
+                .nodes
+                .iter()
+                .map(|n| NodeCfg {
+                    name: n.name.clone(),
+                    channel: n.channel,
+                    source: n.source.clone(),
+                    enabled: n.enabled,
                 })
                 .collect(),
             tx: app
@@ -929,12 +960,20 @@ impl Config {
         app.show_tx = self.show_tx;
         app.show_network = self.show_network;
         app.show_measurement = self.show_measurement;
+        app.show_nodes = self.show_nodes;
         app.show_buses = self.show_buses;
         app.show_triggers = self.show_triggers;
         app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
         app.text_rate_hz = self.text_rate_hz;
+        // Nodes cross as one wholesale command: the core mints fresh ids
+        // and (when a measurement is running) starts every enabled node.
+        // If measuring, the node source recompiles now -- a restore into a
+        // running bus behaves like a live edit.
+        app.send(crate::bus::BusCommand::SetNodes {
+            nodes: self.nodes.clone(),
+        });
         // An unknown kind code (a project from a future version) drops
         // only that trigger; the rest load. The list belongs to the bus,
         // so it crosses as a command; restore reads the list back below
@@ -1018,6 +1057,7 @@ impl Config {
                     show_tx: d.show_tx,
                     show_network: d.show_network,
                     show_measurement: d.show_measurement,
+                    show_nodes: d.show_nodes,
                     show_buses: d.show_buses,
                     show_triggers: d.show_triggers,
                     show_bus_stats: d.show_bus_stats,

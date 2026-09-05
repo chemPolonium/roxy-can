@@ -44,6 +44,10 @@ pub struct Vm {
     steps: u64,
     /// Lines produced by `print`, in order.
     pub output: Vec<String>,
+    /// Messages queued by `send(id, ...)`: identifier plus up-to-8 payload
+    /// bytes. The host drains this after each handler run and decides
+    /// what "send" means (for a CAN node: a frame onto the bus).
+    pub outbox: Vec<(u32, Vec<u8>)>,
 }
 
 impl Vm {
@@ -57,12 +61,21 @@ impl Vm {
             budget: DEFAULT_BUDGET,
             steps: 0,
             output: Vec::new(),
+            outbox: Vec::new(),
         }
     }
 
     pub fn with_budget(mut self, budget: u64) -> Self {
         self.budget = budget;
         self
+    }
+
+    /// Re-arms the instruction budget for one callback: every handler run
+    /// gets the full allowance, so a chatty node cannot starve its own
+    /// later events.
+    pub fn reset_budget(&mut self, budget: u64) {
+        self.budget = budget;
+        self.steps = 0;
     }
 
     /// Runs the script main to completion. Re-running after an error is
@@ -258,8 +271,6 @@ impl Vm {
         }
         let args: Vec<Value> = self.stack.split_off(self.stack.len() - argc);
         match name.as_str() {
-            // The one builtin of v1; external components will add to this
-            // table without touching the language.
             "print" => {
                 let line = args
                     .iter()
@@ -267,6 +278,36 @@ impl Vm {
                     .collect::<Vec<_>>()
                     .join(" ");
                 self.output.write_line(line);
+            }
+            "send" => {
+                // send(id, b0, b1, ...): one classic-frame payload. The
+                // host decides what "send" means; here it only lands in
+                // the outbox, well-formed or not.
+                let id = match &args[0] {
+                    Value::Int(n) if (0..=0x7FF).contains(n) => *n as u32,
+                    other => {
+                        return Err(VmError(format!(
+                            "send: id {} out of the standard range",
+                            kind(other)
+                        )));
+                    }
+                };
+                if args.len() - 1 > 8 {
+                    return Err(VmError("send: at most 8 data bytes".into()));
+                }
+                let mut data = Vec::with_capacity(args.len() - 1);
+                for b in &args[1..] {
+                    match b {
+                        Value::Int(n) if (0..=255).contains(n) => data.push(*n as u8),
+                        other => {
+                            return Err(VmError(format!(
+                                "send: data byte must be 0..255, got {}",
+                                kind(other)
+                            )));
+                        }
+                    }
+                }
+                self.outbox.push((id, data));
             }
             other => return Err(VmError(format!("host function '{other}' not implemented"))),
         }

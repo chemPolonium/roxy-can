@@ -9,6 +9,7 @@ pub mod idfilter;
 pub mod measurement;
 pub mod messages;
 pub mod network;
+pub mod nodes;
 pub mod project_modal;
 pub mod siglist;
 pub mod spec;
@@ -62,6 +63,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     data::render(app, ui);
     graphics::render(app, ui);
     state::render(app, ui);
+    nodes::render(app, ui);
     statusbar::render(app, ui);
     desktops::render(app, ui);
     project_modal::render(app, ui);

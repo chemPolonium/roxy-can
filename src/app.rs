@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -165,6 +166,7 @@ pub struct App {
     pub show_tx: bool,
     pub show_network: bool,
     pub show_measurement: bool,
+    pub show_nodes: bool,
     pub show_buses: bool,
     pub show_triggers: bool,
     pub show_bus_stats: bool,
@@ -183,6 +185,10 @@ pub struct App {
     /// signal key, and the target -- a custom band, or a default-mode
     /// state value (normalized bits). Session state only.
     pub state_rule_pick: Option<(usize, (u8, u32, String), PickTarget)>,
+    /// Source text a Nodes-window editor is typing but has not applied
+    /// yet, keyed by the node's stable id. Applied by the Apply button
+    /// (per-keystroke command traffic and recompiles would be churn).
+    pub node_src_draft: HashMap<u64, String>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Generator row whose value-source parameters the modal is editing:
@@ -356,6 +362,7 @@ impl App {
             show_tx: true,
             show_network: true,
             show_measurement: true,
+            show_nodes: false,
             show_buses: false,
             show_triggers: false,
             show_bus_stats: false,
@@ -369,6 +376,7 @@ impl App {
             focus_title: None,
             state_rule_edit: None,
             state_rule_pick: None,
+            node_src_draft: HashMap::new(),
             net_selected: 0,
             tx_pick: 0,
             src_edit: None,
