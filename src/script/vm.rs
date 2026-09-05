@@ -120,214 +120,238 @@ impl Vm {
                 return Err(VmError("instruction budget exceeded".into()));
             }
             let frame = self.frames.last().expect("run without a frame");
-            let Some(op) = self.script.functions[frame.chunk].code.get(frame.ip) else {
+            let (chunk, ip) = (frame.chunk, frame.ip);
+            let Some(op) = self.script.functions[chunk].code.get(ip) else {
                 return Err(VmError("code ran off its chunk".into()));
             };
             let op = *op;
             self.frames.last_mut().expect("frame").ip += 1;
-            match op {
-                Op::Const(c) => {
-                    let v = self.script.constants[c as usize].clone();
-                    self.stack.push(v);
+            if let Err(e) = self.exec_op(op) {
+                // Runtime errors name the line of the instruction that
+                // produced them, via the chunk's line table.
+                let line = self.line_at(chunk, ip);
+                return Err(VmError(match line {
+                    Some(line) => format!("line {line}: {}", e.0),
+                    None => e.0,
+                }));
+            }
+            if self.frames.is_empty() {
+                self.stack.pop();
+                return Ok(());
+            }
+        }
+    }
+
+    /// The source line recorded for `ip` in `chunk`, if any mark exists.
+    fn line_at(&self, chunk: usize, ip: usize) -> Option<u32> {
+        self.script.functions[chunk]
+            .lines
+            .iter()
+            .rev()
+            .find(|(op, _)| *op as usize <= ip)
+            .map(|(_, line)| *line)
+    }
+
+    fn exec_op(&mut self, op: Op) -> Result<(), VmError> {
+        match op {
+            Op::Const(c) => {
+                let v = self.script.constants[c as usize].clone();
+                self.stack.push(v);
+            }
+            Op::GetGlobal(g) => {
+                let v = self
+                    .globals
+                    .get(g as usize)
+                    .cloned()
+                    .ok_or_else(|| VmError(format!("bad global slot {g}")))?;
+                self.stack.push(v);
+            }
+            Op::SetGlobal(g) => {
+                let v = self.pop()?;
+                if g as usize >= self.globals.len() {
+                    self.globals.resize(g as usize + 1, Value::Nil);
                 }
-                Op::GetGlobal(g) => {
-                    let v = self
-                        .globals
-                        .get(g as usize)
-                        .cloned()
-                        .ok_or_else(|| VmError(format!("bad global slot {g}")))?;
-                    self.stack.push(v);
+                self.globals[g as usize] = v;
+            }
+            Op::GetLocal(n) => {
+                let base = self.frames.last().expect("frame").base;
+                let v = self
+                    .stack
+                    .get(base + n as usize)
+                    .cloned()
+                    .ok_or_else(|| VmError("read of an uninitialised local".into()))?;
+                self.stack.push(v);
+            }
+            Op::SetLocal(n) => {
+                let v = self.pop()?;
+                let base = self.frames.last().expect("frame").base;
+                let at = base + n as usize;
+                let len = self.stack.len();
+                if at >= len {
+                    return Err(VmError("local slot out of range".into()));
                 }
-                Op::SetGlobal(g) => {
-                    let v = self.pop()?;
-                    if g as usize >= self.globals.len() {
-                        self.globals.resize(g as usize + 1, Value::Nil);
+                self.stack[at] = v;
+            }
+            Op::Add => self.binary(|a, b| arith(a, b, Arith::Add))?,
+            Op::Sub => self.binary(|a, b| arith(a, b, Arith::Sub))?,
+            Op::Mul => self.binary(|a, b| arith(a, b, Arith::Mul))?,
+            Op::Div => self.binary(|a, b| arith(a, b, Arith::Div))?,
+            Op::Mod => self.binary(|a, b| arith(a, b, Arith::Mod))?,
+            Op::Neg => {
+                let v = self.pop()?;
+                match v {
+                    Value::Int(n) => {
+                        let r = n
+                            .checked_neg()
+                            .ok_or_else(|| VmError("integer overflow".into()))?;
+                        self.stack.push(Value::Int(r));
                     }
-                    self.globals[g as usize] = v;
+                    Value::Float(x) => self.stack.push(Value::Float(-x)),
+                    other => return Err(VmError(format!("cannot negate {}", kind(&other)))),
                 }
-                Op::GetLocal(n) => {
-                    let base = self.frames.last().expect("frame").base;
-                    let v = self
-                        .stack
-                        .get(base + n as usize)
-                        .cloned()
-                        .ok_or_else(|| VmError("read of an uninitialised local".into()))?;
-                    self.stack.push(v);
-                }
-                Op::SetLocal(n) => {
-                    let v = self.pop()?;
-                    let base = self.frames.last().expect("frame").base;
-                    let at = base + n as usize;
-                    let len = self.stack.len();
-                    if at >= len {
-                        return Err(VmError("local slot out of range".into()));
-                    }
-                    self.stack[at] = v;
-                }
-                Op::Add => self.binary(|a, b| arith(a, b, Arith::Add))?,
-                Op::Sub => self.binary(|a, b| arith(a, b, Arith::Sub))?,
-                Op::Mul => self.binary(|a, b| arith(a, b, Arith::Mul))?,
-                Op::Div => self.binary(|a, b| arith(a, b, Arith::Div))?,
-                Op::Mod => self.binary(|a, b| arith(a, b, Arith::Mod))?,
-                Op::Neg => {
-                    let v = self.pop()?;
-                    match v {
-                        Value::Int(n) => {
-                            let r = n
-                                .checked_neg()
-                                .ok_or_else(|| VmError("integer overflow".into()))?;
-                            self.stack.push(Value::Int(r));
-                        }
-                        Value::Float(x) => self.stack.push(Value::Float(-x)),
-                        other => return Err(VmError(format!("cannot negate {}", kind(&other)))),
-                    }
-                }
-                Op::Not => {
-                    let v = self.pop()?;
-                    match v {
-                        Value::Bool(b) => self.stack.push(Value::Bool(!b)),
-                        other => {
-                            return Err(VmError(format!("'!' needs a bool, got {}", kind(&other))));
-                        }
-                    }
-                }
-                Op::Eq => {
-                    let (b, a) = self.pop2()?;
-                    self.stack.push(Value::Bool(values_eq(&a, &b)));
-                }
-                Op::Ne => {
-                    let (b, a) = self.pop2()?;
-                    self.stack.push(Value::Bool(!values_eq(&a, &b)));
-                }
-                Op::Lt => self.compare(|o| o == std::cmp::Ordering::Less)?,
-                Op::Le => self.compare(|o| o != std::cmp::Ordering::Greater)?,
-                Op::Gt => self.compare(|o| o == std::cmp::Ordering::Greater)?,
-                Op::Ge => self.compare(|o| o != std::cmp::Ordering::Less)?,
-                Op::GetIndex => {
-                    // (container, index) on the stack: byte buffers only.
-                    let idx = self.pop()?;
-                    let container = self.pop()?;
-                    let Value::Bytes(b) = container else {
-                        return Err(VmError("indexing needs a byte buffer".into()));
-                    };
-                    let Value::Int(i) = idx else {
-                        return Err(VmError("index must be an int".into()));
-                    };
-                    let b = b.lock().expect("buffer poisoned");
-                    let i = usize::try_from(i).unwrap_or(usize::MAX);
-                    let byte = *b
-                        .get(i)
-                        .ok_or_else(|| VmError(format!("index {i} outside 0..{}", b.len())))?;
-                    self.stack.push(Value::Int(byte as i64));
-                }
-                Op::SetIndex => {
-                    // (container, index, value) on the stack.
-                    let value = self.pop()?;
-                    let idx = self.pop()?;
-                    let container = self.pop()?;
-                    let Value::Bytes(b) = container else {
-                        return Err(VmError("indexing needs a byte buffer".into()));
-                    };
-                    let Value::Int(i) = idx else {
-                        return Err(VmError("index must be an int".into()));
-                    };
-                    let Value::Int(byte) = value else {
-                        return Err(VmError("buffer elements must be ints".into()));
-                    };
-                    if !(0..=255).contains(&byte) {
-                        return Err(VmError(format!(
-                            "buffer elements must be 0..255, got {byte}"
-                        )));
-                    }
-                    let mut b = b.lock().expect("buffer poisoned");
-                    let i = usize::try_from(i).unwrap_or(usize::MAX);
-                    if i >= b.len() {
-                        return Err(VmError(format!("index {i} outside 0..{}", b.len())));
-                    }
-                    b[i] = byte as u8;
-                }
-                Op::Len => {
-                    let v = self.pop()?;
-                    let n = match v {
-                        Value::Bytes(b) => b.lock().expect("buffer poisoned").len(),
-                        Value::Str(s) => s.chars().count(),
-                        other => {
-                            return Err(VmError(format!(
-                                "len needs a buffer or string, got {}",
-                                kind(&other)
-                            )));
-                        }
-                    };
-                    self.stack.push(Value::Int(n as i64));
-                }
-                Op::Jump(t) => {
-                    self.frames.last_mut().expect("frame").ip = t as usize;
-                }
-                Op::JumpIfFalse(t) => {
-                    let v = self.pop()?;
-                    match v {
-                        Value::Bool(false) => {
-                            self.frames.last_mut().expect("frame").ip = t as usize;
-                        }
-                        Value::Bool(true) => {}
-                        other => {
-                            return Err(VmError(format!(
-                                "condition must be a bool, got {}",
-                                kind(&other)
-                            )));
-                        }
-                    }
-                }
-                Op::Call(idx, argc) => {
-                    if self.frames.len() >= MAX_FRAMES {
-                        return Err(VmError("recursion too deep".into()));
-                    }
-                    let base = self.stack.len() - argc as usize;
-                    self.frames.push(Frame {
-                        chunk: idx as usize,
-                        ip: 0,
-                        base,
-                    });
-                }
-                Op::CallHost(id, argc) => self.call_host(id as usize, argc as usize)?,
-                Op::CallExtern(c, argc) => {
-                    // Runtime-resolved extension call: name from the
-                    // constant pool, dispatched through the host's extern
-                    // hook. Unclaimed names are runtime errors -- the
-                    // compiler cannot know what the host registers.
-                    let Value::Str(name) = self.script.constants[c as usize].clone() else {
-                        return Err(VmError("extern name constant must be a string".into()));
-                    };
-                    if self.stack.len() < argc as usize {
-                        return Err(VmError("stack underflow in extern call".into()));
-                    }
-                    let args: Vec<Value> = self.stack.split_off(self.stack.len() - argc as usize);
-                    let result = match self.host_extern.as_mut() {
-                        Some(f) => f(&name, &args),
-                        None => Ok(None),
-                    };
-                    match result {
-                        Ok(Some(v)) => self.stack.push(v),
-                        Ok(None) => return Err(VmError(format!("unknown function '{name}'"))),
-                        Err(e) => return Err(VmError(e)),
-                    }
-                }
-                Op::Pop => {
-                    self.pop()?;
-                }
-                Op::Return => {
-                    let rv = self.pop()?;
-                    let base = self.frames.last().expect("frame").base;
-                    self.stack.truncate(base);
-                    self.stack.push(rv);
-                    self.frames.pop();
-                    if self.frames.is_empty() {
-                        self.stack.pop();
-                        return Ok(());
+            }
+            Op::Not => {
+                let v = self.pop()?;
+                match v {
+                    Value::Bool(b) => self.stack.push(Value::Bool(!b)),
+                    other => {
+                        return Err(VmError(format!("'!' needs a bool, got {}", kind(&other))));
                     }
                 }
             }
+            Op::Eq => {
+                let (b, a) = self.pop2()?;
+                self.stack.push(Value::Bool(values_eq(&a, &b)));
+            }
+            Op::Ne => {
+                let (b, a) = self.pop2()?;
+                self.stack.push(Value::Bool(!values_eq(&a, &b)));
+            }
+            Op::Lt => self.compare(|o| o == std::cmp::Ordering::Less)?,
+            Op::Le => self.compare(|o| o != std::cmp::Ordering::Greater)?,
+            Op::Gt => self.compare(|o| o == std::cmp::Ordering::Greater)?,
+            Op::Ge => self.compare(|o| o != std::cmp::Ordering::Less)?,
+            Op::GetIndex => {
+                // (container, index) on the stack: byte buffers only.
+                let idx = self.pop()?;
+                let container = self.pop()?;
+                let Value::Bytes(b) = container else {
+                    return Err(VmError("indexing needs a byte buffer".into()));
+                };
+                let Value::Int(i) = idx else {
+                    return Err(VmError("index must be an int".into()));
+                };
+                let b = b.lock().expect("buffer poisoned");
+                let i = usize::try_from(i).unwrap_or(usize::MAX);
+                let byte = *b
+                    .get(i)
+                    .ok_or_else(|| VmError(format!("index {i} outside 0..{}", b.len())))?;
+                self.stack.push(Value::Int(byte as i64));
+            }
+            Op::SetIndex => {
+                // (container, index, value) on the stack.
+                let value = self.pop()?;
+                let idx = self.pop()?;
+                let container = self.pop()?;
+                let Value::Bytes(b) = container else {
+                    return Err(VmError("indexing needs a byte buffer".into()));
+                };
+                let Value::Int(i) = idx else {
+                    return Err(VmError("index must be an int".into()));
+                };
+                let Value::Int(byte) = value else {
+                    return Err(VmError("buffer elements must be ints".into()));
+                };
+                if !(0..=255).contains(&byte) {
+                    return Err(VmError(format!(
+                        "buffer elements must be 0..255, got {byte}"
+                    )));
+                }
+                let mut b = b.lock().expect("buffer poisoned");
+                let i = usize::try_from(i).unwrap_or(usize::MAX);
+                if i >= b.len() {
+                    return Err(VmError(format!("index {i} outside 0..{}", b.len())));
+                }
+                b[i] = byte as u8;
+            }
+            Op::Len => {
+                let v = self.pop()?;
+                let n = match v {
+                    Value::Bytes(b) => b.lock().expect("buffer poisoned").len(),
+                    Value::Str(s) => s.chars().count(),
+                    other => {
+                        return Err(VmError(format!(
+                            "len needs a buffer or string, got {}",
+                            kind(&other)
+                        )));
+                    }
+                };
+                self.stack.push(Value::Int(n as i64));
+            }
+            Op::Jump(t) => {
+                self.frames.last_mut().expect("frame").ip = t as usize;
+            }
+            Op::JumpIfFalse(t) => {
+                let v = self.pop()?;
+                match v {
+                    Value::Bool(false) => {
+                        self.frames.last_mut().expect("frame").ip = t as usize;
+                    }
+                    Value::Bool(true) => {}
+                    other => {
+                        return Err(VmError(format!(
+                            "condition must be a bool, got {}",
+                            kind(&other)
+                        )));
+                    }
+                }
+            }
+            Op::Call(idx, argc) => {
+                if self.frames.len() >= MAX_FRAMES {
+                    return Err(VmError("recursion too deep".into()));
+                }
+                let base = self.stack.len() - argc as usize;
+                self.frames.push(Frame {
+                    chunk: idx as usize,
+                    ip: 0,
+                    base,
+                });
+            }
+            Op::CallHost(id, argc) => self.call_host(id as usize, argc as usize)?,
+            Op::CallExtern(c, argc) => {
+                // Runtime-resolved extension call: name from the
+                // constant pool, dispatched through the host's extern
+                // hook. Unclaimed names are runtime errors -- the
+                // compiler cannot know what the host registers.
+                let Value::Str(name) = self.script.constants[c as usize].clone() else {
+                    return Err(VmError("extern name constant must be a string".into()));
+                };
+                if self.stack.len() < argc as usize {
+                    return Err(VmError("stack underflow in extern call".into()));
+                }
+                let args: Vec<Value> = self.stack.split_off(self.stack.len() - argc as usize);
+                let result = match self.host_extern.as_mut() {
+                    Some(f) => f(&name, &args),
+                    None => Ok(None),
+                };
+                match result {
+                    Ok(Some(v)) => self.stack.push(v),
+                    Ok(None) => return Err(VmError(format!("unknown function '{name}'"))),
+                    Err(e) => return Err(VmError(e)),
+                }
+            }
+            Op::Pop => {
+                self.pop()?;
+            }
+            Op::Return => {
+                let rv = self.pop()?;
+                let base = self.frames.last().expect("frame").base;
+                self.stack.truncate(base);
+                self.stack.push(rv);
+                self.frames.pop();
+            }
         }
+        Ok(())
     }
 
     fn pop(&mut self) -> Result<Value, VmError> {

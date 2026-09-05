@@ -14,7 +14,15 @@ pub struct Program {
 pub enum Item {
     Fn(FnDecl),
     On(OnDecl),
-    Stmt(Stmt),
+    Stmt(SpannedStmt),
+}
+
+/// A statement tagged with its source line: the compiler builds per-chunk
+/// line tables from these so runtime errors can name the line.
+#[derive(Debug)]
+pub struct SpannedStmt {
+    pub line: u32,
+    pub stmt: Stmt,
 }
 
 /// An event handler declaration. The body runs when the node runtime (S2)
@@ -22,7 +30,7 @@ pub enum Item {
 #[derive(Debug)]
 pub struct OnDecl {
     pub kind: OnKind,
-    pub body: Vec<Stmt>,
+    pub body: Vec<SpannedStmt>,
     pub line: u32,
 }
 
@@ -40,7 +48,7 @@ pub enum OnKind {
 pub struct FnDecl {
     pub name: String,
     pub params: Vec<String>,
-    pub body: Vec<Stmt>,
+    pub body: Vec<SpannedStmt>,
 }
 
 #[derive(Debug)]
@@ -53,22 +61,22 @@ pub enum Stmt {
     AssignIndex(String, Expr, Expr),
     If {
         cond: Expr,
-        then: Vec<Stmt>,
-        els: Option<Vec<Stmt>>,
+        then: Vec<SpannedStmt>,
+        els: Option<Vec<SpannedStmt>>,
     },
     While {
         cond: Expr,
-        body: Vec<Stmt>,
+        body: Vec<SpannedStmt>,
     },
     /// Desugared `for`: init, condition (None = true), step, body.
     For {
-        init: Option<Box<Stmt>>,
+        init: Option<Box<SpannedStmt>>,
         cond: Option<Expr>,
-        step: Option<Box<Stmt>>,
-        body: Vec<Stmt>,
+        step: Option<Box<SpannedStmt>>,
+        body: Vec<SpannedStmt>,
     },
     Return(Option<Expr>),
-    Block(Vec<Stmt>),
+    Block(Vec<SpannedStmt>),
     Expr(Expr),
 }
 
@@ -273,7 +281,7 @@ impl P {
         }
     }
 
-    fn block(&mut self) -> Result<Vec<Stmt>, ScriptError> {
+    fn block(&mut self) -> Result<Vec<SpannedStmt>, ScriptError> {
         self.expect(&Tok::LBrace, "'{'")?;
         let mut stmts = Vec::new();
         while !self.at(&Tok::RBrace) {
@@ -289,7 +297,13 @@ impl P {
         Ok(stmts)
     }
 
-    fn stmt(&mut self) -> Result<Stmt, ScriptError> {
+    fn stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let stmt = self.stmt_inner()?;
+        Ok(SpannedStmt { line, stmt })
+    }
+
+    fn stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
         if self.eat(&Tok::Let) {
             let name = self.ident("variable name")?;
             self.expect(&Tok::Assign, "'=' in a let")?;
@@ -298,7 +312,7 @@ impl P {
             return Ok(Stmt::Let(name, expr));
         }
         if self.eat(&Tok::If) {
-            return self.if_stmt();
+            return Ok(self.if_stmt()?.stmt);
         }
         if self.eat(&Tok::While) {
             self.expect(&Tok::LParen, "'('")?;
@@ -308,7 +322,7 @@ impl P {
             return Ok(Stmt::While { cond, body });
         }
         if self.eat(&Tok::For) {
-            return self.for_stmt();
+            return Ok(self.for_stmt()?.stmt);
         }
         if self.eat(&Tok::Return) {
             if self.at(&Tok::Semi) {
@@ -362,7 +376,8 @@ impl P {
         Ok(Stmt::Expr(expr))
     }
 
-    fn if_stmt(&mut self) -> Result<Stmt, ScriptError> {
+    fn if_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
         self.expect(&Tok::LParen, "'('")?;
         let cond = self.expr()?;
         self.expect(&Tok::RParen, "')'")?;
@@ -376,10 +391,12 @@ impl P {
         } else {
             None
         };
-        Ok(Stmt::If { cond, then, els })
+        let stmt = Stmt::If { cond, then, els };
+        Ok(SpannedStmt { line, stmt })
     }
 
-    fn for_stmt(&mut self) -> Result<Stmt, ScriptError> {
+    fn for_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
         self.expect(&Tok::LParen, "'('")?;
         let init = if self.at(&Tok::Semi) {
             None
@@ -400,17 +417,24 @@ impl P {
         };
         self.expect(&Tok::RParen, "')'")?;
         let body = self.block()?;
-        Ok(Stmt::For {
+        let stmt = Stmt::For {
             init,
             cond,
             step,
             body,
-        })
+        };
+        Ok(SpannedStmt { line, stmt })
     }
 
     /// A statement without the trailing `;` -- only what a for-header
     /// slot accepts: a let, an assignment, or an expression.
-    fn simple_stmt(&mut self) -> Result<Stmt, ScriptError> {
+    fn simple_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
+        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let stmt = self.simple_stmt_inner()?;
+        Ok(SpannedStmt { line, stmt })
+    }
+
+    fn simple_stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
         if self.eat(&Tok::Let) {
             let name = self.ident("variable name")?;
             self.expect(&Tok::Assign, "'=' in a let")?;
@@ -655,7 +679,7 @@ mod tests {
             pos: 0,
             fn_depth: 0,
         };
-        match p.stmt().unwrap() {
+        match p.stmt().unwrap().stmt {
             Stmt::For {
                 init: Some(_),
                 cond: Some(_),
@@ -670,7 +694,7 @@ mod tests {
             pos: 0,
             fn_depth: 0,
         };
-        match p.stmt().unwrap() {
+        match p.stmt().unwrap().stmt {
             Stmt::For {
                 init: None,
                 cond: None,

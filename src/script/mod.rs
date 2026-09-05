@@ -127,6 +127,9 @@ pub struct Function {
     pub name: String,
     pub arity: usize,
     pub code: Vec<Op>,
+    /// Sparse op-index -> source-line table (first op on each new line).
+    /// Runtime errors resolve their line through this.
+    pub lines: Vec<(u16, u32)>,
 }
 
 /// One compiled event handler: what triggers it and which chunk runs.
@@ -333,6 +336,13 @@ mod tests {
         assert!(err("print(1 / 0);").contains("zero"));
         assert!(err("print(1 % 0);").contains("zero"));
         assert!(err("if (1) { print(1); }").contains("bool"));
+    }
+
+    #[test]
+    fn runtime_errors_name_the_source_line() {
+        let src = "let a = 1;\nlet b = 2;\nprint(a / (b - b));";
+        let e = err(src);
+        assert!(e.contains("line 3"), "{e}");
     }
 
     #[test]

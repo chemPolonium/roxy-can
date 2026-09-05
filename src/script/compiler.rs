@@ -2,7 +2,7 @@
 //! function defined later in the file), then bodies. Top-level `let`s
 //! become globals; function bodies use stack locals with block scopes.
 
-use super::parser::{BinOp, Expr, FnDecl, Item, OnDecl, OnKind, Program, Stmt, UnOp};
+use super::parser::{BinOp, Expr, FnDecl, Item, OnDecl, OnKind, Program, SpannedStmt, Stmt, UnOp};
 use super::{Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -17,10 +17,13 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
             name: "<main>".to_string(),
             arity: 0,
             code: Vec::new(),
+            lines: Vec::new(),
         }],
         fn_index: HashMap::new(),
         handlers: Vec::new(),
         code: Vec::new(),
+        line_marks: Vec::new(),
+        cur_line: 0,
         locals: Vec::new(),
         depth: 0,
         in_fn: false,
@@ -41,6 +44,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                 name: f.name.clone(),
                 arity: f.params.len(),
                 code: Vec::new(),
+                lines: Vec::new(),
             });
         }
     }
@@ -80,6 +84,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     c.emit(Op::Const(nil));
     c.emit(Op::Return);
     c.functions[0].code = std::mem::take(&mut c.code);
+    c.functions[0].lines = std::mem::take(&mut c.line_marks);
     Ok(Script {
         constants: c.constants,
         globals: c.globals,
@@ -97,6 +102,10 @@ struct Comp {
     fn_index: HashMap<String, u16>,
     /// Code of the chunk currently being compiled.
     code: Vec<Op>,
+    /// Sparse op-index -> source-line table of the current chunk: the
+    /// first op emitted on each new line opens an entry.
+    line_marks: Vec<(u16, u32)>,
+    cur_line: u32,
     /// Locals of the function being compiled: name and scope depth.
     locals: Vec<(String, u32)>,
     depth: u32,
@@ -146,8 +155,12 @@ impl Comp {
             .and_then(|i| u8::try_from(i).ok())
     }
 
-    fn stmt(&mut self, s: &Stmt) -> Result<(), ScriptError> {
-        match s {
+    fn stmt(&mut self, s: &SpannedStmt) -> Result<(), ScriptError> {
+        // Every op emitted for this statement reports the statement's
+        // line at runtime.
+        self.line = s.line;
+        self.line_mark();
+        match &s.stmt {
             Stmt::Let(name, expr) => {
                 self.expr(expr)?;
                 if self.in_fn {
@@ -223,7 +236,7 @@ impl Comp {
                 let loop_depth = self.depth;
                 if let Some(init) = init {
                     self.depth += 1;
-                    self.stmt(init)?;
+                    self.stmt(init.as_ref())?;
                     self.depth -= 1;
                 }
                 let start = self.code.len() as u16;
@@ -237,7 +250,7 @@ impl Comp {
                 self.depth += 1;
                 self.block(body)?;
                 if let Some(step) = step {
-                    self.stmt(step)?;
+                    self.stmt(step.as_ref())?;
                 }
                 self.depth -= 1;
                 self.emit(Op::Jump(start));
@@ -270,7 +283,14 @@ impl Comp {
         Ok(())
     }
 
-    fn block(&mut self, stmts: &[Stmt]) -> Result<(), ScriptError> {
+    fn line_mark(&mut self) {
+        if self.cur_line != self.line {
+            self.line_marks.push((self.code.len() as u16, self.line));
+            self.cur_line = self.line;
+        }
+    }
+
+    fn block(&mut self, stmts: &[SpannedStmt]) -> Result<(), ScriptError> {
         self.depth += 1;
         for s in stmts {
             self.stmt(s)?;
@@ -438,10 +458,13 @@ impl Comp {
     fn compile_fn(&mut self, f: FnDecl) -> Result<(), ScriptError> {
         let idx = self.fn_index[&f.name] as usize;
         let saved_code = std::mem::take(&mut self.code);
+        let saved_marks = std::mem::take(&mut self.line_marks);
+        let saved_cur = self.cur_line;
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
         self.code = Vec::new();
+        self.cur_line = 0;
         self.in_fn = true;
         self.depth = 1;
         if f.params.len() > MAX_LOCALS {
@@ -454,7 +477,10 @@ impl Comp {
         self.emit(Op::Const(nil));
         self.emit(Op::Return);
         self.functions[idx].code = std::mem::take(&mut self.code);
+        self.functions[idx].lines = std::mem::take(&mut self.line_marks);
         self.code = saved_code;
+        self.line_marks = saved_marks;
+        self.cur_line = saved_cur;
         self.locals = saved_locals;
         self.depth = saved_depth;
         self.in_fn = saved_in_fn;
@@ -473,10 +499,13 @@ impl Comp {
             },
         };
         let saved_code = std::mem::take(&mut self.code);
+        let saved_marks = std::mem::take(&mut self.line_marks);
+        let saved_cur = self.cur_line;
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
         self.code = Vec::new();
+        self.cur_line = 0;
         self.in_fn = true;
         self.depth = 1;
         self.block(&on.body)?;
@@ -489,13 +518,17 @@ impl Comp {
             HandlerKind::Message { id } => format!("<on message {id:#x}>"),
             HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
         };
+        let lines = std::mem::take(&mut self.line_marks);
         self.functions.push(Function {
             name: label,
             arity: 0,
             code: std::mem::take(&mut self.code),
+            lines,
         });
         self.handlers.push(Handler { kind, chunk });
         self.code = saved_code;
+        self.line_marks = saved_marks;
+        self.cur_line = saved_cur;
         self.locals = saved_locals;
         self.depth = saved_depth;
         self.in_fn = saved_in_fn;
