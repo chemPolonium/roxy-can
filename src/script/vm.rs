@@ -35,6 +35,12 @@ struct Frame {
 const MAX_FRAMES: usize = 256;
 const DEFAULT_BUDGET: u64 = 10_000_000;
 
+/// A host-registered extension builtin: name-driven, argument list in,
+/// optional result value out. `None` means "not one of mine" (the VM
+/// then reports an unknown function). This is the seam external
+/// simulation components plug into (S4).
+pub type HostExternFn = Box<dyn FnMut(&str, &[Value]) -> Result<Option<Value>, String> + Send>;
+
 pub struct Vm {
     script: Script,
     globals: Vec<Value>,
@@ -53,6 +59,10 @@ pub struct Vm {
     /// The node runtime refreshes this before each handler run; `now()`
     /// and `sig()` read it.
     pub host_input: HostInput,
+    /// Extension point for host-registered builtins (see
+    /// [`HostExternFn`]). Called when the builtin table has no entry for
+    /// a called name.
+    pub host_extern: Option<HostExternFn>,
 }
 
 impl Vm {
@@ -68,6 +78,7 @@ impl Vm {
             output: Vec::new(),
             outbox: Vec::new(),
             host_input: HostInput::default(),
+            host_extern: None,
         }
     }
 
@@ -279,6 +290,28 @@ impl Vm {
                     });
                 }
                 Op::CallHost(id, argc) => self.call_host(id as usize, argc as usize)?,
+                Op::CallExtern(c, argc) => {
+                    // Runtime-resolved extension call: name from the
+                    // constant pool, dispatched through the host's extern
+                    // hook. Unclaimed names are runtime errors -- the
+                    // compiler cannot know what the host registers.
+                    let Value::Str(name) = self.script.constants[c as usize].clone() else {
+                        return Err(VmError("extern name constant must be a string".into()));
+                    };
+                    if self.stack.len() < argc as usize {
+                        return Err(VmError("stack underflow in extern call".into()));
+                    }
+                    let args: Vec<Value> = self.stack.split_off(self.stack.len() - argc as usize);
+                    let result = match self.host_extern.as_mut() {
+                        Some(f) => f(&name, &args),
+                        None => Ok(None),
+                    };
+                    match result {
+                        Ok(Some(v)) => self.stack.push(v),
+                        Ok(None) => return Err(VmError(format!("unknown function '{name}'"))),
+                        Err(e) => return Err(VmError(e)),
+                    }
+                }
                 Op::Pop => {
                     self.pop()?;
                 }
@@ -491,7 +524,26 @@ impl Vm {
                     )));
                 }
             },
-            other => return Err(VmError(format!("host function '{other}' not implemented"))),
+            other => {
+                // Not a builtin: the host's extension hook (external
+                // simulation components, node-runtime functions) gets the
+                // call next. Some(value) pushes the result, None means
+                // the name is unknown to the host too.
+                if let Some(f) = self.host_extern.as_mut() {
+                    match f(other, &args).map_err(VmError)? {
+                        Some(v) => {
+                            self.stack.push(v);
+                            return Ok(());
+                        }
+                        None => {
+                            return Err(VmError(format!(
+                                "host function '{other}' not implemented"
+                            )));
+                        }
+                    }
+                }
+                return Err(VmError(format!("host function '{other}' not implemented")));
+            }
         }
         self.stack.push(Value::Nil);
         Ok(())

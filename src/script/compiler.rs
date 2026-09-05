@@ -422,7 +422,13 @@ impl Comp {
                     }
                     self.emit(Op::CallHost(id, args.len() as u8));
                 } else {
-                    return self.err(name, "unknown function");
+                    // Neither a script function nor a builtin: a
+                    // host-extension call (node runtime builtins, external
+                    // components). The name travels in the constant pool
+                    // and resolves at runtime -- the host may register
+                    // functions the compiler has never seen.
+                    let name_const = self.constant(Value::Str(name.clone()));
+                    self.emit(Op::CallExtern(name_const, args.len() as u8));
                 }
             }
         }

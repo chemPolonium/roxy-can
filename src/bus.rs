@@ -652,7 +652,11 @@ impl BusCore {
                 self.nodes
                     .push(crate::node::ScriptNode::new(id, name, channel));
                 if self.measuring {
-                    self.nodes.last_mut().expect("just added").start();
+                    let dbc = self
+                        .channels
+                        .get(channel as usize)
+                        .and_then(|c| c.dbc.clone());
+                    self.nodes.last_mut().expect("just added").start(dbc);
                 }
                 self.nodes_dirty = true;
             }
@@ -669,18 +673,35 @@ impl BusCore {
             BusCommand::SetNodeChannel { id, channel } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     n.channel = channel;
+                    // The signal builtins read the new channel's database:
+                    // a running node restarts so its extern hook rebinds.
+                    if self.measuring && n.running() {
+                        let dbc = self
+                            .channels
+                            .get(channel as usize)
+                            .and_then(|c| c.dbc.clone());
+                        n.start(dbc);
+                    }
                     self.nodes_dirty = true;
                 }
             }
             BusCommand::SetNodeSource { id, source } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
-                    n.set_source(source, self.measuring);
+                    let dbc = self
+                        .channels
+                        .get(n.channel as usize)
+                        .and_then(|c| c.dbc.clone());
+                    n.set_source(source, dbc, self.measuring);
                     self.nodes_dirty = true;
                 }
             }
             BusCommand::SetNodeEnabled { id, on } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
-                    n.set_enabled(on, self.measuring);
+                    let dbc = self
+                        .channels
+                        .get(n.channel as usize)
+                        .and_then(|c| c.dbc.clone());
+                    n.set_enabled(on, dbc, self.measuring);
                     self.nodes_dirty = true;
                 }
             }
@@ -694,7 +715,11 @@ impl BusCore {
                         n.source = cfg.source;
                         n.enabled = cfg.enabled;
                         if self.measuring && n.enabled {
-                            n.start();
+                            let dbc = self
+                                .channels
+                                .get(cfg.channel as usize)
+                                .and_then(|c| c.dbc.clone());
+                            n.start(dbc);
                         }
                         n
                     })
@@ -901,7 +926,11 @@ impl BusCore {
     fn nodes_start(&mut self) {
         for node in &mut self.nodes {
             if node.enabled {
-                node.start();
+                let dbc = self
+                    .channels
+                    .get(node.channel as usize)
+                    .and_then(|c| c.dbc.clone());
+                node.start(dbc);
             }
         }
         self.nodes_dirty = true;

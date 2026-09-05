@@ -107,6 +107,12 @@ pub enum Op {
     JumpIfFalse(u16),
     Call(u16, u8),
     CallHost(u16, u8),
+    /// Runtime-resolved host extension call (external libraries, node
+    /// builtins backed by host state): arg 0 is a constant-pool index of
+    /// the function's name, arg 1 the argument count. The VM hands name
+    /// and arguments to the host extension hook; an unclaimed name is a
+    /// runtime error.
+    CallExtern(u16, u8),
     GetIndex,
     SetIndex,
     Len,
