@@ -17,6 +17,7 @@ use crate::channel::Channel;
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::Subscription;
+use crate::script::HostInput;
 use crate::source::FrameSource;
 use crate::spec::{Kind, cycle_offender, dlc_offender, missing_offender};
 use crate::trigger::{TriggerAction, TriggerCond};
@@ -907,10 +908,12 @@ impl BusCore {
     }
 
     /// Node timer handlers that are due at wall clock `now_us`; their
-    /// queued frames join this step's buffer.
-    fn run_node_timers(&mut self, now_us: u64) {
+    /// queued frames join this step's buffer. `inputs` carries what
+    /// `now()`/`sig()` read, per channel.
+    fn run_node_timers(&mut self, now_us: u64, inputs: &HashMap<u8, HostInput>) {
         for node in &mut self.nodes {
-            for (id, data) in node.run_timers(now_us) {
+            let input = inputs.get(&node.channel).cloned().unwrap_or_default();
+            for (id, data) in node.run_timers(now_us, &input) {
                 self.buf
                     .push(Self::node_frame(node.channel, id, &data, self.sim_t_us));
             }
@@ -922,10 +925,10 @@ impl BusCore {
 
     /// Delivers one frame to the matching node handlers; the frames they
     /// queue are returned for the step loop to append to the buffer.
-    fn dispatch_node_frame(&mut self, f: &CanFrame) -> Vec<(u32, Vec<u8>)> {
+    fn dispatch_node_frame(&mut self, f: &CanFrame, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
         for node in &mut self.nodes {
-            out.extend(node.dispatch_frame(f.channel, f.id));
+            out.extend(node.dispatch_frame(f.channel, f.id, input));
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
@@ -933,8 +936,43 @@ impl BusCore {
         out
     }
 
-    /// Frames the script queued: one classic frame, `dir` Tx, stamped on
-    /// the bus's own timeline.
+    /// Builds one [`HostInput`] per channel that has nodes: the bus clock
+    /// in seconds plus every decoded signal value seen on that channel
+    /// (from the aggregates, so it covers replay and live alike).
+    fn build_node_inputs(&self, now_us: u64) -> HashMap<u8, HostInput> {
+        let mut inputs: HashMap<u8, HostInput> = HashMap::new();
+        for node in &self.nodes {
+            inputs.entry(node.channel).or_insert_with(|| HostInput {
+                now_s: now_us as f64 / 1e6,
+                signals: HashMap::new(),
+            });
+        }
+        for ((ch, id), agg) in &self.aggs {
+            let Some(input) = inputs.get_mut(ch) else {
+                continue;
+            };
+            let Some(db) = self.channel_dbc(*ch) else {
+                continue;
+            };
+            let f = CanFrame {
+                t_us: agg.last_t_us,
+                channel: *ch,
+                id: *id,
+                extended: false,
+                len: agg.len,
+                data: agg.data,
+                dir: agg.dir,
+                flags: agg.flags,
+            };
+            for d in db.decode_signals(&f) {
+                input.signals.insert((*id, d.name), d.phys);
+            }
+        }
+        inputs
+    }
+
+    /// Frames the script queued: `dir` Tx, stamped on the bus's own
+    /// timeline; an id above 0x7FF travels extended.
     fn node_frame(channel: u8, id: u32, data: &[u8], t_us: u64) -> CanFrame {
         let mut buf = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
         buf[..data.len()].copy_from_slice(data);
@@ -942,7 +980,7 @@ impl BusCore {
             t_us,
             channel,
             id,
-            extended: false,
+            extended: id > 0x7FF,
             len: data.len() as u8,
             data: buf,
             dir: Direction::Tx,
@@ -1867,7 +1905,8 @@ impl BusCore {
         // Node timers fire before the ingest walk so the frames they
         // queue join this same step. Their clock is the step's wall
         // clock: periodic node behaviour keeps its cadence in replay too.
-        self.run_node_timers(now_us);
+        let node_inputs = self.build_node_inputs(now_us);
+        self.run_node_timers(now_us, &node_inputs);
 
         let replay_done =
             matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();
@@ -1887,7 +1926,8 @@ impl BusCore {
             self.eval_triggers(&f, status);
             // Node handlers see the frame next; a send they queue joins
             // `buf` behind this frame and is processed by this same step.
-            let queued = self.dispatch_node_frame(&f);
+            let input = node_inputs.get(&f.channel).cloned().unwrap_or_default();
+            let queued = self.dispatch_node_frame(&f, &input);
             for (id, data) in queued {
                 self.buf
                     .push(Self::node_frame(f.channel, id, &data, f.t_us));

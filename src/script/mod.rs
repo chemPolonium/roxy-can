@@ -14,6 +14,8 @@
 // exactly why the dead-code sweep must stay quiet here.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 mod compiler;
 mod lexer;
 mod parser;
@@ -126,7 +128,19 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     // (name, min_args, max_args)
     ("print", 1, 16),
     ("send", 1, 9),
+    ("now", 0, 0),
+    ("sig", 2, 2),
 ];
+
+/// What the host publishes for a script to read between events: the bus
+/// clock in seconds and the latest physical value of every decoded
+/// signal on the node's channel, keyed by `(message id, signal name)`.
+/// The node runtime refreshes this before each handler run.
+#[derive(Clone, Debug, Default)]
+pub struct HostInput {
+    pub now_s: f64,
+    pub signals: HashMap<(u32, String), f64>,
+}
 
 /// A compile-time error, positioned at the offending source line.
 #[derive(Clone, Debug)]

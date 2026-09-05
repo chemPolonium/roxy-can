@@ -2,7 +2,7 @@
 //! capped; every executed instruction decrements a budget so a runaway
 //! loop (S2: a runaway node callback) can never wedge the host.
 
-use super::{Op, Script, Value};
+use super::{HostInput, Op, Script, Value};
 
 /// Where `print` output goes. The node runtime will plug its log ring in
 /// here; tests collect into a `Vec<String>`.
@@ -46,8 +46,13 @@ pub struct Vm {
     pub output: Vec<String>,
     /// Messages queued by `send(id, ...)`: identifier plus up-to-8 payload
     /// bytes. The host drains this after each handler run and decides
-    /// what "send" means (for a CAN node: a frame onto the bus).
+    /// what "send" means (for a CAN node: a frame onto the bus). An id
+    /// above 0x7FF flags the frame extended.
     pub outbox: Vec<(u32, Vec<u8>)>,
+    /// Host-published read values: the clock and latest signal values.
+    /// The node runtime refreshes this before each handler run; `now()`
+    /// and `sig()` read it.
+    pub host_input: HostInput,
 }
 
 impl Vm {
@@ -62,6 +67,7 @@ impl Vm {
             steps: 0,
             output: Vec::new(),
             outbox: Vec::new(),
+            host_input: HostInput::default(),
         }
     }
 
@@ -279,15 +285,40 @@ impl Vm {
                     .join(" ");
                 self.output.write_line(line);
             }
+            "now" => {
+                // Producing calls must return before the tail push below:
+                // the pushed value IS the call's result.
+                self.stack.push(Value::Float(self.host_input.now_s));
+                return Ok(());
+            }
+            "sig" => {
+                // sig(id, "Name"): the latest physical value the host
+                // published for that signal on this node's channel.
+                let (Value::Int(id), Value::Str(sig)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "sig(id, \"Name\") needs an int and a string".into(),
+                    ));
+                };
+                match self.host_input.signals.get(&(*id as u32, sig.clone())) {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "sig: no value for {id:#x} {sig:?} (not seen yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
             "send" => {
                 // send(id, b0, b1, ...): one classic-frame payload. The
                 // host decides what "send" means; here it only lands in
-                // the outbox, well-formed or not.
+                // the outbox, well-formed or not. An id above 0x7FF
+                // travels as an extended frame.
                 let id = match &args[0] {
-                    Value::Int(n) if (0..=0x7FF).contains(n) => *n as u32,
+                    Value::Int(n) if (0..=0x1FF_FFFF).contains(n) => *n as u32,
                     other => {
                         return Err(VmError(format!(
-                            "send: id {} out of the standard range",
+                            "send: id {} out of range (0..0x1FFFFFFF)",
                             kind(other)
                         )));
                     }
@@ -382,12 +413,18 @@ fn arith(a: Value, b: Value, op: Arith) -> Result<Value, String> {
         Arith::Div => "/",
         Arith::Mod => "%",
     };
-    // String concatenation is the one non-numeric arithmetic: "a" + "b".
-    if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
-        if matches!(op, Arith::Add) {
-            return Ok(Value::Str(format!("{x}{y}")));
+    // String concatenation on '+' with either side a string: the other
+    // value renders as it would in print, so log lines read naturally.
+    if matches!(op, Arith::Add) && (matches!(a, Value::Str(_)) || matches!(b, Value::Str(_))) {
+        let mut s = match a {
+            Value::Str(x) => x,
+            other => other.to_string(),
+        };
+        match b {
+            Value::Str(y) => s.push_str(&y),
+            other => s.push_str(&other.to_string()),
         }
-        return Err(format!("strings only support '+', not '{sign}'"));
+        return Ok(Value::Str(s));
     }
     if !is_num(&a) || !is_num(&b) {
         return Err(format!(

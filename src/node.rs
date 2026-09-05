@@ -8,7 +8,7 @@
 //! instruction budget per callback, and a `send` from the script lands in
 //! an outbox that the core drains onto the bus as real frames.
 
-use crate::script::{Handler, HandlerKind, Vm, compile};
+use crate::script::{Handler, HandlerKind, HostInput, Vm, compile};
 use std::collections::VecDeque;
 
 /// Log lines kept per node, oldest first.
@@ -201,8 +201,14 @@ impl ScriptNode {
     }
 
     /// Delivers one bus frame: handlers for this id on this channel run,
-    /// in declaration order. Returns the frames the script queued.
-    pub fn dispatch_frame(&mut self, channel: u8, id: u32) -> Vec<(u32, Vec<u8>)> {
+    /// in declaration order. `input` is what `now()`/`sig()` read.
+    /// Returns the frames the script queued.
+    pub fn dispatch_frame(
+        &mut self,
+        channel: u8,
+        id: u32,
+        input: &HostInput,
+    ) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -218,6 +224,7 @@ impl ScriptNode {
             .collect();
         for chunk in matches {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
+            rt.vm.host_input = input.clone();
             if let Err(e) = rt.vm.run_handler(chunk) {
                 Self::push_log_into(&mut self.log, &mut self.log_dirty, format!("[error] {e}"));
                 self.errored = true;
@@ -232,7 +239,7 @@ impl ScriptNode {
     /// Fires due timer handlers. A timer armed lazily at `start` gets its
     /// first due one full period out; missed periods (a stalled host)
     /// collapse into one fire plus a resync.
-    pub fn run_timers(&mut self, now_us: u64) -> Vec<(u32, Vec<u8>)> {
+    pub fn run_timers(&mut self, now_us: u64, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -240,6 +247,7 @@ impl ScriptNode {
         if !self.enabled || self.errored {
             return out;
         }
+        rt.vm.host_input = input.clone();
         let due: Vec<u16> = rt
             .timers
             .iter_mut()
@@ -311,14 +319,14 @@ mod tests {
         assert_eq!(n.log_snapshot(), ["hello"]);
 
         // A watched frame queues the reaction payload.
-        let out = n.dispatch_frame(0, 0x100);
+        let out = n.dispatch_frame(0, 0x100, &HostInput::default());
         assert_eq!(out, vec![(0x200, vec![1, 2])]);
 
         // Timers arm lazily one period out (armed at 50 ms -> first due
         // at 150 ms), then fire and resync.
-        assert!(n.run_timers(50_000).is_empty());
-        assert!(n.run_timers(120_000).is_empty());
-        let out = n.run_timers(160_000);
+        assert!(n.run_timers(50_000, &HostInput::default()).is_empty());
+        assert!(n.run_timers(120_000, &HostInput::default()).is_empty());
+        let out = n.run_timers(160_000, &HostInput::default());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, 0x300);
         assert!(n.log_snapshot().last().unwrap().starts_with("tick 1"));
@@ -326,10 +334,11 @@ mod tests {
         // An error in a handler stops the node until restart.
         let mut bad = node("on message 0x100 { print(1 / 0); }");
         bad.start();
-        bad.dispatch_frame(0, 0x100);
+        bad.dispatch_frame(0, 0x100, &HostInput::default());
         assert!(bad.errored());
         assert!(
-            bad.dispatch_frame(0, 0x100).is_empty(),
+            bad.dispatch_frame(0, 0x100, &HostInput::default())
+                .is_empty(),
             "errored nodes stay quiet"
         );
         bad.start();
@@ -348,7 +357,45 @@ mod tests {
     fn channel_mismatch_is_ignored() {
         let mut n = node("on message 0x100 { send(0x200); }");
         n.start();
-        assert!(n.dispatch_frame(1, 0x100).is_empty(), "other channel");
-        assert_eq!(n.dispatch_frame(0, 0x100).len(), 1);
+        assert!(
+            n.dispatch_frame(1, 0x100, &HostInput::default()).is_empty(),
+            "other channel"
+        );
+        assert_eq!(n.dispatch_frame(0, 0x100, &HostInput::default()).len(), 1);
+    }
+
+    #[test]
+    fn now_and_sig_read_the_published_host_input() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    print(now());
+                    print(sig(0x100, "RPM"));
+                }
+            "#,
+        );
+        n.start();
+        let input = HostInput {
+            now_s: 1.5,
+            signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
+        };
+        n.dispatch_frame(0, 0x100, &input);
+        assert_eq!(n.log_snapshot(), ["1.5", "2400.0"]);
+
+        // An unseen signal is a runtime error, not a silent zero.
+        let mut n2 = node(r#"on message 0x100 { print(sig(0x100, "Nope")); }"#);
+        n2.start();
+        n2.dispatch_frame(0, 0x100, &HostInput::default());
+        assert!(n2.errored(), "a missing signal must not read as zero");
+    }
+
+    #[test]
+    fn extended_ids_send_flagged_extended() {
+        // The outbox carries the raw id; the core derives the extended
+        // flag from its size when building the frame.
+        let mut n = node("on message 0x100 { send(0x18FF10, 1); }");
+        n.start();
+        let out = n.dispatch_frame(0, 0x100, &HostInput::default());
+        assert_eq!(out, vec![(0x18FF10, vec![1])]);
     }
 }
