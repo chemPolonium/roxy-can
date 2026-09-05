@@ -41,6 +41,14 @@ const DEFAULT_BUDGET: u64 = 10_000_000;
 /// simulation components plug into (S4).
 pub type HostExternFn = Box<dyn FnMut(&str, &[Value]) -> Result<Option<Value>, String> + Send>;
 
+/// Timer control requested by the RUNNING handler: change its period, or
+/// stop it altogether. The node runtime applies these after the run.
+#[derive(Clone, Copy, Debug)]
+pub enum TimerOp {
+    SetPeriod(u64),
+    Stop,
+}
+
 pub struct Vm {
     script: Script,
     globals: Vec<Value>,
@@ -63,6 +71,10 @@ pub struct Vm {
     /// [`HostExternFn`]). Called when the builtin table has no entry for
     /// a called name.
     pub host_extern: Option<HostExternFn>,
+    /// Timer control queued by `set_period` / `stop_timer` inside the
+    /// running handler. The node runtime drains and applies these after
+    /// the run.
+    pub timer_ops: Vec<TimerOp>,
 }
 
 impl Vm {
@@ -79,6 +91,7 @@ impl Vm {
             outbox: Vec::new(),
             host_input: HostInput::default(),
             host_extern: None,
+            timer_ops: Vec::new(),
         }
     }
 
@@ -548,6 +561,20 @@ impl Vm {
                     )));
                 }
             },
+            "set_period" => {
+                // Timer control for the RUNNING `on timer` handler: the
+                // node runtime applies queued ops after the run.
+                let Value::Int(ms) = args[0] else {
+                    return Err(VmError("set_period needs an int".into()));
+                };
+                if ms <= 0 {
+                    return Err(VmError("set_period: period must be positive".into()));
+                }
+                self.timer_ops.push(TimerOp::SetPeriod(ms as u64));
+            }
+            "stop_timer" => {
+                self.timer_ops.push(TimerOp::Stop);
+            }
             other => {
                 // Not a builtin: the host's extension hook (external
                 // simulation components, node-runtime functions) gets the

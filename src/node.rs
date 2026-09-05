@@ -48,6 +48,9 @@ struct TimerSlot {
     handler_index: usize,
     period_ms: u64,
     next_due_us: u64,
+    /// Set by `stop_timer()` inside the handler: the slot never fires
+    /// again this run.
+    stopped: bool,
 }
 
 impl ScriptNode {
@@ -135,6 +138,7 @@ impl ScriptNode {
                     handler_index: i,
                     period_ms: *period_ms,
                     next_due_us: 0,
+                    stopped: false,
                 }),
                 _ => None,
             })
@@ -262,10 +266,15 @@ impl ScriptNode {
             return out;
         }
         rt.vm.host_input = input.clone();
-        let due: Vec<u16> = rt
+        rt.vm.timer_ops.clear();
+        let due: Vec<(usize, u16)> = rt
             .timers
             .iter_mut()
-            .filter_map(|slot| {
+            .enumerate()
+            .filter_map(|(slot_index, slot)| {
+                if slot.stopped {
+                    return None;
+                }
                 if slot.next_due_us == 0 {
                     slot.next_due_us = now_us.saturating_add(slot.period_ms * 1_000);
                     return None;
@@ -273,16 +282,28 @@ impl ScriptNode {
                 (slot.next_due_us <= now_us).then(|| {
                     let chunk = rt.handlers[slot.handler_index].chunk;
                     slot.next_due_us = now_us.saturating_add(slot.period_ms * 1_000);
-                    chunk
+                    (slot_index, chunk)
                 })
             })
             .collect();
-        for chunk in due {
+        for (slot_index, chunk) in due {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
+            rt.vm.timer_ops.clear();
             if let Err(e) = rt.vm.run_handler(chunk) {
                 Self::push_log_into(&mut self.log, &mut self.log_dirty, format!("[error] {e}"));
                 self.errored = true;
                 return out;
+            }
+            // Apply timer control the handler queued: a new period takes
+            // effect from now, and a stopped timer never fires again.
+            for op in rt.vm.timer_ops.drain(..) {
+                match op {
+                    crate::script::TimerOp::SetPeriod(ms) => {
+                        rt.timers[slot_index].period_ms = ms;
+                        rt.timers[slot_index].next_due_us = now_us.saturating_add(ms * 1_000);
+                    }
+                    crate::script::TimerOp::Stop => rt.timers[slot_index].stopped = true,
+                }
             }
             Self::drain_vm(rt, &mut self.log, &mut self.log_dirty);
             out.append(&mut rt.vm.outbox);
@@ -450,6 +471,57 @@ mod tests {
         n.start(None);
         assert!(!n.running());
         assert!(n.log_snapshot()[0].contains("[compile]"));
+    }
+
+    #[test]
+    fn stop_timer_halts_a_periodic_handler_after_its_runs() {
+        let mut n = node(
+            r#"
+                let n = 0;
+                on timer 100 {
+                    n = n + 1;
+                    print("tick", n);
+                    if (n == 2) { stop_timer(); }
+                }
+            "#,
+        );
+        n.start(None);
+        n.run_timers(50_000, &HostInput::default()); // arms: due 150_000
+        n.run_timers(160_000, &HostInput::default()); // tick 1, arms 310_000
+        n.run_timers(320_000, &HostInput::default()); // tick 2, stops
+        n.run_timers(1_000_000, &HostInput::default()); // stopped: silence
+        eprintln!("DEBUG LOG: {:?}", n.log_snapshot());
+        let ticks = n
+            .log_snapshot()
+            .iter()
+            .filter(|l| l.starts_with("tick "))
+            .count();
+        assert_eq!(ticks, 2, "stop_timer must halt the periodic handler");
+    }
+
+    #[test]
+    fn set_period_reschedules_the_running_timer() {
+        let mut n = node(
+            r#"
+                let ticks = 0;
+                on timer 100 {
+                    ticks = ticks + 1;
+                    if (ticks == 1) { set_period(50); }
+                    print("t", ticks);
+                }
+            "#,
+        );
+        n.start(None);
+        n.run_timers(50_000, &HostInput::default()); // arms: due 150_000
+        n.run_timers(150_000, &HostInput::default()); // tick 1, period -> 50ms
+        n.run_timers(199_999, &HostInput::default()); // not yet
+        n.run_timers(200_000, &HostInput::default()); // tick 2
+        let ticks = n
+            .log_snapshot()
+            .iter()
+            .filter(|l| l.starts_with("t "))
+            .count();
+        assert_eq!(ticks, 2);
     }
 
     #[test]

@@ -23,7 +23,7 @@ mod vm;
 
 // The node runtime holds the VM per script node; the rest of the module
 // is reachable only through it until the product path grows further uses.
-pub use vm::Vm;
+pub use vm::{TimerOp, Vm};
 
 /// A runtime value of the script language.
 #[derive(Clone, Debug)]
@@ -176,6 +176,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("sig", 2, 2),
     ("bytes", 1, 1),
     ("len", 1, 1),
+    ("set_period", 1, 1),
+    ("stop_timer", 0, 0),
     // Stimulus math: pure functions over floats, radians for trig.
     ("abs", 1, 1),
     ("floor", 1, 1),
