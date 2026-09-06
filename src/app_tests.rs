@@ -3266,6 +3266,11 @@ fn a_clear_trace_trigger_empties_the_ring_and_nothing_else() {
         TriggerCond::IdPresent { ch: 0, id: 0x777 },
         TriggerAction::ClearTrace,
     ));
+    // Keep the recorder off the repo root: a named temp path, recording.
+    let base = std::env::temp_dir().join("roxy_can_clear_trace.asc");
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
     app.recorder.recording = true;
     app.recorder.open().unwrap();
 
