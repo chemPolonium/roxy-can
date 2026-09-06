@@ -181,6 +181,8 @@ pub enum HandlerKind {
     Message {
         id: u32,
     },
+    /// Every frame on the channel (`on message *`).
+    AnyMessage,
     Timer {
         period_ms: u64,
     },
@@ -761,6 +763,12 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("duplicate")
+        );
+        assert!(
+            compile("on message * { } on message * { }")
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate 'on message *'")
         );
         assert!(
             compile("fn f() { on start { } }")

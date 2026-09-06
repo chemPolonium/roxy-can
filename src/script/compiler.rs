@@ -53,10 +53,11 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     }
 
     // Handler sanity: one on start, one handler per message id, one
-    // handler per one-shot timer name.
+    // handler per one-shot timer name, one wildcard.
     let mut seen_start = false;
     let mut seen_ids: HashSet<u32> = HashSet::new();
     let mut seen_named: HashSet<String> = HashSet::new();
+    let mut seen_wildcard = false;
     for item in &program.items {
         if let Item::On(on) = item {
             match &on.kind {
@@ -74,6 +75,12 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                             &format!("duplicate handler for id {id:#x}"),
                         );
                     }
+                }
+                OnKind::AnyMessage => {
+                    if seen_wildcard {
+                        return c.err_at(on.line, on.col, "duplicate 'on message *' handler");
+                    }
+                    seen_wildcard = true;
                 }
                 OnKind::Timer { .. } => {}
                 OnKind::Oneshot { name } => {
@@ -571,6 +578,7 @@ impl Comp {
         let kind = match &on.kind {
             OnKind::Start => HandlerKind::Start,
             OnKind::Message { id } => HandlerKind::Message { id: *id },
+            OnKind::AnyMessage => HandlerKind::AnyMessage,
             OnKind::Timer { period_ms } => HandlerKind::Timer {
                 period_ms: *period_ms,
             },
@@ -594,6 +602,7 @@ impl Comp {
         let label = match &kind {
             HandlerKind::Start => "<on start>".to_string(),
             HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+            HandlerKind::AnyMessage => "<on message *>".to_string(),
             HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
             HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
         };

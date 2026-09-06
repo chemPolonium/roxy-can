@@ -269,9 +269,12 @@ impl ScriptNode {
         let matches: Vec<u16> = rt
             .handlers
             .iter()
-            .filter(|h| {
-                matches!(h.kind, HandlerKind::Message { id: mid } if
-                    mid == id && extended == (mid > 0x7FF))
+            .filter(|h| match &h.kind {
+                // `on message *` sees every frame; a specific handler only
+                // its own class and id.
+                HandlerKind::AnyMessage => true,
+                HandlerKind::Message { id: mid } => *mid == id && extended == (*mid > 0x7FF),
+                _ => false,
             })
             .map(|h| h.chunk)
             .collect();
@@ -710,6 +713,45 @@ mod tests {
         }
         fn ext_count(n: &ScriptNode) -> usize {
             n.log_snapshot().iter().filter(|l| *l == "ext").count()
+        }
+    }
+
+    /// `on message *` sees every frame on the channel; specific handlers
+    /// still fire for their own ids, in declaration order.
+    #[test]
+    fn a_wildcard_handler_sees_every_frame() {
+        let mut n = node(
+            r#"
+                let hits = 0;
+                on message * {
+                    hits = hits + 1;
+                    print("any", frame_byte(0));
+                }
+                on message 0x55 { print("specific"); }
+            "#,
+        );
+        n.start(None);
+        let hit = HostInput {
+            now_s: 0.01,
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, &[7], &hit);
+        n.dispatch_frame(0, 0x55, false, &[9], &hit);
+        n.dispatch_frame(0, 0x1ABCDEF, true, &[11], &hit);
+        let log = n.log_snapshot();
+        assert_eq!(log[0], "any 7", "the wildcard saw 0x100");
+        // For 0x55 both handlers match and run in declaration order:
+        // the wildcard was declared first.
+        assert_eq!(log[1], "any 9");
+        assert_eq!(log[2], "specific");
+        assert_eq!(log[3], "any 11", "the wildcard saw the extended frame");
+        assert_eq!(hits_of(&n), 3);
+
+        fn hits_of(n: &ScriptNode) -> usize {
+            n.log_snapshot()
+                .iter()
+                .filter(|l| l.starts_with("any "))
+                .count()
         }
     }
 

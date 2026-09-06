@@ -43,6 +43,9 @@ pub enum OnKind {
     Start,
     /// A frame with this identifier arrived on the node's channel.
     Message { id: u32 },
+    /// Every frame on the node's channel, whatever its id: the gateway /
+    /// logger shape. `on message *`.
+    AnyMessage,
     /// A periodic tick every `period_ms` milliseconds.
     Timer { period_ms: u64 },
     /// A named one-shot: idle until `set_timer(name, ms)` arms it from
@@ -245,8 +248,13 @@ impl P {
         let kind = match word.as_str() {
             "start" => OnKind::Start,
             "message" => {
-                let id = self.id_literal()?;
-                OnKind::Message { id }
+                // `on message *`: every frame, whatever its id.
+                if self.eat(&Tok::Star) {
+                    OnKind::AnyMessage
+                } else {
+                    let id = self.id_literal()?;
+                    OnKind::Message { id }
+                }
             }
             "timer" => {
                 // A number declares a periodic tick; a string names a

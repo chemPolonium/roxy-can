@@ -121,6 +121,18 @@ on message 0x1C3D1E5 {
 }
 ```
 
+### on message \*
+
+收到本信道**任何帧**时触发（含错误帧，此时 `frame_dlc()` 为 0），
+配合 `frame_byte` 可写网关、记录器、协议嗅探节点。
+注意节点也会收到自己 `send` 出去的帧——在通配处理器里无条件发帧会自激成环。
+
+```c
+on message * {
+    print("seen 0x", frame_dlc(), "byte0", frame_byte(0));
+}
+```
+
 ### on timer \<ms\>
 
 周期定时器，每 N 毫秒触发一次。
