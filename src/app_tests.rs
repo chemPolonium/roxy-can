@@ -2899,11 +2899,7 @@ fn a_shared_numeric_id_aggregates_as_two_messages() {
     let db = app.channel_dbc(0).expect("sample DBC loaded");
     // Standard 0x100 exists in the sample database; the extended twin
     // deliberately does not, so only the extended class reads Unknown.
-    let std_id = db
-        .order
-        .iter()
-        .find(|&&(_, ext)| !ext)
-        .map(|&(id, _)| id);
+    let std_id = db.order.iter().find(|&&(_, ext)| !ext).map(|&(id, _)| id);
     let Some(std_id) = std_id else {
         panic!("sample database has a standard message");
     };
