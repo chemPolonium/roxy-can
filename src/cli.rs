@@ -1,6 +1,7 @@
 //! The headless command line: replay a CAN log with no window, record it
-//! to a fresh file, and/or dump the message statistics -- the same bus core
-//! the GUI drives, hand-cranked against the wall clock on the manual drive.
+//! to a fresh file, dump the message statistics, or syntax-check node
+//! scripts -- the same bus core the GUI drives, hand-cranked against the
+//! wall clock on the manual drive.
 
 use crate::app::App;
 
@@ -13,6 +14,8 @@ pub enum Cli {
     Help(String),
     /// Run the replay headless.
     Run(CliOpts),
+    /// Compile node scripts and report; exit non-zero on any failure.
+    CheckScripts(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -30,6 +33,9 @@ pub fn usage() -> &'static str {
 
   roxy-can                       open the workspace window (default)
   roxy-can --replay <log> ...    replay a CAN log without any window
+  roxy-can --check-script <f>    compile node scripts, no window needed
+                                 (repeat the flag for more files; non-zero
+                                 exit when any script fails)
 
 replay options
   --replay <path>    log to replay (.asc or .blf)
@@ -51,6 +57,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
+    let mut scripts = Vec::new();
     let mut i = 0;
     while i < args.len() {
         // Reads the value after `flag`, refusing an empty or missing one.
@@ -63,6 +70,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         }
         match args[i].as_str() {
             "--replay" => replay = Some(value(args, &mut i, "--replay")?),
+            "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--speed" => {
                 let raw = value(args, &mut i, "--speed")?;
                 speed = raw
@@ -86,6 +94,12 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             other => return Err(format!("unknown flag `{other}`")),
         }
         i += 1;
+    }
+    if !scripts.is_empty() {
+        if replay.is_some() {
+            return Err("`--check-script` runs headless on its own; drop `--replay`".to_string());
+        }
+        return Ok(Cli::CheckScripts(scripts));
     }
     let replay = replay.ok_or("`--replay <log.asc|log.blf>` is required")?;
     Ok(Cli::Run(CliOpts {
@@ -171,6 +185,36 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
         report.push_str(&format!("  stats csv  : {csv}\n"));
     }
     Ok(report)
+}
+
+/// Compiles each node script and reports the outcome per file. A file that
+/// fails to read or compile prints its error and makes the whole run fail,
+/// so a CI job or a pre-save hook can refuse broken scripts. Success prints
+/// one `ok` line per script.
+pub fn check_scripts(paths: &[String]) -> Result<String, String> {
+    let mut lines = Vec::new();
+    let mut failed = false;
+    for path in paths {
+        match std::fs::read_to_string(path) {
+            Ok(src) => match crate::script::compile(&src) {
+                Ok(script) => lines.push(format!(
+                    "ok      {path} ({} handlers)",
+                    script.handlers.len()
+                )),
+                Err(e) => {
+                    lines.push(format!("failed {path}\n  {e}"));
+                    failed = true;
+                }
+            },
+            Err(e) => {
+                lines.push(format!("failed {path}\n  {e}"));
+                failed = true;
+            }
+        }
+    }
+    let mut report = lines.join("\n");
+    report.push('\n');
+    if failed { Err(report) } else { Ok(report) }
 }
 
 /// Release builds ship with `windows_subsystem = "windows"`: no console is

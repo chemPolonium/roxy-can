@@ -77,11 +77,66 @@ fn usage_errors_name_their_flag() {
             "--speed must be a positive number",
         ),
         (&["--speed", "2"], "--replay"), // run needs its log
+        (
+            &["--check-script", "a.capl", "--replay", "a.asc"],
+            "drop `--replay`",
+        ),
     ];
     for (args, needle) in cases {
         let err = parse_args(&flag_set(args)).unwrap_err();
         assert!(err.contains(needle), "`{err}` should mention `{needle}`");
     }
+}
+
+#[test]
+fn check_script_flags_collect_files() {
+    let cli = parse_args(&flag_set(&["--check-script", "a.capl"])).unwrap();
+    match cli {
+        Cli::CheckScripts(files) => assert_eq!(files, ["a.capl"]),
+        other => panic!("expected CheckScripts, got {other:?}"),
+    }
+    let cli = parse_args(&flag_set(&[
+        "--check-script",
+        "a.capl",
+        "--check-script",
+        "b.capl",
+    ]))
+    .unwrap();
+    match cli {
+        Cli::CheckScripts(files) => assert_eq!(files, ["a.capl", "b.capl"]),
+        other => panic!("expected CheckScripts, got {other:?}"),
+    }
+}
+
+/// The checker is the automation story for `.capl` files: a broken script
+/// must name its file and its compile error, a good one must pass.
+#[test]
+fn check_scripts_compile_and_report() {
+    use super::check_scripts;
+    let dir = std::env::temp_dir();
+    let good = dir.join("roxy_can_check_good.capl");
+    let bad = dir.join("roxy_can_check_bad.capl");
+    let missing = dir.join("roxy_can_check_missing.capl");
+    std::fs::write(&good, "on start { print(\"up\"); }").unwrap();
+    std::fs::write(&bad, "on timer 0 { }").unwrap();
+
+    let ok = check_scripts(&[good.to_string_lossy().to_string()]).unwrap();
+    assert!(ok.contains("ok"), "{ok}");
+    assert!(ok.contains("1 handlers"), "{ok}");
+
+    let report = check_scripts(&[
+        bad.to_string_lossy().to_string(),
+        missing.to_string_lossy().to_string(),
+    ])
+    .unwrap_err();
+    assert!(report.contains("positive"), "{report}");
+    assert!(
+        report.contains("(os error"),
+        "missing file explains itself: {report}"
+    );
+
+    std::fs::remove_file(&good).ok();
+    std::fs::remove_file(&bad).ok();
 }
 
 fn write_log(name: &str, frames: usize, step_us: u64) -> std::path::PathBuf {

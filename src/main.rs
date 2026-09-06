@@ -465,6 +465,17 @@ fn main() {
             // Printed the report; do not fall through into the window.
             return;
         }
+        Ok(cli::Cli::CheckScripts(paths)) => {
+            cli::attach_parent_console();
+            match cli::check_scripts(&paths) {
+                Ok(report) => println!("{report}"),
+                Err(report) => {
+                    eprintln!("{report}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Err(msg) => {
             cli::attach_parent_console();
             eprintln!("{msg}\n\n{}", cli::usage());
