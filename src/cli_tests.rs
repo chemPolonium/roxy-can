@@ -317,3 +317,44 @@ fn a_project_needs_a_duration_and_refuses_a_log() {
         assert!(err.contains(needle), "`{err}` should mention `{needle}`");
     }
 }
+
+/// The composite CI story end to end: a saved project whose script node
+/// transmits on a timer runs headless and the node's frames reach the
+/// stats export -- no window, no user, full fidelity.
+#[test]
+fn a_project_node_script_drives_a_headless_simulation() {
+    let mut app = crate::app::App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.send(crate::bus::BusCommand::SetNodes {
+        nodes: vec![crate::config::NodeCfg {
+            name: "beacon".to_string(),
+            channel: 0,
+            source: "on timer 50 { send(0x555, 1); }".to_string(),
+            enabled: true,
+        }],
+    });
+    app.settle();
+    let project = std::env::temp_dir().join("roxy_can_cli_node.rxproj");
+    assert!(app.save_project(Some(project.clone())), "save writes");
+    app.stop();
+
+    let report = run(&CliOpts {
+        replay: None,
+        project: Some(project.to_string_lossy().into_owned()),
+        speed: 1.0,
+        duration_s: Some(0.3),
+        stats_csv: None,
+    })
+    .unwrap();
+    let frames: u64 = report
+        .lines()
+        .find_map(|l| l.strip_prefix("  frames     : "))
+        .expect("the report counts frames")
+        .parse()
+        .unwrap();
+    assert!(
+        frames >= 3,
+        "a 50 ms node timer must drive traffic for 0.3 s: {report}"
+    );
+    std::fs::remove_file(&project).ok();
+}
