@@ -345,9 +345,10 @@ impl Vm {
             Op::CallHost(id, argc) => self.call_host(id as usize, argc as usize)?,
             Op::CallExtern(c, argc) => {
                 // Runtime-resolved extension call: name from the
-                // constant pool, dispatched through the host's extern
-                // hook. Unclaimed names are runtime errors -- the
-                // compiler cannot know what the host registers.
+                // constant pool. Registered extern components claim
+                // the name first; otherwise the host's per-node extern
+                // hook answers. Unclaimed names are runtime errors --
+                // the compiler cannot know what the host registers.
                 let Value::Str(name) = self.script.constants[c as usize].clone() else {
                     return Err(VmError("extern name constant must be a string".into()));
                 };
@@ -355,14 +356,17 @@ impl Vm {
                     return Err(VmError("stack underflow in extern call".into()));
                 }
                 let args: Vec<Value> = self.stack.split_off(self.stack.len() - argc as usize);
-                let result = match self.host_extern.as_mut() {
-                    Some(f) => f(&name, &args),
-                    None => Ok(None),
+                let claimed = match super::extern_lookup(&name) {
+                    Some(f) => Some(f(&args)),
+                    None => self.host_extern.as_mut().map(|f| f(&name, &args)),
                 };
-                match result {
-                    Ok(Some(v)) => self.stack.push(v),
-                    Ok(None) => return Err(VmError(format!("unknown function '{name}'"))),
-                    Err(e) => return Err(VmError(e)),
+                match claimed {
+                    // A registered extern's Ok(None) means "returns
+                    // nothing": the name was claimed, so nil it is.
+                    Some(Ok(None)) => self.stack.push(Value::Nil),
+                    Some(Ok(Some(v))) => self.stack.push(v),
+                    Some(Err(e)) => return Err(VmError(e)),
+                    None => return Err(VmError(format!("unknown function '{name}'"))),
                 }
             }
             Op::Pop => {
