@@ -743,6 +743,7 @@ impl Config {
                                 send_id = id;
                                 2
                             }
+                            TriggerAction::ClearTrace => 3,
                         },
                         send_ch,
                         send_id,
@@ -1016,6 +1017,7 @@ impl Config {
                         ch: c.send_ch,
                         id: c.send_id,
                     },
+                    3 => TriggerAction::ClearTrace,
                     _ => TriggerAction::StartRecording,
                 };
                 let mut t = crate::trigger::Trigger::new(cond, action);

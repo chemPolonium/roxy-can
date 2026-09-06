@@ -58,7 +58,15 @@ pub enum TriggerCond {
 pub enum TriggerAction {
     StartRecording,
     StopRecording,
-    Send { ch: u8, id: u32 },
+    Send {
+        ch: u8,
+        id: u32,
+    },
+    /// Blanks the trace ring on the edge: a clean window at the moment
+    /// something interesting happened, and the manual way to re-arm a
+    /// latched appearance watch. Aggregates, spec memory and the
+    /// recorder are deliberately untouched.
+    ClearTrace,
 }
 
 /// One armed condition plus its edge state and fire history.

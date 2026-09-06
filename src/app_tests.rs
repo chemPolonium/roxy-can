@@ -3232,6 +3232,59 @@ fn an_id_present_trigger_latches_and_can_stop_a_recording() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
+/// The manual re-arm for appearance watches: the edge blanks the trace
+/// ring but leaves aggregates, spec memory and the recorder alone.
+#[test]
+fn a_clear_trace_trigger_empties_the_ring_and_nothing_else() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::ClearTrace,
+    ));
+    app.recorder.recording = true;
+    app.recorder.open().unwrap();
+
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x100, 8, FrameFlags::NONE)],
+    );
+    assert!(app.trace.len() == 1, "traffic landed");
+    assert!(app.snap.frame_counter == 1);
+    assert!(app.recorder.recording, "the recorder is untouched");
+
+    receive(
+        &mut app,
+        20_000,
+        vec![rx_frame(20_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    // The evaluator runs before the frame folds in: the ring was emptied
+    // and then the triggering frame itself landed.
+    assert_eq!(app.trace.len(), 1, "cleared, then the trigger frame lands");
+    assert_eq!(app.trace.iter().next().map(|f| f.id), Some(0x777));
+    assert!(
+        app.aggs.contains_key(&(0, 0x100, false)),
+        "aggregates survive the clear"
+    );
+    assert!(app.recorder.recording, "still recording after the clear");
+
+    // The ring keeps working afterwards. The IdPresent condition itself
+    // still latches for the run -- the action clears the view, not the
+    // condition's memory.
+    receive(
+        &mut app,
+        30_000,
+        vec![rx_frame(30_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert_eq!(app.trace.len(), 2, "the ring refills after a clear");
+    assert_eq!(
+        app.triggers[0].fired, 1,
+        "the condition's own latch is untouched"
+    );
+    app.recorder.close();
+    std::fs::remove_file(&app.recorder.last_record).ok();
+}
+
 #[test]
 fn an_error_frame_trigger_latches_once_per_run() {
     let mut app = quiet_app();

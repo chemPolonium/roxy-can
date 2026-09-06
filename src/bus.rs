@@ -2366,6 +2366,11 @@ impl BusCore {
                 TriggerAction::Send { ch, id } => {
                     self.send_one_shot(ch, id, at_us, mirror);
                 }
+                TriggerAction::ClearTrace => {
+                    self.trace.clear();
+                    self.publish_trace();
+                    *status = "trigger cleared the trace".to_string();
+                }
             }
         }
     }
