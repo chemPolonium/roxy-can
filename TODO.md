@@ -171,9 +171,15 @@
    落地：`SignalInfo.mux_when` 存条件列表（开关名 + 闭区间集），`mN` 生成单值条件、`mNM` 嵌套在加载时继承祖先开关条件、`SG_MUL_VAL_` 按区间直接 gating（多区间、多开关、覆盖 `m` 标记三案都有测试）；Trace / Messages / Data / Graphics 同走 `decode_signals`，切组后旧组信号立即消失。已知边界：`MuxCondition` 引用消息里不存在的开关时按"无条件"放行（坏库仍显示数据而不是空解码）。
 2. ~~**VAL_ 值表**~~ ✅ 0.7.0
    落地：`SymbolTable.value_tables` 按（报文， 信号）收 `VAL_` 枚举，解码按符号扩展后的原始值匹配（负 id 可标注有符号信号）；Messages / Data / Graphics 显示 `(标签)`，Data 导出的 CSV 给 `value` 裸值与 `label` 文本两列。`VAL_TABLE_` 命名表引用仍不可解析（can-dbc-pest 无该产生式，已有测试钉住）。
-3. **标准帧与扩展帧共用裸 `u32` 做键**（未动）
-   现状：聚合与 DBC 都只用裸 ID（0.6.0 明确接受并写进了 README），所以 `0x123` 标准帧与 `0x123` 扩展帧互相顶名，会假报 Unknown / Dlc、也会让两个观测器读到同一份聚合。
-   要做：键改成 `(id, extended)`。这是有传染性的改动（`aggs`、`spec`、DBC 查表、导出、工程文件里的 ID 集合），先想清楚迁移再动。
+3. **标准帧与扩展帧共用裸 `u32` 做键**（2026-09-07 完成迁移侦察；脚本节点侧已修 ✅ 57d66d4）
+   侦察结论（当时 v0.6.0 说"aggs、spec、DBC 查表、导出、工程文件"——复核后点位如下）：
+   - **根**：`dbc.rs::msg_id_of` 把 `MessageId::Standard/Extended` 折叠成裸 u32，`messages`/`declared_cycles`/`value_tables` 三张表都因此无法区分两类帧；同值冲突时后者覆盖前者，解码会拿错声明。
+   - **主干**：`bus.rs` `aggs: HashMap<(u8,u32), MessageAgg>`——`MessageAgg` 值里有 `extended` 字段但键不用它，两类帧互相覆写。
+   - **分支**：`bus.rs` `subs: (u8,u32,String)`（订阅键无 extended 位）；`spec.rs previous: (u8,u32)`。
+   - **UI 查表十处**：`idfilter.rs:216/330`、`ui/spec.rs:36`、`ui/state.rs:273/723/729`、`trace.rs:304`、`tx.rs:69/157/580`，各处上下文里多数拿得到帧的 extended，少数（如 sub 键推导）要随订阅键一起补位。
+   - **迁移顺序**（每步保持可编译、测试全绿）：① DBC 三表键改 `(u32, bool)`、`MessageInfo` 带 `extended`，`decode_signals(&CanFrame)` 天然拿对 → ② `aggs`/`spec.previous` 键加位（帧上下文都有）→ ③ 订阅键 `(u8,u32,bool,String)` + `SignalCfg`/工程持久化加字段（serde 默认 false，老工程照载）→ ④ UI 十处查表按上下文补 extended。
+   - 脚本语言侧已一致：`on message`/`send` 都按"id ≤ 0x7FF 标准帧、>0x7FF 扩展帧"划类（57d66d4），`set_sig` 编码沿用同规则即可。
+   - 侦察时点为 0.9.0；动手前再跑一遍上述行号。
 4. ~~**`SigType` / 单位的显示口径**~~ ✅ 0.7.0
    落地：每个信号带 `type_tag`（`u8`/`i16`/`f32`/`f64`），值后统一显示 `[u16]` 型标记；`SIG_VALTYPE_` 声明的浮点按位模式解码（can-dbc 约定 0=整型 1=f32 2=f64，与 Vector 文档的 0/1 约定不同，以解析器为准）；整型按需显示小数，`fmt_decoded`/`fmt_signal_value` 是唯一的格式化出口。min/max 仍只在生成器夹范围，未显示。
 

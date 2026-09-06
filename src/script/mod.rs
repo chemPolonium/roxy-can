@@ -490,6 +490,33 @@ mod tests {
         );
     }
 
+    /// Everything in examples/ must keep compiling against the real
+    /// compiler, so the samples never rot behind the language.
+    #[test]
+    fn the_example_scripts_compile() {
+        for entry in std::fs::read_dir("examples").expect("examples dir exists") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().is_some_and(|e| e == "capl") {
+                let src = std::fs::read_to_string(&path).unwrap();
+                compile(&src).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            }
+        }
+    }
+
+    /// Waveform builtins answer in floats; the payload paths truncate so
+    /// a wave can flow straight into a byte.
+    #[test]
+    fn payload_bytes_truncate_floats() {
+        assert_eq!(
+            out("let b = bytes(2); b[0] = ramp(0, 255, 1.0); print(b[0]);"),
+            ["0"]
+        );
+        assert_eq!(
+            err("send(0x100, 256);"),
+            "line 1: send: data byte must be 0..255, got 256"
+        );
+    }
+
     #[test]
     fn runtime_errors_stop_the_vm() {
         assert!(err("print(1 / 0);").contains("zero"));

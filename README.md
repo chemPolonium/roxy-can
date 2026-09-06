@@ -13,6 +13,7 @@
 - **总线负载统计**：Statistics 窗口顶部按总线给出线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；仲裁与 CAN FD 数据段比特率按总线设置，BRS 载荷按数据段速率计费
 - **Interactive Generator**：DBC 报文即开即用，按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random 激励随仿真时间连续变化
 - **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；勾选 **Simulate this node** 即按 DBC 声明的周期模拟整个 ECU
+- **仿真节点**：类 CAPL 脚本语言（编译成字节码跑在自带 VM 上）驱动的自定义 ECU 节点——`on start` / `on message` / `on timer` 事件驱动，读写 DBC 信号、收发帧、周期与一次性定时器、随机与波形内建；每回调 10 万指令预算，坏脚本卡不死总线。语言参考见 `docs/script_language.md`，可运行示例见 `examples/`
 - **Specification（规格监视）**：实测流量与数据库声明逐条对账，四类判定——Unknown（未知 ID）、Dlc（长度不符）、Cycle（周期漂移）、Missing（掉线）；容差与宽限可调并随工程保存
 - **录制与回放**：读写 Vector ASC（经典 / FD / 错误 / 远程帧），读取 Vector BLF（raw 与 zlib 压缩容器）；大文件走 mmap 流式加载；播放器式走带控制——倍速增减、倍速直选、可拖动时间轴任意定位
 - **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、窗口布局全部存一个 JSON；DBC 路径相对工程目录，工程文件夹可整体移动；30 秒自动保存，异常退出后恢复
@@ -56,6 +57,25 @@ cargo test
 3. **Measurement Setup**：新增各类观测窗口、选择信号范围、逐个导出；Data / Graphics 的信号在 Signal Selection 弹窗里跨总线勾选
 4. 勾选 **Record** 录制 ASC
 5. 总线挂了 DBC 之后，**View → Specification** 查看实测流量与数据库声明的对账结果
+
+## 仿真节点
+
+**View → Nodes** 打开节点面板：新建节点、绑定总线、贴入脚本（或保存/加载 `.capl` 文件）、Apply 后随测量启动。一门 C 风格的小语言编译成字节码执行，事件驱动产生总线行为：
+
+```c
+// 收到请求 200ms 后应答（完整示例见 examples/）
+on message 0x6A0 {
+    set_timer("resp", 200);
+}
+
+on timer "resp" {
+    send(0x6A1, frame_byte(0) + 0x40, 0x01);
+}
+```
+
+- 内建覆盖：收发帧、DBC 信号读写（`sig` / `set_sig` / `get_sig`）、周期与一次性定时器、帧数据访问、随机数、五类波形（与 TX 发生器共用求值器）、数学与位运算
+- 节点日志走 `print`，面板里直接看；编译/运行错误带行号列号，出错节点熔断待恢复
+- 节点源码、绑定与启用状态随工程（`.rxproj`）保存
 
 ## 主要依赖
 

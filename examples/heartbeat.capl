@@ -1,0 +1,29 @@
+// 心跳节点：周期发一条报文，载荷里带滚动计数器与方波、斜波信号。
+// 挂到任意总线即可运行，不需要 DBC。
+//
+// 字节布局：
+//   byte 0  滚动计数器 0..15，每 100ms 加一
+//   byte 1  方波（前半周期 0，后半周期 255）
+//   byte 2  斜波 0..255 随 4s 周期循环
+//   byte 3  正弦波中心 128、振幅 120
+
+let counter = 0;
+
+on start {
+    print("heartbeat up at", now());
+}
+
+on timer 100 {
+    counter = (counter + 1) % 16;
+    // 波形内建返回浮点，send 会自动截断成字节；它们与 TX 发生器
+    // 共用同一套求值器，同参数下逐采样一致。
+    send(0x620, counter,
+         square(0, 255, 2.0),
+         ramp(0, 255, 4.0),
+         clamp(sine_wave(128, 120, 3.0), 0, 255));
+}
+
+on timer 5000 {
+    // 周期更慢的第二个定时器：只是报个平安。
+    print("alive, counter =", counter);
+}

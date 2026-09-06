@@ -1,0 +1,34 @@
+// 信号监视节点：读 DBC 信号、限值判断、写字节缓冲再转发。
+// 需要所在总线加载了 DBC（信号读写走数据库编解码）。
+//
+// 行为：
+//   - 收到 0x100 时读物理信号 EngineSpeed，打印原始值与处理后结果
+//   - 周期 500ms 把 0x100 的前两个字节原样搬进 0x101 的后两个字节，
+//     组一条"中继报文"
+//
+// 注意：sig() 读的是本节点所在信道最新解码出的物理值，必须等该
+// 报文至少出现过一次才有读数，所以读取放在 on message 里最稳。
+
+let rpm = 0.0;
+let relay = bytes(8);
+
+on message 0x100 {
+    rpm = sig(0x100, "EngineSpeed");
+    print("rpm:", rpm, "limited:", clamp(rpm, 0, 5000));
+
+    if (rpm > 4500) {
+        print("WARN high rpm at", now());
+    }
+
+    // 把物理值写回另一条报文的信号（数据库里 0x101 需有同名信号）。
+    set_sig(relay, 0x101, "EngineSpeedMirror", rpm);
+
+    // 缓冲元素赋值：浮点自动截断成字节。
+    relay[7] = 0xAA;
+    send(0x101, relay);
+}
+
+on timer 500 {
+    // len() 读缓冲长度；bit_and 抽位。
+    print("relay dlc =", len(relay), "headroom =", bit_and(relay[7], 0x0F));
+}

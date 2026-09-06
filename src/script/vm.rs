@@ -284,8 +284,17 @@ impl Vm {
                 let Value::Int(i) = idx else {
                     return Err(VmError("index must be an int".into()));
                 };
-                let Value::Int(byte) = value else {
-                    return Err(VmError("buffer elements must be ints".into()));
+                // Floats truncate, matching `send`: a waveform value can
+                // flow straight into a buffer element.
+                let byte = match value {
+                    Value::Int(n) => n,
+                    Value::Float(f) if f.is_finite() => f.trunc() as i64,
+                    other => {
+                        return Err(VmError(format!(
+                            "buffer elements must be ints, got {}",
+                            kind(&other)
+                        )));
+                    }
                 };
                 if !(0..=255).contains(&byte) {
                     return Err(VmError(format!(
@@ -493,15 +502,25 @@ impl Vm {
                     }
                     let mut data = Vec::with_capacity(args.len() - 1);
                     for b in &args[1..] {
-                        match b {
-                            Value::Int(n) if (0..=255).contains(n) => data.push(*n as u8),
+                        // Floats truncate: a waveform value flows straight
+                        // into the payload, `send(0x100, floor(ramp(...)))`
+                        // and `send(0x100, ramp(...))` agree.
+                        let n = match b {
+                            Value::Int(n) => *n,
+                            Value::Float(f) if f.is_finite() => f.trunc() as i64,
                             other => {
                                 return Err(VmError(format!(
                                     "send: data byte must be 0..255, got {}",
                                     kind(other)
                                 )));
                             }
+                        };
+                        if !(0..=255).contains(&n) {
+                            return Err(VmError(format!(
+                                "send: data byte must be 0..255, got {n}"
+                            )));
                         }
+                        data.push(n as u8);
                     }
                     data
                 };
