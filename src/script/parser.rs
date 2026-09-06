@@ -46,6 +46,8 @@ pub enum OnKind {
     /// Every frame on the node's channel, whatever its id: the gateway /
     /// logger shape. `on message *`.
     AnyMessage,
+    /// An error frame arrived on the node's channel (`on errorFrame`).
+    ErrorFrame,
     /// A periodic tick every `period_ms` milliseconds.
     Timer { period_ms: u64 },
     /// A named one-shot: idle until `set_timer(name, ms)` arms it from
@@ -268,8 +270,11 @@ impl P {
                     },
                 }
             }
+            "errorframe" | "errorFrame" => OnKind::ErrorFrame,
             other => {
-                return self.err(&format!("unknown event '{other}' (start, message, timer)"));
+                return self.err(&format!(
+                    "unknown event '{other}' (start, message, timer, errorFrame)"
+                ));
             }
         };
         self.fn_depth += 1;

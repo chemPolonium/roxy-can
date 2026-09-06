@@ -21,6 +21,10 @@
 //!     send(0x200, rpm * 2);           // raw payload: int bytes 0..255
 //! }
 //!
+//! on message * {                      // every frame, whatever its id
+//!     if (frame_dlc() > 0) { print(frame_id(), frame_byte(0)); }
+//! }
+//!
 //! on timer 100 {                      // every 100 ms
 //!     let buf = bytes(8);             // zero-filled byte buffer
 //!     buf[0] = 0xAB;                  // element store (0..255)
@@ -28,6 +32,10 @@
 //!     send(0x200, buf);               // buffer as payload
 //!     print("t", now(), limit(buf[0]));                  // text log
 //! }
+//!
+//! on timer "resp" {                   // named one-shot: fires once per
+//!     send(0x200, frame_id());        // `set_timer("resp", ms)` armed
+//! }                                   // from any handler (e.g. on message)
 //! ```
 //!
 //! Types: int, float, bool, string, bytes (reference semantics). Math is
@@ -183,6 +191,8 @@ pub enum HandlerKind {
     },
     /// Every frame on the channel (`on message *`).
     AnyMessage,
+    /// An error frame arrived (`on errorFrame`).
+    ErrorFrame,
     Timer {
         period_ms: u64,
     },

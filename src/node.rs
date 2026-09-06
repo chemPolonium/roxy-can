@@ -240,13 +240,15 @@ impl ScriptNode {
     /// `data` is the triggering frame's payload, exposed to `on message`
     /// handlers via `frame_byte(n)` / `frame_dlc()`. A handler whose id
     /// sits in the standard range matches standard frames only; a larger
-    /// handler id names a 29-bit extended frame, mirroring `send`.
+    /// handler id names a 29-bit extended frame, mirroring `send`. Error
+    /// frames only reach `on errorFrame` handlers.
     /// Returns the frames the script queued.
     pub fn dispatch_frame(
         &mut self,
         channel: u8,
         id: u32,
         extended: bool,
+        is_error: bool,
         data: &[u8],
         input: &HostInput,
     ) -> Vec<(u32, Vec<u8>)> {
@@ -271,10 +273,13 @@ impl ScriptNode {
             .handlers
             .iter()
             .filter(|h| match &h.kind {
-                // `on message *` sees every frame; a specific handler only
-                // its own class and id.
-                HandlerKind::AnyMessage => true,
-                HandlerKind::Message { id: mid } => *mid == id && extended == (*mid > 0x7FF),
+                // Error frames belong to `on errorFrame` alone; regular
+                // handlers never see them.
+                HandlerKind::ErrorFrame => is_error,
+                HandlerKind::AnyMessage => !is_error,
+                HandlerKind::Message { id: mid } => {
+                    !is_error && *mid == id && extended == (*mid > 0x7FF)
+                }
                 _ => false,
             })
             .map(|h| h.chunk)
@@ -578,7 +583,7 @@ mod tests {
         assert_eq!(n.log_snapshot(), ["hello"]);
 
         // A watched frame queues the reaction payload.
-        let out = n.dispatch_frame(0, 0x100, false, &[], &HostInput::default());
+        let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert_eq!(out, vec![(0x200, vec![1, 2])]);
 
         // Timers arm lazily one period out (armed at 50 ms -> first due
@@ -593,10 +598,10 @@ mod tests {
         // An error in a handler stops the node until restart.
         let mut bad = node("on message 0x100 { print(1 / 0); }");
         bad.start(None);
-        bad.dispatch_frame(0, 0x100, false, &[], &HostInput::default());
+        bad.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert!(bad.errored());
         assert!(
-            bad.dispatch_frame(0, 0x100, false, &[], &HostInput::default())
+            bad.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default())
                 .is_empty(),
             "errored nodes stay quiet"
         );
@@ -668,12 +673,12 @@ mod tests {
         let mut n = node("on message 0x100 { send(0x200); }");
         n.start(None);
         assert!(
-            n.dispatch_frame(1, 0x100, false, &[], &HostInput::default())
+            n.dispatch_frame(1, 0x100, false, false, &[], &HostInput::default())
                 .is_empty(),
             "other channel"
         );
         assert_eq!(
-            n.dispatch_frame(0, 0x100, false, &[], &HostInput::default())
+            n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default())
                 .len(),
             1
         );
@@ -692,21 +697,21 @@ mod tests {
         n.start(None);
         // Standard 0x100 fires the standard handler only.
         assert_eq!(
-            n.dispatch_frame(0, 0x100, false, &[], &HostInput::default())
+            n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default())
                 .len(),
             0
         );
         assert_eq!(std_count(&n), 1);
         // Extended 0x100 fires nothing: no handler names an extended
         // frame with that id.
-        n.dispatch_frame(0, 0x100, true, &[], &HostInput::default());
+        n.dispatch_frame(0, 0x100, true, false, &[], &HostInput::default());
         assert_eq!(std_count(&n), 1);
         // Extended 0x1C3D1E5 fires the extended handler only.
-        n.dispatch_frame(0, 0x1C3D1E5, true, &[], &HostInput::default());
+        n.dispatch_frame(0, 0x1C3D1E5, true, false, &[], &HostInput::default());
         assert_eq!(std_count(&n), 1);
         assert_eq!(ext_count(&n), 1);
         // The same id arriving as standard fires nothing.
-        n.dispatch_frame(0, 0x1C3D1E5, false, &[], &HostInput::default());
+        n.dispatch_frame(0, 0x1C3D1E5, false, false, &[], &HostInput::default());
         assert_eq!(ext_count(&n), 1);
 
         fn std_count(n: &ScriptNode) -> usize {
@@ -736,9 +741,9 @@ mod tests {
             now_s: 0.01,
             ..HostInput::default()
         };
-        n.dispatch_frame(0, 0x100, false, &[7], &hit);
-        n.dispatch_frame(0, 0x55, false, &[9], &hit);
-        n.dispatch_frame(0, 0x1ABCDEF, true, &[11], &hit);
+        n.dispatch_frame(0, 0x100, false, false, &[7], &hit);
+        n.dispatch_frame(0, 0x55, false, false, &[9], &hit);
+        n.dispatch_frame(0, 0x1ABCDEF, true, false, &[11], &hit);
         let log = n.log_snapshot();
         assert_eq!(log[0], "any 7 256", "the wildcard saw 0x100");
         // For 0x55 both handlers match and run in declaration order:
@@ -759,6 +764,34 @@ mod tests {
         }
     }
 
+    /// Error frames belong to `on errorFrame` alone: wildcard and
+    /// id handlers never see them.
+    #[test]
+    fn an_error_frame_reaches_only_the_error_handler() {
+        let mut n = node(
+            r#"
+                let errors = 0;
+                on message * {
+                    print("any", frame_dlc());
+                }
+                on errorFrame {
+                    errors = errors + 1;
+                    print("err", errors);
+                }
+            "#,
+        );
+        n.start(None);
+        // An error frame carries no payload and no regular handler runs.
+        n.dispatch_frame(0, 0x1, false, true, &[], &HostInput::default());
+        let log = n.log_snapshot();
+        assert_eq!(log, ["err 1"], "only the error handler ran: {log:?}");
+        // Regular traffic keeps flowing through the wildcard.
+        n.dispatch_frame(0, 0x100, false, false, &[1], &HostInput::default());
+        let log = n.log_snapshot();
+        assert_eq!(log.last().map(|l| l.as_str()), Some("any 1"));
+        assert_eq!(log.len(), 2, "no error handler fire on a data frame");
+    }
+
     /// The delayed-response shape: a frame arrives, the node answers one
     /// fixed delay later, exactly once per arming.
     #[test]
@@ -775,7 +808,8 @@ mod tests {
             ..HostInput::default()
         };
         assert!(
-            n.dispatch_frame(0, 0x100, false, &[], &hit).is_empty(),
+            n.dispatch_frame(0, 0x100, false, false, &[], &hit)
+                .is_empty(),
             "arming"
         );
         assert!(n.run_timers(100_000, &hit).is_empty(), "not yet due");
@@ -833,7 +867,7 @@ mod tests {
             now_s: 0.01,
             ..HostInput::default()
         };
-        n.dispatch_frame(0, 0x1, false, &[], &hit);
+        n.dispatch_frame(0, 0x1, false, false, &[], &hit);
         assert!(
             n.run_timers(500_000, &t0).is_empty(),
             "a cancelled one-shot never fires"
@@ -870,13 +904,13 @@ mod tests {
             now_s: 1.5,
             signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
         };
-        n.dispatch_frame(0, 0x100, false, &[], &input);
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1.5", "2400.0"]);
 
         // An unseen signal is a runtime error, not a silent zero.
         let mut n2 = node(r#"on message 0x100 { print(sig(0x100, "Nope")); }"#);
         n2.start(None);
-        n2.dispatch_frame(0, 0x100, false, &[], &HostInput::default());
+        n2.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert!(n2.errored(), "a missing signal must not read as zero");
     }
 
@@ -886,7 +920,7 @@ mod tests {
         // flag from its size when building the frame.
         let mut n = node("on message 0x100 { send(0x18FF10, 1); }");
         n.start(None);
-        let out = n.dispatch_frame(0, 0x100, false, &[], &HostInput::default());
+        let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert_eq!(out, vec![(0x18FF10, vec![1])]);
     }
 
@@ -924,7 +958,7 @@ BO_ 512 Status: 8 ECU
         // A later frame flushes the on-start send: the composed buffer
         // leaves as the payload, little-endian raw 4000 (1000 / 0.25) in
         // bytes 0-1.
-        let out = n.dispatch_frame(0, 0x1, false, &[], &HostInput::default());
+        let out = n.dispatch_frame(0, 0x1, false, false, &[], &HostInput::default());
         assert_eq!(out, vec![(0x200, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]);
     }
 }

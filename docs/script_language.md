@@ -123,13 +123,28 @@ on message 0x1C3D1E5 {
 
 ### on message \*
 
-收到本信道**任何帧**时触发（含错误帧，此时 `frame_dlc()` 为 0），
-配合 `frame_byte` 可写网关、记录器、协议嗅探节点。
+收到本信道**任何数据帧**时触发（错误帧只走 `on errorFrame`），
+配合 `frame_byte` / `frame_id` 可写网关、记录器、协议嗅探节点。
 注意节点也会收到自己 `send` 出去的帧——在通配处理器里无条件发帧会自激成环。
 
 ```c
 on message * {
-    print("seen 0x", frame_dlc(), "byte0", frame_byte(0));
+    if (frame_id() != 0x700) {   // 排除自己的转发帧
+        print("seen 0x", frame_id());
+    }
+}
+```
+
+### on errorFrame
+
+收到错误帧时触发。此时 `frame_dlc()` 为 0，`frame_byte(n)` 会越界报错。
+
+```c
+let errors = 0;
+
+on errorFrame {
+    errors = errors + 1;
+    print("error frame seen, total", errors);
 }
 ```
 
