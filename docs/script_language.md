@@ -202,12 +202,17 @@ let v = get_sig(buf, 0x200, "RPM");
 
 ## 波形内建
 
+周期波形与 TX 发生器共用同一套求值器，同参数下逐采样一致。
+
 | 内建 | 说明 |
 |------|------|
 | `ramp(lo, hi, period_s)` | 锯齿波，从 lo 线性升到 hi，周期 period_s 秒 |
-| `sine_wave(offset, amplitude, period_s)` | 正弦波，中心 offset，振幅 amplitude |
+| `triangle(lo, hi, period_s)` | 三角波，半周期处到达峰值 hi |
+| `square(lo, hi, period_s)` | 方波，前半周期 lo，后半周期 hi |
+| `counter(lo, hi, period_s)` | 滚动计数器，从 lo 到 hi 整步递增 |
+| `sine_wave(offset, amplitude, period_s)` | 正弦波，中心 offset，振幅 amplitude（独立参数化，起点在中心） |
 
-均以总线时钟为时基。
+均以总线时钟为时基。`hi < lo` 时 ramp/triangle/counter 反向。
 
 ## 其他内建
 

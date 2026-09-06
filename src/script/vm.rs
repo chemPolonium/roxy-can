@@ -3,6 +3,7 @@
 //! loop (S2: a runaway node callback) can never wedge the host.
 
 use super::{HostInput, Op, Script, Value};
+use crate::sim::{SrcKind, ValueSrc, eval_phys};
 
 /// Where `print` output goes. The node runtime will plug its log ring in
 /// here; tests collect into a `Vec<String>`.
@@ -160,15 +161,6 @@ impl Vm {
                 return Ok(());
             }
         }
-    }
-
-    /// Pops three numeric args from the stack (in source order) as f64s.
-    fn pop3_f64(&mut self, what: &str) -> Result<(f64, f64, f64), VmError> {
-        let c = as_float(&self.pop()?);
-        let b = as_float(&self.pop()?);
-        let a = as_float(&self.pop()?);
-        let _ = what;
-        Ok((a, b, c))
     }
 
     /// The source line recorded for `ip` in `chunk`, if any mark exists.
@@ -647,21 +639,38 @@ impl Vm {
                 };
                 self.rng = seed as u64;
             }
-            "ramp" => {
-                // ramp(lo, hi, period_s): sawtooth from lo to hi, one
-                // cycle per period_s seconds of bus time.
-                let (lo, hi, period) = self.pop3_f64("ramp")?;
+            "ramp" | "triangle" | "square" | "counter" => {
+                // Periodic shapes share one evaluator with the TX
+                // generator, so a scripted wave matches a generator wave
+                // sample for sample. Square is sim's two-slot step.
+                let lo = as_float(&args[0]);
+                let hi = as_float(&args[1]);
+                let period = as_float(&args[2]);
                 if period <= 0.0 {
-                    return Err(VmError("ramp: period must be positive".into()));
+                    return Err(VmError(format!("{name}: period must be positive")));
                 }
-                let phase = (self.host_input.now_s % period) / period;
-                self.stack.push(Value::Float(lo + phase * (hi - lo)));
+                let kind = match name.as_str() {
+                    "ramp" => SrcKind::Ramp,
+                    "triangle" => SrcKind::Triangle,
+                    "square" => SrcKind::Step,
+                    _ => SrcKind::Counter,
+                };
+                let src = ValueSrc {
+                    // A sub-microsecond period is meaningless on CAN; hold
+                    // the sim fallback (one second) rather than zeroing.
+                    period_us: (period * 1_000_000.0).round().max(1.0) as u64,
+                    ..ValueSrc::new("wave", kind, lo, hi)
+                };
+                let t_us = (self.host_input.now_s.max(0.0) * 1_000_000.0) as u64;
+                self.stack.push(Value::Float(eval_phys(&src, t_us)));
                 return Ok(());
             }
             "sine_wave" => {
                 // sine_wave(offset, amplitude, period_s): a sine centred
                 // at `offset` with peak-to-peak `2 * amplitude`.
-                let (offset, amplitude, period) = self.pop3_f64("sine_wave")?;
+                let offset = as_float(&args[0]);
+                let amplitude = as_float(&args[1]);
+                let period = as_float(&args[2]);
                 if period <= 0.0 {
                     return Err(VmError("sine_wave: period must be positive".into()));
                 }
@@ -670,8 +679,6 @@ impl Vm {
                     .push(Value::Float(offset + amplitude * phase.sin()));
                 return Ok(());
             }
-            // Bitwise operations: int-only, essential for CAN field
-            // extraction and construction.
             // Bitwise operations: int-only, essential for CAN field
             // extraction and construction.
             "bit_and" | "bit_or" | "bit_xor" => {
@@ -896,6 +903,43 @@ mod tests {
         let mut vm = Vm::new(script);
         let e = vm.run().unwrap_err();
         assert!(e.to_string().contains("number"), "{e}");
+    }
+
+    /// The periodic shapes must match the TX generator sample for
+    /// sample: both evaluate through `sim::eval_phys`.
+    #[test]
+    fn periodic_waves_share_the_generator_evaluator() {
+        let script = compile(
+            "print(ramp(0, 100, 1)); \
+             print(triangle(0, 100, 1)); \
+             print(square(0, 100, 1)); \
+             print(counter(0, 15, 1.6));",
+        )
+        .unwrap();
+        let mut vm = Vm::new(script);
+        vm.host_input.now_s = 0.25;
+        vm.run().unwrap();
+        assert_eq!(
+            vm.output,
+            ["25.0", "50.0", "0.0", "2.0"],
+            "ramp rises, triangle peaks at half, square holds lo in the first half, counter is one step in"
+        );
+        // The sine builtin keeps its centred parameterisation.
+        let script = compile("print(sine_wave(10, 5, 1));").unwrap();
+        let mut vm = Vm::new(script);
+        vm.host_input.now_s = 0.25;
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["15.0"]);
+    }
+
+    #[test]
+    fn waves_reject_a_non_positive_period() {
+        for wave in ["ramp", "triangle", "square", "counter", "sine_wave"] {
+            let src = format!("print({wave}(0, 100, 0));");
+            let mut vm = Vm::new(compile(&src).unwrap());
+            let e = vm.run().unwrap_err();
+            assert!(e.to_string().contains("positive"), "{wave}: {e}");
+        }
     }
 
     #[test]
