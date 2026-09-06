@@ -505,14 +505,26 @@ impl Vm {
                     }
                 };
                 let data = if args.len() == 2 && matches!(args[1], Value::Bytes(_)) {
-                    // Single-buffer form: the buffer IS the payload.
+                    // Single-buffer form: the buffer IS the payload. Up to
+                    // 64 bytes; beyond 8 the core sends the frame as FD.
                     match &args[1] {
-                        Value::Bytes(b) => b.lock().expect("buffer poisoned").clone(),
+                        Value::Bytes(b) => {
+                            let buf = b.lock().expect("buffer poisoned").clone();
+                            if buf.len() > 64 {
+                                return Err(VmError(format!(
+                                    "send: payload up to 64 bytes, got {}",
+                                    buf.len()
+                                )));
+                            }
+                            buf
+                        }
                         _ => unreachable!(),
                     }
                 } else {
                     if args.len() - 1 > 8 {
-                        return Err(VmError("send: at most 8 data bytes".into()));
+                        return Err(VmError(
+                            "send: at most 8 data bytes for a classic frame".into(),
+                        ));
                     }
                     let mut data = Vec::with_capacity(args.len() - 1);
                     for b in &args[1..] {

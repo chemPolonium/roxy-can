@@ -722,6 +722,34 @@ mod tests {
         }
     }
 
+    /// A buffer payload past 8 bytes travels as CAN FD with a valid FD
+    /// length; the VM refuses anything past the 64-byte ceiling.
+    #[test]
+    fn long_buffers_travel_as_fd_frames() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    let fd = bytes(12);
+                    fd[11] = 0xEE;
+                    send(0x300, fd);
+                }
+            "#,
+        );
+        n.start(None);
+        let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 0x300);
+        assert_eq!(out[0].1.len(), 12);
+
+        let mut too_long = node("let big = bytes(65); send(0x300, big);");
+        too_long.start(None);
+        too_long.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        assert!(
+            too_long.errored(),
+            "past 64 bytes the send must fail the handler"
+        );
+    }
+
     /// `on message *` sees every frame on the channel; specific handlers
     /// still fire for their own ids, in declaration order.
     #[test]

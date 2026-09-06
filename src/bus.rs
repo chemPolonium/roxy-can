@@ -1036,19 +1036,28 @@ impl BusCore {
     }
 
     /// Frames the script queued: `dir` Tx, stamped on the bus's own
-    /// timeline; an id above 0x7FF travels extended.
+    /// timeline; an id above 0x7FF travels extended. A payload past 8
+    /// bytes becomes a CAN FD frame, snapped to a valid FD length exactly
+    /// like the generator's own emit path.
     fn node_frame(channel: u8, id: u32, data: &[u8], t_us: u64) -> CanFrame {
+        use crate::can::frame::{FrameFlags, dlc2len, len2dlc};
+        let data_len = data.len().min(crate::can::frame::MAX_CAN_FD_LEN);
+        let (len, flags) = if data_len > 8 {
+            (dlc2len(len2dlc(data_len as u8)), FrameFlags::FD)
+        } else {
+            (data_len as u8, FrameFlags::NONE)
+        };
         let mut buf = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
-        buf[..data.len()].copy_from_slice(data);
+        buf[..data_len].copy_from_slice(&data[..data_len]);
         CanFrame {
             t_us,
             channel,
             id,
             extended: id > 0x7FF,
-            len: data.len() as u8,
+            len,
             data: buf,
             dir: Direction::Tx,
-            flags: crate::can::frame::FrameFlags::NONE,
+            flags,
         }
     }
 
