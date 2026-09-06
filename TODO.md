@@ -10,14 +10,14 @@
 
 目标：像 CANoe 一样在总线上挂**自定义仿真节点**——节点由脚本（或将来的外部接口）驱动，按事件产生行为（向总线发帧、输出文本）。语言为 C 风格小子集，**编译成字节码**由自带 VM 执行；节点交互全部走文本（`print` 进日志窗口），不做 GUI 面板；**外部库调用在架构上预留**（`CallHost` 操作码 + 主机函数表，外部仿真元件将来注册进表即可），实现延后。
 
-- **S1 语言内核**（纯函数，零总线依赖）：
+- **S1 语言内核**（纯函数，零总线依赖）——✅ 已完成：
   - [x] 词法器：关键字/标识符/整数/浮点/字符串（转义）/运算符/`//` 与 `/* */` 注释/行号
   - [x] 语法器：`let`/赋值/`fn`/`if`-`else`/`while`/`for`（降糖）/`return`/块/调用，算术·比较·短路逻辑，优先级正确
   - [x] 字节码编译器 + 栈式 VM：常量池、全局与局部变量（块作用域）、用户函数调用与递归、主机调用（`CallHost` 架构缝）、指令预算与帧深上限
-  - [ ] 事件语法解析（`on message` / `on timer` / `on start`）→ 处理器表（先能编译，不接线）
+  - [x] 事件语法解析（`on message` / `on timer` / `on start`）→ 处理器表
 
-  第一刀已落地（2026-09-05，`src/script/`）：`mod.rs`（Value/Op/Script + `HOST_FNS` 主机函数表——print 为首个条目，外部库将来注册进此表）、`lexer.rs`、`parser.rs`（`for` 降糖成 init/while/step）、`compiler.rs`（两遍：先收函数签名支持前向调用；顶层 `let` 归全局，函数体用栈局部变量+块作用域，出作用域发 Pop）、`vm.rs`（栈帧、256 帧深上限、逐指令预算防死循环；`print` 汇入 output 向量——S2 换成节点日志环）。整数溢出/除零/类型错误都是可捕获的运行时错误，条件表达式必须是 bool。调试教训：`binary`/`compare` 里 pop2 已经排好序，再解构交换一次导致 7%3=3、1<2 为假——操作数顺序只在**一处**归一（pop2），其余地方直接用。
-- **S2 节点运行时**（接入核心线程）：
+  落地：`src/script/`（mod/lexer/parser/compiler/vm 五文件），详细语言参考见模块顶部文档注释与 `docs/script_language.md`。
+- **S2 节点运行时**（接入核心线程）——✅ 已完成：
   - [x] `ScriptNode` 实例：VM 状态 + 定时器表 + 事件注册表，一个节点绑定一条信道
   - [x] 核心循环接入：帧到达按 (信道， ID) 分发、节点定时器并入核心死线
   - [x] 主机内建补齐：`send` 帧（outbox → 核心成帧入总线）、信号读写（走 DBC 编解码）待补、`now()`/`setTimer` 待补
@@ -26,18 +26,18 @@
   - [x] 节点源码与绑定随工程持久化
 
   **已落地（2026-09-05/06，`src/node.rs` + bus.rs + `src/ui/nodes.rs`）**：节点常驻核心（`BusCore.nodes`，稳定 id），测量启动时从源码重编译（run 主块初始化全局 → `on start` → 定时器惰性武装"首周期后触发"）；帧分发挂在 ingest 走循环里（`on message` 按 信道+id 匹配，脚本 `send` 的出站帧**压进同一 buf 由同一步处理**——与触发器 Send 同机制）；`on timer` 按步壁钟触发，错过的周期收敛为一次触发加重新同步；每回调 10 万指令预算，出错节点熔断停跑（日志留痕，重启测量或改源码恢复）。`print` 走节点日志环（200 行封顶）经快照发布；`send` 内建在 VM 里只产出 outbox 条目，语义由宿主解释（外部库同缝）。Nodes 窗口：每节点卡片（改名/信道/运行开关/删除）+ 多行源码编辑器（草稿在本地，Apply 下发）+ 状态行 + 日志尾。持久化：`NodeCfg`（name/channel/source/enabled）随工程走 `SetNodes` 整表命令恢复，id 重新铸造；面板开关 `show_nodes` 与桌面同链保存。无头集成测试覆盖"打印、定时发帧、收到自己帧、禁用静默"全链。
-- **S2 余项 → 部分落地（2026-09-06）**：`now()`（总线秒，浮点）与 `sig(id, "Name")`（读本信道已见信号的最新物理值，走 HostInput 每步快照——聚合解码一次/步/信道，handler 运行前注入 VM）两个内建；`send` 的 id 超 0x7FF 自动按扩展帧成帧。**坑**：`call_host` 尾部统一补推 Nil，会盖住有返回值内建的返回值——产出型调用必须提前 return。字符串 `+` 拼接（任一侧为 Str 即按 print 同款格式化拼接）。**刺激数学内建（同日）**：`abs/floor/ceil/round/sin/cos/min/max/clamp`（全浮点进出，弧度制；实现于 call_host 分发，参数统一读 `args`——曾犯 pop 二次取参导致空栈）。仍待：信号**写**（改信号值发帧，需 DBC 编码内建）、一次性定时器、字节缓冲类型。
-**字节缓冲类型（2026-09-06，S3 开篇）**：`Value::Bytes`（`Arc<Mutex<Vec<u8>>>`，引用语义——赋值/传参共享同一缓冲，且 VM 在核心线程上必须 Send）；`bytes(n)` 分配零填充缓冲，`buf[i]` 读写（越界/0..255 检查报运行时错误），`len()` 兼容缓冲与字符串，`send(id, buf)` 整缓冲作为载荷。词法加 `[ ]`，语法加后缀索引与 `name[i] = v` 语句，编译加 `GetIndex/SetIndex/Len` 三指令。
-
-**信号读写内建 + S4 缝落地（2026-09-06）**：VM 加 `host_extern` 扩展钩子（`HostExternFn`：按名分发、参数数组进出、`Ok(None)`=不归我管）——编译器把既非脚本函数又非内建的调用编译成 `CallExtern(名字常量, argc)` **运行时解析**，这正是外部库架构缝的实现形态：外部仿真元件注册进钩子即可，语言与编译器零改动。节点运行时经此注册 `set_sig(buf, id, "Name", value)`（DBC `encode_signal` 编入缓冲，不足 8 字节自动补齐）与 `get_sig(buf, id, "Name")`（`decode_signals` 解出物理值），信号读写从此进字节缓冲自由组合，`send(id, buf)` 出帧——CAPL 式"组包"完整闭环。
-
-**帧数据访问内建（2026-09-06）**：`frame_byte(n)`（读触发帧第 n 字节，越界报错）与 `frame_dlc()`（读触发帧 DLC）——`on message` 处理器从此能根据请求内容构造应答，实现诊断应答等场景。`frame_bytes` 每次分发前由节点运行时注入 VM。
-
-**随机与定时器控制内建（2026-09-06）**：`random(lo, hi)`（xorshift64 均匀浮点，确定序——同 seed 同序列可复现）与 `srand(seed)`（重播子）；`set_period(ms)` / `stop_timer()`（on timer 处理器内动态改周期/自停，经 VM `timer_ops` 请求队列由运行时落账，`stopped` 槽位不再武装）。**通用坑记录**：`call_host` 的产出型内建（now/sig/random 等）必须 `return Ok(())` 跳过尾部 Nil 补推，否则返回值被盖成 nil——已两次踩中。
-
+- **S1 语言内核**（纯函数，零总线依赖）——✅ 已完成：
+  - [x] 词法器/语法器/字节码编译器 + 栈式 VM/事件语法解析
+  - 落地：`src/script/` 五文件。详细语言参考见模块顶部文档注释与 `docs/script_language.md`。
+- **S2 节点运行时**（接入核心线程）——✅ 已完成：
+  - [x] ScriptNode 实例、核心循环接入、定时器并入死线
+  - [x] 内建：send / print / now / sig / set_sig / get_sig / bytes / len / random / srand / frame_byte / frame_dlc / set_period / stop_timer / 数学九件
+  - [x] 每回调指令预算 + 帧深上限——坏脚本卡不死总线线程
+  - [x] Nodes 窗口：源码编辑 + Apply + 保存/加载 .capl + 状态/日志
+  - [x] 节点随工程持久化（NodeCfg + SetNodes 整表恢复）
+  - 落地：`src/node.rs` + bus.rs 集成 + `src/ui/nodes.rs`。信号读写经 host_extern 钩子（S4 缝）走 DBC 编解码；`frame_byte` / `frame_dlc` 每次分发前由节点运行时注入 VM。
 - **S2 余项**：一次性定时器。
-- **S3 语言补全**：随机内建（`random`/`srand`）✅、字符串拼接 ✅、字节缓冲 ✅、错误行号 ✅；余项：波形辅助（复用 `sim.rs`）、一次性定时器、错误列号
-  - **错误行列已落地（2026-09-06）**：语法器给每条语句标行号，编译器为每个 chunk 建稀疏"指令→行"表（每行首条指令打标），VM 运行时错误经表定位——"line 3: integer division by zero"。
+- **S3 语言补全**——已完成：随机/字符串拼接/字节缓冲/错误行号 ✅。余项：波形辅助（复用 `sim.rs`）、错误列号
 - **S4 外部接口**（缝已落地）：外部仿真元件注册进 `host_extern` 钩子；动态库加载另议
 
 红线：每步测试全绿；语言内核不做任何总线假设，S2 之前不碰核心线程。

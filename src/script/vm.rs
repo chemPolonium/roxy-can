@@ -404,8 +404,23 @@ impl Vm {
 
     fn compare(&mut self, want: impl Fn(std::cmp::Ordering) -> bool) -> Result<(), VmError> {
         let (a, b) = self.pop2()?;
-        let ord = numeric_order(&a, &b)
-            .ok_or_else(|| VmError(format!("cannot order {} and {}", kind(&a), kind(&b))))?;
+        // Numeric ordering for int/float; lexicographic for strings.
+        let ord = match (&a, &b) {
+            (Value::Str(x), Value::Str(y)) => x.cmp(y),
+            _ => {
+                let (x, y) = (as_float(&a), as_float(&b));
+                match x.partial_cmp(&y) {
+                    Some(o) => o,
+                    None => {
+                        return Err(VmError(format!(
+                            "cannot order {} and {}",
+                            kind(&a),
+                            kind(&b)
+                        )));
+                    }
+                }
+            }
+        };
         self.stack.push(Value::Bool(want(ord)));
         Ok(())
     }
@@ -703,23 +718,6 @@ fn values_eq(a: &Value, b: &Value) -> bool {
         }
         _ => a == b,
     }
-}
-
-fn numeric_order(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    use std::cmp::Ordering;
-    let (x, y) = match (a, b) {
-        (Value::Int(x), Value::Int(y)) => (*x as f64, *y as f64),
-        (Value::Int(x), Value::Float(y)) => (*x as f64, *y),
-        (Value::Float(x), Value::Int(y)) => (*x, *y as f64),
-        (Value::Float(x), Value::Float(y)) => (*x, *y),
-        _ => return None,
-    };
-    x.partial_cmp(&y).or(match (x.is_nan(), y.is_nan()) {
-        (true, true) => Some(Ordering::Equal),
-        (true, false) => Some(Ordering::Greater),
-        (false, true) => Some(Ordering::Less),
-        _ => None,
-    })
 }
 
 enum Arith {
