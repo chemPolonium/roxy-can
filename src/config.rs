@@ -360,6 +360,10 @@ pub struct TriggerCfg {
     pub threshold: f64,
     #[serde(default)]
     pub rising: bool,
+    /// SignalCross only: the watched message's frame class. Absent in
+    /// older projects, which could only watch standard messages.
+    #[serde(default)]
+    pub ext: bool,
     pub action: u8,
     /// Target generator entry for `action` code 2 (Send); ignored otherwise.
     #[serde(default)]
@@ -704,20 +708,23 @@ impl Config {
                 .map(|t| {
                     let mut send_ch = 0u8;
                     let mut send_id = 0u32;
-                    let (kind, ch, id, signal, threshold, rising) = match &t.cond {
+                    let (kind, ch, id, ext, signal, threshold, rising) = match &t.cond {
                         TriggerCond::SignalCross {
                             ch,
                             id,
+                            ext,
                             signal,
                             threshold,
                             rising,
-                        } => (0, *ch, *id, signal.clone(), *threshold, *rising),
+                        } => (0, *ch, *id, *ext, signal.clone(), *threshold, *rising),
                         TriggerCond::IdPresent { ch, id } => {
-                            (1, *ch, *id, String::new(), 0.0, false)
+                            (1, *ch, *id, false, String::new(), 0.0, false)
                         }
-                        TriggerCond::ErrorFrame { ch } => (2, *ch, 0, String::new(), 0.0, false),
+                        TriggerCond::ErrorFrame { ch } => {
+                            (2, *ch, 0, false, String::new(), 0.0, false)
+                        }
                         TriggerCond::CycleTimeout { ch, id } => {
-                            (3, *ch, *id, String::new(), 0.0, false)
+                            (3, *ch, *id, false, String::new(), 0.0, false)
                         }
                     };
                     TriggerCfg {
@@ -727,6 +734,7 @@ impl Config {
                         signal,
                         threshold,
                         rising,
+                        ext,
                         action: match t.action {
                             TriggerAction::StartRecording => 0,
                             TriggerAction::StopRecording => 1,
@@ -992,6 +1000,7 @@ impl Config {
                     0 => TriggerCond::SignalCross {
                         ch: c.ch,
                         id: c.id,
+                        ext: c.ext,
                         signal: c.signal.clone(),
                         threshold: c.threshold,
                         rising: c.rising,

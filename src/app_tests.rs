@@ -3152,6 +3152,7 @@ fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
         TriggerCond::SignalCross {
             ch: 0,
             id: 0x100,
+            ext: false,
             signal: "EngineSpeed".to_string(),
             threshold: 3000.0,
             rising: true,
@@ -3337,6 +3338,7 @@ fn a_trigger_edit_flips_the_crossing_direction() {
         cond: TriggerCond::SignalCross {
             ch: 0,
             id: 0x100,
+            ext: false,
             signal: "EngineSpeed".to_string(),
             threshold: 500.0,
             rising: false,
@@ -3357,12 +3359,14 @@ fn a_trigger_edit_flips_the_crossing_direction() {
         TriggerCond::SignalCross {
             ch,
             id,
+            ext,
             signal,
             threshold,
             ..
         } => TriggerCond::SignalCross {
             ch: *ch,
             id: *id,
+            ext: *ext,
             signal: signal.clone(),
             threshold: *threshold,
             rising: true,
@@ -3505,12 +3509,14 @@ fn triggers_round_trip_through_a_project() {
         TriggerCond::SignalCross {
             ch,
             id,
+            ext,
             signal,
             threshold,
             rising,
         } => {
             assert_eq!(*ch, 0);
             assert_eq!(*id, 0x100);
+            assert!(!*ext);
             assert_eq!(signal, "EngineSpeed");
             assert_eq!(*threshold, 3000.0);
             assert!(!*rising);
@@ -3625,6 +3631,7 @@ fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
         TriggerCond::SignalCross {
             ch: 0,
             id: 0x100,
+            ext: false,
             signal: "EngineSpeed".to_string(),
             threshold: 3000.0,
             rising: true,

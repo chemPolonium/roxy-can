@@ -24,10 +24,12 @@ use crate::app::App;
 pub enum TriggerCond {
     /// A decoded signal's physical value at or past a threshold. The
     /// edge is the crossing; the level follows the signal's own frames
-    /// and holds in between.
+    /// and holds in between. `ext` picks the frame class, so a standard
+    /// and an extended message sharing one numeric id are told apart.
     SignalCross {
         ch: u8,
         id: u32,
+        ext: bool,
         signal: String,
         threshold: f64,
         rising: bool,
@@ -102,13 +104,15 @@ impl TriggerCond {
         match self {
             TriggerCond::SignalCross {
                 id,
+                ext,
                 signal,
                 threshold,
                 rising,
                 ..
             } => format!(
-                "{signal} {} {threshold} @ 0x{id:X}",
-                if *rising { ">=" } else { "<=" }
+                "{signal} {} {threshold} @ 0x{id:X}{}",
+                if *rising { ">=" } else { "<=" },
+                if *ext { "x" } else { "" }
             ),
             TriggerCond::IdPresent { id, .. } => format!("0x{id:X} present"),
             TriggerCond::ErrorFrame { .. } => "error frames".to_string(),
@@ -141,18 +145,19 @@ impl App {
         // Default to the database's first message and signal so the row
         // starts watching something real instead of a blind id.
         let db = self.snap.channels.first().and_then(|c| c.dbc.as_deref());
-        let id = db
+        let (id, ext) = db
             .and_then(|db| db.order.first())
-            .map(|&(id, _)| id)
-            .unwrap_or(0x100);
+            .copied()
+            .unwrap_or((0x100, false));
         let signal = db
-            .and_then(|db| db.message_of(id))
+            .and_then(|db| db.messages.get(&(id, ext)))
             .and_then(|m| m.signals.first())
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "Signal".to_string());
         self.push_trigger(TriggerCond::SignalCross {
             ch: 0,
             id,
+            ext,
             signal,
             threshold: 0.0,
             rising: true,

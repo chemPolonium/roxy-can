@@ -2222,11 +2222,12 @@ impl BusCore {
                     TriggerCond::SignalCross {
                         ch,
                         id,
+                        ext,
                         signal,
                         threshold,
                         rising,
                     } => {
-                        if f.channel != *ch || f.id != *id || f.is_error() {
+                        if f.channel != *ch || f.id != *id || f.extended != *ext || f.is_error() {
                             // Not this message's frame: the level holds.
                             continue;
                         }
