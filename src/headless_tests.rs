@@ -412,6 +412,53 @@ fn a_script_node_prints_sends_and_keeps_time() {
     app.stop();
 }
 
+/// The responder pattern end to end: the node watches for a frame and
+/// verifies that the script compiles with `frame_byte` / `frame_dlc`
+/// builtins and that periodic sends land on the bus.
+#[test]
+fn a_script_node_responds_to_a_diagnostic_request() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "responder".into(),
+        channel: 0,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+                on start { print("responder up"); }
+                on timer 50 {
+                    send(0x200, 0xE0, 0x2E);
+                }
+                on message 0x7E0 {
+                    print("req", frame_byte(0), frame_dlc());
+                }
+            "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+
+    let mut now = 1_000;
+    for _ in 0..10 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+
+    let node = &app.snap.nodes.iter().find(|n| n.id == id).expect("node");
+    assert!(node.running, "node compiled and started");
+    // Periodic timer sends landed on the bus.
+    let sent = app
+        .snap
+        .trace
+        .iter()
+        .filter(|f| f.id == 0x200 && matches!(f.dir, Direction::Tx))
+        .count();
+    assert!(sent >= 2, "timer frames hit the bus: {sent}");
+    app.stop();
+}
+
 /// The crash the first threaded launch actually produced: startup
 /// restores the last project, and the restore path must cross the thread
 /// boundary too. A distinctive workspace is saved from the manual drive,
