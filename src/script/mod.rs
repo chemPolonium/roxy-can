@@ -257,16 +257,21 @@ pub struct HostInput {
     pub signals: HashMap<(u32, String), f64>,
 }
 
-/// A compile-time error, positioned at the offending source line.
+/// A compile-time error, positioned at the offending source line and,
+/// when the offending token is known, its character column.
 #[derive(Clone, Debug)]
 pub struct ScriptError {
     pub line: u32,
+    pub col: Option<u32>,
     pub msg: String,
 }
 
 impl std::fmt::Display for ScriptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}: {}", self.line, self.msg)
+        match self.col {
+            Some(col) => write!(f, "line {}:{col}: {}", self.line, self.msg),
+            None => write!(f, "line {}: {}", self.line, self.msg),
+        }
     }
 }
 
@@ -388,6 +393,16 @@ mod tests {
         assert!(e.contains("unknown"), "{e}");
         let e = err("fn f() { return 1; } return 2;");
         assert!(e.contains("outside"), "{e}");
+    }
+
+    #[test]
+    fn compile_errors_name_the_column() {
+        let e = compile("let ok = 1;\n    zz = ok;")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("line 2:5"), "{e}");
+        let e = compile("on message 0x800 { }").unwrap_err().to_string();
+        assert!(e.contains("line 1:12"), "{e}");
     }
 
     #[test]

@@ -28,6 +28,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         depth: 0,
         in_fn: false,
         line: 1,
+        col: 1,
         break_jumps: Vec::new(),
         continue_jumps: Vec::new(),
     };
@@ -61,20 +62,27 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
             match &on.kind {
                 OnKind::Start => {
                     if seen_start {
-                        return c.err_at(on.line, "duplicate 'on start' handler");
+                        return c.err_at(on.line, on.col, "duplicate 'on start' handler");
                     }
                     seen_start = true;
                 }
                 OnKind::Message { id } => {
                     if !seen_ids.insert(*id) {
-                        return c.err_at(on.line, &format!("duplicate handler for id {id:#x}"));
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for id {id:#x}"),
+                        );
                     }
                 }
                 OnKind::Timer { .. } => {}
                 OnKind::Oneshot { name } => {
                     if !seen_named.insert(name.clone()) {
-                        return c
-                            .err_at(on.line, &format!("duplicate handler for timer \"{name}\""));
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for timer \"{name}\""),
+                        );
                     }
                 }
             }
@@ -121,6 +129,8 @@ struct Comp {
     depth: u32,
     in_fn: bool,
     line: u32,
+    /// Column of the statement being compiled, for error messages.
+    col: u32,
     /// Jump instruction indices for `break` inside the innermost loop,
     /// patched at loop exit. One entry per loop nesting level.
     break_jumps: Vec<Vec<usize>>,
@@ -133,6 +143,7 @@ impl Comp {
     fn err<T>(&self, where_: &str, msg: &str) -> Result<T, ScriptError> {
         Err(ScriptError {
             line: self.line,
+            col: Some(self.col),
             msg: format!("{where_}: {msg}"),
         })
     }
@@ -157,9 +168,10 @@ impl Comp {
         (self.globals.len() - 1) as u16
     }
 
-    fn err_at<T>(&self, line: u32, msg: &str) -> Result<T, ScriptError> {
+    fn err_at<T>(&self, line: u32, col: u32, msg: &str) -> Result<T, ScriptError> {
         Err(ScriptError {
             line,
+            col: Some(col),
             msg: msg.to_string(),
         })
     }
@@ -173,8 +185,9 @@ impl Comp {
 
     fn stmt(&mut self, s: &SpannedStmt) -> Result<(), ScriptError> {
         // Every op emitted for this statement reports the statement's
-        // line at runtime.
+        // line at runtime; errors name the statement's column too.
         self.line = s.line;
+        self.col = s.col;
         self.line_mark();
         match &s.stmt {
             Stmt::Let(name, expr) => {

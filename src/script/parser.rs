@@ -17,11 +17,13 @@ pub enum Item {
     Stmt(SpannedStmt),
 }
 
-/// A statement tagged with its source line: the compiler builds per-chunk
-/// line tables from these so runtime errors can name the line.
+/// A statement tagged with its source position: the compiler builds
+/// per-chunk line tables from these so runtime errors can name the line,
+/// and compile errors name the statement's column.
 #[derive(Debug)]
 pub struct SpannedStmt {
     pub line: u32,
+    pub col: u32,
     pub stmt: Stmt,
 }
 
@@ -32,6 +34,7 @@ pub struct OnDecl {
     pub kind: OnKind,
     pub body: Vec<SpannedStmt>,
     pub line: u32,
+    pub col: u32,
 }
 
 #[derive(Debug)]
@@ -151,9 +154,10 @@ struct P {
 
 impl P {
     fn err<T>(&self, msg: &str) -> Result<T, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
         Err(ScriptError {
-            line,
+            line: at.map_or(1, |t| t.line),
+            col: at.map(|t| t.col),
             msg: msg.to_string(),
         })
     }
@@ -184,13 +188,16 @@ impl P {
             self.advance();
             Ok(())
         } else {
-            let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+            let at = self.toks.get(self.pos);
+            let line = at.map_or(1, |t| t.line);
+            let col = at.map(|t| t.col);
             self.err(&format!(
                 "expected {what}, found {:?}",
                 self.toks.get(self.pos).map(|t| &t.tok)
             ))
             .map_err(|mut e| {
                 e.line = line;
+                e.col = col;
                 e
             })
         }
@@ -230,7 +237,9 @@ impl P {
     /// node's event handlers. The event word is matched by text so that
     /// `message` and `timer` stay usable as ordinary variable names.
     fn on_decl(&mut self) -> Result<OnDecl, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::On, "'on'")?;
         let word = self.ident("'start', 'message' or 'timer'")?;
         let kind = match word.as_str() {
@@ -258,13 +267,20 @@ impl P {
         self.fn_depth += 1;
         let body = self.block()?;
         self.fn_depth -= 1;
-        Ok(OnDecl { kind, body, line })
+        Ok(OnDecl {
+            kind,
+            body,
+            line,
+            col,
+        })
     }
 
     /// A CAN identifier: a non-negative integer fitting in 29 bits of a
     /// standard id (extended ids come with extended frame support).
     fn id_literal(&mut self) -> Result<u32, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         match self.toks.get(self.pos).map(|t| t.tok.clone()) {
             Some(Tok::Int(n)) if (0..=0x7FF).contains(&n) => {
                 self.advance();
@@ -272,6 +288,7 @@ impl P {
             }
             Some(Tok::Int(n)) => Err(ScriptError {
                 line,
+                col: Some(col),
                 msg: format!("id {n:#x} out of the standard 11-bit range"),
             }),
             _ => self.err("expected a message id"),
@@ -280,7 +297,9 @@ impl P {
 
     /// A timer period in milliseconds: a positive integer.
     fn period_literal(&mut self) -> Result<u64, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         match self.toks.get(self.pos).map(|t| t.tok.clone()) {
             Some(Tok::Int(n)) if n > 0 => {
                 self.advance();
@@ -288,6 +307,7 @@ impl P {
             }
             Some(Tok::Int(0)) => Err(ScriptError {
                 line,
+                col: Some(col),
                 msg: "timer period must be positive".to_string(),
             }),
             _ => self.err("expected a timer period in milliseconds"),
@@ -322,9 +342,11 @@ impl P {
     }
 
     fn stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         let stmt = self.stmt_inner()?;
-        Ok(SpannedStmt { line, stmt })
+        Ok(SpannedStmt { line, col, stmt })
     }
 
     fn stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
@@ -409,7 +431,9 @@ impl P {
     }
 
     fn if_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::LParen, "'('")?;
         let cond = self.expr()?;
         self.expect(&Tok::RParen, "')'")?;
@@ -424,11 +448,13 @@ impl P {
             None
         };
         let stmt = Stmt::If { cond, then, els };
-        Ok(SpannedStmt { line, stmt })
+        Ok(SpannedStmt { line, col, stmt })
     }
 
     fn for_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::LParen, "'('")?;
         let init = if self.at(&Tok::Semi) {
             None
@@ -455,15 +481,17 @@ impl P {
             step,
             body,
         };
-        Ok(SpannedStmt { line, stmt })
+        Ok(SpannedStmt { line, col, stmt })
     }
 
     /// A statement without the trailing `;` -- only what a for-header
     /// slot accepts: a let, an assignment, or an expression.
     fn simple_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
-        let line = self.toks.get(self.pos).map_or(1, |t| t.line);
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
         let stmt = self.simple_stmt_inner()?;
-        Ok(SpannedStmt { line, stmt })
+        Ok(SpannedStmt { line, col, stmt })
     }
 
     fn simple_stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
