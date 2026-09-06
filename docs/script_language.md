@@ -213,17 +213,6 @@ let v = get_sig(buf, 0x200, "RPM");
 | `now()` | 总线时钟（秒，浮点） |
 | `bytes(n)` | 分配 n 字节缓冲（零填充） |
 | `len(v)` | 缓冲长度或字符串字符数 |
-| `set_period(ms)` | 修改当前定时器周期 |
-| `stop_timer()` | 停止当前定时器 |
-
-## 刺激波形内建
-
-| 内建 | 说明 |
-|------|------|
-| `ramp(lo, hi, period_s)` | 锯齿波，从 lo 线性升到 hi |
-| `sine_wave(offset, amplitude, period_s)` | 正弦波 |
-
-均以总线时钟为时基，周期性循环。
 
 ## 编译错误 vs 运行时错误
 
