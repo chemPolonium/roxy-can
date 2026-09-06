@@ -77,6 +77,7 @@ pub enum Stmt {
     },
     Return(Option<Expr>),
     Break,
+    Continue,
     Block(Vec<SpannedStmt>),
     Expr(Expr),
 }
@@ -346,6 +347,10 @@ impl P {
         if self.eat(&Tok::Break) {
             self.expect(&Tok::Semi, "';'")?;
             return Ok(Stmt::Break);
+        }
+        if self.eat(&Tok::Continue) {
+            self.expect(&Tok::Semi, "';'")?;
+            return Ok(Stmt::Continue);
         }
         // Assignment or a bare expression, told apart by the next token.
         // `name[i] = v` (buffer element store) is a third shape.

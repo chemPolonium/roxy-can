@@ -29,6 +29,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         in_fn: false,
         line: 1,
         break_jumps: Vec::new(),
+        continue_jumps: Vec::new(),
     };
 
     // Pass 1: function signatures, so later items may call earlier names.
@@ -115,6 +116,9 @@ struct Comp {
     /// Jump instruction indices for `break` inside the innermost loop,
     /// patched at loop exit. One entry per loop nesting level.
     break_jumps: Vec<Vec<usize>>,
+    /// Continue jump code indices for the innermost loop, patched to the
+    /// step/cond position.
+    continue_jumps: Vec<Vec<usize>>,
 }
 
 impl Comp {
@@ -227,14 +231,20 @@ impl Comp {
                 let start = self.code.len() as u16;
                 self.expr(cond)?;
                 let j_end = self.emit_jump(Op::JumpIfFalse);
-                // Break inside this loop jumps to the same exit.
+                // Break inside this loop jumps to the same exit; continue
+                // jumps back to the condition.
                 self.break_jumps.push(Vec::new());
+                self.continue_jumps.push(Vec::new());
                 self.block(body)?;
                 let breaks = self.break_jumps.pop().unwrap_or_default();
+                let continues = self.continue_jumps.pop().unwrap_or_default();
                 self.emit(Op::Jump(start));
                 self.patch(j_end);
                 for j in breaks {
                     self.patch(j);
+                }
+                for j in continues {
+                    self.patch_to(j, start);
                 }
             }
             Stmt::For {
@@ -250,6 +260,7 @@ impl Comp {
                     self.depth -= 1;
                 }
                 self.break_jumps.push(Vec::new());
+                self.continue_jumps.push(Vec::new());
                 let start = self.code.len() as u16;
                 let j_end = match cond {
                     Some(cond) => {
@@ -260,18 +271,24 @@ impl Comp {
                 };
                 self.depth += 1;
                 self.block(body)?;
+                self.depth -= 1;
+                // `continue` lands on the step, not the condition.
+                let step_pos = self.code.len() as u16;
                 if let Some(step) = step {
                     self.stmt(step.as_ref())?;
                 }
-                self.depth -= 1;
                 self.emit(Op::Jump(start));
                 if let Some(j_end) = j_end {
                     self.patch(j_end);
                 }
                 // Patch break jumps to the loop exit point.
                 let breaks = self.break_jumps.pop().unwrap_or_default();
+                let continues = self.continue_jumps.pop().unwrap_or_default();
                 for j in breaks {
                     self.patch(j);
+                }
+                for j in continues {
+                    self.patch_to(j, step_pos);
                 }
                 self.drop_locals(loop_depth);
             }
@@ -289,11 +306,17 @@ impl Comp {
                 self.emit(Op::Return);
             }
             Stmt::Break => {
-                // Emit a placeholder jump; the enclosing loop patches it
-                // to its exit point.
                 self.emit(Op::Jump(u16::MAX));
-                if let Some(breaks) = self.break_jumps.last_mut() {
-                    breaks.push(self.code.len() - 1);
+                match self.break_jumps.last_mut() {
+                    Some(breaks) => breaks.push(self.code.len() - 1),
+                    None => return self.err("'break'", "outside a loop"),
+                }
+            }
+            Stmt::Continue => {
+                self.emit(Op::Jump(u16::MAX));
+                match self.continue_jumps.last_mut() {
+                    Some(jumps) => jumps.push(self.code.len() - 1),
+                    None => return self.err("'continue'", "outside a loop"),
                 }
             }
             Stmt::Block(stmts) => {
@@ -345,6 +368,15 @@ impl Comp {
         let target = self.code.len() as u16;
         match &mut self.code[at] {
             Op::Jump(t) | Op::JumpIfFalse(t) => *t = target,
+            _ => unreachable!("patched a non-jump"),
+        }
+    }
+
+    /// Patches a jump to a known position: the `continue` target, which
+    /// sits before the code emitted after the loop body.
+    fn patch_to(&mut self, at: usize, target: u16) {
+        match &mut self.code[at] {
+            Op::Jump(t) => *t = target,
             _ => unreachable!("patched a non-jump"),
         }
     }

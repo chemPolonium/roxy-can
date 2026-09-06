@@ -33,7 +33,8 @@
 //! Types: int, float, bool, string, bytes (reference semantics). Math is
 //! int-exact / float-promoting; `+` with a string concatenates. Control
 //! flow: `if (..) .. else ..`, `while (..) ..`, `for (init; cond; step) ..`,
-//! early `return` inside functions. Bytecode: constants + ops, stack VM
+//! `break`/`continue` inside loops, early `return` inside functions.
+//! Bytecode: constants + ops, stack VM
 //! with per-callback instruction budget and frame-depth cap.
 //!
 //! Architecture seam for external libraries: host functions live in one
@@ -429,6 +430,66 @@ mod tests {
                     print(s);
                 "#),
             ["15"]
+        );
+    }
+
+    #[test]
+    fn continue_skips_to_the_next_iteration() {
+        // While: continue re-tests the condition.
+        assert_eq!(
+            out(r#"
+                    let n = 0;
+                    let evens = 0;
+                    while (n < 10) {
+                        n = n + 1;
+                        if (n % 2 == 1) { continue; }
+                        evens = evens + 1;
+                    }
+                    print(evens);
+                "#),
+            ["5"]
+        );
+        // For: continue still runs the step, or the loop would hang.
+        assert_eq!(
+            out(r#"
+                    let s = 0;
+                    for (let i = 0; i < 10; i = i + 1) {
+                        if (i % 2 == 0) { continue; }
+                        s = s + i;
+                    }
+                    print(s);
+                "#),
+            ["25"]
+        );
+        // Nested loops: continue binds to the innermost one.
+        assert_eq!(
+            out(r#"
+                    let hits = 0;
+                    for (let i = 0; i < 3; i = i + 1) {
+                        for (let j = 0; j < 3; j = j + 1) {
+                            if (j == 1) { continue; }
+                            hits = hits + 1;
+                        }
+                    }
+                    print(hits);
+                "#),
+            ["6"]
+        );
+    }
+
+    #[test]
+    fn break_and_continue_outside_a_loop_fail_to_compile() {
+        assert!(
+            compile("break;")
+                .unwrap_err()
+                .to_string()
+                .contains("'break'")
+        );
+        assert!(
+            compile("continue;")
+                .unwrap_err()
+                .to_string()
+                .contains("'continue'")
         );
     }
 
