@@ -38,7 +38,7 @@
 //! }
 //!
 //! on timer "resp" {                   // named one-shot: fires once per
-//!     send(0x200, frame_id());        // `set_timer("resp", ms)` armed
+//!     send(0x200, 0x40);              // `set_timer("resp", ms)` armed
 //! }                                   // from any handler (e.g. on message)
 //! ```
 //!

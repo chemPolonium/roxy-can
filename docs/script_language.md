@@ -26,11 +26,16 @@ on message 0x100 {
     print("rpm:", rpm);
 }
 
-on timer 100 {
-    let buf = bytes(8);
-    buf[0] = 0xAB;
-    set_sig(buf, 0x200, "RPM", base + random(0, 50));
-    send(0x200, buf);
+on message * { }        // 任意帧（嗅探/网关）
+
+on errorFrame { }       // 错误帧
+
+on timer 100 { }        // 周期定时器
+
+on timer "name" { }     // 命名一次性定时器（配合 set_timer）
+
+on start {
+    set_timer("name", 500);
 }
 ```
 
