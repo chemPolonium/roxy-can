@@ -2973,6 +2973,53 @@ fn an_insert_marker_trigger_stamps_the_bus_clock() {
     assert!(app.snap.markers.is_empty(), "markers are run-scored state");
 }
 
+/// The pre-trigger half of TODO item 8: a trigger-started recording opens
+/// with the frames that came before the event, oldest first, and the
+/// triggering frame itself lands right after them.
+#[test]
+fn a_trigger_started_recording_includes_the_pre_buffer() {
+    let mut app = quiet_app();
+    let base = std::env::temp_dir().join("roxy_can_pre_buffer.asc");
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::StartRecording,
+    ));
+    app.recorder.recording = false;
+
+    receive(
+        &mut app,
+        10_000,
+        vec![
+            rx_frame(10_000, 0x100, 8, FrameFlags::NONE),
+            rx_frame(20_000, 0x200, 8, FrameFlags::NONE),
+        ],
+    );
+    assert!(
+        !app.recorder.recording,
+        "no watched id yet: the recorder stayed closed"
+    );
+    receive(
+        &mut app,
+        30_000,
+        vec![rx_frame(30_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert!(app.recorder.recording, "the watched id opened the file");
+    app.recorder.close();
+
+    let content = std::fs::read_to_string(&app.recorder.last_record).unwrap();
+    let frames = crate::log::asc::parse_asc(&content);
+    let ids: Vec<u32> = frames.iter().map(|f| f.id).collect();
+    assert_eq!(
+        ids,
+        [0x100, 0x200, 0x777],
+        "pre-context oldest first, then the trigger frame"
+    );
+    std::fs::remove_file(&app.recorder.last_record).ok();
+}
+
 fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
     CanFrame {
         t_us,
@@ -3199,8 +3246,8 @@ fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
     assert_eq!(app.triggers[0].fired, 2, "re-crossing re-arms");
     assert_eq!(app.triggers[0].last_fire_t_us, 50_000);
 
-    // The recording opened on the crossing frame, so the very frame that
-    // fired the trigger is in the file.
+    // The recording opens with the pre-trigger context (the below-
+    // threshold 10 ms frame), then the crossing frame and everything after.
     app.recorder.close();
     let text = std::fs::read_to_string(&app.recorder.last_record).unwrap();
     let times: Vec<u64> = crate::log::asc::parse_asc(&text)
@@ -3209,8 +3256,8 @@ fn a_signal_crossing_fires_on_the_crossing_not_the_level() {
         .collect();
     assert_eq!(
         times,
-        vec![20_000, 30_000, 40_000, 50_000],
-        "capture starts at the firing frame"
+        vec![10_000, 20_000, 30_000, 40_000, 50_000],
+        "pre-trigger context first, then the firing frame and on"
     );
     std::fs::remove_file(&app.recorder.last_record).ok();
 }

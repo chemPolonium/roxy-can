@@ -30,6 +30,10 @@ pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
 /// Oldest bus-event markers fall off once the list outgrows this.
 pub(crate) const MARKER_CAP: usize = 512;
 
+/// How many frames before a trigger-initiated recording start are written
+/// into the file (the pre-trigger context).
+pub(crate) const PRE_BUFFER_FRAMES: usize = 256;
+
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
@@ -562,6 +566,9 @@ pub struct BusCore {
     /// Bus-event markers, oldest first, capped oldest-out. Dropped by
     /// trigger actions and drawn by Graphics as vertical lines.
     pub(crate) markers: Vec<u64>,
+    /// The last [`PRE_BUFFER_FRAMES`] frames, written into the file when a
+    /// trigger starts a recording: the context before the event.
+    pub(crate) pre_buffer: std::collections::VecDeque<CanFrame>,
     /// Contiguous log-time span whose frames have already been decoded into
     /// the signal caches. A Graphics window asking for a range outside it
     /// triggers a backfill scan.
@@ -629,6 +636,7 @@ impl BusCore {
             loads_dirty: false,
             subs: HashMap::new(),
             markers: Vec::new(),
+            pre_buffer: std::collections::VecDeque::new(),
             sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
             measuring: false,
@@ -1739,6 +1747,7 @@ impl BusCore {
         self.spec = crate::spec::Spec::default();
         self.sample_cover = None;
         self.markers.clear();
+        self.pre_buffer.clear();
         // Send-now intents recorded while the old run was winding down
         // belong to it, not to the fresh one.
         self.injected.clear();
@@ -1975,6 +1984,12 @@ impl BusCore {
             // frame that fired it.
             self.eval_triggers(&f, status);
             self.recorder.write(&f);
+            // Pre-trigger memory: a trigger that starts a recording drains
+            // this ring into the file first, so the event keeps its past.
+            self.pre_buffer.push_back(f);
+            if self.pre_buffer.len() > PRE_BUFFER_FRAMES {
+                self.pre_buffer.pop_front();
+            }
             // Ingest first, then dispatch to nodes: `sig()` in node
             // handlers reads the freshly-updated aggregates.
             self.ingest(f, stride);
@@ -2361,12 +2376,19 @@ impl BusCore {
                 TriggerAction::StartRecording => {
                     if self.measuring && !self.recorder.recording {
                         self.recorder.recording = true;
-                        let opened = self.recorder.open();
-                        self.recorder.recording = opened.is_ok();
-                        *status = match opened {
+                        let opened_path = self.recorder.open();
+                        self.recorder.recording = opened_path.is_ok();
+                        *status = match &opened_path {
                             Ok(path) => format!("trigger started recording to {path}"),
                             Err(e) => format!("trigger record failed: {e}"),
                         };
+                        if opened_path.is_ok() {
+                            // Oldest first: the file opens with the frames
+                            // that came before the trigger fired.
+                            for pre in self.pre_buffer.drain(..) {
+                                self.recorder.write(&pre);
+                            }
+                        }
                     }
                 }
                 TriggerAction::StopRecording => {
