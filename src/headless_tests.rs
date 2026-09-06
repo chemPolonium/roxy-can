@@ -399,6 +399,8 @@ fn a_script_node_prints_sends_and_keeps_time() {
     assert!(sent >= 2, "timer frames hit the bus: {sent}");
     assert!(app.aggs.contains_key(&(0, 0x123)));
 
+    assert!(app.aggs.contains_key(&(0, 0x123)));
+
     // Disabling silences the node without removing it.
     app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: false });
     let before = app.snap.frame_counter;
@@ -408,6 +410,52 @@ fn a_script_node_prints_sends_and_keeps_time() {
     assert_eq!(
         app.snap.frame_counter, before,
         "a disabled node stays quiet"
+    );
+    app.stop();
+}
+
+/// The full node signal workflow: sig() reads the live published value,
+/// and the node logs it — verifying DBC + script + runtime integration.
+#[test]
+fn a_script_node_reads_signals_and_logs_them() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "monitor".into(),
+        channel: 0,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+                on message 0x100 {
+                    let rpm = sig(0x100, "EngineSpeed");
+                    print("rpm:", rpm);
+                }
+            "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    // Activate the generator so 0x100 frames flow and the node's
+    // `on message 0x100` handler fires.
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.start_virtual();
+
+    let mut now = 1_000;
+    for _ in 0..10 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+
+    let node = &app.snap.nodes.iter().find(|n| n.id == id).expect("node");
+    assert!(
+        node.log.iter().any(|l| l.starts_with("rpm:")),
+        "sig() read live values: {:?}",
+        node.log
     );
     app.stop();
 }

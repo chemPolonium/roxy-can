@@ -954,6 +954,8 @@ impl BusCore {
 
     /// Delivers one frame to the matching node handlers; the frames they
     /// queue are returned for the step loop to append to the buffer.
+    /// Decodes the current frame's DBC signals and merges them into the
+    /// host input so `sig()` in node handlers reads fresh values.
     fn dispatch_node_frame(&mut self, f: &CanFrame, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
         let data = &f.data[..f.len as usize];
@@ -1954,16 +1956,19 @@ impl BusCore {
             // so a trigger that starts a recording captures the very
             // frame that fired it.
             self.eval_triggers(&f, status);
-            // Node handlers see the frame next; a send they queue joins
-            // `buf` behind this frame and is processed by this same step.
+            self.recorder.write(&f);
+            // Ingest first, then dispatch to nodes: `sig()` in node
+            // handlers reads the freshly-updated aggregates.
+            self.ingest(f, stride);
+            // Build fresh inputs after ingest so `sig()` reads current
+            // values, not stale ones from before the frame arrived.
+            let node_inputs = self.build_node_inputs(now_us);
             let input = node_inputs.get(&f.channel).cloned().unwrap_or_default();
             let queued = self.dispatch_node_frame(&f, &input);
             for (id, data) in queued {
                 self.buf
                     .push(Self::node_frame(f.channel, id, &data, f.t_us));
             }
-            self.recorder.write(&f);
-            self.ingest(f, stride);
         }
         if i > 0 {
             self.publish_trace();
