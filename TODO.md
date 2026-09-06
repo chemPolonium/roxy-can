@@ -178,6 +178,7 @@
    - **④ 触发器/生成器**：`SignalCross` 加 `ext` 位并参与帧匹配（`TriggerCfg` 同步 serde default）；生成器 `TxMsg.extended` 原本就有，`add_entry`/发射路径不受影响；`timeout_silent` 暂按任一类兜底（触发条件无类）。
    - 脚本侧（57d66d4）：`on message`/`send` 按"id ≤ 0x7FF 标准、> 0x7FF 扩展"划类，`set_sig` 编码沿用同规则。
    - 已知妥协：裸 id 展示层（网络视图 `node_tx_ids`、TX 选择器、报文过滤器）对同值双类只列一条（标准优先）；要完全分开需把展示层也四元组化，等有真实双类库需求再说。
+   - 已知妥协 2：脚本/生成的"id 决定类"约定意味着**数值 ≤ 0x7FF 的扩展帧**（合法但不常见）无法被 `on message` 匹配、`send` 也永远按标准帧发。要支持需在语言里加显式类语法（如 `on extended message 0x50` / `send_ext`），属语言设计决策，未动。
 4. ~~**`SigType` / 单位的显示口径**~~ ✅ 0.7.0
    落地：每个信号带 `type_tag`（`u8`/`i16`/`f32`/`f64`），值后统一显示 `[u16]` 型标记；`SIG_VALTYPE_` 声明的浮点按位模式解码（can-dbc 约定 0=整型 1=f32 2=f64，与 Vector 文档的 0/1 约定不同，以解析器为准）；整型按需显示小数，`fmt_decoded`/`fmt_signal_value` 是唯一的格式化出口。min/max 仍只在生成器夹范围，未显示。
 
