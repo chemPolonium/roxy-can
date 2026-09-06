@@ -220,8 +220,9 @@
     现状：没有任何算术概念，全仓库搜不到 `expr` / `formula` / `compute` / `derived`；解码值就是 `raw * factor + offset`。
     要做：表达式求值（`a-b`、`(x>3)?1:0`、单位换算），派生信号能进 Graphics 与 Data。
 
-12. ~~**headless CLI**~~ ✅ 2026-09-04
+12. ~~**headless CLI**~~ ✅ 2026-09-04；**`--project` 无头仿真** ✅ 2026-09-07（f389acc）
     落地：`roxy-can --replay <log.asc|blf> [--speed n] [--duration s] [--stats csv]`（`src/cli.rs`）。无参数照旧开窗口；手动驱动下以 1 ms 节拍手摇 `advance_clock`+`tick`（晚醒只会成批交帧，backfill 补样，迟滞不丢数），跑到日志末尾或墙钟时长上限，按帧数/播放头/墙钟出报告，`--stats` 复用统计 CSV 导出。release 的 `windows_subsystem=windows` 下经 `AttachConsole` 认领父控制台再重定向标准句柄。8 条新测试（解析/默认值/用法错误/端到端回放+导出/时长截断/坏日志），真二进制冒烟：10 帧 10 ms 周期日志回放 + CSV 逐项核对 + 退出码 0/1/2。**边界**：无 `--record`——核心有意在回放启动时丢弃录制状态（录回放只会复刻日志），BLF→ASC 转存若要做需先改这条产品语义。
+    `--project <p.rxproj> --duration <s>`：无头仿真保存的工程——生成器/脚本节点按工程保存的状态上线（GUI 打开工程"不发车"的安全语义不变：CLI 显式仿真时按文件里的 active 位重新武装）；`--stats` 可导出统计。`--check-script` 见 2026-09-07 夜间记录。
 
 ## 明确暂缓 / 边界外
 
