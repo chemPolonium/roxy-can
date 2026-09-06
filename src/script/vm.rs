@@ -670,6 +670,42 @@ impl Vm {
                     .push(Value::Float(offset + amplitude * phase.sin()));
                 return Ok(());
             }
+            // Bitwise operations: int-only, essential for CAN field
+            // extraction and construction.
+            // Bitwise operations: int-only, essential for CAN field
+            // extraction and construction.
+            "bit_and" | "bit_or" | "bit_xor" => {
+                let (Value::Int(a), Value::Int(b)) = (&args[0], &args[1]) else {
+                    return Err(VmError(format!("{name} needs two ints")));
+                };
+                let r = match name.as_str() {
+                    "bit_and" => a & b,
+                    "bit_or" => a | b,
+                    _ => a ^ b,
+                };
+                self.stack.push(Value::Int(r));
+                return Ok(());
+            }
+            "bit_not" => {
+                let Value::Int(a) = args[0] else {
+                    return Err(VmError("bit_not needs an int".into()));
+                };
+                self.stack.push(Value::Int(!a));
+                return Ok(());
+            }
+            "bit_shl" | "bit_shr" => {
+                let (Value::Int(a), Value::Int(n)) = (&args[0], &args[1]) else {
+                    return Err(VmError(format!("{name} needs two ints")));
+                };
+                let (a, n) = (*a, *n as u32 % 64);
+                let r = if name == "bit_shl" {
+                    ((a as u64) << n) as i64
+                } else {
+                    ((a as u64) >> n) as i64
+                };
+                self.stack.push(Value::Int(r));
+                return Ok(());
+            }
             other => {
                 // Not a builtin: the host's extension hook (external
                 // simulation components, node-runtime functions) gets the

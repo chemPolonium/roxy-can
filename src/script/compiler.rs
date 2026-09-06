@@ -28,6 +28,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         depth: 0,
         in_fn: false,
         line: 1,
+        break_jumps: Vec::new(),
     };
 
     // Pass 1: function signatures, so later items may call earlier names.
@@ -111,6 +112,9 @@ struct Comp {
     depth: u32,
     in_fn: bool,
     line: u32,
+    /// Jump instruction indices for `break` inside the innermost loop,
+    /// patched at loop exit. One entry per loop nesting level.
+    break_jumps: Vec<Vec<usize>>,
 }
 
 impl Comp {
@@ -223,9 +227,15 @@ impl Comp {
                 let start = self.code.len() as u16;
                 self.expr(cond)?;
                 let j_end = self.emit_jump(Op::JumpIfFalse);
+                // Break inside this loop jumps to the same exit.
+                self.break_jumps.push(Vec::new());
                 self.block(body)?;
+                let breaks = self.break_jumps.pop().unwrap_or_default();
                 self.emit(Op::Jump(start));
                 self.patch(j_end);
+                for j in breaks {
+                    self.patch(j);
+                }
             }
             Stmt::For {
                 init,
@@ -239,6 +249,7 @@ impl Comp {
                     self.stmt(init.as_ref())?;
                     self.depth -= 1;
                 }
+                self.break_jumps.push(Vec::new());
                 let start = self.code.len() as u16;
                 let j_end = match cond {
                     Some(cond) => {
@@ -257,6 +268,11 @@ impl Comp {
                 if let Some(j_end) = j_end {
                     self.patch(j_end);
                 }
+                // Patch break jumps to the loop exit point.
+                let breaks = self.break_jumps.pop().unwrap_or_default();
+                for j in breaks {
+                    self.patch(j);
+                }
                 self.drop_locals(loop_depth);
             }
             Stmt::Return(expr) => {
@@ -271,6 +287,14 @@ impl Comp {
                     }
                 }
                 self.emit(Op::Return);
+            }
+            Stmt::Break => {
+                // Emit a placeholder jump; the enclosing loop patches it
+                // to its exit point.
+                self.emit(Op::Jump(u16::MAX));
+                if let Some(breaks) = self.break_jumps.last_mut() {
+                    breaks.push(self.code.len() - 1);
+                }
             }
             Stmt::Block(stmts) => {
                 self.block(stmts)?;

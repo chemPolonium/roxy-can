@@ -18,6 +18,7 @@ pub enum Tok {
     While,
     For,
     Return,
+    Break,
     True,
     False,
     /// Event handler introducer (`on start` / `on message 0x100` /
@@ -66,6 +67,7 @@ fn keyword(word: &str) -> Option<Tok> {
         "while" => Tok::While,
         "for" => Tok::For,
         "return" => Tok::Return,
+        "break" => Tok::Break,
         "true" => Tok::True,
         "false" => Tok::False,
         "on" => Tok::On,

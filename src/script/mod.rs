@@ -215,6 +215,12 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("srand", 1, 1),
     ("ramp", 3, 3),
     ("sine_wave", 3, 3),
+    ("bit_and", 2, 2),
+    ("bit_or", 2, 2),
+    ("bit_xor", 2, 2),
+    ("bit_not", 1, 1),
+    ("bit_shl", 2, 2),
+    ("bit_shr", 2, 2),
     // Stimulus math: pure functions over floats, radians for trig.
     ("abs", 1, 1),
     ("floor", 1, 1),
@@ -398,6 +404,32 @@ mod tests {
         vm.run().unwrap();
         vm.run_handler(start_chunk).unwrap();
         assert_eq!(vm.output, ["node up"]);
+    }
+
+    #[test]
+    fn break_exits_while_and_for_loops() {
+        assert_eq!(
+            out(r#"
+                    let n = 0;
+                    while (true) {
+                        n = n + 1;
+                        if (n >= 3) { break; }
+                    }
+                    print(n);
+                "#),
+            ["3"]
+        );
+        assert_eq!(
+            out(r#"
+                    let s = 0;
+                    for (let i = 0; i < 100; i = i + 1) {
+                        s = s + i;
+                        if (s > 10) { break; }
+                    }
+                    print(s);
+                "#),
+            ["15"]
+        );
     }
 
     #[test]
