@@ -65,17 +65,22 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let Some(db) = &channel.dbc else {
                             continue;
                         };
-                        for &(id, _) in &db.order {
-                            if let Some(m) = db.message_of(id) {
-                                ids.push((ch as u8, id));
-                                names.push(format!(
-                                    "{}  {:03X}  {}",
-                                    app.channel_name(ch as u8),
-                                    id,
-                                    m.name
-                                ));
-                            }
+                    let mut listed: std::collections::HashSet<u32> =
+                        std::collections::HashSet::new();
+                    for &(id, _) in &db.order {
+                        if !listed.insert(id) {
+                            continue;
                         }
+                        if let Some(m) = db.message_of(id) {
+                            ids.push((ch as u8, id));
+                            names.push(format!(
+                                "{}  {:03X}  {}",
+                                app.channel_name(ch as u8),
+                                id,
+                                m.name
+                            ));
+                        }
+                    }
                     }
                     (ids, names)
                 };

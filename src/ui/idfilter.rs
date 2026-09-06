@@ -210,9 +210,15 @@ fn message_content(app: &mut App, ui: &Ui) {
                 .dbc
                 .as_ref()
                 .map(|db| {
+                    // The selection model is keyed by bare id, so a standard
+                    // and an extended twin list once (standard wins).
+                    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
                     db.order
                         .iter()
                         .filter_map(|&(id, _)| {
+                            if !seen.insert(id) {
+                                return None;
+                            }
                             let m = db.message_of(id)?;
                             Some(MsgEntry {
                                 id,
@@ -324,9 +330,13 @@ fn signal_content(app: &mut App, ui: &Ui) {
                 .dbc
                 .as_ref()
                 .map(|db| {
+                    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
                     db.order
                         .iter()
                         .filter_map(|&(id, _)| {
+                            if !seen.insert(id) {
+                                return None;
+                            }
                             let m = db.message_of(id)?;
                             let msg_hit = q.is_empty() || m.name.to_ascii_uppercase().contains(&q);
                             let signals: Vec<String> = m

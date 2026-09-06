@@ -345,13 +345,17 @@ impl SymbolTable {
 
     /// Message IDs transmitted by the given node, numerically. An extended
     /// message whose number sits in the standard range is indistinguishable
-    /// here until its consumers carry the frame class.
+    /// here until its consumers carry the frame class; twins collapse to
+    /// one entry.
     pub fn node_tx_ids(&self, node: &str) -> Vec<u32> {
-        self.order
+        let mut ids: Vec<u32> = self
+            .order
             .iter()
             .map(|&(id, _)| id)
             .filter(|id| self.message_of(*id).is_some_and(|m| m.transmitter == node))
-            .collect()
+            .collect();
+        ids.dedup();
+        ids
     }
 
     /// Signals received by the given node: (message, signal name, sender).
