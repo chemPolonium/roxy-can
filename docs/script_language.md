@@ -162,7 +162,8 @@ on timer "resp" {
 ### send(id, byte0, byte1, ...) / send(id, buffer)
 
 发送经典帧。id ≤ 0x7FF 为标准帧，> 0x7FF 为扩展帧。
-载荷为 0..255 的整数字节或一个 bytes 缓冲。
+载荷为 0..255 的整数字节或一个 bytes 缓冲；浮点值自动向零截断，
+所以波形内建可以直接喂进载荷（`send(0x100, ramp(0, 255, 1))`）。
 
 ```c
 send(0x123, 0x01, 0x02);

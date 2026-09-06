@@ -401,7 +401,10 @@ fn signal_content(app: &mut App, ui: &Ui) {
             let m_sel = msg_keys.iter().filter(|k| sel.contains(k)).count();
             let m_tot = msg_keys.len();
             let mut msg_on = m_sel == m_tot;
-            if ui.checkbox(format!("##msgchk{ch}_{:X}", m.id), &mut msg_on) {
+            if ui.checkbox(
+                format!("##msgchk{ch}_{:X}{}", m.id, m.ext as u8),
+                &mut msg_on,
+            ) {
                 for k in &msg_keys {
                     actions.push((k.clone(), msg_on));
                 }
