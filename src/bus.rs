@@ -537,7 +537,7 @@ pub struct BusCore {
     /// Frames received this run, for the run-total counter in the status bar.
     pub(crate) frame_counter: u64,
     /// Per-(bus, id) aggregates behind the Messages / Statistics views.
-    pub(crate) aggs: HashMap<(u8, u32), MessageAgg>,
+    pub(crate) aggs: HashMap<(u8, u32, bool), MessageAgg>,
     /// Per-bus load / frame-rate / error rolling state, one entry per channel.
     pub(crate) bus_loads: Vec<crate::load::BusLoad>,
     /// Send-now requests recorded by commands, built into frames at the
@@ -984,25 +984,25 @@ impl BusCore {
                 signals: HashMap::new(),
             });
         }
-        for ((ch, id), agg) in &self.aggs {
-            let Some(input) = inputs.get_mut(ch) else {
+        for (&(ch, id, extended), agg) in &self.aggs {
+            let Some(input) = inputs.get_mut(&ch) else {
                 continue;
             };
-            let Some(db) = self.channel_dbc(*ch) else {
+            let Some(db) = self.channel_dbc(ch) else {
                 continue;
             };
             let f = CanFrame {
                 t_us: agg.last_t_us,
-                channel: *ch,
-                id: *id,
-                extended: false,
+                channel: ch,
+                id,
+                extended,
                 len: agg.len,
                 data: agg.data,
                 dir: agg.dir,
                 flags: agg.flags,
             };
             for d in db.decode_signals(&f) {
-                input.signals.insert((*id, d.name), d.phys);
+                input.signals.insert((id, d.name), d.phys);
             }
         }
         inputs
@@ -1449,10 +1449,10 @@ impl BusCore {
         self.aggs = self
             .aggs
             .drain()
-            .filter_map(|((c, id), mut a)| {
+            .filter_map(|((c, id, ext), mut a)| {
                 remap(c).map(|nc| {
                     a.channel = nc;
-                    ((nc, id), a)
+                    ((nc, id, ext), a)
                 })
             })
             .collect();
@@ -2017,17 +2017,20 @@ impl BusCore {
         // separately by the step not running at all. The other three are facts
         // about frames already seen and stay on in every mode.
         let live = matches!(self.mode, Mode::Virtual) && !self.trace_paused;
-        let mut hits: Vec<((u8, u32, Kind), f64, f64)> = Vec::new();
-        let mut seen: Vec<((u8, u32), u64)> = Vec::with_capacity(self.aggs.len());
+        /// A verdict bound to one message's class, with the declared and
+        /// measured quantities for the report row.
+        type Hit = ((u8, u32, bool, Kind), f64, f64);
+        let mut hits: Vec<Hit> = Vec::new();
+        let mut seen: Vec<((u8, u32, bool), u64)> = Vec::with_capacity(self.aggs.len());
         for (&key, agg) in &self.aggs {
-            let (ch, id) = key;
+            let (ch, id, ext) = key;
             seen.push((key, agg.last_t_us));
             // No database on this bus means no opinion, not a clean bill.
             let Some(db) = self.channel_dbc(ch) else {
                 continue;
             };
-            let Some(m) = db.messages.get(&(id, agg.extended)) else {
-                hits.push(((ch, id, Kind::Unknown), 0.0, 0.0));
+            let Some(m) = db.messages.get(&(id, ext)) else {
+                hits.push(((ch, id, ext, Kind::Unknown), 0.0, 0.0));
                 continue;
             };
             // A declaration of 0 is event-triggered, which the two timing
@@ -2042,7 +2045,7 @@ impl BusCore {
             // period. Transmitting an id the database lacks is still reported.
             if matches!(agg.dir, Direction::Rx) {
                 if dlc_offender(agg.len, m.dlc) {
-                    hits.push(((ch, id, Kind::Dlc), m.dlc as f64, f64::from(agg.len)));
+                    hits.push(((ch, id, ext, Kind::Dlc), m.dlc as f64, f64::from(agg.len)));
                 }
                 // The interval since the previous step, never the running
                 // average in `agg.cycle_us`: an EMA reads a five-fold stall as
@@ -2059,14 +2062,14 @@ impl BusCore {
                 if let (Some(d), Some(interval)) = (declared, elapsed)
                     && cycle_offender(interval, d, tol_pct)
                 {
-                    hits.push(((ch, id, Kind::Cycle), d as f64, interval as f64));
+                    hits.push(((ch, id, ext, Kind::Cycle), d as f64, interval as f64));
                 }
             }
             if let (true, Some(d)) = (live, declared)
                 && missing_offender(now, agg.last_t_us, d, grace)
             {
                 hits.push((
-                    (ch, id, Kind::Missing),
+                    (ch, id, ext, Kind::Missing),
                     d as f64,
                     now.saturating_sub(agg.last_t_us) as f64,
                 ));
@@ -2119,20 +2122,23 @@ impl BusCore {
             self.trace.enforce_limit(TRACE_LIMIT);
             return;
         }
-        let agg = self.aggs.entry((f.channel, f.id)).or_insert(MessageAgg {
-            id: f.id,
-            extended: f.extended,
-            channel: f.channel,
-            dir: f.dir,
-            count: 0,
-            last_t_us: 0,
-            cycle_us: 0.0,
-            min_us: f64::MAX,
-            max_us: 0.0,
-            len: f.len,
-            data: f.data,
-            flags: f.flags,
-        });
+        let agg = self
+            .aggs
+            .entry((f.channel, f.id, f.extended))
+            .or_insert(MessageAgg {
+                id: f.id,
+                extended: f.extended,
+                channel: f.channel,
+                dir: f.dir,
+                count: 0,
+                last_t_us: 0,
+                cycle_us: 0.0,
+                min_us: f64::MAX,
+                max_us: 0.0,
+                len: f.len,
+                data: f.data,
+                flags: f.flags,
+            });
         // Only a strictly later timestamp marks a real cycle. A backwards
         // or repeated one is a discontinuity -- a seek, or an out-of-order
         // log row -- and folding it in used to pin `min_us` at zero for the
@@ -2324,7 +2330,9 @@ impl BusCore {
     /// The spec's own grace comparison decides silence, so a trigger and
     /// the Dropped verdict can never disagree about the same message.
     fn timeout_silent(&self, ch: u8, id: u32, now_us: u64, grace: u64) -> bool {
-        let Some(agg) = self.aggs.get(&(ch, id)) else {
+        // Trigger conditions carry no frame class yet: either class's
+        // aggregate counts.
+        let Some(agg) = self.aggs.values().find(|a| a.channel == ch && a.id == id) else {
             return false; // never seen: no opinion, not a dropout
         };
         let Some(declared) = self.dbc_cycle_us(ch, id) else {

@@ -291,12 +291,17 @@ impl App {
             .sum();
         s.push_str(&format!("# periodic messages declared,{periodic}\n"));
         s.push_str("bus,id,name,rule,declared,measured,count,first_s,last_s\n");
-        for ((ch, id, kind), l) in &self.snap.spec.rows {
+        for ((ch, id, ext, kind), l) in &self.snap.spec.rows {
             let name = self.message_name(*ch, *id).unwrap_or("not in database");
+            let id_text = if *ext {
+                format!("{id:X} ext")
+            } else {
+                format!("{id:X}")
+            };
             s.push_str(&format!(
-                "{},{:X},{},{},{},{},{},{:.3},{:.3}\n",
+                "{},{},{},{},{},{},{},{:.3},{:.3}\n",
                 self.channel_name(*ch),
-                id,
+                id_text,
                 name,
                 kind.label(),
                 crate::spec::qty(*kind, l.declared),

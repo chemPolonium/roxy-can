@@ -162,7 +162,7 @@ fn aggregates_frames_per_message_id() {
     }
     let agg = app
         .aggs
-        .get(&(0, 0x100))
+        .get(&(0, 0x100, false))
         .expect("EngineStatus aggregated on CAN1");
     assert!(agg.count >= 5, "expected several frames, got {}", agg.count);
     assert!(
@@ -207,7 +207,7 @@ fn generator_frames_are_spaced_exactly_one_cycle() {
         slots_of(&app, 0x777),
         vec![0, 20_000, 40_000, 60_000, 80_000]
     );
-    let agg = app.aggs.get(&(0, 0x777)).expect("aggregate");
+    let agg = app.aggs.get(&(0, 0x777, false)).expect("aggregate");
     assert_eq!((agg.min_us, agg.max_us), (20_000.0, 20_000.0));
     app.stop();
 }
@@ -860,7 +860,7 @@ fn tx_generator_emits_frames() {
         "expected a Tx frame from the generator"
     );
     assert!(
-        app.aggs.contains_key(&(0, 0x777)),
+        app.aggs.contains_key(&(0, 0x777, false)),
         "generator frames aggregate"
     );
     app.stop();
@@ -907,7 +907,7 @@ fn the_spec_report_export_includes_its_premises_and_rows() {
     assert!(
         app.spec
             .rows
-            .contains_key(&(0, 0x777, crate::spec::Kind::Unknown))
+            .contains_key(&(0, 0x777, false, crate::spec::Kind::Unknown))
     );
     app.spec_tol_pct = 5;
     app.spec_grace = 4;
@@ -957,8 +957,8 @@ fn two_channels_aggregate_separately() {
         std::thread::sleep(std::time::Duration::from_millis(11));
         app.update();
     }
-    let a = app.aggs.get(&(0, 0x100)).expect("CAN1 aggregate");
-    let b = app.aggs.get(&(1, 0xC8)).expect("CAN2 aggregate");
+    let a = app.aggs.get(&(0, 0x100, false)).expect("CAN1 aggregate");
+    let b = app.aggs.get(&(1, 0xC8, false)).expect("CAN2 aggregate");
     assert!(a.count >= 3, "CAN1 frames: {}", a.count);
     assert!(b.count >= 3, "CAN2 frames: {}", b.count);
     assert!(app.trace.iter().any(|f| f.channel == 1 && f.id == 0xC8));
@@ -1098,7 +1098,7 @@ fn channels_can_be_added_removed_and_renamed() {
     assert_eq!(app.channel_name(2), "CAN3");
 
     app.aggs.insert(
-        (1, 0x100),
+        (1, 0x100, false),
         MessageAgg {
             id: 0x100,
             channel: 1,
@@ -1121,7 +1121,10 @@ fn channels_can_be_added_removed_and_renamed() {
     app.remove_channel(0);
     assert_eq!(app.channels.len(), 2);
     assert_eq!(app.channel_name(0), "CAN2", "remaining buses shift down");
-    assert!(app.aggs.contains_key(&(0, 0x100)), "agg remapped 1 -> 0");
+    assert!(
+        app.aggs.contains_key(&(0, 0x100, false)),
+        "agg remapped 1 -> 0"
+    );
     assert!(
         app.trace_windows[0].manual.contains(&(1, 0x200)),
         "filter remapped 2 -> 1"
@@ -1868,7 +1871,7 @@ fn replay_injection_lands_on_the_log_timeline() {
     );
     let agg = app
         .aggs
-        .get(&(tx_ch, tx_id))
+        .get(&(tx_ch, tx_id, false))
         .expect("injected frames aggregate");
     assert_eq!(agg.count, injected.len() as u64);
     assert!(
@@ -2351,11 +2354,11 @@ fn receive(app: &mut App, t_us: u64, frames: Vec<CanFrame>) {
 }
 
 fn flagged(app: &App, ch: u8, id: u32, kind: Kind) -> bool {
-    app.spec.rows.contains_key(&(ch, id, kind))
+    app.spec.rows.contains_key(&(ch, id, false, kind))
 }
 
 fn verdict(app: &App, ch: u8, id: u32, kind: Kind) -> crate::spec::Latch {
-    app.spec.rows[&(ch, id, kind)]
+    app.spec.rows[&(ch, id, false, kind)]
 }
 
 #[test]
@@ -2673,7 +2676,7 @@ fn the_first_sample_of_a_message_is_never_a_cycle_violation() {
         vec![frame_at(500_000, 100, 8, Direction::Rx)],
     );
     assert_eq!(
-        app.aggs[&(0, 100)].count,
+        app.aggs[&(0, 100, false)].count,
         1,
         "test setup: one frame, no interval yet"
     );
@@ -2773,7 +2776,7 @@ fn the_monitor_forgets_everything_when_a_new_run_starts() {
     app.start_virtual();
     assert!(app.spec.rows.is_empty(), "the report belongs to a run");
     assert_eq!(
-        app.spec.previous((0, 100)),
+        app.spec.previous((0, 100, false)),
         None,
         "and so does the interval memory"
     );
@@ -2872,6 +2875,68 @@ fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
         dir: Direction::Rx,
         flags,
     }
+}
+
+fn ext_rx_frame(t_us: u64, id: u32, len: u8) -> CanFrame {
+    CanFrame {
+        t_us,
+        channel: 0,
+        id,
+        extended: true,
+        len,
+        data: [0u8; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    }
+}
+
+/// A standard and an extended frame sharing one numeric id are two
+/// messages as far as every consumer is concerned: two aggregates, two
+/// spec watch keys, no verdicts bleeding across the class boundary.
+#[test]
+fn a_shared_numeric_id_aggregates_as_two_messages() {
+    let mut app = App::headless();
+    let db = app.channel_dbc(0).expect("sample DBC loaded");
+    // Standard 0x100 exists in the sample database; the extended twin
+    // deliberately does not, so only the extended class reads Unknown.
+    let std_id = db
+        .order
+        .iter()
+        .find(|&&(_, ext)| !ext)
+        .map(|&(id, _)| id);
+    let Some(std_id) = std_id else {
+        panic!("sample database has a standard message");
+    };
+    receive(
+        &mut app,
+        1_000,
+        vec![
+            rx_frame(1_000, std_id, 8, FrameFlags::NONE),
+            ext_rx_frame(1_000, std_id, 8),
+        ],
+    );
+    assert!(
+        app.aggs.contains_key(&(0, std_id, false)),
+        "the standard class aggregates"
+    );
+    assert!(
+        app.aggs.contains_key(&(0, std_id, true)),
+        "the extended class aggregates separately"
+    );
+    // The standard id is declared, so no verdict; the extended one is
+    // unknown to the database and gets exactly one Unknown row.
+    assert!(
+        !app.spec
+            .rows
+            .contains_key(&(0, std_id, false, crate::spec::Kind::Unknown)),
+        "the declared standard message stays clean"
+    );
+    assert!(
+        app.spec
+            .rows
+            .contains_key(&(0, std_id, true, crate::spec::Kind::Unknown)),
+        "the undeclared extended twin is judged on its own"
+    );
 }
 
 fn quiet_app() -> App {
@@ -3432,7 +3497,7 @@ fn a_send_action_transmits_one_generator_frame() {
         "the entry's payload goes out"
     );
     assert!(
-        app.aggs.contains_key(&(0, 0x777)),
+        app.aggs.contains_key(&(0, 0x777, false)),
         "the reaction aggregates like any real traffic"
     );
 

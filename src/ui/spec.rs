@@ -71,12 +71,12 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.separator();
 
-    let rows: Vec<((u8, u32, Kind), Latch)> = app
+    let rows: Vec<((u8, u32, bool, Kind), Latch)> = app
         .snap
         .spec
         .rows
         .iter()
-        .filter(|((_, _, kind), _)| app.spec_show[kind.index()])
+        .filter(|((_, _, _, kind), _)| app.spec_show[kind.index()])
         .map(|(k, l)| (*k, *l))
         .collect();
     if rows.is_empty() {
@@ -116,11 +116,16 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.table_headers_row();
 
-    for ((ch, id, kind), l) in rows {
+    for ((ch, id, ext, kind), l) in rows {
         ui.table_next_row();
         ui.table_next_column();
         let name = app.message_name(ch, id).unwrap_or("not in database");
-        ui.text(format!("{name} ({id:X})"));
+        let id_text = if ext {
+            format!("{id:X} ext")
+        } else {
+            format!("{id:X}")
+        };
+        ui.text(format!("{name} ({id_text})"));
         for column in [
             app.channel_name(ch),
             kind.label().to_string(),

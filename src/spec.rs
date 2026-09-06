@@ -73,28 +73,36 @@ pub struct Latch {
 }
 
 /// The monitor's whole state: the latched rows plus just enough memory of the
-/// previous step to measure an interval.
+/// previous step to measure an interval. Both tables key on
+/// `(bus, id, extended, kind)` so a standard and an extended message that
+/// share one numeric id never convict each other.
 #[derive(Clone, Debug, Default)]
 pub struct Spec {
-    pub rows: BTreeMap<(u8, u32, Kind), Latch>,
+    pub rows: BTreeMap<(u8, u32, bool, Kind), Latch>,
     /// `last_t_us` of each message as of the previous step. Kept here rather
     /// than added to [`crate::app::MessageAgg`], which is the observers' shared
     /// ledger and should not grow a field for one consumer.
-    previous: HashMap<(u8, u32), u64>,
+    previous: HashMap<(u8, u32, bool), u64>,
 }
 
 impl Spec {
     /// The last time we saw this message, as recorded on the previous step.
     /// `None` on its first appearance, when there is no interval to measure.
-    pub fn previous(&self, key: (u8, u32)) -> Option<u64> {
+    pub fn previous(&self, key: (u8, u32, bool)) -> Option<u64> {
         self.previous.get(&key).copied()
     }
 
-    pub fn note(&mut self, key: (u8, u32), last_t_us: u64) {
+    pub fn note(&mut self, key: (u8, u32, bool), last_t_us: u64) {
         self.previous.insert(key, last_t_us);
     }
 
-    pub fn record(&mut self, key: (u8, u32, Kind), now_us: u64, declared: f64, measured: f64) {
+    pub fn record(
+        &mut self,
+        key: (u8, u32, bool, Kind),
+        now_us: u64,
+        declared: f64,
+        measured: f64,
+    ) {
         let row = self.rows.entry(key).or_insert(Latch {
             count: 0,
             first_t_us: now_us,
@@ -126,11 +134,11 @@ impl Spec {
         };
         self.rows = std::mem::take(&mut self.rows)
             .into_iter()
-            .filter_map(|((c, id, kind), l)| remap(c).map(|nc| ((nc, id, kind), l)))
+            .filter_map(|((c, id, ext, kind), l)| remap(c).map(|nc| ((nc, id, ext, kind), l)))
             .collect();
         self.previous = std::mem::take(&mut self.previous)
             .into_iter()
-            .filter_map(|((c, id), t)| remap(c).map(|nc| ((nc, id), t)))
+            .filter_map(|((c, id, ext), t)| remap(c).map(|nc| ((nc, id, ext), t)))
             .collect();
     }
 }
@@ -227,7 +235,7 @@ mod tests {
     #[test]
     fn a_latch_opens_once_and_only_deepens() {
         let mut spec = Spec::default();
-        let key = (0, 0x64, Kind::Cycle);
+        let key = (0, 0x64, false, Kind::Cycle);
         spec.record(key, 100, 100_000.0, 200_000.0);
         spec.record(key, 200, 100_000.0, 300_000.0);
         assert_eq!(
@@ -245,27 +253,31 @@ mod tests {
     #[test]
     fn there_is_no_interval_to_measure_on_a_messages_first_step() {
         let mut spec = Spec::default();
-        assert_eq!(spec.previous((0, 0x64)), None);
-        spec.note((0, 0x64), 42);
-        assert_eq!(spec.previous((0, 0x64)), Some(42));
+        assert_eq!(spec.previous((0, 0x64, false)), None);
+        spec.note((0, 0x64, false), 42);
+        assert_eq!(spec.previous((0, 0x64, false)), Some(42));
         spec.clear();
         // Clearing the report must not forget the clock, or the next step would
         // measure an interval across the whole gap it just hid.
-        assert_eq!(spec.previous((0, 0x64)), Some(42));
+        assert_eq!(spec.previous((0, 0x64, false)), Some(42));
     }
 
     #[test]
     fn remapping_a_bus_drops_it_and_shifts_the_ones_above() {
         let mut spec = Spec::default();
         for ch in 0..3 {
-            spec.record((ch, 1, Kind::Dlc), 0, 8.0, 6.0);
+            spec.record((ch, 1, false, Kind::Dlc), 0, 8.0, 6.0);
         }
-        spec.note((2, 1), 500);
+        spec.note((2, 1, false), 500);
         spec.drop_channel(1);
-        let buses: Vec<u8> = spec.rows.keys().map(|(c, _, _)| *c).collect();
+        let buses: Vec<u8> = spec.rows.keys().map(|(c, _, _, _)| *c).collect();
         assert_eq!(buses, [0, 1], "gone, and the one above shifted down");
-        assert_eq!(spec.previous((1, 1)), Some(500), "the clock moved with it");
-        assert_eq!(spec.previous((2, 1)), None);
+        assert_eq!(
+            spec.previous((1, 1, false)),
+            Some(500),
+            "the clock moved with it"
+        );
+        assert_eq!(spec.previous((2, 1, false)), None);
     }
 
     #[test]
