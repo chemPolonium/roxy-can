@@ -668,8 +668,8 @@ fn perf_snapshot_publish_under_load() {
     // Every signal the sample database declares, taken in table order.
     let mut keys: Vec<(u8, u32, String)> = Vec::new();
     let db = app.channel_dbc(0).expect("sample.dbc loaded");
-    for id in &db.order {
-        let msg = db.messages.get(id).expect("message table");
+    for (id, _) in &db.order {
+        let msg = db.message_of(*id).expect("message table");
         for s in &msg.signals {
             keys.push((0, *id, s.name.clone()));
         }

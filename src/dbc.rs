@@ -21,10 +21,15 @@ fn numeric(v: &NumericValue) -> f64 {
 /// `CycleTime`, so both are honoured.
 const CYCLE_ATTRS: [&str; 2] = ["GenMsgCycleTime", "CycleTime"];
 
-fn msg_id_of(id: &MessageId) -> u32 {
+/// The map key for a message: the numeric id plus its frame class, so a
+/// standard `0x123` and an extended `0x123` stay two different messages
+/// instead of overwriting each other's declaration.
+type MsgKey = (u32, bool);
+
+fn msg_key_of(id: &MessageId) -> MsgKey {
     match id {
-        MessageId::Standard(i) => *i as u32,
-        MessageId::Extended(i) => *i,
+        MessageId::Standard(i) => (*i as u32, false),
+        MessageId::Extended(i) => (*i, true),
     }
 }
 
@@ -45,8 +50,8 @@ fn cycle_us_of(v: &AttributeValue) -> Option<u64> {
 /// over the `BA_DEF_DEF_` default, which by definition applies to each message
 /// that carries none. A database that says nothing produces no entry at all --
 /// the caller then keeps whatever fallback it had rather than an invented value.
-fn declared_cycles(db: &can_dbc::Dbc) -> HashMap<u32, u64> {
-    let mut out: HashMap<u32, u64> = HashMap::new();
+fn declared_cycles(db: &can_dbc::Dbc) -> HashMap<MsgKey, u64> {
+    let mut out: HashMap<MsgKey, u64> = HashMap::new();
     // One pass per attribute name, always `or_insert`, so `CYCLE_ATTRS` order is
     // the priority order and neither scan can clobber the other's explicit hit.
     for name in CYCLE_ATTRS {
@@ -55,7 +60,7 @@ fn declared_cycles(db: &can_dbc::Dbc) -> HashMap<u32, u64> {
                 continue;
             }
             if let Some(us) = cycle_us_of(&v.value) {
-                out.entry(msg_id_of(&v.message_id)).or_insert(us);
+                out.entry(msg_key_of(&v.message_id)).or_insert(us);
             }
         }
     }
@@ -65,7 +70,7 @@ fn declared_cycles(db: &can_dbc::Dbc) -> HashMap<u32, u64> {
         .and_then(|d| cycle_us_of(&d.value));
     if let Some(us) = default {
         for msg in &db.messages {
-            out.entry(msg_id_of(&msg.id)).or_insert(us);
+            out.entry(msg_key_of(&msg.id)).or_insert(us);
         }
     }
     out
@@ -120,19 +125,19 @@ pub struct MessageInfo {
 }
 
 pub struct SymbolTable {
-    pub messages: HashMap<u32, MessageInfo>,
-    pub order: Vec<u32>,
+    pub messages: HashMap<MsgKey, MessageInfo>,
+    pub order: Vec<MsgKey>,
     pub nodes: Vec<String>,
-    /// `VAL_` enum labels, keyed by (message id, signal name) and matching on
+    /// `VAL_` enum labels, keyed by (message, signal name) and matching on
     /// the **raw** integer value. Labels referenced by a named table
     /// (`VAL_ 100 Sig TableName;`) are unreachable: the parser cannot read that
     /// form at all.
-    pub value_tables: HashMap<(u32, String), HashMap<i64, String>>,
+    pub value_tables: HashMap<(MsgKey, String), HashMap<i64, String>>,
 }
 
-/// `SG_MUL_VAL_` gates, grouped as message id → signal name → switch name →
+/// `SG_MUL_VAL_` gates, grouped as message key, signal name, switch name, then
 /// the inclusive switch ranges that show the signal.
-type ExtMuxRules = HashMap<u32, HashMap<String, HashMap<String, Vec<(u64, u64)>>>>;
+type ExtMuxRules = HashMap<MsgKey, HashMap<String, HashMap<String, Vec<(u64, u64)>>>>;
 
 impl SymbolTable {
     pub fn from_dbc(db: &can_dbc::Dbc) -> Self {
@@ -140,20 +145,20 @@ impl SymbolTable {
         let mut order = Vec::new();
         let cycles = declared_cycles(db);
         // `SIG_VALTYPE_` lines name the signals whose bits are IEEE floats.
-        let mut floats: HashMap<(u32, &str), u64> = HashMap::new();
+        let mut floats: HashMap<(MsgKey, &str), u64> = HashMap::new();
         for v in &db.signal_extended_value_type_list {
             let width = match v.signal_extended_value_type {
                 SignalExtendedValueType::IEEEfloat32Bit => 32,
                 SignalExtendedValueType::IEEEdouble64bit => 64,
                 SignalExtendedValueType::SignedOrUnsignedInteger => continue,
             };
-            floats.insert((msg_id_of(&v.message_id), v.signal_name.as_str()), width);
+            floats.insert((msg_key_of(&v.message_id), v.signal_name.as_str()), width);
         }
         // `SG_MUL_VAL_` lines state a signal's gating outright: per switch
         // signal, a union of inclusive ranges, and all switches must agree.
         let mut ext_mux: ExtMuxRules = HashMap::new();
         for em in &db.extended_multiplex {
-            let by_switch = ext_mux.entry(msg_id_of(&em.message_id)).or_default();
+            let by_switch = ext_mux.entry(msg_key_of(&em.message_id)).or_default();
             let ranges = by_switch
                 .entry(em.signal_name.clone())
                 .or_default()
@@ -164,7 +169,7 @@ impl SymbolTable {
             }
         }
         for msg in &db.messages {
-            let id = msg_id_of(&msg.id);
+            let (id, extended) = msg_key_of(&msg.id);
             // `m` markers gate against the message's single top switch, named
             // by whichever signal carries the `M`. A message with several `M`
             // markers keeps the first -- there is nothing sane to do with
@@ -178,7 +183,7 @@ impl SymbolTable {
                 .iter()
                 .map(|s| {
                     let mux_when: Vec<MuxCondition> = match ext_mux
-                        .get(&id)
+                        .get(&(id, extended))
                         .and_then(|m| m.get(s.name.as_str()))
                     {
                         // An `SG_MUL_VAL_` line supersedes whatever the
@@ -206,7 +211,7 @@ impl SymbolTable {
                     // signal's own bit size is broken; the integer reading is
                     // kept rather than decoding from mismatched bits.
                     let float_width = floats
-                        .get(&(id, s.name.as_str()))
+                        .get(&((id, extended), s.name.as_str()))
                         .copied()
                         .filter(|w| *w == s.size);
                     let type_tag = match float_width {
@@ -299,22 +304,22 @@ impl SymbolTable {
                 .filter(|t| t != "Vector__XXX")
                 .unwrap_or_default();
             messages.insert(
-                id,
+                (id, extended),
                 MessageInfo {
                     name: msg.name.clone(),
                     dlc: msg.size,
                     transmitter,
-                    cycle_us: cycles.get(&id).copied(),
+                    cycle_us: cycles.get(&(id, extended)).copied(),
                     signals,
                     switch_names,
                 },
             );
-            order.push(id);
+            order.push((id, extended));
         }
         order.sort_unstable();
         order.dedup();
         let nodes = db.nodes.iter().map(|n| n.0.clone()).collect();
-        let mut value_tables: HashMap<(u32, String), HashMap<i64, String>> = HashMap::new();
+        let mut value_tables: HashMap<(MsgKey, String), HashMap<i64, String>> = HashMap::new();
         for vd in &db.value_descriptions {
             if let ValueDescription::Signal {
                 message_id,
@@ -323,7 +328,7 @@ impl SymbolTable {
             } = vd
             {
                 let table = value_tables
-                    .entry((msg_id_of(message_id), name.clone()))
+                    .entry((msg_key_of(message_id), name.clone()))
                     .or_default();
                 for d in value_descriptions {
                     table.insert(d.id, d.description.clone());
@@ -338,39 +343,73 @@ impl SymbolTable {
         }
     }
 
-    /// Message IDs transmitted by the given node.
+    /// Message IDs transmitted by the given node, numerically. An extended
+    /// message whose number sits in the standard range is indistinguishable
+    /// here until its consumers carry the frame class.
     pub fn node_tx_ids(&self, node: &str) -> Vec<u32> {
         self.order
             .iter()
-            .copied()
-            .filter(|id| self.messages.get(id).is_some_and(|m| m.transmitter == node))
+            .map(|&(id, _)| id)
+            .filter(|id| self.message_of(*id).is_some_and(|m| m.transmitter == node))
             .collect()
     }
 
-    /// Signals received by the given node: (message id, signal name, sender).
-    pub fn node_rx_signals(&self, node: &str) -> Vec<(u32, String, String)> {
+    /// Signals received by the given node: (message, signal name, sender).
+    pub fn node_rx_signals(&self, node: &str) -> Vec<(MsgKey, String, String)> {
         let mut out = Vec::new();
-        for &id in &self.order {
-            let Some(m) = self.messages.get(&id) else {
+        for &key in &self.order {
+            let Some(m) = self.messages.get(&key) else {
                 continue;
             };
             for s in &m.signals {
                 if s.receivers.iter().any(|r| r == node) {
-                    out.push((id, s.name.clone(), m.transmitter.clone()));
+                    out.push((key, s.name.clone(), m.transmitter.clone()));
                 }
             }
         }
         out
     }
 
+    /// Exact lookup when the caller knows the frame class.
+    pub fn message_name_of(&self, key: MsgKey) -> Option<&str> {
+        self.messages.get(&key).map(|m| m.name.as_str())
+    }
+
+    /// Bare-id lookup for callers that do not carry a frame class yet:
+    /// standard first, extended as the fallback. Exact for every database
+    /// that does not reuse one number across both classes.
+    pub fn message_of(&self, id: u32) -> Option<&MessageInfo> {
+        self.messages
+            .get(&(id, false))
+            .or_else(|| self.messages.get(&(id, true)))
+    }
+
+    /// Bare-id form of [`Self::message_of`], for name display.
     pub fn message_name(&self, id: u32) -> Option<&str> {
-        self.messages.get(&id).map(|m| m.name.as_str())
+        self.message_of(id).map(|m| m.name.as_str())
+    }
+
+    /// The `VAL_` table for a signal, bare-id form for callers that do not
+    /// carry a frame class yet: standard first, extended as the fallback.
+    pub fn val_table_of(&self, id: u32, name: &str) -> Option<&HashMap<i64, String>> {
+        self.value_tables
+            .get(&((id, false), name.to_string()))
+            .or_else(|| self.value_tables.get(&((id, true), name.to_string())))
     }
 
     /// Packs a physical signal value into the frame data bytes.
-    /// Returns false if the message or signal is unknown.
+    /// Returns false if the message or signal is unknown. The id picks the
+    /// frame class like `send` does: up to 0x7FF standard (with the extended
+    /// declaration as fallback), above it extended only.
     pub fn encode_signal(&self, id: u32, name: &str, phys: f64, data: &mut [u8]) -> bool {
-        let Some(msg) = self.messages.get(&id) else {
+        let msg = if id <= 0x7FF {
+            self.messages
+                .get(&(id, false))
+                .or_else(|| self.messages.get(&(id, true)))
+        } else {
+            self.messages.get(&(id, true))
+        };
+        let Some(msg) = msg else {
             return false;
         };
         let Some(s) = msg.signals.iter().find(|s| s.name == name) else {
@@ -386,7 +425,7 @@ impl SymbolTable {
     }
 
     pub fn decode_signals(&self, frame: &CanFrame) -> Vec<DecodedSignal> {
-        let Some(msg) = self.messages.get(&frame.id) else {
+        let Some(msg) = self.messages.get(&(frame.id, frame.extended)) else {
             return Vec::new();
         };
         // Every switch a condition gates on, decoded once per call. A switch
@@ -427,7 +466,7 @@ impl SymbolTable {
                 let label = if s.is_float {
                     None
                 } else {
-                    self.val_label(frame.id, &s.name, raw, s.size, s.signed)
+                    self.val_label((frame.id, frame.extended), &s.name, raw, s.size, s.signed)
                 };
                 // The raw integer, sign-extended for signed signals: the Data
                 // window's Raw Value column shows the wire value before the
@@ -452,11 +491,18 @@ impl SymbolTable {
     /// The `VAL_` label for a signal's extracted bits, if one names this raw
     /// value. Comparing on the sign-extended integer means a `VAL_` entry with
     /// a negative id can label a signed signal.
-    fn val_label(&self, id: u32, name: &str, raw: u64, size: u64, signed: bool) -> Option<String> {
-        let key = decode::to_physical(raw, size, signed, 1.0, 0.0) as i64;
+    fn val_label(
+        &self,
+        msg: MsgKey,
+        name: &str,
+        raw: u64,
+        size: u64,
+        signed: bool,
+    ) -> Option<String> {
+        let raw_val = decode::to_physical(raw, size, signed, 1.0, 0.0) as i64;
         self.value_tables
-            .get(&(id, name.to_string()))
-            .and_then(|table| table.get(&key))
+            .get(&(msg, name.to_string()))
+            .and_then(|table| table.get(&raw_val))
             .cloned()
     }
 }
@@ -570,11 +616,19 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
         let motbus = std::fs::read_to_string("assets/motbus.dbc").unwrap();
         let db = load_dbc_str(&motbus).unwrap();
         // assets/motbus.dbc:62-63 give these two explicit values...
-        assert_eq!(db.messages[&0x64].cycle_us, Some(133_000), "EngineData");
-        assert_eq!(db.messages[&0xC9].cycle_us, Some(50_000), "ABSdata");
+        assert_eq!(
+            db.messages[&(0x64, false)].cycle_us,
+            Some(133_000),
+            "EngineData"
+        );
+        assert_eq!(
+            db.messages[&(0xC9, false)].cycle_us,
+            Some(50_000),
+            "ABSdata"
+        );
         // ...and every other message inherits BA_DEF_DEF_ "CycleTime" 100.
         assert_eq!(
-            db.messages[&0xC7].cycle_us,
+            db.messages[&(0xC7, false)].cycle_us,
             Some(100_000),
             "unlisted takes the default"
         );
@@ -582,7 +636,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
         // sample.dbc declares no attributes at all, which is not a claim of 0.
         let sample = std::fs::read_to_string("assets/sample.dbc").unwrap();
         assert_eq!(
-            load_dbc_str(&sample).unwrap().messages[&0x100].cycle_us,
+            load_dbc_str(&sample).unwrap().messages[&(0x100, false)].cycle_us,
             None
         );
     }
@@ -591,17 +645,17 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
     fn gen_msg_cycle_time_beats_cycle_time() {
         let db = load_dbc_str(CYCLE_DBC).unwrap();
         assert_eq!(
-            db.messages[&256].cycle_us,
+            db.messages[&(256, false)].cycle_us,
             Some(111_000),
             "the Vector name wins"
         );
         assert_eq!(
-            db.messages[&257].cycle_us,
+            db.messages[&(257, false)].cycle_us,
             Some(333_000),
             "legacy name still honoured"
         );
         assert_eq!(
-            db.messages[&260].cycle_us,
+            db.messages[&(260, false)].cycle_us,
             Some(77_000),
             "default follows the winner"
         );
@@ -611,7 +665,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
     fn a_zero_declared_cycle_means_event_triggered() {
         let db = load_dbc_str(CYCLE_DBC).unwrap();
         assert_eq!(
-            db.messages[&258].cycle_us,
+            db.messages[&(258, false)].cycle_us,
             Some(0),
             "0 is a real declaration, not the absence of one"
         );
@@ -632,7 +686,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
         let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
         let table = load_dbc_str(&content).unwrap();
         assert_eq!(table.order.len(), 3);
-        let engine = table.messages.get(&0x100).unwrap();
+        let engine = table.messages.get(&(0x100, false)).unwrap();
         assert_eq!(engine.name, "EngineStatus");
         assert_eq!(engine.signals.len(), 3);
         assert_eq!(engine.signals[0].name, "EngineSpeed");
@@ -657,19 +711,19 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
         assert_eq!(table.node_tx_ids("ChassisECU"), vec![0x200, 0x320]);
         assert!(table.node_tx_ids("Dashboard").is_empty());
         let rx = table.node_rx_signals("Dashboard");
-        assert!(rx.iter().any(|(id, sig, sender)| *id == 0x100
+        assert!(rx.iter().any(|((id, _), sig, sender)| *id == 0x100
             && sig == "EngineSpeed"
             && sender == "EngineECU"));
         assert!(
             rx.iter()
-                .any(|(id, sig, _)| *id == 0x320 && sig == "BrakePressure")
+                .any(|((id, _), sig, _)| *id == 0x320 && sig == "BrakePressure")
         );
         assert_eq!(rx.len(), 5, "Dashboard receives all five signals");
         assert!(
             table
                 .node_rx_signals("ChassisECU")
                 .iter()
-                .any(|(id, sig, _)| *id == 0x100 && sig == "ThrottlePos")
+                .any(|((id, _), sig, _)| *id == 0x100 && sig == "ThrottlePos")
         );
     }
 
@@ -696,6 +750,49 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
         assert!((speed.phys - 3000.0).abs() < 0.5, "decoded {}", speed.phys);
         assert!(!table.encode_signal(0x100, "NoSuchSignal", 1.0, &mut data));
         assert!(!table.encode_signal(0x999, "EngineSpeed", 1.0, &mut data));
+    }
+
+    /// A standard and an extended message may share one numeric id. The
+    /// database keeps both declarations apart and each frame class decodes
+    /// against its own.
+    const TWIN_ID_DBC: &str = r#"VERSION "roxy-can twin id test"
+
+NS_ :
+
+BS_:
+
+BU_: EngineECU
+
+BO_ 256 StdHeartbeat: 1 EngineECU
+ SG_ StdCounter : 0|8@1+ (1,0) [0|255] ""  EngineECU
+
+BO_ 2147483904 ExtHeartbeat: 2 EngineECU
+ SG_ ExtPayload : 0|16@1+ (0.1,0) [0|6553.5] "V"  EngineECU
+"#;
+
+    #[test]
+    fn a_shared_numeric_id_keeps_both_frame_classes() {
+        let table = load_dbc_str(TWIN_ID_DBC).unwrap();
+        // Both declarations survive; the bare-id fallback prefers standard.
+        assert_eq!(table.messages.len(), 2);
+        assert!(table.message_of(0x100).is_some());
+        assert_eq!(table.message_name_of((0x100, true)), Some("ExtHeartbeat"));
+
+        let mut frame = frame_with(0x100, &[3, 0]);
+        let sigs = table.decode_signals(&frame);
+        assert_eq!(sigs.len(), 1, "standard frame sees the standard message");
+        assert_eq!(sigs[0].name, "StdCounter");
+        frame.extended = true;
+        let sigs = table.decode_signals(&frame);
+        assert_eq!(sigs.len(), 1, "extended frame sees the extended message");
+        assert_eq!(sigs[0].name, "ExtPayload");
+
+        // Encoding follows the same class rule as `send`. With one number
+        // claimed by both classes the standard declaration wins -- an
+        // ambiguous request cannot reach the extended twin.
+        let mut data = [0u8; MAX_CAN_FD_LEN];
+        assert!(table.encode_signal(0x100, "StdCounter", 5.0, &mut data));
+        assert!(!table.encode_signal(0x100, "ExtPayload", 5.0, &mut data));
     }
 
     /// A multiplexed message with two groups sharing the same byte range, one
@@ -761,8 +858,8 @@ BO_ 401 Plain: 8 ECU
     #[test]
     fn a_non_muxed_message_decodes_everything_unchanged() {
         let table = load_dbc_str(MUX_DBC).unwrap();
-        assert!(table.messages[&401].switch_names.is_empty());
-        assert!(!table.messages[&400].switch_names.is_empty());
+        assert!(table.messages[&(401, false)].switch_names.is_empty());
+        assert!(!table.messages[&(400, false)].switch_names.is_empty());
         let sigs = table.decode_signals(&frame_with(401, &[1, 2, 3, 4, 5, 6, 7, 8]));
         assert_eq!(names(&sigs), ["P1", "P2"]);
     }
@@ -770,7 +867,7 @@ BO_ 401 Plain: 8 ECU
     #[test]
     fn a_nested_switch_marker_decodes_with_its_group() {
         let table = load_dbc_str(MUX_DBC).unwrap();
-        let nested = table.messages[&400]
+        let nested = table.messages[&(400, false)]
             .signals
             .iter()
             .find(|s| s.name == "Nested")
@@ -822,7 +919,7 @@ SG_MUL_VAL_ 430 Leaf Mid 5-5;
     #[test]
     fn a_signal_can_belong_to_several_switch_ranges() {
         let table = load_dbc_str(SG_MUL_VAL_DBC).unwrap();
-        let split = table.messages[&430]
+        let split = table.messages[&(430, false)]
             .signals
             .iter()
             .find(|s| s.name == "Split")
@@ -976,7 +1073,7 @@ SIG_VALTYPE_ 440 Bad : 1;
     #[test]
     fn a_float_declaration_on_a_mismatched_size_is_ignored() {
         let table = load_dbc_str(FLOAT_DBC).unwrap();
-        let bad = table.messages[&440]
+        let bad = table.messages[&(440, false)]
             .signals
             .iter()
             .find(|s| s.name == "Bad")
@@ -1010,7 +1107,7 @@ BO_ 441 Tags: 8 ECU
 "#,
         )
         .unwrap();
-        let tags: Vec<&str> = table.messages[&441]
+        let tags: Vec<&str> = table.messages[&(441, false)]
             .signals
             .iter()
             .map(|s| s.type_tag.as_str())

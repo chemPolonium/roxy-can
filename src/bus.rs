@@ -1187,11 +1187,14 @@ impl BusCore {
     /// until the first frame refreshes it -- and forever when no database
     /// names it.
     fn signal_meta(&self, key: &(u8, u32, String)) -> String {
-        self.channels
+        // The subscription key carries no frame class yet, so the lookup
+        // falls back across both classes.
+        let msg = self
+            .channels
             .get(key.0 as usize)
             .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.messages.get(&key.1))
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .and_then(|db| db.message_of(key.1));
+        msg.and_then(|m| m.signals.iter().find(|s| s.name == key.2))
             .map(|s| s.type_tag.clone())
             .unwrap_or_default()
     }
@@ -1215,7 +1218,7 @@ impl BusCore {
         let ids: Vec<u32> = self.channels[ch]
             .dbc
             .as_ref()
-            .map(|db| db.order.clone())
+            .map(|db| db.order.iter().map(|&(id, _)| id).collect())
             .unwrap_or_default();
         for id in ids {
             self.add_entry(ch as u8, id);
@@ -1410,7 +1413,7 @@ impl BusCore {
             .flat_map(|(ch, c)| {
                 c.dbc
                     .as_ref()
-                    .map(|db| db.order.iter().map(move |&id| (ch as u8, id)))
+                    .map(|db| db.order.iter().map(move |&(id, _)| (ch as u8, id)))
                     .into_iter()
                     .flatten()
             })
@@ -1562,7 +1565,7 @@ impl BusCore {
         }
         let (name, node, len, cycle_us) = self
             .channel_dbc(ch)
-            .and_then(|db| db.messages.get(&id))
+            .and_then(|db| db.message_of(id))
             .map(|m| {
                 (
                     m.name.clone(),
@@ -1619,8 +1622,7 @@ impl BusCore {
             return false;
         }
         let msg_size = table
-            .messages
-            .get(&id)
+            .message_of(id)
             .map(|m| m.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8)
             .unwrap_or(0);
         let tx = self.entry_mut(ch, id).expect("entry checked above");
@@ -2024,7 +2026,7 @@ impl BusCore {
             let Some(db) = self.channel_dbc(ch) else {
                 continue;
             };
-            let Some(m) = db.messages.get(&id) else {
+            let Some(m) = db.messages.get(&(id, agg.extended)) else {
                 hits.push(((ch, id, Kind::Unknown), 0.0, 0.0));
                 continue;
             };
@@ -2089,7 +2091,7 @@ impl BusCore {
     /// event-triggered one, `None` when it says nothing at all.
     pub(crate) fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
         self.channel_dbc(ch)
-            .and_then(|db| db.messages.get(&id))
+            .and_then(|db| db.message_of(id))
             .and_then(|m| m.cycle_us)
     }
 

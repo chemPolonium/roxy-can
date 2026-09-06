@@ -799,7 +799,7 @@ impl Config {
             .flat_map(|(ch, c)| {
                 c.dbc
                     .as_ref()
-                    .map(|db| db.order.iter().map(move |&id| (ch as u8, id)))
+                    .map(|db| db.order.iter().map(move |&(id, _)| (ch as u8, id)))
                     .into_iter()
                     .flatten()
             })

@@ -51,7 +51,7 @@ impl App {
     /// read (shadows the `BusCore` lookup).
     pub fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
         self.channel_dbc(ch)
-            .and_then(|db| db.messages.get(&id))
+            .and_then(|db| db.message_of(id))
             .and_then(|m| m.cycle_us)
     }
 

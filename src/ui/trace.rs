@@ -301,7 +301,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             if app.snap.tx.len() > was_len {
                 let known = app
                     .channel_dbc(f.channel)
-                    .is_some_and(|db| db.messages.contains_key(&f.id));
+                    .is_some_and(|db| db.messages.contains_key(&(f.id, f.extended)));
                 let data_text = if known {
                     None
                 } else {

@@ -169,7 +169,7 @@ fn message_content(app: &mut App, ui: &Ui) {
             let Some(db) = &channel.dbc else {
                 continue;
             };
-            for &id in &db.order {
+            for &(id, _) in &db.order {
                 if msg_matches(db.message_name(id), id, &q) {
                     keys.push((ch as u8, id));
                 }
@@ -212,8 +212,8 @@ fn message_content(app: &mut App, ui: &Ui) {
                 .map(|db| {
                     db.order
                         .iter()
-                        .filter_map(|&id| {
-                            let m = db.messages.get(&id)?;
+                        .filter_map(|&(id, _)| {
+                            let m = db.message_of(id)?;
                             Some(MsgEntry {
                                 id,
                                 name: m.name.clone(),
@@ -326,8 +326,8 @@ fn signal_content(app: &mut App, ui: &Ui) {
                 .map(|db| {
                     db.order
                         .iter()
-                        .filter_map(|&id| {
-                            let m = db.messages.get(&id)?;
+                        .filter_map(|&(id, _)| {
+                            let m = db.message_of(id)?;
                             let msg_hit = q.is_empty() || m.name.to_ascii_uppercase().contains(&q);
                             let signals: Vec<String> = m
                                 .signals

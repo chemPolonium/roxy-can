@@ -132,7 +132,7 @@ impl App {
     /// signal picker; empty when there is no database or message.
     pub fn signal_names(&self, ch: u8, id: u32) -> Vec<String> {
         self.channel_dbc(ch)
-            .and_then(|db| db.messages.get(&id))
+            .and_then(|db| db.message_of(id))
             .map(|m| m.signals.iter().map(|s| s.name.clone()).collect())
             .unwrap_or_default()
     }
@@ -141,9 +141,12 @@ impl App {
         // Default to the database's first message and signal so the row
         // starts watching something real instead of a blind id.
         let db = self.snap.channels.first().and_then(|c| c.dbc.as_deref());
-        let id = db.and_then(|db| db.order.first()).copied().unwrap_or(0x100);
+        let id = db
+            .and_then(|db| db.order.first())
+            .map(|&(id, _)| id)
+            .unwrap_or(0x100);
         let signal = db
-            .and_then(|db| db.messages.get(&id))
+            .and_then(|db| db.message_of(id))
             .and_then(|m| m.signals.first())
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "Signal".to_string());

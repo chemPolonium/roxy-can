@@ -270,10 +270,10 @@ fn default_panel(
     let mut states: Vec<(u64, String)> = Vec::new();
     if let Some(db) = dbc {
         let sig = db
-            .messages
-            .get(&key.1)
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.2));
-        let table = db.value_tables.get(&(key.1, key.2.clone()));
+            .message_of(key.1)
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .cloned();
+        let table = db.val_table_of(key.1, &key.2).cloned();
         if let (Some(sig), Some(table)) = (sig, table) {
             let mut entries: Vec<(i64, &String)> = table.iter().map(|(r, l)| (*r, l)).collect();
             entries.sort_by_key(|(r, _)| *r);
@@ -720,13 +720,13 @@ fn draw_wave(
 fn table_label(app: &App, key: &(u8, u32, String), v: f64) -> Option<String> {
     let db = app.snap.channels.get(key.0 as usize)?.dbc.as_deref()?;
     let sig = db
-        .messages
-        .get(&key.1)?
+        .message_of(key.1)?
         .signals
         .iter()
-        .find(|s| s.name == key.2)?;
+        .find(|s| s.name == key.2)?
+        .clone();
     let raw = ((v - sig.offset) / sig.factor).round() as i64;
-    let table = db.value_tables.get(&(key.1, key.2.clone()))?;
+    let table = db.val_table_of(key.1, &key.2)?;
     table.get(&raw).cloned()
 }
 

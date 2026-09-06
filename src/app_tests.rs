@@ -298,8 +298,8 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
     let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
-        let id = db.order[0];
-        (0u8, id, db.messages[&id].signals[0].name.clone())
+        let id = db.order[0].0;
+        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -969,8 +969,8 @@ fn two_channels_aggregate_separately() {
 fn csv_exports_match_window_state() {
     let mut app = App::headless();
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
-    let id = db.order[0];
-    let sig = db.messages[&id].signals[0].name.clone();
+    let id = db.order[0].0;
+    let sig = db.messages[&(id, false)].signals[0].name.clone();
     let key = (0u8, id, sig);
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
@@ -1444,8 +1444,8 @@ fn app_with_replayable_recording(name: &str, iters: usize) -> (App, (u8, u32, St
     let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
-        let id = db.order[0];
-        (0u8, id, db.messages[&id].signals[0].name.clone())
+        let id = db.order[0].0;
+        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
@@ -2177,8 +2177,8 @@ fn signal_stats_track_min_avg_max() {
     let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
-        let id = db.order[0];
-        (0u8, id, db.messages[&id].signals[0].name.clone())
+        let id = db.order[0].0;
+        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -2205,8 +2205,8 @@ fn restored_signals_are_resubscribed() {
     let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
-        let id = db.order[0];
-        (0u8, id, db.messages[&id].signals[0].name.clone())
+        let id = db.order[0].0;
+        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
@@ -3601,8 +3601,8 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
     let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
-        let id = db.order[0];
-        (0u8, id, db.messages[&id].signals[0].name.clone())
+        let id = db.order[0].0;
+        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {

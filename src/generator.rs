@@ -79,7 +79,7 @@ pub(crate) fn tx_payload(
     let Some((table, msg)) = channels
         .get(tx.channel as usize)
         .and_then(|c| c.dbc.as_ref())
-        .and_then(|db| db.messages.get(&tx.id).map(|m| (db, m)))
+        .and_then(|db| db.message_of(tx.id).map(|m| (db, m)))
     else {
         return (data, len, flags);
     };
@@ -121,8 +121,7 @@ pub(crate) fn encode_mirror(
     flags: &mut FrameFlags,
 ) -> bool {
     let Some(s) = table
-        .messages
-        .get(&id)
+        .message_of(id)
         .and_then(|m| m.signals.iter().find(|s| s.name == name))
     else {
         return false;

@@ -677,7 +677,7 @@ impl App {
             .channels
             .get(key.0 as usize)
             .and_then(|c| c.dbc.as_deref())
-            .and_then(|db| db.messages.get(&key.1))
+            .and_then(|db| db.message_of(key.1))
             .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
             .and_then(|s| (s.max > s.min).then_some((s.min, s.max)))
     }

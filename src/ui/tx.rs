@@ -65,8 +65,8 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let Some(db) = &channel.dbc else {
                             continue;
                         };
-                        for &id in &db.order {
-                            if let Some(m) = db.messages.get(&id) {
+                        for &(id, _) in &db.order {
+                            if let Some(m) = db.message_of(id) {
                                 ids.push((ch as u8, id));
                                 names.push(format!(
                                     "{}  {:03X}  {}",
@@ -154,7 +154,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     let sigs: Vec<SignalInfo> = app
                         .channel_dbc(ch)
-                        .and_then(|db| db.messages.get(&id))
+                        .and_then(|db| db.message_of(id))
                         .map(|m| m.signals.clone())
                         .unwrap_or_default();
                     let driven = view.srcs.len();
@@ -577,7 +577,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     };
     let desc = app.snap.tx.get(row).and_then(|t| {
         app.channel_dbc(t.channel)
-            .and_then(|db| db.messages.get(&t.id))
+            .and_then(|db| db.message_of(t.id))
             .and_then(|m| m.signals.iter().find(|s| s.name == sig))
             .map(|s| (t.name.clone(), t.id, s.unit.clone()))
     });

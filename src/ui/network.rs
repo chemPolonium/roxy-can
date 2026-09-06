@@ -8,7 +8,7 @@ const SECTION_H: f32 = 150.0;
 struct NodeInfo {
     name: String,
     tx: Vec<(u32, String)>,
-    rx: Vec<(u32, String, String)>,
+    rx: Vec<((u32, bool), String, String)>,
 }
 
 /// Per channel: the DBC node infos of that bus.
@@ -254,12 +254,18 @@ pub fn render(app: &mut App, ui: &Ui) {
                         ui.text(format!("  {id:03X}  {name}  count {count}{cycle_s}"));
                     }
                     ui.text("Received signals");
-                    for (id, sig, sender) in &ni.rx {
+                    for (key, sig, sender) in &ni.rx {
                         let msg = app
                             .channel_dbc(ch as u8)
-                            .and_then(|db| db.message_name(*id))
+                            .and_then(|db| db.message_name_of(*key))
                             .unwrap_or("-");
-                        ui.text(format!("  {sig}  <-  {sender}  ({msg} {id:03X})"));
+                        let (id, ext) = *key;
+                        let id_text = if ext {
+                            format!("{id:03X} ext")
+                        } else {
+                            format!("{id:03X}")
+                        };
+                        ui.text(format!("  {sig}  <-  {sender}  ({msg} {id_text})"));
                     }
                 });
             });
