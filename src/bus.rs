@@ -34,6 +34,10 @@ pub(crate) const MARKER_CAP: usize = 512;
 /// into the file (the pre-trigger context).
 pub(crate) const PRE_BUFFER_FRAMES: usize = 256;
 
+/// Frames a trigger-initiated recording keeps writing after a
+/// `StopRecording` edge (the post-trigger context).
+pub(crate) const POST_ROLL_FRAMES: u32 = 32;
+
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
@@ -569,6 +573,9 @@ pub struct BusCore {
     /// The last [`PRE_BUFFER_FRAMES`] frames, written into the file when a
     /// trigger starts a recording: the context before the event.
     pub(crate) pre_buffer: std::collections::VecDeque<CanFrame>,
+    /// While `Some(n)`, a trigger-initiated stop is rolling: the recorder
+    /// stays open for `n` more frames, then closes.
+    pub(crate) post_roll: Option<u32>,
     /// Contiguous log-time span whose frames have already been decoded into
     /// the signal caches. A Graphics window asking for a range outside it
     /// triggers a backfill scan.
@@ -637,6 +644,7 @@ impl BusCore {
             subs: HashMap::new(),
             markers: Vec::new(),
             pre_buffer: std::collections::VecDeque::new(),
+            post_roll: None,
             sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
             measuring: false,
@@ -1748,6 +1756,7 @@ impl BusCore {
         self.sample_cover = None;
         self.markers.clear();
         self.pre_buffer.clear();
+        self.post_roll = None;
         // Send-now intents recorded while the old run was winding down
         // belong to it, not to the fresh one.
         self.injected.clear();
@@ -1771,6 +1780,8 @@ impl BusCore {
     }
 
     fn toggle_record(&mut self, status: &mut String) {
+        // A manual stop is immediate: any pending trigger post-roll dies.
+        self.post_roll = None;
         if self.recorder.recording {
             self.recorder.close();
             self.recorder.recording = false;
@@ -1989,6 +2000,18 @@ impl BusCore {
             self.pre_buffer.push_back(f);
             if self.pre_buffer.len() > PRE_BUFFER_FRAMES {
                 self.pre_buffer.pop_front();
+            }
+            // Post-roll: a trigger-initiated stop keeps the file open for
+            // this many frames before the recorder actually closes.
+            if let Some(left) = self.post_roll.as_mut() {
+                if *left <= 1 {
+                    self.post_roll = None;
+                    self.recorder.close();
+                    self.recorder.recording = false;
+                    *status = "trigger post-roll finished".to_string();
+                } else {
+                    *left -= 1;
+                }
             }
             // Ingest first, then dispatch to nodes: `sig()` in node
             // handlers reads the freshly-updated aggregates.
@@ -2383,6 +2406,8 @@ impl BusCore {
                             Err(e) => format!("trigger record failed: {e}"),
                         };
                         if opened_path.is_ok() {
+                            // A fresh recording cancels any pending roll.
+                            self.post_roll = None;
                             // Oldest first: the file opens with the frames
                             // that came before the trigger fired.
                             for pre in self.pre_buffer.drain(..) {
@@ -2393,9 +2418,11 @@ impl BusCore {
                 }
                 TriggerAction::StopRecording => {
                     if self.recorder.recording {
-                        self.recorder.close();
-                        self.recorder.recording = false;
-                        *status = "trigger stopped recording".to_string();
+                        // Roll on: the file stays open for the post-roll,
+                        // then the step loop closes it once the countdown
+                        // is spent.
+                        self.post_roll = Some(POST_ROLL_FRAMES);
+                        *status = "trigger stopping after post-roll".to_string();
                     }
                 }
                 TriggerAction::Send { ch, id } => {

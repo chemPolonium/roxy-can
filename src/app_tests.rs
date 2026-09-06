@@ -3020,6 +3020,51 @@ fn a_trigger_started_recording_includes_the_pre_buffer() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
+/// The post-trigger roll: a trigger stop keeps recording for a bounded
+/// number of frames, so the aftermath of the event stays in the file.
+#[test]
+fn a_stop_trigger_rolls_on_for_the_post_frames() {
+    let mut app = quiet_app();
+    let base = std::env::temp_dir().join("roxy_can_post_roll.asc");
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::StopRecording,
+    ));
+    app.recorder.recording = true;
+    app.recorder.open().unwrap();
+
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert!(
+        app.recorder.recording,
+        "the stop rolls on instead of closing"
+    );
+
+    // Far more frames than the post-roll can hold.
+    let fillers: Vec<CanFrame> = (0..60)
+        .map(|i| rx_frame(20_000 + i as u64 * 1_000, 0x100, 8, FrameFlags::NONE))
+        .collect();
+    receive(&mut app, 100_000, fillers);
+    assert!(!app.recorder.recording, "the post-roll expired");
+    app.recorder.close();
+
+    let text = std::fs::read_to_string(&app.recorder.last_record).unwrap();
+    let frames = crate::log::asc::parse_asc(&text);
+    assert_eq!(
+        frames.len(),
+        32, // POST_ROLL_FRAMES: the edge frame plus the roll
+        "the file holds exactly the post-roll window"
+    );
+    assert_eq!(frames[0].id, 0x777, "the event frame is first");
+    assert_eq!(frames[0].t_us, 10_000);
+}
+
 fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
     CanFrame {
         t_us,
@@ -3288,16 +3333,15 @@ fn an_id_present_trigger_latches_and_can_stop_a_recording() {
         20_000,
         vec![rx_frame(20_000, 0x777, 8, FrameFlags::NONE)],
     );
+    assert_eq!(app.triggers[0].fired, 1);
+    // The stop rolls on for the post frames, then the recorder closes.
+    let fillers: Vec<CanFrame> = (0..40)
+        .map(|i| rx_frame(21_000 + i as u64 * 1_000, 0x100, 8, FrameFlags::NONE))
+        .collect();
+    receive(&mut app, 100_000, fillers);
     assert!(
         !app.recorder.recording,
-        "the watched id stops the recording"
-    );
-    assert_eq!(app.triggers[0].fired, 1);
-
-    receive(
-        &mut app,
-        30_000,
-        vec![rx_frame(30_000, 0x777, 8, FrameFlags::NONE)],
+        "the watched id stopped the recording after the roll"
     );
     assert_eq!(app.triggers[0].fired, 1, "presence latches for the run");
     app.recorder.close();
