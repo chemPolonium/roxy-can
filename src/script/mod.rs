@@ -213,6 +213,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("frame_dlc", 0, 0),
     ("random", 2, 2),
     ("srand", 1, 1),
+    ("ramp", 3, 3),
+    ("sine_wave", 3, 3),
     // Stimulus math: pure functions over floats, radians for trig.
     ("abs", 1, 1),
     ("floor", 1, 1),

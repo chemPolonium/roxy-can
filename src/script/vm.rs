@@ -162,6 +162,15 @@ impl Vm {
         }
     }
 
+    /// Pops three numeric args from the stack (in source order) as f64s.
+    fn pop3_f64(&mut self, what: &str) -> Result<(f64, f64, f64), VmError> {
+        let c = as_float(&self.pop()?);
+        let b = as_float(&self.pop()?);
+        let a = as_float(&self.pop()?);
+        let _ = what;
+        Ok((a, b, c))
+    }
+
     /// The source line recorded for `ip` in `chunk`, if any mark exists.
     fn line_at(&self, chunk: usize, ip: usize) -> Option<u32> {
         self.script.functions[chunk]
@@ -622,6 +631,29 @@ impl Vm {
                     return Err(VmError("srand needs an int".into()));
                 };
                 self.rng = seed as u64;
+            }
+            "ramp" => {
+                // ramp(lo, hi, period_s): sawtooth from lo to hi, one
+                // cycle per period_s seconds of bus time.
+                let (lo, hi, period) = self.pop3_f64("ramp")?;
+                if period <= 0.0 {
+                    return Err(VmError("ramp: period must be positive".into()));
+                }
+                let phase = (self.host_input.now_s % period) / period;
+                self.stack.push(Value::Float(lo + phase * (hi - lo)));
+                return Ok(());
+            }
+            "sine_wave" => {
+                // sine_wave(offset, amplitude, period_s): a sine centred
+                // at `offset` with peak-to-peak `2 * amplitude`.
+                let (offset, amplitude, period) = self.pop3_f64("sine_wave")?;
+                if period <= 0.0 {
+                    return Err(VmError("sine_wave: period must be positive".into()));
+                }
+                let phase = (self.host_input.now_s % period) / period * std::f64::consts::TAU;
+                self.stack
+                    .push(Value::Float(offset + amplitude * phase.sin()));
+                return Ok(());
             }
             other => {
                 // Not a builtin: the host's extension hook (external
