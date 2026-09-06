@@ -1,0 +1,28 @@
+// 错误帧监视节点：统计总线上的错误帧，短时爆发时给出提示。
+//
+// `on errorFrame` 只收错误帧；数据帧由 `on message *` 处理，
+// 两类事件互不串扰。
+
+let errors = 0;
+let frames = 0;
+
+on errorFrame {
+    errors = errors + 1;
+    print("error frame! total", errors);
+
+    // 短时间连续多个错误帧：只提示，不刷屏。
+    if (errors % 10 == 0) {
+        print("WARN error burst:", errors, "errors so far at", now());
+    }
+}
+
+on message * {
+    frames = frames + 1;
+    if (frames % 1000 == 0) {
+        print(frames, "data frames,", errors, "errors");
+    }
+}
+
+on start {
+    print("error watch armed");
+}
