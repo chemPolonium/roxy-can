@@ -204,7 +204,7 @@
 
 8. **触发层**（条件与录制动作闭环：`src/trigger.rs`、`src/ui/triggers.rs`）
    已有：四条件 `TriggerCond`——信号越阈 `SignalCross`（按 false→true 沿触发，电平跟随该报文自己的帧）、`IdPresent` / `ErrorFrame`（帧驱动，一次运行锁存一次）、`CycleTimeout`（挂进 `check_spec` 每步扫描，直接复用 `spec::missing_offender` 的宽限比较，触发器与 Dropped 判定**永不打架**；报文恢复后电平清除，每次掉线都是新沿）。动作：开始·停止录制；`tick` 帧循环**最前**求值，触发帧本身被录进文件。Triggers 窗口增删/启停/选中编辑，触发器内容与面板开关都随工程文件保存（未知 kind 码只丢该条，运行态电平/计数不落盘）。第 10 项的反应规则复用同一个 `TriggerCond`，动作枚举里加 `Send` 即可，**不要另写求值器**。
-   要做：pre/post 环形缓冲；出现类条件的再武装手段（条件自身的锁存重置）。~~插入标记 + 清 Trace 动作~~ ✅ 2026-09-07（`TriggerAction::InsertMarker` 标记入快照、Graphics 画琥珀色竖线；`TriggerAction::ClearTrace` 清 Trace 环，聚合/规格/录制不动；动作码 3/4 随工程持久化，`a_clear_trace_*`/`an_insert_marker_*` 测试钉住）。
+   要做：出现类条件的再武装手段（条件自身的锁存重置）。~~插入标记 + 清 Trace 动作~~ ✅ 2026-09-07（`TriggerAction::InsertMarker` 标记入快照、Graphics 画琥珀色竖线；`TriggerAction::ClearTrace` 清 Trace 环，聚合/规格/录制不动；动作码 3/4 随工程持久化，`a_clear_trace_*`/`an_insert_marker_*` 测试钉住）。~~pre/post 环形缓冲~~ ✅ 2026-09-07（`PRE_BUFFER_FRAMES`=256：触发启动录制先落触发前上下文；`POST_ROLL_FRAMES`=32：触发停止后再滚 32 帧（含边沿帧）才闭文件，手动录制不受影响；ff9fa8b）。数值均可调空间在 `bus.rs` 顶部常量，做成 UI 设置待议。
 
 9. **Trace 突破 50k 环 + 按过滤器落盘**
    现状：`TRACE_LIMIT = 50_000`（`src/app.rs:18`）固定环形缓冲，满了就丢头部（`src/app.rs:2190-2197`）——长时间实时抓取会**静默丢掉开头**；而录制走的是**每帧、不过滤**（`src/app.rs:2191-2193`）。方向正好相反的做法是：测量数据落盘、并且能只落被选中的那部分。
