@@ -186,6 +186,25 @@ let v = get_sig(buf, 0x200, "RPM");
 | `random(lo, hi)` | 均匀随机浮点 |
 | `srand(seed)` | 重置随机种子 |
 
+## 位运算内建
+
+| 内建 | 说明 |
+|------|------|
+| `bit_and(a, b)` | 按位与 |
+| `bit_or(a, b)` | 按位或 |
+| `bit_xor(a, b)` | 按位异或 |
+| `bit_not(a)` | 按位取反 |
+| `bit_shl(a, n)` / `bit_shr(a, n)` | 左移/右移 |
+
+## 波形内建
+
+| 内建 | 说明 |
+|------|------|
+| `ramp(lo, hi, period_s)` | 锯齿波，从 lo 线性升到 hi，周期 period_s 秒 |
+| `sine_wave(offset, amplitude, period_s)` | 正弦波，中心 offset，振幅 amplitude |
+
+均以总线时钟为时基。
+
 ## 其他内建
 
 | 内建 | 说明 |
@@ -194,6 +213,8 @@ let v = get_sig(buf, 0x200, "RPM");
 | `now()` | 总线时钟（秒，浮点） |
 | `bytes(n)` | 分配 n 字节缓冲（零填充） |
 | `len(v)` | 缓冲长度或字符串字符数 |
+| `set_period(ms)` | 修改当前定时器周期 |
+| `stop_timer()` | 停止当前定时器 |
 
 ## 刺激波形内建
 
