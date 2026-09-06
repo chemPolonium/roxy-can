@@ -25,6 +25,10 @@
 //!     if (frame_dlc() > 0) { print(frame_id(), frame_byte(0)); }
 //! }
 //!
+//! on errorFrame {                      // error frames only
+//!     print("bus error");
+//! }
+//!
 //! on timer 100 {                      // every 100 ms
 //!     let buf = bytes(8);             // zero-filled byte buffer
 //!     buf[0] = 0xAB;                  // element store (0..255)
