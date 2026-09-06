@@ -171,11 +171,13 @@
    落地：`SignalInfo.mux_when` 存条件列表（开关名 + 闭区间集），`mN` 生成单值条件、`mNM` 嵌套在加载时继承祖先开关条件、`SG_MUL_VAL_` 按区间直接 gating（多区间、多开关、覆盖 `m` 标记三案都有测试）；Trace / Messages / Data / Graphics 同走 `decode_signals`，切组后旧组信号立即消失。已知边界：`MuxCondition` 引用消息里不存在的开关时按"无条件"放行（坏库仍显示数据而不是空解码）。
 2. ~~**VAL_ 值表**~~ ✅ 0.7.0
    落地：`SymbolTable.value_tables` 按（报文， 信号）收 `VAL_` 枚举，解码按符号扩展后的原始值匹配（负 id 可标注有符号信号）；Messages / Data / Graphics 显示 `(标签)`，Data 导出的 CSV 给 `value` 裸值与 `label` 文本两列。`VAL_TABLE_` 命名表引用仍不可解析（can-dbc-pest 无该产生式，已有测试钉住）。
-3. **标准帧与扩展帧共用裸 `u32` 做键**（2026-09-07 夜间迁移①②已落地 ✅，③④待续）
-   - ✅ **① DBC 层**（fd9abf2）：`MsgKey = (u32, bool)`；`messages`/`order`/`value_tables`/`declared_cycles`/floats/ext_mux 全部按键；`decode_signals(&CanFrame)` 精确匹配（天然正确）；`encode_signal`/`message_of`/`val_table_of` 按"id ≤ 0x7FF 标准优先、扩展兜底；> 0x7FF 仅扩展"规则（与脚本 `send` 一致）；`message_name_of` 提供精确版。`build_node_inputs` 顺带修掉硬编码 `extended: false` 的旧 bug（扩展报文的 `sig()` 此前永远读不到）。
-   - ✅ **② 聚合与规格**（ec65a55）：`aggs: (u8, u32, bool)`、`Spec::rows: (u8, u32, bool, Kind)`、`previous: (u8, u32, bool)`；规格表与 CSV 报告的 id 列对扩展帧带 `ext` 后缀；同值标准/扩展两类各有聚合与判定，互不串扰（有测试钉住）。
-   - ⬜ **③ 订阅键**：信号键 `(u8, u32, String)` → 加 extended 位。牵动 `observe.rs`（Data/Graphics/State 的 key、color_slots、rules、overrides）、`workspace.rs` 弹窗、`SignalCfg` 序列化（serde 默认 false 保旧工程）、`ui/idfilter.rs` 信号树、`export.rs` 三处 keys。改完即可把 ① 的 `message_of` 兜底调用点升级为精确匹配。
-   - ⬜ **④ 触发器/生成器**：`TriggerCond` 与 `TxMsg` 目前不带 extended 位（超时判断暂按任一类兜底）；网络视图 `node_rx_signals` 已带键但 `node_tx_ids` 仍只回数值。
+3. ~~**标准帧与扩展帧共用裸 `u32` 做键**~~ ✅ 2026-09-07 夜间全部落地（57d66d4、fd9abf2、ec65a55、381a208、bbae35b、4d04c58）
+   - **① DBC 层**：`MsgKey = (u32, bool)`；`messages`/`order`/`value_tables`/`declared_cycles`/floats/ext_mux 全部按键；`decode_signals(&CanFrame)` 精确匹配；`encode_signal`/`message_of`/`message_name` 按"id ≤ 0x7FF 标准优先、扩展兜底；> 0x7FF 仅扩展"规则（与脚本 `send` 一致）；`build_node_inputs` 顺带修掉硬编码 `extended: false` 的旧 bug（扩展报文的 `sig()` 此前永远读不到）。
+   - **② 聚合与规格**：`aggs: (u8, u32, bool)`、`Spec::rows: (u8, u32, bool, Kind)`、`previous: (u8, u32, bool)`；规格表与 CSV 报告的 id 列对扩展帧带 `ext` 后缀，查名走精确 `message_name_of`；同值标准/扩展两类各有聚合与判定（`a_shared_numeric_id_*` 两组测试钉住）。
+   - **③ 订阅键**：`observe::SigKey = (u8, u32, bool, String)` 贯穿 subs/采样/GfxSignal/color_slots/rules/overrides/Data/Graphics/State 全链；信号选择树按类分行（扩展行带 `x` 后缀）；`SignalCfg` 加 `ext`（serde default false，老工程照载，新工程才序列化）。
+   - **④ 触发器/生成器**：`SignalCross` 加 `ext` 位并参与帧匹配（`TriggerCfg` 同步 serde default）；生成器 `TxMsg.extended` 原本就有，`add_entry`/发射路径不受影响；`timeout_silent` 暂按任一类兜底（触发条件无类）。
+   - 脚本侧（57d66d4）：`on message`/`send` 按"id ≤ 0x7FF 标准、> 0x7FF 扩展"划类，`set_sig` 编码沿用同规则。
+   - 已知妥协：裸 id 展示层（网络视图 `node_tx_ids`、TX 选择器、报文过滤器）对同值双类只列一条（标准优先）；要完全分开需把展示层也四元组化，等有真实双类库需求再说。
 4. ~~**`SigType` / 单位的显示口径**~~ ✅ 0.7.0
    落地：每个信号带 `type_tag`（`u8`/`i16`/`f32`/`f64`），值后统一显示 `[u16]` 型标记；`SIG_VALTYPE_` 声明的浮点按位模式解码（can-dbc 约定 0=整型 1=f32 2=f64，与 Vector 文档的 0/1 约定不同，以解析器为准）；整型按需显示小数，`fmt_decoded`/`fmt_signal_value` 是唯一的格式化出口。min/max 仍只在生成器夹范围，未显示。
 

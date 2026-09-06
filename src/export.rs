@@ -292,7 +292,10 @@ impl App {
         s.push_str(&format!("# periodic messages declared,{periodic}\n"));
         s.push_str("bus,id,name,rule,declared,measured,count,first_s,last_s\n");
         for ((ch, id, ext, kind), l) in &self.snap.spec.rows {
-            let name = self.message_name(*ch, *id).unwrap_or("not in database");
+            let name = self
+                .channel_dbc(*ch)
+                .and_then(|db| db.message_name_of((*id, *ext)))
+                .unwrap_or("not in database");
             let id_text = if *ext {
                 format!("{id:X} ext")
             } else {

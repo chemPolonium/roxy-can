@@ -119,7 +119,10 @@ fn content(app: &mut App, ui: &Ui) {
     for ((ch, id, ext, kind), l) in rows {
         ui.table_next_row();
         ui.table_next_column();
-        let name = app.message_name(ch, id).unwrap_or("not in database");
+        let name = app
+            .channel_dbc(ch)
+            .and_then(|db| db.message_name_of((id, ext)))
+            .unwrap_or("not in database");
         let id_text = if ext {
             format!("{id:X} ext")
         } else {
