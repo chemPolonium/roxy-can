@@ -226,6 +226,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("cancel_timer", 1, 1),
     ("frame_byte", 1, 1),
     ("frame_dlc", 0, 0),
+    ("frame_id", 0, 0),
     ("random", 2, 2),
     ("srand", 1, 1),
     ("ramp", 3, 3),

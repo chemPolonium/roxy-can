@@ -258,6 +258,7 @@ impl ScriptNode {
             return out;
         }
         rt.vm.frame_bytes = data.to_vec();
+        rt.vm.frame_id = id;
         // Leftover ops from `on start` arm here if no tick ran first.
         let now_us = (input.now_s.max(0.0) * 1e6) as u64;
         let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
@@ -725,7 +726,7 @@ mod tests {
                 let hits = 0;
                 on message * {
                     hits = hits + 1;
-                    print("any", frame_byte(0));
+                    print("any", frame_byte(0), frame_id());
                 }
                 on message 0x55 { print("specific"); }
             "#,
@@ -739,12 +740,15 @@ mod tests {
         n.dispatch_frame(0, 0x55, false, &[9], &hit);
         n.dispatch_frame(0, 0x1ABCDEF, true, &[11], &hit);
         let log = n.log_snapshot();
-        assert_eq!(log[0], "any 7", "the wildcard saw 0x100");
+        assert_eq!(log[0], "any 7 256", "the wildcard saw 0x100");
         // For 0x55 both handlers match and run in declaration order:
         // the wildcard was declared first.
-        assert_eq!(log[1], "any 9");
+        assert_eq!(log[1], "any 9 85");
         assert_eq!(log[2], "specific");
-        assert_eq!(log[3], "any 11", "the wildcard saw the extended frame");
+        assert_eq!(
+            log[3], "any 11 28036591",
+            "the wildcard saw the extended frame"
+        );
         assert_eq!(hits_of(&n), 3);
 
         fn hits_of(n: &ScriptNode) -> usize {

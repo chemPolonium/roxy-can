@@ -83,6 +83,9 @@ pub struct Vm {
     /// The triggering frame's payload bytes, set by the node runtime
     /// before `on message` handlers run. Empty outside of frame events.
     pub frame_bytes: Vec<u8>,
+    /// The triggering frame's identifier, set alongside `frame_bytes`.
+    /// What `frame_id()` reads; 0 outside of frame events.
+    pub frame_id: u32,
     /// xorshift64 state for `random()`; re-seedable via `srand`.
     pub rng: u64,
 }
@@ -103,6 +106,7 @@ impl Vm {
             host_extern: None,
             timer_ops: Vec::new(),
             frame_bytes: Vec::new(),
+            frame_id: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
         }
     }
@@ -678,6 +682,12 @@ impl Vm {
             }
             "frame_dlc" => {
                 self.stack.push(Value::Int(self.frame_bytes.len() as i64));
+                return Ok(());
+            }
+            "frame_id" => {
+                // The triggering frame's own identifier: what a wildcard
+                // `on message *` handler needs to filter or forward.
+                self.stack.push(Value::Int(self.frame_id as i64));
                 return Ok(());
             }
             "random" => {

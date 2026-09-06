@@ -1,0 +1,29 @@
+// 嗅探节点：`on message *` 通配处理器看到信道上的每一帧，
+// 按条件选择性反应（网关/记录器/协议嗅探的骨架）。
+//
+// 行为：
+//   - 统计经过的帧数，每 100 帧报一次
+//   - 发现 byte0 最高位为 1 的帧，把它的 id 和 byte0 转发成 0x700 报文
+//
+// 注意：节点也会收到自己 send 出去的帧，转发前用 frame_id()
+// 排除自己的 0x700，避免自激成环。
+
+let seen = 0;
+
+on message * {
+    seen = seen + 1;
+    if (seen % 100 == 0) {
+        print("seen", seen, "frames");
+    }
+
+    // 错误帧没有载荷，先看 frame_dlc() 再取字节。
+    if (frame_dlc() > 0) {
+        let b0 = frame_byte(0);
+        if (b0 >= 128 && frame_id() != 0x700) {
+            let relay = bytes(8);
+            relay[0] = b0;
+            relay[1] = seen % 256;
+            send(0x700, relay);
+        }
+    }
+}
