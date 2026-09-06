@@ -275,21 +275,22 @@ impl P {
         })
     }
 
-    /// A CAN identifier: a non-negative integer fitting in 29 bits of a
-    /// standard id (extended ids come with extended frame support).
+    /// A CAN identifier. Within the standard range it names standard
+    /// frames; beyond 0x7FF it names a 29-bit extended frame (the same
+    /// rule `send` uses to pick the frame class).
     fn id_literal(&mut self) -> Result<u32, ScriptError> {
         let at = self.toks.get(self.pos);
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
         match self.toks.get(self.pos).map(|t| t.tok.clone()) {
-            Some(Tok::Int(n)) if (0..=0x7FF).contains(&n) => {
+            Some(Tok::Int(n)) if (0..=0x1FFF_FFFF).contains(&n) => {
                 self.advance();
                 Ok(n as u32)
             }
             Some(Tok::Int(n)) => Err(ScriptError {
                 line,
                 col: Some(col),
-                msg: format!("id {n:#x} out of the standard 11-bit range"),
+                msg: format!("id {n:#x} out of the 29-bit extended range"),
             }),
             _ => self.err("expected a message id"),
         }

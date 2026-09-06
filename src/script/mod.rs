@@ -458,7 +458,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("line 2:5"), "{e}");
-        let e = compile("on message 0x800 { }").unwrap_err().to_string();
+        let e = compile("on message 0x20000000 { }")
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("line 1:12"), "{e}");
     }
 
@@ -697,10 +699,10 @@ mod tests {
                 .contains("duplicate")
         );
         assert!(
-            compile("on message 0x800 { }")
+            compile("on message 0x20000000 { }")
                 .unwrap_err()
                 .to_string()
-                .contains("11-bit")
+                .contains("29-bit")
         );
         assert!(
             compile("on timer 0 { }")

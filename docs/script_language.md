@@ -106,13 +106,18 @@ on start {
 
 ### on message \<id\>
 
-收到指定 ID 的帧时触发。
+收到指定 ID 的帧时触发。id ≤ 0x7FF 只匹配标准帧；更大的 id 匹配
+29 位扩展帧（与 `send` 的判断规则一致，同值的标准/扩展帧互不串扰）。
 
 ```c
 on message 0x100 {
     // frame_byte(n): 触发帧的第 n 字节
     // frame_dlc():  触发帧的数据长度
     print("got", frame_byte(0), frame_dlc());
+}
+
+on message 0x1C3D1E5 {
+    // 扩展帧
 }
 ```
 
