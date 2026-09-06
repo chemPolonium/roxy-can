@@ -42,12 +42,16 @@ const DEFAULT_BUDGET: u64 = 10_000_000;
 /// simulation components plug into (S4).
 pub type HostExternFn = Box<dyn FnMut(&str, &[Value]) -> Result<Option<Value>, String> + Send>;
 
-/// Timer control requested by the RUNNING handler: change its period, or
-/// stop it altogether. The node runtime applies these after the run.
-#[derive(Clone, Copy, Debug)]
+/// Timer control requested by the running handler. `SetPeriod`/`Stop`
+/// concern the running `on timer` body itself; `Arm`/`Cancel` address a
+/// named one-shot and are meaningful from any handler. The node runtime
+/// applies these after the run.
+#[derive(Clone, Debug)]
 pub enum TimerOp {
     SetPeriod(u64),
     Stop,
+    Arm { name: String, ms: u64 },
+    Cancel { name: String },
 }
 
 pub struct Vm {
@@ -597,6 +601,31 @@ impl Vm {
             }
             "stop_timer" => {
                 self.timer_ops.push(TimerOp::Stop);
+            }
+            "set_timer" => {
+                // set_timer("name", ms): arms the named one-shot. It
+                // fires once, `ms` from now, on `on timer "name"`;
+                // arming again (even from that handler) restarts it.
+                let (Value::Str(timer), Value::Int(ms)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "set_timer(\"name\", ms) needs a string and an int".into(),
+                    ));
+                };
+                if *ms <= 0 {
+                    return Err(VmError("set_timer: delay must be positive".into()));
+                }
+                self.timer_ops.push(TimerOp::Arm {
+                    name: timer.clone(),
+                    ms: *ms as u64,
+                });
+            }
+            "cancel_timer" => {
+                let Value::Str(timer) = &args[0] else {
+                    return Err(VmError("cancel_timer(\"name\") needs a string".into()));
+                };
+                self.timer_ops.push(TimerOp::Cancel {
+                    name: timer.clone(),
+                });
             }
             "frame_byte" => {
                 let Value::Int(n) = args[0] else {

@@ -51,9 +51,11 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         }
     }
 
-    // Handler sanity: one on start, one handler per message id.
+    // Handler sanity: one on start, one handler per message id, one
+    // handler per one-shot timer name.
     let mut seen_start = false;
     let mut seen_ids: HashSet<u32> = HashSet::new();
+    let mut seen_named: HashSet<String> = HashSet::new();
     for item in &program.items {
         if let Item::On(on) = item {
             match &on.kind {
@@ -69,6 +71,12 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                     }
                 }
                 OnKind::Timer { .. } => {}
+                OnKind::Oneshot { name } => {
+                    if !seen_named.insert(name.clone()) {
+                        return c
+                            .err_at(on.line, &format!("duplicate handler for timer \"{name}\""));
+                    }
+                }
             }
         }
     }
@@ -553,6 +561,7 @@ impl Comp {
             OnKind::Timer { period_ms } => HandlerKind::Timer {
                 period_ms: *period_ms,
             },
+            OnKind::Oneshot { name } => HandlerKind::Oneshot { name: name.clone() },
         };
         let saved_code = std::mem::take(&mut self.code);
         let saved_marks = std::mem::take(&mut self.line_marks);
@@ -573,6 +582,7 @@ impl Comp {
             HandlerKind::Start => "<on start>".to_string(),
             HandlerKind::Message { id } => format!("<on message {id:#x}>"),
             HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
+            HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
         };
         let lines = std::mem::take(&mut self.line_marks);
         self.functions.push(Function {

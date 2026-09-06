@@ -36,8 +36,8 @@
   - [x] Nodes 窗口：源码编辑 + Apply + 保存/加载 .capl + 状态/日志
   - [x] 节点随工程持久化（NodeCfg + SetNodes 整表恢复）
   - 落地：`src/node.rs` + bus.rs 集成 + `src/ui/nodes.rs`。信号读写经 host_extern 钩子（S4 缝）走 DBC 编解码；`frame_byte` / `frame_dlc` 每次分发前由节点运行时注入 VM。
-- **S2 余项**：一次性定时器。
-- **S3 语言补全**——已完成：随机/字符串拼接/字节缓冲/错误行号 ✅。余项：波形辅助（复用 `sim.rs`）、错误列号
+- ~~**S2 余项**：一次性定时器~~ ✅（2026-09-07）：`on timer "名"` + `set_timer`/`cancel_timer`，任意回调可武装；事件回调里的 timer op 原先被丢弃，现一并接入
+- **S3 语言补全**——已完成：随机/字符串拼接/字节缓冲/错误行号/波形内建（复用 `sim.rs` 求值器，`ramp`/`triangle`/`square`/`counter`，顺带修掉 `ramp`/`sine_wave` 取参 bug）✅。余项：错误列号
 - **S4 外部接口**（缝已落地）：外部仿真元件注册进 `host_extern` 钩子；动态库加载另议
 
 红线：每步测试全绿；语言内核不做任何总线假设，S2 之前不碰核心线程。

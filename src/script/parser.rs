@@ -42,6 +42,9 @@ pub enum OnKind {
     Message { id: u32 },
     /// A periodic tick every `period_ms` milliseconds.
     Timer { period_ms: u64 },
+    /// A named one-shot: idle until `set_timer(name, ms)` arms it from
+    /// any handler, then fires once on its handler.
+    Oneshot { name: String },
 }
 
 #[derive(Debug)]
@@ -237,8 +240,16 @@ impl P {
                 OnKind::Message { id }
             }
             "timer" => {
-                let period_ms = self.period_literal()?;
-                OnKind::Timer { period_ms }
+                // A number declares a periodic tick; a string names a
+                // one-shot that `set_timer` arms at runtime.
+                match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+                    Some(Tok::Str(_)) => OnKind::Oneshot {
+                        name: self.string_literal()?,
+                    },
+                    _ => OnKind::Timer {
+                        period_ms: self.period_literal()?,
+                    },
+                }
             }
             other => {
                 return self.err(&format!("unknown event '{other}' (start, message, timer)"));
@@ -280,6 +291,17 @@ impl P {
                 msg: "timer period must be positive".to_string(),
             }),
             _ => self.err("expected a timer period in milliseconds"),
+        }
+    }
+
+    /// A string literal: a one-shot timer's name.
+    fn string_literal(&mut self) -> Result<String, ScriptError> {
+        match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+            Some(Tok::Str(s)) => {
+                self.advance();
+                Ok(s)
+            }
+            _ => self.err("expected a timer name string"),
         }
     }
 

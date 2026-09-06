@@ -176,8 +176,16 @@ pub struct Handler {
 #[derive(Clone, Debug, PartialEq)]
 pub enum HandlerKind {
     Start,
-    Message { id: u32 },
-    Timer { period_ms: u64 },
+    Message {
+        id: u32,
+    },
+    Timer {
+        period_ms: u64,
+    },
+    /// Fires once per `set_timer(name, ms)` arming.
+    Oneshot {
+        name: String,
+    },
 }
 
 /// A compiled script, ready for the VM. Immutable after compilation --
@@ -210,6 +218,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("len", 1, 1),
     ("set_period", 1, 1),
     ("stop_timer", 0, 0),
+    ("set_timer", 2, 2),
+    ("cancel_timer", 1, 1),
     ("frame_byte", 1, 1),
     ("frame_dlc", 0, 0),
     ("random", 2, 2),
@@ -599,6 +609,12 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("positive")
+        );
+        assert!(
+            compile("on timer \"a\" { } on timer \"a\" { }")
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate")
         );
         assert!(
             compile("fn f() { on start { } }")

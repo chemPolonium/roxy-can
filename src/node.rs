@@ -42,9 +42,9 @@ pub struct ScriptNode {
 struct NodeRuntime {
     vm: Vm,
     handlers: Vec<Handler>,
-    /// One slot per Timer handler, in handler order. `next_due_us == 0`
-    /// means "not armed yet": the first step after start arms it one
-    /// period out.
+    /// One slot per Timer handler, in handler order; named one-shot slots
+    /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
+    /// first step after start arms periodic slots one period out.
     timers: Vec<TimerSlot>,
 }
 
@@ -52,8 +52,11 @@ struct TimerSlot {
     handler_index: usize,
     period_ms: u64,
     next_due_us: u64,
-    /// Set by `stop_timer()` inside the handler: the slot never fires
-    /// again this run.
+    /// Some for a named one-shot: spent after firing, re-armed by
+    /// `set_timer` from any handler.
+    name: Option<String>,
+    /// Set by `stop_timer()` inside a periodic handler or by a spent /
+    /// cancelled one-shot: the slot never fires again until re-armed.
     stopped: bool,
 }
 
@@ -143,7 +146,16 @@ impl ScriptNode {
                     handler_index: i,
                     period_ms: *period_ms,
                     next_due_us: 0,
+                    name: None,
                     stopped: false,
+                }),
+                // One-shots start disarmed: only `set_timer` arms them.
+                HandlerKind::Oneshot { name } => Some(TimerSlot {
+                    handler_index: i,
+                    period_ms: 0,
+                    next_due_us: 0,
+                    name: Some(name.clone()),
+                    stopped: true,
                 }),
                 _ => None,
             })
@@ -243,6 +255,14 @@ impl ScriptNode {
             return out;
         }
         rt.vm.frame_bytes = data.to_vec();
+        // Leftover ops from `on start` arm here if no tick ran first.
+        let now_us = (input.now_s.max(0.0) * 1e6) as u64;
+        let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+        for op in pending {
+            if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
+                Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+            }
+        }
         let matches: Vec<u16> = rt
             .handlers
             .iter()
@@ -258,6 +278,15 @@ impl ScriptNode {
                 return out;
             }
             Self::drain_vm(rt, &mut self.log, &mut self.log_dirty);
+            // Named one-shot ops stay meaningful from any handler. The
+            // running-timer ops (`set_period`/`stop_timer`) name no slot
+            // here and are dropped.
+            let ops: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+            for op in ops {
+                if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
+                    Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+                }
+            }
             out.append(&mut rt.vm.outbox);
         }
         out
@@ -265,7 +294,8 @@ impl ScriptNode {
 
     /// Fires due timer handlers. A timer armed lazily at `start` gets its
     /// first due one full period out; missed periods (a stalled host)
-    /// collapse into one fire plus a resync.
+    /// collapse into one fire plus a resync. A named one-shot is spent
+    /// the moment it fires; `set_timer` inside its own handler re-arms it.
     pub fn run_timers(&mut self, now_us: u64, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
@@ -275,7 +305,14 @@ impl ScriptNode {
             return out;
         }
         rt.vm.host_input = input.clone();
-        rt.vm.timer_ops.clear();
+        // Ops queued before this tick (e.g. `set_timer` from `on start`)
+        // arm against the first tick's clock.
+        let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+        for op in pending {
+            if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
+                Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+            }
+        }
         let due: Vec<(usize, u16)> = rt
             .timers
             .iter_mut()
@@ -290,7 +327,14 @@ impl ScriptNode {
                 }
                 (slot.next_due_us <= now_us).then(|| {
                     let chunk = rt.handlers[slot.handler_index].chunk;
-                    slot.next_due_us = now_us.saturating_add(slot.period_ms * 1_000);
+                    if slot.name.is_some() {
+                        // Spent on firing; a `set_timer` in the handler
+                        // re-arms the slot afterwards.
+                        slot.stopped = true;
+                        slot.next_due_us = 0;
+                    } else {
+                        slot.next_due_us = now_us.saturating_add(slot.period_ms * 1_000);
+                    }
                     (slot_index, chunk)
                 })
             })
@@ -305,19 +349,87 @@ impl ScriptNode {
             }
             // Apply timer control the handler queued: a new period takes
             // effect from now, and a stopped timer never fires again.
-            for op in rt.vm.timer_ops.drain(..) {
-                match op {
-                    crate::script::TimerOp::SetPeriod(ms) => {
-                        rt.timers[slot_index].period_ms = ms;
-                        rt.timers[slot_index].next_due_us = now_us.saturating_add(ms * 1_000);
-                    }
-                    crate::script::TimerOp::Stop => rt.timers[slot_index].stopped = true,
+            let ops: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+            for op in ops {
+                if let Some(warn) = Self::apply_timer_op(rt, op, now_us, Some(slot_index)) {
+                    Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
                 }
             }
             Self::drain_vm(rt, &mut self.log, &mut self.log_dirty);
             out.append(&mut rt.vm.outbox);
         }
         out
+    }
+
+    /// Applies one queued timer op. `slot` is the running handler's own
+    /// slot when called from the timer loop, None elsewhere. Returns a
+    /// warning line for an `set_timer` naming no declared one-shot.
+    fn apply_timer_op(
+        rt: &mut NodeRuntime,
+        op: crate::script::TimerOp,
+        now_us: u64,
+        slot: Option<usize>,
+    ) -> Option<String> {
+        match op {
+            crate::script::TimerOp::SetPeriod(ms) => {
+                let i = slot?;
+                let s = &mut rt.timers[i];
+                s.period_ms = ms;
+                s.next_due_us = now_us.saturating_add(ms * 1_000);
+                if s.name.is_some() {
+                    // A named slot is spent before its handler runs, so a
+                    // `set_period` there counts as a re-arm.
+                    s.stopped = false;
+                }
+                None
+            }
+            crate::script::TimerOp::Stop => {
+                if let Some(i) = slot {
+                    rt.timers[i].stopped = true;
+                }
+                None
+            }
+            crate::script::TimerOp::Arm { name, ms } => {
+                let due = now_us.saturating_add(ms.saturating_mul(1_000));
+                // Re-arm in place when the name already has a slot.
+                if let Some(s) = rt
+                    .timers
+                    .iter_mut()
+                    .find(|s| s.name.as_deref() == Some(name.as_str()))
+                {
+                    s.period_ms = ms;
+                    s.next_due_us = due;
+                    s.stopped = false;
+                    return None;
+                }
+                // Otherwise bind a fresh slot to its declared handler.
+                let declared = rt.handlers.iter().enumerate().find_map(|(i, h)| {
+                    matches!(&h.kind, HandlerKind::Oneshot { name: n } if *n == name).then_some(i)
+                });
+                if let Some(i) = declared {
+                    rt.timers.push(TimerSlot {
+                        handler_index: i,
+                        period_ms: ms,
+                        next_due_us: due,
+                        name: Some(name),
+                        stopped: false,
+                    });
+                    return None;
+                }
+                Some(format!("[timer] set_timer(\"{name}\"): no such handler"))
+            }
+            crate::script::TimerOp::Cancel { name } => {
+                if let Some(s) = rt
+                    .timers
+                    .iter_mut()
+                    .find(|s| s.name.as_deref() == Some(name.as_str()))
+                {
+                    s.stopped = true;
+                    s.next_due_us = 0;
+                }
+                None
+            }
+        }
     }
 
     /// Moves freshly printed lines from the VM into the node's log ring.
@@ -545,6 +657,99 @@ mod tests {
         assert_eq!(
             n.dispatch_frame(0, 0x100, &[], &HostInput::default()).len(),
             1
+        );
+    }
+
+    /// The delayed-response shape: a frame arrives, the node answers one
+    /// fixed delay later, exactly once per arming.
+    #[test]
+    fn a_set_timer_one_shot_fires_once_from_an_event() {
+        let mut n = node(
+            r#"
+                on message 0x100 { set_timer("resp", 100); }
+                on timer "resp" { send(0x200, 1); }
+            "#,
+        );
+        n.start(None);
+        let hit = HostInput {
+            now_s: 0.05,
+            ..HostInput::default()
+        };
+        assert!(n.dispatch_frame(0, 0x100, &[], &hit).is_empty(), "arming");
+        assert!(n.run_timers(100_000, &hit).is_empty(), "not yet due");
+        let out = n.run_timers(150_000, &hit);
+        assert_eq!(out.len(), 1, "one shot, one frame");
+        assert_eq!(out[0].0, 0x200);
+        assert!(
+            n.run_timers(400_000, &hit).is_empty(),
+            "a one-shot never repeats"
+        );
+    }
+
+    #[test]
+    fn a_one_shot_can_re_arm_itself() {
+        let mut n = node(
+            r#"
+                let fired = 0;
+                on start { set_timer("beat", 100); }
+                on timer "beat" {
+                    fired = fired + 1;
+                    print("beat", fired);
+                    if (fired < 3) { set_timer("beat", 100); }
+                }
+            "#,
+        );
+        n.start(None);
+        let t0 = HostInput::default();
+        // The `on start` arming lands on the first tick's clock.
+        n.run_timers(0, &t0);
+        n.run_timers(100_000, &t0); // beat 1, re-arms
+        n.run_timers(200_000, &t0); // beat 2, re-arms
+        n.run_timers(300_000, &t0); // beat 3, no re-arm
+        n.run_timers(500_000, &t0);
+        let beats = n
+            .log_snapshot()
+            .iter()
+            .filter(|l| l.starts_with("beat "))
+            .count();
+        assert_eq!(beats, 3, "log: {:?}", n.log_snapshot());
+    }
+
+    #[test]
+    fn cancel_timer_disarms_a_one_shot() {
+        let mut n = node(
+            r#"
+                on start { set_timer("beat", 100); }
+                on message 0x1 { cancel_timer("beat"); }
+                on timer "beat" { print("beat"); }
+            "#,
+        );
+        n.start(None);
+        let t0 = HostInput::default();
+        n.run_timers(0, &t0);
+        let hit = HostInput {
+            now_s: 0.01,
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x1, &[], &hit);
+        assert!(
+            n.run_timers(500_000, &t0).is_empty(),
+            "a cancelled one-shot never fires"
+        );
+        assert!(n.log_snapshot().iter().all(|l| !l.contains("beat")));
+    }
+
+    #[test]
+    fn set_timer_without_a_handler_logs_a_warning() {
+        let mut n = node(r#"on start { set_timer("nope", 50); }"#);
+        n.start(None);
+        n.run_timers(0, &HostInput::default());
+        assert!(
+            n.log_snapshot()
+                .iter()
+                .any(|l| l.contains("nope") && l.contains("no such handler")),
+            "log: {:?}",
+            n.log_snapshot()
         );
     }
 
