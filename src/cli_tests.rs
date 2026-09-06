@@ -47,7 +47,7 @@ fn a_full_flag_set_parses() {
     ]))
     .unwrap();
     let o = opts_of(&cli);
-    assert_eq!(o.replay, "run.asc");
+    assert_eq!(o.replay.as_deref(), Some("run.asc"));
     assert_eq!(o.speed, 2.5);
     assert_eq!(o.duration_s, Some(10.0));
     assert_eq!(o.stats_csv.as_deref(), Some("out.csv"));
@@ -172,7 +172,8 @@ fn a_cli_replay_runs_the_log_and_exports() {
     let log = write_log("roxy_can_cli_replay.asc", 100, 10_000);
     let stats = tmp("roxy_can_cli_stats.csv");
     let report = run(&CliOpts {
-        replay: log.to_string_lossy().into_owned(),
+        replay: Some(log.to_string_lossy().into_owned()),
+        project: None,
         speed: 50.0, // a 1 s log finishes in ~20 ms of wall clock
         duration_s: None,
         stats_csv: Some(stats.clone()),
@@ -199,7 +200,8 @@ fn the_duration_flag_stops_before_the_log_ends() {
     let log = write_log("roxy_can_cli_duration.asc", 100, 10_000);
     let started = std::time::Instant::now();
     let report = run(&CliOpts {
-        replay: log.to_string_lossy().into_owned(),
+        replay: Some(log.to_string_lossy().into_owned()),
+        project: None,
         speed: 1.0,
         duration_s: Some(0.05),
         stats_csv: None,
@@ -226,11 +228,92 @@ fn the_duration_flag_stops_before_the_log_ends() {
 #[test]
 fn a_missing_log_reports_instead_of_running() {
     let err = run(&CliOpts {
-        replay: tmp("roxy_can_cli_no_such_log.asc"),
+        replay: Some(tmp("roxy_can_cli_no_such_log.asc")),
+        project: None,
         speed: 1.0,
         duration_s: None,
         stats_csv: None,
     })
     .unwrap_err();
     assert!(err.contains("log load failed"), "{err}");
+}
+
+/// `--project`: the saved project simulates headless. The generator
+/// entries saved active in the project drive the virtual bus, and the
+/// stats CSV comes out the far end -- the CI story for simulation
+/// setups.
+#[test]
+fn a_project_simulates_headless_until_the_duration_stops_it() {
+    let mut app = crate::app::App::headless();
+    app.add_tx(0, 0x100);
+    app.settle();
+    // Command-driven, so the core (not a stale frontend copy) holds the
+    // activated entry the project save must record.
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.send(crate::bus::BusCommand::SetEntryCycle {
+        ch: 0,
+        id: 0x100,
+        cycle_us: 10_000,
+    });
+    app.settle();
+    let project = std::env::temp_dir().join("roxy_can_cli_sim.rxproj");
+    assert!(app.save_project(Some(project.clone())), "save writes");
+    app.stop();
+
+    let stats = tmp("roxy_can_cli_sim_stats.csv");
+    let report = run(&CliOpts {
+        replay: None,
+        project: Some(project.to_string_lossy().into_owned()),
+        speed: 1.0,
+        duration_s: Some(0.2),
+        stats_csv: Some(stats.clone()),
+    })
+    .unwrap();
+    assert!(report.contains("simulation finished"), "{report}");
+    assert!(report.contains("sim clock"), "{report}");
+
+    let frames: u64 = report
+        .lines()
+        .find_map(|l| l.strip_prefix("  frames     : "))
+        .expect("the report counts frames")
+        .parse()
+        .unwrap();
+    assert!(
+        (10..500).contains(&frames),
+        "a 100 ms entry ran for ~0.2 s of wall clock: {frames}"
+    );
+    let csv = std::fs::read_to_string(&stats).unwrap();
+    assert!(
+        csv.contains("EngineStatus"),
+        "the stats csv names the simulated message: {csv}"
+    );
+
+    std::fs::remove_file(&project).ok();
+    std::fs::remove_file(&stats).ok();
+}
+
+#[test]
+fn a_project_needs_a_duration_and_refuses_a_log() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["--project", "p.rxproj"], "--duration"),
+        (
+            &[
+                "--project",
+                "p.rxproj",
+                "--replay",
+                "a.asc",
+                "--duration",
+                "1",
+            ],
+            "mutually exclusive",
+        ),
+    ];
+    for (args, needle) in cases {
+        let err = parse_args(&flag_set(args)).unwrap_err();
+        assert!(err.contains(needle), "`{err}` should mention `{needle}`");
+    }
 }

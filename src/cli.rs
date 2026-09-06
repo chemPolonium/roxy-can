@@ -20,9 +20,13 @@ pub enum Cli {
 
 #[derive(Debug)]
 pub struct CliOpts {
-    pub replay: String,
+    /// The log to replay, when `--replay` was given.
+    pub replay: Option<String>,
+    /// The project to simulate, when `--project` was given.
+    pub project: Option<String>,
     pub speed: f64,
-    /// Wall-clock seconds to run before stopping; the whole log when None.
+    /// Wall-clock seconds to run before stopping; the whole log when None
+    /// (replay only -- a project simulation must be bounded).
     pub duration_s: Option<f64>,
     /// Write the message-statistics CSV here when the run ends.
     pub stats_csv: Option<String>,
@@ -33,15 +37,19 @@ pub fn usage() -> &'static str {
 
   roxy-can                       open the workspace window (default)
   roxy-can --replay <log> ...    replay a CAN log without any window
+  roxy-can --project <p> ...     simulate a saved project without any window
   roxy-can --check-script <f>    compile node scripts, no window needed
                                  (repeat the flag for more files; non-zero
                                  exit when any script fails)
 
-replay options
+run options
   --replay <path>    log to replay (.asc or .blf)
-  --speed <n>        playback rate, 1.0 = real time (default)
+  --project <path>   project (.rxproj) to simulate: generators and script
+                     nodes run on the virtual bus (needs --duration)
+  --speed <n>        playback rate, 1.0 = real time (replay only, default 1.0)
   --duration <s>     stop after this many wall-clock seconds
-                     (default: run to the end of the log)
+                     (replay default: run to the end of the log;
+                      project: required, a simulation has no end)
   --stats <path>     write the message-statistics CSV when the run ends
   -h, --help         this text"
 }
@@ -54,6 +62,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         return Ok(Cli::Help(usage().to_string()));
     }
     let mut replay = None;
+    let mut project = None;
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -70,6 +79,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         }
         match args[i].as_str() {
             "--replay" => replay = Some(value(args, &mut i, "--replay")?),
+            "--project" => project = Some(value(args, &mut i, "--project")?),
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--speed" => {
                 let raw = value(args, &mut i, "--speed")?;
@@ -96,58 +106,109 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         i += 1;
     }
     if !scripts.is_empty() {
-        if replay.is_some() {
-            return Err("`--check-script` runs headless on its own; drop `--replay`".to_string());
+        if replay.is_some() || project.is_some() {
+            return Err(
+                "`--check-script` runs headless on its own; drop `--replay`/`--project`"
+                    .to_string(),
+            );
         }
         return Ok(Cli::CheckScripts(scripts));
     }
-    let replay = replay.ok_or("`--replay <log.asc|log.blf>` is required")?;
+    if replay.is_some() && project.is_some() {
+        return Err("`--replay` and `--project` are mutually exclusive".to_string());
+    }
+    if project.is_some() && duration_s.is_none() {
+        return Err(
+            "`--project` simulates until told to stop; `--duration` is required".to_string(),
+        );
+    }
+    if replay.is_none() && project.is_none() {
+        return Err("`--replay <log>` or `--project <project>` is required".to_string());
+    }
     Ok(Cli::Run(CliOpts {
         replay,
+        project,
         speed,
         duration_s,
         stats_csv,
     }))
 }
 
-/// Runs the replay on the manual drive against the real wall clock: the
-/// same `advance_clock` + `tick` lap the GUI's frame loop performs, at a
-/// 1 ms cadence. A late lap only batches frames (backfill covers the
-/// samples), so sleep granularity costs smoothness, never data.
+/// Runs a replay or a project simulation on the manual drive against the
+/// real wall clock: the same `advance_clock` + `tick` lap the GUI's frame
+/// loop performs, at a 1 ms cadence. A late lap only batches frames
+/// (backfill covers the samples), so sleep granularity costs smoothness,
+/// never data.
 pub fn run(opts: &CliOpts) -> Result<String, String> {
     let mut app = App::headless();
-    app.load_log(&opts.replay);
-    // A failed load leaves `log_path` untouched and explains itself in the
-    // status line.
-    if app.log_path != opts.replay {
-        return Err(app.status.clone());
+    let replaying = opts.project.is_none();
+    if let Some(project) = &opts.project {
+        // A project simulation: generators and script nodes run on the
+        // virtual bus, exactly as the GUI would drive them.
+        app.open_project_path(std::path::Path::new(project));
+        if app.project_path.as_deref() != Some(std::path::Path::new(project)) {
+            return Err(app.status.clone());
+        }
+        // A GUI project open deliberately leaves every generator entry
+        // muted (opening a project must not start traffic). A headless
+        // run is the explicit exception: re-arm the entries the project
+        // saved as active, from the file itself.
+        let file =
+            std::fs::read_to_string(project).map_err(|e| format!("project read failed: {e}"))?;
+        let cfg: crate::config::ProjectFile =
+            serde_json::from_str(&file).map_err(|e| format!("project parse failed: {e}"))?;
+        app.start_virtual();
+        for t in &cfg.config.tx {
+            if t.active {
+                app.send(crate::bus::BusCommand::SetEntryActive {
+                    ch: t.channel,
+                    id: t.id,
+                    on: true,
+                });
+            }
+        }
+    } else {
+        let log = opts.replay.as_deref().expect("validated");
+        app.load_log(log);
+        // A failed load leaves `log_path` untouched and explains itself in
+        // the status line.
+        if app.log_path != log {
+            return Err(app.status.clone());
+        }
+        // Set before `replay`, whose StartReplay carries the frontend's
+        // speed. (No --record by design: the core drops Record state on
+        // replay starts, since recording a replay would only duplicate the
+        // log.)
+        app.set_replay_speed(opts.speed);
+        app.replay();
     }
-    // Set before `replay`, whose StartReplay carries the frontend's speed.
-    // (No --record by design: the core drops Record state on replay starts,
-    // since recording a replay would only duplicate the log.)
-    app.set_replay_speed(opts.speed);
-    app.replay();
 
     let t0 = std::time::Instant::now();
     let mut saw_timeline = false;
-    let mut reason = "end of log";
+    let mut reason = if replaying {
+        "end of log"
+    } else {
+        "duration limit"
+    };
     loop {
         let now = t0.elapsed().as_micros() as u64;
         app.advance_clock(now);
         app.tick(now);
         // The playhead advances with the wall clock even past the last
         // frame, so this fires for every log -- empty ones on the first lap.
-        match app.replay_position() {
-            Some((pos, dur)) => {
-                saw_timeline = true;
-                if pos >= dur {
-                    break;
+        if replaying {
+            match app.replay_position() {
+                Some((pos, dur)) => {
+                    saw_timeline = true;
+                    if pos >= dur {
+                        break;
+                    }
                 }
-            }
-            None => {
-                if saw_timeline {
-                    reason = "source stopped";
-                    break;
+                None => {
+                    if saw_timeline {
+                        reason = "source stopped";
+                        break;
+                    }
                 }
             }
         }
@@ -159,7 +220,7 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    if !saw_timeline {
+    if replaying && !saw_timeline {
         return Err("the replay never produced a timeline (is the log empty?)".to_string());
     }
     app.stop();
@@ -171,16 +232,28 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
         }
     }
 
-    let (pos, dur) = app.replay_position().unwrap_or((0.0, 0.0));
-    let mut report = format!(
-        "replay finished ({reason})\n  log        : {}\n  frames     : {}\n  playhead   : {:.3} / {:.3} s at {}x\n  wall time  : {:.3} s\n",
-        opts.replay,
-        app.snap.frame_counter,
-        pos.min(dur),
-        dur,
-        opts.speed,
+    let mut report = if replaying {
+        let (pos, dur) = app.replay_position().unwrap_or((0.0, 0.0));
+        format!(
+            "replay finished ({reason})\n  log        : {}\n  frames     : {}\n  playhead   : {:.3} / {:.3} s at {}x\n",
+            opts.replay.as_deref().unwrap_or_default(),
+            app.snap.frame_counter,
+            pos.min(dur),
+            dur,
+            opts.speed,
+        )
+    } else {
+        format!(
+            "simulation finished ({reason})\n  project    : {}\n  frames     : {}\n  sim clock  : {:.3} s\n",
+            opts.project.as_deref().unwrap_or_default(),
+            app.snap.frame_counter,
+            app.snap.sim_t_us as f64 / 1e6,
+        )
+    };
+    report.push_str(&format!(
+        "  wall time  : {:.3} s\n",
         t0.elapsed().as_secs_f64()
-    );
+    ));
     if let Some(csv) = &opts.stats_csv {
         report.push_str(&format!("  stats csv  : {csv}\n"));
     }
