@@ -304,7 +304,7 @@ impl App {
 
     /// Adds or removes a signal in a Graphics/Data window's signal list
     /// (used by the Signal Selection popup).
-    pub fn set_win_signal(&mut self, target: PopupTarget, key: (u8, u32, String), on: bool) {
+    pub fn set_win_signal(&mut self, target: PopupTarget, key: crate::observe::SigKey, on: bool) {
         let signals: Option<&mut Vec<GfxSignal>> = match target {
             PopupTarget::Graphics(i) => self.graphics.get_mut(i).map(|w| &mut w.signals),
             PopupTarget::Data(i) => self.data_windows.get_mut(i).map(|w| &mut w.signals),

@@ -361,7 +361,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     // Follows the replay playhead, not the wall clock, so the axis moves with
     // the scrub bar and the curve stays in view at any playback speed.
     let t_now = app.plot_now_s();
-    let keys: Vec<(u8, u32, String)> = app.graphics[i]
+    let keys: Vec<crate::observe::SigKey> = app.graphics[i]
         .signals
         .iter()
         .filter(|s| s.visible)
@@ -556,7 +556,7 @@ struct PlotPane<'a> {
     y0: f32,
     w: f32,
     h: f32,
-    keys: &'a [(u8, u32, String)],
+    keys: &'a [crate::observe::SigKey],
     /// Throttled legend strings, one per key (see
     /// `App::sync_gfx_legend`); the readout holds still while the curve
     /// animates at full frame rate.
@@ -581,7 +581,7 @@ struct PlotPane<'a> {
 pub(crate) fn resolve_y_range(
     app: &mut App,
     gi: usize,
-    keys: &[(u8, u32, String)],
+    keys: &[crate::observe::SigKey],
     lo_us: u64,
     hi_us: u64,
 ) -> (f64, f64) {
@@ -606,7 +606,7 @@ pub(crate) fn resolve_y_range(
 fn resolve_signal_range(
     app: &mut App,
     gi: usize,
-    key: &(u8, u32, String),
+    key: &crate::observe::SigKey,
     lo_us: u64,
     hi_us: u64,
 ) -> (f64, f64) {
@@ -620,7 +620,7 @@ fn resolve_signal_range(
 
     /// What the visible slice spans right now -- the behaviour of every
     /// Graphics tool before the Y modes existed.
-    fn auto(app: &App, key: &(u8, u32, String), lo_us: u64, hi_us: u64) -> (f64, f64) {
+    fn auto(app: &App, key: &crate::observe::SigKey, lo_us: u64, hi_us: u64) -> (f64, f64) {
         let mut vmin = f64::INFINITY;
         let mut vmax = f64::NEG_INFINITY;
         if let Some(sub) = app.sub_view(key) {
@@ -851,8 +851,8 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
                 continue;
             };
             let txt = match value_at(&sub.history, t_us) {
-                Some(v) => format!("{} = {}", key.2, fmt_val(v)),
-                None => format!("{} = -", key.2),
+                Some(v) => format!("{} = {}", key.3, fmt_val(v)),
+                None => format!("{} = -", key.3),
             };
             let lx = if left_side {
                 cx - 8.0 - txt.len() as f32 * 6.5

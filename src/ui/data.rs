@@ -114,7 +114,7 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             if !ui.table_next_column() {
                 continue;
             }
-            ui.text(&key.2);
+            ui.text(&key.3);
             ui.table_next_column();
             ui.text(&text[0]);
             ui.table_next_column();

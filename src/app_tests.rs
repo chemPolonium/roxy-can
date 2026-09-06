@@ -299,7 +299,12 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
+        (
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -971,7 +976,7 @@ fn csv_exports_match_window_state() {
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
     let id = db.order[0].0;
     let sig = db.messages[&(id, false)].signals[0].name.clone();
-    let key = (0u8, id, sig);
+    let key = (0u8, id, false, sig);
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
         key: key.clone(),
@@ -1006,12 +1011,12 @@ fn csv_exports_match_window_state() {
     let gfx = dir.join("roxy_gfx_test.csv");
     app.export_graphics_csv(0, &gfx.to_string_lossy());
     let g = std::fs::read_to_string(&gfx).unwrap();
-    assert!(g.contains(&key.2), "graphics history names the signal");
+    assert!(g.contains(&key.3), "graphics history names the signal");
 
     let data = dir.join("roxy_data_test.csv");
     app.export_data_csv(0, &data.to_string_lossy());
     let d = std::fs::read_to_string(&data).unwrap();
-    assert!(d.contains(&key.2), "data snapshot names the signal");
+    assert!(d.contains(&key.3), "data snapshot names the signal");
 
     for p in [&stats, &msgs, &gfx, &data] {
         std::fs::remove_file(p).ok();
@@ -1443,12 +1448,20 @@ fn retention_backs_the_widest_plot_window() {
 /// App with the first sample.dbc signal subscribed and that log loaded but
 /// not yet playing. The traffic has to be DBC-decodable for the Graphics
 /// history to fill, so a hand-written fixture will not do.
-fn app_with_replayable_recording(name: &str, iters: usize) -> (App, (u8, u32, String), String) {
+fn app_with_replayable_recording(
+    name: &str,
+    iters: usize,
+) -> (App, crate::observe::SigKey, String) {
     let mut app = App::headless();
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
+        (
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
@@ -2181,7 +2194,12 @@ fn signal_stats_track_min_avg_max() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
+        (
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -2209,7 +2227,12 @@ fn restored_signals_are_resubscribed() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
+        (
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
@@ -2825,11 +2848,72 @@ fn mux_frame(t_us: u64, switch: u8) -> CanFrame {
     f
 }
 
+/// A standard and an extended message sharing one numeric id are two
+/// different signals: each subscription samples only its own class's
+/// frames, even though the id and the channel are identical.
+#[test]
+fn twin_class_subscriptions_never_cross_feed() {
+    const TWIN_DBC: &str = r#"VERSION "roxy-can twin sub test"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 256 Twin: 2 ECU
+ SG_ StdSig : 0|16@1+ (0.1,0) [0|0] ""  ECU
+
+BO_ 2147483904 Twin: 2 ECU
+ SG_ ExtSig : 0|16@1+ (0.1,0) [0|0] ""  ECU
+"#;
+    let mut app = App::headless();
+    app.channels[0].dbc = Some(std::sync::Arc::new(
+        crate::dbc::load_dbc_str(TWIN_DBC).unwrap(),
+    ));
+    app.tx_list.retain(|t| t.channel != 0);
+    app.start_virtual();
+    let std_key = (0u8, 0x100u32, false, "StdSig".to_string());
+    let ext_key = (0u8, 0x100u32, true, "ExtSig".to_string());
+    app.subscribe(std_key.clone());
+    app.subscribe(ext_key.clone());
+
+    // A standard frame: only the standard subscription sees it...
+    receive(
+        &mut app,
+        10_000,
+        vec![frame_at(10_000, 0x100, 2, Direction::Rx)],
+    );
+    assert!(
+        !app.subs[&std_key].history.is_empty(),
+        "standard class sampled"
+    );
+    assert!(
+        app.subs[&ext_key].history.is_empty(),
+        "extended class got nothing from a standard frame"
+    );
+
+    // ...an extended frame: only the extended subscription sees it.
+    let mut ext = frame_at(20_000, 0x100, 2, Direction::Rx);
+    ext.extended = true;
+    ext.data[0] = 200;
+    receive(&mut app, 20_000, vec![ext]);
+    assert_eq!(
+        app.subs[&std_key].latest, 0.0,
+        "standard class never saw the extended frame"
+    );
+    assert!(
+        app.subs[&ext_key].latest > 0.0,
+        "extended class sampled the extended frame"
+    );
+    app.stop();
+}
+
 #[test]
 fn a_signal_of_the_inactive_group_is_not_sampled() {
     let mut app = mux_app();
-    let g1 = (0u8, 400u32, "G1_A".to_string());
-    let g2 = (0u8, 400u32, "G2_C".to_string());
+    let g1 = (0u8, 400u32, false, "G1_A".to_string());
+    let g2 = (0u8, 400u32, false, "G2_C".to_string());
     app.subscribe(g1.clone());
     app.subscribe(g2.clone());
     assert!(app.subs.contains_key(&g1), "both signals are subscribed");
@@ -2850,7 +2934,7 @@ fn a_signal_of_the_inactive_group_is_not_sampled() {
 #[test]
 fn a_group_signal_gains_samples_once_its_group_is_switched_in() {
     let mut app = mux_app();
-    let g2 = (0u8, 400u32, "G2_C".to_string());
+    let g2 = (0u8, 400u32, false, "G2_C".to_string());
     app.subscribe(g2.clone());
 
     receive(&mut app, 100_000, vec![mux_frame(100_000, 1)]);
@@ -3349,7 +3433,7 @@ fn a_cycle_timeout_trigger_fires_on_each_dropout() {
 #[test]
 fn a_small_graphics_window_pulls_the_sample_stride_down() {
     let mut app = quiet_app();
-    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
     app.subscribe(key.clone());
 
     // The default 10 s window keeps the coarse stride: 21 frames at 100 Hz
@@ -3535,7 +3619,7 @@ fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
     // The reaction target, inactive so only the reaction itself emits it;
     // its base payload is all zeroes.
     app.add_tx(0, 0x200);
-    let key = (0u8, 0x200u32, "EngineSpeed".to_string());
+    let key = (0u8, 0x200u32, false, "EngineSpeed".to_string());
     app.subscribe(key.clone());
     app.triggers.push(Trigger::new(
         TriggerCond::SignalCross {
@@ -3592,7 +3676,7 @@ fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
 /// and right edge. A curve that "breathes" -- shrinking back and forth in
 /// the time direction -- shows up as the count or the right edge swinging
 /// while the clock only ever moves forward.
-fn visible_curve(app: &mut App, key: &(u8, u32, String)) -> (f64, usize, f64) {
+fn visible_curve(app: &mut App, key: &crate::observe::SigKey) -> (f64, usize, f64) {
     let t_now = app.plot_now_s();
     let tw = app.graphics[0].time_window_s;
     let t_right = t_now - app.graphics[0].t_offset_s;
@@ -3663,7 +3747,12 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (0u8, id, db.messages[&(id, false)].signals[0].name.clone())
+        (
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -3710,9 +3799,9 @@ fn feed_rpm(app: &mut App, pts: &[(u64, f64)]) {
 /// Subscribe EngineSpeed and hang it in Graphics 1's curve list with the
 /// given value-axis policy -- the strategies resolve from the list entry,
 /// not the window.
-fn gfx_app(mode: YMode) -> (App, (u8, u32, String)) {
+fn gfx_app(mode: YMode) -> (App, crate::observe::SigKey) {
     let mut app = quiet_app();
-    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
     app.subscribe(key.clone());
     app.graphics[0].opened = true;
     app.graphics[0].signals.push(GfxSignal {
@@ -3812,7 +3901,7 @@ fn each_signal_keeps_its_own_axis_in_the_overlay_union() {
     // locked keeps its span as a floor/ceiling while an Auto neighbour
     // widens the shared span past it.
     let (mut app, key) = gfx_app(YMode::Lock);
-    let temp = (0u8, 0x100u32, "EngineTemp".to_string());
+    let temp = (0u8, 0x100u32, false, "EngineTemp".to_string());
     app.subscribe(temp.clone());
     app.graphics[0].signals.push(GfxSignal {
         key: temp.clone(),
@@ -3869,7 +3958,7 @@ fn the_y_mode_round_trips_through_a_project() {
 #[test]
 fn the_state_tracker_round_trips_through_a_project() {
     let mut app = App::headless();
-    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
     app.state_trackers[0].signals.push(GfxSignal {
         key: key.clone(),
         visible: true,
@@ -3979,7 +4068,7 @@ fn the_text_gate_fires_on_its_cadence() {
 #[test]
 fn data_values_hold_still_until_the_text_gate_fires() {
     let mut app = quiet_app();
-    let key = (0u8, 0x100u32, "EngineSpeed".to_string());
+    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
     app.subscribe(key.clone());
     if app.data_windows.is_empty() {
         app.new_data_window();

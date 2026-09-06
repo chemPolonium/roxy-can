@@ -193,7 +193,7 @@ impl App {
         let Some(g) = self.graphics.get(i) else {
             return;
         };
-        let keys: Vec<(u8, u32, String)> = g
+        let keys: Vec<crate::observe::SigKey> = g
             .signals
             .iter()
             .filter(|s| s.visible)
@@ -207,7 +207,7 @@ impl App {
             };
             let bus = self.channel_name(key.0);
             for (t, v) in sub.history.iter() {
-                s.push_str(&format!("{t},{bus},{},{v}\n", key.2));
+                s.push_str(&format!("{t},{bus},{},{v}\n", key.3));
                 n += 1;
             }
         }
@@ -238,7 +238,7 @@ impl App {
         let Some(d) = self.data_windows.get(i) else {
             return;
         };
-        let keys: Vec<(u8, u32, String)> = d
+        let keys: Vec<crate::observe::SigKey> = d
             .signals
             .iter()
             .filter(|s| s.visible)
@@ -253,7 +253,7 @@ impl App {
             let label = sub.label.as_deref().unwrap_or("");
             s.push_str(&format!(
                 "{bus},{},{},{},{},{label}\n",
-                key.2, sub.latest, sub.unit, sub.type_tag
+                key.3, sub.latest, sub.unit, sub.type_tag
             ));
         }
         self.write_export(path, s);

@@ -393,14 +393,6 @@ impl SymbolTable {
         self.message_of(id).map(|m| m.name.as_str())
     }
 
-    /// The `VAL_` table for a signal, bare-id form for callers that do not
-    /// carry a frame class yet: standard first, extended as the fallback.
-    pub fn val_table_of(&self, id: u32, name: &str) -> Option<&HashMap<i64, String>> {
-        self.value_tables
-            .get(&((id, false), name.to_string()))
-            .or_else(|| self.value_tables.get(&((id, true), name.to_string())))
-    }
-
     /// Packs a physical signal value into the frame data bytes.
     /// Returns false if the message or signal is unknown. The id picks the
     /// frame class like `send` does: up to 0x7FF standard (with the extended

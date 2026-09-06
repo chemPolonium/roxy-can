@@ -60,7 +60,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
         src: ValueSrc::new("EngineSpeed", SrcKind::Sine, 0.0, 8000.0),
     });
     app.send(crate::bus::BusCommand::Subscribe {
-        key: (0, 0x100, "EngineSpeed".to_string()),
+        key: (0, 0x100, false, "EngineSpeed".to_string()),
     });
 
     // Three simulated seconds at 1 ms. 0x100 has no declared cycle in
@@ -90,7 +90,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
         agg.cycle_us
     );
     let sub = app
-        .sub_view(&(0, 0x100, "EngineSpeed".to_string()))
+        .sub_view(&(0, 0x100, false, "EngineSpeed".to_string()))
         .expect("subscribed");
     assert!(
         sub.history.len() >= 20,
@@ -664,12 +664,12 @@ fn perf_snapshot_publish_under_load() {
     app.start_virtual();
 
     // Every signal the sample database declares, taken in table order.
-    let mut keys: Vec<(u8, u32, String)> = Vec::new();
+    let mut keys: Vec<crate::observe::SigKey> = Vec::new();
     let db = app.channel_dbc(0).expect("sample.dbc loaded");
-    for (id, _) in &db.order {
-        let msg = db.message_of(*id).expect("message table");
+    for (id, ext) in &db.order {
+        let msg = db.messages.get(&(*id, *ext)).expect("message table");
         for s in &msg.signals {
-            keys.push((0, *id, s.name.clone()));
+            keys.push((0, *id, *ext, s.name.clone()));
         }
     }
     assert!(keys.len() >= 4, "need a handful of signals to subscribe");

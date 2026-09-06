@@ -394,8 +394,14 @@ impl Subscription {
     }
 }
 
+/// One subscribed signal: bus, message id, the message's frame class, and
+/// the signal name. The frame class rides the key so a standard and an
+/// extended message sharing one numeric id stay two different signals
+/// everywhere a subscription is stored, listed, or plotted.
+pub type SigKey = (u8, u32, bool, String);
+
 pub struct GfxSignal {
-    pub key: (u8, u32, String),
+    pub key: SigKey,
     pub visible: bool,
     /// This signal's value-axis policy. Each curve scales on its own: one
     /// signal riding Auto breathes with its window while a neighbour stays
@@ -486,7 +492,7 @@ pub struct GraphicsWindow {
     /// text refresh, aligned with `legend_keys`; the plot draws these so the
     /// digits hold still while the curve itself animates at full frame rate.
     /// Session state only.
-    pub(crate) legend_keys: Vec<(u8, u32, String)>,
+    pub(crate) legend_keys: Vec<SigKey>,
     pub(crate) legend: Vec<String>,
 }
 
@@ -497,7 +503,7 @@ pub struct DataWindow {
     /// Value/unit/raw strings as of the last throttled text refresh; the
     /// table draws these so digits hold still long enough to read, while
     /// the bar next to them animates at full frame rate.
-    pub(crate) text_keys: Vec<(u8, u32, String)>,
+    pub(crate) text_keys: Vec<SigKey>,
     pub(crate) text_cache: Vec<[String; 3]>,
 }
 
@@ -567,16 +573,16 @@ pub struct StateWin {
     /// then by the value's bits: a value keeps the slot it first drew
     /// with, so the same value keeps the same color as the run goes on
     /// and new states never reshuffle the old ones. Not persisted.
-    pub(crate) color_slots: HashMap<(u8, u32, String), HashMap<u64, usize>>,
+    pub(crate) color_slots: HashMap<SigKey, HashMap<u64, usize>>,
     /// Custom state bands per signal key (CANoe's Value Definition). When
     /// present, the signal is in custom mode and the rule drives both the
     /// band labels and the fill colors. Absent means default mode: states
     /// come from the VAL_ table or observed values.
-    pub rules: HashMap<(u8, u32, String), StateRule>,
+    pub rules: HashMap<SigKey, StateRule>,
     /// Default-mode color overrides per signal key, keyed by the state
     /// value's normalized bits: an entry pins one state's color while the
     /// rest stay automatic.
-    pub overrides: HashMap<(u8, u32, String), HashMap<u64, [f32; 3]>>,
+    pub overrides: HashMap<SigKey, HashMap<u64, [f32; 3]>>,
 }
 
 impl Default for StateWin {
@@ -600,7 +606,7 @@ use crate::app::App;
 impl GraphicsWindow {
     /// The throttled legend strings for `keys`, in the same order; an empty
     /// string stands in until the first text refresh fills the snapshot.
-    pub(crate) fn legend_for(&self, keys: &[(u8, u32, String)]) -> Vec<String> {
+    pub(crate) fn legend_for(&self, keys: &[SigKey]) -> Vec<String> {
         keys.iter()
             .map(|key| {
                 self.legend_keys
@@ -672,13 +678,13 @@ impl App {
     /// The database's declared min..max for a signal -- the scale the Data
     /// window's bar draws against. None when no database names the signal
     /// or declares a usable range on it.
-    pub(crate) fn declared_range(&self, key: &(u8, u32, String)) -> Option<(f64, f64)> {
+    pub(crate) fn declared_range(&self, key: &SigKey) -> Option<(f64, f64)> {
         self.snap
             .channels
             .get(key.0 as usize)
             .and_then(|c| c.dbc.as_deref())
-            .and_then(|db| db.message_of(key.1))
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .and_then(|db| db.messages.get(&(key.1, key.2)))
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.3))
             .and_then(|s| (s.max > s.min).then_some((s.min, s.max)))
     }
 
@@ -687,7 +693,7 @@ impl App {
     /// signal set changed (adding a signal must not wait a full period to
     /// show its first value).
     pub(crate) fn sync_data_text(&mut self, i: usize) {
-        let keys: Vec<(u8, u32, String)> = self.data_windows[i]
+        let keys: Vec<SigKey> = self.data_windows[i]
             .signals
             .iter()
             .filter(|s| s.visible)
@@ -719,7 +725,7 @@ impl App {
     /// as [`App::sync_data_text`]: no-op unless the text gate says so or the
     /// visible signal set changed.
     pub(crate) fn sync_gfx_legend(&mut self, i: usize) {
-        let keys: Vec<(u8, u32, String)> = self.graphics[i]
+        let keys: Vec<SigKey> = self.graphics[i]
             .signals
             .iter()
             .filter(|s| s.visible)
@@ -734,7 +740,7 @@ impl App {
                 Some(sub) => {
                     format!(
                         "{} = {}",
-                        key.2,
+                        key.3,
                         crate::dbc::fmt_signal_value(
                             sub.latest,
                             &sub.unit,
@@ -743,7 +749,7 @@ impl App {
                         )
                     )
                 }
-                None => format!("{} = -", key.2),
+                None => format!("{} = -", key.3),
             })
             .collect();
         let win = &mut self.graphics[i];
@@ -753,13 +759,13 @@ impl App {
 
     /// Starts caching one signal on the bus (command `Subscribe`; the
     /// creation semantics live there now).
-    pub fn subscribe(&mut self, key: (u8, u32, String)) {
+    pub fn subscribe(&mut self, key: SigKey) {
         self.send(crate::bus::BusCommand::Subscribe { key });
     }
 
     /// This frame's snapshot view of subscribed signal `key`. All frontend
     /// reads of subscription state go through here, never the live map.
-    pub(crate) fn sub_view(&self, key: &(u8, u32, String)) -> Option<&crate::bus::SubView> {
+    pub(crate) fn sub_view(&self, key: &SigKey) -> Option<&crate::bus::SubView> {
         self.snap.subs.iter().find(|s| &s.key == key)
     }
 
@@ -767,7 +773,7 @@ impl App {
     /// row references the signal anymore. The "still referenced" judgement
     /// is frontend policy; the removal itself goes through the command so
     /// the bus owns its own map.
-    pub fn prune_signal(&mut self, key: &(u8, u32, String)) {
+    pub fn prune_signal(&mut self, key: &SigKey) {
         let in_use = self
             .graphics
             .iter()

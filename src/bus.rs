@@ -16,7 +16,7 @@ use crate::can::frame::{CanFrame, Direction};
 use crate::channel::Channel;
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
-use crate::observe::Subscription;
+use crate::observe::{SigKey, Subscription};
 use crate::script::HostInput;
 use crate::source::FrameSource;
 use crate::spec::{Kind, cycle_offender, dlc_offender, missing_offender};
@@ -137,12 +137,12 @@ pub enum BusCommand {
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
     Subscribe {
-        key: (u8, u32, String),
+        key: SigKey,
     },
     /// Drop the subscription. The frontend only asks after none of its
     /// windows references the signal anymore.
     Unsubscribe {
-        key: (u8, u32, String),
+        key: SigKey,
     },
     /// Open `path` and replay it: generators stand down for the ids the
     /// log carries, a fresh replay source replaces the old input at
@@ -460,7 +460,7 @@ pub struct TxView {
 /// on the bus; this is the display-facing projection.
 #[derive(Clone, Debug)]
 pub struct SubView {
-    pub key: (u8, u32, String),
+    pub key: SigKey,
     pub latest: f64,
     pub last_raw: i64,
     pub unit: String,
@@ -551,7 +551,7 @@ pub struct BusCore {
     /// True when `bus_loads` changed since `published_loads` was built.
     pub(crate) loads_dirty: bool,
     /// Subscribed signals: latest value, min/max/avg, sampled history.
-    pub(crate) subs: HashMap<(u8, u32, String), Subscription>,
+    pub(crate) subs: HashMap<SigKey, Subscription>,
     /// Contiguous log-time span whose frames have already been decoded into
     /// the signal caches. A Graphics window asking for a range outside it
     /// triggers a backfill scan.
@@ -1154,7 +1154,7 @@ impl BusCore {
     /// Starts caching one signal: a fresh [`Subscription`] gets the next
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
-    pub(crate) fn subscribe_signal(&mut self, key: (u8, u32, String)) {
+    pub(crate) fn subscribe_signal(&mut self, key: SigKey) {
         if !self.subs.contains_key(&key) {
             let color = self.color_counter;
             self.color_counter += 1;
@@ -1186,15 +1186,13 @@ impl BusCore {
     /// The display type the database declares for a subscribed signal, used
     /// until the first frame refreshes it -- and forever when no database
     /// names it.
-    fn signal_meta(&self, key: &(u8, u32, String)) -> String {
-        // The subscription key carries no frame class yet, so the lookup
-        // falls back across both classes.
+    fn signal_meta(&self, key: &SigKey) -> String {
         let msg = self
             .channels
             .get(key.0 as usize)
             .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.message_of(key.1));
-        msg.and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .and_then(|db| db.messages.get(&(key.1, key.2)));
+        msg.and_then(|m| m.signals.iter().find(|s| s.name == key.3))
             .map(|s| s.type_tag.clone())
             .unwrap_or_default()
     }
@@ -1351,8 +1349,8 @@ impl BusCore {
                 .scan_range(t_from_us, t_to_us, crate::app::MAX_SCAN_FRAMES, &mut frames);
         // A scan-local stride: the shared per-signal baseline sits at the
         // playhead and would reject every point that lies behind it.
-        let mut stride_map: HashMap<(u8, u32, String), u64> = HashMap::new();
-        let mut batches: HashMap<(u8, u32, String), Vec<(u64, f64)>> = HashMap::new();
+        let mut stride_map: HashMap<SigKey, u64> = HashMap::new();
+        let mut batches: HashMap<SigKey, Vec<(u64, f64)>> = HashMap::new();
         for f in &frames {
             for (key, d) in self.subscribed_values(f) {
                 if stride_map.get(&key).is_some_and(|&lt| f.t_us < lt + stride) {
@@ -1459,7 +1457,7 @@ impl BusCore {
         self.subs = self
             .subs
             .drain()
-            .filter_map(|((c, id, sig), s)| remap(c).map(|nc| ((nc, id, sig), s)))
+            .filter_map(|((c, id, ext, sig), s)| remap(c).map(|nc| ((nc, id, ext, sig), s)))
             .collect();
         self.spec.drop_channel(ch as u8);
         self.tx_list.retain(|t| t.channel as usize != ch);
@@ -2185,10 +2183,7 @@ impl BusCore {
 
     /// The frames a frame carries for signals this run subscribes to, looked
     /// up in the sending bus's database.
-    pub(crate) fn subscribed_values(
-        &self,
-        f: &CanFrame,
-    ) -> Vec<((u8, u32, String), DecodedSignal)> {
+    pub(crate) fn subscribed_values(&self, f: &CanFrame) -> Vec<(SigKey, DecodedSignal)> {
         let Some(db) = self
             .channels
             .get(f.channel as usize)
@@ -2199,7 +2194,7 @@ impl BusCore {
         db.decode_signals(f)
             .into_iter()
             .filter_map(|d| {
-                let key = (f.channel, f.id, d.name.clone());
+                let key = (f.channel, f.id, f.extended, d.name.clone());
                 self.subs.contains_key(&key).then_some((key, d))
             })
             .collect()

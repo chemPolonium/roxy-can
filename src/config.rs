@@ -156,6 +156,10 @@ pub struct StatsCfg {
 pub struct SignalCfg {
     pub ch: u8,
     pub id: u32,
+    /// The message's frame class. Absent in older projects, which can
+    /// only have selected standard-class signals.
+    #[serde(default)]
+    pub ext: bool,
     pub signal: String,
     #[serde(default = "true_default")]
     pub visible: bool,
@@ -453,7 +457,8 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
         .map(|s| SignalCfg {
             ch: s.key.0,
             id: s.key.1,
-            signal: s.key.2.clone(),
+            ext: s.key.2,
+            signal: s.key.3.clone(),
             visible: s.visible,
             y_mode: s.y_mode.to_u8(),
             state_rule: None,
@@ -516,7 +521,7 @@ fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
     signals
         .iter()
         .map(|s| GfxSignal {
-            key: (s.ch, s.id, s.signal.clone()),
+            key: (s.ch, s.id, s.ext, s.signal.clone()),
             visible: s.visible,
             y_mode: YMode::from_u8(s.y_mode),
         })
@@ -626,7 +631,8 @@ impl Config {
                         .map(|s| SignalCfg {
                             ch: s.key.0,
                             id: s.key.1,
-                            signal: s.key.2.clone(),
+                            ext: s.key.2,
+                            signal: s.key.3.clone(),
                             visible: s.visible,
                             y_mode: s.y_mode.to_u8(),
                             state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
@@ -1019,7 +1025,7 @@ impl Config {
         app.recent_log = self.recent_log;
         // Restored signal lists need their subscriptions recreated,
         // otherwise they render grey and never receive values.
-        let keys: Vec<(u8, u32, String)> = app
+        let keys: Vec<crate::observe::SigKey> = app
             .graphics
             .iter()
             .flat_map(|g| g.signals.iter().map(|s| s.key.clone()))

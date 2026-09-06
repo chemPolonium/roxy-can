@@ -111,7 +111,10 @@ fn rule_editor(app: &mut App, ui: &Ui) {
     let Some((wi, key)) = app.state_rule_edit.clone() else {
         return;
     };
-    let title = format!("State bands \u{2014} {}###srules{wi}{}", key.2, key.1);
+    let title = format!(
+        "State bands \u{2014} {}###srules{wi}{}{}",
+        key.3, key.1, key.2 as u8
+    );
     let mut open = true;
     ui.window(title)
         .opened(&mut open)
@@ -167,8 +170,8 @@ fn rule_editor(app: &mut App, ui: &Ui) {
 fn custom_panel(
     ui: &Ui,
     w: &mut StateWin,
-    key: &(u8, u32, String),
-    pick: &mut Option<(usize, (u8, u32, String), PickTarget)>,
+    key: &crate::observe::SigKey,
+    pick: &mut Option<(usize, crate::observe::SigKey, PickTarget)>,
     wi: usize,
 ) {
     let Some(rule) = w.rules.get_mut(key) else {
@@ -250,7 +253,7 @@ fn custom_panel(
 /// Drops a signal's band slot entries once its rule is gone: they would
 /// otherwise count as taken and shove the value auto-colors down the
 /// palette.
-fn purge_band_slots(w: &mut StateWin, key: &(u8, u32, String)) {
+fn purge_band_slots(w: &mut StateWin, key: &crate::observe::SigKey) {
     if let Some(m) = w.color_slots.get_mut(key) {
         m.retain(|k, _| *k < BAND_KEY_BASE);
     }
@@ -263,17 +266,21 @@ fn default_panel(
     ui: &Ui,
     dbc: Option<&crate::dbc::SymbolTable>,
     w: &mut StateWin,
-    key: &(u8, u32, String),
-    pick: &mut Option<(usize, (u8, u32, String), PickTarget)>,
+    key: &crate::observe::SigKey,
+    pick: &mut Option<(usize, crate::observe::SigKey, PickTarget)>,
     wi: usize,
 ) {
     let mut states: Vec<(u64, String)> = Vec::new();
     if let Some(db) = dbc {
         let sig = db
-            .message_of(key.1)
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.2))
+            .messages
+            .get(&(key.1, key.2))
+            .and_then(|m| m.signals.iter().find(|s| s.name == key.3))
             .cloned();
-        let table = db.val_table_of(key.1, &key.2).cloned();
+        let table = db
+            .value_tables
+            .get(&((key.1, key.2), key.3.clone()))
+            .cloned();
         if let (Some(sig), Some(table)) = (sig, table) {
             let mut entries: Vec<(i64, &String)> = table.iter().map(|(r, l)| (*r, l)).collect();
             entries.sort_by_key(|(r, _)| *r);
@@ -525,13 +532,13 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         dl.add_rect([x0, ry], [x0 + w, ry + ROW_H], bg)
             .filled(true)
             .build();
-        let tsz = ui.calc_text_size(&key.2);
+        let tsz = ui.calc_text_size(&key.3);
         let name_col = if visible {
             [0.9, 0.9, 0.95, 1.0]
         } else {
             [0.45, 0.45, 0.5, 1.0]
         };
-        dl.add_text([x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5], name_col, &key.2);
+        dl.add_text([x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5], name_col, &key.3);
         dl.add_rect(
             [geo.bx0, ry],
             [geo.bx1, ry + ROW_H],
@@ -717,16 +724,17 @@ fn draw_wave(
 /// `key` -- CANoe shows `NM_STATE_NORMAL_OPERATION`, not the raw number.
 /// Physical maps back to raw through the signal's own factor/offset;
 /// None when there is no table or no entry for that raw value.
-fn table_label(app: &App, key: &(u8, u32, String), v: f64) -> Option<String> {
+fn table_label(app: &App, key: &crate::observe::SigKey, v: f64) -> Option<String> {
     let db = app.snap.channels.get(key.0 as usize)?.dbc.as_deref()?;
     let sig = db
-        .message_of(key.1)?
+        .messages
+        .get(&(key.1, key.2))?
         .signals
         .iter()
-        .find(|s| s.name == key.2)?
+        .find(|s| s.name == key.3)?
         .clone();
     let raw = ((v - sig.offset) / sig.factor).round() as i64;
-    let table = db.val_table_of(key.1, &key.2)?;
+    let table = db.value_tables.get(&((key.1, key.2), key.3.clone()))?;
     table.get(&raw).cloned()
 }
 
@@ -1050,7 +1058,7 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
         ));
         // table_label reads the snapshot's view of the channels.
         app.refresh_snapshot();
-        let gear = (0u8, 410u32, "Gear".to_string());
+        let gear = (0u8, 410u32, false, "Gear".to_string());
         assert_eq!(table_label(&app, &gear, 2.0).as_deref(), Some("Gear_2"));
         assert_eq!(table_label(&app, &gear, 0.0).as_deref(), Some("Neutral"));
         assert_eq!(
@@ -1058,7 +1066,7 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
             None,
             "a raw value with no entry stays numeric"
         );
-        let free = (0u8, 410u32, "Free".to_string());
+        let free = (0u8, 410u32, false, "Free".to_string());
         assert_eq!(
             table_label(&app, &free, 1.0),
             None,

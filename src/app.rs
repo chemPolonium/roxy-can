@@ -180,11 +180,11 @@ pub struct App {
     pub focus_title: Option<String>,
     /// The State Tracker row whose state editor is open: window index plus
     /// signal key. Session state only.
-    pub state_rule_edit: Option<(usize, (u8, u32, String))>,
+    pub state_rule_edit: Option<(usize, crate::observe::SigKey)>,
     /// The swatch currently picking a color in that editor: window index,
     /// signal key, and the target -- a custom band, or a default-mode
     /// state value (normalized bits). Session state only.
-    pub state_rule_pick: Option<(usize, (u8, u32, String), PickTarget)>,
+    pub state_rule_pick: Option<(usize, crate::observe::SigKey, PickTarget)>,
     /// Source text a Nodes-window editor is typing but has not applied
     /// yet, keyed by the node's stable id. Applied by the Apply button
     /// (per-keystroke command traffic and recompiles would be churn).

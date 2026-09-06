@@ -10,6 +10,9 @@ struct MsgEntry {
 
 struct TreeMsg {
     id: u32,
+    /// The entry's frame class: a standard and an extended message that
+    /// share one numeric id list separately, each with its own signals.
+    ext: bool,
     name: String,
     signals: Vec<String>,
 }
@@ -278,7 +281,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
     let Some(target) = app.popup_target else {
         return;
     };
-    let selected: Vec<(u8, u32, String)> = match target {
+    let selected: Vec<crate::observe::SigKey> = match target {
         PopupTarget::Graphics(i) => {
             let Some(w) = app.graphics.get(i) else {
                 return;
@@ -314,13 +317,15 @@ fn signal_content(app: &mut App, ui: &Ui) {
     ui.separator();
 
     let q = app.symbol_search.trim().to_ascii_uppercase();
-    let sel: HashSet<(u8, u32, String)> = selected.into_iter().collect();
+    let sel: HashSet<crate::observe::SigKey> = selected.into_iter().collect();
     let bus_names: Vec<String> = (0..app.snap.channel_count)
         .map(|ch| app.channel_name(ch as u8))
         .collect();
 
     // Clone the bus/message/signal layout first so toggle actions can be
-    // applied afterwards without borrow conflicts.
+    // applied afterwards without borrow conflicts. Every order entry lists:
+    // a standard and an extended twin are two different messages, with two
+    // distinct signal sets.
     let layout: Vec<Vec<TreeMsg>> = app
         .snap
         .channels
@@ -330,14 +335,10 @@ fn signal_content(app: &mut App, ui: &Ui) {
                 .dbc
                 .as_ref()
                 .map(|db| {
-                    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
                     db.order
                         .iter()
-                        .filter_map(|&(id, _)| {
-                            if !seen.insert(id) {
-                                return None;
-                            }
-                            let m = db.message_of(id)?;
+                        .filter_map(|&(id, ext)| {
+                            let m = db.messages.get(&(id, ext))?;
                             let msg_hit = q.is_empty() || m.name.to_ascii_uppercase().contains(&q);
                             let signals: Vec<String> = m
                                 .signals
@@ -354,6 +355,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
                             }
                             Some(TreeMsg {
                                 id,
+                                ext,
                                 name: m.name.clone(),
                                 signals,
                             })
@@ -370,12 +372,16 @@ fn signal_content(app: &mut App, ui: &Ui) {
     } else {
         TreeNodeFlags::empty()
     };
-    let mut actions: Vec<((u8, u32, String), bool)> = Vec::new();
+    let mut actions: Vec<(crate::observe::SigKey, bool)> = Vec::new();
 
     for (ch, msgs) in layout.iter().enumerate() {
-        let bus_keys: Vec<(u8, u32, String)> = msgs
+        let bus_keys: Vec<crate::observe::SigKey> = msgs
             .iter()
-            .flat_map(|m| m.signals.iter().map(move |s| (ch as u8, m.id, s.clone())))
+            .flat_map(|m| {
+                m.signals
+                    .iter()
+                    .map(move |s| (ch as u8, m.id, m.ext, s.clone()))
+            })
             .collect();
         let sel_n = bus_keys.iter().filter(|k| sel.contains(k)).count();
         ui.text_colored(
@@ -387,10 +393,10 @@ fn signal_content(app: &mut App, ui: &Ui) {
             continue;
         }
         for m in msgs {
-            let msg_keys: Vec<(u8, u32, String)> = m
+            let msg_keys: Vec<crate::observe::SigKey> = m
                 .signals
                 .iter()
-                .map(|s| (ch as u8, m.id, s.clone()))
+                .map(|s| (ch as u8, m.id, m.ext, s.clone()))
                 .collect();
             let m_sel = msg_keys.iter().filter(|k| sel.contains(k)).count();
             let m_tot = msg_keys.len();
@@ -403,16 +409,23 @@ fn signal_content(app: &mut App, ui: &Ui) {
             ui.same_line();
             let mtoken = ui
                 .tree_node_config(format!(
-                    "{:03X}  {} ({m_sel}/{m_tot})###selmsg{ch}_{:X}",
-                    m.id, m.name, m.id
+                    "{:03X}{}  {} ({m_sel}/{m_tot})###selmsg{ch}_{:X}{}",
+                    m.id,
+                    if m.ext { "x" } else { "" },
+                    m.name,
+                    m.id,
+                    if m.ext { "x" } else { "" }
                 ))
                 .flags(open_flags)
                 .push();
             if mtoken.is_some() {
                 for s in &m.signals {
-                    let key = (ch as u8, m.id, s.clone());
+                    let key = (ch as u8, m.id, m.ext, s.clone());
                     let mut son = sel.contains(&key);
-                    if ui.checkbox(format!("{s}##selsig{ch}_{:X}", m.id), &mut son) {
+                    if ui.checkbox(
+                        format!("{s}##selsig{ch}_{:X}{}", m.id, m.ext as u8),
+                        &mut son,
+                    ) {
                         actions.push((key, son));
                     }
                 }

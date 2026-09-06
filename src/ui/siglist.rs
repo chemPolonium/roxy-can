@@ -69,7 +69,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
             *DRAG.lock().unwrap() = Some((kind, j));
         }
         ui.same_line();
-        ui.text(&key.2);
+        ui.text(&key.3);
         // A State Tracker row's badge opens its custom state-band editor
         // (CANoe's Value Definition); Graphics rows keep the Y-axis badge.
         if let ListKind::State(wi) = kind {
@@ -136,7 +136,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         // the state; any other window must leave DRAG untouched, otherwise
         // an earlier-rendered window would cancel the drag on mouse release.
         if dk == kind && from < tops.len() {
-            let label = signals_mut(app, kind)[from].key.2.clone();
+            let label = signals_mut(app, kind)[from].key.3.clone();
             dl.add_text(
                 [mouse[0] + 12.0, mouse[1] + 12.0],
                 [0.9, 0.9, 0.95, 1.0],
