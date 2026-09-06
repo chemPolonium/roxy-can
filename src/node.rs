@@ -368,8 +368,10 @@ impl ScriptNode {
     }
 
     /// Applies one queued timer op. `slot` is the running handler's own
-    /// slot when called from the timer loop, None elsewhere. Returns a
-    /// warning line for an `set_timer` naming no declared one-shot.
+    /// slot when called from the timer loop, None elsewhere -- the
+    /// running-timer ops warn when they have no slot to act on.
+    /// Returns a warning line for an `set_timer` naming no declared
+    /// one-shot, or a stray `set_period`/`stop_timer`.
     fn apply_timer_op(
         rt: &mut NodeRuntime,
         op: crate::script::TimerOp,
@@ -378,7 +380,12 @@ impl ScriptNode {
     ) -> Option<String> {
         match op {
             crate::script::TimerOp::SetPeriod(ms) => {
-                let i = slot?;
+                let Some(i) = slot else {
+                    return Some(
+                        "[timer] set_period outside an `on timer` handler has no effect"
+                            .to_string(),
+                    );
+                };
                 let s = &mut rt.timers[i];
                 s.period_ms = ms;
                 s.next_due_us = now_us.saturating_add(ms * 1_000);
@@ -392,8 +399,9 @@ impl ScriptNode {
             crate::script::TimerOp::Stop => {
                 if let Some(i) = slot {
                     rt.timers[i].stopped = true;
+                    return None;
                 }
-                None
+                Some("[timer] stop_timer outside an `on timer` handler has no effect".to_string())
             }
             crate::script::TimerOp::Arm { name, ms } => {
                 let due = now_us.saturating_add(ms.saturating_mul(1_000));
