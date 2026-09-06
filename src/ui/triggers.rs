@@ -149,6 +149,7 @@ fn content(app: &mut App, ui: &Ui) {
                 TriggerAction::StopRecording => "stop rec".to_string(),
                 TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
                 TriggerAction::ClearTrace => "clear trace".to_string(),
+                TriggerAction::InsertMarker => "marker".to_string(),
             };
             ui.align_text_to_frame_padding();
             ui.text(action_text);
@@ -304,6 +305,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             TriggerAction::StopRecording => 1,
             TriggerAction::Send { .. } => 2,
             TriggerAction::ClearTrace => 3,
+            TriggerAction::InsertMarker => 4,
         };
         row(ui, "Action", |ui| {
             let mut act = act;
@@ -316,12 +318,14 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                     "Stop recording",
                     "Send generator entry",
                     "Clear trace",
+                    "Insert marker",
                 ],
             ) {
                 draft.action = match act {
                     0 => TriggerAction::StartRecording,
                     1 => TriggerAction::StopRecording,
                     3 => TriggerAction::ClearTrace,
+                    4 => TriggerAction::InsertMarker,
                     // Coming back to Send keeps whatever target was last
                     // set; a fresh Send starts from the first entry.
                     _ => match draft.action {

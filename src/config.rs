@@ -744,6 +744,7 @@ impl Config {
                                 2
                             }
                             TriggerAction::ClearTrace => 3,
+                            TriggerAction::InsertMarker => 4,
                         },
                         send_ch,
                         send_id,
@@ -1018,6 +1019,7 @@ impl Config {
                         id: c.send_id,
                     },
                     3 => TriggerAction::ClearTrace,
+                    4 => TriggerAction::InsertMarker,
                     _ => TriggerAction::StartRecording,
                 };
                 let mut t = crate::trigger::Trigger::new(cond, action);

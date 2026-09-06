@@ -67,6 +67,10 @@ pub enum TriggerAction {
     /// latched appearance watch. Aggregates, spec memory and the
     /// recorder are deliberately untouched.
     ClearTrace,
+    /// Drops a timestamped marker on the edge; Graphics draws the markers
+    /// as vertical lines so a curve can be read against the moment the
+    /// condition fired.
+    InsertMarker,
 }
 
 /// One armed condition plus its edge state and fire history.

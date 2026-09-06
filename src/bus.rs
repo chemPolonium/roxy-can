@@ -27,6 +27,9 @@ use crate::trigger::{TriggerAction, TriggerCond};
 /// following steps. At 100 Hz one step covers ~10 s of missed timeline.
 pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
 
+/// Oldest bus-event markers fall off once the list outgrows this.
+pub(crate) const MARKER_CAP: usize = 512;
+
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
@@ -361,6 +364,10 @@ pub struct Snapshot {
     /// One entry per live subscription: the scalar stats the Data window
     /// draws and the sampled history the curves read.
     pub subs: Vec<SubView>,
+    /// Bus-event markers (timestamps in µs), newest last, capped oldest-out.
+    /// Trigger actions and future bus events drop these; Graphics draws
+    /// them as vertical lines.
+    pub markers: Vec<u64>,
     /// One entry per generator row: display state plus the bytes that
     /// actually go out at this frame's sim time.
     pub tx: Vec<TxView>,
@@ -552,6 +559,9 @@ pub struct BusCore {
     pub(crate) loads_dirty: bool,
     /// Subscribed signals: latest value, min/max/avg, sampled history.
     pub(crate) subs: HashMap<SigKey, Subscription>,
+    /// Bus-event markers, oldest first, capped oldest-out. Dropped by
+    /// trigger actions and drawn by Graphics as vertical lines.
+    pub(crate) markers: Vec<u64>,
     /// Contiguous log-time span whose frames have already been decoded into
     /// the signal caches. A Graphics window asking for a range outside it
     /// triggers a backfill scan.
@@ -618,6 +628,7 @@ impl BusCore {
             published_loads,
             loads_dirty: false,
             subs: HashMap::new(),
+            markers: Vec::new(),
             sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
             measuring: false,
@@ -1090,6 +1101,7 @@ impl BusCore {
                     color: s.color,
                 })
                 .collect(),
+            markers: self.markers.clone(),
             tx: self
                 .tx_list
                 .iter()
@@ -1726,6 +1738,7 @@ impl BusCore {
         // enormous measured period.
         self.spec = crate::spec::Spec::default();
         self.sample_cover = None;
+        self.markers.clear();
         // Send-now intents recorded while the old run was winding down
         // belong to it, not to the fresh one.
         self.injected.clear();
@@ -2365,6 +2378,12 @@ impl BusCore {
                 }
                 TriggerAction::Send { ch, id } => {
                     self.send_one_shot(ch, id, at_us, mirror);
+                }
+                TriggerAction::InsertMarker => {
+                    self.markers.push(at_us);
+                    if self.markers.len() > MARKER_CAP {
+                        self.markers.remove(0);
+                    }
                 }
                 TriggerAction::ClearTrace => {
                     self.trace.clear();

@@ -759,6 +759,18 @@ fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         );
     }
 
+    // Bus-event markers: thin amber lines behind the curves, so a
+    // trigger's edge can be read against the samples around it.
+    for &m in &app.snap.markers {
+        if m < lo_us || m > hi_us {
+            continue;
+        }
+        let tf = m as f64 / 1e6;
+        let x = x0 + w * ((tf - t_min) / tw).clamp(0.0, 1.0) as f32;
+        dl.add_line([x, y0], [x, y0 + h], [0.85, 0.65, 0.15, 0.6])
+            .build();
+    }
+
     for entry in &curves {
         let color = entry.0;
         let samples = &entry.1;

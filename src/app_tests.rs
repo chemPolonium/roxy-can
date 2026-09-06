@@ -2948,6 +2948,31 @@ fn a_group_signal_gains_samples_once_its_group_is_switched_in() {
     app.stop();
 }
 
+#[test]
+fn an_insert_marker_trigger_stamps_the_bus_clock() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::InsertMarker,
+    ));
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x100, 8, FrameFlags::NONE)],
+    );
+    assert!(app.snap.markers.is_empty(), "an unwatched id marks nothing");
+    receive(
+        &mut app,
+        20_000,
+        vec![rx_frame(20_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert_eq!(app.snap.markers, [20_000], "the edge stamps the bus clock");
+    // A new measurement forgets the markers with the rest of the run.
+    app.reset_run();
+    app.refresh_snapshot();
+    assert!(app.snap.markers.is_empty(), "markers are run-scored state");
+}
+
 fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
     CanFrame {
         t_us,
