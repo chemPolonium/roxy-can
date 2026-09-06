@@ -965,7 +965,7 @@ impl BusCore {
         let mut out = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
-            out.extend(node.dispatch_frame(f.channel, f.id, data, input));
+            out.extend(node.dispatch_frame(f.channel, f.id, f.extended, data, input));
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
