@@ -24,6 +24,10 @@ pub struct ScriptNode {
     pub channel: u8,
     pub source: String,
     pub enabled: bool,
+    /// Optional file path for standalone `.capl` source files. Set when
+    /// the user saves or loads a node script from disk. Persisted with
+    /// the project so the user can find their files again.
+    pub file_path: Option<String>,
     /// Present only while measuring: recompiled from `source` at every
     /// start, so edits apply without a separate compile action.
     runtime: Option<NodeRuntime>,
@@ -61,6 +65,7 @@ impl ScriptNode {
             channel,
             source: String::new(),
             enabled: true,
+            file_path: None,
             runtime: None,
             log: VecDeque::new(),
             log_dirty: false,

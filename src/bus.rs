@@ -296,6 +296,10 @@ pub struct NodeView {
     pub channel: u8,
     pub source: String,
     pub enabled: bool,
+    /// Optional file path if the node source was saved to or loaded from a
+    /// standalone `.capl` file.
+    #[allow(dead_code)]
+    pub file_path: Option<String>,
     /// Runtime present and error-free (while measuring).
     pub running: bool,
     /// A handler failed: the node is stopped until restart or edit.
@@ -911,6 +915,7 @@ impl BusCore {
                         channel: n.channel,
                         source: n.source.clone(),
                         enabled: n.enabled,
+                        file_path: n.file_path.clone(),
                         running: n.running(),
                         errored: n.errored(),
                         log: n.log_snapshot(),

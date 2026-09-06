@@ -113,6 +113,40 @@ fn card(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         ui.same_line();
         ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
     }
+    ui.same_line();
+    if ui.small_button(format!("保存##nsave{id}")) {
+        let source = app.node_src_draft.get(&id).cloned().unwrap_or_default();
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("保存节点脚本")
+            .add_filter("节点脚本", &["capl"])
+            .save_file()
+        {
+            let path = path.to_string_lossy().into_owned();
+            if let Err(e) = std::fs::write(&path, &source) {
+                app.status = format!("保存失败: {e}");
+            } else {
+                app.status = format!("已保存 {path}");
+            }
+        }
+    }
+    ui.same_line();
+    if ui.small_button(format!("加载##nload{id}")) {
+        let picked = rfd::FileDialog::new()
+            .set_title("加载节点脚本")
+            .add_filter("节点脚本", &["capl"])
+            .pick_file();
+        if let Some(p) = picked {
+            let path = p.to_string_lossy().into_owned();
+            match std::fs::read_to_string(&path) {
+                Ok(src) => {
+                    app.node_src_draft.insert(id, src);
+                }
+                Err(e) => {
+                    app.status = format!("加载失败: {e}");
+                }
+            }
+        }
+    }
 
     // Log tail, newest at the bottom.
     if !node.log.is_empty() {
