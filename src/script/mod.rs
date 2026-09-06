@@ -490,6 +490,25 @@ mod tests {
         );
     }
 
+    /// The two seams answer differently for Ok(None): a registered
+    /// extern owns the name, so its Ok(None) is nil; a per-node hook
+    /// that returns Ok(None) is declining the name, so the call errors.
+    #[test]
+    fn hook_and_registry_disagree_on_none() {
+        // Registry: the name is owned, Ok(None) lands as nil.
+        register_extern("regtest_noop", regtest_noop).expect("fresh name");
+        assert_eq!(out("print(regtest_noop());"), ["nil"]);
+        // Hook: Ok(None) means "not mine" -- the name is unknown.
+        let script = compile("print(hooked_nothing());").unwrap();
+        let mut vm = Vm::new(script);
+        vm.host_extern = Some(Box::new(|_name, _args| Ok(None)));
+        let e = vm.run().unwrap_err().to_string();
+        assert!(e.contains("unknown function"), "{e}");
+        // No hook at all: same verdict.
+        let e = err("print(alsomissing());");
+        assert!(e.contains("unknown function"), "{e}");
+    }
+
     /// Everything in examples/ must keep compiling against the real
     /// compiler, so the samples never rot behind the language.
     #[test]

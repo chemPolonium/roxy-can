@@ -365,17 +365,27 @@ impl Vm {
                     return Err(VmError("stack underflow in extern call".into()));
                 }
                 let args: Vec<Value> = self.stack.split_off(self.stack.len() - argc as usize);
-                let claimed = match super::extern_lookup(&name) {
-                    Some(f) => Some(f(&args)),
-                    None => self.host_extern.as_mut().map(|f| f(&name, &args)),
-                };
-                match claimed {
-                    // A registered extern's Ok(None) means "returns
-                    // nothing": the name was claimed, so nil it is.
-                    Some(Ok(None)) => self.stack.push(Value::Nil),
-                    Some(Ok(Some(v))) => self.stack.push(v),
-                    Some(Err(e)) => return Err(VmError(e)),
-                    None => return Err(VmError(format!("unknown function '{name}'"))),
+                match super::extern_lookup(&name) {
+                    // A registered extern owns the name, so its Ok(None)
+                    // means "returns nothing": nil it is.
+                    Some(f) => match f(&args) {
+                        Ok(Some(v)) => self.stack.push(v),
+                        Ok(None) => self.stack.push(Value::Nil),
+                        Err(e) => return Err(VmError(e)),
+                    },
+                    // The per-node hook claims what it knows; an
+                    // unclaimed name (its Ok(None)) is a runtime error.
+                    None => {
+                        let result = match self.host_extern.as_mut() {
+                            Some(f) => f(&name, &args),
+                            None => Ok(None),
+                        };
+                        match result {
+                            Ok(Some(v)) => self.stack.push(v),
+                            Ok(None) => return Err(VmError(format!("unknown function '{name}'"))),
+                            Err(e) => return Err(VmError(e)),
+                        }
+                    }
                 }
             }
             Op::Pop => {
