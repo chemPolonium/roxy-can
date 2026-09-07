@@ -40,6 +40,36 @@ fn content(app: &mut App, ui: &Ui) {
         card(app, ui, &node);
         ui.spacing();
     }
+    let cards: Vec<crate::bus::GroupCardView> = app.snap.group_cards.clone();
+    for card_view in &cards {
+        group_card(app, ui, card_view);
+        ui.spacing();
+    }
+}
+
+/// A DBC transmitter simulated through the generator: no source editor —
+/// its "program" is the TX entries it owns. The checkbox is the same
+/// "Simulate this node" the Network view shows.
+fn group_card(app: &mut App, ui: &Ui, card: &crate::bus::GroupCardView) {
+    let id = card.id;
+    let open_token = ui
+        .tree_node_config(format!("{}##node{}", card.name, id))
+        .push();
+    let Some(_t) = open_token else { return };
+
+    ui.text(format!("[生成器组] {}", card.name));
+    ui.same_line();
+    ui.text_disabled(format!("· {}", app.channel_name(card.channel)));
+    ui.same_line();
+    let mut enabled = card.enabled;
+    if ui.checkbox(format!("运行##ngen{id}"), &mut enabled) {
+        app.send(crate::bus::BusCommand::SetNodeSim {
+            ch: card.channel,
+            node: card.name.clone(),
+            on: enabled,
+        });
+    }
+    ui.text_disabled("DBC 发送节点：报文条目在 TX 列表中，按节点整体开关");
 }
 
 /// One node card. Works on a clone of the view; every edit goes out as a

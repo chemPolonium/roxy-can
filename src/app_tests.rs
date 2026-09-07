@@ -4414,6 +4414,46 @@ fn the_state_tracker_round_trips_through_a_project() {
     std::fs::remove_file(&path).ok();
 }
 
+/// Every DBC transmitter shows up in the Nodes window as a generator-
+/// group card, even before it is simulated; simulating flips its enabled
+/// bit. Script-node cards are unaffected.
+#[test]
+fn generator_groups_appear_as_cards_and_follow_sim_nodes() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::SetNodeSim {
+        ch: 0,
+        node: "EngineECU".to_string(),
+        on: true,
+    });
+    app.settle();
+    let cards = &app.snap.group_cards;
+    assert!(!cards.is_empty(), "the sample DBC has transmitters");
+    let engine = cards
+        .iter()
+        .find(|c| c.name == "EngineECU")
+        .expect("EngineECU card");
+    assert!(engine.enabled, "simulated node shows enabled");
+    assert!(
+        cards.iter().all(|c| c.id & (1 << 63) != 0),
+        "synthetic ids never collide with script-node ids"
+    );
+
+    // Turning the simulation off keeps the card but clears the flag.
+    app.send(crate::bus::BusCommand::SetNodeSim {
+        ch: 0,
+        node: "EngineECU".to_string(),
+        on: false,
+    });
+    app.settle();
+    let engine = app
+        .snap
+        .group_cards
+        .iter()
+        .find(|c| c.name == "EngineECU")
+        .expect("card stays visible");
+    assert!(!engine.enabled, "the card now reads disabled");
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();

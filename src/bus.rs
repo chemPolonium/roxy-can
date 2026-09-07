@@ -38,6 +38,18 @@ pub(crate) const PRE_BUFFER_FRAMES: usize = 256;
 /// `StopRecording` edge (the post-trigger context).
 pub(crate) const POST_ROLL_FRAMES: u32 = 32;
 
+/// One DBC transmitter simulated-or-available on a bus: the generator-
+/// group card in the Nodes window. Derived state — toggling goes through
+/// `SetNodeSim`, and the card itself is rebuilt from the database and
+/// `sim_nodes` on every publish.
+#[derive(Clone, Debug)]
+pub struct GroupCardView {
+    pub id: u64,
+    pub name: String,
+    pub channel: u8,
+    pub enabled: bool,
+}
+
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
@@ -325,6 +337,17 @@ pub struct NodeView {
     pub log: Vec<String>,
 }
 
+/// Stable-ish synthetic id for a generator-group card: the top bit marks
+/// it synthetic so it can never collide with a minted script-node id.
+fn gen_group_id(ch: usize, name: &str) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    (1 << 63) | ((ch as u64) << 32) | (h & 0xFFFF_FFFF)
+}
+
 /// What the frontend may see of the bus: one immutable, frame-shaped
 /// bundle of the read-only facts. Single-threaded it is a plain copy
 /// taken once per UI frame; stage 3 publishes it behind an Arc swap
@@ -363,6 +386,10 @@ pub struct Snapshot {
     /// Simulation nodes as of the last publish: identity, source, state
     /// and log. The Nodes window's data source and the project save.
     pub nodes: Arc<Vec<NodeView>>,
+    /// One generator-group card per DBC transmitter per bus: derived
+    /// from the attached databases and `sim_nodes`, toggled with
+    /// `SetNodeSim`.
+    pub group_cards: Vec<GroupCardView>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -618,6 +645,8 @@ pub struct BusCore {
     /// The node views as of the last publish. Rebuilt only when a command
     /// or a script print changed something.
     pub(crate) published_nodes: Arc<Vec<NodeView>>,
+    /// Generator-group cards published alongside the script nodes.
+    pub(crate) published_groups: Arc<Vec<GroupCardView>>,
     /// True when `nodes` changed since `published_nodes` was built.
     pub(crate) nodes_dirty: bool,
 }
@@ -663,6 +692,7 @@ impl BusCore {
             nodes: Vec::new(),
             node_counter: 0,
             published_nodes: Arc::new(Vec::new()),
+            published_groups: Arc::new(Vec::new()),
             nodes_dirty: false,
         }
     }
@@ -938,27 +968,46 @@ impl BusCore {
     }
 
     /// Republishes the node views after a command or a script print
-    /// changed something.
+    /// changed something. Alongside the script nodes, one synthetic
+    /// generator-group card per DBC transmitter node per bus (CANoe's
+    /// "simulate this node") lands in `group_cards` — always visible
+    /// while a database is attached.
     pub(crate) fn publish_nodes(&mut self) {
-        if self.nodes_dirty {
-            self.published_nodes = Arc::new(
-                self.nodes
-                    .iter()
-                    .map(|n| NodeView {
-                        id: n.id,
-                        name: n.name.clone(),
-                        channel: n.channel,
-                        source: n.source.clone(),
-                        enabled: n.enabled,
-                        file_path: n.file_path.clone(),
-                        running: n.running(),
-                        errored: n.errored(),
-                        log: n.log_snapshot(),
-                    })
-                    .collect(),
-            );
-            self.nodes_dirty = false;
+        if !self.nodes_dirty {
+            return;
         }
+        let views: Vec<NodeView> = self
+            .nodes
+            .iter()
+            .map(|n| NodeView {
+                id: n.id,
+                name: n.name.clone(),
+                channel: n.channel,
+                source: n.source.clone(),
+                enabled: n.enabled,
+                file_path: n.file_path.clone(),
+                running: n.running(),
+                errored: n.errored(),
+                log: n.log_snapshot(),
+            })
+            .collect();
+        let mut cards: Vec<GroupCardView> = Vec::new();
+        for (ch_idx, channel) in self.channels.iter().enumerate() {
+            let Some(db) = channel.dbc.as_deref() else {
+                continue;
+            };
+            for node_name in &db.nodes {
+                cards.push(GroupCardView {
+                    id: gen_group_id(ch_idx, node_name),
+                    name: node_name.clone(),
+                    channel: ch_idx as u8,
+                    enabled: channel.sim_nodes.iter().any(|n| n == node_name),
+                });
+            }
+        }
+        self.published_nodes = Arc::new(views);
+        self.published_groups = Arc::new(cards);
+        self.nodes_dirty = false;
     }
 
     /// Arms every enabled node for a measurement: recompile from source,
@@ -1107,6 +1156,7 @@ impl BusCore {
             spec: self.spec.clone(),
             bus_loads: Arc::clone(&self.published_loads),
             nodes: Arc::clone(&self.published_nodes),
+            group_cards: (*self.published_groups).clone(),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self
@@ -1326,6 +1376,8 @@ impl BusCore {
         for extra in tables {
             crate::dbc::absorb(&mut merged, extra);
         }
+        // Transmitter lists feed the generator-group cards.
+        self.nodes_dirty = true;
         channel.dbc = Some(std::sync::Arc::new(merged));
         *status = match first_error {
             Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
@@ -1638,6 +1690,8 @@ impl BusCore {
         } else {
             format!("{node} stopped on {bus}")
         };
+        // The generator-group cards read sim membership: republish.
+        self.nodes_dirty = true;
     }
 
     /// Adds the generator entry `(ch, id)` unless it already exists.
