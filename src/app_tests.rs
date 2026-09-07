@@ -1958,13 +1958,26 @@ fn recent_lists_dedup_and_cap() {
 #[test]
 fn dropping_a_dbc_loads_it_into_the_first_bus() {
     let mut app = App::headless();
+    // The default bus already carries sample.dbc; a drop **attaches** the
+    // new database as an extra instead of replacing the primary.
     app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
-    assert_eq!(app.channels[0].dbc_paths, ["assets/motbus.dbc"]);
+    assert_eq!(
+        app.channels[0].dbc_paths,
+        ["assets/sample.dbc", "assets/motbus.dbc"]
+    );
     assert!(
         app.channels[0].dbc.is_some(),
         "dropped DBC is parsed into the first bus"
     );
     assert_eq!(app.recent_dbc[0], "assets/motbus.dbc");
+
+    // Dropping the same file again never duplicates the attach.
+    app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
+    assert_eq!(
+        app.channels[0].dbc_paths.len(),
+        2,
+        "an already-attached path is not re-added"
+    );
 }
 
 #[test]

@@ -210,7 +210,23 @@ impl App {
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
             Some("dbc") => {
-                self.open_dbc_for(0, path.to_string_lossy().into_owned());
+                // Dropping a DBC onto the window **attaches** it to the
+                // first bus as an extra database (the primary stays).
+                // Replacing the primary goes through "Open..." instead.
+                let mut paths = self
+                    .snap
+                    .channels
+                    .first()
+                    .map(|c| c.dbc_paths.clone())
+                    .unwrap_or_default();
+                let p = path.to_string_lossy().into_owned();
+                if !paths.contains(&p) {
+                    paths.push(p.clone());
+                }
+                self.send(crate::bus::BusCommand::LoadDbc { ch: 0, paths });
+                if self.snap.channels.first().is_some_and(|c| c.dbc.is_some()) {
+                    self.push_recent_dbc(p);
+                }
             }
             Some("asc") | Some("blf") | Some("mf4") => {
                 self.load_log(&path.to_string_lossy());
