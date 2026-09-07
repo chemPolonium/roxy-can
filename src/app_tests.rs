@@ -3107,6 +3107,12 @@ fn clear_trace_and_rearm_reset_latched_conditions() {
 #[test]
 fn the_rearm_command_resets_latches_but_not_real_levels() {
     let mut app = quiet_app();
+    // Both actions start recordings: give them temp paths so nothing
+    // lands in the repo root.
+    let base = std::env::temp_dir().join("roxy_can_rearm_trigger.asc");
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
     app.triggers.push(Trigger::new(
         TriggerCond::IdPresent { ch: 0, id: 0x777 },
         TriggerAction::StartRecording,
