@@ -65,9 +65,11 @@ pub struct Vm {
     pub output: Vec<String>,
     /// Messages queued by `send(id, ...)`: identifier plus up-to-8 payload
     /// bytes. The host drains this after each handler run and decides
-    /// what "send" means (for a CAN node: a frame onto the bus). An id
-    /// above 0x7FF flags the frame extended.
-    pub outbox: Vec<(u32, Vec<u8>)>,
+    /// what "send" means (for a CAN node: a frame onto the bus). The
+    /// bool asks for an extended frame even when the numeric id sits in
+    /// the standard range (`send_ext`); `send` leaves the choice to the
+    /// id alone.
+    pub outbox: Vec<(u32, bool, Vec<u8>)>,
     /// Host-published read values: the clock and latest signal values.
     /// The node runtime refreshes this before each handler run; `now()`
     /// and `sig()` read it.
@@ -490,16 +492,19 @@ impl Vm {
                 }
                 return Ok(());
             }
-            "send" => {
-                // send(id, b0, b1, ...) or send(id, buf): the payload is
-                // either literal bytes or one byte buffer. The host
-                // decides what "send" means; here it only lands in the
-                // outbox. An id above 0x7FF travels extended.
+            // `send` / `send_ext`: identical argument shapes; the ext form
+            // always travels extended, even for ids inside the standard
+            // range (that is its whole point). `send(id, b0, ...)` or
+            // `send(id, buf)`: literal bytes or one byte buffer; the host
+            // decides what "send" means -- here it only lands in the
+            // outbox.
+            "send" | "send_ext" => {
+                let force_ext = name == "send_ext";
                 let id = match &args[0] {
                     Value::Int(n) if (0..=0x1FF_FFFF).contains(n) => *n as u32,
                     other => {
                         return Err(VmError(format!(
-                            "send: id {} out of range (0..0x1FFFFFFF)",
+                            "{name}: id {} out of range (0..0x1FFFFFFF)",
                             kind(other)
                         )));
                     }
@@ -512,7 +517,7 @@ impl Vm {
                             let buf = b.lock().expect("buffer poisoned").clone();
                             if buf.len() > 64 {
                                 return Err(VmError(format!(
-                                    "send: payload up to 64 bytes, got {}",
+                                    "{name}: payload up to 64 bytes, got {}",
                                     buf.len()
                                 )));
                             }
@@ -522,9 +527,9 @@ impl Vm {
                     }
                 } else {
                     if args.len() - 1 > 8 {
-                        return Err(VmError(
-                            "send: at most 8 data bytes for a classic frame".into(),
-                        ));
+                        return Err(VmError(format!(
+                            "{name}: at most 8 data bytes for a classic frame"
+                        )));
                     }
                     let mut data = Vec::with_capacity(args.len() - 1);
                     for b in &args[1..] {
@@ -536,21 +541,21 @@ impl Vm {
                             Value::Float(f) if f.is_finite() => f.trunc() as i64,
                             other => {
                                 return Err(VmError(format!(
-                                    "send: data byte must be 0..255, got {}",
+                                    "{name}: data byte must be 0..255, got {}",
                                     kind(other)
                                 )));
                             }
                         };
                         if !(0..=255).contains(&n) {
                             return Err(VmError(format!(
-                                "send: data byte must be 0..255, got {n}"
+                                "{name}: data byte must be 0..255, got {n}"
                             )));
                         }
                         data.push(n as u8);
                     }
                     data
                 };
-                self.outbox.push((id, data));
+                self.outbox.push((id, force_ext, data));
             }
             // Stimulus math: floats in and out; `now()` reads the same
             // clock, so e.g. sin(now()) animates with the bus.
@@ -1041,7 +1046,7 @@ mod tests {
         assert_eq!(vm.output, ["171 255 8"]);
         assert_eq!(
             vm.outbox,
-            [(0x300, vec![0xAB, 0, 0, 0, 0, 0, 0, 255])],
+            [(0x300, false, vec![0xAB, 0, 0, 0, 0, 0, 0, 255])],
             "the whole buffer goes out as the payload"
         );
     }

@@ -242,7 +242,7 @@ impl ScriptNode {
     /// sits in the standard range matches standard frames only; a larger
     /// handler id names a 29-bit extended frame, mirroring `send`. Error
     /// frames only reach `on errorFrame` handlers.
-    /// Returns the frames the script queued.
+    /// Returns the frames the script queued as `(id, extended, payload)`.
     pub fn dispatch_frame(
         &mut self,
         channel: u8,
@@ -251,7 +251,7 @@ impl ScriptNode {
         is_error: bool,
         data: &[u8],
         input: &HostInput,
-    ) -> Vec<(u32, Vec<u8>)> {
+    ) -> Vec<(u32, bool, Vec<u8>)> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -274,12 +274,15 @@ impl ScriptNode {
             .iter()
             .filter(|h| match &h.kind {
                 // Error frames belong to `on errorFrame` alone; regular
-                // handlers never see them.
+                // handlers never see them. An extended-message handler
+                // matches extended frames by numeric id even inside the
+                // standard range.
                 HandlerKind::ErrorFrame => is_error,
                 HandlerKind::AnyMessage => !is_error,
                 HandlerKind::Message { id: mid } => {
                     !is_error && *mid == id && extended == (*mid > 0x7FF)
                 }
+                HandlerKind::ExtendedMessage { id: mid } => !is_error && extended && *mid == id,
                 _ => false,
             })
             .map(|h| h.chunk)
@@ -311,7 +314,7 @@ impl ScriptNode {
     /// first due one full period out; missed periods (a stalled host)
     /// collapse into one fire plus a resync. A named one-shot is spent
     /// the moment it fires; `set_timer` inside its own handler re-arms it.
-    pub fn run_timers(&mut self, now_us: u64, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
+    pub fn run_timers(&mut self, now_us: u64, input: &HostInput) -> Vec<(u32, bool, Vec<u8>)> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -584,7 +587,7 @@ mod tests {
 
         // A watched frame queues the reaction payload.
         let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
-        assert_eq!(out, vec![(0x200, vec![1, 2])]);
+        assert_eq!(out, vec![(0x200, false, vec![1, 2])]);
 
         // Timers arm lazily one period out (armed at 50 ms -> first due
         // at 150 ms), then fire and resync.
@@ -722,6 +725,36 @@ mod tests {
         }
     }
 
+    /// Extended frames whose numeric id sits inside the standard range are
+    /// reachable through the explicit `on extended message` form and
+    /// `send_ext`, where plain `on message` / `send` cannot go.
+    #[test]
+    fn extended_syntax_addresses_small_numeric_extended_ids() {
+        let mut n = node(
+            r#"
+            let count = 0;
+            on message 0x50 { print("std"); }
+            on extended message 0x50 { count = count + 1; print("ext", count); }
+            on message 0x60 { send_ext(0x60, 7); }
+        "#,
+        );
+        n.start(None);
+        // Standard 0x50: the plain handler; extended 0x50: the explicit one.
+        n.dispatch_frame(0, 0x50, false, false, &[], &HostInput::default());
+        let log = n.log_snapshot();
+        assert_eq!(log[0], "std");
+        n.dispatch_frame(0, 0x50, true, false, &[], &HostInput::default());
+        let log = n.log_snapshot();
+        assert_eq!(
+            log[1], "ext 1",
+            "the extended form catches what plain cannot"
+        );
+
+        // send_ext always travels extended, even below 0x700.
+        let out = n.dispatch_frame(0, 0x60, false, false, &[], &HostInput::default());
+        assert_eq!(out, vec![(0x60, true, vec![7])]);
+    }
+
     /// A buffer payload past 8 bytes travels as CAN FD with a valid FD
     /// length; the VM refuses anything past the 64-byte ceiling.
     #[test]
@@ -739,7 +772,11 @@ mod tests {
         let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, 0x300);
-        assert_eq!(out[0].1.len(), 12);
+        // A 12-byte payload needs CAN FD but not an extended id: those
+        // are two independent dimensions. The core snaps the length to
+        // a valid FD DLC and sets the FD flag.
+        assert!(!out[0].1);
+        assert_eq!(out[0].2.len(), 12);
 
         let mut too_long = node("let big = bytes(65); send(0x300, big);");
         too_long.start(None);
@@ -944,12 +981,13 @@ mod tests {
 
     #[test]
     fn extended_ids_send_flagged_extended() {
-        // The outbox carries the raw id; the core derives the extended
-        // flag from its size when building the frame.
+        // The outbox carries the raw id plus the "force extended" bit
+        // (`send_ext` sets it); the core ORs it with the id-size rule
+        // when building the frame.
         let mut n = node("on message 0x100 { send(0x18FF10, 1); }");
         n.start(None);
         let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
-        assert_eq!(out, vec![(0x18FF10, vec![1])]);
+        assert_eq!(out, vec![(0x18FF10, false, vec![1])]);
     }
 
     const SIG_DBC: &str = r#"VERSION "roxy-can node sig test"
@@ -987,6 +1025,9 @@ BO_ 512 Status: 8 ECU
         // leaves as the payload, little-endian raw 4000 (1000 / 0.25) in
         // bytes 0-1.
         let out = n.dispatch_frame(0, 0x1, false, false, &[], &HostInput::default());
-        assert_eq!(out, vec![(0x200, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]);
+        assert_eq!(
+            out,
+            vec![(0x200, false, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]
+        );
     }
 }

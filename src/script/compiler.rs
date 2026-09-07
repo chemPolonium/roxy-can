@@ -59,6 +59,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     let mut seen_named: HashSet<String> = HashSet::new();
     let mut seen_wildcard = false;
     let mut seen_error = false;
+    let mut seen_ext_ids: HashSet<u32> = HashSet::new();
     for item in &program.items {
         if let Item::On(on) = item {
             match &on.kind {
@@ -74,6 +75,15 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                             on.line,
                             on.col,
                             &format!("duplicate handler for id {id:#x}"),
+                        );
+                    }
+                }
+                OnKind::ExtendedMessage { id } => {
+                    if !seen_ext_ids.insert(*id) {
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for extended id {id:#x}"),
                         );
                     }
                 }
@@ -585,6 +595,7 @@ impl Comp {
         let kind = match &on.kind {
             OnKind::Start => HandlerKind::Start,
             OnKind::Message { id } => HandlerKind::Message { id: *id },
+            OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
             OnKind::AnyMessage => HandlerKind::AnyMessage,
             OnKind::ErrorFrame => HandlerKind::ErrorFrame,
             OnKind::Timer { period_ms } => HandlerKind::Timer {
@@ -610,6 +621,7 @@ impl Comp {
         let label = match &kind {
             HandlerKind::Start => "<on start>".to_string(),
             HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+            HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
             HandlerKind::AnyMessage => "<on message *>".to_string(),
             HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
             HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),

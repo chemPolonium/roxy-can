@@ -43,6 +43,10 @@ pub enum OnKind {
     Start,
     /// A frame with this identifier arrived on the node's channel.
     Message { id: u32 },
+    /// An **extended** frame with this identifier arrived. Numeric ids
+    /// inside the standard range can be extended frames too (rare but
+    /// legal); this form addresses them where plain `on message` cannot.
+    ExtendedMessage { id: u32 },
     /// Every frame on the node's channel, whatever its id: the gateway /
     /// logger shape. `on message *`.
     AnyMessage,
@@ -246,9 +250,20 @@ impl P {
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::On, "'on'")?;
-        let word = self.ident("'start', 'message' or 'timer'")?;
+        let word = self.ident("'start', 'message', 'timer', 'extended' or 'errorFrame'")?;
         let kind = match word.as_str() {
             "start" => OnKind::Start,
+            "extended" => {
+                // `on extended message <id>`: an extended frame with this
+                // numeric id. The word after must be `message`.
+                let word = self.ident("'message'")?;
+                if word != "message" {
+                    return self.err("expected 'message' after 'extended'");
+                }
+                OnKind::ExtendedMessage {
+                    id: self.id_literal()?,
+                }
+            }
             "message" => {
                 // `on message *`: every frame, whatever its id.
                 if self.eat(&Tok::Star) {
@@ -273,7 +288,7 @@ impl P {
             "errorframe" | "errorFrame" => OnKind::ErrorFrame,
             other => {
                 return self.err(&format!(
-                    "unknown event '{other}' (start, message, timer, errorFrame)"
+                    "unknown event '{other}' (start, message, extended message, timer, errorFrame)"
                 ));
             }
         };

@@ -193,6 +193,12 @@ pub enum HandlerKind {
     Message {
         id: u32,
     },
+    /// An extended frame with this numeric id (`on extended message`).
+    /// Addresses extended frames whose numeric id sits inside the
+    /// standard range, where plain `on message` cannot reach.
+    ExtendedMessage {
+        id: u32,
+    },
     /// Every frame on the channel (`on message *`).
     AnyMessage,
     /// An error frame arrived (`on errorFrame`).
@@ -230,6 +236,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     // (name, min_args, max_args)
     ("print", 1, 16),
     ("send", 1, 9),
+    ("send_ext", 1, 9),
     ("now", 0, 0),
     ("sig", 2, 2),
     ("bytes", 1, 1),

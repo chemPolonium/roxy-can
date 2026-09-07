@@ -26,6 +26,8 @@ on message 0x100 {
     print("rpm:", rpm);
 }
 
+on extended message 0x50 { }    // 显式扩展帧（数值可 ≤ 0x7FF）
+
 on message * { }        // 任意帧（嗅探/网关）
 
 on errorFrame { }       // 错误帧
@@ -140,6 +142,24 @@ on message * {
 }
 ```
 
+### on extended message \<id\>
+
+显式匹配**扩展帧**：数值 ≤ 0x7FF 的扩展帧（合法但不常见）只有这种
+写法能寻址，普通 `on message 0x50` 只匹配标准帧。
+
+```c
+on extended message 0x50 { }   // 只匹配扩展帧 0x50
+```
+
+配套发送用 `send_ext`：与 `send` 参数相同，但**永远按扩展帧发送**，
+即使 id ≤ 0x7FF。
+
+```c
+on extended message 0x50 {
+    send_ext(0x51, frame_byte(0));   // 应答也走扩展帧
+}
+```
+
 ### on errorFrame
 
 收到错误帧时触发。此时 `frame_dlc()` 为 0，`frame_byte(n)` 会越界报错。
@@ -196,6 +216,8 @@ on timer "resp" {
 发送经典帧。id ≤ 0x7FF 为标准帧，> 0x7FF 为扩展帧。
 载荷为 0..255 的整数字节或一个 bytes 缓冲；浮点值自动向零截断，
 所以波形内建可以直接喂进载荷（`send(0x100, ramp(0, 255, 1))`）。
+缓冲超过 8 字节自动按 CAN FD 发送（长度取整到合法 FD 长度，上限 64）。
+需要显式扩展帧时用 `send_ext`（参数相同，永远扩展）。
 
 ```c
 send(0x123, 0x01, 0x02);

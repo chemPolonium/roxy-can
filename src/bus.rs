@@ -982,9 +982,14 @@ impl BusCore {
     fn run_node_timers(&mut self, now_us: u64, inputs: &HashMap<u8, HostInput>) {
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
-            for (id, data) in node.run_timers(now_us, &input) {
-                self.buf
-                    .push(Self::node_frame(node.channel, id, &data, self.sim_t_us));
+            for (id, ext, data) in node.run_timers(now_us, &input) {
+                self.buf.push(Self::node_frame(
+                    node.channel,
+                    id,
+                    ext,
+                    &data,
+                    self.sim_t_us,
+                ));
             }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
@@ -996,7 +1001,11 @@ impl BusCore {
     /// queue are returned for the step loop to append to the buffer.
     /// Decodes the current frame's DBC signals and merges them into the
     /// host input so `sig()` in node handlers reads fresh values.
-    fn dispatch_node_frame(&mut self, f: &CanFrame, input: &HostInput) -> Vec<(u32, Vec<u8>)> {
+    fn dispatch_node_frame(
+        &mut self,
+        f: &CanFrame,
+        input: &HostInput,
+    ) -> Vec<(u32, bool, Vec<u8>)> {
         let mut out = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
@@ -1044,10 +1053,11 @@ impl BusCore {
     }
 
     /// Frames the script queued: `dir` Tx, stamped on the bus's own
-    /// timeline; an id above 0x7FF travels extended. A payload past 8
+    /// timeline; an id above 0x7FF travels extended unless the script
+    /// forced the class the other way (`send_ext`). A payload past 8
     /// bytes becomes a CAN FD frame, snapped to a valid FD length exactly
     /// like the generator's own emit path.
-    fn node_frame(channel: u8, id: u32, data: &[u8], t_us: u64) -> CanFrame {
+    fn node_frame(channel: u8, id: u32, force_extended: bool, data: &[u8], t_us: u64) -> CanFrame {
         use crate::can::frame::{FrameFlags, dlc2len, len2dlc};
         let data_len = data.len().min(crate::can::frame::MAX_CAN_FD_LEN);
         let (len, flags) = if data_len > 8 {
@@ -1061,7 +1071,7 @@ impl BusCore {
             t_us,
             channel,
             id,
-            extended: id > 0x7FF,
+            extended: force_extended || id > 0x7FF,
             len,
             data: buf,
             dir: Direction::Tx,
@@ -2082,9 +2092,9 @@ impl BusCore {
             let node_inputs = self.build_node_inputs(now_us);
             let input = node_inputs.get(&f.channel).cloned().unwrap_or_default();
             let queued = self.dispatch_node_frame(&f, &input);
-            for (id, data) in queued {
+            for (id, ext, data) in queued {
                 self.buf
-                    .push(Self::node_frame(f.channel, id, &data, f.t_us));
+                    .push(Self::node_frame(f.channel, id, ext, &data, f.t_us));
             }
         }
         if i > 0 {
