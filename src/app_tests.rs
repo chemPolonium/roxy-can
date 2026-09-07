@@ -3065,6 +3065,85 @@ fn a_stop_trigger_rolls_on_for_the_post_frames() {
     assert_eq!(frames[0].t_us, 10_000);
 }
 
+/// The re-arm half of the appearance-watch story: the ClearTrace action
+/// resets the firing condition's own latch, and the manual command
+/// resets latches without touching real-level conditions.
+#[test]
+fn clear_trace_and_rearm_reset_latched_conditions() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::ClearTrace,
+    ));
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert_eq!(app.triggers[0].fired, 1);
+    // The action re-armed its own condition: the next occurrence fires
+    // again instead of being swallowed by the latch.
+    receive(
+        &mut app,
+        20_000,
+        vec![rx_frame(20_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert_eq!(app.triggers[0].fired, 2, "re-armed by its own clear");
+}
+
+#[test]
+fn the_rearm_command_resets_latches_but_not_real_levels() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::StartRecording,
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::SignalCross {
+            ch: 0,
+            id: 0x100,
+            ext: false,
+            signal: "EngineSpeed".to_string(),
+            threshold: 3000.0,
+            rising: true,
+        },
+        TriggerAction::StartRecording,
+    ));
+    receive(
+        &mut app,
+        10_000,
+        vec![
+            rx_frame(10_000, 0x777, 8, FrameFlags::NONE),
+            rpm_frame(10_000, 4000.0),
+        ],
+    );
+    assert_eq!(app.triggers[0].fired, 1);
+    assert_eq!(app.triggers[1].fired, 1);
+    assert!(app.triggers[1].level, "the crossing level is a real level");
+
+    app.send(crate::bus::BusCommand::RearmTriggers);
+
+    // Still above threshold: the crossing must NOT re-fire, while the
+    // re-armed presence watch does.
+    receive(
+        &mut app,
+        20_000,
+        vec![
+            rpm_frame(20_000, 4000.0),
+            rx_frame(20_000, 0x777, 8, FrameFlags::NONE),
+        ],
+    );
+    assert_eq!(
+        app.triggers[0].fired, 2,
+        "presence fires again after re-arm"
+    );
+    assert_eq!(
+        app.triggers[1].fired, 1,
+        "a real level is not disturbed by the re-arm"
+    );
+    assert!(app.triggers[1].level);
+}
+
 fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
     CanFrame {
         t_us,
@@ -3389,18 +3468,19 @@ fn a_clear_trace_trigger_empties_the_ring_and_nothing_else() {
     );
     assert!(app.recorder.recording, "still recording after the clear");
 
-    // The ring keeps working afterwards. The IdPresent condition itself
-    // still latches for the run -- the action clears the view, not the
-    // condition's memory.
+    // The ring keeps working afterwards. The ClearTrace action also
+    // re-armed the condition's own latch: the next occurrence fires,
+    // clears, and its frame lands alone again.
     receive(
         &mut app,
         30_000,
         vec![rx_frame(30_000, 0x777, 8, FrameFlags::NONE)],
     );
-    assert_eq!(app.trace.len(), 2, "the ring refills after a clear");
+    assert_eq!(app.trace.len(), 1, "cleared, then the trigger frame lands");
+    assert_eq!(app.trace.iter().next().map(|f| f.id), Some(0x777));
     assert_eq!(
-        app.triggers[0].fired, 1,
-        "the condition's own latch is untouched"
+        app.triggers[0].fired, 2,
+        "the watch re-armed itself on every clear"
     );
     app.recorder.close();
     std::fs::remove_file(&app.recorder.last_record).ok();

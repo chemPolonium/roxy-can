@@ -82,6 +82,13 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.button("+ Timeout") {
         app.add_timeout_trigger();
     }
+    ui.same_line();
+    if ui.button("Re-arm latched") {
+        app.send(crate::bus::BusCommand::RearmTriggers);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("重置出现类条件的锁存（ID 出现 / 错误帧）：下一个对应事件再次触发");
+    }
     ui.separator();
 
     let flags = TableFlags::BORDERS_INNER

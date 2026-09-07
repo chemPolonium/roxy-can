@@ -55,6 +55,10 @@ pub enum BusCommand {
     /// Toggle ASC recording. While stopped, the file is created by the
     /// next start -- checking Record must not leave an empty file behind.
     ToggleRecord,
+    /// Clears the level latch of every appearance-type condition (ID
+    /// present / error frame) so they fire again on their next
+    /// occurrence. Real-level conditions are untouched.
+    RearmTriggers,
     /// Select the bus kind the next start will run (Simulation / Replay).
     SetRunMode(crate::app::Mode),
     /// Add a bus with the sample DBC path, load it, and pre-populate its
@@ -672,6 +676,7 @@ impl BusCore {
             BusCommand::Stop => self.stop_bus(status),
             BusCommand::SetTracePaused(on) => self.trace_paused = on,
             BusCommand::ToggleRecord => self.toggle_record(status),
+            BusCommand::RearmTriggers => self.rearm_latched_triggers(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
@@ -1809,6 +1814,21 @@ impl BusCore {
         }
     }
 
+    /// Manual re-arm: clears the level latch of every appearance-type
+    /// condition (ID present / error frame) so the next occurrence fires
+    /// again. Signal-cross and cycle-timeout levels are real levels and
+    /// are never touched.
+    fn rearm_latched_triggers(&mut self, status: &mut String) {
+        let mut n = 0;
+        for t in &mut self.triggers {
+            if t.cond.latches_once() && t.level {
+                t.rearm();
+                n += 1;
+            }
+        }
+        *status = format!("re-armed {n} latched trigger(s)");
+    }
+
     /// The wall-clock instant the bus next has work due: the next replay
     /// frame, or the next generator slot against the sim clock (which runs
     /// 1:1 with the wall in Virtual). `None` means nothing is scheduled --
@@ -2446,6 +2466,11 @@ impl BusCore {
                 TriggerAction::ClearTrace => {
                     self.trace.clear();
                     self.publish_trace();
+                    // Clearing the view is also the re-arm: appearance
+                    // watches fire again on their next occurrence.
+                    for t in &mut self.triggers {
+                        t.rearm();
+                    }
                     *status = "trigger cleared the trace".to_string();
                 }
             }

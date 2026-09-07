@@ -97,6 +97,14 @@ impl Trigger {
             last_fire_t_us: 0,
         }
     }
+
+    /// Clears the level latch of appearance-type conditions so the next
+    /// occurrence fires again. A no-op for real-level conditions.
+    pub fn rearm(&mut self) {
+        if self.cond.latches_once() {
+            self.level = false;
+        }
+    }
 }
 
 impl TriggerCond {
@@ -108,6 +116,17 @@ impl TriggerCond {
             | TriggerCond::ErrorFrame { ch }
             | TriggerCond::CycleTimeout { ch, .. } => *ch,
         }
+    }
+
+    /// True for conditions whose level is a **latch** -- once the event is
+    /// seen the level stays true for the run. Re-arming means clearing
+    /// exactly these; signal-cross and cycle-timeout levels are real
+    /// levels and must never be touched.
+    pub fn latches_once(&self) -> bool {
+        matches!(
+            self,
+            TriggerCond::IdPresent { .. } | TriggerCond::ErrorFrame { .. }
+        )
     }
 
     /// One-line summary without the bus name; the trigger list shows the
