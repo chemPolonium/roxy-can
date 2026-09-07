@@ -8,7 +8,7 @@
 //! one segment per sample.
 
 use crate::app::{App, PALETTE, PickTarget, StateRule};
-use crate::observe::StateWin;
+use crate::observe::{SigKey, StateWin};
 use imgui::Ui;
 use std::collections::HashMap;
 
@@ -449,6 +449,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     if ui.is_item_hovered() {
         ui.tooltip_text("最短显示时长（毫秒）：更短的碎带并入前一段，0 = 全部显示");
     }
+    ui.same_line();
+    if ui.button(format!("Export CSV##stexp{i}")) {
+        app.export_state_dialog(i);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("导出当前窗口的状态区段表（CSV）");
+    }
     ui.separator();
     let avail = ui.content_region_avail();
     ui.child_window(format!("st_panel{i}"))
@@ -577,24 +584,8 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // Custom state bands (CANoe's Value Definition) own both labels
         // and colors when present; otherwise states are quantized values
         // labeled from the DBC value table.
-        let rule = app.state_trackers[i].rules.get(&key).cloned();
-        let min_us = app.state_trackers[i].min_shown_ms * 1_000;
-        let mut segs = if let Some(rule) = &rule {
-            state_segments(held, &pts, lo_us, hi_us, |v| {
-                let b = rule.band(v);
-                (b as u64, rule.names[b].clone())
-            })
-        } else {
-            state_segments(held, &pts, lo_us, hi_us, |v| {
-                (
-                    bits_of(v),
-                    table_label(app, &key, v).unwrap_or_else(|| fmt_val(v)),
-                )
-            })
-        };
-        if min_us > 0 {
-            segs = merge_short_segments(segs, min_us);
-        }
+        let has_rule = app.state_trackers[i].rules.contains_key(&key);
+        let segs = compute_segs(app, i, &key, held, &pts, lo_us, hi_us);
         let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
         states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         states.dedup();
@@ -602,7 +593,7 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // CANoe's Binary rendering: a signal whose whole visible world is
         // 0/1 draws as a square wave instead of filled bands -- but a
         // custom rule owns the palette, so it wins.
-        if rule.is_none() && is_binary(&states) {
+        if !has_rule && is_binary(&states) {
             draw_wave(ui, &mut dl, &segs, &geo, color);
             continue;
         }
@@ -615,17 +606,19 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // picked in the editor) beats the slot, and a busy analog with
         // more visible states than the palette gets CANoe's plain neutral
         // band: the value label does the talking.
+        let rule = app.state_trackers[i].rules.get(&key).cloned();
         let per_state = rule.is_none() && states.len() <= BAND_PALETTE.len();
         let win = &mut app.state_trackers[i];
         let overrides = win.overrides.get(&key).cloned();
         let slots = win.color_slots.entry(key.clone()).or_default();
+        let rule = rule.as_ref();
         for seg in segs {
             let sx0 = geo.x_of(seg.t0_us as f64 / 1e6).max(geo.bx0);
             let sx1 = geo.x_of(seg.t1_us as f64 / 1e6).min(geo.bx1);
             if sx1 - sx0 < 1.0 {
                 continue;
             }
-            let fill = if let Some(rule) = &rule {
+            let fill = if let Some(rule) = rule {
                 let b = rule.band(seg.value);
                 match rule.colors[b] {
                     Some(c) => [c[0], c[1], c[2], 0.92],
@@ -863,6 +856,42 @@ pub(crate) fn state_segments(
         });
     }
     out
+}
+
+/// The classified, min-duration-filtered state bands for one tracked
+/// signal over `[lo_us, hi_us]`: exactly what the bands draw, shared with
+/// the CSV export so the file shows the same picture as the screen.
+/// `classify` is custom rules when present, else quantized values labeled
+/// from the DBC value table; short bands are absorbed per the window's
+/// minimum display duration.
+pub(crate) fn compute_segs(
+    app: &App,
+    wi: usize,
+    key: &SigKey,
+    held: Option<f64>,
+    pts: &[(u64, f64)],
+    lo_us: u64,
+    hi_us: u64,
+) -> Vec<StateSeg> {
+    let w = &app.state_trackers[wi];
+    let rule = w.rules.get(key);
+    let mut segs = if let Some(rule) = rule {
+        state_segments(held, pts, lo_us, hi_us, |v| {
+            let b = rule.band(v);
+            (b as u64, rule.names[b].clone())
+        })
+    } else {
+        state_segments(held, pts, lo_us, hi_us, |v| {
+            (
+                bits_of(v),
+                table_label(app, key, v).unwrap_or_else(|| fmt_val(v)),
+            )
+        })
+    };
+    if w.min_shown_ms > 0 {
+        segs = merge_short_segments(segs, w.min_shown_ms * 1_000);
+    }
+    segs
 }
 
 /// Absorbs state bands shorter than `min_us` so a jittery signal stays

@@ -230,6 +230,66 @@ impl App {
         }
     }
 
+    pub fn export_state_dialog(&mut self, i: usize) {
+        let name = self
+            .state_trackers
+            .get(i)
+            .map(|w| w.name.to_lowercase().replace(' ', "_"))
+            .unwrap_or_else(|| "state".to_string());
+        if let Some(p) = Self::csv_save_dialog("Export state bands as CSV", &format!("{name}.csv"))
+        {
+            self.export_state_csv(i, &p.to_string_lossy());
+        }
+    }
+
+    /// The State Tracker's band table: one row per state segment per
+    /// visible signal over the window's live span -- what the bands draw,
+    /// as spreadsheet rows.
+    pub fn export_state_csv(&mut self, i: usize, path: &str) {
+        let Some(w) = self.state_trackers.get(i) else {
+            return;
+        };
+        let tw = w.time_window_s;
+        let t_right = self.plot_now_s();
+        let t_left = (t_right - tw).max(0.0);
+        let lo_us = (t_left * 1e6) as u64;
+        let hi_us = (t_right * 1e6) as u64;
+        let mut s = String::from("bus,signal,start_s,end_s,duration_s,label\n");
+        let mut n = 0usize;
+        for s_key in &w.signals {
+            if !s_key.visible {
+                continue;
+            }
+            let key = s_key.key.clone();
+            let Some(sub) = self.sub_view(&key) else {
+                continue;
+            };
+            let held = sub.history.at(lo_us).map(crate::ui::state::quantize);
+            let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
+            let segs = crate::ui::state::compute_segs(self, i, &key, held, &pts, lo_us, hi_us);
+            let bus = self.channel_name(key.0);
+            for seg in &segs {
+                let start = (seg.t0_us as f64 / 1e6).max(t_left);
+                let end = (seg.t1_us as f64 / 1e6).min(t_right);
+                if end <= start {
+                    continue;
+                }
+                s.push_str(&format!(
+                    "{bus},{},{start:.3},{end:.3},{:.3},{}\n",
+                    key.3,
+                    end - start,
+                    seg.label
+                ));
+                n += 1;
+            }
+        }
+        if n == 0 {
+            self.status = "export: no state segments yet".to_string();
+            return;
+        }
+        self.write_export(path, s);
+    }
+
     /// Snapshot of the latest signal values shown in a Data window. Each row
     /// carries the raw number and, where the database names this value, its
     /// enum label -- both, so a spreadsheet can sort on the number while a

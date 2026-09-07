@@ -3157,6 +3157,45 @@ fn the_rearm_command_resets_latches_but_not_real_levels() {
     assert!(app.triggers[1].level);
 }
 
+/// The State Tracker CSV export mirrors what the bands draw: one row per
+/// state segment per visible signal over the window's live span.
+#[test]
+fn the_state_csv_writes_one_row_per_state_segment() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.new_state_window();
+    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
+    app.subscribe(key.clone());
+    app.state_trackers[0]
+        .signals
+        .push(crate::observe::GfxSignal {
+            key: key.clone(),
+            visible: true,
+            y_mode: YMode::Auto,
+        });
+    app.start_virtual();
+    // 1000 rpm then 8000 rpm: two clearly distinct states.
+    receive(&mut app, 10_000, vec![rpm_frame(10_000, 1000.0)]);
+    // 70 ms later: beyond the subscription stride, so the second state is
+    // actually sampled into the history.
+    receive(&mut app, 80_000, vec![rpm_frame(80_000, 8000.0)]);
+    // Push the clock past the last frame so the 8000 band has width at
+    // export time.
+    receive(&mut app, 100_000, vec![]);
+    let path = std::env::temp_dir().join("roxy_can_state_export.csv");
+    app.export_state_csv(0, &path.to_string_lossy());
+    let content = std::fs::read_to_string(&path).unwrap();
+    let rows: Vec<&str> = content.lines().skip(1).collect();
+    assert!(
+        rows.len() >= 2,
+        "two rpm states must appear as at least two rows: {content}"
+    );
+    assert!(content.contains("1000"), "{content}");
+    assert!(content.contains("8000"), "{content}");
+    std::fs::remove_file(&path).ok();
+    app.stop();
+}
+
 fn rx_frame(t_us: u64, id: u32, len: u8, flags: FrameFlags) -> CanFrame {
     CanFrame {
         t_us,
