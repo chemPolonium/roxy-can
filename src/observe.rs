@@ -583,6 +583,10 @@ pub struct StateWin {
     /// value's normalized bits: an entry pins one state's color while the
     /// rest stay automatic.
     pub overrides: HashMap<SigKey, HashMap<u64, [f32; 3]>>,
+    /// Minimum display duration in milliseconds: state bands shorter than
+    /// this are absorbed into the band before them (the first into the
+    /// one after), so a jittery signal stays readable. 0 shows everything.
+    pub min_shown_ms: u64,
 }
 
 impl Default for StateWin {
@@ -595,6 +599,7 @@ impl Default for StateWin {
             color_slots: HashMap::new(),
             rules: HashMap::new(),
             overrides: HashMap::new(),
+            min_shown_ms: 0,
         }
     }
 }

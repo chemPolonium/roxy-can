@@ -246,6 +246,10 @@ pub struct StateCfg {
     pub signals: Vec<SignalCfg>,
     #[serde(default = "twenty_default")]
     pub time_window_s: f64,
+    /// Minimum display duration in ms for a state band; shorter bands are
+    /// absorbed into their neighbour. Absent from older projects (0).
+    #[serde(default)]
+    pub min_shown_ms: u64,
 }
 
 fn twenty_default() -> f64 {
@@ -645,6 +649,7 @@ impl Config {
                     name: w.name.clone(),
                     opened: w.opened,
                     time_window_s: w.time_window_s,
+                    min_shown_ms: w.min_shown_ms,
                     signals: w
                         .signals
                         .iter()
@@ -990,6 +995,7 @@ impl Config {
                         opened: w.opened,
                         signals,
                         time_window_s: w.time_window_s,
+                        min_shown_ms: w.min_shown_ms,
                         color_slots: HashMap::new(),
                         rules,
                         overrides,

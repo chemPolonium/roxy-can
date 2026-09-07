@@ -423,6 +423,7 @@ impl App {
             opened: true,
             signals: Vec::new(),
             time_window_s: 20.0,
+            min_shown_ms: 0,
             color_slots: HashMap::new(),
             rules: HashMap::new(),
             overrides: HashMap::new(),

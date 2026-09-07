@@ -433,6 +433,22 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         ui.same_line();
     }
     ui.text_colored([0.6, 0.85, 1.0, 1.0], "live");
+    ui.same_line();
+    // Minimum display duration: state bands shorter than this are absorbed
+    // into the band before them (the first into the one after), so a
+    // jittery signal stays readable. 0 = show everything.
+    ui.same_line();
+    let mut min_ms = app.state_trackers[i].min_shown_ms as i32;
+    ui.set_next_item_width(70.0);
+    if ui
+        .input_int(format!("Min ms##stmin{i}"), &mut min_ms)
+        .build()
+    {
+        app.state_trackers[i].min_shown_ms = min_ms.max(0) as u64;
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("最短显示时长（毫秒）：更短的碎带并入前一段，0 = 全部显示");
+    }
     ui.separator();
     let avail = ui.content_region_avail();
     ui.child_window(format!("st_panel{i}"))
@@ -562,7 +578,8 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         // and colors when present; otherwise states are quantized values
         // labeled from the DBC value table.
         let rule = app.state_trackers[i].rules.get(&key).cloned();
-        let segs = if let Some(rule) = &rule {
+        let min_us = app.state_trackers[i].min_shown_ms * 1_000;
+        let mut segs = if let Some(rule) = &rule {
             state_segments(held, &pts, lo_us, hi_us, |v| {
                 let b = rule.band(v);
                 (b as u64, rule.names[b].clone())
@@ -575,6 +592,9 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
                 )
             })
         };
+        if min_us > 0 {
+            segs = merge_short_segments(segs, min_us);
+        }
         let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
         states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         states.dedup();
@@ -845,6 +865,36 @@ pub(crate) fn state_segments(
     out
 }
 
+/// Absorbs state bands shorter than `min_us` so a jittery signal stays
+/// readable: a short band merges into the band **before** it (that state
+/// simply held longer), except the very first, which merges into the one
+/// after. Absorbing can cascade -- a merged band may itself become short
+/// relative to its neighbours and disappears the same way.
+pub(crate) fn merge_short_segments(mut segs: Vec<StateSeg>, min_us: u64) -> Vec<StateSeg> {
+    // Each pass absorbs one short band into a neighbour; absorbing can
+    // cascade (a merged band may itself fall under the minimum), so the
+    // sweep repeats until every band is long enough -- or one is left.
+    while segs.len() > 1 {
+        let Some(i) = segs
+            .iter()
+            .position(|s| s.t1_us.saturating_sub(s.t0_us) < min_us)
+        else {
+            break;
+        };
+        if i == 0 {
+            // The first band has no predecessor: the successor absorbs it
+            // and starts where the absorbed band started.
+            segs[1].t0_us = segs[0].t0_us;
+            segs.remove(0);
+        } else {
+            // Otherwise the band before it absorbs it entirely.
+            segs[i - 1].t1_us = segs[i].t1_us;
+            segs.remove(i);
+        }
+    }
+    segs
+}
+
 /// The palette slot of one state value, stable for the whole session: the
 /// first time a key is seen it takes the lowest free slot, and it keeps
 /// that slot even after leaving the view, so colors never reshuffle as
@@ -899,6 +949,32 @@ mod tests {
         let q = quantize(v);
         let q = if q == 0.0 { 0.0 } else { q };
         (q.to_bits(), fmt_val(q))
+    }
+
+    /// Absorbing short bands into their predecessor keeps the timeline
+    /// contiguous: the surviving band extends over the absorbed one, and
+    /// the cascade stops when nothing is short anymore.
+    #[test]
+    fn merge_short_segments_absorbs_into_the_previous_band() {
+        let seg = |t0: u64, t1: u64, label: &str| StateSeg {
+            t0_us: t0,
+            t1_us: t1,
+            value: 0.0,
+            label: label.to_string(),
+        };
+        let mut segs = vec![seg(0, 900, "a"), seg(900, 1000, "b"), seg(1000, 2000, "c")];
+        // 900→1000 (100) is short, 0→900 (900) is not: only "b" goes.
+        segs = merge_short_segments(segs, 150);
+        assert_eq!(segs.len(), 2);
+        assert_eq!((segs[0].t0_us, segs[0].t1_us), (0, 1000), "a absorbs b");
+        assert_eq!((segs[1].t0_us, segs[1].t1_us), (1000, 2000));
+        // A cascade: shrinking the minimum again merges further.
+        segs = merge_short_segments(segs, 1500);
+        assert_eq!(segs.len(), 1);
+        assert_eq!((segs[0].t0_us, segs[0].t1_us), (0, 2000));
+        // A single surviving band is left alone no matter how short.
+        segs = merge_short_segments(segs, 10_000);
+        assert_eq!(segs.len(), 1);
     }
 
     #[test]
