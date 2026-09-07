@@ -186,12 +186,14 @@ pub enum BusCommand {
         fd_data_kbps: Option<u32>,
         sim_nodes: Option<Vec<String>>,
     },
-    /// Point a bus at `path` and parse the file (empty path = drop the
-    /// database). A failed load leaves no table behind: what the
-    /// snapshot then shows is what the bus will actually use.
+    /// Attach the listed DBC files to the bus (primary first; on a
+    /// duplicate message id the earlier database wins) and parse them all
+    /// into one merged table. An empty list drops the databases. A file
+    /// that fails to parse is skipped and reported: what the snapshot
+    /// then shows is what the bus will actually use.
     LoadDbc {
         ch: u8,
-        path: String,
+        paths: Vec<String>,
     },
     /// Rewind the bus-name counter used to mint "CAN{n}" for new buses;
     /// project restore pins it so the next added bus keeps counting from
@@ -429,7 +431,8 @@ const _: () = {
 #[derive(Clone)]
 pub struct ChannelView {
     pub name: String,
-    pub dbc_path: String,
+    /// Every attached database path, primary first.
+    pub dbc_paths: Vec<String>,
     pub bitrate_kbps: u32,
     pub fd_data_kbps: u32,
     pub sim_nodes: Vec<String>,
@@ -442,7 +445,7 @@ impl std::fmt::Debug for ChannelView {
         // matters here.
         f.debug_struct("ChannelView")
             .field("name", &self.name)
-            .field("dbc_path", &self.dbc_path)
+            .field("dbc_paths", &self.dbc_paths)
             .field("bitrate_kbps", &self.bitrate_kbps)
             .field("fd_data_kbps", &self.fd_data_kbps)
             .field("sim_nodes", &self.sim_nodes)
@@ -844,7 +847,7 @@ impl BusCore {
                 fd_data_kbps,
                 sim_nodes,
             } => self.set_channel_config(ch, name, dbc_path, bitrate_kbps, fd_data_kbps, sim_nodes),
-            BusCommand::LoadDbc { ch, path } => self.load_dbc(ch, path, status),
+            BusCommand::LoadDbc { ch, paths } => self.load_dbc(ch, paths, status),
             BusCommand::SetBusCounter(n) => self.bus_counter = n,
             BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
             BusCommand::SetEntryConfig {
@@ -864,7 +867,7 @@ impl BusCore {
             } => self.backfill(from_us, to_us, stride_us, status),
             BusCommand::ClearDatabases => {
                 for c in &mut self.channels {
-                    c.dbc_path.clear();
+                    c.dbc_paths.clear();
                     c.dbc = None;
                 }
                 self.tx_list.clear();
@@ -1101,7 +1104,7 @@ impl BusCore {
                 .iter()
                 .map(|c| ChannelView {
                     name: c.name.clone(),
-                    dbc_path: c.dbc_path.clone(),
+                    dbc_paths: c.dbc_paths.clone(),
                     bitrate_kbps: c.bitrate_kbps,
                     fd_data_kbps: c.fd_data_kbps,
                     sim_nodes: c.sim_nodes.clone(),
@@ -1246,7 +1249,7 @@ impl BusCore {
         self.channels.push(Channel {
             name: format!("CAN{}", self.bus_counter),
             dbc: None,
-            dbc_path: "assets/sample.dbc".to_string(),
+            dbc_paths: vec!["assets/sample.dbc".to_string()],
             sim_nodes: Vec::new(),
             bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
@@ -1265,47 +1268,70 @@ impl BusCore {
         }
     }
 
-    /// (Re)loads the database named by the bus's `dbc_path`. A failed or
-    /// empty path drops any previous table, so the snapshot never shows a
-    /// database the bus would not actually use. An empty path is silent:
-    /// a bus deliberately configured without a database is not an error.
+    /// (Re)loads every database attached to the bus (primary first, then
+    /// extras) and merges them into one lookup table: on a duplicate
+    /// message id the earlier database wins. Files that fail to parse are
+    /// skipped and reported; a bus whose files all fail ends up without a
+    /// database. An empty path list is silent: a bus deliberately
+    /// configured without a database is not an error.
     fn load_channel(&mut self, ch: usize, status: &mut String) -> bool {
         let Some(channel) = self.channels.get_mut(ch) else {
             return false;
         };
-        if channel.dbc_path.trim().is_empty() {
+        if channel.dbc_paths.iter().all(|p| p.trim().is_empty()) {
             channel.dbc = None;
             return false;
         }
         let name = channel.name.clone();
-        match std::fs::read_to_string(channel.dbc_path.trim()) {
-            Ok(content) => match crate::dbc::load_dbc_str(&content) {
-                Ok(table) => {
-                    *status = format!("{name} DBC loaded: {} messages", table.order.len());
-                    channel.dbc = Some(std::sync::Arc::new(table));
-                    true
-                }
+        let mut tables: Vec<crate::dbc::SymbolTable> = Vec::new();
+        let mut first_error: Option<String> = None;
+        for path in &channel.dbc_paths {
+            let path = path.trim();
+            if path.is_empty() {
+                continue;
+            }
+            match std::fs::read_to_string(path) {
+                Ok(content) => match crate::dbc::load_dbc_str(&content) {
+                    Ok(table) => tables.push(table),
+                    Err(e) => {
+                        first_error.get_or_insert_with(|| format!("{path}: {e}"));
+                    }
+                },
                 Err(e) => {
-                    *status = format!("{name} DBC error: {e}");
-                    channel.dbc = None;
-                    false
+                    first_error.get_or_insert_with(|| format!("{path}: {e}"));
                 }
-            },
-            Err(e) => {
-                *status = format!("{name} DBC read failed: {e}");
-                channel.dbc = None;
-                false
             }
         }
+        let loaded = tables.len();
+        let total: usize = tables.iter().map(|t| t.order.len()).sum();
+        if tables.is_empty() {
+            channel.dbc = None;
+            *status = match first_error {
+                Some(e) => format!("{name} DBC error: {e}"),
+                None => format!("{name} DBC error: no database file"),
+            };
+            return false;
+        }
+        let mut merged = tables.remove(0);
+        for extra in tables {
+            crate::dbc::absorb(&mut merged, extra);
+        }
+        channel.dbc = Some(std::sync::Arc::new(merged));
+        *status = match first_error {
+            Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
+            None => format!("{name} DBC loaded: {total} messages"),
+        };
+        true
     }
 
-    /// Points the bus at `path` and parses it in the same stroke -- the
-    /// path is not really set until its file has been accepted.
-    fn load_dbc(&mut self, ch: u8, path: String, status: &mut String) {
+    /// Stores the bus's database path list (primary first, extras after)
+    /// and parses everything in the same stroke -- the path is not really
+    /// set until its file has been accepted.
+    fn load_dbc(&mut self, ch: u8, paths: Vec<String>, status: &mut String) {
         let Some(channel) = self.channels.get_mut(ch as usize) else {
             return;
         };
-        channel.dbc_path = path;
+        channel.dbc_paths = paths;
         self.load_channel(ch as usize, status);
     }
 
@@ -1328,7 +1354,13 @@ impl BusCore {
             c.name = name;
         }
         if let Some(p) = dbc_path {
-            c.dbc_path = p;
+            // Replaces the primary database; any extra attached databases
+            // stay on the bus.
+            if c.dbc_paths.is_empty() {
+                c.dbc_paths.push(p);
+            } else {
+                c.dbc_paths[0] = p;
+            }
         }
         if let Some(k) = bitrate_kbps {
             c.bitrate_kbps = k.max(1);

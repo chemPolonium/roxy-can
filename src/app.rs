@@ -302,7 +302,7 @@ impl App {
             Channel {
                 name: "CAN1".to_string(),
                 dbc: None,
-                dbc_path: "assets/sample.dbc".to_string(),
+                dbc_paths: vec!["assets/sample.dbc".to_string()],
                 sim_nodes: Vec::new(),
                 bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
@@ -310,7 +310,7 @@ impl App {
             Channel {
                 name: "CAN2".to_string(),
                 dbc: None,
-                dbc_path: "assets/motbus.dbc".to_string(),
+                dbc_paths: vec!["assets/motbus.dbc".to_string()],
                 sim_nodes: Vec::new(),
                 bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,

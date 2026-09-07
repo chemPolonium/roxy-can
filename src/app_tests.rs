@@ -1959,7 +1959,7 @@ fn recent_lists_dedup_and_cap() {
 fn dropping_a_dbc_loads_it_into_the_first_bus() {
     let mut app = App::headless();
     app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
-    assert_eq!(app.channels[0].dbc_path, "assets/motbus.dbc");
+    assert_eq!(app.channels[0].dbc_paths, ["assets/motbus.dbc"]);
     assert!(
         app.channels[0].dbc.is_some(),
         "dropped DBC is parsed into the first bus"
@@ -1995,7 +1995,7 @@ fn new_project_starts_completely_empty() {
     assert!(
         app.channels
             .iter()
-            .all(|c| c.dbc.is_none() && c.dbc_path.is_empty()),
+            .all(|c| c.dbc.is_none() && c.dbc_paths.is_empty()),
         "no DBCs on any bus"
     );
     assert!(app.trace_windows.is_empty());
@@ -3168,6 +3168,93 @@ fn ext_rx_frame(t_us: u64, id: u32, len: u8) -> CanFrame {
         dir: Direction::Rx,
         flags: FrameFlags::NONE,
     }
+}
+
+/// One bus carrying **two** DBC files: both decode live traffic, and on
+/// a duplicate message id the earlier database wins. The attach list
+/// round-trips through the project file.
+#[test]
+fn one_bus_attaches_several_databases() {
+    const DB_A: &str = r#"VERSION "multi A"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 256 PrimaryMsg: 2 ECU
+ SG_ PSig : 0|16@1+ (0.1,0) [0|0] ""  ECU
+"#;
+    const DB_B: &str = r#"VERSION "multi B"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 256 SecondaryMsg: 3 ECU
+ SG_ SSig : 0|24@1+ (1,0) [0|0] ""  ECU
+
+BO_ 257 OnlyInB: 1 ECU
+ SG_ BOnly : 0|8@1+ (1,0) [0|0] ""  ECU
+"#;
+    let a = std::env::temp_dir().join("roxy_can_multi_a.dbc");
+    let b = std::env::temp_dir().join("roxy_can_multi_b.dbc");
+    std::fs::write(&a, DB_A).unwrap();
+    std::fs::write(&b, DB_B).unwrap();
+
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec![
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ],
+    });
+    app.settle();
+    let db = app.channel_dbc(0).expect("both databases merged");
+    // Three declarations collapse to two keys: the duplicated 256 is one
+    // message (first database wins), 257 is the second file's own.
+    assert_eq!(db.messages.len(), 2);
+    // Duplicate numeric id: the earlier database wins.
+    assert_eq!(db.message_name_of((0x100, false)), Some("PrimaryMsg"));
+    assert_eq!(db.message_name_of((0x101, false)), Some("OnlyInB"));
+
+    // Both databases decode live traffic on the same bus.
+    let psig = (0u8, 0x100u32, false, "PSig".to_string());
+    let bonly = (0u8, 0x101u32, false, "BOnly".to_string());
+    app.subscribe(psig.clone());
+    app.subscribe(bonly.clone());
+    app.start_virtual();
+    receive(
+        &mut app,
+        10_000,
+        vec![
+            frame_at(10_000, 0x100, 2, Direction::Rx),
+            frame_at(10_000, 0x101, 1, Direction::Rx),
+        ],
+    );
+    assert!(
+        !app.subs[&psig].history.is_empty(),
+        "the primary database decodes 0x100"
+    );
+    assert!(
+        !app.subs[&bonly].history.is_empty(),
+        "the second database decodes 0x101 on the same bus"
+    );
+
+    // The attach list survives a project round trip.
+    let project = std::env::temp_dir().join("roxy_can_multi.rxproj");
+    assert!(app.save_project(Some(project.clone())), "save writes");
+    let mut restored = App::headless();
+    restored.open_project_path(&project);
+    let restored_db = restored.channel_dbc(0).unwrap();
+    assert_eq!(restored_db.messages.len(), 2, "both databases re-attach");
+    assert_eq!(restored_db.message_name_of((0x101, false)), Some("OnlyInB"));
+    std::fs::remove_file(&project).ok();
+    app.stop();
 }
 
 /// A standard and an extended frame sharing one numeric id are two

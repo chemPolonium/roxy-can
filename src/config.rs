@@ -93,7 +93,13 @@ fn sixty_default() -> f64 {
 #[derive(Serialize, Deserialize)]
 pub struct ChannelCfg {
     pub name: String,
+    /// The bus's primary database. Kept as its own field so older
+    /// versions can still read new projects (they see the primary).
     pub dbc_path: String,
+    /// Any further databases attached to the bus, in attach order.
+    /// Absent from projects saved before multi-database support.
+    #[serde(default)]
+    pub dbc_paths_extra: Vec<String>,
     /// DBC nodes ticked as simulated on this bus. Absent from projects saved
     /// before v0.5, which then load with nothing simulated.
     #[serde(default)]
@@ -541,15 +547,25 @@ impl Config {
                 .snap
                 .channels
                 .iter()
-                .map(|c| ChannelCfg {
-                    name: c.name.clone(),
-                    dbc_path: match base {
-                        Some(b) => relativize(&c.dbc_path, b),
-                        None => c.dbc_path.clone(),
-                    },
-                    sim_nodes: c.sim_nodes.clone(),
-                    bitrate_kbps: c.bitrate_kbps,
-                    fd_data_kbps: c.fd_data_kbps,
+                .map(|c| {
+                    // Primary first, then the extras; every path is stored
+                    // relative to the project directory when there is one.
+                    let rel = |p: &String| match base {
+                        Some(b) => relativize(p, b),
+                        None => p.clone(),
+                    };
+                    let (first, rest) = match c.dbc_paths.split_first() {
+                        Some((f, r)) => (rel(f), r.iter().map(rel).collect()),
+                        None => (String::new(), Vec::new()),
+                    };
+                    ChannelCfg {
+                        name: c.name.clone(),
+                        dbc_path: first,
+                        dbc_paths_extra: rest,
+                        sim_nodes: c.sim_nodes.clone(),
+                        bitrate_kbps: c.bitrate_kbps,
+                        fd_data_kbps: c.fd_data_kbps,
+                    }
                 })
                 .collect(),
             bus_counter: app.snap.bus_counter,
@@ -760,6 +776,9 @@ impl Config {
     pub fn resolve_paths(&mut self, base: Option<&Path>) {
         for c in &mut self.channels {
             c.dbc_path = resolve_dbc(&c.dbc_path, base);
+            for p in &mut c.dbc_paths_extra {
+                *p = resolve_dbc(p, base);
+            }
         }
     }
 
@@ -792,14 +811,19 @@ impl Config {
                     fd_data_kbps: Some(c.fd_data_kbps),
                     sim_nodes: Some(c.sim_nodes.clone()),
                 });
+                // The full attach list (primary + extras) travels as one
+                // command; SetChannelConfig only pins the primary.
+                let mut paths = vec![c.dbc_path.clone()];
+                paths.extend(c.dbc_paths_extra.iter().cloned());
+                app.send(crate::bus::BusCommand::LoadDbc { ch: i as u8, paths });
             }
             // Intent only. What transmits is decided by each TxCfg's
             // `active` below, so a restored project never starts
             // traffic that was stopped when it was saved.
             app.set_bus_counter(self.bus_counter.max(self.channels.len()));
             app.settle();
-            app.load_dbcs();
-            app.settle();
+            // Databases were already loaded with their full attach lists
+            // above; no second pass needed.
         }
         // The generator is rebuilt from the (possibly new) DBCs, then the
         // saved per-message state is overlaid.

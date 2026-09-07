@@ -555,6 +555,29 @@ pub fn load_dbc_str(content: &str) -> Result<SymbolTable, String> {
     Ok(SymbolTable::from_dbc(&db))
 }
 
+/// Folds `extra` into `primary`: lookups fall through in order, so on a
+/// duplicate message id (or value table) the earlier database wins.
+/// Nodes and the display order concatenate. This is how one bus carries
+/// several DBC files.
+pub fn absorb(primary: &mut SymbolTable, extra: SymbolTable) {
+    for (key, msg) in extra.messages {
+        primary.messages.entry(key).or_insert(msg);
+    }
+    for key in extra.order {
+        if !primary.order.contains(&key) {
+            primary.order.push(key);
+        }
+    }
+    for node in extra.nodes {
+        if !primary.nodes.contains(&node) {
+            primary.nodes.push(node);
+        }
+    }
+    for (key, table) in extra.value_tables {
+        primary.value_tables.entry(key).or_insert(table);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

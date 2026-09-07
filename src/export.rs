@@ -268,10 +268,10 @@ impl App {
     pub fn export_spec_csv(&mut self, path: &str) {
         let mut s = String::new();
         for c in &self.snap.channels {
-            let dbc = if c.dbc_path.trim().is_empty() {
+            let dbc = if c.dbc_paths.is_empty() {
                 "(none)".to_string()
             } else {
-                c.dbc_path.clone()
+                c.dbc_paths.join(";")
             };
             s.push_str(&format!("# database,{},{dbc}\n", c.name));
         }

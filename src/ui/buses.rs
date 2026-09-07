@@ -70,20 +70,20 @@ fn content(app: &mut App, ui: &Ui) {
 
         // The rows render from the snapshot; edits are frontend drafts
         // that commit as commands.
-        let views: Vec<(String, String, u32, u32)> = app
+        let views: Vec<(String, Vec<String>, u32, u32)> = app
             .snap
             .channels
             .iter()
             .map(|c| {
                 (
                     c.name.clone(),
-                    c.dbc_path.clone(),
+                    c.dbc_paths.clone(),
                     c.bitrate_kbps,
                     c.fd_data_kbps,
                 )
             })
             .collect();
-        for (i, (name, path, arb_kbps, data_kbps)) in views.into_iter().enumerate() {
+        for (i, (name, paths, arb_kbps, data_kbps)) in views.into_iter().enumerate() {
             ui.table_next_row();
             if !ui.table_next_column() {
                 continue;
@@ -118,8 +118,12 @@ fn content(app: &mut App, ui: &Ui) {
             // No baseline alignment: the small button is text-height, so
             // label and button sit level on their own, and aligning would
             // push the `same_line` button a step below the row.
+            let path = paths.first().cloned().unwrap_or_default();
+            let extra_n = paths.len().saturating_sub(1);
             ui.text(if path.trim().is_empty() {
                 "(none)".to_string()
+            } else if extra_n > 0 {
+                format!("{} +{}", file_name(&path), extra_n)
             } else {
                 file_name(&path)
             });

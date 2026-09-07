@@ -11,8 +11,13 @@ use crate::dbc::SymbolTable;
 /// same allocation instead of a copy.
 pub struct Channel {
     pub name: String,
+    /// The **merged** database of every path in `dbc_paths`: decoded
+    /// lookups never need to know how many files back it.
     pub dbc: Option<Arc<SymbolTable>>,
-    pub dbc_path: String,
+    /// The primary path (UI-editable) plus any extra databases attached
+    /// to this bus. First entry is the primary; on duplicate message ids
+    /// the earlier database wins.
+    pub dbc_paths: Vec<String>,
     /// Names of the DBC nodes marked as simulated on this bus. Kept on the
     /// channel itself so deleting or renumbering a bus takes its nodes along
     /// without a second remap pass.
@@ -146,25 +151,6 @@ impl App {
         // The status line ("bus CANx removed") came from the command.
     }
 
-    /// Re-parses a bus's database from its current path. The outcome
-    /// lands in the snapshot: the table (or its absence after a failed
-    /// load) and the status line.
-    pub fn load_channel(&mut self, ch: usize) {
-        let path = self
-            .snap
-            .channels
-            .get(ch)
-            .map(|c| c.dbc_path.clone())
-            .unwrap_or_default();
-        self.send(crate::bus::BusCommand::LoadDbc { ch: ch as u8, path });
-    }
-
-    pub fn load_dbcs(&mut self) {
-        for ch in 0..self.snap.channel_count {
-            self.load_channel(ch);
-        }
-    }
-
     pub fn pick_dbc(&mut self) {
         let ch = 0;
         let name = self.channel_name(ch as u8);
@@ -189,16 +175,29 @@ impl App {
         }
     }
 
-    /// Sets a bus's DBC path and loads it; successful parses are recorded
-    /// in the recent list. "Table present after the load" is the success
-    /// signal -- a failed load leaves no table behind.
+    /// Sets a bus's primary DBC path (extra attached databases stay) and
+    /// loads it; successful parses are recorded in the recent list.
+    /// "Table present after the load" is the success signal -- a failed
+    /// load leaves no table behind.
     pub fn open_dbc_for(&mut self, ch: usize, path: String) {
+        let mut paths = self
+            .snap
+            .channels
+            .get(ch)
+            .map(|c| c.dbc_paths.clone())
+            .unwrap_or_default();
+        let new_path = path.clone();
+        if paths.is_empty() {
+            paths.push(path);
+        } else {
+            paths[0] = path;
+        }
         self.send(crate::bus::BusCommand::LoadDbc {
             ch: ch as u8,
-            path: path.clone(),
+            paths,
         });
         if self.snap.channels.get(ch).is_some_and(|c| c.dbc.is_some()) {
-            self.push_recent_dbc(path);
+            self.push_recent_dbc(new_path);
         }
     }
 
