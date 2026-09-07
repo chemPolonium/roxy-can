@@ -1,242 +1,45 @@
 # TODO
 
-能力补齐清单（不含硬件接口与其它总线协议，那两类另议）。按优先级排列：P0 是"现在就在给出错误结果"，P1 是"用已有数据就能换来的能力"，P2 是"决定能不能查偶发问题的结构"，P3 是"平台性的表达层"。
+只记录**尚未完成**的工作项。已完成能力的行为说明见 `README.md` 与 `docs/usage.md`；系统结构与设计决策见 `docs/architecture.md`；历史实现过程见 git log。
 
-立单时间：2026-08-31，v0.6.0 之后。文中的 `file:line` 是当时的实际代码位置，动之前先复核。
+## 待办
 
-主线：2026-09-02（v0.9.0 之后）立项**总线核心与前端分离**，见下一节；硬件接口作为主线阶段 5 收尾，不再属于边界外。P0–P3 的能力条目在主线各阶段之间穿插。
+### 观测与触发
 
-## 仿真节点与脚本语言（2026-09-05 立项）
+- **触发条件锁存重置**：ID 出现/错误帧条件每运行锁存一次，目前没有重新武装手段（清 Trace、插标记均不影响条件记忆）。
+- **State Tracker 收尾**：右键把 Data/Graphics 窗口里的信号直接加入跟踪；状态带内最小显示时长（抖动信号的碎带合并）；状态区段表的 CSV 导出口径。
+- **触发数值常量 UI 化**（待议）：预触发 256 帧 / post-roll 32 帧 / 标记上限目前在 `bus.rs` 顶部常量。
 
-目标：像 CANoe 一样在总线上挂**自定义仿真节点**——节点由脚本（或将来的外部接口）驱动，按事件产生行为（向总线发帧、输出文本）。语言为 C 风格小子集，**编译成字节码**由自带 VM 执行；节点交互全部走文本（`print` 进日志窗口），不做 GUI 面板；**外部库调用在架构上预留**（`CallHost` 操作码 + 主机函数表，外部仿真元件将来注册进表即可），实现延后。
+### 结构
 
-- **S1 语言内核**（纯函数，零总线依赖）——✅ 已完成：
-  - [x] 词法器：关键字/标识符/整数/浮点/字符串（转义）/运算符/`//` 与 `/* */` 注释/行号
-  - [x] 语法器：`let`/赋值/`fn`/`if`-`else`/`while`/`for`（降糖）/`return`/块/调用，算术·比较·短路逻辑，优先级正确
-  - [x] 字节码编译器 + 栈式 VM：常量池、全局与局部变量（块作用域）、用户函数调用与递归、主机调用（`CallHost` 架构缝）、指令预算与帧深上限
-  - [x] 事件语法解析（`on message` / `on timer` / `on start`）→ 处理器表
+- **Trace 落盘**（#9）：`TRACE_LIMIT = 50_000` 固定环形缓冲，长时间抓取静默丢头部。方向：分段索引或磁盘支撑的 Trace；录制支持按过滤器只落一部分。负载视图改从落盘数据取数即可，接口不变。
+- **派生信号**（#11）：表达式求值（`a-b`、`(x>3)?1:0`、单位换算），派生信号能进 Graphics 与 Data。候选方案：复用脚本语言求值器。
+- **脚本显式扩展帧语法**：数值 ≤ 0x7FF 的扩展帧（合法但不常见）无法被 `on message` 匹配，`send` 也永远按标准帧发。需语言设计决策（如 `on extended message 0x50` / `send_ext`）。
+- **双类展示层四元组化**：网络视图、TX 选择器、报文过滤器对同值双类只列一条（标准优先）。等有真实双类库需求再做。
+- **动态库加载外部仿真元件**：进程内注册表已就绪（`script::register_extern`），动态库入口另议。
+- **BLF→ASC 转存**：前置是改"回放启动丢弃录制状态"的产品语义（录回放只会复刻日志）。
 
-  落地：`src/script/`（mod/lexer/parser/compiler/vm 五文件），详细语言参考见模块顶部文档注释与 `docs/script_language.md`。
-- **S2 节点运行时**（接入核心线程）——✅ 已完成：
-  - [x] `ScriptNode` 实例：VM 状态 + 定时器表 + 事件注册表，一个节点绑定一条信道
-  - [x] 核心循环接入：帧到达按 (信道， ID) 分发、节点定时器并入核心死线
-  - [x] 主机内建补齐：`send` 帧（outbox → 核心成帧入总线）、信号读写（走 DBC 编解码）待补、`now()`/`setTimer` 待补
-  - [x] 每回调指令预算——坏脚本卡不死总线线程
-  - [x] Nodes 窗口：节点源码文本 + 状态/日志（交互全走文本）
-  - [x] 节点源码与绑定随工程持久化
+### 需要人工验收（无 UI 自动化测试床）
 
-  **已落地（2026-09-05/06，`src/node.rs` + bus.rs + `src/ui/nodes.rs`）**：节点常驻核心（`BusCore.nodes`，稳定 id），测量启动时从源码重编译（run 主块初始化全局 → `on start` → 定时器惰性武装"首周期后触发"）；帧分发挂在 ingest 走循环里（`on message` 按 信道+id 匹配，脚本 `send` 的出站帧**压进同一 buf 由同一步处理**——与触发器 Send 同机制）；`on timer` 按步壁钟触发，错过的周期收敛为一次触发加重新同步；每回调 10 万指令预算，出错节点熔断停跑（日志留痕，重启测量或改源码恢复）。`print` 走节点日志环（200 行封顶）经快照发布；`send` 内建在 VM 里只产出 outbox 条目，语义由宿主解释（外部库同缝）。Nodes 窗口：每节点卡片（改名/信道/运行开关/删除）+ 多行源码编辑器（草稿在本地，Apply 下发）+ 状态行 + 日志尾。持久化：`NodeCfg`（name/channel/source/enabled）随工程走 `SetNodes` 整表命令恢复，id 重新铸造；面板开关 `show_nodes` 与桌面同链保存。无头集成测试覆盖"打印、定时发帧、收到自己帧、禁用静默"全链。
-- **S1 语言内核**（纯函数，零总线依赖）——✅ 已完成：
-  - [x] 词法器/语法器/字节码编译器 + 栈式 VM/事件语法解析
-  - 落地：`src/script/` 五文件。详细语言参考见模块顶部文档注释与 `docs/script_language.md`。
-- **S2 节点运行时**（接入核心线程）——✅ 已完成：
-  - [x] ScriptNode 实例、核心循环接入、定时器并入死线
-  - [x] 内建：send / print / now / sig / set_sig / get_sig / bytes / len / random / srand / frame_byte / frame_dlc / set_period / stop_timer / 数学九件
-  - [x] 每回调指令预算 + 帧深上限——坏脚本卡不死总线线程
-  - [x] Nodes 窗口：源码编辑 + Apply + 保存/加载 .capl + 状态/日志
-  - [x] 节点随工程持久化（NodeCfg + SetNodes 整表恢复）
-  - 落地：`src/node.rs` + bus.rs 集成 + `src/ui/nodes.rs`。信号读写经 host_extern 钩子（S4 缝）走 DBC 编解码；`frame_byte` / `frame_dlc` 每次分发前由节点运行时注入 VM。
-- ~~**S2 余项**：一次性定时器~~ ✅（2026-09-07）：`on timer "名"` + `set_timer`/`cancel_timer`，任意回调可武装；事件回调里的 timer op 原先被丢弃，现一并接入
-- **S3 语言补全**——已完成：随机/字符串拼接/字节缓冲/错误行号/波形内建（复用 `sim.rs` 求值器，`ramp`/`triangle`/`square`/`counter`，顺带修掉 `ramp`/`sine_wave` 取参 bug）✅。余项：错误列号
-- **S4 外部接口**（缝已落地）✅（2026-09-07）：进程内注册表 `script::register_extern`（外部仿真元件启动时登记，任何脚本可调，内建名保留），VM 解析顺序 注册表 → 节点 `host_extern` 钩子；动态库加载另议
+- **总线核心线程化**：拖窗口、开模态、卡鼠标时波形不断流。
+- **历史数据共享与性能**：多曲线 + Trace 1000 行 + 多窗口下，CPU 占用不高于单线程版；backfill 阻塞核心线程的观察与后续挪移。
+- **v0.10.0 仿真节点全链**：Nodes 窗口、五个示例脚本、触发新动作（标记/清 Trace）、Graphics 标记竖线、State Tracker 双模式。
 
-红线：每步测试全绿；语言内核不做任何总线假设，S2 之前不碰核心线程。
+## 阶段 5：硬件源落地（适配器选型后启动）
 
-## 主线：总线核心与前端分离
+适配器作为核心的又一个 `FrameSource`：RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器；信道 UI 加适配器选择、连接状态、bus-off 恢复。
 
-动机：全应用单线程，总线活在 UI 的 60 fps tick 里——`MAX_TX_CATCHUP` 补发预算、激活锚定、Trace 揭示水位标都是这个耦合上的补丁；UI 一卡总线就停；真实硬件接入更是无从谈起。目标形态：总线核心按自己的时钟独立推进，前端按 60 fps 渲染，两者只通过**命令进、快照出**交流。
-
-归属划分——核心所有：信道/DBC、仿真时钟、发生器（TxMsg + ValueSrc）、`FrameSource`、trace 环、aggs、bus_loads、订阅与 SampleCache、spec/触发器、recorder、replay_ids。前端所有：窗口布局与桌面、弹窗与草稿态（`num_draft`/`src_draft`）、文字节流、focus_title、状态行文案。
-
-纪律：每一步结束时代码可编译、测试全绿、程序可用、可发版；重构期间冻结新功能；纯移动不改逻辑，编译器和测试兜底。
-
-协作：需要看界面时向用户要截图，不自己启动/操控 GUI——窗口布局用户最熟，代理未必找得到入口；改完让用户肉眼验收。
-
-### 核心线程与时钟模型（设计定案，2026-09-03）
-
-**事件驱动，不用固定步长。** 理由：本系统的信号值全是时间的解析纯函数（`eval_phys` 在任意 t 直接算 Sine/Ramp/Step/Random，没有需要积分的连续动力学），固定 1 ms 网格只有代价没有收益——发送时刻被量化出 0–1 ms 抖动、空转烧 CPU、网格超载时抖动进一步放大。事件只有两类：每条目的周期 TX 槽位、外来帧（日志顺序到达 / 硬件到达）。核心睡到最近死线，醒来处理到期事件，再算下一个死线；空闲总线就是睡觉。
-
-**时间戳永不量化。** 槽位保留精确 µs、值在槽位时刻求值（现行语义不变）；核心超跑（醒来晚了）时按各自**原始时间戳**顺序补发——正确的数据晚到，好过准时的失真数据，而记录端只认帧内时间戳，迟发在曲线与统计里不可见。
-
-**唤醒精度。** Windows 默认定时器粒度 ~15 ms 不可用：`timeBeginPeriod(1)`（或等效）拉到 1 ms；对 ≥10 ms 周期 ±1 ms 抖动可接受，若将来有更高要求，加"最后 <1 ms 自旋收尾"开关。该常数只影响发送**延迟**，不影响时间戳正确性。
-
-**死线来源。** 给 `FrameSource` 加 `next_deadline()`：虚拟源=最近活跃条目的下一槽位；回放源=下一帧日志的到期墙钟（按 speed 换算）；硬件源=轮询周期。核心循环骨架：`loop { 等（命令到达 或 next_deadline）→ drain 命令 → step_to(now) → 脏则发布快照（至多 ~60/s） }`。暂停不停车：只翻标志、重算死线。
-
-**远期放弃的常数**：落后超过"预算 × 周期 × 若干"时不再无限补发（常数阶段 3 定）；主要场景——重新激活从当前时钟起发——已在 `set_tx_active` 源头解决。
-
-### 阶段 1：抽出总线核心（纯重构，不开线程）——✅ 已完成（2026-09-03）
-
-落地：`src/bus.rs` 的 `BusCore` 收拢了全部总线状态（mode/run_mode、source、replay_ids、channels、tx_list、sim 时钟、trace 环、aggs、bus_loads、subs 与采样簿记、triggers、recorder、spec、buf、measuring）与全部总线方法（`step`＝轮询→发射→消化→负载采样→spec 检查→超时扫描→回放收尾，及 `ingest`/`eval_triggers`/`eval_timeout_triggers`/`check_spec`/`advance_clock`）。App 只剩前端状态，`tick` 四行（取采样密度→调 `step`→上状态行）；`stride`/`tol_pct`/`grace` 以参数传入，状态消息走出参——这就是命令边界前，前端策略与总线执行的最后一条缝。迁移靠 App→BusCore 的 Deref 脚手架逐刀完成（六刀，见 git log），跨界借用点改显式 `self.core.` 路径。原验收达成：全程 316 测试过，界面无可感知变化。
-
-### 阶段 2：命令/快照边界（仍单线程）——写侧完成，读侧大部（2026-09-03）
-
-已落地：`BusCommand` 18 个变体收编了 UI 对总线的**全部写操作**（启停/回放传输/录制、条目增删改与源编辑、订阅/退订、加载回放日志），经 `App::send` 单入口下发，`BusCore::handle` 派发；`Snapshot` 每帧发布（计数器、回放时间线、聚合表、订阅投影含采样历史），Messages/Statistics/网络图/Data/Graphics/导出均已改读快照，`send`/`tick` 末尾"写后重读"保证读写一致。验收的**无头集成测试已落地**（`headless_tests.rs` 四条：命令组合的完整仿真、录制回读、CSV 导出、日志回放+双发静音），不开 UI 全绿——第 12 项（headless CLI）的根基即此。
-
-读侧尚余两块，各有结构性原因，随阶段 3 的共享发布一并解决：`tx_list` 投影（`data_text` 既是持久化配置又是每帧输入框草稿，需先把编辑草稿态真正归前端）与 trace 环（50k 帧按帧拷贝不经济，需要脏标记/Arc 共享而非复制）——已于"阶段 3 预备"中全部落地，见下节。
-
-验收：行为不变（325 测试过）；新增**无头集成测试**——不开 UI 完整跑仿真 + 导出。这一步做完，第 12 项（headless CLI）近乎免费。
-
-### 阶段 3 预备：把读侧清干净、给核心上好发条（2026-09-03）
-
-阶段 2 遗留的"读侧尚余两块"至此全部落地，另加了三件为上线程铺路的准备：
-
-- **`tx_list` 投影**：`TxView` 入快照（含 `data_text`/`sent_text` 投影），发送窗口整表读快照；数据框编辑草稿 `tx_data_edit` 归前端，提交才走命令。源编辑（pin/set/clear）全部改为按 `(channel, id)` 键的命令。
-- **trace 环 Arc 共享**：仅在真正吞了帧的 step 里重建 `Arc<Vec<CanFrame>>` 发布，空闲帧零拷贝；UI 与无头测试读同一份。
-- **标志类读取**：`measuring`/`run_mode`/`trace_paused`/`recording` 等入快照，工具条/状态条改读快照。
-- **事件死线**：`FrameSource::next_deadline(now)` + `BusCore::step_to(now, ...)`（= advance_clock + step），回放源按速度换算下次到期时刻；无头测试验证死线跟随发生器槽位、`step_to` 按次唤醒推进。
-- **通道配置 Arc 化**：`Channel.dbc` 改为 `Arc<SymbolTable>`，`ChannelView`（含 DBC 表的 Arc 克隆）入快照；`channel_dbc`/`dbc_cycle_us`/`message_name`/`channel_name` 及各窗口的通道遍历全部改读快照。固有方法遮蔽 BusCore 的同名活表查询，调用方无感。
-
-仍属例外（等 Arc 配置设计，阶段 3 后收编）：总线窗口的名称/波特率编辑、`record_path` 输入框、`load_channel` 写活表及其结果反馈、config.rs 序列化直读核心。
-
-### 阶段 3 第一刀：管子铺好（mpsc + 信箱，2026-09-04）
-
-命令与快照的传输介质换成上线程后的最终形态，循环体先手动摇：
-
-- **命令走 mpsc**：`App::send` 只往 `inbox_tx` 推，`drain_inbox` 在核心侧 `try_recv` 排干、逐条 `handle`；本刀发送端与接收端都在 App 上（接收端就是未来线程的入口）。`BusCommand` 加了 `Send` 静态断言。
-- **快照走信箱**：`SnapshotMailbox = Arc<Mutex<Arc<Snapshot>>>`，核心每圈 `publish_snapshot` 覆写，前端 `peek_mailbox` 用 `try_lock` 取新——拿不到就沿用上一帧，读总线永不阻塞等总线；`Arc::ptr_eq` 守住"同一帧不重复刷状态"。`App.snap` 变为 `Arc<Snapshot>`，UI 读法不变。
-- **状态搭乘快照**：`Snapshot.status: Option<String>` 单发字段——drain 出的状态随下一次发布送达状态栏，随后清空（状态是新闻不是状态量）；`send`/`tick` 不再有独立的回传通道。`Snapshot` 加 `Send + Sync` 静态断言。
-- **循环体成形**：`tick` 即未来核心线程的一圈——drain → step（步幅/容差/宽限仍是前端策略参数）→ publish；`update` 帧首只做一次 `read_snapshot`。`refresh_snapshot`（publish+read）留给 `send` 与直改核心的测试。
-
-验收：行为不变（327 测试过，新增 2 条——信箱争用时读侧退回上一帧且事后追平、命令状态搭乘快照一次性送达）。
-
-### 阶段 3 第二刀（前置）：配置类例外清零（2026-09-04）
-
-上线程前的最后一笔直读直写—— buses 窗口编辑、record_path、`load_channel` 写活表——全部收编为命令/快照，前端从此对核心**零直接访问**（无头测试直改核心的引导与构造除外）：
-
-- **五个新命令**：`SetChannelConfig`（名称/DBC 路径/波特率/FD 数据率/仿真节点，`Option` 字段按需生效）、`LoadDbc`（指向即解析；失败或空路径不留旧表——快照里的表就是总线真正在用的表）、`SetBusCounter`、`SetRecordPath`、`SetEntryConfig`（工程恢复的整行覆盖：active/周期/FD/载荷/源栈，`None` 载荷保留现值）。
-- **快照补位**：`bus_counter` 入快照（保存读、恢复写）；`LoadDbc` 成功与否由"表在不在"判定，`open_dbc_for` 据此决定是否记入最近列表。
-- **引导下沉**：App::new 的 DBC 预加载改为 `BusCore::bootstrap_dbcs()`（首次发布前、未来 spawn 前直接跑，无前端可汇报）；运行期恢复仍走 `load_dbcs` 命令。
-- **窗口改造**：buses 窗口整表读快照，改名沿用 `tx_data_edit` 式草稿（聚焦暂存、失焦提交），波特率每步一键一命令；录制路径输入框写前端草稿 `record_path_buf`，`toggle_record` 落地时随命令转交。
-- **工程存取换轨**：`Config::from_app` 的通道/条目/计数读自快照；`apply` 的通道增删、声明覆盖、DBC 加载、生成器重建与条目恢复全部改为命令序列（中间读取走"写后重读"的快照），线程化后无需改写。
-
-排查记要：录制类测试曾集体翻车——`toggle_record` 现在以草稿覆盖录制路径，测试直写 `recorder.record_path` 被清空后全部落到同一个 CWD 默认名，并行执行时互相碰撞；测试改写 `record_path_buf` 后恢复。教训重申：批量改测试用 Edit 工具，PowerShell 会再度引入 BOM 与 µ 乱码。
-
-验收：行为不变（327 测试过）。至此 spawn 核心线程不再有编译期障碍；配置类例外仅剩"序列化未来改为读快照"一项自然消失。
-
-### 阶段 3 第三刀：核心线程上线（2026-09-04）
-
-`src/core_loop.rs` 落地，`App::new` 起 `bus-core` 线程，总线从此自己跑：
-
-- **CoreLoop**：核心 + 命令收件箱 + 快照信箱的可运行单元，`drain`/`publish`/`step_lap` 一圈三件套。**线程体**：`recv_timeout(next_deadline, 封顶 10ms)` 等命令或死线 → drain → 仅在 measuring 且未暂停时 `step_to`（时钟是线程自己的，`StartVirtual` 重锚 `clock_zero`，暂停边沿盖章 `paused_at_us`，与原 UI 循环语义一致）→ publish；空闲但有命令也发布（命令结果必须回到快照）。断线（前端丢弃发送端）即退出。
-- **双驱动**：`CoreDrive::Threaded`（产品，`App::new`）与 `Manual(Box<CoreLoop>)`（测试/未来 headless CLI，`App::headless()`，send 同步、tick 手摇）。`Deref` 仅在 Manual 下交出核心，Threaded 下 panic——把隐式核心访问在编译期逼出来。`refresh_snapshot` 转为 `#[cfg(test)]`（产品流程没人再需要"发布+读"）。
-- **策略旋钮**：`BusKnobs`（stride/tol/grace 原子量）——前端每帧写、线程每圈读；连续量走旋钮，事件走命令，边界记录在类型文档里。
-- **快照补齐**（把产品路径上最后的隐式核心读清零）：`sim_t_us`、`sample_cover`、`spec`、`triggers`、`last_record`、`laps`（命令进度，线程追赶检测用）；start/load/replay/plot_now/toggle_play 等改读快照。**Backfill** 与 **ClearDatabases** 变成命令——绘图的历史回填（扫描日志源属核心）与"新建工程"的总线清空都改走管道；`settle()` 供工程恢复等"发一批、读回来"的流程在线程驱动下等待追赶（圈计数静止即认为追平，2s 封顶）。帧率 EMA 改由快照帧计数差算出，与驱动方式无关。
-- **引导收敛**：`build_core()`（默认总线 + `bootstrap_dbcs` + `populate_generator`）在 spawn 前同步跑完并预发布首帧快照，baseline 与首个 UI 帧看到的都是完整总线；`reset_to_defaults` 按原驱动重建。
-- **编译期收编**：`FrameSource: Send`、`FrameStream: Send`——核心整体过线程边界从此由类型保证。
-
-排查记要：冒烟测试（真线程 + 实时轮询帧流）当场抓住 `update` 里经 Deref 读 `measuring` 的 panic——正是它存在的意义；暂停直写类测试补 `refresh_snapshot` 与手摇盖章即可。上线后首次实跑即抓住第二处：启动时的自动恢复工程走 `Config::apply`，触发器列表仍直写核心——触发器整簇（窗口读写 + 编辑器 + 恢复）随之全部收编（`AddTrigger`/`RemoveTrigger`/`SetTriggerEnabled`/`EditTrigger`/`SetTriggers`），GUI 启动验证通过。教训：双驱动下每个产品路径都要过一遍"读经快照、写经命令"，冒烟测试应逐步覆盖启动与恢复路径——已补齐：线程驱动下的**工程恢复、回放（含暂停/恢复边沿）、录制**三条冒烟测试落地，这个组合从此回归受保护。
-
-验收：328 测试过，其中新增**真线程冒烟测试**——`App::new` 起线程、发命令、实时轮询到帧流、drop 后线程随断线退出。阶段 3 剩余验收项：GUI 实测拖窗口/开模态/卡鼠标时波形不断流（需要跑起来看），以及 backfill 阻塞核心线程的观察与后续挪移。
-
-### 阶段 3：核心上线程
-
-要做：BusCore 搬进独立线程，跑"核心线程与时钟模型"定案的事件驱动循环（死线等待 → drain 命令 → step → 发布快照）；命令走 mpsc，快照用 Arc 换手（UI `try_lock`，拿不到沿用上一帧快照，永不阻塞）。发生器槽位在事件死线上精确调度——`MAX_TX_CATCHUP` 预算与激活锚定大半自然消失，相关测试搬到核心的时钟语义上。
-验收：拖窗口、开模态、卡鼠标时总线波形不断流；回放、录制、总线负载行为与单线程版一致。
-
-### 阶段 4：历史数据共享与性能
-
-要做：SampleCache 跨线程共享（Arc 换手，不深拷贝）、trace 尾部流式供给 UI（有界交接）；跑性能对比（多曲线 + Trace 1000 行 + 多窗口）。
-
-**第一刀已落地（2026-09-04）**：`Subscription` 增加 `published: Arc<SampleCache>` + 脏标记，`refresh_sub_histories()` 在 step 吞帧后、backfill 合并后、reset 后各调一次——脏了才重建 Arc，否则纯指针克隆；`SubView.history` 变为 `Arc<SampleCache>`，曲线/导出经自动解引用零改动。空闲与暂停帧的发布不再拷贝任何采样点；播放中仍按"有变化即拷贝"逐帧拷贝活跃缓存——量级削减留给"分块流式缓存"（历史改为 Arc 分块追加，发布只换外层指针）这一后续刀。
-
-**第二刀已落地（2026-09-04）**：`SampleCache` 内部改为**封存分块 + COW**——`chunks: Vec<Arc<Vec<点>>>`（只读、跨线程共享）+ `tail`（活跃追加区，512 点封存一次，封存即移动零拷贝）。`Clone` 因此从深拷贝变为"块引用计数 + 尾部拷贝"，发布代价从 O(全部点) 降到 O(指针数 + ≤512 点)。工作缓存的改动走 `Arc::make_mut`，绝不惊动 UI 仍在读的块。合并语义保持：直播采样走 O(增量) 追加快路；重叠/回退 backfill 仍走 O(总量) 的展平-合并-重分块（与旧扁平缓冲同价）。`range` 从返回切片改为返回知道自身长度的 `Samples` 迭代器（块级跳过 + 块内二分），`bucket_extremes` 泛化为 ExactSizeIterator 的单遍折叠。
-
-**第三刀已落地（2026-09-04）**：新模块 `src/trace.rs`——`TraceRing`（封存分块 + 活跃尾部，512 帧封存一次，发布 = 块引用计数 + 一条尾部拷贝）与前端冻结视图 `TraceView`（双向迭代器，`iter().rev()` 供 Trace 窗口"新帧在上"的读取）。上限裁剪、移除总线时的整环重写都走 COW，绝不惊动 UI 持有的块。至此"每步全量拷贝"的三处大头——历史缓存、快照里的各订阅、trace 环——全部改为共享 + 增量。阶段 4 剩余：性能对比（多曲线 + Trace 1000 行 + 多窗口）。
-
-**收尾已落地（2026-09-04）**：满载对比探针 `perf_snapshot_publish_under_load`（`#[ignore]`，release 手动跑）——6 路订阅 × 72 000 点/路 + 5 万帧满环，三口径各 200 轮：旧设计（每次发布深拷贝全部历史 + 重建扁平 trace）**4 511.6 µs**；现状最坏（当轮所有缓存都脏）**12.4 µs**；现状空闲（无重采样，纯指针换手）**3.7 µs**——最坏情况 **362×** 便宜，旧设计光发布一帧就吃掉 60 FPS 帧预算的 27%，现在千分之几。测试 338 过 + 1 探针（ignored）。阶段 4 剩余验收：用户实测拖窗口 / 多曲线窗口 / Trace 滚动时总线不断流。
-验收：CPU 占用不高于单线程版；慢机器上 UI 也拖不慢总线。
-
-**收尾后补漏（2026-09-04）**：用户实测打开 Specification 窗口程序直接退出——阶段 3 的直读清扫漏了四个"不常打开就走不到"的路径，全部带 Deref panic：spec 窗口（读 `channels`/`spec`、Clear 直写）、Bus Statistics 窗口（`bus_loads` 根本不在快照里，现补：核心加脏标记 + `publish_loads()`，`Snapshot.bus_loads` 走 `Arc<Vec<BusLoad>>`，仅 step/增删总线后重克隆）、Graphics 的 Dbc 纵轴回退（读 `subs`，改走 `sub_view`）、Trace 右键"加入发生器"（直改 `tx_list`，改走 `SetEntryConfig`，命令新增 `flags: Option<FrameFlags>` 让回放里见到的帧按原样入列）。Clear 按钮落成 `ClearSpec` 命令（清账后下一帧算首采样，不会立即再挂账）。教训：窗口级清扫要按"打开每个窗口 + 点开每个右键菜单"逐一眼见为实，编译期逼不出来的是没人打开过的窗口。349 测试过（+3：ClearSpec、flags 覆盖、快照 loads）。
-
-**待查（偶发）→ 已破案（2026-09-04）**：全量测试偶发"单个测试挂、重跑即绿"，八连跑抓到现场——`a_signal_crossing_fires_on_the_crossing_not_the_level` 在读录制文件时报 NotFound。根因是并行碰撞的老家族漏网：四个触发动作类测试把路径写进前端草稿 `record_path_buf`，但录制是由**触发动作**在核心侧开的，核心的 `record_path` 从未收到 `SetRecordPath`，为空 → 派生出 CWD 的 `record_<日期>.asc`，与并行测试同一秒同文件名互相删文件。修法：四个测试改发 `SetRecordPath` 命令（路径进 temp 且各用独立名）。仓库根出现的无名 `record_*.asc` 都是这个产生的测试残留。
-
-**仿真波形补全（2026-09-04）**：`SrcKind` 新增 **Triangle**（半周期升到 hi、半周期降回 lo，hi<lo 时整体向下镜像）与 **Counter**（滚动计数器：lo..=hi 逐周期整数步进、周期末回卷，hi<lo 时倒着数，小数跨度只在整数点停留）——真实 ECU 的 alive counter 从此不用手打 Step 序列。纯函数求值不变式保持（`eval_phys(src, t)`），枚举码追加在 `KINDS` 末尾，旧工程不受影响、新码被旧版本读取时按既有约定丢源。UI 的 Shape 下拉与工程持久化自动长出新形状，零改动。356 测试过（+5：三角关键点/镜像、计数正反/回卷/取整）。
-
-**Triggers 编辑器重做（2026-09-04，用户反馈）**：行内编辑器撤掉——触发器一多就要滚到最底下改，且每改一个控件就实时下发命令。改成 Send-cycle 式弹出编辑器：点行打开，Bus/Message/Signal/Threshold/Direction/Action/Entry 两列对齐排布，`%g` 自动数字格式（不再固定三位小数），Apply 一次性 `EditTrigger`、Cancel/Esc 丢弃；窗口最小宽度 460（弹窗 380）。`falling→rising` 改不动的问题随行内实时回写一起消失（草稿在本地，不再被快照回灌），补了模型层双向翻转测试。新状态 `trig_draft: Option<TrigDraft>`（index+cond+action+id_buf 一体），顶掉 `trigger_sel`/`trig_id_buf`/`trig_edit_sel` 三个散字段；删行时编辑器随行关闭或跟行上移。350 测试过。
-
-**仿真动作两件（2026-09-04）**：抖动被否，落了另外两项。
-- **Send now（立即单发）**：`BusCommand::SendNow { ch, id }`——发生器行头新按钮，脱离周期表把当前基础字节 + 波形值立即打一帧；只记意图（`injected: Vec<(u8, u32)>`），帧在 `step()` 内用**当步时钟**构建（跨暂停不背旧时间戳），不动条目的 active 标志（停着的条目打一帧不等于把它排上日程），总线停止时请求直接丢弃（不留到下个 run 意外冒出来）。
-- **Reaction 镜像（Mirror）**：触发器 `Send` 动作发出目标帧前，把**触发帧**解码一遍，同名信号逐个覆盖进目标载荷（`generator::encode_mirror`，按目标信号自己的编码重算，长度不够自动加宽、超 8 字节按 FD 取整）——网关转发从此一条规则搞定：0x100 的 EngineSpeed 越阈触发 0x200，0x200 帧里带着**那一帧**的转速。超时触发无触发帧，不镜像。周期语义不做镜像：反应帧只对沿负责。
-- 358 测试过（+2：单发"恰好一帧 + 不改标志 + 停止丢弃"；镜像"同名值进载荷、无同名信号保持基值"——夹具专门造了双消息同名信号库）。
-
-### 阶段 5：硬件源落地（适配器选型后启动）
-
-要做：适配器作为核心的又一个 `FrameSource`——RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器；信道 UI 加适配器选择、连接状态、bus-off 恢复。分期：只收（2-4 天）→ 发送（约 1 周）→ CAN FD 与错误状态（数周）。
-选型：CANable/candleLight（全 Rust 生态，无厂商 SDK 授权）或 PCAN-USB（PCanBasic.dll，行业最常见）。
-前置：阶段 3 完成，否则无从谈"总线自己的速率"。
-
-## P0 解码正确性
-
-1. ~~**复用报文（mux）解码**~~ ✅ 0.7.0
-   落地：`SignalInfo.mux_when` 存条件列表（开关名 + 闭区间集），`mN` 生成单值条件、`mNM` 嵌套在加载时继承祖先开关条件、`SG_MUL_VAL_` 按区间直接 gating（多区间、多开关、覆盖 `m` 标记三案都有测试）；Trace / Messages / Data / Graphics 同走 `decode_signals`，切组后旧组信号立即消失。已知边界：`MuxCondition` 引用消息里不存在的开关时按"无条件"放行（坏库仍显示数据而不是空解码）。
-2. ~~**VAL_ 值表**~~ ✅ 0.7.0
-   落地：`SymbolTable.value_tables` 按（报文， 信号）收 `VAL_` 枚举，解码按符号扩展后的原始值匹配（负 id 可标注有符号信号）；Messages / Data / Graphics 显示 `(标签)`，Data 导出的 CSV 给 `value` 裸值与 `label` 文本两列。`VAL_TABLE_` 命名表引用仍不可解析（can-dbc-pest 无该产生式，已有测试钉住）。
-3. ~~**标准帧与扩展帧共用裸 `u32` 做键**~~ ✅ 2026-09-07 夜间全部落地（57d66d4、fd9abf2、ec65a55、381a208、bbae35b、4d04c58）
-   - **① DBC 层**：`MsgKey = (u32, bool)`；`messages`/`order`/`value_tables`/`declared_cycles`/floats/ext_mux 全部按键；`decode_signals(&CanFrame)` 精确匹配；`encode_signal`/`message_of`/`message_name` 按"id ≤ 0x7FF 标准优先、扩展兜底；> 0x7FF 仅扩展"规则（与脚本 `send` 一致）；`build_node_inputs` 顺带修掉硬编码 `extended: false` 的旧 bug（扩展报文的 `sig()` 此前永远读不到）。
-   - **② 聚合与规格**：`aggs: (u8, u32, bool)`、`Spec::rows: (u8, u32, bool, Kind)`、`previous: (u8, u32, bool)`；规格表与 CSV 报告的 id 列对扩展帧带 `ext` 后缀，查名走精确 `message_name_of`；同值标准/扩展两类各有聚合与判定（`a_shared_numeric_id_*` 两组测试钉住）。
-   - **③ 订阅键**：`observe::SigKey = (u8, u32, bool, String)` 贯穿 subs/采样/GfxSignal/color_slots/rules/overrides/Data/Graphics/State 全链；信号选择树按类分行（扩展行带 `x` 后缀）；`SignalCfg` 加 `ext`（serde default false，老工程照载，新工程才序列化）。
-   - **④ 触发器/生成器**：`SignalCross` 加 `ext` 位并参与帧匹配（`TriggerCfg` 同步 serde default）；生成器 `TxMsg.extended` 原本就有，`add_entry`/发射路径不受影响；`timeout_silent` 暂按任一类兜底（触发条件无类）。
-   - 脚本侧（57d66d4）：`on message`/`send` 按"id ≤ 0x7FF 标准、> 0x7FF 扩展"划类，`set_sig` 编码沿用同规则。
-   - 已知妥协：裸 id 展示层（网络视图 `node_tx_ids`、TX 选择器、报文过滤器）对同值双类只列一条（标准优先）；要完全分开需把展示层也四元组化，等有真实双类库需求再说。
-   - 已知妥协 2：脚本/生成的"id 决定类"约定意味着**数值 ≤ 0x7FF 的扩展帧**（合法但不常见）无法被 `on message` 匹配、`send` 也永远按标准帧发。要支持需在语言里加显式类语法（如 `on extended message 0x50` / `send_ext`），属语言设计决策，未动。
-4. ~~**`SigType` / 单位的显示口径**~~ ✅ 0.7.0
-   落地：每个信号带 `type_tag`（`u8`/`i16`/`f32`/`f64`），值后统一显示 `[u16]` 型标记；`SIG_VALTYPE_` 声明的浮点按位模式解码（can-dbc 约定 0=整型 1=f32 2=f64，与 Vector 文档的 0/1 约定不同，以解析器为准）；整型按需显示小数，`fmt_decoded`/`fmt_signal_value` 是唯一的格式化出口。min/max 仍只在生成器夹范围，未显示。
-
-## P1 用已有聚合数据换来的视图
-
-5. ~~**总线负载 / 帧率-时间图 + 每总线错误帧计数**~~ ✅ 0.8.0（`src/load.rs`）；0.9 扩成对齐 CANoe Statistics 的整页行
-   落地：每帧换算**线上一帧占时**（经典 `47+8·len` / 扩展 `67+8·len` 位，FD 的载荷与 CRC 走数据段速率），1 s 滚动窗口上算负载与帧率，错误帧单独累计并计入占时。比特率（仲裁 / FD 数据段）是每总线的可编辑配置，随工程文件保存。总线数字在独立的 Bus Statistics 窗口，按 CANoe 的 Statistic / Current·Last / Min / Max / Avg 行布局：Busload、Min. Send Dist.（任意相邻帧的起点间距）、Bursts / Burst Time / Frames per Burst（1 ms 分类间隙，常量）、Std/Ext × Data/Remote 的 n/s 与 total（按帧分类计数，随窗口滚动）、Errorframes、Chip State=Simulated；Min/Max/Avg 列由 `BusLoad::sample` 每步采样累计。硬件寄存器行（TEC/REC、收发器错误与延迟）在仿真里无意义，不列。60 s 桶历史仍在收集（测试钉住）供将来导出。已知口径：位数为无填充近似；窗口只由新帧推进，静默时读数冻结。
-6. ~~**规格监视出报告**~~ ✅（export.rs `export_spec_csv`）
-   落地：Specification 窗口 Export 按钮导出整份 CSV 报告，头部带判定前提（每总线的数据库路径、容差、宽限、声明了周期的报文数），随后是全部已锁存违规行（不受窗口会话级过滤勾选影响）。数量级单位与窗口同一词形（`spec::qty` 两处共用）。
-7. ~~**回放时注入**~~ ✅
-   落地：`tick` 摘除 `Mode::Virtual` 闸门，生成器在回放中照常发车；时基裁决为**日志时基为主**——回放期间 `sim_t_us` 由最新日志帧自身的时间戳接管（帧间冻结、seek 跟随日志），`update` 的墙钟推进只在仿真模式生效，生成帧的调度与打点都落在这条轴上，聚合 / 图窗 / 规格判定同钟。回放里从未调度的条目（`next_t_us==0`）按 playhead 锚定，不会发出一帧"纪元零点"的怪帧。原 `replay_does_not_inject` 契约测试反转为 `replay_injection_lands_on_the_log_timeline`。已知边界：日志静默段注入随之冻结（日志时基为主的自然语义）；录制在回放期间本就关闭，注入不落盘。
-12. **State Tracker**（信号状态带视图，`src/ui/state.rs`）
-   已落第一刀（2026-09-04，随即按用户意见收编为观察器）：对订阅采样历史做**状态分段**——值按 `%g` 六位有效数字量化，量化值不变的最长区段为一条状态带，带内居中标值；离散 0/1 出格子、缓变模拟量折叠成可读区段。**观察器身份齐全**：`StateWin` 进测量设置注册表（+ 按钮 / goto / 改名 / Filter 列 / 删行退订），可多开、`PopupTarget::State` 走 Signal Selection 弹窗选信号、`WindowKind::StateTracker`（码 5）随桌面保存、`StateCfg` 随工程持久化（恢复后自动重订阅）、左栏复用共享 siglist（可见开关 + 拖拽排序，State 行不画信号色片）。恒走 live 贴边（回放中跟随 playhead），窗口宽 5 s–30 min 预设；名字与带同一张 draw list，对齐由构造保证。**状态配色（2026-09-04 两轮迭代）**：可见状态数 ≤ 调色板时每状态一色、文字按底色亮度取黑/白（描边试过即撤——细线压亮色抗锯齿出一圈怪边，分界交给颜色差本身；同色相邻段的回退模式改用 1px 间隙）；配色走**会话槽位**（`color_slots`，值首次出现领最低空槽并永久保留，超出调色板的新值哈希入位可撞色）——排序分配会让"新状态一出现全体洗色"，哈希直配 8 槽几乎必撞，两条路都被否；繁忙模拟量（可见状态数超调色板）整带退回信号本色。删信号时槽位记忆随行清除，不随工程持久化。
-
-**CANoe 机制对齐（2026-09-04，用户给三张截图后）**：① **VAL_ 值表标签**——状态带显示表标签（`NM_STATE_NORMAL_OPERATION`）而非裸数字，物理值经信号自己的 factor/offset 折回 raw 查 `value_tables`，无表/无条目回退 `%g`；② **Binary 渲染**——可见状态 ⊆ {0,1} 的信号画成方波（高态走行顶、低态走行底、跃变落竖边、标签居中），按可见状态自动判定不配置；③ **素色带**——繁忙模拟量回退成 CANoe 式浅素带（原先用信号本色），数值标签说话；④ 标尺加 1/5 步长细刻度。
-
-**自定义状态带（2026-09-04，用户点名要 Configuration 的条件变色机制）**：`StateRule`——升序切分点把值轴分成若干区间（`< c0` / `c0..c1` / `≥ cN`，切点值归上区间），每区间自带名字与颜色；规则存在 `StateWin.rules`（按键索引，拖拽排序不失效）。规则在手时**接管**标签与配色（优先于值表标签、槽位配色、Binary 判定）；没有规则则一切照旧。左栏 State 行新增 "S" 徽章开编辑器：切点行（`%g` 输入 + 删）+ 区间行（范围文字 / 色块 / 名字输入）+ Add cut / Clear；加切点自动长出缺省名字，删切点合并区间（留下方区间）。规则随工程持久化（`RuleCfg` 挂在 `SignalCfg.state_rule`，serde 缺省容忍旧工程）。`state_segments` 从"内部量化"改为收 `classify` 闭包——规则按区间分类、自动按量化值分类，同一折叠器两种语义。**取色器按用户意见改成 Word 式（2026-09-05）**：原 `color_edit3` 换成"自动 + 12 个低饱和默认色（BAND_PALETTE，两行）+ 其他颜色（完整 `color_picker3`，带 RGB 输入）"三段弹窗——全饱和色在深底上对比过烈是主诉；颜色建模为 `Option<[f32;3]>`，None=自动（区间按值配色同一套会话槽位，合成键落在 NaN 位型段避免与真实值撞键），新建区间一律自动起步。修复记录：弹窗曾因 open_popup 与 popup 不在同一窗口 ID 作用域而永远弹不出来；自动色块曾显示灰色占位，现直接跑渲染同款槽位查询显示真实将绘颜色。**区间自动色改从 BAND_PALETTE 取**（slot_for 泛化出调色板长度参数，值配色仍用主调色板）。
-
-**默认/自定义双模式（2026-09-05，用户需求）**：S 编辑器顶部"默认 | 自定义"单选。**默认模式**（无规则时的常态）：状态列表 = VAL_ 值表全条目（按 raw 排序、经 factor/offset 折算物理值）或已观测数值，每行 标签 + 色块，色块弹同一个取色器可**钉住**该状态的颜色（`overrides` 映射，按状态值归一化 bits 索引），未钉住的走自动槽位；"清除颜色"一键回自动。**自定义模式**：即原切分区间编辑器。渲染路径：自定义按区间取色；默认模式先查 override、再自动槽位、超调色板回素色。取色弹窗目标抽象为 `PickTarget::Band(i)/Value(bits)`，一条弹窗服务两种模式。`SignalCfg.state_overrides` 随工程持久化（value+color，恢复时按同一量化归一化重建键）；`bits_of` 统一"量化 → -0.0 归一 → bits"的键生成，渲染/编辑/持久化三处共用。**随后微调（同日，用户反馈）**：默认模式的自动色也改从低饱和默认色分配（per_state 判定同步改对 BAND_PALETTE 长度）；规则撤销时清掉区间槽位键防挤占；状态带相邻色块统一留 1px 间隙（过窄段跳过内缩避免消失）。
-   要做：右键把 Data/Graphics 信号直接加入跟踪；带内最小显示时长（抖动信号的一段碎带合并）；状态自定义（阈值区间命名如 Low/Mid/High）代替裸数值标签；CSV 导出口径（状态区段表）。
-
-## P2 结构解锁
-
-8. **触发层**（条件与录制动作闭环：`src/trigger.rs`、`src/ui/triggers.rs`）
-   已有：四条件 `TriggerCond`——信号越阈 `SignalCross`（按 false→true 沿触发，电平跟随该报文自己的帧）、`IdPresent` / `ErrorFrame`（帧驱动，一次运行锁存一次）、`CycleTimeout`（挂进 `check_spec` 每步扫描，直接复用 `spec::missing_offender` 的宽限比较，触发器与 Dropped 判定**永不打架**；报文恢复后电平清除，每次掉线都是新沿）。动作：开始·停止录制；`tick` 帧循环**最前**求值，触发帧本身被录进文件。Triggers 窗口增删/启停/选中编辑，触发器内容与面板开关都随工程文件保存（未知 kind 码只丢该条，运行态电平/计数不落盘）。第 10 项的反应规则复用同一个 `TriggerCond`，动作枚举里加 `Send` 即可，**不要另写求值器**。
-   要做：出现类条件的再武装手段（条件自身的锁存重置）。~~插入标记 + 清 Trace 动作~~ ✅ 2026-09-07（`TriggerAction::InsertMarker` 标记入快照、Graphics 画琥珀色竖线；`TriggerAction::ClearTrace` 清 Trace 环，聚合/规格/录制不动；动作码 3/4 随工程持久化，`a_clear_trace_*`/`an_insert_marker_*` 测试钉住）。~~pre/post 环形缓冲~~ ✅ 2026-09-07（`PRE_BUFFER_FRAMES`=256：触发启动录制先落触发前上下文；`POST_ROLL_FRAMES`=32：触发停止后再滚 32 帧（含边沿帧）才闭文件，手动录制不受影响；ff9fa8b）。数值均可调空间在 `bus.rs` 顶部常量，做成 UI 设置待议。
-
-9. **Trace 突破 50k 环 + 按过滤器落盘**
-   现状：`TRACE_LIMIT = 50_000`（`src/app.rs:18`）固定环形缓冲，满了就丢头部（`src/app.rs:2190-2197`）——长时间实时抓取会**静默丢掉开头**；而录制走的是**每帧、不过滤**（`src/app.rs:2191-2193`）。方向正好相反的做法是：测量数据落盘、并且能只落被选中的那部分。
-   要做：分段索引或磁盘支撑的 Trace；录制能按当前过滤器只落一部分。注意这会影响第 5 项的取数方式，所以第 5 项先做。
-
-## P3 表达层
-
-10. **反应规则 `on message X → send Y`**（最小砖已落，与第 8 项同一求值器）
-    已有：`TriggerAction::Send { ch, id }`——任意条件沿触发时，从生成器条目 `(ch, id)` 发**一条**帧：载荷走该条目自己的基字节 + 波形源（`tx_payload`），时间戳取**触发帧自身的时钟**（回放中落在日志轴上）；帧压进 `buf` 由同一 tick 处理，Trace / 聚合 / 负载 / 录制一视同仁。目标按 (总线， ID) 而非行索引引用，生成器行增删不失效，条目缺失时规则静默待命；条件求值器的电平锁存保证规则对自身输出不会成环。Triggers 窗口动作下拉第三项 + 条目选择器；随工程持久化（action 码 2 + 目标字段）。**触发帧信号镜像已落（2026-09-04）**：Send 前把触发帧解码一遍，同名信号逐个覆盖进目标载荷（`generator::encode_mirror`，按目标信号自己的编码重算、长度加宽、超 8 字节按 FD 取整）；超时触发无触发帧，不镜像。
-    要做：~~条件→发送的定时回调（周期性反应）~~ 已被脚本节点覆盖（`on message` + `set_timer` 重武装即可表达"条件持续期间周期性反应"，见 `examples/delayed_responder.capl`）；若将来要"零脚本即可配的周期反应"再议。
-
-11. **信号数学 / 派生信号**
-    现状：没有任何算术概念，全仓库搜不到 `expr` / `formula` / `compute` / `derived`；解码值就是 `raw * factor + offset`。
-    要做：表达式求值（`a-b`、`(x>3)?1:0`、单位换算），派生信号能进 Graphics 与 Data。
-
-12. ~~**headless CLI**~~ ✅ 2026-09-04；**`--project` 无头仿真** ✅ 2026-09-07（f389acc）
-    落地：`roxy-can --replay <log.asc|blf> [--speed n] [--duration s] [--stats csv]`（`src/cli.rs`）。无参数照旧开窗口；手动驱动下以 1 ms 节拍手摇 `advance_clock`+`tick`（晚醒只会成批交帧，backfill 补样，迟滞不丢数），跑到日志末尾或墙钟时长上限，按帧数/播放头/墙钟出报告，`--stats` 复用统计 CSV 导出。release 的 `windows_subsystem=windows` 下经 `AttachConsole` 认领父控制台再重定向标准句柄。8 条新测试（解析/默认值/用法错误/端到端回放+导出/时长截断/坏日志），真二进制冒烟：10 帧 10 ms 周期日志回放 + CSV 逐项核对 + 退出码 0/1/2。**边界**：无 `--record`——核心有意在回放启动时丢弃录制状态（录回放只会复刻日志），BLF→ASC 转存若要做需先改这条产品语义。
-    `--project <p.rxproj> --duration <s>`：无头仿真保存的工程——生成器/脚本节点按工程保存的状态上线（GUI 打开工程"不发车"的安全语义不变：CLI 显式仿真时按文件里的 active 位重新武装）；`--stats` 可导出统计。`--check-script <f>`（flag 可重复校验多个 .capl）编译节点脚本，任一失败非零退出并列出错误行号。
+- 分期：只收（2–4 天）→ 发送（约 1 周）→ CAN FD 与错误状态（数周）。
+- 选型：CANable/candleLight（全 Rust 生态，无厂商 SDK 授权）或 PCAN-USB（PCanBasic.dll，行业最常见）。
 
 ## 明确暂缓 / 边界外
 
-- **一总线多库合并、网关与跨总线路由模型**：`Channel.dbc` 是 `Option<SymbolTable>`（`src/app.rs:279-287`），一总线一库是硬假设，改动面比看起来大。
-- **诊断层（UDS / CDD / ODX）**：会被"更多协议"这条边界挡住，按协议那一轮一起谈。
-- **MF4 读取**：仍然卡在"先拿到 Vector 真实导出样本"，没有样本不可验证。
-- **硬件后端（SocketCAN / PCAN / Kvaser / Vector XL）**：不再暂缓——立项为主线阶段 5，等适配器选型后启动。**LIN / FlexRay / 以太网**：仍按协议那一轮一起谈。
+- **一总线多库合并、网关与跨总线路由**：`Channel.dbc` 是 `Option<SymbolTable>`，一总线一库是硬假设，改动面大。
+- **诊断层（UDS / CDD / ODX）**：按"更多协议"那一轮一起谈。
+- **MF4 读取**：卡在"先拿到 Vector 真实导出样本"，没有样本不可验证。
+- **LIN / FlexRay / 以太网**：按协议那一轮一起谈。
 
-## 依赖与取舍
+## 备注
 
-- ~~主线阶段 2 落地后，第 12 项（headless CLI）近乎免费——无头驱动核心的测试床就是 CLI 的骨架~~ 第 12 项已兑现（双驱动 + 命令边界直接长出 CLI）。
-- 第 9 项（Trace 落盘）排在主线阶段 3 之后：trace 归核心所有，先分家再落盘，避免在旧结构上动两次。
-- 主线重构期间冻结新功能；P0–P3 的小条目（如第 3 项的键改造）可以在阶段 1 的搬家过程中顺路做，前提是只动被搬的那块。
-- 第 8 项的"条件"与第 10 项的"规则"是同一个求值器，合并设计。
-- ~~第 9 项会改变第 5 项的取数方式，所以第 5 项先落地更划算~~ 第 5 项已落地；第 9 项若改为磁盘支撑，负载视图改从落盘数据取数即可，接口不变。
-- ~~第 1、2、4 项都是解码层，适合作为一个"解码正确性"版本（0.7.0）一起做~~ 已照此落地（0.7.0）。
-- 本工具界面无自动化测试床（`src/ui/*` 没有任何 imgui 测试），所有条目的验收都分两半：判定逻辑能自动证明，控件行为只能人眼看。主线阶段 2 的无头测试床落地后，这条边界从"判定逻辑"一侧开始松动。
+- UI 无 imgui 自动化测试床：控件行为验收靠人工，判定逻辑用无头测试自动证明（详见 `docs/architecture.md` 开发约定）。
+- 唤醒精度远期可选：事件驱动核心的"最后 <1 ms 自旋收尾"开关（详见 `docs/architecture.md` 核心时钟模型）。

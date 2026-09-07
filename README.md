@@ -78,6 +78,12 @@ on timer "resp" {
 - 节点源码、绑定与启用状态随工程（`.rxproj`）保存
 - 命令行可脱离界面运行与校验（CI 友好）：`--check-script` 编译节点脚本；`--project <p.rxproj> --duration <s> [--stats <csv>]` 无头仿真整个工程（生成器 + 脚本节点按保存的激活状态上线），非零退出报告失败
 
+## 文档
+
+- [使用说明](docs/usage.md)：命令行、仿真节点、触发器、State Tracker 的操作语义与口径说明
+- [架构文档](docs/architecture.md)：核心线程模型、命令/快照边界、数据共享、帧键模型与开发约定
+- [节点脚本语言参考](docs/script_language.md)：完整的语言参考手册
+
 ## 主要依赖
 
 - [imgui-rs](https://github.com/imgui-rs/imgui-rs) + imgui-wgpu：界面与渲染
