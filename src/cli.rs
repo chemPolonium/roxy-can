@@ -314,6 +314,13 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
 /// the old "replay drops recording state" blocker does not apply. Frames
 /// cross with their own timestamps, classes, and payloads.
 pub fn convert_log(input: &str, output: &str) -> Result<String, String> {
+    // Same-file conversion truncates the input while the stream may be
+    // mmap-reading it -- refuse rather than corrupt.
+    if std::fs::canonicalize(input).ok() == std::fs::canonicalize(output).ok()
+        && std::fs::canonicalize(input).is_ok()
+    {
+        return Err("--convert: input and output are the same file".to_string());
+    }
     let mut stream = crate::log::open_stream(std::path::Path::new(input))
         .map_err(|e| format!("log load failed: {e}"))?;
     let mut w =

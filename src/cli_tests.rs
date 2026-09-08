@@ -409,6 +409,19 @@ fn convert_reports_a_broken_input() {
     );
 }
 
+/// Same-file conversion is refused before anything is opened: truncating
+/// the input under its own mmap reader would corrupt the data.
+#[test]
+fn convert_refuses_input_equal_to_output() {
+    let src = write_log("roxy_can_convert_same.asc", 3, 1_000);
+    let err = convert_log(src.to_string_lossy().as_ref(), src.to_string_lossy().as_ref())
+        .unwrap_err();
+    assert!(err.contains("same file"), "{err}");
+    let text = std::fs::read_to_string(&src).unwrap();
+    assert!(text.contains("End TriggerBlock"), "the input survived");
+    std::fs::remove_file(&src).ok();
+}
+
 /// The composite CI story end to end: a saved project whose script node
 /// transmits on a timer runs headless and the node's frames reach the
 /// stats export -- no window, no user, full fidelity.
