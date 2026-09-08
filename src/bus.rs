@@ -867,6 +867,11 @@ impl BusCore {
             }
             BusCommand::RemoveNode { id } => {
                 self.nodes.retain(|n| n.id != id);
+                // The removed node's derived-signal streams have no future
+                // emitter; drop them from the selection tree. Existing
+                // window selections keep working like after a DBC swap.
+                self.emitted_streams
+                    .retain(|(k, _)| k.1 & !crate::app::EMITTED_ID_BASE != id as u32);
                 self.nodes_dirty = true;
             }
             BusCommand::SetNodeName { id, name } => {
@@ -929,6 +934,9 @@ impl BusCore {
                         n
                     })
                     .collect();
+                // Wholesale replacement mints new node ids: every existing
+                // derived-signal stream loses its owner.
+                self.emitted_streams.clear();
                 self.nodes_dirty = true;
             }
             BusCommand::AddReplayBlock {

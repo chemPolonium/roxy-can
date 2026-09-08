@@ -5011,6 +5011,15 @@ fn emit_value_publishes_a_derived_signal_stream() {
         !sub.history.is_empty(),
         "samples flowed with the timer cadence"
     );
+
+    // Removing the node retires its streams from the selection tree --
+    // there is no future emitter for them.
+    app.send(crate::bus::BusCommand::RemoveNode { id });
+    app.settle();
+    assert!(
+        app.snap.emitted.is_empty(),
+        "a removed node's streams leave the tree"
+    );
     app.stop();
 }
 
