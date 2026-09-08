@@ -478,6 +478,17 @@ fn main() {
             }
             return;
         }
+        Ok(cli::Cli::Convert(input, output)) => {
+            cli::attach_parent_console();
+            match cli::convert_log(&input, &output) {
+                Ok(report) => println!("{report}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Err(msg) => {
             cli::attach_parent_console();
             eprintln!("{msg}\n\n{}", cli::usage());

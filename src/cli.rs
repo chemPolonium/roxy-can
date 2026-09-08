@@ -16,6 +16,9 @@ pub enum Cli {
     Run(CliOpts),
     /// Compile node scripts and report; exit non-zero on any failure.
     CheckScripts(Vec<String>),
+    /// Transcode a log to ASC: `--convert <in> <out>`. A pure stream
+    /// transform -- no bus, no clock, no window.
+    Convert(String, String),
 }
 
 #[derive(Debug)]
@@ -44,6 +47,7 @@ pub fn usage() -> &'static str {
   roxy-can --check-script <f>    compile node scripts, no window needed
                                  (repeat the flag for more files; non-zero
                                  exit when any script fails)
+  roxy-can --convert <in> <out>  transcode a log (.asc/.blf) to ASC
 
 run options
   --replay <path>    log to replay (.asc or .blf)
@@ -70,6 +74,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut replay = None;
     let mut project = None;
     let mut profile = None;
+    let mut convert: Option<(String, String)> = None;
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -88,6 +93,11 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             "--replay" => replay = Some(value(args, &mut i, "--replay")?),
             "--project" => project = Some(value(args, &mut i, "--project")?),
             "--profile" => profile = Some(value(args, &mut i, "--profile")?),
+            "--convert" => {
+                let input = value(args, &mut i, "--convert input")?;
+                let output = value(args, &mut i, "--convert output")?;
+                convert = Some((input, output));
+            }
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--speed" => {
                 let raw = value(args, &mut i, "--speed")?;
@@ -121,6 +131,17 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             );
         }
         return Ok(Cli::CheckScripts(scripts));
+    }
+    if let Some((input, output)) = convert {
+        if replay.is_some() || project.is_some() || profile.is_some() {
+            return Err(
+                "`--convert` transcodes a log on its own; drop the other run flags".to_string(),
+            );
+        }
+        if !output.to_ascii_lowercase().ends_with(".asc") {
+            return Err("`--convert` writes ASC; the output must end in .asc".to_string());
+        }
+        return Ok(Cli::Convert(input, output));
     }
     if replay.is_some() && project.is_some() {
         return Err("`--replay` and `--project` are mutually exclusive".to_string());
@@ -286,6 +307,30 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
         report.push_str(&format!("  stats csv  : {csv}\n"));
     }
     Ok(report)
+}
+
+/// Transcodes any readable log (ASC or BLF) into ASC: a pure stream
+/// transform with no bus, clock, or recorder involvement -- which is why
+/// the old "replay drops recording state" blocker does not apply. Frames
+/// cross with their own timestamps, classes, and payloads.
+pub fn convert_log(input: &str, output: &str) -> Result<String, String> {
+    let mut stream = crate::log::open_stream(std::path::Path::new(input))
+        .map_err(|e| format!("log load failed: {e}"))?;
+    let mut w =
+        crate::log::AscWriter::new(output).map_err(|e| format!("open output failed: {e}"))?;
+    let mut n: u64 = 0;
+    while let Some(t) = stream.peek_t() {
+        let Some(f) = stream.next_frame() else {
+            break;
+        };
+        let _ = t;
+        w.write(&f).map_err(|e| format!("write failed: {e}"))?;
+        n += 1;
+    }
+    w.finish().map_err(|e| format!("close failed: {e}"))?;
+    Ok(format!(
+        "converted {n} frame(s)\n  input : {input}\n  output: {output}"
+    ))
 }
 
 /// Compiles each node script and reports the outcome per file. A file that

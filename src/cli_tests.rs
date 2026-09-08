@@ -2,7 +2,7 @@
 //! real log on disk at high playback speed so the wall-clock loop finishes
 //! in milliseconds.
 
-use super::{Cli, CliOpts, parse_args, run};
+use super::{convert_log, Cli, CliOpts, parse_args, run};
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::log::AscWriter;
 
@@ -336,11 +336,77 @@ fn a_project_needs_a_duration_and_refuses_a_log() {
             ],
             "mutually exclusive",
         ),
+        (
+            &[
+                "--convert",
+                "a.blf",
+                "b.asc",
+                "--replay",
+                "a.asc",
+            ],
+            "on its own",
+        ),
+        (
+            &["--convert", "a.blf", "b.csv"],
+            "must end in .asc",
+        ),
     ];
     for (args, needle) in cases {
         let err = parse_args(&flag_set(args)).unwrap_err();
         assert!(err.contains(needle), "`{err}` should mention `{needle}`");
     }
+}
+
+/// `--convert` is a pure stream transform: every frame crosses with its
+/// timestamp, id, and payload -- the BLF→ASC story without touching the
+/// replay or recording semantics.
+#[test]
+fn convert_transcodes_a_log_to_asc_losslessly() {
+    let src = write_log("roxy_can_convert_in.asc", 7, 1_000);
+    let out = tmp("roxy_can_convert_out.asc");
+    let report = convert_log(src.to_string_lossy().as_ref(), &out).unwrap();
+    assert!(report.contains("7 frame(s)"), "{report}");
+
+    let text = std::fs::read_to_string(&out).unwrap();
+    let frames = crate::log::asc::parse_asc(&text);
+    assert_eq!(frames.len(), 7, "every frame crossed");
+    assert_eq!(frames[3].id, 0x100);
+    assert_eq!(frames[3].data[0], 3, "payloads are exact");
+
+    // Round-tripping again yields the same frames (the ASC header's
+    // wall-clock date line differs, but no frame data does). CanFrame
+    // has no PartialEq, so compare the identity tuple.
+    let again = tmp("roxy_can_convert_again.asc");
+    convert_log(&out, &again).unwrap();
+    let sig = |frames: &[CanFrame]| -> Vec<(u64, u8, u32, bool, u8)> {
+        frames
+            .iter()
+            .map(|f| (f.t_us, f.channel, f.id, f.extended, f.len))
+            .collect()
+    };
+    let first = crate::log::asc::parse_asc(&std::fs::read_to_string(&out).unwrap());
+    let second = crate::log::asc::parse_asc(&std::fs::read_to_string(&again).unwrap());
+    assert_eq!(sig(&first), sig(&second), "ASC->ASC is frame-stable");
+    let payload_stable = first
+        .iter()
+        .zip(second.iter())
+        .all(|(a, b)| a.data == b.data);
+    assert!(payload_stable, "payloads are stable too");
+    std::fs::remove_file(&src).ok();
+    std::fs::remove_file(&out).ok();
+    std::fs::remove_file(&again).ok();
+}
+
+/// A missing input names the failure instead of writing an empty file.
+#[test]
+fn convert_reports_a_broken_input() {
+    let out = tmp("roxy_can_convert_broken.asc");
+    let err = convert_log(tmp("roxy_can_convert_missing.blf").as_str(), &out).unwrap_err();
+    assert!(err.contains("log load failed"), "{err}");
+    assert!(
+        !std::path::Path::new(&out).exists(),
+        "no output file for a failed load"
+    );
 }
 
 /// The composite CI story end to end: a saved project whose script node
