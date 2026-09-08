@@ -1,5 +1,10 @@
-/target
+# 本地状态：程序自动写在启动目录，不属于任何工程，不入库
 roxy-can.ini
 roxy-can.json
 roxy-can.meta.json
 roxy-can.autosave.rxproj
+
+# 运行产物：录制未指定路径时默认落在工作目录（文件名带日期后缀）
+record_*.asc
+
+/target

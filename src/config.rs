@@ -411,8 +411,19 @@ impl Default for SpecCfg {
     }
 }
 
+/// The project-file format version [`Config`] writes. Reader logic keys
+/// migrations off this, not off the crate version: the format moves only
+/// when its meaning does. Projects older than the field load as version 0
+/// (the pre-role-model format) and read fine -- every field has its own
+/// default, per the missing-key convention.
+pub const SCHEMA_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize)]
 pub struct Config {
+    /// The format version the file was written with. Absent from the
+    /// earliest projects, which therefore read as 0.
+    #[serde(default)]
+    pub schema_version: u32,
     #[serde(default)]
     pub channels: Vec<ChannelCfg>,
     #[serde(default)]
@@ -555,6 +566,7 @@ impl Config {
         // Bus-side reads go through the snapshot, like every other
         // frontend read of the bus.
         Config {
+            schema_version: SCHEMA_VERSION,
             channels: app
                 .snap
                 .channels
@@ -1447,6 +1459,23 @@ mod tests {
             cfg.channels[0].fd_data_kbps,
             crate::app::Channel::DEFAULT_FD_DATA_KBPS
         );
+    }
+
+    /// The format version travels with the file: new files carry the
+    /// current version, files from before the field existed read as 0.
+    /// Both load -- the number is for future migrations to branch on.
+    #[test]
+    fn the_project_file_carries_its_schema_version() {
+        let app = App::headless();
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        assert!(
+            json.contains(r#""schema_version":1"#),
+            "new files are stamped with the current version"
+        );
+        let cfg: Config =
+            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc"}]}"#)
+                .unwrap();
+        assert_eq!(cfg.schema_version, 0, "pre-versioning files read as 0");
     }
 
     /// The two monitor thresholds are a project-level opinion about how
