@@ -16,6 +16,7 @@ mod load;
 mod log;
 mod node;
 mod observe;
+mod profile;
 mod project;
 mod recorder;
 mod script;

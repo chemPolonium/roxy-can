@@ -81,11 +81,32 @@ fn usage_errors_name_their_flag() {
             &["--check-script", "a.capl", "--replay", "a.asc"],
             "drop `--replay`",
         ),
+        (
+            &["--replay", "a.asc", "--profile", "ci"],
+            "--profile` overlays a `--project`",
+        ),
     ];
     for (args, needle) in cases {
         let err = parse_args(&flag_set(args)).unwrap_err();
         assert!(err.contains(needle), "`{err}` should mention `{needle}`");
     }
+}
+
+/// The profile rides on a project: accepted with one, stored for run().
+#[test]
+fn the_profile_flag_travels_with_the_project() {
+    let cli = parse_args(&flag_set(&[
+        "--project",
+        "net.rxproj",
+        "--duration",
+        "5",
+        "--profile",
+        "ci",
+    ]))
+    .unwrap();
+    let o = opts_of(&cli);
+    assert_eq!(o.profile.as_deref(), Some("ci"));
+    assert_eq!(o.project.as_deref(), Some("net.rxproj"));
 }
 
 #[test]
@@ -174,6 +195,7 @@ fn a_cli_replay_runs_the_log_and_exports() {
     let report = run(&CliOpts {
         replay: Some(log.to_string_lossy().into_owned()),
         project: None,
+        profile: None,
         speed: 50.0, // a 1 s log finishes in ~20 ms of wall clock
         duration_s: None,
         stats_csv: Some(stats.clone()),
@@ -202,6 +224,7 @@ fn the_duration_flag_stops_before_the_log_ends() {
     let report = run(&CliOpts {
         replay: Some(log.to_string_lossy().into_owned()),
         project: None,
+        profile: None,
         speed: 1.0,
         duration_s: Some(0.05),
         stats_csv: None,
@@ -230,6 +253,7 @@ fn a_missing_log_reports_instead_of_running() {
     let err = run(&CliOpts {
         replay: Some(tmp("roxy_can_cli_no_such_log.asc")),
         project: None,
+        profile: None,
         speed: 1.0,
         duration_s: None,
         stats_csv: None,
@@ -268,6 +292,7 @@ fn a_project_simulates_headless_until_the_duration_stops_it() {
     let report = run(&CliOpts {
         replay: None,
         project: Some(project.to_string_lossy().into_owned()),
+        profile: None,
         speed: 1.0,
         duration_s: Some(0.2),
         stats_csv: Some(stats.clone()),
@@ -341,6 +366,7 @@ fn a_project_node_script_drives_a_headless_simulation() {
     let report = run(&CliOpts {
         replay: None,
         project: Some(project.to_string_lossy().into_owned()),
+        profile: None,
         speed: 1.0,
         duration_s: Some(0.3),
         stats_csv: None,

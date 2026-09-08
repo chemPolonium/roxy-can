@@ -15,5 +15,9 @@ chrono = "0.4"
 rfd = "0.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Hand-edited profiles (profiles/*.toml) parse through toml_edit, which
+# is already in the dependency tree; the `toml` wrapper is not.
+# Parse-only: the profile reader never writes TOML.
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 memmap2 = "0.9"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

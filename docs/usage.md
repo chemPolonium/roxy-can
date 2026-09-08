@@ -14,6 +14,16 @@ roxy-can -h                               完整帮助
 
 - **`--replay`**：按日志时间轴回放；`--speed <n>` 倍速（默认 1.0），`--duration <s>` 到时即停（默认跑到日志末尾），`--stats <csv>` 结束后导出消息统计。回放自动静音同 ID 的发生器条目，不会两路混流。
 - **`--project`**：无头仿真保存的工程——生成器与脚本节点按工程里保存的**激活状态**上线（与 GUI 打开工程不发车的安全语义不同：CLI 是显式的"跑一次"）。必须给 `--duration`，否则仿真没有终点。
+- **`--profile <名>`**：叠加 `<工程目录>/profiles/<名>.toml` 里的**角色覆盖**，需配合 `--project`——同一套工程在 simulation / bench / CI 间零修改切换。角色词汇与工程一致（`Simulated` / `Monitor` / `Absent`）；Profile 覆盖优先于工程里保存的条目激活状态；写了不存在的总线 / 节点 / 角色词则**整份拒绝**（半套覆盖比没有更难排查），运行中止在任何发车之前。格式：
+  ```toml
+  # profiles/bench.toml —— 被测件是真硬件，其余全模拟
+  description = "bench rig"
+
+  [[node]]
+  bus = "Powertrain"
+  node = "EngineECU"
+  role = "Simulated"
+  ```
 - **`--stats`**：结束时写出消息统计 CSV（bus, id, name, count, 周期 Min/Avg/Max, 长度, Flags）。
 - **`--check-script`**：编译 `.capl` 节点脚本，全部通过退出码 0；任一失败退出码非 0 并列出 `line N:M` 错误。适合放进 CI 或保存前钩子。
 - release 版无控制台窗口：从终端启动时会自动认领父控制台输出报告。

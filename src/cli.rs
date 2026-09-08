@@ -24,6 +24,9 @@ pub struct CliOpts {
     pub replay: Option<String>,
     /// The project to simulate, when `--project` was given.
     pub project: Option<String>,
+    /// Profile name under the project's `profiles/` directory, when
+    /// `--profile` was given: role overrides layered on the project.
+    pub profile: Option<String>,
     pub speed: f64,
     /// Wall-clock seconds to run before stopping; the whole log when None
     /// (replay only -- a project simulation must be bounded).
@@ -46,6 +49,9 @@ run options
   --replay <path>    log to replay (.asc or .blf)
   --project <path>   project (.rxproj) to simulate: generators and script
                      nodes run on the virtual bus (needs --duration)
+  --profile <name>   overlay profiles/<name>.toml from the project
+                     directory onto the project's node roles (needs
+                     --project); every unknown bus/node/role is an error
   --speed <n>        playback rate, 1.0 = real time (replay only, default 1.0)
   --duration <s>     stop after this many wall-clock seconds
                      (replay default: run to the end of the log;
@@ -63,6 +69,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     }
     let mut replay = None;
     let mut project = None;
+    let mut profile = None;
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -80,6 +87,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         match args[i].as_str() {
             "--replay" => replay = Some(value(args, &mut i, "--replay")?),
             "--project" => project = Some(value(args, &mut i, "--project")?),
+            "--profile" => profile = Some(value(args, &mut i, "--profile")?),
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--speed" => {
                 let raw = value(args, &mut i, "--speed")?;
@@ -117,6 +125,9 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     if replay.is_some() && project.is_some() {
         return Err("`--replay` and `--project` are mutually exclusive".to_string());
     }
+    if profile.is_some() && project.is_none() {
+        return Err("`--profile` overlays a `--project`; give both".to_string());
+    }
     if project.is_some() && duration_s.is_none() {
         return Err(
             "`--project` simulates until told to stop; `--duration` is required".to_string(),
@@ -128,6 +139,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     Ok(Cli::Run(CliOpts {
         replay,
         project,
+        profile,
         speed,
         duration_s,
         stats_csv,
@@ -142,6 +154,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
 pub fn run(opts: &CliOpts) -> Result<String, String> {
     let mut app = App::headless();
     let replaying = opts.project.is_none();
+    let mut profile_summary: Option<String> = None;
     if let Some(project) = &opts.project {
         // A project simulation: generators and script nodes run on the
         // virtual bus, exactly as the GUI would drive them.
@@ -166,6 +179,18 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
                     on: true,
                 });
             }
+        }
+        // The profile overlays role declarations on the freshly opened
+        // project and WINS over the saved entry states -- it is the more
+        // specific, later declaration. A refused profile aborts the run
+        // before any traffic.
+        if let Some(name) = &opts.profile {
+            let dir = std::path::Path::new(project)
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            let summary = crate::profile::apply_profile(&mut app, dir, name)?;
+            app.settle();
+            profile_summary = Some(summary);
         }
     } else {
         let log = opts.replay.as_deref().expect("validated");
@@ -250,6 +275,9 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
             app.snap.sim_t_us as f64 / 1e6,
         )
     };
+    if let Some(summary) = &profile_summary {
+        report.push_str(&format!("  profile    : {summary}\n"));
+    }
     report.push_str(&format!(
         "  wall time  : {:.3} s\n",
         t0.elapsed().as_secs_f64()
