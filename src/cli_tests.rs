@@ -384,3 +384,97 @@ fn a_project_node_script_drives_a_headless_simulation() {
     );
     std::fs::remove_file(&project).ok();
 }
+
+/// `--profile` end to end: a project saved fully muted, a profile that
+/// simulates EngineECU, and the overlay's traffic reaching the run. The
+/// report names the profile; the project alone would have produced
+/// nothing.
+#[test]
+fn a_profile_overlay_drives_a_muted_project() {
+    use std::fs;
+
+    let dir = std::env::temp_dir().join("roxy_can_cli_prof");
+    fs::create_dir_all(dir.join("profiles")).unwrap();
+    let project = dir.join("net.rxproj");
+
+    // The fixture project: nothing active, nothing simulated.
+    let app = crate::app::App::headless();
+    let proj = crate::config::ProjectFile {
+        version: 1,
+        layout: String::new(),
+        project: None,
+        config: crate::config::Config::from_app(&app, None),
+    };
+    fs::write(
+        &project,
+        serde_json::to_string_pretty(&proj).expect("project serializes"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("profiles").join("ci.toml"),
+        "[[node]]\nbus = \"CAN1\"\nnode = \"EngineECU\"\nrole = \"Simulated\"\n",
+    )
+    .unwrap();
+
+    let report = run(&CliOpts {
+        replay: None,
+        project: Some(project.to_string_lossy().into_owned()),
+        profile: Some("ci".to_string()),
+        speed: 1.0,
+        duration_s: Some(0.2),
+        stats_csv: None,
+    })
+    .unwrap();
+    assert!(report.contains("profile    : profile `ci` applied"), "{report}");
+    let frames: u64 = report
+        .lines()
+        .find_map(|l| l.strip_prefix("  frames     : "))
+        .expect("the report counts frames")
+        .parse()
+        .unwrap();
+    assert!(
+        frames >= 3,
+        "the profile's Simulated node must drive the muted project: {report}"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A profile that names a node the DBC never declared aborts the run
+/// before any traffic -- loud failure is the profile contract.
+#[test]
+fn a_bad_profile_aborts_the_run_before_traffic() {
+    use std::fs;
+
+    let dir = std::env::temp_dir().join("roxy_can_cli_prof_bad");
+    fs::create_dir_all(dir.join("profiles")).unwrap();
+    let project = dir.join("net.rxproj");
+    let app = crate::app::App::headless();
+    let proj = crate::config::ProjectFile {
+        version: 1,
+        layout: String::new(),
+        project: None,
+        config: crate::config::Config::from_app(&app, None),
+    };
+    fs::write(
+        &project,
+        serde_json::to_string_pretty(&proj).expect("project serializes"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("profiles").join("typo.toml"),
+        "[[node]]\nbus = \"CAN1\"\nnode = \"EngineEcu\"\nrole = \"Simulated\"\n",
+    )
+    .unwrap();
+
+    let err = run(&CliOpts {
+        replay: None,
+        project: Some(project.to_string_lossy().into_owned()),
+        profile: Some("typo".to_string()),
+        speed: 1.0,
+        duration_s: Some(0.2),
+        stats_csv: None,
+    })
+    .unwrap_err();
+    assert!(err.contains("EngineEcu"), "{err}");
+    fs::remove_dir_all(&dir).ok();
+}
