@@ -1,0 +1,7 @@
+# bench 台架：发动机控制器是真硬件，其余全部由本工具模拟。
+description = "bench rig"
+
+[[node]]
+bus = "Powertrain"
+node = "EngineECU"
+role = "Simulated"

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "schema_version": 1,
+  "config": {
+    "schema_version": 1,
+    "channels": [
+      {
+        "name": "Powertrain",
+        "dbc_path": "../../assets/sample.dbc"
+      }
+    ],
+    "bus_counter": 1
+  }
+}

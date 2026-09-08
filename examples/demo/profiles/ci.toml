@@ -1,0 +1,9 @@
+# CI 冒烟：让 EngineECU 按库声明发车，验证整条管线通畅。
+# 想要完全静默的跑法，把下面的角色改成 "Absent" 或整段删掉
+# （未声明的节点一律离线）。
+description = "CI smoke: one ECU transmits"
+
+[[node]]
+bus = "Powertrain"
+node = "EngineECU"
+role = "Simulated"
