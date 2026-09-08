@@ -127,10 +127,9 @@ fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView) {
             .set_title("选择回放日志")
             .add_filter("日志文件", &["asc", "blf"])
             .pick_file()
+        && let Some(d) = app.block_drafts.get_mut(&id)
     {
-        if let Some(d) = app.block_drafts.get_mut(&id) {
-            d.path = p.to_string_lossy().into_owned();
-        }
+        d.path = p.to_string_lossy().into_owned();
     }
 
     // Filter row: DBC node combo (None = every sender) plus an id list.

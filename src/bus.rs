@@ -49,6 +49,12 @@ pub(crate) const PRE_BUFFER_FRAMES: usize = 256;
 /// `StopRecording` edge (the post-trigger context).
 pub(crate) const POST_ROLL_FRAMES: u32 = 32;
 
+/// How many distinct derived-signal streams (`emit_value` names) may
+/// exist at once. Beyond it, emissions under further NEW names are
+/// ignored for the rest of the session -- a guard against a script
+/// minting names in a loop, not a real limit.
+pub(crate) const MAX_EMITTED_STREAMS: usize = 256;
+
 /// One DBC node on a bus with its declared role: the role card in the
 /// Nodes window. Derived state — switching goes through `SetNodeRole`,
 /// and the card itself is rebuilt from the database and `node_roles` on
@@ -1252,6 +1258,13 @@ impl BusCore {
             name.to_string(),
         );
         if !self.emitted_streams.iter().any(|(k, _)| k == &key) {
+            // A script computing names in a loop would otherwise balloon
+            // the registry, the selection tree, and the subscription map
+            // with one-shot streams. The cap is generous for real derived
+            // signals and keeps a runaway script cheap.
+            if self.emitted_streams.len() >= MAX_EMITTED_STREAMS {
+                return;
+            }
             self.emitted_streams.push((key.clone(), node_name.to_string()));
             self.nodes_dirty = true;
         }
@@ -2010,6 +2023,9 @@ impl BusCore {
     /// Rewrites one block's declaration. An enabled block reloads its
     /// queue against the current database, so the edit lands immediately;
     /// a disabled one just carries the new text until it is enabled.
+    // The signature mirrors the `SetReplayBlock` command one-to-one; a
+    // payload struct would just relocate the field list.
+    #[allow(clippy::too_many_arguments)]
     fn set_replay_block(
         &mut self,
         id: u64,
