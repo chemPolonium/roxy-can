@@ -254,6 +254,16 @@ impl App {
         self.send(crate::bus::BusCommand::SetTraceLimit { frames });
     }
 
+    /// Sets the trigger-recording context sizes. Any subset may be set;
+    /// the core clamps all three.
+    pub fn set_run_limits(&mut self, pre_frames: usize, post_frames: u32, marker_cap: usize) {
+        self.send(crate::bus::BusCommand::SetRunLimits {
+            pre_frames: Some(pre_frames),
+            post_frames: Some(post_frames),
+            marker_cap: Some(marker_cap),
+        });
+    }
+
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

@@ -89,6 +89,60 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.is_item_hovered() {
         ui.tooltip_text("重置出现类条件的锁存（ID 出现 / 错误帧）：下一个对应事件再次触发");
     }
+    // Trigger-recording context: pre-trigger frames, post-roll frames,
+    // and the marker cap. Each accepted edit is its own command, like the
+    // bitrate inputs in the Buses window.
+    ui.same_line();
+    ui.align_text_to_frame_padding();
+    ui.text_disabled("预触发");
+    ui.same_line();
+    ui.set_next_item_width(64.0);
+    let mut pre = app.limits.pre_frames as i32;
+    if ui
+        .input_int("##prelim", &mut pre)
+        .step(64)
+        .build()
+    {
+        app.limits.pre_frames = pre.max(0) as usize;
+        app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("触发启动的录制：文件以事件前这么多帧开头");
+    }
+    ui.same_line();
+    ui.align_text_to_frame_padding();
+    ui.text_disabled("post");
+    ui.same_line();
+    ui.set_next_item_width(64.0);
+    let mut post = app.limits.post_frames as i32;
+    if ui
+        .input_int("##postlim", &mut post)
+        .step(8)
+        .build()
+    {
+        app.limits.post_frames = post.max(0) as u32;
+        app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("触发停止的录制：边沿后再滚这么多帧才闭文件");
+    }
+    ui.same_line();
+    ui.align_text_to_frame_padding();
+    ui.text_disabled("标记上限");
+    ui.same_line();
+    ui.set_next_item_width(64.0);
+    let mut cap = app.limits.marker_cap as i32;
+    if ui
+        .input_int("##marklim", &mut cap)
+        .step(16)
+        .build()
+    {
+        app.limits.marker_cap = cap.max(8) as usize;
+        app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Graphics 标记竖线最多保留这么多条");
+    }
     ui.separator();
 
     let flags = TableFlags::BORDERS_INNER

@@ -443,12 +443,51 @@ impl Default for SpecCfg {
 /// default, per the missing-key convention.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Trigger-recording context sizes: pre-trigger frames kept for
+/// trigger-started recordings, post-roll frames after a trigger-stopped
+/// edge, and the marker list cap.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct LimitsCfg {
+    #[serde(default = "pre_frames_default")]
+    pub pre_frames: usize,
+    #[serde(default = "post_frames_default")]
+    pub post_frames: u32,
+    #[serde(default = "marker_cap_default")]
+    pub marker_cap: usize,
+}
+
+impl Default for LimitsCfg {
+    fn default() -> Self {
+        Self {
+            pre_frames: crate::bus::PRE_BUFFER_FRAMES,
+            post_frames: crate::bus::POST_ROLL_FRAMES,
+            marker_cap: crate::bus::MARKER_CAP,
+        }
+    }
+}
+
+fn pre_frames_default() -> usize {
+    crate::bus::PRE_BUFFER_FRAMES
+}
+
+fn post_frames_default() -> u32 {
+    crate::bus::POST_ROLL_FRAMES
+}
+
+fn marker_cap_default() -> usize {
+    crate::bus::MARKER_CAP
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     /// The format version the file was written with. Absent from the
     /// earliest projects, which therefore read as 0.
     #[serde(default)]
     pub schema_version: u32,
+    /// Trigger-recording context sizes (pre-trigger, post-roll, marker
+    /// cap). Absent fields load at the defaults the constants carried.
+    #[serde(default)]
+    pub limits: LimitsCfg,
     #[serde(default)]
     pub channels: Vec<ChannelCfg>,
     #[serde(default)]
@@ -649,6 +688,7 @@ impl Config {
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
             trace_limit: app.trace_limit,
+            limits: app.limits,
             trace_windows: app
                 .trace_windows
                 .iter()
@@ -1108,6 +1148,12 @@ impl Config {
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
         app.set_trace_limit(self.trace_limit);
+        app.limits = self.limits;
+        app.send(crate::bus::BusCommand::SetRunLimits {
+            pre_frames: Some(self.limits.pre_frames),
+            post_frames: Some(self.limits.post_frames),
+            marker_cap: Some(self.limits.marker_cap),
+        });
         // Nodes cross as one wholesale command: the core mints fresh ids
         // and (when a measurement is running) starts every enabled node.
         // If measuring, the node source recompiles now -- a restore into a
@@ -1545,6 +1591,25 @@ mod tests {
             plain.contains(&format!(r#""trace_limit":{}"#, crate::app::TRACE_LIMIT)),
             "the default capacity is written too"
         );
+    }
+
+    /// Trigger-recording context sizes are project opinions too: they
+    /// round-trip, and the defaults are what the constants carried.
+    #[test]
+    fn run_limits_round_trip() {
+        let mut app = App::headless();
+        assert_eq!(app.limits.pre_frames, 256, "the constant was the default");
+        app.limits.pre_frames = 1_024;
+        app.limits.post_frames = 128;
+        app.limits.marker_cap = 2_048;
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.limits.pre_frames, 1_024);
+        assert_eq!(restored.limits.post_frames, 128);
+        assert_eq!(restored.limits.marker_cap, 2_048);
     }
 
     /// The format version travels with the file: new files carry the

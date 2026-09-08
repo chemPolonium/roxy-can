@@ -260,6 +260,13 @@ pub enum BusCommand {
     SetTraceLimit {
         frames: usize,
     },
+    /// Trigger-recording context, clamped core-side: pre-trigger frames,
+    /// post-roll frames, and the marker list cap. Any subset may be set.
+    SetRunLimits {
+        pre_frames: Option<usize>,
+        post_frames: Option<u32>,
+        marker_cap: Option<usize>,
+    },
     /// Add a script node bound to one channel; it starts with the next
     /// measurement (or immediately, if one is running).
     AddNode {
@@ -760,6 +767,14 @@ pub struct BusCore {
     /// [`TRACE_LIMIT`]; user-settable (project-persisted) because the
     /// right capacity depends on bus load and how long a capture runs.
     pub(crate) trace_limit: usize,
+    /// Trigger-recording context: pre-trigger frames kept for
+    /// trigger-started recordings, post-roll frames after a
+    /// trigger-stopped edge, and the marker list cap. Defaults
+    /// [`PRE_BUFFER_FRAMES`] / [`POST_ROLL_FRAMES`] / [`MARKER_CAP`];
+    /// all three are project-persisted settings now.
+    pub(crate) pre_frames: usize,
+    pub(crate) post_frames: u32,
+    pub(crate) marker_cap: usize,
 }
 
 impl BusCore {
@@ -810,6 +825,9 @@ impl BusCore {
             block_counter: 0,
             emitted_streams: Vec::new(),
             trace_limit: TRACE_LIMIT,
+            pre_frames: PRE_BUFFER_FRAMES,
+            post_frames: POST_ROLL_FRAMES,
+            marker_cap: MARKER_CAP,
         }
     }
 
@@ -1049,6 +1067,21 @@ impl BusCore {
             BusCommand::SetRecordFilter { ids } => self.recorder.ids = ids,
             BusCommand::SetTraceLimit { frames } => {
                 self.trace_limit = frames.clamp(1_000, 5_000_000)
+            }
+            BusCommand::SetRunLimits {
+                pre_frames,
+                post_frames,
+                marker_cap,
+            } => {
+                if let Some(n) = pre_frames {
+                    self.pre_frames = n.clamp(0, 32_768);
+                }
+                if let Some(n) = post_frames {
+                    self.post_frames = n.clamp(0, 32_768);
+                }
+                if let Some(n) = marker_cap {
+                    self.marker_cap = n.clamp(8, 65_536);
+                }
             }
             BusCommand::SetEntryConfig {
                 ch,
@@ -2574,7 +2607,7 @@ impl BusCore {
                 // Pre-trigger memory: a trigger that starts a recording drains
                 // this ring into the file first, so the event keeps its past.
                 self.pre_buffer.push_back(f);
-                if self.pre_buffer.len() > PRE_BUFFER_FRAMES {
+                if self.pre_buffer.len() > self.pre_frames {
                     self.pre_buffer.pop_front();
                 }
                 // Post-roll: a trigger-initiated stop keeps the file open for
@@ -2998,7 +3031,7 @@ impl BusCore {
                         // Roll on: the file stays open for the post-roll,
                         // then the step loop closes it once the countdown
                         // is spent.
-                        self.post_roll = Some(POST_ROLL_FRAMES);
+                        self.post_roll = Some(self.post_frames);
                         *status = "trigger stopping after post-roll".to_string();
                     }
                 }
@@ -3007,7 +3040,7 @@ impl BusCore {
                 }
                 TriggerAction::InsertMarker => {
                     self.markers.push(at_us);
-                    if self.markers.len() > MARKER_CAP {
+                    if self.markers.len() > self.marker_cap {
                         self.markers.remove(0);
                     }
                 }

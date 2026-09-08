@@ -239,6 +239,9 @@ pub struct App {
     /// The trace ring's retention, mirrored for the UI and the project
     /// file; the core holds the authoritative clamped value.
     pub trace_limit: usize,
+    /// Trigger-recording context sizes, mirrored for the UI and the
+    /// project file like `trace_limit`.
+    pub limits: crate::config::LimitsCfg,
     pub last_tick_us: u64,
     /// How often number readouts (Data values, Statistics, Messages, the
     /// status bar) re-render, in Hz; 0 follows the frame rate. Curves and
@@ -416,6 +419,7 @@ impl App {
             record_path_buf: String::new(),
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
+            limits: Default::default(),
             last_tick_us: 0,
             text_rate_hz: 10,
             text_fresh: true,
