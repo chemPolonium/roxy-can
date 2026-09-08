@@ -236,6 +236,9 @@ pub struct App {
     /// The record filter draft: hex id list gating what lands in the
     /// recorded ASC. Session state, like the record path stem.
     pub record_filter_text: String,
+    /// The trace ring's retention, mirrored for the UI and the project
+    /// file; the core holds the authoritative clamped value.
+    pub trace_limit: usize,
     pub last_tick_us: u64,
     /// How often number readouts (Data values, Statistics, Messages, the
     /// status bar) re-render, in Hz; 0 follows the frame rate. Curves and
@@ -412,6 +415,7 @@ impl App {
             // recorder gets a copy when recording arms.
             record_path_buf: String::new(),
             record_filter_text: String::new(),
+            trace_limit: TRACE_LIMIT,
             last_tick_us: 0,
             text_rate_hz: 10,
             text_fresh: true,

@@ -86,6 +86,10 @@ fn one_default() -> f64 {
 fn ten_default() -> u32 {
     10
 }
+
+fn trace_limit_default() -> usize {
+    crate::app::TRACE_LIMIT
+}
 fn sixty_default() -> f64 {
     60.0
 }
@@ -477,6 +481,10 @@ pub struct Config {
     /// frame rate.
     #[serde(default = "ten_default")]
     pub text_rate_hz: u32,
+    /// How many frames the trace ring retains. Absent from older
+    /// projects, which load with the default.
+    #[serde(default = "trace_limit_default")]
+    pub trace_limit: usize,
     #[serde(default)]
     pub trace_windows: Vec<TraceCfg>,
     #[serde(default)]
@@ -640,6 +648,7 @@ impl Config {
             show_blocks: app.show_blocks,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
+            trace_limit: app.trace_limit,
             trace_windows: app
                 .trace_windows
                 .iter()
@@ -1097,6 +1106,8 @@ impl Config {
         app.show_entities = self.show_entities;
         app.show_blocks = self.show_blocks;
         app.text_rate_hz = self.text_rate_hz;
+        app.trace_limit = self.trace_limit;
+        app.set_trace_limit(self.trace_limit);
         // Nodes cross as one wholesale command: the core mints fresh ids
         // and (when a measurement is running) starts every enabled node.
         // If measuring, the node source recompiles now -- a restore into a
@@ -1512,6 +1523,27 @@ mod tests {
         assert_eq!(
             cfg.channels[0].fd_data_kbps,
             crate::app::Channel::DEFAULT_FD_DATA_KBPS
+        );
+    }
+
+    /// The trace ring's retention is a project opinion about how much
+    /// history to keep, so it survives a save.
+    #[test]
+    fn the_trace_capacity_round_trips() {
+        let mut app = App::headless();
+        app.trace_limit = 500_000;
+        app.set_trace_limit(500_000);
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.trace_limit, 500_000);
+        let default = App::headless();
+        let plain = serde_json::to_string(&Config::from_app(&default, None)).unwrap();
+        assert!(
+            plain.contains(&format!(r#""trace_limit":{}"#, crate::app::TRACE_LIMIT)),
+            "the default capacity is written too"
         );
     }
 

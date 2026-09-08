@@ -249,6 +249,11 @@ impl App {
         self.send(crate::bus::BusCommand::SetRecordFilter { ids });
     }
 
+    /// Sets the trace ring's retention in frames.
+    pub fn set_trace_limit(&mut self, frames: usize) {
+        self.send(crate::bus::BusCommand::SetTraceLimit { frames });
+    }
+
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

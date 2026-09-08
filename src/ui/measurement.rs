@@ -54,6 +54,24 @@ fn content(app: &mut App, ui: &Ui) {
     if ui.small_button("+ State Tracker") {
         app.new_state_window();
     }
+    ui.same_line();
+    // The trace ring's retention is a global capacity, not a window
+    // property: one combo here, project-persisted.
+    ui.set_next_item_width(90.0);
+    const TRACE_CAPS: [usize; 5] = [50_000, 200_000, 500_000, 1_000_000, 2_000_000];
+    const TRACE_LABELS: [&str; 5] = ["50k", "200k", "500k", "1M", "2M"];
+    let mut cap_idx = TRACE_CAPS
+        .iter()
+        .position(|&c| c == app.trace_limit)
+        .unwrap_or(0);
+    if ui.combo_simple_string("##tracecap", &mut cap_idx, &TRACE_LABELS) {
+        let cap = TRACE_CAPS[cap_idx];
+        app.trace_limit = cap;
+        app.set_trace_limit(cap);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Trace 容量（帧数）：超出后最旧帧被裁掉，Trace 窗口会提示");
+    }
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.

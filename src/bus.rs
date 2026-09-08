@@ -255,6 +255,11 @@ pub enum BusCommand {
     SetRecordFilter {
         ids: Vec<(u32, bool)>,
     },
+    /// The trace ring's retention in frames, clamped core-side. Takes
+    /// effect on the next ingest; already-dropped frames stay gone.
+    SetTraceLimit {
+        frames: usize,
+    },
     /// Add a script node bound to one channel; it starts with the next
     /// measurement (or immediately, if one is running).
     AddNode {
@@ -751,6 +756,10 @@ pub struct BusCore {
     /// Derived-signal streams a node has opened with `emit_value`:
     /// synthetic key plus the owning node's name, for the selection tree.
     pub(crate) emitted_streams: Vec<(SigKey, String)>,
+    /// How many frames the trace ring retains. Default
+    /// [`TRACE_LIMIT`]; user-settable (project-persisted) because the
+    /// right capacity depends on bus load and how long a capture runs.
+    pub(crate) trace_limit: usize,
 }
 
 impl BusCore {
@@ -800,6 +809,7 @@ impl BusCore {
             replay_blocks: Vec::new(),
             block_counter: 0,
             emitted_streams: Vec::new(),
+            trace_limit: TRACE_LIMIT,
         }
     }
 
@@ -1037,6 +1047,9 @@ impl BusCore {
             BusCommand::SetBusCounter(n) => self.bus_counter = n,
             BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
             BusCommand::SetRecordFilter { ids } => self.recorder.ids = ids,
+            BusCommand::SetTraceLimit { frames } => {
+                self.trace_limit = frames.clamp(1_000, 5_000_000)
+            }
             BusCommand::SetEntryConfig {
                 ch,
                 id,
@@ -2732,7 +2745,7 @@ impl BusCore {
             // Error frames carry no identifier and no payload; they are
             // intentionally kept out of per-message aggregation.
             self.trace.push(f);
-            self.trace.enforce_limit(TRACE_LIMIT);
+            self.trace.enforce_limit(self.trace_limit);
             return;
         }
         let agg = self
@@ -2793,7 +2806,7 @@ impl BusCore {
             }
         }
         self.trace.push(f);
-        self.trace.enforce_limit(TRACE_LIMIT);
+        self.trace.enforce_limit(self.trace_limit);
     }
 
     /// The frames a frame carries for signals this run subscribes to, looked
