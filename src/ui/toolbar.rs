@@ -433,6 +433,22 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.same_line();
                 ui.align_text_to_frame_padding();
                 ui.text("_<date>.asc");
+                // The id filter commits on edit end: only matching frames
+                // land in the file; trace and statistics stay whole-bus.
+                ui.same_line();
+                ui.set_next_item_width(110.0);
+                if ui
+                    .input_text("##recordfilter", &mut app.record_filter_text)
+                    .hint("id filter")
+                    .build()
+                {
+                    app.set_record_filter(crate::ui::parse_id_filter(
+                        &app.record_filter_text,
+                    ));
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("只录制这些 id（如 100, 3F4x；留空 = 全部）");
+                }
             }
             if matches!(app.snap.run_mode, Mode::Replay) {
                 vsep(ui);

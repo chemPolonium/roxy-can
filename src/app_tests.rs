@@ -58,6 +58,51 @@ fn record_survives_start_and_writes_frames() {
     }
 }
 
+/// The record filter gates only the FILE: a whitelist of ids keeps the
+/// recorded ASC to those frames, while trace and aggregates still see
+/// the whole bus.
+#[test]
+fn the_record_filter_limits_the_file_but_not_the_bus() {
+    let mut app = App::headless();
+    let path = std::env::temp_dir().join("roxy_can_record_filtered.asc");
+    app.record_path_buf = path.to_string_lossy().to_string();
+    app.set_record_filter(vec![(0x100, false)]);
+    app.toggle_record();
+    // motbus on CAN2: activate one entry whose id is NOT in the whitelist.
+    app.add_tx(1, 0x999);
+    for tx in &mut app.tx_list {
+        tx.active = true;
+        tx.cycle_us = 10_000;
+    }
+    app.start_virtual();
+    for _ in 0..12 {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    app.stop();
+    let actual = app.recorder.last_record.clone();
+    let content = std::fs::read_to_string(&actual).unwrap();
+    let frames = crate::log::asc::parse_asc(&content);
+    assert!(
+        frames.len() >= 5,
+        "the whitelisted id flowed: got {} frame(s)",
+        frames.len()
+    );
+    assert!(
+        frames.iter().all(|f| f.id == 0x100),
+        "nothing outside the whitelist landed in the file"
+    );
+    // The bus itself saw the filtered-out traffic: aggregates count it.
+    let stray = app
+        .snap
+        .aggs
+        .iter()
+        .find(|a| a.channel == 1 && a.id == 0x999)
+        .expect("the filtered-out id still reached the bus");
+    assert!(stray.count >= 1, "aggregates must not be filtered");
+    std::fs::remove_file(&actual).ok();
+}
+
 #[test]
 fn replay_after_recorded_simulation_creates_no_second_file() {
     let mut app = App::headless();

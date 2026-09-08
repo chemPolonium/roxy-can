@@ -46,20 +46,9 @@ fn drafts_of(app: &mut App, id: u64) -> crate::ui::BlockDraft {
     app.block_drafts.entry(id).or_default().clone()
 }
 
-/// Parses the id filter text: comma-separated hex ids, an `x` suffix
-/// marks an extended frame. Empty text = no id filter.
+/// Parses the id filter text via the shared helper.
 fn parse_ids(text: &str) -> Vec<(u32, bool)> {
-    text.split([',', ' ', ';'])
-        .filter(|s| !s.is_empty())
-        .map(|raw| {
-            let s = raw.trim();
-            match s.strip_suffix(['x', 'X']) {
-                Some(hex) => (u32::from_str_radix(hex, 16).unwrap_or(0), true),
-                None => (u32::from_str_radix(s, 16).unwrap_or(0), false),
-            }
-        })
-        .filter(|&(id, _)| id != 0)
-        .collect()
+    crate::ui::parse_id_filter(text)
 }
 
 fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView) {

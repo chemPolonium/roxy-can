@@ -248,6 +248,13 @@ pub enum BusCommand {
     /// The dated ASC file the recorder derives its name from. Only read
     /// when recording actually arms.
     SetRecordPath(String),
+    /// Id whitelist for recorded files: only these `(id, extended)` frames
+    /// land in the ASC (empty list = record everything). Gates the file,
+    /// the pre-trigger context, and post-roll counting; never the trace,
+    /// aggregates, or the spec.
+    SetRecordFilter {
+        ids: Vec<(u32, bool)>,
+    },
     /// Add a script node bound to one channel; it starts with the next
     /// measurement (or immediately, if one is running).
     AddNode {
@@ -1029,6 +1036,7 @@ impl BusCore {
             BusCommand::LoadDbc { ch, paths } => self.load_dbc(ch, paths, status),
             BusCommand::SetBusCounter(n) => self.bus_counter = n,
             BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
+            BusCommand::SetRecordFilter { ids } => self.recorder.ids = ids,
             BusCommand::SetEntryConfig {
                 ch,
                 id,
@@ -2544,23 +2552,29 @@ impl BusCore {
             // so a trigger that starts a recording captures the very
             // frame that fired it.
             self.eval_triggers(&f, status);
-            self.recorder.write(&f);
-            // Pre-trigger memory: a trigger that starts a recording drains
-            // this ring into the file first, so the event keeps its past.
-            self.pre_buffer.push_back(f);
-            if self.pre_buffer.len() > PRE_BUFFER_FRAMES {
-                self.pre_buffer.pop_front();
-            }
-            // Post-roll: a trigger-initiated stop keeps the file open for
-            // this many frames before the recorder actually closes.
-            if let Some(left) = self.post_roll.as_mut() {
-                if *left <= 1 {
-                    self.post_roll = None;
-                    self.recorder.close();
-                    self.recorder.recording = false;
-                    *status = "trigger post-roll finished".to_string();
-                } else {
-                    *left -= 1;
+            // The record filter gates only what lands in the file: direct
+            // writes, the pre-trigger context, and post-roll counting.
+            // Trace, aggregates, and the spec always see the whole bus.
+            let record_this = self.recorder.admits(&f);
+            if record_this {
+                self.recorder.write(&f);
+                // Pre-trigger memory: a trigger that starts a recording drains
+                // this ring into the file first, so the event keeps its past.
+                self.pre_buffer.push_back(f);
+                if self.pre_buffer.len() > PRE_BUFFER_FRAMES {
+                    self.pre_buffer.pop_front();
+                }
+                // Post-roll: a trigger-initiated stop keeps the file open for
+                // this many frames before the recorder actually closes.
+                if let Some(left) = self.post_roll.as_mut() {
+                    if *left <= 1 {
+                        self.post_roll = None;
+                        self.recorder.close();
+                        self.recorder.recording = false;
+                        *status = "trigger post-roll finished".to_string();
+                    } else {
+                        *left -= 1;
+                    }
                 }
             }
             // Ingest first, then dispatch to nodes: `sig()` in node

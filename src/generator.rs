@@ -243,6 +243,12 @@ impl App {
         self.send(crate::bus::BusCommand::RemoveReplayBlock { id });
     }
 
+    /// Sets the record filter: only these `(id, extended)` frames land in
+    /// the recorded ASC; an empty list records everything.
+    pub fn set_record_filter(&mut self, ids: Vec<(u32, bool)>) {
+        self.send(crate::bus::BusCommand::SetRecordFilter { ids });
+    }
+
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

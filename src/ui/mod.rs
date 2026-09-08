@@ -98,6 +98,24 @@ pub struct BlockDraft {
     pub ids_text: String,
 }
 
+/// Parses an id filter text shared by the record filter and replay
+/// blocks: comma- or space-separated hex ids, an `x` suffix marks an
+/// extended frame. Empty text = no filter; unparsable tokens yield id 0,
+/// which the callers drop.
+pub(crate) fn parse_id_filter(text: &str) -> Vec<(u32, bool)> {
+    text.split([',', ' ', ';'])
+        .filter(|s| !s.is_empty())
+        .map(|raw| {
+            let s = raw.trim();
+            match s.strip_suffix(['x', 'X']) {
+                Some(hex) => (u32::from_str_radix(hex, 16).unwrap_or(0), true),
+                None => (u32::from_str_radix(s, 16).unwrap_or(0), false),
+            }
+        })
+        .filter(|&(id, _)| id != 0)
+        .collect()
+}
+
 impl Draft {
     /// What the widget should display: the draft while it owns `key`, so a
     /// dragged handle does not snap back to the untouched model.

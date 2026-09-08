@@ -16,6 +16,11 @@ pub struct Recorder {
     pub record_path: String,
     /// The dated path of the most recent recording, kept as a replay source.
     pub last_record: String,
+    /// Optional id whitelist for the file: empty records everything, a
+    /// non-empty list records only those `(id, extended)` frames. The
+    /// filter gates the file's contents only -- trace, aggregates, and
+    /// the spec always see the whole bus.
+    pub ids: Vec<(u32, bool)>,
 }
 
 impl Recorder {
@@ -25,11 +30,21 @@ impl Recorder {
             recording: false,
             record_path: String::new(),
             last_record: String::new(),
+            ids: Vec::new(),
         }
     }
 
-    /// Writes one frame if a recording is open; a no-op otherwise.
+    /// Whether a frame belongs in the file under the current filter.
+    pub fn admits(&self, f: &CanFrame) -> bool {
+        self.ids.is_empty() || self.ids.contains(&(f.id, f.extended))
+    }
+
+    /// Writes one frame if a recording is open and the frame passes the
+    /// record filter; a no-op otherwise.
     pub fn write(&mut self, f: &CanFrame) {
+        if !self.admits(f) {
+            return;
+        }
         if let Some(w) = &mut self.writer {
             w.write(f).ok();
         }
