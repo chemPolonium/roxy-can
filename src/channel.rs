@@ -207,6 +207,27 @@ impl App {
         for d in &mut self.data_windows {
             remap_keys(&mut d.signals);
         }
+        // State Tracker rows carry signal keys too -- plus per-key state
+        // maps (color memory, rules, overrides) that shift with them.
+        fn remap_key_map<V>(
+            m: std::collections::HashMap<crate::observe::SigKey, V>,
+            remap: &impl Fn(u8) -> Option<u8>,
+        ) -> std::collections::HashMap<crate::observe::SigKey, V> {
+            m.into_iter()
+                .filter_map(|(mut k, v)| {
+                    remap(k.0).map(|nc| {
+                        k.0 = nc;
+                        (k, v)
+                    })
+                })
+                .collect()
+        }
+        for w in &mut self.state_trackers {
+            remap_keys(&mut w.signals);
+            w.color_slots = remap_key_map(w.color_slots.drain().collect(), &remap);
+            w.rules = remap_key_map(w.rules.drain().collect(), &remap);
+            w.overrides = remap_key_map(w.overrides.drain().collect(), &remap);
+        }
         let fix_scope = |s: &mut SigScope| {
             if let SigScope::Bus(b) = *s {
                 *s = match (b as usize).cmp(&ch) {

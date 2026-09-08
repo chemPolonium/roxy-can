@@ -5119,6 +5119,31 @@ fn removing_a_bus_drops_its_triggers_and_shifts_the_rest() {
     );
 }
 
+/// State Trackers ride the same remap: their rows (and the per-key color
+/// memory) follow the bus removal just like Graphics and Data rows.
+#[test]
+fn removing_a_bus_remaps_state_trackers() {
+    let mut app = App::headless();
+    app.new_state_window();
+    let key = (1u8, 0x200u32, false, "VehicleSpeed".to_string());
+    app.set_win_signal(crate::app::PopupTarget::State(0), key.clone(), true);
+    assert!(!app.state_trackers[0].signals.is_empty(), "the row landed");
+    app.state_trackers[0]
+        .color_slots
+        .insert(key.clone(), [(7u64, 0usize)].into_iter().collect());
+
+    app.remove_channel(0);
+    app.settle();
+
+    let sig = &app.state_trackers[0].signals[0];
+    assert_eq!(sig.key.0, 0, "the row's key shifted down with the bus");
+    let shifted = (0u8, 0x200u32, false, "VehicleSpeed".to_string());
+    assert!(
+        app.state_trackers[0].color_slots.contains_key(&shifted),
+        "the color memory follows the key"
+    );
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();
