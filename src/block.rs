@@ -33,10 +33,15 @@ pub struct ReplayBlock {
     /// pretending the block contributes nothing on purpose.
     pub last_error: Option<String>,
     /// Preloaded frames, timestamps normalized so the first one is due at
-    /// sim-clock zero, in send order.
+    /// the block's anchor point on the sim timeline.
     queue: Vec<(u64, CanFrame)>,
     /// Next queue index to emit; reset at every measurement start.
     cursor: usize,
+    /// Where the queue's zero sits on the sim timeline. Loads at run
+    /// start anchor at 0; enabling or editing mid-run anchors at the
+    /// current clock, so the block starts *now* at recorded spacing
+    /// instead of bursting out frames dated in the past.
+    anchor_us: u64,
 }
 
 impl ReplayBlock {
@@ -60,16 +65,20 @@ impl ReplayBlock {
             last_error: None,
             queue: Vec::new(),
             cursor: 0,
+            anchor_us: 0,
         }
     }
 
-    /// (Re)reads the log and rebuilds the queue. The node filter resolves
-    /// against the bus's current database -- which is why the queue is
-    /// runtime state: a DBC swap changes what a node-filtered block sends.
-    /// A failed load disables the block and records why.
-    pub fn load_queue(&mut self, dbc: Option<&SymbolTable>) {
+    /// (Re)reads the log and rebuilds the queue, anchoring the queue's
+    /// zero at `sim_t_us`: a block loaded at run start anchors at 0, one
+    /// enabled mid-run starts at the current clock. The node filter
+    /// resolves against the bus's current database -- which is why the
+    /// queue is runtime state: a DBC swap changes what a node-filtered
+    /// block sends. A failed load disables the block and records why.
+    pub fn load_queue(&mut self, dbc: Option<&SymbolTable>, sim_t_us: u64) {
         self.queue.clear();
         self.cursor = 0;
+        self.anchor_us = sim_t_us;
         let load = (|| -> Result<Vec<(u64, CanFrame)>, String> {
             if self.path.trim().is_empty() {
                 return Err("no log file".to_string());
@@ -123,18 +132,20 @@ impl ReplayBlock {
     }
 
     /// Emits every queued frame the sim clock has passed, up to `budget`,
-    /// retargeted to the block's bus. Frames carry their recorded spacing,
-    /// so catch-up bursts keep the exact gaps the log captured.
+    /// retargeted to the block's bus. Frames carry their recorded spacing
+    /// past the anchor, so catch-up bursts keep the exact gaps the log
+    /// captured.
     pub fn poll(&mut self, sim_t_us: u64, out: &mut Vec<CanFrame>, budget: usize) {
         if !self.enabled {
             return;
         }
         while self.cursor < self.queue.len() && budget > out.len() {
-            let (t, mut f) = self.queue[self.cursor];
-            if t > sim_t_us {
+            let (rel_t, mut f) = self.queue[self.cursor];
+            let due = self.anchor_us.saturating_add(rel_t);
+            if due > sim_t_us {
                 break;
             }
-            f.t_us = t;
+            f.t_us = due;
             f.channel = self.channel;
             f.dir = Direction::Tx;
             out.push(f);
@@ -142,9 +153,12 @@ impl ReplayBlock {
         }
     }
 
-    /// Rewinds to the run start without re-reading the file.
+    /// Rewinds to the run start without re-reading the file. The anchor
+    /// goes to 0 with the clock: this runs inside `reset_run`, where the
+    /// sim timeline restarts.
     pub fn rewind(&mut self) {
         self.cursor = 0;
+        self.anchor_us = 0;
     }
 
     /// How many frames the loaded queue carries (after the filters).

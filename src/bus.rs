@@ -972,7 +972,7 @@ impl BusCore {
                                 .channels
                                 .get(b.channel as usize)
                                 .and_then(|c| c.dbc.clone());
-                            b.load_queue(dbc.as_deref());
+                            b.load_queue(dbc.as_deref(), self.sim_t_us);
                         }
                         b
                     })
@@ -2067,7 +2067,7 @@ impl BusCore {
                 .channels
                 .get(block.channel as usize)
                 .and_then(|c| c.dbc.clone());
-            block.load_queue(dbc.as_deref());
+            block.load_queue(dbc.as_deref(), self.sim_t_us);
         }
         *status = format!("replay block `{}` added (disabled)", block.name);
         self.replay_blocks.push(block);
@@ -2103,7 +2103,7 @@ impl BusCore {
                 .channels
                 .get(block.channel as usize)
                 .and_then(|c| c.dbc.clone());
-            block.load_queue(dbc.as_deref());
+            block.load_queue(dbc.as_deref(), self.sim_t_us);
         }
         *status = format!("replay block `{}` updated", block.name);
         self.nodes_dirty = true;
@@ -2122,7 +2122,7 @@ impl BusCore {
                 .channels
                 .get(block.channel as usize)
                 .and_then(|c| c.dbc.clone());
-            block.load_queue(dbc.as_deref());
+            block.load_queue(dbc.as_deref(), self.sim_t_us);
             *status = match (&block.last_error, block.enabled) {
                 (Some(e), _) => format!("replay block `{}`: {e}", block.name),
                 (None, true) => format!(
@@ -2289,7 +2289,7 @@ impl BusCore {
                     .channels
                     .get(block.channel as usize)
                     .and_then(|c| c.dbc.clone());
-                block.load_queue(dbc.as_deref());
+                block.load_queue(dbc.as_deref(), self.sim_t_us);
                 if let Some(e) = &block.last_error {
                     block_notes.push(format!("`{}`: {e}", block.name));
                 }

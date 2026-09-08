@@ -46,7 +46,7 @@ fn block(path: &str, node: Option<&str>, ids: Vec<(u32, bool)>) -> ReplayBlock {
 fn an_id_filtered_block_keeps_only_its_frames() {
     let path = write_log("roxy_can_block_id.asc");
     let mut b = block(&path, None, vec![(0x100, false)]);
-    b.load_queue(None);
+    b.load_queue(None, 0);
     assert_eq!(b.last_error, None, "the log loads");
     assert_eq!(b.queue.len(), 3, "the three 0x100 frames");
 
@@ -75,7 +75,7 @@ fn a_node_filtered_block_replays_that_nodes_traffic() {
     .unwrap();
 
     let mut b = block(&path, Some("EngineECU"), Vec::new());
-    b.load_queue(Some(&dbc));
+    b.load_queue(Some(&dbc), 0);
     assert_eq!(b.last_error, None);
     assert_eq!(
         b.queue.len(),
@@ -84,12 +84,12 @@ fn a_node_filtered_block_replays_that_nodes_traffic() {
     );
 
     let mut b = block(&path, Some("ABS"), Vec::new());
-    b.load_queue(Some(&dbc));
+    b.load_queue(Some(&dbc), 0);
     assert_eq!(b.queue.len(), 1, "0x200 belongs to ABS");
     assert_eq!(b.queue[0].1.id, 0x200);
 
     let mut b = block(&path, None, Vec::new());
-    b.load_queue(Some(&dbc));
+    b.load_queue(Some(&dbc), 0);
     assert_eq!(b.queue.len(), 5, "no filter keeps everything");
 }
 
@@ -98,7 +98,7 @@ fn a_node_filtered_block_replays_that_nodes_traffic() {
 #[test]
 fn a_failed_load_disables_the_block_and_names_the_reason() {
     let mut b = block("Z:/nowhere/never.asc", None, Vec::new());
-    b.load_queue(None);
+    b.load_queue(None, 0);
     assert!(!b.enabled, "a broken block must not pretend to run");
     let err = b.last_error.clone().expect("the reason is recorded");
     assert!(!err.is_empty());
@@ -109,7 +109,7 @@ fn a_failed_load_disables_the_block_and_names_the_reason() {
 fn a_rewound_block_replays_from_the_start() {
     let path = write_log("roxy_can_block_rw.asc");
     let mut b = block(&path, None, Vec::new());
-    b.load_queue(None);
+    b.load_queue(None, 0);
     let mut out = Vec::new();
     b.poll(1_000_000, &mut out, 100);
     assert_eq!(out.len(), 5, "everything is due after the first second");
@@ -118,4 +118,41 @@ fn a_rewound_block_replays_from_the_start() {
     b.poll(0, &mut out, 100);
     assert_eq!(out.len(), 1, "the run starts over at zero");
     assert_eq!(out[0].data[0], 0x11);
+}
+
+/// A block loaded mid-run anchors at the current clock: the first frame
+/// is due *now*, none are dated in the past, and the recorded spacing
+/// runs forward from there. (Anchoring at zero would burst the whole
+/// queue out immediately and then go silent forever.)
+#[test]
+fn a_mid_run_load_anchors_at_the_current_clock() {
+    let path = write_log("roxy_can_block_anchor.asc");
+    let mut b = block(&path, None, Vec::new());
+    b.load_queue(None, 1_000_000); // the sim clock already reads 1 s
+
+    let mut out = Vec::new();
+    b.poll(1_000_000, &mut out, 100);
+    assert_eq!(out.len(), 1, "only the first frame is due at the anchor");
+    assert_eq!(out[0].t_us, 1_000_000, "stamped at the anchor");
+
+    b.poll(1_005_000, &mut out, 100);
+    assert_eq!(out.len(), 1, "recorded spacing still applies");
+
+    b.poll(1_010_000, &mut out, 100);
+    assert_eq!(
+        out.len(),
+        3,
+        "two frames share rel 10 ms in the fixture; both are due now"
+    );
+    assert_eq!(out[1].t_us, 1_010_000);
+    assert_eq!(out[1].id, 0x100);
+    assert_eq!(out[2].t_us, 1_010_000);
+    assert_eq!(out[2].id, 0x200);
+
+    // Rewinding clears the anchor with the clock (reset_run context).
+    b.rewind();
+    let mut out = Vec::new();
+    b.poll(0, &mut out, 100);
+    assert_eq!(out.len(), 1, "back to the run's own zero");
+    assert_eq!(out[0].t_us, 0);
 }
