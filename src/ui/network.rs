@@ -130,17 +130,30 @@ fn draw_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base
         dl.add_rect([bx, box_y], [bx + BOX_W, box_y + BOX_H], border)
             .rounding(6.0)
             .build();
-        // Amber bar on the left edge: "I transmit as this ECU". Deliberately a
-        // different channel from the green dot, which means "I have seen this
-        // ECU send" -- a simulated node that is also real shows both.
-        if app.is_node_simulated(ch as u8, &ni.name) {
-            dl.add_rect(
-                [bx + 3.0, box_y + 7.0],
-                [bx + 6.0, box_y + BOX_H - 7.0],
-                [0.95, 0.70, 0.20, 1.0],
-            )
-            .filled(true)
-            .build();
+        // Amber bar on the left edge: "I transmit as this ECU"; the dimmer
+        // slate bar: "present, listening only". Deliberately a different
+        // channel from the green dot, which means "I have seen this ECU
+        // send" -- a simulated node that is also real shows both.
+        match app.node_role(ch as u8, &ni.name) {
+            crate::app::NodeRole::Simulated => {
+                dl.add_rect(
+                    [bx + 3.0, box_y + 7.0],
+                    [bx + 6.0, box_y + BOX_H - 7.0],
+                    [0.95, 0.70, 0.20, 1.0],
+                )
+                .filled(true)
+                .build();
+            }
+            crate::app::NodeRole::Monitor => {
+                dl.add_rect(
+                    [bx + 3.0, box_y + 7.0],
+                    [bx + 6.0, box_y + BOX_H - 7.0],
+                    [0.45, 0.62, 0.80, 1.0],
+                )
+                .filled(true)
+                .build();
+            }
+            crate::app::NodeRole::Absent => {}
         }
         let size = ui.calc_text_size(ni.name.clone());
         dl.add_text(
@@ -227,10 +240,22 @@ pub fn render(app: &mut App, ui: &Ui) {
                             ni.rx.len()
                         ),
                     );
-                    let mut sim = app.is_node_simulated(ch as u8, &ni.name);
-                    if ui.checkbox("Simulate this node", &mut sim) {
-                        app.set_node_sim(ch as u8, &ni.name, sim);
+                    let mut role_idx = crate::app::NodeRole::ALL
+                        .iter()
+                        .position(|r| *r == app.node_role(ch as u8, &ni.name))
+                        .unwrap_or(0);
+                    ui.set_next_item_width(88.0);
+                    let role_labels: Vec<&str> = crate::app::NodeRole::ALL
+                        .iter()
+                        .map(|r| r.label())
+                        .collect();
+                    if ui.combo_simple_string(format!("##netrole{ch}"), &mut role_idx, &role_labels)
+                    {
+                        let role = crate::app::NodeRole::ALL[role_idx];
+                        app.set_node_role(ch as u8, &ni.name, role);
                     }
+                    ui.same_line();
+                    ui.text_disabled("节点角色");
                     ui.same_line();
                     if ui.small_button(format!("Simulate all##netsimall{ch}")) {
                         app.simulate_all_nodes(ch as u8);
@@ -242,7 +267,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ni.tx.is_empty() {
                         ui.text_colored(
                             [0.5, 0.5, 0.6, 1.0],
-                            "  (sends nothing -- ticking only records the intent)",
+                            "  (sends nothing -- the role is still recorded)",
                         );
                     }
                     ui.text("Sent messages");

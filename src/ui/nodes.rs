@@ -47,9 +47,9 @@ fn content(app: &mut App, ui: &Ui) {
     }
 }
 
-/// A DBC transmitter simulated through the generator: no source editor —
-/// its "program" is the TX entries it owns. The checkbox is the same
-/// "Simulate this node" the Network view shows.
+/// A DBC node with its declared role: no source editor — a `Simulated`
+/// node's "program" is the TX entries it owns. The combo is the same
+/// role declaration the Network view shows.
 fn group_card(app: &mut App, ui: &Ui, card: &crate::bus::GroupCardView) {
     let id = card.id;
     let open_token = ui
@@ -57,19 +57,33 @@ fn group_card(app: &mut App, ui: &Ui, card: &crate::bus::GroupCardView) {
         .push();
     let Some(_t) = open_token else { return };
 
-    ui.text(format!("[生成器组] {}", card.name));
+    ui.text(format!("[角色卡片] {}", card.name));
     ui.same_line();
     ui.text_disabled(format!("· {}", app.channel_name(card.channel)));
     ui.same_line();
-    let mut enabled = card.enabled;
-    if ui.checkbox(format!("运行##ngen{id}"), &mut enabled) {
-        app.send(crate::bus::BusCommand::SetNodeSim {
+    let mut role_idx = crate::app::NodeRole::ALL
+        .iter()
+        .position(|r| *r == card.role)
+        .unwrap_or(0);
+    ui.set_next_item_width(72.0);
+    let labels: Vec<&str> = crate::app::NodeRole::ALL
+        .iter()
+        .map(|r| r.label())
+        .collect();
+    if ui.combo_simple_string(format!("##nrole{id}"), &mut role_idx, &labels) {
+        let role = crate::app::NodeRole::ALL[role_idx];
+        app.send(crate::bus::BusCommand::SetNodeRole {
             ch: card.channel,
             node: card.name.clone(),
-            on: enabled,
+            role,
         });
     }
-    ui.text_disabled("DBC 发送节点：报文条目在 TX 列表中，按节点整体开关");
+    let hint = match card.role {
+        crate::app::NodeRole::Simulated => "DBC 节点由本工具模拟：报文条目在 TX 列表中",
+        crate::app::NodeRole::Monitor => "DBC 节点在总线上监听：不产生发送负载",
+        crate::app::NodeRole::Absent => "DBC 节点不在仿真总线上：报文需来自回放或真实节点",
+    };
+    ui.text_disabled(hint);
 }
 
 /// One node card. Works on a clone of the view; every edit goes out as a

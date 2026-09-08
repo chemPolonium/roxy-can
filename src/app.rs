@@ -43,7 +43,7 @@ pub const PALETTE: [[f32; 4]; 8] = [
     [0.95, 0.55, 0.85, 1.0],
 ];
 pub use crate::aggregate::MessageAgg;
-pub use crate::channel::Channel;
+pub use crate::channel::{Channel, NodeRole};
 pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
 pub use crate::observe::{
     DataWindow, GfxSignal, GraphicsWindow, PickTarget, SampleCache, StateRule, StateWin, YMode,
@@ -304,7 +304,7 @@ impl App {
                 dbc: None,
                 dbc_paths: vec!["assets/sample.dbc".to_string()],
                 dbc_sums: Vec::new(),
-                sim_nodes: Vec::new(),
+                node_roles: std::collections::BTreeMap::new(),
                 bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
             },
@@ -313,7 +313,7 @@ impl App {
                 dbc: None,
                 dbc_paths: vec!["assets/motbus.dbc".to_string()],
                 dbc_sums: Vec::new(),
-                sim_nodes: Vec::new(),
+                node_roles: std::collections::BTreeMap::new(),
                 bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
             },

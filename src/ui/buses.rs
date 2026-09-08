@@ -109,7 +109,7 @@ fn content(app: &mut App, ui: &Ui) {
                     dbc_path: None,
                     bitrate_kbps: None,
                     fd_data_kbps: None,
-                    sim_nodes: None,
+                    node_roles: None,
                 });
             } else if editing && !ui.is_item_active() {
                 app.bus_name_edit = None;
@@ -164,7 +164,7 @@ fn content(app: &mut App, ui: &Ui) {
                     dbc_path: None,
                     bitrate_kbps: Some(arb.max(1) as u32),
                     fd_data_kbps: None,
-                    sim_nodes: None,
+                    node_roles: None,
                 });
             }
             ui.same_line();
@@ -182,7 +182,7 @@ fn content(app: &mut App, ui: &Ui) {
                     dbc_path: None,
                     bitrate_kbps: None,
                     fd_data_kbps: Some(data.max(1) as u32),
-                    sim_nodes: None,
+                    node_roles: None,
                 });
             }
             ui.table_next_column();

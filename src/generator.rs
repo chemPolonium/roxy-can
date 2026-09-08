@@ -2,7 +2,7 @@
 //! sources, and the payload assembly that drives a frame out.
 
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN, dlc2len, len2dlc};
-use crate::channel::Channel;
+use crate::channel::{Channel, NodeRole};
 use crate::sim::{ValueSrc, eval_phys};
 
 pub struct TxMsg {
@@ -161,50 +161,52 @@ impl App {
         self.send(crate::bus::BusCommand::SetEntryActive { ch, id, on });
     }
 
-    /// Ticks or unticks a DBC node as one this tool transmits as. The
-    /// whole membership/activation semantics live with the command.
-    pub fn set_node_sim(&mut self, channel: u8, node: &str, on: bool) {
+    /// Declares the role of a DBC node on this bus. The whole
+    /// membership/activation semantics live with the command.
+    pub fn set_node_role(&mut self, channel: u8, node: &str, role: NodeRole) {
         // `""` is what the parser writes for "no transmitter assigned", and
         // `node_tx_ids` matches it against every unassigned message at once.
         if node.is_empty() || channel as usize >= self.snap.channel_count {
             return;
         }
-        self.send(crate::bus::BusCommand::SetNodeSim {
+        self.send(crate::bus::BusCommand::SetNodeRole {
             ch: channel,
             node: node.to_string(),
-            on,
+            role,
         });
     }
 
-    /// Simulates every DBC transmitter node on the bus (CANoe's "Switch
-    /// All Blocks to Simulation").
+    /// Simulates every DBC node on the bus (CANoe's "Switch All Blocks to
+    /// Simulation").
     pub fn simulate_all_nodes(&mut self, ch: u8) {
         let Some(db) = self.channel_dbc(ch) else {
             return;
         };
         let names: Vec<String> = db.nodes.clone();
         for name in names {
-            self.set_node_sim(ch, &name, true);
+            self.set_node_role(ch, &name, NodeRole::Simulated);
         }
     }
 
-    /// Stops the simulation of every DBC transmitter node on the bus.
+    /// Takes every DBC node on the bus out of the simulation.
     pub fn stop_all_nodes(&mut self, ch: u8) {
         let Some(db) = self.channel_dbc(ch) else {
             return;
         };
         let names: Vec<String> = db.nodes.clone();
         for name in names {
-            self.set_node_sim(ch, &name, false);
+            self.set_node_role(ch, &name, NodeRole::Absent);
         }
     }
 
-    /// Whether this bus was told to transmit as `node`.
-    pub fn is_node_simulated(&self, ch: u8, node: &str) -> bool {
+    /// The role declared for `node` on this bus; nodes without a
+    /// declaration are `Absent`.
+    pub fn node_role(&self, ch: u8, node: &str) -> NodeRole {
         self.snap
             .channels
             .get(ch as usize)
-            .is_some_and(|c| c.sim_nodes.iter().any(|n| n == node))
+            .map(|c| c.role_of(node))
+            .unwrap_or(NodeRole::Absent)
     }
 
     /// Adds the generator entry unless it exists (command `AddEntry`).

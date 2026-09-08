@@ -1,9 +1,60 @@
 //! One CAN bus: user identity, its DBC, and the bitrate declarations the
 //! load view divides wire bits by.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::dbc::SymbolTable;
+
+/// Who plays a DBC node on this bus. The role answers "who is this node
+/// right now", never "how it runs" -- the driver (generator entries, a
+/// script, replay) is a separate choice. The declaration can only name
+/// nodes the DBC already declares; anything else is a mismatch the UI
+/// never offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeRole {
+    /// This tool transmits as the node: its DBC-scheduled TX frames come
+    /// from the generator. Later phases may bind a script as the driver.
+    Simulated,
+    /// The node is present and listens but transmits nothing here --
+    /// a zero-cost role. With no hardware attached, its frames can only
+    /// come from a replay.
+    Monitor,
+    /// The node is not on the simulated bus at all: nothing is transmitted
+    /// for it. This is also the default for every node without an entry,
+    /// so restbus needs no configuration -- absent is what you get.
+    Absent,
+}
+
+impl NodeRole {
+    /// The three roles in display order (increasing presence).
+    pub const ALL: [NodeRole; 3] = [NodeRole::Absent, NodeRole::Monitor, NodeRole::Simulated];
+
+    /// The UI label.
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeRole::Absent => "离线",
+            NodeRole::Monitor => "监听",
+            NodeRole::Simulated => "模拟",
+        }
+    }
+
+    /// The project-file spelling (the Rust variant name, like the other
+    /// persisted enums).
+    pub fn tag(self) -> &'static str {
+        match self {
+            NodeRole::Absent => "Absent",
+            NodeRole::Monitor => "Monitor",
+            NodeRole::Simulated => "Simulated",
+        }
+    }
+
+    /// Parses the project-file spelling; `None` for anything else, which
+    /// the loader drops rather than guessing.
+    pub fn parse(s: &str) -> Option<NodeRole> {
+        NodeRole::ALL.iter().copied().find(|r| r.tag() == s)
+    }
+}
 
 /// One CAN bus: user-defined name, a DBC database, the path it came from, and
 /// the DBC nodes this tool transmits as. The parsed database is shared as an
@@ -21,10 +72,11 @@ pub struct Channel {
     /// Content checksums of `dbc_paths`, kept in sync so external edits
     /// to a DBC file can be detected and the database reloaded.
     pub dbc_sums: Vec<u64>,
-    /// Names of the DBC nodes marked as simulated on this bus. Kept on the
-    /// channel itself so deleting or renumbering a bus takes its nodes along
-    /// without a second remap pass.
-    pub sim_nodes: Vec<String>,
+    /// Per-node roles declared on this bus. Only deviations from the
+    /// default are stored: a missing entry *is* the `Absent` role, so
+    /// restbus is the default behaviour rather than a configuration.
+    /// `BTreeMap` keeps the project file's key order stable.
+    pub node_roles: BTreeMap<String, NodeRole>,
     /// Arbitration bitrate in kbit/s, as the load view divides wire bits by
     /// it. There is no hardware behind the simulation, so the value is a
     /// declaration about the bus being analysed, not a device setting.
@@ -36,6 +88,29 @@ pub struct Channel {
 impl Channel {
     pub const DEFAULT_BITRATE_KBPS: u32 = 500;
     pub const DEFAULT_FD_DATA_KBPS: u32 = 2000;
+
+    /// The role declared for `node`; every node without an entry is
+    /// `Absent` -- that is the restbus default, not a stored state.
+    pub fn role_of(&self, node: &str) -> NodeRole {
+        self.node_roles
+            .get(node)
+            .copied()
+            .unwrap_or(NodeRole::Absent)
+    }
+
+    /// Records a role. `Absent` removes the entry: the map holds only
+    /// deviations from the default, and a node's role outliving its
+    /// database is meaningless anyway.
+    pub fn set_node_role(&mut self, node: &str, role: NodeRole) {
+        match role {
+            NodeRole::Absent => {
+                self.node_roles.remove(node);
+            }
+            r => {
+                self.node_roles.insert(node.to_string(), r);
+            }
+        }
+    }
 }
 
 use std::collections::HashSet;

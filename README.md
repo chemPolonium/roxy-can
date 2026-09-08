@@ -13,7 +13,7 @@
 - **总线负载统计**：Statistics 窗口顶部按总线给出线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；仲裁与 CAN FD 数据段比特率按总线设置，BRS 载荷按数据段速率计费
 - **Interactive Generator**：DBC 报文即开即用，按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random / Triangle / Counter 激励随仿真时间连续变化
 - **Triggers 触发器**：信号越阈 / ID 出现 / 错误帧 / 周期超时四类条件，动作支持开始·停止录制（带预触发上下文与 post-roll）、单帧反应（触发帧信号自动镜像进目标载荷）、插入标记（Graphics 竖线）、清空 Trace；编辑器与持久化齐备
-- **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；勾选 **Simulate this node** 即按 DBC 声明的周期模拟整个 ECU
+- **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；节点角色三态声明——**模拟**（按 DBC 声明的周期模拟整个 ECU）/ **监听**（只收不发）/ **离线**（不在仿真总线上，未声明即离线），Nodes 窗口的角色卡片与 Network 视图同源
 - **仿真节点**：类 CAPL 脚本语言（编译成字节码跑在自带 VM 上）驱动的自定义 ECU 节点——`on start` / `on message`（含 `*` 通配与错误帧事件）/ `on timer`（周期与一次性）事件驱动，读写 DBC 信号、收发帧、随机与波形内建；每回调 10 万指令预算，坏脚本卡不死总线。语言参考见 `docs/script_language.md`，可运行示例见 `examples/`
 - **Specification（规格监视）**：实测流量与数据库声明逐条对账，四类判定——Unknown（未知 ID）、Dlc（长度不符）、Cycle（周期漂移）、Missing（掉线）；容差与宽限可调并随工程保存
 - **State Tracker（状态带观察器）**：订阅信号按状态分段绘制——VAL_ 值表标签、二进制方波、会话稳定配色，支持自定义阈值区间（名字 + 颜色）与颜色钉住；碎带按最短显示时长合并，区段表可导出 CSV

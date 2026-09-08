@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::aggregate::MessageAgg;
 use crate::app::{Mode, SAMPLE_INTERVAL_US, TRACE_LIMIT};
 use crate::can::frame::{CanFrame, Direction};
-use crate::channel::Channel;
+use crate::channel::{Channel, NodeRole};
 use crate::dbc::DecodedSignal;
 use crate::generator::TxMsg;
 use crate::observe::{SigKey, Subscription};
@@ -49,16 +49,16 @@ pub(crate) const PRE_BUFFER_FRAMES: usize = 256;
 /// `StopRecording` edge (the post-trigger context).
 pub(crate) const POST_ROLL_FRAMES: u32 = 32;
 
-/// One DBC transmitter simulated-or-available on a bus: the generator-
-/// group card in the Nodes window. Derived state — toggling goes through
-/// `SetNodeSim`, and the card itself is rebuilt from the database and
-/// `sim_nodes` on every publish.
+/// One DBC node on a bus with its declared role: the role card in the
+/// Nodes window. Derived state — switching goes through `SetNodeRole`,
+/// and the card itself is rebuilt from the database and `node_roles` on
+/// every publish.
 #[derive(Clone, Debug)]
 pub struct GroupCardView {
     pub id: u64,
     pub name: String,
     pub channel: u8,
-    pub enabled: bool,
+    pub role: crate::app::NodeRole,
 }
 
 /// What the frontend may ask the bus to do. One variant per transport
@@ -98,11 +98,12 @@ pub enum BusCommand {
         ch: u8,
         on: bool,
     },
-    /// Tick or untick a DBC node as one this tool transmits as.
-    SetNodeSim {
+    /// Declare the role of a DBC node: `Simulated` transmits its DBC
+    /// traffic through the generator; `Monitor`/`Absent` do not.
+    SetNodeRole {
         ch: u8,
         node: String,
-        on: bool,
+        role: crate::app::NodeRole,
     },
     /// Replay-speed multiplier applied to the log source. (The remembered
     /// choice for the next run and the combo's display stay frontend.)
@@ -200,14 +201,14 @@ pub enum BusCommand {
     },
     /// Static per-bus declarations from the Buses window / project
     /// restore: rename, bitrate figures, the DBC path (without loading
-    /// it -- pair with `LoadDbc`), or the simulated-node list.
+    /// it -- pair with `LoadDbc`), or the node-role map.
     SetChannelConfig {
         ch: u8,
         name: Option<String>,
         dbc_path: Option<String>,
         bitrate_kbps: Option<u32>,
         fd_data_kbps: Option<u32>,
-        sim_nodes: Option<Vec<String>>,
+        node_roles: Option<std::collections::BTreeMap<String, crate::app::NodeRole>>,
     },
     /// Attach the listed DBC files to the bus (primary first; on a
     /// duplicate message id the earlier database wins) and parse them all
@@ -397,9 +398,8 @@ pub struct Snapshot {
     /// Simulation nodes as of the last publish: identity, source, state
     /// and log. The Nodes window's data source and the project save.
     pub nodes: Arc<Vec<NodeView>>,
-    /// One generator-group card per DBC transmitter per bus: derived
-    /// from the attached databases and `sim_nodes`, toggled with
-    /// `SetNodeSim`.
+    /// One role card per DBC node per bus: derived from the attached
+    /// databases and `node_roles`, switched with `SetNodeRole`.
     pub group_cards: Vec<GroupCardView>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
@@ -473,8 +473,20 @@ pub struct ChannelView {
     pub dbc_paths: Vec<String>,
     pub bitrate_kbps: u32,
     pub fd_data_kbps: u32,
-    pub sim_nodes: Vec<String>,
+    pub node_roles: std::collections::BTreeMap<String, crate::app::NodeRole>,
     pub dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
+}
+
+impl ChannelView {
+    /// The role declared for `node`; every node without an entry is
+    /// `Absent` -- the restbus default. Mirrors `Channel::role_of` so
+    /// frontend reads never touch live bus state.
+    pub fn role_of(&self, node: &str) -> NodeRole {
+        self.node_roles
+            .get(node)
+            .copied()
+            .unwrap_or(NodeRole::Absent)
+    }
 }
 
 impl std::fmt::Debug for ChannelView {
@@ -486,7 +498,7 @@ impl std::fmt::Debug for ChannelView {
             .field("dbc_paths", &self.dbc_paths)
             .field("bitrate_kbps", &self.bitrate_kbps)
             .field("fd_data_kbps", &self.fd_data_kbps)
-            .field("sim_nodes", &self.sim_nodes)
+            .field("node_roles", &self.node_roles)
             .field("dbc_loaded", &self.dbc.is_some())
             .finish()
     }
@@ -725,7 +737,9 @@ impl BusCore {
             BusCommand::AddChannel => self.add_channel(status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
             BusCommand::SetBusTx { ch, on } => self.set_bus_tx(ch, on),
-            BusCommand::SetNodeSim { ch, node, on } => self.set_node_sim(ch, &node, on, status),
+            BusCommand::SetNodeRole { ch, node, role } => {
+                self.set_node_role(ch, &node, role, status)
+            }
             BusCommand::AddNode { name, channel } => {
                 self.node_counter += 1;
                 let id = self.node_counter;
@@ -886,8 +900,8 @@ impl BusCore {
                 dbc_path,
                 bitrate_kbps,
                 fd_data_kbps,
-                sim_nodes,
-            } => self.set_channel_config(ch, name, dbc_path, bitrate_kbps, fd_data_kbps, sim_nodes),
+                node_roles,
+            } => self.set_channel_config(ch, name, dbc_path, bitrate_kbps, fd_data_kbps, node_roles),
             BusCommand::LoadDbc { ch, paths } => self.load_dbc(ch, paths, status),
             BusCommand::SetBusCounter(n) => self.bus_counter = n,
             BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
@@ -979,10 +993,10 @@ impl BusCore {
     }
 
     /// Republishes the node views after a command or a script print
-    /// changed something. Alongside the script nodes, one synthetic
-    /// generator-group card per DBC transmitter node per bus (CANoe's
-    /// "simulate this node") lands in `group_cards` — always visible
-    /// while a database is attached.
+    /// changed something. Alongside the script nodes, one role card per
+    /// DBC node per bus (not only transmitters) lands in `group_cards` —
+    /// every declared node is visible, which is what lets the user assign
+    /// a role to a node that sends nothing yet.
     pub(crate) fn publish_nodes(&mut self) {
         if !self.nodes_dirty {
             return;
@@ -1012,7 +1026,7 @@ impl BusCore {
                     id: gen_group_id(ch_idx, node_name),
                     name: node_name.clone(),
                     channel: ch_idx as u8,
-                    enabled: channel.sim_nodes.iter().any(|n| n == node_name),
+                    role: channel.role_of(node_name),
                 });
             }
         }
@@ -1178,7 +1192,7 @@ impl BusCore {
                     dbc_paths: c.dbc_paths.clone(),
                     bitrate_kbps: c.bitrate_kbps,
                     fd_data_kbps: c.fd_data_kbps,
-                    sim_nodes: c.sim_nodes.clone(),
+                    node_roles: c.node_roles.clone(),
                     dbc: c.dbc.clone(),
                 })
                 .collect(),
@@ -1322,7 +1336,7 @@ impl BusCore {
             dbc: None,
             dbc_paths: vec!["assets/sample.dbc".to_string()],
             dbc_sums: Vec::new(),
-            sim_nodes: Vec::new(),
+            node_roles: std::collections::BTreeMap::new(),
             bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
         });
@@ -1454,7 +1468,7 @@ impl BusCore {
 
     /// Static per-bus declarations: rename, bitrate figures, the DBC
     /// path (without loading it -- that is [`Self::load_dbc`]'s job), or
-    /// the simulated-node list.
+    /// the node-role map.
     fn set_channel_config(
         &mut self,
         ch: u8,
@@ -1462,7 +1476,7 @@ impl BusCore {
         dbc_path: Option<String>,
         bitrate_kbps: Option<u32>,
         fd_data_kbps: Option<u32>,
-        sim_nodes: Option<Vec<String>>,
+        node_roles: Option<std::collections::BTreeMap<String, crate::app::NodeRole>>,
     ) {
         let Some(c) = self.channels.get_mut(ch as usize) else {
             return;
@@ -1485,8 +1499,13 @@ impl BusCore {
         if let Some(k) = fd_data_kbps {
             c.fd_data_kbps = k.max(1);
         }
-        if let Some(nodes) = sim_nodes {
-            c.sim_nodes = nodes;
+        if let Some(roles) = node_roles {
+            // Project restore pins the declarations wholesale. Whether
+            // anything transmits is decided by the restored generator
+            // rows, so this only records intent -- no entry activation
+            // here.
+            c.node_roles = roles;
+            self.nodes_dirty = true;
         }
     }
 
@@ -1684,27 +1703,23 @@ impl BusCore {
         }
     }
 
-    /// Ticks or unticks a DBC node as one this tool transmits as.
+    /// Declares a DBC node's role.
     ///
-    /// Ticking adds whatever generator entry the node is missing and
+    /// `Simulated` adds whatever generator entry the node is missing and
     /// switches them on. The period of an entry that already exists is
     /// never rewritten, so a value tuned by hand outlives the click.
-    /// Unticking only stops sending: entries keep their payload and
-    /// waveforms, so ticking the node again restores it exactly as it was.
-    fn set_node_sim(&mut self, channel: u8, node: &str, on: bool, status: &mut String) {
+    /// Leaving `Simulated` only stops sending: entries keep their payload
+    /// and waveforms, so simulating the node again restores it exactly as
+    /// it was. `Monitor` and `Absent` are behaviourally the same here --
+    /// neither transmits -- and differ in what they declare: a monitor is
+    /// present and listening, an absent node is not on the simulated bus.
+    fn set_node_role(&mut self, channel: u8, node: &str, role: NodeRole, status: &mut String) {
         if self.channels.get(channel as usize).is_none() {
             return;
         }
-        // The tick is recorded first and unconditionally: a node that sends
-        // nothing still has to remember that we mean to be it.
-        let list = &mut self.channels[channel as usize].sim_nodes;
-        if on {
-            if !list.iter().any(|n| n == node) {
-                list.push(node.to_string());
-            }
-        } else {
-            list.retain(|n| n != node);
-        }
+        // The role is recorded first and unconditionally: a node that sends
+        // nothing still has to remember what we declared it to be.
+        self.channels[channel as usize].set_node_role(node, role);
 
         // Membership comes from the live database, not from each entry's
         // stamped `node`: loading another DBC does not rebuild the generator,
@@ -1713,7 +1728,7 @@ impl BusCore {
             .channel_dbc(channel)
             .map(|db| db.node_tx_ids(node))
             .unwrap_or_default();
-        if on {
+        if role == NodeRole::Simulated {
             for id in &ids {
                 self.add_entry(channel, *id);
             }
@@ -1725,10 +1740,11 @@ impl BusCore {
                 }
             }
         } else {
-            // The stamped name is included on the way out only, so unchecking
-            // still silences a node whose database has since been swapped or
-            // unloaded. "I unchecked it and it is still transmitting" is the
-            // one outcome a user cannot recover from by guessing.
+            // The stamped name is included on the way out only, so leaving
+            // the simulated role still silences a node whose database has
+            // since been swapped or unloaded. "I unchecked it and it is
+            // still transmitting" is the one outcome a user cannot recover
+            // from by guessing.
             for t in &mut self.tx_list {
                 if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
                     t.active = false;
@@ -1740,12 +1756,14 @@ impl BusCore {
             .get(channel as usize)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("CAN{}", channel + 1));
-        *status = if on {
-            format!("simulating {node} on {bus} ({} message(s))", ids.len())
-        } else {
-            format!("{node} stopped on {bus}")
+        *status = match role {
+            NodeRole::Simulated => {
+                format!("simulating {node} on {bus} ({} message(s))", ids.len())
+            }
+            NodeRole::Monitor => format!("{node} monitors {bus} (receiving only)"),
+            NodeRole::Absent => format!("{node} absent from {bus}"),
         };
-        // The generator-group cards read sim membership: republish.
+        // The role cards read the role map: republish.
         self.nodes_dirty = true;
     }
 

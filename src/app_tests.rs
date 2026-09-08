@@ -621,13 +621,18 @@ fn an_event_triggered_message_is_never_auto_sent() {
 #[test]
 fn simulated_node_state_follows_the_bus_it_lives_on() {
     let mut app = App::headless();
-    app.channels[0].sim_nodes.push("EngineECU".to_string());
-    app.channels[1].sim_nodes.push("ABS".to_string());
+    app.channels[0].set_node_role("EngineECU", NodeRole::Simulated);
+    app.channels[1].set_node_role("ABS", NodeRole::Simulated);
     app.remove_channel(0);
     assert_eq!(
-        app.channels[0].sim_nodes,
-        ["ABS"],
+        app.channels[0].role_of("ABS"),
+        NodeRole::Simulated,
         "the survivor keeps its own nodes instead of inheriting the deleted bus's"
+    );
+    assert_eq!(
+        app.channels[0].role_of("EngineECU"),
+        NodeRole::Absent,
+        "the removed bus's declarations go with it"
     );
 }
 
@@ -653,7 +658,7 @@ fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
 #[test]
 fn ticking_a_node_activates_only_its_own_messages() {
     let mut app = App::headless();
-    app.set_node_sim(1, "ABS", true);
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
     // assets/motbus.dbc:31,35,54 -- ABS owns these three, nobody else.
     assert_eq!(active_ids(&app, 1), [199, 200, 201]);
     assert!(active_ids(&app, 0).is_empty(), "the other bus untouched");
@@ -664,15 +669,19 @@ fn ticking_a_node_activates_only_its_own_messages() {
             .all(|t| t.next_t_us == 0),
         "a ticked node starts on the next tick, not one period later"
     );
-    assert!(app.is_node_simulated(1, "ABS"));
-    assert!(!app.is_node_simulated(1, "GearBox"), "not a side effect");
+    assert_eq!(app.node_role(1, "ABS"), NodeRole::Simulated);
+    assert_eq!(
+        app.node_role(1, "GearBox"),
+        NodeRole::Absent,
+        "not a side effect"
+    );
 }
 
 #[test]
 fn ticking_a_node_creates_the_entries_it_lacks() {
     let mut app = App::headless();
     app.tx_list.clear();
-    app.set_node_sim(1, "ABS", true);
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
     assert_eq!(
         active_ids(&app, 1),
         [199, 200, 201],
@@ -694,7 +703,7 @@ fn ticking_a_node_never_overwrites_a_tuned_cycle() {
         .position(|t| t.channel == 1 && t.id == 201)
         .unwrap();
     app.tx_list[i].cycle_us = 250_000;
-    app.set_node_sim(1, "ABS", true);
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
     assert_eq!(
         app.tx_list[i].cycle_us, 250_000,
         "a period someone dialed in outlives the click"
@@ -705,7 +714,7 @@ fn ticking_a_node_never_overwrites_a_tuned_cycle() {
 #[test]
 fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     let mut app = App::headless();
-    app.set_node_sim(1, "ABS", true);
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
     let i = app
         .tx_list
         .iter()
@@ -717,13 +726,13 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     );
     let before = app.tx_list.len();
 
-    app.set_node_sim(1, "ABS", false);
+    app.set_node_role(1, "ABS", NodeRole::Absent);
     assert!(active_ids(&app, 1).is_empty(), "stopped sending");
     assert_eq!(app.tx_list.len(), before, "entries survive");
     assert_eq!(app.tx_list[i].srcs.len(), 1, "with the waveform attached");
     assert_eq!(app.tx_list[i].cycle_us, 50_000, "and the declared period");
 
-    app.set_node_sim(1, "ABS", true);
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
     assert_eq!(
         app.tx_list[i].srcs.len(),
         1,
@@ -737,26 +746,51 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
 #[test]
 fn unticking_still_silences_a_node_after_its_dbc_is_gone() {
     let mut app = App::headless();
-    app.set_node_sim(1, "ABS", true);
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
     assert_eq!(active_ids(&app, 1).len(), 3);
     app.channels[1].dbc = None;
     app.refresh_snapshot();
-    app.set_node_sim(1, "ABS", false);
+    app.set_node_role(1, "ABS", NodeRole::Absent);
     assert!(
         active_ids(&app, 1).is_empty(),
         "unchecking must work even with nothing to look up"
     );
-    assert!(!app.is_node_simulated(1, "ABS"));
+    assert_eq!(app.node_role(1, "ABS"), NodeRole::Absent);
 }
 
 #[test]
-fn a_receive_only_node_can_still_be_ticked() {
+fn a_receive_only_node_can_still_be_simulated() {
     let mut app = App::headless();
-    app.set_node_sim(1, "DashBoard", true);
+    app.set_node_role(1, "DashBoard", NodeRole::Simulated);
     assert!(active_ids(&app, 1).is_empty(), "it has no messages to send");
-    assert!(
-        app.is_node_simulated(1, "DashBoard"),
+    assert_eq!(
+        app.node_role(1, "DashBoard"),
+        NodeRole::Simulated,
         "the intent is remembered anyway"
+    );
+}
+
+/// The zero-cost role: a monitor is present and listening, but the bus
+/// carries nothing from it -- behaviourally the same as absent today,
+/// and a different declaration for the hardware phase to honour.
+#[test]
+fn a_monitoring_node_declares_presence_without_traffic() {
+    let mut app = App::headless();
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
+    assert_eq!(active_ids(&app, 1).len(), 3);
+
+    app.set_node_role(1, "ABS", NodeRole::Monitor);
+    assert!(active_ids(&app, 1).is_empty(), "a monitor sends nothing");
+    assert_eq!(app.node_role(1, "ABS"), NodeRole::Monitor);
+    assert!(
+        [199, 200, 201]
+            .iter()
+            .all(|id| app.tx_list.iter().any(|t| t.channel == 1 && t.id == *id)),
+        "its entries survive, ready for a return to Simulated"
+    );
+    assert!(
+        !app.channels[1].node_roles.contains_key("GearBox"),
+        "absent stays the stored default: no entry, no traffic"
     );
 }
 
@@ -835,9 +869,9 @@ fn a_node_with_no_name_simulates_nothing() {
     app.add_tx(0, 4096);
     assert_eq!(entry_of(&app, 0, 4096).node, "", "unassigned");
 
-    app.set_node_sim(0, "", true);
+    app.set_node_role(0, "", NodeRole::Simulated);
     assert!(
-        app.channels[0].sim_nodes.is_empty(),
+        app.channels[0].node_roles.is_empty(),
         "not even recorded as a tick"
     );
     assert!(
@@ -4507,35 +4541,35 @@ fn the_state_tracker_round_trips_through_a_project() {
     std::fs::remove_file(&path).ok();
 }
 
-/// Every DBC transmitter shows up in the Nodes window as a generator-
-/// group card, even before it is simulated; simulating flips its enabled
-/// bit. Script-node cards are unaffected.
+/// Every DBC node shows up in the Nodes window as a role card, even
+/// before it is simulated; switching the role flips the card's role.
+/// Script-node cards are unaffected.
 #[test]
-fn generator_groups_appear_as_cards_and_follow_sim_nodes() {
+fn generator_groups_appear_as_cards_and_follow_node_roles() {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::SetNodeSim {
+    app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
         node: "EngineECU".to_string(),
-        on: true,
+        role: NodeRole::Simulated,
     });
     app.settle();
     let cards = &app.snap.group_cards;
-    assert!(!cards.is_empty(), "the sample DBC has transmitters");
+    assert!(!cards.is_empty(), "the sample DBC has nodes");
     let engine = cards
         .iter()
         .find(|c| c.name == "EngineECU")
         .expect("EngineECU card");
-    assert!(engine.enabled, "simulated node shows enabled");
+    assert_eq!(engine.role, NodeRole::Simulated, "simulated node shows it");
     assert!(
         cards.iter().all(|c| c.id & (1 << 63) != 0),
         "synthetic ids never collide with script-node ids"
     );
 
-    // Turning the simulation off keeps the card but clears the flag.
-    app.send(crate::bus::BusCommand::SetNodeSim {
+    // Leaving the simulation keeps the card and reads the new role.
+    app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
         node: "EngineECU".to_string(),
-        on: false,
+        role: NodeRole::Monitor,
     });
     app.settle();
     let engine = app
@@ -4544,7 +4578,7 @@ fn generator_groups_appear_as_cards_and_follow_sim_nodes() {
         .iter()
         .find(|c| c.name == "EngineECU")
         .expect("card stays visible");
-    assert!(!engine.enabled, "the card now reads disabled");
+    assert_eq!(engine.role, NodeRole::Monitor, "the card now reads monitor");
 }
 
 #[test]

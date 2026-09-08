@@ -100,9 +100,17 @@ pub struct ChannelCfg {
     /// Absent from projects saved before multi-database support.
     #[serde(default)]
     pub dbc_paths_extra: Vec<String>,
-    /// DBC nodes ticked as simulated on this bus. Absent from projects saved
-    /// before v0.5, which then load with nothing simulated.
+    /// Per-node roles declared on this bus, in the labels' project-file
+    /// spelling. A node without an entry is `Absent` -- the restbus
+    /// default. Unknown role names are dropped on load rather than
+    /// guessed. Absent from projects saved before the role model.
     #[serde(default)]
+    pub node_roles: std::collections::BTreeMap<String, String>,
+    /// Legacy v0.5-v0.10 field: names of nodes ticked as simulated.
+    /// Merged in as `Simulated` roles on load; no longer written. Absent
+    /// from projects saved before v0.5, which then load with nothing
+    /// simulated.
+    #[serde(default, skip_serializing)]
     pub sim_nodes: Vec<String>,
     /// Arbitration and CAN FD data-phase bitrates in kbit/s, for the load
     /// view. Absent from projects saved before v0.8, which load with the
@@ -566,7 +574,12 @@ impl Config {
                         name: c.name.clone(),
                         dbc_path: first,
                         dbc_paths_extra: rest,
-                        sim_nodes: c.sim_nodes.clone(),
+                        node_roles: c
+                            .node_roles
+                            .iter()
+                            .map(|(n, r)| (n.clone(), r.tag().to_string()))
+                            .collect(),
+                        sim_nodes: Vec::new(),
                         bitrate_kbps: c.bitrate_kbps,
                         fd_data_kbps: c.fd_data_kbps,
                     }
@@ -808,13 +821,26 @@ impl Config {
                 count += 1;
             }
             for (i, c) in self.channels.iter().enumerate() {
+                // Role declarations: drop unknown spellings (the 未知码丢条
+                // convention), then fold the legacy simulated-name list in
+                // -- old projects keep their nodes simulating.
+                let mut roles: std::collections::BTreeMap<String, crate::app::NodeRole> = c
+                    .node_roles
+                    .iter()
+                    .filter_map(|(n, r)| crate::app::NodeRole::parse(r).map(|r| (n.clone(), r)))
+                    .collect();
+                for n in &c.sim_nodes {
+                    roles
+                        .entry(n.clone())
+                        .or_insert(crate::app::NodeRole::Simulated);
+                }
                 app.send(crate::bus::BusCommand::SetChannelConfig {
                     ch: i as u8,
                     name: Some(c.name.clone()),
                     dbc_path: Some(c.dbc_path.clone()),
                     bitrate_kbps: Some(c.bitrate_kbps),
                     fd_data_kbps: Some(c.fd_data_kbps),
-                    sim_nodes: Some(c.sim_nodes.clone()),
+                    node_roles: Some(roles),
                 });
                 // The full attach list (primary + extras) travels as one
                 // command; SetChannelConfig only pins the primary.
@@ -1148,6 +1174,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::NodeRole;
 
     #[test]
     fn config_round_trips_through_json() {
@@ -1295,27 +1322,74 @@ mod tests {
         );
     }
 
-    /// Which nodes a bus simulates has to outlive the session, or the bus
+    /// Which roles a bus declares has to outlive the session, or the bus
     /// composition a user set up is lost on every reload. Restoring it must
     /// not, however, start any traffic by itself.
     #[test]
-    fn simulated_nodes_round_trip_without_starting_traffic() {
+    fn node_roles_round_trip_without_starting_traffic() {
         let mut app = App::headless();
-        app.channels[1].sim_nodes = vec!["ABS".to_string(), "GearBox".to_string()];
+        app.channels[1].set_node_role("ABS", NodeRole::Monitor);
+        app.channels[1].set_node_role("GearBox", NodeRole::Simulated);
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
-        assert_eq!(restored.channels[1].sim_nodes, ["ABS", "GearBox"]);
+        assert_eq!(
+            restored.channels[1].role_of("ABS"),
+            NodeRole::Monitor,
+            "a monitor stays a monitor"
+        );
+        assert_eq!(
+            restored.channels[1].role_of("GearBox"),
+            NodeRole::Simulated,
+            "a simulated node keeps its declaration"
+        );
+        assert_eq!(
+            restored.channels[1].role_of("DashBoard"),
+            NodeRole::Absent,
+            "an undeclared node is absent, not an error"
+        );
         assert!(
-            restored.channels[0].sim_nodes.is_empty(),
-            "the other bus keeps its own list"
+            restored.channels[0].node_roles.is_empty(),
+            "the other bus keeps its own map"
         );
         assert!(
             restored.tx_list.iter().all(|t| !t.active),
             "a read-only look at a saved project must not begin transmitting"
+        );
+    }
+
+    /// Old projects carry the simulated names as a plain list; they load
+    /// as `Simulated` role declarations. Role names the program does not
+    /// know are dropped, per the unknown-code convention.
+    #[test]
+    fn legacy_sim_nodes_become_roles_and_unknown_roles_are_dropped() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc",
+                 "sim_nodes":["ABS"],
+                 "node_roles":{"GearBox":"Monitor","DashBoard":"Bogus"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.channels[0].sim_nodes, ["ABS"]);
+        assert_eq!(
+            cfg.channels[0].node_roles.get("DashBoard").map(String::as_str),
+            Some("Bogus"),
+            "the raw file keeps unknown names; the restore filters them"
+        );
+        let mut app = App::headless();
+        cfg.apply(&mut app);
+        assert_eq!(
+            app.channels[0].role_of("ABS"),
+            NodeRole::Simulated,
+            "the legacy simulated list migrated"
+        );
+        assert_eq!(app.channels[0].role_of("GearBox"), NodeRole::Monitor);
+        assert_eq!(
+            app.channels[0].role_of("DashBoard"),
+            NodeRole::Absent,
+            "an unknown role name is dropped, not guessed"
         );
     }
 
@@ -1329,6 +1403,7 @@ mod tests {
                 .unwrap();
         assert_eq!(cfg.channels.len(), 1);
         assert!(cfg.channels[0].sim_nodes.is_empty());
+        assert!(cfg.channels[0].node_roles.is_empty());
         assert!(
             serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
             "name is still required"
