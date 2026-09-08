@@ -3163,6 +3163,33 @@ fn the_rearm_command_resets_latches_but_not_real_levels() {
     assert!(app.triggers[1].level);
 }
 
+/// "Switch All Blocks to Simulation" at the bus level: simulate-all arms
+/// every DBC transmitter's generator entries; stop-all silences the bus.
+#[test]
+fn simulate_all_activates_every_dbc_node() {
+    let mut app = App::headless();
+    app.simulate_all_nodes(0);
+    let db = app.channel_dbc(0).expect("sample DBC loaded");
+    let expected: Vec<u32> = db
+        .order
+        .iter()
+        .filter(|&&(_, ext)| !ext)
+        .map(|&(id, _)| id)
+        .collect();
+    for id in &expected {
+        let entry = app.tx_list.iter().find(|t| t.channel == 0 && t.id == *id);
+        assert!(
+            entry.is_some_and(|t| t.active),
+            "node message 0x{id:X} should be simulated"
+        );
+    }
+    // The reverse sweep silences every entry on the bus.
+    app.stop_all_nodes(0);
+    app.settle();
+    let any_active = app.tx_list.iter().any(|t| t.channel == 0 && t.active);
+    assert!(!any_active, "stop-all silences every entry on the bus");
+}
+
 /// The State Tracker CSV export mirrors what the bands draw: one row per
 /// state segment per visible signal over the window's live span.
 #[test]

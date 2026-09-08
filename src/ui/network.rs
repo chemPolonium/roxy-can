@@ -231,6 +231,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.checkbox("Simulate this node", &mut sim) {
                         app.set_node_sim(ch as u8, &ni.name, sim);
                     }
+                    ui.same_line();
+                    if ui.small_button(format!("Simulate all##netsimall{ch}")) {
+                        app.simulate_all_nodes(ch as u8);
+                    }
+                    ui.same_line();
+                    if ui.small_button(format!("Stop all##netstop{ch}")) {
+                        app.stop_all_nodes(ch as u8);
+                    }
                     if ni.tx.is_empty() {
                         ui.text_colored(
                             [0.5, 0.5, 0.6, 1.0],

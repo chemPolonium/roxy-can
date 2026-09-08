@@ -176,6 +176,29 @@ impl App {
         });
     }
 
+    /// Simulates every DBC transmitter node on the bus (CANoe's "Switch
+    /// All Blocks to Simulation").
+    pub fn simulate_all_nodes(&mut self, ch: u8) {
+        let Some(db) = self.channel_dbc(ch) else {
+            return;
+        };
+        let names: Vec<String> = db.nodes.clone();
+        for name in names {
+            self.set_node_sim(ch, &name, true);
+        }
+    }
+
+    /// Stops the simulation of every DBC transmitter node on the bus.
+    pub fn stop_all_nodes(&mut self, ch: u8) {
+        let Some(db) = self.channel_dbc(ch) else {
+            return;
+        };
+        let names: Vec<String> = db.nodes.clone();
+        for name in names {
+            self.set_node_sim(ch, &name, false);
+        }
+    }
+
     /// Whether this bus was told to transmit as `node`.
     pub fn is_node_simulated(&self, ch: u8, node: &str) -> bool {
         self.snap
