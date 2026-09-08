@@ -246,6 +246,23 @@ pub struct NodeCfg {
     pub enabled: bool,
 }
 
+/// One replay block: a recorded log, filtered, injected onto one bus when
+/// a simulation runs. Absent from projects saved before replay blocks.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BlockCfg {
+    pub name: String,
+    pub channel: u8,
+    pub path: String,
+    #[serde(default)]
+    pub node_filter: Option<String>,
+    #[serde(default)]
+    pub ids: Vec<(u32, bool)>,
+    /// Disabled blocks are kept so the declaration survives; nothing
+    /// transmits while disabled, matching the runtime semantics.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct StateCfg {
     pub name: String,
@@ -335,6 +352,8 @@ pub struct DesktopCfg {
     pub show_id_filter: bool,
     #[serde(default)]
     pub show_entities: bool,
+    #[serde(default)]
+    pub show_blocks: bool,
 }
 
 fn cycle_default() -> u64 {
@@ -450,6 +469,8 @@ pub struct Config {
     pub show_id_filter: bool,
     #[serde(default)]
     pub show_entities: bool,
+    #[serde(default)]
+    pub show_blocks: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
@@ -470,6 +491,8 @@ pub struct Config {
     pub state_trackers: Vec<StateCfg>,
     #[serde(default)]
     pub nodes: Vec<NodeCfg>,
+    #[serde(default)]
+    pub blocks: Vec<BlockCfg>,
     #[serde(default)]
     pub tx: Vec<TxCfg>,
     #[serde(default)]
@@ -552,6 +575,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
         show_entities: d.show_entities,
+        show_blocks: d.show_blocks,
     }
 }
 
@@ -613,6 +637,7 @@ impl Config {
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
             show_entities: app.show_entities,
+            show_blocks: app.show_blocks,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
             trace_windows: app
@@ -717,6 +742,19 @@ impl Config {
                     channel: n.channel,
                     source: n.source.clone(),
                     enabled: n.enabled,
+                })
+                .collect(),
+            blocks: app
+                .snap
+                .blocks
+                .iter()
+                .map(|b| BlockCfg {
+                    name: b.name.clone(),
+                    channel: b.channel,
+                    path: b.path.clone(),
+                    node_filter: b.node_filter.clone(),
+                    ids: b.ids.clone(),
+                    enabled: b.enabled,
                 })
                 .collect(),
             tx: app
@@ -1057,6 +1095,7 @@ impl Config {
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
         app.show_entities = self.show_entities;
+        app.show_blocks = self.show_blocks;
         app.text_rate_hz = self.text_rate_hz;
         // Nodes cross as one wholesale command: the core mints fresh ids
         // and (when a measurement is running) starts every enabled node.
@@ -1064,6 +1103,12 @@ impl Config {
         // running bus behaves like a live edit.
         app.send(crate::bus::BusCommand::SetNodes {
             nodes: self.nodes.clone(),
+        });
+        // Replay blocks cross wholesale like the nodes: ids are minted
+        // fresh, and enabled blocks load their queues right away so a
+        // broken log path surfaces at restore, not at the first start.
+        app.send(crate::bus::BusCommand::SetReplayBlocks {
+            blocks: self.blocks.clone(),
         });
         // An unknown kind code (a project from a future version) drops
         // only that trigger; the rest load. The list belongs to the bus,
@@ -1158,6 +1203,7 @@ impl Config {
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
                     show_entities: d.show_entities,
+                    show_blocks: d.show_blocks,
                 })
                 .collect();
             app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);

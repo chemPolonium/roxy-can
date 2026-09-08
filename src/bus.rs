@@ -61,6 +61,22 @@ pub struct GroupCardView {
     pub role: crate::app::NodeRole,
 }
 
+/// One replay block as the frontend sees it this frame: the declaration
+/// plus what the runtime made of it (queue size, load failure).
+#[derive(Clone, Debug)]
+pub struct ReplayBlockView {
+    pub id: u64,
+    pub name: String,
+    pub channel: u8,
+    pub path: String,
+    pub node_filter: Option<String>,
+    pub ids: Vec<(u32, bool)>,
+    pub enabled: bool,
+    /// Frames in the loaded queue; 0 unless the block loaded successfully.
+    pub frames: usize,
+    pub last_error: Option<String>,
+}
+
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
@@ -261,6 +277,41 @@ pub enum BusCommand {
     SetNodes {
         nodes: Vec<crate::config::NodeCfg>,
     },
+    /// Add a replay block: recorded traffic from `path`, filtered, injected
+    /// onto bus `ch` when a simulation runs. New blocks start disabled --
+    /// nothing transmits until the user says so.
+    AddReplayBlock {
+        name: String,
+        channel: u8,
+        path: String,
+        node_filter: Option<String>,
+        ids: Vec<(u32, bool)>,
+    },
+    /// Edit a replay block's declaration wholesale. An enabled block
+    /// reloads its queue from the log, so the edit takes effect at once.
+    SetReplayBlock {
+        id: u64,
+        name: String,
+        channel: u8,
+        path: String,
+        node_filter: Option<String>,
+        ids: Vec<(u32, bool)>,
+    },
+    /// Remove a replay block wholesale.
+    RemoveReplayBlock {
+        id: u64,
+    },
+    /// Toggle a replay block. Enabling loads its queue from the log right
+    /// away, so a broken path surfaces as a status line, not as silence.
+    SetReplayBlockEnabled {
+        id: u64,
+        on: bool,
+    },
+    /// Replace the replay-block list wholesale -- the project-restore
+    /// shape. Ids are minted fresh; enabled blocks load their queues.
+    SetReplayBlocks {
+        blocks: Vec<crate::config::BlockCfg>,
+    },
     /// Restore one generator row wholesale from a saved project. `None`
     /// data_text keeps the row's current base payload. Rows the bus does
     /// not know are ignored -- the database decides which messages exist.
@@ -401,6 +452,8 @@ pub struct Snapshot {
     /// One role card per DBC node per bus: derived from the attached
     /// databases and `node_roles`, switched with `SetNodeRole`.
     pub group_cards: Vec<GroupCardView>,
+    /// One view per replay block, as of the last publish.
+    pub blocks: Vec<ReplayBlockView>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -670,8 +723,15 @@ pub struct BusCore {
     pub(crate) published_nodes: Arc<Vec<NodeView>>,
     /// Generator-group cards published alongside the script nodes.
     pub(crate) published_groups: Arc<Vec<GroupCardView>>,
+    /// Replay-block views as of the last publish.
+    pub(crate) published_blocks: Arc<Vec<ReplayBlockView>>,
     /// True when `nodes` changed since `published_nodes` was built.
     pub(crate) nodes_dirty: bool,
+    /// Replay blocks: recorded logs, filtered, streamed back onto the
+    /// simulated timeline as independently toggleable traffic drivers.
+    pub(crate) replay_blocks: Vec<crate::block::ReplayBlock>,
+    /// Counter minting stable replay-block ids; never resets.
+    pub(crate) block_counter: u64,
 }
 
 impl BusCore {
@@ -716,7 +776,10 @@ impl BusCore {
             node_counter: 0,
             published_nodes: Arc::new(Vec::new()),
             published_groups: Arc::new(Vec::new()),
+            published_blocks: Arc::new(Vec::new()),
             nodes_dirty: false,
+            replay_blocks: Vec::new(),
+            block_counter: 0,
         }
     }
 
@@ -816,6 +879,54 @@ impl BusCore {
                             n.start(dbc);
                         }
                         n
+                    })
+                    .collect();
+                self.nodes_dirty = true;
+            }
+            BusCommand::AddReplayBlock {
+                name,
+                channel,
+                path,
+                node_filter,
+                ids,
+            } => self.add_replay_block(name, channel, path, node_filter, ids, status),
+            BusCommand::SetReplayBlock {
+                id,
+                name,
+                channel,
+                path,
+                node_filter,
+                ids,
+            } => self.set_replay_block(id, name, channel, path, node_filter, ids, status),
+            BusCommand::RemoveReplayBlock { id } => {
+                self.replay_blocks.retain(|b| b.id != id);
+                self.nodes_dirty = true;
+            }
+            BusCommand::SetReplayBlockEnabled { id, on } => {
+                self.set_replay_block_enabled(id, on, status)
+            }
+            BusCommand::SetReplayBlocks { blocks } => {
+                self.replay_blocks = blocks
+                    .into_iter()
+                    .map(|cfg| {
+                        self.block_counter += 1;
+                        let mut b = crate::block::ReplayBlock::new(
+                            self.block_counter,
+                            cfg.name,
+                            cfg.channel,
+                            cfg.path,
+                            cfg.node_filter,
+                            cfg.ids,
+                            cfg.enabled,
+                        );
+                        if b.enabled {
+                            let dbc = self
+                                .channels
+                                .get(b.channel as usize)
+                                .and_then(|c| c.dbc.clone());
+                            b.load_queue(dbc.as_deref());
+                        }
+                        b
                     })
                     .collect();
                 self.nodes_dirty = true;
@@ -1032,6 +1143,22 @@ impl BusCore {
         }
         self.published_nodes = Arc::new(views);
         self.published_groups = Arc::new(cards);
+        self.published_blocks = Arc::new(
+            self.replay_blocks
+                .iter()
+                .map(|b| ReplayBlockView {
+                    id: b.id,
+                    name: b.name.clone(),
+                    channel: b.channel,
+                    path: b.path.clone(),
+                    node_filter: b.node_filter.clone(),
+                    ids: b.ids.clone(),
+                    enabled: b.enabled,
+                    frames: b.queue_len(),
+                    last_error: b.last_error.clone(),
+                })
+                .collect(),
+        );
         self.nodes_dirty = false;
     }
 
@@ -1182,6 +1309,7 @@ impl BusCore {
             bus_loads: Arc::clone(&self.published_loads),
             nodes: Arc::clone(&self.published_nodes),
             group_cards: (*self.published_groups).clone(),
+            blocks: (*self.published_blocks).clone(),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self
@@ -1794,6 +1922,100 @@ impl BusCore {
         self.nodes_dirty = true;
     }
 
+    /// Adds a replay block. New blocks start disabled: nothing transmits
+    /// until the user says so, whichever way the toggle flips later.
+    fn add_replay_block(
+        &mut self,
+        name: String,
+        channel: u8,
+        path: String,
+        node_filter: Option<String>,
+        ids: Vec<(u32, bool)>,
+        status: &mut String,
+    ) {
+        self.block_counter += 1;
+        let mut block = crate::block::ReplayBlock::new(
+            self.block_counter,
+            name,
+            channel,
+            path,
+            node_filter,
+            ids,
+            false,
+        );
+        if block.enabled {
+            let dbc = self
+                .channels
+                .get(block.channel as usize)
+                .and_then(|c| c.dbc.clone());
+            block.load_queue(dbc.as_deref());
+        }
+        *status = format!("replay block `{}` added (disabled)", block.name);
+        self.replay_blocks.push(block);
+        self.nodes_dirty = true;
+    }
+
+    /// Rewrites one block's declaration. An enabled block reloads its
+    /// queue against the current database, so the edit lands immediately;
+    /// a disabled one just carries the new text until it is enabled.
+    fn set_replay_block(
+        &mut self,
+        id: u64,
+        name: String,
+        channel: u8,
+        path: String,
+        node_filter: Option<String>,
+        ids: Vec<(u32, bool)>,
+        status: &mut String,
+    ) {
+        let Some(block) = self.replay_blocks.iter_mut().find(|b| b.id == id) else {
+            return;
+        };
+        block.name = name;
+        block.channel = channel;
+        block.path = path;
+        block.node_filter = node_filter;
+        block.ids = ids;
+        if block.enabled {
+            let dbc = self
+                .channels
+                .get(block.channel as usize)
+                .and_then(|c| c.dbc.clone());
+            block.load_queue(dbc.as_deref());
+        }
+        *status = format!("replay block `{}` updated", block.name);
+        self.nodes_dirty = true;
+    }
+
+    /// Toggles a block. Enabling loads the queue right away regardless of
+    /// the measurement state, so a broken path surfaces now, not silently
+    /// at the next start.
+    fn set_replay_block_enabled(&mut self, id: u64, on: bool, status: &mut String) {
+        let Some(block) = self.replay_blocks.iter_mut().find(|b| b.id == id) else {
+            return;
+        };
+        block.enabled = on;
+        if on {
+            let dbc = self
+                .channels
+                .get(block.channel as usize)
+                .and_then(|c| c.dbc.clone());
+            block.load_queue(dbc.as_deref());
+            *status = match (&block.last_error, block.enabled) {
+                (Some(e), _) => format!("replay block `{}`: {e}", block.name),
+                (None, true) => format!(
+                    "replay block `{}` on ({} frame(s))",
+                    block.name,
+                    block.queue_len()
+                ),
+                (None, false) => format!("replay block `{}` off", block.name),
+            };
+        } else {
+            *status = format!("replay block `{}` off", block.name);
+        }
+        self.nodes_dirty = true;
+    }
+
     /// Adds the generator entry `(ch, id)` unless it already exists.
     fn add_entry(&mut self, ch: u8, id: u32) {
         if self.tx_list.iter().any(|t| t.channel == ch && t.id == id) {
@@ -1935,7 +2157,27 @@ impl BusCore {
         self.reset_run();
         self.measuring = true;
         self.nodes_start();
-        *status = "measuring (virtual)".to_string();
+        // Enabled blocks load their queues now: the log is read against
+        // the database as it stands at run start, and a broken path or a
+        // filtered-to-nothing log names itself instead of going silent.
+        let mut block_notes: Vec<String> = Vec::new();
+        for block in &mut self.replay_blocks {
+            if block.enabled {
+                let dbc = self
+                    .channels
+                    .get(block.channel as usize)
+                    .and_then(|c| c.dbc.clone());
+                block.load_queue(dbc.as_deref());
+                if let Some(e) = &block.last_error {
+                    block_notes.push(format!("`{}`: {e}", block.name));
+                }
+            }
+        }
+        *status = if block_notes.is_empty() {
+            "measuring (virtual)".to_string()
+        } else {
+            format!("measuring (virtual); replay block {}", block_notes.join("; "))
+        };
         if self.recorder.recording {
             match self.recorder.open() {
                 Ok(path) => *status = format!("recording to {path}"),
@@ -1949,6 +2191,9 @@ impl BusCore {
     pub(crate) fn reset_run(&mut self) {
         self.sim_t_us = 0;
         self.sim_prev_us = 0;
+        for block in &mut self.replay_blocks {
+            block.rewind();
+        }
         // A fresh start must not inherit the previous run's pause state.
         self.trace_paused = false;
         self.paused_at_us = None;
@@ -2196,6 +2441,18 @@ impl BusCore {
             }
         }
         self.buf.extend(emitted);
+
+        // Replay blocks stream their recorded traffic onto the same sim
+        // clock the generator uses. Replay mode is excluded: the whole log
+        // already IS the source there, and doubling its frames up would
+        // poison every aggregate, load figure, and spec verdict.
+        if !matches!(self.mode, Mode::Replay) {
+            let mut block_out: Vec<CanFrame> = Vec::new();
+            for block in &mut self.replay_blocks {
+                block.poll(sim, &mut block_out, MAX_TX_CATCHUP as usize);
+            }
+            self.buf.extend(block_out);
+        }
 
         // Node timers fire before the ingest walk so the frames they
         // queue join this same step. Their clock is the step's wall

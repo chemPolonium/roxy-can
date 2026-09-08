@@ -209,6 +209,40 @@ impl App {
             .unwrap_or(NodeRole::Absent)
     }
 
+    /// Adds a replay block: recorded traffic from `path`, filtered,
+    /// injected onto this bus when a simulation runs. New blocks start
+    /// disabled; the whole membership/activation semantics live with the
+    /// command.
+    pub fn add_replay_block(
+        &mut self,
+        channel: u8,
+        name: String,
+        path: String,
+        node_filter: Option<String>,
+    ) {
+        if channel as usize >= self.snap.channel_count {
+            return;
+        }
+        self.send(crate::bus::BusCommand::AddReplayBlock {
+            name,
+            channel,
+            path,
+            node_filter,
+            ids: Vec::new(),
+        });
+    }
+
+    /// Ticks a replay block. Enabling loads its queue from the log right
+    /// away, so a broken path surfaces in the status line.
+    pub fn set_replay_block_enabled(&mut self, id: u64, on: bool) {
+        self.send(crate::bus::BusCommand::SetReplayBlockEnabled { id, on });
+    }
+
+    /// Removes a replay block wholesale.
+    pub fn remove_replay_block(&mut self, id: u64) {
+        self.send(crate::bus::BusCommand::RemoveReplayBlock { id });
+    }
+
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

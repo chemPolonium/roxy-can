@@ -73,9 +73,13 @@ fn content(app: &mut App, ui: &Ui) {
         if !ui.table_next_column() {
             continue;
         }
+        // The badge dims when the entity is declared but currently
+        // silent -- one glance shows what actually drives the bus.
+        let alpha = if row.transmits { 1.0 } else { 0.45 };
         match row.kind {
-            EntityKind::Dbc => ui.text_colored([0.95, 0.70, 0.20, 1.0], "DBC"),
-            EntityKind::Script => ui.text_colored([0.35, 0.85, 1.0, 1.0], "脚本"),
+            EntityKind::Dbc => ui.text_colored([0.95, 0.70, 0.20, alpha], "DBC"),
+            EntityKind::Script => ui.text_colored([0.35, 0.85, 1.0, alpha], "脚本"),
+            EntityKind::Replay => ui.text_colored([0.75, 0.55, 1.0, alpha], "回放"),
         }
 
         ui.table_next_column();
@@ -96,10 +100,17 @@ fn content(app: &mut App, ui: &Ui) {
                         ui.text_disabled("来自 DBC 声明，不可插入或删除");
                     }
                     EntityKind::Script => {
-                        if ui.menu_item("删除节点") {
-                            if let Some(id) = row.script_id {
-                                app.send(crate::bus::BusCommand::RemoveNode { id });
-                            }
+                        if ui.menu_item("删除节点")
+                            && let Some(id) = row.script_id
+                        {
+                            app.send(crate::bus::BusCommand::RemoveNode { id });
+                        }
+                    }
+                    EntityKind::Replay => {
+                        if ui.menu_item("删除回放块")
+                            && let Some(id) = row.block_id
+                        {
+                            app.remove_replay_block(id);
                         }
                     }
                 }
@@ -111,7 +122,10 @@ fn content(app: &mut App, ui: &Ui) {
                         channel: row.channel,
                     });
                 }
-                ui.text_disabled("回放块（待实现）");
+                if ui.menu_item("插入回放块") {
+                    let name = format!("Block {}", app.snap.blocks.len() + 1);
+                    app.add_replay_block(row.channel, name, String::new(), None);
+                }
             });
         }
 
@@ -145,10 +159,20 @@ fn content(app: &mut App, ui: &Ui) {
                 }
                 EntityKind::Script => {
                     let mut enabled = row.script_enabled.unwrap_or(false);
-                    if ui.checkbox("##erun", &mut enabled) {
-                        if let Some(id) = row.script_id {
-                            app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: enabled });
-                        }
+                    if ui.checkbox("##erun", &mut enabled)
+                        && let Some(id) = row.script_id
+                    {
+                        app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: enabled });
+                    }
+                }
+                EntityKind::Replay => {
+                    let mut enabled = row
+                        .block_id
+                        .is_some_and(|id| app.snap.blocks.iter().any(|b| b.id == id && b.enabled));
+                    if ui.checkbox("##erun", &mut enabled)
+                        && let Some(id) = row.block_id
+                    {
+                        app.set_replay_block_enabled(id, enabled);
                     }
                 }
             }
@@ -162,6 +186,7 @@ fn content(app: &mut App, ui: &Ui) {
 fn open_entity_ui(app: &mut App, row: &crate::app::EntityRow) {
     match row.kind {
         EntityKind::Script => app.show_nodes = true,
+        EntityKind::Replay => app.show_blocks = true,
         EntityKind::Dbc => {
             app.show_network = true;
             if let Some(idx) = row.network_select {

@@ -173,6 +173,7 @@ pub struct App {
     pub show_spec: bool,
     pub show_id_filter: bool,
     pub show_entities: bool,
+    pub show_blocks: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
     pub id_filter_search: String,
@@ -190,6 +191,10 @@ pub struct App {
     /// yet, keyed by the node's stable id. Applied by the Apply button
     /// (per-keystroke command traffic and recompiles would be churn).
     pub node_src_draft: HashMap<u64, String>,
+    /// Text a Replay Blocks editor is typing but has not applied yet,
+    /// keyed by the block's stable id: name, log path, id filter text.
+    /// Session state only, like the node source drafts.
+    pub block_drafts: HashMap<u64, crate::ui::BlockDraft>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Generator row whose value-source parameters the modal is editing:
@@ -372,6 +377,7 @@ impl App {
             show_spec: false,
             show_id_filter: false,
             show_entities: false,
+            show_blocks: false,
             show_shortcuts: false,
             show_about: false,
             id_filter_search: String::new(),
@@ -381,6 +387,7 @@ impl App {
             state_rule_edit: None,
             state_rule_pick: None,
             node_src_draft: HashMap::new(),
+            block_drafts: HashMap::new(),
             net_selected: 0,
             tx_pick: 0,
             src_edit: None,
@@ -1086,6 +1093,8 @@ pub enum EntityKind {
     Dbc,
     /// A script node; its own UI is the Nodes window.
     Script,
+    /// A replay block; its own UI is the Replay Blocks window.
+    Replay,
 }
 
 /// One flat row of the network entity table: every actor on the bus,
@@ -1102,6 +1111,8 @@ pub struct EntityRow {
     /// while no measurement runs.
     pub script_enabled: Option<bool>,
     pub script_id: Option<u64>,
+    /// Replay rows: the block's stable id.
+    pub block_id: Option<u64>,
     /// DBC rows: the declared role, and the flat index that selects this
     /// node in the Network view (its position across every bus's node
     /// list, the same walk `net_selected` uses).
@@ -1130,6 +1141,7 @@ impl App {
                         transmits: role == NodeRole::Simulated,
                         script_enabled: None,
                         script_id: None,
+                        block_id: None,
                         role: Some(role),
                         network_select: Some(network_select + i),
                     });
@@ -1147,10 +1159,24 @@ impl App {
                         transmits: n.running && !n.errored,
                         script_enabled: Some(n.enabled),
                         script_id: Some(n.id),
+                        block_id: None,
                         role: None,
                         network_select: None,
                     });
                 });
+            for b in self.snap.blocks.iter().filter(|b| b.channel == ch) {
+                rows.push(EntityRow {
+                    kind: EntityKind::Replay,
+                    name: b.name.clone(),
+                    channel: ch,
+                    transmits: self.snap.measuring && b.enabled,
+                    script_enabled: None,
+                    script_id: None,
+                    block_id: Some(b.id),
+                    role: None,
+                    network_select: None,
+                });
+            }
         }
         rows
     }

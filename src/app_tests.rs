@@ -4707,6 +4707,227 @@ fn entity_rows_list_dbc_nodes_and_script_nodes_flat() {
     assert!(row.transmits, "a simulated node drives the bus");
 }
 
+/// The whole replay-block path, from the entity table to the wire: an
+/// enabled block streams its filtered log traffic into a running
+/// simulation, with recorded spacing; nothing flows while the block is
+/// disabled, and nothing flows in Replay mode either (the log is already
+/// the source there).
+#[test]
+fn a_replay_block_streams_its_log_into_the_simulation() {
+    // Fixture log: 0x100 every 10 ms for 5 frames, plus one 0x999 frame.
+    let path = std::env::temp_dir().join("roxy_can_block_e2e.asc");
+    let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+    for i in 0..5u64 {
+        let mut f = CanFrame {
+            t_us: i * 10_000,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 1,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        };
+        f.data[0] = i as u8;
+        w.write(&f).unwrap();
+    }
+    let mut stray = CanFrame {
+        t_us: 25_000,
+        channel: 0,
+        id: 0x999,
+        extended: false,
+        len: 1,
+        data: [0; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    };
+    stray.data[0] = 0xAA;
+    w.write(&stray).unwrap();
+    w.finish().unwrap();
+
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.add_replay_block(
+        0,
+        "restbus".to_string(),
+        path.to_string_lossy().into_owned(),
+        None,
+    );
+    app.settle();
+    // The block entity is visible and starts disabled -- adding a block
+    // must not begin transmitting on its own.
+    let row = app
+        .entity_rows()
+        .into_iter()
+        .find(|r| r.kind == EntityKind::Replay)
+        .expect("the block joined the entity table");
+    let id = row.block_id.expect("block id");
+    assert!(
+        !row.transmits,
+        "a fresh block is off"
+    );
+    assert!(
+        app.snap
+            .blocks
+            .first()
+            .is_some_and(|b| !b.enabled && b.frames == 0),
+        "no queue is loaded until the block is enabled"
+    );
+
+    // Filter the block down to 0x100, then enable it: the queue loads
+    // against the filter at once.
+    app.send(crate::bus::BusCommand::SetReplayBlock {
+        id,
+        name: "restbus".to_string(),
+        channel: 0,
+        path: path.to_string_lossy().into_owned(),
+        node_filter: None,
+        ids: vec![(0x100, false)],
+    });
+    app.settle();
+    app.set_replay_block_enabled(id, true);
+    app.settle();
+    let block_view = app.snap.blocks.first().expect("block view");
+    assert_eq!(block_view.frames, 5, "the id filter kept only 0x100");
+
+    // Run a 45 ms simulation: every block frame is due by then.
+    app.start_virtual();
+    app.settle();
+    for t in 1..=60 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let agg = app
+        .snap
+        .aggs
+        .iter()
+        .find(|a| a.channel == 0 && a.id == 0x100)
+        .expect("the block's frames reached the bus");
+    assert_eq!(agg.count, 5, "all five frames arrived");
+    assert!(
+        !app.snap.aggs.iter().any(|a| a.channel == 0 && a.id == 0x999),
+        "the id filter kept the stray frame out"
+    );
+    let cycles: Vec<u64> = app
+        .trace
+        .iter()
+        .filter(|f| f.channel == 0 && f.id == 0x100)
+        .map(|f| f.t_us)
+        .collect();
+    assert_eq!(
+        cycles,
+        [0, 10_000, 20_000, 30_000, 40_000],
+        "recorded spacing survives the round trip"
+    );
+    app.stop();
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// In Replay mode the log itself is the source; replay blocks stay
+/// silent so no frame is ever delivered twice.
+#[test]
+fn a_replay_block_stays_silent_in_replay_mode() {
+    let path = std::env::temp_dir().join("roxy_can_block_replay.asc");
+    let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+    let mut f = CanFrame {
+        t_us: 0,
+        channel: 0,
+        id: 0x321,
+        extended: false,
+        len: 1,
+        data: [0; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    };
+    f.data[0] = 1;
+    w.write(&f).unwrap();
+    w.finish().unwrap();
+
+    let mut app = App::headless();
+    app.load_log(&path.to_string_lossy());
+    app.add_replay_block(
+        0,
+        "b".to_string(),
+        path.to_string_lossy().into_owned(),
+        None,
+    );
+    app.settle();
+    let id = app.snap.blocks[0].id;
+    app.set_replay_block_enabled(id, true);
+    app.settle();
+    app.set_replay_speed(100.0);
+    app.replay();
+    app.settle();
+    for t in 1..=40 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let count_321 = app
+        .snap
+        .aggs
+        .iter()
+        .find(|a| a.channel == 0 && a.id == 0x321)
+        .map(|a| a.count)
+        .unwrap_or(0);
+    assert_eq!(
+        count_321, 1,
+        "exactly one delivery: the log's own frame, not the block's copy"
+    );
+    app.stop();
+    std::fs::remove_file(&path).ok();
+}
+
+/// Replay blocks survive a project round trip: declaration, filters, and
+/// the enable bit all come back.
+#[test]
+fn replay_blocks_round_trip_through_a_project() {
+    let path = std::env::temp_dir().join("roxy_can_block_proj.asc");
+    let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+    let mut f = CanFrame {
+        t_us: 0,
+        channel: 0,
+        id: 0x100,
+        extended: false,
+        len: 1,
+        data: [0; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    };
+    f.data[0] = 1;
+    w.write(&f).unwrap();
+    w.finish().unwrap();
+
+    let mut app = App::headless();
+    app.add_replay_block(
+        1,
+        "engine_log".to_string(),
+        path.to_string_lossy().into_owned(),
+        None,
+    );
+    app.settle();
+    let id = app.snap.blocks[0].id;
+    app.set_replay_block_enabled(id, true);
+    app.settle();
+
+    let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+    assert!(
+        json.contains(r#""blocks""#) && json.contains("engine_log"),
+        "the declaration is in the file"
+    );
+    let mut restored = App::headless();
+    serde_json::from_str::<Config>(&json)
+        .unwrap()
+        .apply(&mut restored);
+    restored.settle();
+    let block = restored.snap.blocks.first().expect("block restored");
+    assert_eq!(block.name, "engine_log");
+    assert_eq!(block.channel, 1);
+    assert!(block.enabled, "the enable bit survives");
+    assert_eq!(block.frames, 1, "the queue reloaded against the same log");
+    std::fs::remove_file(&path).ok();
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();
