@@ -18,6 +18,9 @@ pub struct Channel {
     /// to this bus. First entry is the primary; on duplicate message ids
     /// the earlier database wins.
     pub dbc_paths: Vec<String>,
+    /// Content checksums of `dbc_paths`, kept in sync so external edits
+    /// to a DBC file can be detected and the database reloaded.
+    pub dbc_sums: Vec<u64>,
     /// Names of the DBC nodes marked as simulated on this bus. Kept on the
     /// channel itself so deleting or renumbering a bus takes its nodes along
     /// without a second remap pass.

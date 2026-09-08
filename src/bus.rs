@@ -30,6 +30,17 @@ pub(crate) const MAX_TX_CATCHUP: u32 = 1024;
 /// Oldest bus-event markers fall off once the list outgrows this.
 pub(crate) const MARKER_CAP: usize = 512;
 
+/// FNV-1a content checksum for a DBC file, used by the auto-reload sweep
+/// to detect external edits without full re-parses.
+pub(crate) fn content_sum(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
 /// How many frames before a trigger-initiated recording start are written
 /// into the file (the pre-trigger context).
 pub(crate) const PRE_BUFFER_FRAMES: usize = 256;
@@ -1310,6 +1321,7 @@ impl BusCore {
             name: format!("CAN{}", self.bus_counter),
             dbc: None,
             dbc_paths: vec!["assets/sample.dbc".to_string()],
+            dbc_sums: Vec::new(),
             sim_nodes: Vec::new(),
             bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
@@ -1340,10 +1352,12 @@ impl BusCore {
         };
         if channel.dbc_paths.iter().all(|p| p.trim().is_empty()) {
             channel.dbc = None;
+            channel.dbc_sums.clear();
             return false;
         }
         let name = channel.name.clone();
         let mut tables: Vec<crate::dbc::SymbolTable> = Vec::new();
+        let mut sums: Vec<u64> = Vec::new();
         let mut first_error: Option<String> = None;
         for path in &channel.dbc_paths {
             let path = path.trim();
@@ -1352,7 +1366,10 @@ impl BusCore {
             }
             match std::fs::read_to_string(path) {
                 Ok(content) => match crate::dbc::load_dbc_str(&content) {
-                    Ok(table) => tables.push(table),
+                    Ok(table) => {
+                        sums.push(content_sum(content.as_bytes()));
+                        tables.push(table);
+                    }
                     Err(e) => {
                         first_error.get_or_insert_with(|| format!("{path}: {e}"));
                     }
@@ -1362,6 +1379,7 @@ impl BusCore {
                 }
             }
         }
+        channel.dbc_sums = sums;
         let loaded = tables.len();
         let total: usize = tables.iter().map(|t| t.order.len()).sum();
         if tables.is_empty() {
@@ -1384,6 +1402,43 @@ impl BusCore {
             None => format!("{name} DBC loaded: {total} messages"),
         };
         true
+    }
+
+    /// Re-reads every attached DBC file and reloads the merged table when
+    /// any content checksum changed. Returns the reload status text when
+    /// something was reloaded. Cheap: one small read per file per sweep,
+    /// rate-limited by the caller. Keeps external DBC edits flowing into
+    /// decode without a manual reload.
+    pub(crate) fn maybe_reload_changed_dbcs(&mut self) -> Option<String> {
+        // First pass: find buses whose checksum changed (read-only scan).
+        let mut to_reload: Vec<usize> = Vec::new();
+        for (ch, channel) in self.channels.iter().enumerate() {
+            if channel.dbc_paths.len() != channel.dbc_sums.len() {
+                continue; // lists out of sync until the next explicit load
+            }
+            for (i, path) in channel.dbc_paths.iter().enumerate() {
+                let path = path.trim();
+                if path.is_empty() {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(path) else {
+                    continue;
+                };
+                if content_sum(content.as_bytes()) != channel.dbc_sums[i] {
+                    to_reload.push(ch);
+                    break; // one reload per bus per sweep
+                }
+            }
+        }
+        // Second pass: reload and collect status text.
+        let mut reloaded: Option<String> = None;
+        for ch in to_reload {
+            let mut status = String::new();
+            if self.load_channel(ch, &mut status) {
+                reloaded = Some(status);
+            }
+        }
+        reloaded
     }
 
     /// Stores the bus's database path list (primary first, extras after)

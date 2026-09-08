@@ -3315,6 +3315,66 @@ BO_ 257 OnlyInB: 1 ECU
     app.stop();
 }
 
+/// External DBC edits are detected by checksum and reload automatically:
+/// the merged table picks up the new message without a manual reload.
+#[test]
+fn dbc_file_changes_are_detected_and_reloaded() {
+    let a = std::env::temp_dir().join("roxy_can_autoreload_a.dbc");
+    std::fs::write(
+        &a,
+        r#"VERSION "auto a"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 300 FirstMsg: 1 ECU
+ SG_ A1 : 0|8@1+ (1,0) [0|0] ""  ECU
+"#,
+    )
+    .unwrap();
+
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec![a.to_string_lossy().into_owned()],
+    });
+    app.settle();
+    let db = app.channel_dbc(0).expect("loaded");
+    assert!(
+        db.message_name_of((300, false)) == Some("FirstMsg"),
+        "BO_ 300 is decimal id 300"
+    );
+
+    // External edit: rename the message in the file.
+    std::fs::write(
+        &a,
+        r#"VERSION "auto a"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 300 RenamedMsg: 1 ECU
+ SG_ A1 : 0|8@1+ (1,0) [0|0] ""  ECU
+"#,
+    )
+    .unwrap();
+    assert!(app.maybe_reload_changed_dbcs().is_some());
+    app.refresh_snapshot();
+    let db = app.channel_dbc(0).expect("still loaded");
+    assert_eq!(
+        db.message_name_of((300, false)),
+        Some("RenamedMsg"),
+        "the reload picked up the external edit"
+    );
+    std::fs::remove_file(&a).ok();
+}
+
 /// A standard and an extended frame sharing one numeric id are two
 /// messages as far as every consumer is concerned: two aggregates, two
 /// spec watch keys, no verdicts bleeding across the class boundary.

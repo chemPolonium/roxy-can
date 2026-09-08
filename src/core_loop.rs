@@ -131,6 +131,9 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
             // pause and sim time stays frozen across it -- the same
             // contract the UI loop used to implement.
             let mut paused_at: Option<u64> = None;
+            // Rate limit for the DBC auto-reload sweep: cheap stats, but
+            // there is no reason to stat attached files every lap.
+            let mut last_dbc_sweep = Instant::now();
             loop {
                 let now = elapsed_us(clock_zero);
                 let wait_us = lane
@@ -156,6 +159,15 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                     // wall anchor re-set here, in the same stroke.
                     clock_zero = Instant::now();
                     paused_at = None;
+                }
+                // External DBC edits flow back in without a manual reload:
+                // checksums are cheap, the sweep runs at most every 2 s.
+                if last_dbc_sweep.elapsed() >= Duration::from_secs(2) {
+                    last_dbc_sweep = Instant::now();
+                    if let Some(status) = lane.core.maybe_reload_changed_dbcs() {
+                        lane.pending_status = Some(status);
+                        any = true;
+                    }
                 }
                 if lane.core.measuring && !lane.core.trace_paused {
                     let now = elapsed_us(clock_zero);
