@@ -119,17 +119,30 @@ fn content(app: &mut App, ui: &Ui) {
             // label and button sit level on their own, and aligning would
             // push the `same_line` button a step below the row.
             let path = paths.first().cloned().unwrap_or_default();
-            let extra_n = paths.len().saturating_sub(1);
+            let extras: Vec<String> = paths.iter().skip(1).cloned().collect();
             ui.text(if path.trim().is_empty() {
                 "(none)".to_string()
-            } else if extra_n > 0 {
-                format!("{} +{}", file_name(&path), extra_n)
             } else {
                 file_name(&path)
             });
             ui.same_line();
             if ui.small_button(format!("Open...##busdbc{i}")) {
                 app.pick_dbc_for(i);
+            }
+            // Extra attached databases: one row each with a detach button.
+            for (e, extra) in extras.iter().enumerate() {
+                ui.text(file_name(extra));
+                ui.same_line();
+                if ui.small_button(format!("x##busdbx{i}_{e}")) {
+                    app.detach_dbc_extra(i, e);
+                }
+            }
+            ui.same_line();
+            if ui.small_button(format!("+##busdbadd{i}")) {
+                app.attach_dbc_dialog(i);
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("附加更多 DBC 文件到该总线");
             }
             ui.table_next_column();
             // The load view divides wire bits by these; there is no hardware

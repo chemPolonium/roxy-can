@@ -175,6 +175,22 @@ impl App {
         }
     }
 
+    /// Attaches one more DBC file to the bus as an extra database (the
+    /// primary stays); re-attaching the same path is a no-op.
+    pub fn attach_dbc_to(&mut self, ch: usize, path: String) {
+        let mut paths = self
+            .snap
+            .channels
+            .get(ch)
+            .map(|c| c.dbc_paths.clone())
+            .unwrap_or_default();
+        if paths.contains(&path) {
+            return;
+        }
+        paths.push(path);
+        self.send(crate::bus::BusCommand::LoadDbc { ch: ch as u8, paths });
+    }
+
     /// Sets a bus's primary DBC path (extra attached databases stay) and
     /// loads it; successful parses are recorded in the recent list.
     /// "Table present after the load" is the success signal -- a failed
@@ -198,6 +214,35 @@ impl App {
         });
         if self.snap.channels.get(ch).is_some_and(|c| c.dbc.is_some()) {
             self.push_recent_dbc(new_path);
+        }
+    }
+
+    /// Detaches the extra database at `extra_index` (0 = first extra; the
+    /// primary is detached with `open_dbc_for`'s replacement or by emptying
+    /// the path). Reloads the bus from the remaining list.
+    pub fn detach_dbc_extra(&mut self, ch: usize, extra_index: usize) {
+        let mut paths = self
+            .snap
+            .channels
+            .get(ch)
+            .map(|c| c.dbc_paths.clone())
+            .unwrap_or_default();
+        if extra_index + 1 < paths.len() {
+            paths.remove(extra_index + 1);
+            self.send(crate::bus::BusCommand::LoadDbc { ch: ch as u8, paths });
+        }
+    }
+
+    /// Opens a file-picker and attaches the picked DBC to the bus as an
+    /// extra database.
+    pub fn attach_dbc_dialog(&mut self, ch: usize) {
+        let name = self.channel_name(ch as u8);
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title(format!("Attach extra DBC to {name}"))
+            .add_filter("DBC files", &["dbc"])
+            .pick_file()
+        {
+            self.attach_dbc_to(ch, p.to_string_lossy().into_owned());
         }
     }
 
