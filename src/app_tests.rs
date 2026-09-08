@@ -5082,6 +5082,43 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     app.stop();
 }
 
+/// Triggers bind to a bus by index too: a rule watching the removed bus
+/// is meaningless, and a Send reaction aimed at it has no target -- both
+/// are dropped; the survivors shift down.
+#[test]
+fn removing_a_bus_drops_its_triggers_and_shifts_the_rest() {
+    let mut app = App::headless();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 1, id: 199 },
+        TriggerAction::StartRecording,
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x100 },
+        TriggerAction::StartRecording,
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 1, id: 200 },
+        TriggerAction::Send { ch: 0, id: 0x100 },
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::ErrorFrame { ch: 1 },
+        TriggerAction::Send { ch: 1, id: 199 },
+    ));
+    app.refresh_snapshot();
+
+    app.remove_channel(0);
+    app.settle();
+
+    assert_eq!(app.snap.triggers.len(), 2, "two of four survive");
+    assert_eq!(app.snap.triggers[0].cond.bus(), 0, "shifted down");
+    assert_eq!(app.snap.triggers[1].cond.bus(), 0);
+    assert_eq!(
+        app.snap.triggers[1].action,
+        TriggerAction::Send { ch: 0, id: 199 },
+        "the Send reaction follows its bus down"
+    );
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();

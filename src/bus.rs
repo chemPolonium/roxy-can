@@ -1974,6 +1974,32 @@ impl BusCore {
                 b.channel -= 1;
             }
         }
+        // Triggers bind to a bus by index as well: a rule watching the
+        // removed bus is meaningless, and a Send reaction aimed at it has
+        // no target left. Everything else shifts down.
+        let removed = ch as u8;
+        self.triggers.retain(|t| {
+            let cond_gone = t.cond.bus() == removed;
+            let action_gone =
+                matches!(&t.action, TriggerAction::Send { ch, .. } if *ch == removed);
+            !cond_gone && !action_gone
+        });
+        for t in &mut self.triggers {
+            let cond_ch = match &mut t.cond {
+                TriggerCond::SignalCross { ch, .. }
+                | TriggerCond::IdPresent { ch, .. }
+                | TriggerCond::ErrorFrame { ch }
+                | TriggerCond::CycleTimeout { ch, .. } => ch,
+            };
+            if *cond_ch > removed {
+                *cond_ch -= 1;
+            }
+            if let TriggerAction::Send { ch, .. } = &mut t.action
+                && *ch > removed
+            {
+                *ch -= 1;
+            }
+        }
         self.emitted_streams = self
             .emitted_streams
             .drain(..)
