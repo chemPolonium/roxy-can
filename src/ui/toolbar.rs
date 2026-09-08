@@ -280,6 +280,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                     {
                         app.show_nodes = !app.show_nodes;
                     }
+                    if ui
+                        .menu_item_config("Entities")
+                        .selected(app.show_entities)
+                        .build()
+                    {
+                        app.show_entities = !app.show_entities;
+                    }
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {

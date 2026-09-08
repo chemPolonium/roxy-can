@@ -172,6 +172,7 @@ pub struct App {
     pub show_bus_stats: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
+    pub show_entities: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
     pub id_filter_search: String,
@@ -370,6 +371,7 @@ impl App {
             show_bus_stats: false,
             show_spec: false,
             show_id_filter: false,
+            show_entities: false,
             show_shortcuts: false,
             show_about: false,
             id_filter_search: String::new(),
@@ -1073,6 +1075,84 @@ impl App {
         };
         lane.step_lap(now_us, stride, tol, grace);
         self.read_snapshot();
+    }
+}
+
+/// What an entity-table row represents. The kind decides the badge and
+/// the row's own UI -- the table itself never branches on more than this.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EntityKind {
+    /// A node the database declares; its own UI is the Network view.
+    Dbc,
+    /// A script node; its own UI is the Nodes window.
+    Script,
+}
+
+/// One flat row of the network entity table: every actor on the bus,
+/// however it is driven, one row each -- no kind folders.
+#[derive(Clone, Debug)]
+pub struct EntityRow {
+    pub kind: EntityKind,
+    pub name: String,
+    pub channel: u8,
+    /// Whether the entity currently drives the bus: a running script, or
+    /// a `Simulated` role.
+    pub transmits: bool,
+    /// Script rows: the enabled intent, which may differ from `transmits`
+    /// while no measurement runs.
+    pub script_enabled: Option<bool>,
+    pub script_id: Option<u64>,
+    /// DBC rows: the declared role, and the flat index that selects this
+    /// node in the Network view (its position across every bus's node
+    /// list, the same walk `net_selected` uses).
+    pub role: Option<NodeRole>,
+    pub network_select: Option<usize>,
+}
+
+impl App {
+    /// Builds the entity table's rows: per bus, its DBC nodes in database
+    /// order, then that bus's script nodes by name. The ordering is
+    /// derived state -- a flat table has no folders to sort inside.
+    pub fn entity_rows(&self) -> Vec<EntityRow> {
+        let mut rows: Vec<EntityRow> = Vec::new();
+        let mut script_nodes: Vec<&crate::bus::NodeView> = self.snap.nodes.iter().collect();
+        script_nodes.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut network_select = 0usize;
+        for ch in 0..self.snap.channel_count {
+            let ch = ch as u8;
+            if let Some(db) = self.channel_dbc(ch) {
+                for (i, node_name) in db.nodes.iter().enumerate() {
+                    let role = self.node_role(ch, node_name);
+                    rows.push(EntityRow {
+                        kind: EntityKind::Dbc,
+                        name: node_name.clone(),
+                        channel: ch,
+                        transmits: role == NodeRole::Simulated,
+                        script_enabled: None,
+                        script_id: None,
+                        role: Some(role),
+                        network_select: Some(network_select + i),
+                    });
+                }
+                network_select += db.nodes.len();
+            }
+            script_nodes
+                .iter()
+                .filter(|n| n.channel == ch)
+                .for_each(|n| {
+                    rows.push(EntityRow {
+                        kind: EntityKind::Script,
+                        name: n.name.clone(),
+                        channel: ch,
+                        transmits: n.running && !n.errored,
+                        script_enabled: Some(n.enabled),
+                        script_id: Some(n.id),
+                        role: None,
+                        network_select: None,
+                    });
+                });
+        }
+        rows
     }
 }
 

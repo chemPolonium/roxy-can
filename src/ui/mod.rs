@@ -3,6 +3,7 @@ pub mod busstats;
 pub mod data;
 pub mod desktops;
 pub mod dockspace;
+pub mod entities;
 pub mod graphics;
 pub mod help;
 pub mod idfilter;
@@ -59,6 +60,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     triggers::render(app, ui);
     tx::render(app, ui);
     network::render(app, ui);
+    entities::render(app, ui);
     spec::render(app, ui);
     data::render(app, ui);
     graphics::render(app, ui);

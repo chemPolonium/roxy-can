@@ -333,6 +333,8 @@ pub struct DesktopCfg {
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
+    #[serde(default)]
+    pub show_entities: bool,
 }
 
 fn cycle_default() -> u64 {
@@ -446,6 +448,8 @@ pub struct Config {
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
+    #[serde(default)]
+    pub show_entities: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
@@ -547,6 +551,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_bus_stats: d.show_bus_stats,
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
+        show_entities: d.show_entities,
     }
 }
 
@@ -607,6 +612,7 @@ impl Config {
             show_bus_stats: app.show_bus_stats,
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
+            show_entities: app.show_entities,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
             trace_windows: app
@@ -1050,6 +1056,7 @@ impl Config {
         app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
+        app.show_entities = self.show_entities;
         app.text_rate_hz = self.text_rate_hz;
         // Nodes cross as one wholesale command: the core mints fresh ids
         // and (when a measurement is running) starts every enabled node.
@@ -1150,6 +1157,7 @@ impl Config {
                     show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
+                    show_entities: d.show_entities,
                 })
                 .collect();
             app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);

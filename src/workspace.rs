@@ -122,6 +122,7 @@ pub struct Desktop {
     pub show_bus_stats: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
+    pub show_entities: bool,
 }
 
 use crate::app::App;
@@ -174,6 +175,7 @@ impl App {
             show_bus_stats: self.show_bus_stats,
             show_spec: self.show_spec,
             show_id_filter: self.show_id_filter,
+            show_entities: self.show_entities,
         }
     }
 
@@ -209,6 +211,7 @@ impl App {
         self.show_bus_stats = d.show_bus_stats;
         self.show_spec = d.show_spec;
         self.show_id_filter = d.show_id_filter;
+        self.show_entities = d.show_entities;
         let layout = if d.layout.is_empty() {
             self.default_layout.clone()
         } else {
@@ -254,6 +257,7 @@ impl App {
             show_bus_stats: false,
             show_spec: false,
             show_id_filter: false,
+            show_entities: false,
         };
         self.desktops.push(snap);
         self.active_desktop = self.desktops.len() - 1;
