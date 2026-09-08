@@ -53,7 +53,7 @@
 
 ### 观测与触发
 
-- **State Tracker 收尾**：右键把 Data/Graphics 窗口里的信号直接加入跟踪；状态区段表的 CSV 导出口径细化。
+- **State Tracker 收尾**：~~右键把 Data/Graphics 窗口里的信号直接加入跟踪~~ ✅（信号列表行右键 → 选 tracker 或新建并加入）；状态区段表的 CSV 导出口径细化。
 - **触发数值常量 UI 化**（待议）：预触发 256 帧 / post-roll 32 帧 / 标记上限目前在 `bus.rs` 顶部常量。
 
 ### 结构

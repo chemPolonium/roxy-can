@@ -70,6 +70,39 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         }
         ui.same_line();
         ui.text(&key.3);
+        // Right-click a Graphics/Data row routes the signal into a State
+        // Tracker -- one more way to start watching a signal's states
+        // without visiting the Signal Selection popup.
+        let text_hovered = ui.is_item_hovered();
+        if !matches!(kind, ListKind::State(_)) && text_hovered {
+            let menu_id = format!("##track-menu{j}");
+            if ui.is_mouse_clicked(MouseButton::Right) {
+                ui.open_popup(&menu_id);
+            }
+            ui.popup(&menu_id, || {
+                ui.text_disabled("加入 State Tracker");
+                let names: Vec<String> =
+                    app.state_trackers.iter().map(|w| w.name.clone()).collect();
+                for (ti, name) in names.iter().enumerate() {
+                    if ui.menu_item(name) {
+                        app.set_win_signal(
+                            crate::app::PopupTarget::State(ti),
+                            key.clone(),
+                            true,
+                        );
+                    }
+                }
+                if ui.menu_item("+ 新建 State Tracker") {
+                    app.new_state_window();
+                    let ti = app.state_trackers.len() - 1;
+                    app.set_win_signal(
+                        crate::app::PopupTarget::State(ti),
+                        key.clone(),
+                        true,
+                    );
+                }
+            });
+        }
         // A State Tracker row's badge opens its custom state-band editor
         // (CANoe's Value Definition); Graphics rows keep the Y-axis badge.
         if let ListKind::State(wi) = kind {
