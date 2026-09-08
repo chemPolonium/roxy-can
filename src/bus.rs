@@ -1958,6 +1958,33 @@ impl BusCore {
                 t.channel -= 1;
             }
         }
+        // Script nodes and replay blocks bind to a bus by index: the ones
+        // on the removed bus lose their meaning and go with it, the rest
+        // shift down -- the same policy the tx entries follow. Derived
+        // streams follow their owning node's bus.
+        self.nodes.retain(|n| n.channel as usize != ch);
+        for n in &mut self.nodes {
+            if n.channel as usize > ch {
+                n.channel -= 1;
+            }
+        }
+        self.replay_blocks.retain(|b| b.channel as usize != ch);
+        for b in &mut self.replay_blocks {
+            if b.channel as usize > ch {
+                b.channel -= 1;
+            }
+        }
+        self.emitted_streams = self
+            .emitted_streams
+            .drain(..)
+            .filter_map(|(mut k, owner)| {
+                remap(k.0).map(|nc| {
+                    k.0 = nc;
+                    (k, owner)
+                })
+            })
+            .collect();
+        self.nodes_dirty = true;
         self.trace.rewrite(|f| {
             if f.channel as usize == ch {
                 return false;

@@ -5023,6 +5023,65 @@ fn emit_value_publishes_a_derived_signal_stream() {
     app.stop();
 }
 
+/// Removing a bus takes its script nodes, replay blocks, and derived
+/// streams with it and shifts the survivors' bindings down -- the same
+/// remap the tx entries and the windows follow.
+#[test]
+fn removing_a_bus_remaps_nodes_blocks_and_streams() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gone".to_string(),
+        channel: 0,
+    });
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "stay".to_string(),
+        channel: 1,
+    });
+    app.settle();
+    let stay_id = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.name == "stay")
+        .expect("stay node")
+        .id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id: stay_id,
+        source: "on start { emit_value(\"X\", 1); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id: stay_id, on: true });
+    app.add_replay_block(1, "blk".to_string(), String::new(), None);
+    app.settle();
+
+    app.start_virtual();
+    app.settle();
+    for t in 1..=10u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    assert!(
+        app.snap.emitted.iter().any(|(k, _)| k.0 == 1),
+        "the surviving node emitted on bus CAN2"
+    );
+
+    app.remove_channel(0);
+    app.settle();
+
+    let nodes: Vec<&str> = app.snap.nodes.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(nodes, ["stay"], "the removed bus's node went with it");
+    assert_eq!(
+        app.snap.nodes[0].channel, 0,
+        "the survivor's binding shifted down"
+    );
+    assert_eq!(app.snap.blocks.len(), 1);
+    assert_eq!(app.snap.blocks[0].channel, 0, "the block shifted down too");
+    assert!(
+        app.snap.emitted.iter().all(|(k, _)| k.0 == 0),
+        "derived streams follow their node's bus"
+    );
+    app.stop();
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();
