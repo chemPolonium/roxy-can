@@ -31,6 +31,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         col: 1,
         break_jumps: Vec::new(),
         continue_jumps: Vec::new(),
+        signal_refs: Vec::new(),
     };
 
     // Pass 1: function signatures, so later items may call earlier names.
@@ -133,6 +134,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         functions: c.functions,
         handlers: c.handlers,
         host_fns: HOST_FNS.iter().map(|(n, _, _)| n.to_string()).collect(),
+        signal_refs: c.signal_refs,
     })
 }
 
@@ -161,6 +163,10 @@ struct Comp {
     /// Continue jump code indices for the innermost loop, patched to the
     /// step/cond position.
     continue_jumps: Vec<Vec<usize>>,
+    /// Signal references made by literal-argument `sig` / `set_sig`
+    /// calls, deduped: metadata the host can check against the database
+    /// at node-assembly time.
+    signal_refs: Vec<(u32, String)>,
 }
 
 impl Comp {
@@ -540,6 +546,29 @@ impl Comp {
                             name,
                             &format!("expects {}..{} argument(s), got {}", min, max, args.len()),
                         );
+                    }
+                    // Literal signal references to `sig` / `set_sig` are
+                    // recorded so the host can check them against the
+                    // database at node-assembly time.
+                    if *name == "sig"
+                        && args.len() == 2
+                        && let (Expr::Int(id), Expr::Str(sig)) = (&args[0], &args[1])
+                        && *id >= 0
+                    {
+                        let r = (*id as u32, sig.clone());
+                        if !self.signal_refs.contains(&r) {
+                            self.signal_refs.push(r);
+                        }
+                    }
+                    if *name == "set_sig"
+                        && args.len() == 4
+                        && let (Expr::Int(id), Expr::Str(sig)) = (&args[1], &args[2])
+                        && *id >= 0
+                    {
+                        let r = (*id as u32, sig.clone());
+                        if !self.signal_refs.contains(&r) {
+                            self.signal_refs.push(r);
+                        }
                     }
                     self.emit(Op::CallHost(id, args.len() as u8));
                 } else {

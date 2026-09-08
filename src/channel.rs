@@ -188,7 +188,10 @@ impl App {
             return;
         }
         paths.push(path);
-        self.send(crate::bus::BusCommand::LoadDbc { ch: ch as u8, paths });
+        self.send(crate::bus::BusCommand::LoadDbc {
+            ch: ch as u8,
+            paths,
+        });
     }
 
     /// Sets a bus's primary DBC path (extra attached databases stay) and
@@ -229,7 +232,10 @@ impl App {
             .unwrap_or_default();
         if extra_index + 1 < paths.len() {
             paths.remove(extra_index + 1);
-            self.send(crate::bus::BusCommand::LoadDbc { ch: ch as u8, paths });
+            self.send(crate::bus::BusCommand::LoadDbc {
+                ch: ch as u8,
+                paths,
+            });
         }
     }
 

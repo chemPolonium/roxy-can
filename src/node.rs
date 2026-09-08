@@ -128,6 +128,23 @@ impl ScriptNode {
             }
         };
         let handlers = script.handlers.clone();
+        // Static check: literal signal references in `sig` / `set_sig`
+        // are validated against the channel database, so a typo'd name is
+        // reported at Apply instead of failing silently at runtime.
+        if let Some(db) = &dbc {
+            for (id, sig) in &script.signal_refs {
+                let known = db
+                    .message_of(*id)
+                    .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
+                if !known {
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        format!("[check] 信号未在 DBC 中找到: 0x{id:X} \"{sig}\""),
+                    );
+                }
+            }
+        }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.host_extern = Some(Box::new(move |name, args| {
@@ -618,6 +635,56 @@ mod tests {
         n.start(None);
         assert!(!n.running());
         assert!(n.log_snapshot()[0].contains("[compile]"));
+    }
+
+    /// Literal `sig` / `set_sig` references are checked against the
+    /// channel database at Apply: a typo'd name is a logged warning, not
+    /// a runtime surprise. With no database there is nothing to check.
+    #[test]
+    fn unknown_signal_references_are_reported_at_apply() {
+        let dbc = Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(
+                r#"VERSION "check"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 256 Real: 2 ECU
+ SG_ RealSig : 0|16@1+ (0.1,0) [0|0] ""  ECU
+"#,
+            )
+            .unwrap(),
+        ));
+        let mut n = node(
+            r#"
+                on start {
+                    let v = sig(0x100, "RealSig");
+                    let w = sig(0x100, "TypoSig");
+                }
+            "#,
+        );
+        n.start(dbc.clone());
+        let log = n.log_snapshot();
+        let check_lines: Vec<&String> = log.iter().filter(|l| l.starts_with("[check]")).collect();
+        assert_eq!(
+            check_lines.len(),
+            1,
+            "exactly the typo is flagged: {check_lines:?}"
+        );
+        assert!(check_lines[0].contains("TypoSig"));
+
+        // Without a database there is no vocabulary to check against —
+        // and no false warnings either.
+        let mut n2 = node("on start { let v = sig(0x100, \"Whatever\"); }");
+        n2.start(None);
+        let log2 = n2.log_snapshot();
+        assert!(
+            log2.iter().all(|l| !l.starts_with("[check]")),
+            "no db: no static check warnings: {log2:?}"
+        );
     }
 
     #[test]

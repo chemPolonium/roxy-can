@@ -226,6 +226,10 @@ pub struct Script {
     /// Host function names, ordered by id (mirrors [`HOST_FNS`] plus any
     /// future external registrations).
     pub host_fns: Vec<String>,
+    /// `(message id, signal name)` pairs referenced by literal-argument
+    /// `sig` / `set_sig` calls, deduped. Pure metadata for the host's
+    /// load-time checks; the kernel itself attaches no meaning to them.
+    pub signal_refs: Vec<(u32, String)>,
 }
 
 /// The host functions every script can call. The compiler resolves names
