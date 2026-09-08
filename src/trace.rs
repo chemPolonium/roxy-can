@@ -13,12 +13,19 @@ use std::sync::Arc;
 const SEAL_FRAMES: usize = 512;
 
 /// The bus-side ring: append at the back, drop from the front once the
-/// limit is exceeded.
+/// limit is exceeded. Head drops are *accounted*, never silent: the
+/// dropped count and the first dropped frame's timestamp surface in the
+/// Trace window.
 #[derive(Debug, Default)]
 pub struct TraceRing {
     chunks: Vec<Arc<Vec<CanFrame>>>,
     tail: Vec<CanFrame>,
     total: usize,
+    /// Frames trimmed from the head since the last `clear`.
+    dropped: u64,
+    /// Timestamp of the first frame the ring ever dropped (its own
+    /// timeline), so the loss has a visible position, not just a count.
+    first_dropped_t_us: Option<u64>,
 }
 
 impl TraceRing {
@@ -39,20 +46,35 @@ impl TraceRing {
         while overflow > 0 {
             let Some(head_len) = self.chunks.first().map(|c| c.len()) else {
                 let stale = overflow.min(self.tail.len());
+                let leaving: Vec<CanFrame> = self.tail[..stale].to_vec();
                 self.tail.drain(..stale);
                 self.total -= stale;
+                self.note_dropped(&leaving);
                 return;
             };
             if head_len <= overflow {
                 let dropped = self.chunks.remove(0);
+                self.note_dropped(&dropped);
                 overflow -= dropped.len();
                 self.total -= dropped.len();
             } else {
                 let head = Arc::make_mut(self.chunks.first_mut().expect("checked above"));
+                let leaving: Vec<CanFrame> = head[..overflow].to_vec();
                 head.drain(..overflow);
                 self.total -= overflow;
+                self.note_dropped(&leaving);
                 overflow = 0;
             }
+        }
+    }
+
+    fn note_dropped(&mut self, frames: &[CanFrame]) {
+        if frames.is_empty() {
+            return;
+        }
+        self.dropped += frames.len() as u64;
+        if self.first_dropped_t_us.is_none() {
+            self.first_dropped_t_us = Some(frames[0].t_us);
         }
     }
 
@@ -79,6 +101,8 @@ impl TraceRing {
             chunks: self.chunks.clone(),
             tail: self.tail.clone(),
             total: self.total,
+            dropped: self.dropped,
+            first_dropped_t_us: self.first_dropped_t_us,
         })
     }
 
@@ -98,6 +122,15 @@ impl TraceRing {
         self.chunks.clear();
         self.tail.clear();
         self.total = 0;
+        self.dropped = 0;
+        self.first_dropped_t_us = None;
+    }
+
+    /// Frames trimmed from the head since the last clear, and where the
+    /// loss began (the first dropped frame's own timestamp).
+    #[cfg(test)]
+    pub fn head_loss(&self) -> (u64, Option<u64>) {
+        (self.dropped, self.first_dropped_t_us)
     }
 
     /// Core-side iteration, for test assertions on the working ring.
@@ -116,6 +149,8 @@ pub struct TraceView {
     chunks: Vec<Arc<Vec<CanFrame>>>,
     tail: Vec<CanFrame>,
     total: usize,
+    dropped: u64,
+    first_dropped_t_us: Option<u64>,
 }
 
 impl TraceView {
@@ -125,6 +160,12 @@ impl TraceView {
 
     pub fn is_empty(&self) -> bool {
         self.total == 0
+    }
+
+    /// Frames the ring trimmed from its head (the loss the limit causes),
+    /// and the first lost frame's timestamp when any were lost.
+    pub fn head_loss(&self) -> (u64, Option<u64>) {
+        (self.dropped, self.first_dropped_t_us)
     }
 
     pub fn last(&self) -> Option<&CanFrame> {
@@ -204,5 +245,49 @@ impl<'a> DoubleEndedIterator for TraceIter<'a> {
             }
             self.back_cur = self.back_segs.next()?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::can::frame::{Direction, FrameFlags, MAX_CAN_FD_LEN};
+
+    fn frame(t_us: u64) -> CanFrame {
+        CanFrame {
+            t_us,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 0,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        }
+    }
+
+    /// The ring's limit trims the head, and the trim is *accounted*: how
+    /// many frames were lost and where the loss began.
+    #[test]
+    fn head_drops_are_accounted_with_their_first_timestamp() {
+        let mut ring = TraceRing::default();
+        for t in 0..10u64 {
+            ring.push(frame(t * 100));
+        }
+        ring.enforce_limit(5);
+        assert_eq!(ring.len(), 5);
+        let (dropped, first) = ring.head_loss();
+        assert_eq!((dropped, first), (5, Some(0)), "the five oldest, from t=0");
+
+        // Losing more moves the count, not the remembered origin.
+        for t in 10..15u64 {
+            ring.push(frame(t * 100));
+        }
+        ring.enforce_limit(5);
+        let (dropped, first) = ring.head_loss();
+        assert_eq!((dropped, first), (10, Some(0)));
+
+        ring.clear();
+        assert_eq!(ring.head_loss(), (0, None), "a fresh run forgets the loss");
     }
 }
