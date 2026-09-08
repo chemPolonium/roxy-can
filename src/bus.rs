@@ -454,6 +454,9 @@ pub struct Snapshot {
     pub group_cards: Vec<GroupCardView>,
     /// One view per replay block, as of the last publish.
     pub blocks: Vec<ReplayBlockView>,
+    /// Derived-signal streams opened by `emit_value` so far: key plus the
+    /// owning node's display name.
+    pub emitted: Vec<(SigKey, String)>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -732,6 +735,9 @@ pub struct BusCore {
     pub(crate) replay_blocks: Vec<crate::block::ReplayBlock>,
     /// Counter minting stable replay-block ids; never resets.
     pub(crate) block_counter: u64,
+    /// Derived-signal streams a node has opened with `emit_value`:
+    /// synthetic key plus the owning node's name, for the selection tree.
+    pub(crate) emitted_streams: Vec<(SigKey, String)>,
 }
 
 impl BusCore {
@@ -780,6 +786,7 @@ impl BusCore {
             nodes_dirty: false,
             replay_blocks: Vec::new(),
             block_counter: 0,
+            emitted_streams: Vec::new(),
         }
     }
 
@@ -1181,6 +1188,7 @@ impl BusCore {
     /// queued frames join this step's buffer. `inputs` carries what
     /// `now()`/`sig()` read, per channel.
     fn run_node_timers(&mut self, now_us: u64, inputs: &HashMap<u8, HostInput>) {
+        let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             for (id, ext, data) in node.run_timers(now_us, &input) {
@@ -1192,9 +1200,15 @@ impl BusCore {
                     self.sim_t_us,
                 ));
             }
+            for (name, v) in node.take_emitted() {
+                derived.push((node.channel, node.id, node.name.clone(), name, v));
+            }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
+        }
+        for (ch, node_id, node_name, name, v) in derived {
+            self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
     }
 
@@ -1208,14 +1222,51 @@ impl BusCore {
         input: &HostInput,
     ) -> Vec<(u32, bool, Vec<u8>)> {
         let mut out = Vec::new();
+        let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             out.extend(node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input));
+            for (name, v) in node.take_emitted() {
+                derived.push((node.channel, node.id, node.name.clone(), name, v));
+            }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
         }
+        for (ch, node_id, node_name, name, v) in derived {
+            self.ingest_emitted(ch, node_id, &node_name, &name, v);
+        }
         out
+    }
+
+    /// Folds one `emit_value` sample into its synthetic subscription,
+    /// creating the stream on first emission. The key carries
+    /// [`crate::app::EMITTED_ID_BASE`] in its id, so a derived signal can
+    /// never collide with a real frame's signals; the selection tree lists
+    /// these streams under the owning node's name.
+    fn ingest_emitted(&mut self, ch: u8, node_id: u64, node_name: &str, name: &str, v: f64) {
+        let key: SigKey = (
+            ch,
+            crate::app::EMITTED_ID_BASE | node_id as u32,
+            false,
+            name.to_string(),
+        );
+        if !self.emitted_streams.iter().any(|(k, _)| k == &key) {
+            self.emitted_streams.push((key.clone(), node_name.to_string()));
+            self.nodes_dirty = true;
+        }
+        self.subscribe_signal(key.clone());
+        let stride = self.applied_stride_us;
+        let t_us = self.sim_t_us;
+        let Some(entry) = self.subs.get_mut(&key) else {
+            return;
+        };
+        entry.latest = v;
+        entry.last_raw = v as i64;
+        entry.last_update_us = t_us;
+        if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
+            entry.push_sample(t_us, v, stride);
+        }
     }
 
     /// Builds one [`HostInput`] per channel that has nodes: the bus clock
@@ -1310,6 +1361,7 @@ impl BusCore {
             nodes: Arc::clone(&self.published_nodes),
             group_cards: (*self.published_groups).clone(),
             blocks: (*self.published_blocks).clone(),
+            emitted: self.emitted_streams.clone(),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self

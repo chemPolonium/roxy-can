@@ -4928,6 +4928,47 @@ fn replay_blocks_round_trip_through_a_project() {
     std::fs::remove_file(&path).ok();
 }
 
+/// `emit_value` turns a script into a derived-signal driver: the stream
+/// shows up in the snapshot under the node's name, subscribes like any
+/// signal, and carries the computed samples through history.
+#[test]
+fn emit_value_publishes_a_derived_signal_stream() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "calc".to_string(),
+        channel: 0,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 10 { emit_value(\"SpeedKmh\", 36 * 10); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    for t in 1..=60 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+
+    let key = (0u8, crate::app::EMITTED_ID_BASE | id as u32, false, "SpeedKmh".to_string());
+    assert!(
+        app.snap
+            .emitted
+            .iter()
+            .any(|(k, node)| k == &key && node == "calc"),
+        "the stream is published for the selection tree"
+    );
+    let sub = app.subs.get(&key).expect("the stream subscribes itself");
+    assert_eq!(sub.latest, 360.0, "the expression was evaluated");
+    assert!(
+        !sub.history.is_empty(),
+        "samples flowed with the timer cadence"
+    );
+    app.stop();
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();

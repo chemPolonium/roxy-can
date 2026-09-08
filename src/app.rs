@@ -26,6 +26,11 @@ pub(crate) const MIN_STRIDE_US: u64 = 1_000;
 /// a dense hour-wide window cannot lock the UI; the plot shows what it got and
 /// asks again on the next change.
 pub(crate) const MAX_SCAN_FRAMES: usize = 300_000;
+/// Synthetic id prefix for derived signals: `emit_value` streams are
+/// keyed `(ch, EMITTED_ID_BASE | node_id, false, name)`. The prefix sits
+/// far above every real identifier (max 0x1FFFFFFF), so a derived stream
+/// can never collide with a frame's own signals.
+pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 /// Cycle a new generator entry gets when its DBC declares none. A declared

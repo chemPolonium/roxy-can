@@ -42,6 +42,9 @@ pub struct ScriptNode {
 struct NodeRuntime {
     vm: Vm,
     handlers: Vec<Handler>,
+    /// Derived-signal samples queued by `emit_value` and not yet taken by
+    /// the bus. Drained from the VM after every handler run.
+    emitted: Vec<(String, f64)>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.
@@ -180,6 +183,7 @@ impl ScriptNode {
         let mut rt = NodeRuntime {
             vm,
             handlers,
+            emitted: Vec::new(),
             timers,
         };
         // `on start` handlers, in declaration order.
@@ -475,11 +479,21 @@ impl ScriptNode {
         }
     }
 
-    /// Moves freshly printed lines from the VM into the node's log ring.
+    /// Moves freshly printed lines from the VM into the node's log ring,
+    /// and derived-signal samples into the runtime's emission queue.
     fn drain_vm(rt: &mut NodeRuntime, log: &mut VecDeque<String>, dirty: &mut bool) {
         for line in rt.vm.output.drain(..) {
             Self::push_log_into(log, dirty, line);
         }
+        rt.emitted.append(&mut rt.vm.emitted);
+    }
+
+    /// Hands the bus everything `emit_value` queued since the last call.
+    pub fn take_emitted(&mut self) -> Vec<(String, f64)> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.emitted))
+            .unwrap_or_default()
     }
 
     fn fail(&mut self, msg: &str) {

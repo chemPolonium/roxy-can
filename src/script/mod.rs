@@ -241,6 +241,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("print", 1, 16),
     ("send", 1, 9),
     ("send_ext", 1, 9),
+    ("emit_value", 2, 2),
     ("now", 0, 0),
     ("sig", 2, 2),
     ("bytes", 1, 1),

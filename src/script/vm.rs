@@ -70,6 +70,12 @@ pub struct Vm {
     /// the standard range (`send_ext`); `send` leaves the choice to the
     /// id alone.
     pub outbox: Vec<(u32, bool, Vec<u8>)>,
+    /// Values queued by `emit_value("Name", expr)`: derived signals the
+    /// host publishes under this node's identity. The node runtime drains
+    /// this after each handler run; the bus turns each emission into a
+    /// synthetic subscription stream that Graphics and Data select like
+    /// any database signal.
+    pub emitted: Vec<(String, f64)>,
     /// Host-published read values: the clock and latest signal values.
     /// The node runtime refreshes this before each handler run; `now()`
     /// and `sig()` read it.
@@ -104,6 +110,7 @@ impl Vm {
             steps: 0,
             output: Vec::new(),
             outbox: Vec::new(),
+            emitted: Vec::new(),
             host_input: HostInput::default(),
             host_extern: None,
             timer_ops: Vec::new(),
@@ -557,6 +564,32 @@ impl Vm {
                 };
                 self.outbox.push((id, force_ext, data));
             }
+            "emit_value" => {
+                // emit_value("Name", value): publishes one derived-signal
+                // sample. The expression is the whole point -- the value
+                // is whatever the script computed from `sig()` reads and
+                // the math builtins, so a derived signal needs no
+                // evaluator of its own.
+                let (Value::Str(name), v) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "emit_value(\"Name\", value) needs a string and a number".into(),
+                    ));
+                };
+                if name.is_empty() {
+                    return Err(VmError("emit_value: signal name must not be empty".into()));
+                }
+                let v = match v {
+                    Value::Float(f) if f.is_finite() => *f,
+                    Value::Int(n) => *n as f64,
+                    other => {
+                        return Err(VmError(format!(
+                            "emit_value: value must be a number, got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                self.emitted.push((name.clone(), v));
+            }
             // Stimulus math: floats in and out; `now()` reads the same
             // clock, so e.g. sin(now()) animates with the bus.
             "abs" | "floor" | "ceil" | "round" | "sin" | "cos" => {
@@ -989,6 +1022,34 @@ mod tests {
     #[test]
     fn math_builtins_reject_non_numbers() {
         let script = compile("print(abs(\"x\"));").unwrap();
+        let mut vm = Vm::new(script);
+        let e = vm.run().unwrap_err();
+        assert!(e.to_string().contains("number"), "{e}");
+    }
+
+    /// `emit_value` queues a named sample per call -- the arithmetic in
+    /// the argument IS the derived-signal evaluator.
+    #[test]
+    fn emit_value_queues_named_samples() {
+        let script = compile("emit_value(\"Speed\", 2 * 3.5); emit_value(\"Zero\", 0);").unwrap();
+        let mut vm = Vm::new(script);
+        vm.run().unwrap();
+        assert_eq!(
+            vm.emitted,
+            vec![
+                ("Speed".to_string(), 7.0),
+                ("Zero".to_string(), 0.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn emit_value_rejects_an_empty_name_or_a_non_number() {
+        let script = compile("emit_value(\"\", 1);").unwrap();
+        let mut vm = Vm::new(script);
+        assert!(vm.run().is_err(), "an empty name is a runtime error");
+
+        let script = compile("emit_value(\"X\", \"no\");").unwrap();
         let mut vm = Vm::new(script);
         let e = vm.run().unwrap_err();
         assert!(e.to_string().contains("number"), "{e}");

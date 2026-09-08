@@ -436,8 +436,40 @@ fn signal_content(app: &mut App, ui: &Ui) {
         }
     }
 
+    emitted_section(app, ui, &sel, &mut actions);
+
     for (key, on) in actions {
         app.set_win_signal(target, key, on);
+    }
+}
+
+/// Adds a checkbox per emitted signal emitted by the script nodes
+/// (`emit_value`): grouped by node below the DBC tree, because a derived
+/// signal is selected exactly like a database one.
+fn emitted_section(
+    app: &mut App,
+    ui: &Ui,
+    sel: &HashSet<crate::observe::SigKey>,
+    actions: &mut Vec<(crate::observe::SigKey, bool)>,
+) {
+    let streams: Vec<(crate::observe::SigKey, String)> = app.snap.emitted.clone();
+    if streams.is_empty() {
+        return;
+    }
+    ui.spacing();
+    ui.separator();
+    ui.text_colored(
+        [0.75, 0.55, 1.0, 1.0],
+        format!("派生信号  ({}/{})", streams.iter().filter(|(k, _)| sel.contains(k)).count(), streams.len()),
+    );
+    ui.text_disabled("脚本节点 emit_value 发布的派生信号");
+    for (key, node_name) in &streams {
+        let mut on = sel.contains(key);
+        if ui.checkbox(format!("{}##emit{}_{:X}_{}", key.3, key.0, key.1, node_name), &mut on) {
+            actions.push((key.clone(), on));
+        }
+        ui.same_line();
+        ui.text_disabled(format!("← {node_name}"));
     }
 }
 
