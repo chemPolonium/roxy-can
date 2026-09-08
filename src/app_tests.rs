@@ -3436,6 +3436,81 @@ BO_ 300 RenamedMsg: 1 ECU
     std::fs::remove_file(&a).ok();
 }
 
+/// A simulated node whose database gains a message gets the new entry at
+/// reload time -- but **inactive**: an external DBC edit must not begin
+/// transmitting on its own.
+#[test]
+fn a_reload_seeds_new_entries_for_simulated_nodes_inactive() {
+    let a = std::env::temp_dir().join("roxy_can_role_seed.dbc");
+    std::fs::write(
+        &a,
+        r#"VERSION "role seed"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 300 FirstMsg: 1 ECU
+ SG_ A1 : 0|8@1+ (1,0) [0|0] ""  ECU
+"#,
+    )
+    .unwrap();
+
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec![a.to_string_lossy().into_owned()],
+    });
+    app.settle();
+    app.set_node_role(0, "ECU", NodeRole::Simulated);
+    app.settle();
+    assert_eq!(
+        active_ids(&app, 0),
+        [300],
+        "the declared node starts on its declared message"
+    );
+
+    // External edit: the node gains a second message.
+    std::fs::write(
+        &a,
+        r#"VERSION "role seed"
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 300 FirstMsg: 1 ECU
+ SG_ A1 : 0|8@1+ (1,0) [0|0] ""  ECU
+
+BO_ 301 SecondMsg: 1 ECU
+ SG_ A2 : 0|8@1+ (1,0) [0|0] ""  ECU
+"#,
+    )
+    .unwrap();
+    assert!(app.maybe_reload_changed_dbcs().is_some());
+    app.refresh_snapshot();
+
+    let fresh = app
+        .tx_list
+        .iter()
+        .find(|t| t.channel == 0 && t.id == 301)
+        .expect("the new message became a generator entry");
+    assert!(
+        !fresh.active,
+        "an external edit must not start traffic by itself"
+    );
+    assert_eq!(
+        active_ids(&app, 0),
+        [300],
+        "the previously simulated message keeps transmitting"
+    );
+    std::fs::remove_file(&a).ok();
+}
+
 /// A standard and an extended frame sharing one numeric id are two
 /// messages as far as every consumer is concerned: two aggregates, two
 /// spec watch keys, no verdicts bleeding across the class boundary.

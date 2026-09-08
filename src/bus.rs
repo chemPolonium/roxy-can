@@ -1408,14 +1408,41 @@ impl BusCore {
         for extra in tables {
             crate::dbc::absorb(&mut merged, extra);
         }
-        // Transmitter lists feed the generator-group cards.
+        // Transmitter lists feed the role cards.
         self.nodes_dirty = true;
         channel.dbc = Some(std::sync::Arc::new(merged));
+        // The role declarations are already in place on a reload, so the
+        // fresh table has to meet them: Simulated nodes get entries for
+        // messages the database newly declares.
+        self.seed_entries_for_simulated(ch);
         *status = match first_error {
             Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
             None => format!("{name} DBC loaded: {total} messages"),
         };
         true
+    }
+
+    /// Gives every `Simulated` node on the bus the generator entries it is
+    /// missing, so a database that gained messages makes them show up.
+    /// New entries arrive **inactive** -- neither a DBC edit nor a project
+    /// restore may start traffic by itself; switching the role or the TX
+    /// switch is the explicit act that does.
+    fn seed_entries_for_simulated(&mut self, ch: usize) {
+        let simulated: Vec<String> = self.channels[ch]
+            .node_roles
+            .iter()
+            .filter(|(_, r)| **r == NodeRole::Simulated)
+            .map(|(n, _)| n.clone())
+            .collect();
+        for node in simulated {
+            let ids = self
+                .channel_dbc(ch as u8)
+                .map(|db| db.node_tx_ids(&node))
+                .unwrap_or_default();
+            for id in ids {
+                self.add_entry(ch as u8, id);
+            }
+        }
     }
 
     /// Re-reads every attached DBC file and reloads the merged table when
