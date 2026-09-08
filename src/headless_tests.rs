@@ -4,7 +4,7 @@
 //! way the frame loop does, with a synthetic clock, so they never touch
 //! imgui, winit or the real wall clock.
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, NodeRole};
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::log::AscWriter;
 use crate::sim::{SrcKind, ValueSrc};
@@ -503,6 +503,120 @@ fn a_script_node_responds_to_a_diagnostic_request() {
         .count();
     assert!(sent >= 2, "timer frames hit the bus: {sent}");
     app.stop();
+}
+
+/// The 2026-09-09 role-model batch on the THREADED drive: role switches
+/// and replay blocks must cross the command boundary and act inside the
+/// core thread, observable through the snapshot.
+#[test]
+fn the_threaded_core_honors_node_roles_and_replay_blocks() {
+    let mut app = App::new();
+
+    // Simulating EngineECU arms its generator entries (0x100 among them).
+    app.send(crate::bus::BusCommand::SetNodeRole {
+        ch: 0,
+        node: "EngineECU".to_string(),
+        role: NodeRole::Simulated,
+    });
+    app.start_virtual();
+
+    let zero_hundred = |app: &App| {
+        app.snap
+            .trace
+            .iter()
+            .filter(|f| f.id == 0x100 && matches!(f.dir, Direction::Tx))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && zero_hundred(&app) < 2 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.update();
+    }
+    assert!(
+        zero_hundred(&app) >= 2,
+        "a Simulated role must drive traffic on the threaded core"
+    );
+
+    // Leaving the simulation silences the entry; the snapshot's TxView
+    // and the role card both read the new state.
+    app.send(crate::bus::BusCommand::SetNodeRole {
+        ch: 0,
+        node: "EngineECU".to_string(),
+        role: NodeRole::Absent,
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        app.update();
+        let inactive = app
+            .snap
+            .tx
+            .iter()
+            .find(|t| t.channel == 0 && t.id == 0x100)
+            .is_some_and(|t| !t.active);
+        if inactive {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let engine_card = app
+        .snap
+        .group_cards
+        .iter()
+        .find(|c| c.name == "EngineECU" && c.channel == 0)
+        .expect("EngineECU role card");
+    assert_eq!(engine_card.role, NodeRole::Absent, "the card reads the role");
+
+    // A replay block enabled mid-run streams its recorded frames onto
+    // the live bus -- the block's fixture carries only id 0x777.
+    let log = std::env::temp_dir().join("roxy_can_threaded_block.asc");
+    let mut w = AscWriter::new(&log.to_string_lossy()).unwrap();
+    for t in 0..4u64 {
+        let mut f = CanFrame {
+            t_us: t * 10_000,
+            channel: 0,
+            id: 0x777,
+            extended: false,
+            len: 1,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        };
+        f.data[0] = t as u8;
+        w.write(&f).unwrap();
+    }
+    w.finish().unwrap();
+    app.send(crate::bus::BusCommand::AddReplayBlock {
+        name: "threaded blk".to_string(),
+        channel: 0,
+        path: log.to_string_lossy().into_owned(),
+        node_filter: None,
+        ids: Vec::new(),
+    });
+    app.settle();
+    let block_id = app.snap.blocks[0].id;
+    app.send(crate::bus::BusCommand::SetReplayBlockEnabled {
+        id: block_id,
+        on: true,
+    });
+    let seven = |app: &App| {
+        app.snap
+            .trace
+            .iter()
+            .filter(|f| f.id == 0x777 && matches!(f.dir, Direction::Tx))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && seven(&app) < 2 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.update();
+    }
+    assert!(
+        seven(&app) >= 2,
+        "an enabled replay block must stream on the threaded core"
+    );
+
+    app.stop();
+    std::fs::remove_file(&log).ok();
 }
 
 /// The crash the first threaded launch actually produced: startup
