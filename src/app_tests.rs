@@ -5395,6 +5395,29 @@ fn detaching_hardware_clears_the_node_switches() {
     );
 }
 
+/// Removing a bus detaches its hardware and shifts the other buses'
+/// attachments and node switches down with the bus.
+#[test]
+fn removing_a_bus_detaches_its_hardware_and_shifts_the_rest() {
+    let mut app = App::headless();
+    app.hw.attach_mock(0);
+    let (_w, _i) = app.hw.attach_mock(1);
+    app.hw.set_node_tx(1, "EngineECU", true);
+    assert!(app.hw.is_attached(1));
+
+    app.remove_channel(0);
+    app.settle();
+
+    assert!(
+        app.hw.is_attached(0) && !app.hw.is_attached(1),
+        "the removed bus's hardware went with it, the survivor shifted down"
+    );
+    assert!(
+        !app.hw.node_sends_via_hw(1, "EngineECU"),
+        "the removed bus's switches are gone"
+    );
+}
+
 /// State Trackers ride the same remap: their rows (and the per-key color
 /// memory) follow the bus removal just like Graphics and Data rows.
 #[test]

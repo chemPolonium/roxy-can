@@ -567,7 +567,7 @@ fn render_window(
                             None => 0,
                             Some(h) => 1 + KINDS.iter().position(|k| *k == h.kind).unwrap_or(0),
                         };
-                        if ui.combo_simple_string(format!("##src{i}_{}", s.name), &mut pick, &kinds)
+                        if ui.combo_simple_string(format!("##src{i}_{}", s.name), &mut pick, kinds)
                         {
                             if pick == 0 {
                                 app.send(crate::bus::BusCommand::ClearEntrySource {

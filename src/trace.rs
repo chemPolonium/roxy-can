@@ -180,9 +180,11 @@ impl TraceRing {
     /// share the pid-suffixed default file.
     #[cfg(test)]
     fn with_spill_at(path: std::path::PathBuf) -> Self {
-        let mut ring = TraceRing::default();
-        ring.spill = Some(SpillFile::create_at(path).expect("spill file"));
-        ring
+        let spill = Some(SpillFile::create_at(path).expect("spill file"));
+        TraceRing {
+            spill,
+            ..Default::default()
+        }
     }
 }
 

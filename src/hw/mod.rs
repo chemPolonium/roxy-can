@@ -123,6 +123,32 @@ impl Hardware {
         self.node_tx.retain(|(b, _)| *b != bus);
     }
 
+    /// Drops the attachment (and switches) of a bus being removed and
+    /// shifts the survivors down -- same policy as the tx entries. The
+    /// ports close with their bus.
+    pub fn remove_bus(&mut self, ch: usize) {
+        self.buses.retain(|&b, _| b as usize != ch);
+        self.buses = self
+            .buses
+            .drain()
+            .map(|(mut b, bh)| {
+                if b as usize > ch {
+                    b -= 1;
+                }
+                (b, bh)
+            })
+            .collect();
+        self.node_tx.retain(|(b, _)| *b as usize != ch);
+        self.node_tx = self
+            .node_tx
+            .iter()
+            .map(|&(b, ref n)| {
+                let nb = if b as usize > ch { b - 1 } else { b };
+                (nb, n.clone())
+            })
+            .collect();
+    }
+
     pub fn set_node_tx(&mut self, bus: u8, node: &str, on: bool) {
         if on {
             if self.is_attached(bus) {

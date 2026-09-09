@@ -2001,6 +2001,9 @@ impl BusCore {
                 t.channel -= 1;
             }
         }
+        // The hardware attachment of the removed bus closes with it; the
+        // other buses' attachments shift down with their bus.
+        self.hw.remove_bus(ch);
         // Script nodes and replay blocks bind to a bus by index: the ones
         // on the removed bus lose their meaning and go with it, the rest
         // shift down -- the same policy the tx entries follow. Derived
