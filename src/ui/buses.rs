@@ -147,43 +147,62 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             // The load view divides wire bits by these; there is no hardware
             // behind the simulation, so the values are declarations about the
-            // bus being analysed, not device settings. Each accepted step is
-            // its own command -- there is no draft state worth the trouble
-            // for two integers.
-            ui.set_next_item_width(56.0);
-            let mut arb = arb_kbps as i32;
-            if ui
-                .input_int(format!("##busarb{i}"), &mut arb)
-                .step(50)
-                .step_fast(500)
-                .build()
+            // bus being analysed, not device settings. Each field is a plain
+            // "type the number" box: the draft lives in App while the field
+            // has focus, the parsed value commits when the edit ends, and an
+            // unparsable text simply reverts to the model.
+            let mut arb = match &app.bus_arb_edit {
+                Some((r, s)) if *r == i => s.clone(),
+                _ => arb_kbps.to_string(),
+            };
+            ui.set_next_item_width(70.0);
+            if ui.input_text(format!("##busarb{i}"), &mut arb).build()
+                || ui.is_item_active()
             {
-                app.send(crate::bus::BusCommand::SetChannelConfig {
-                    ch: i as u8,
-                    name: None,
-                    dbc_path: None,
-                    bitrate_kbps: Some(arb.max(1) as u32),
-                    fd_data_kbps: None,
-                    node_roles: None,
-                });
+                app.bus_arb_edit = Some((i, arb.clone()));
+            }
+            if ui.is_item_deactivated_after_edit() {
+                if let Ok(v) = arb.trim().parse::<u32>() {
+                    app.send(crate::bus::BusCommand::SetChannelConfig {
+                        ch: i as u8,
+                        name: None,
+                        dbc_path: None,
+                        bitrate_kbps: Some(v.max(1)),
+                        fd_data_kbps: None,
+                        node_roles: None,
+                    });
+                }
+                app.bus_arb_edit = None;
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("仲裁比特率 kbit/s，直接输入数字");
             }
             ui.same_line();
-            ui.set_next_item_width(56.0);
-            let mut data = data_kbps as i32;
-            if ui
-                .input_int(format!("##busdata{i}"), &mut data)
-                .step(100)
-                .step_fast(1000)
-                .build()
+            let mut data = match &app.bus_data_edit {
+                Some((r, s)) if *r == i => s.clone(),
+                _ => data_kbps.to_string(),
+            };
+            ui.set_next_item_width(70.0);
+            if ui.input_text(format!("##busdata{i}"), &mut data).build()
+                || ui.is_item_active()
             {
-                app.send(crate::bus::BusCommand::SetChannelConfig {
-                    ch: i as u8,
-                    name: None,
-                    dbc_path: None,
-                    bitrate_kbps: None,
-                    fd_data_kbps: Some(data.max(1) as u32),
-                    node_roles: None,
-                });
+                app.bus_data_edit = Some((i, data.clone()));
+            }
+            if ui.is_item_deactivated_after_edit() {
+                if let Ok(v) = data.trim().parse::<u32>() {
+                    app.send(crate::bus::BusCommand::SetChannelConfig {
+                        ch: i as u8,
+                        name: None,
+                        dbc_path: None,
+                        bitrate_kbps: None,
+                        fd_data_kbps: Some(v.max(1)),
+                        node_roles: None,
+                    });
+                }
+                app.bus_data_edit = None;
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("CAN FD 数据段比特率 kbit/s，直接输入数字");
             }
             ui.table_next_column();
             if ui.small_button(format!("x##busrm{i}")) {

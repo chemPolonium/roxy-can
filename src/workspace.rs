@@ -116,7 +116,6 @@ pub struct Desktop {
     pub show_tx: bool,
     pub show_network: bool,
     pub show_measurement: bool,
-    pub show_nodes: bool,
     pub show_buses: bool,
     pub show_triggers: bool,
     pub show_bus_stats: bool,
@@ -170,7 +169,6 @@ impl App {
             show_tx: self.show_tx,
             show_network: self.show_network,
             show_measurement: self.show_measurement,
-            show_nodes: self.show_nodes,
             show_buses: self.show_buses,
             show_triggers: self.show_triggers,
             show_bus_stats: self.show_bus_stats,
@@ -207,7 +205,6 @@ impl App {
         self.show_tx = d.show_tx;
         self.show_network = d.show_network;
         self.show_measurement = d.show_measurement;
-        self.show_nodes = d.show_nodes;
         self.show_buses = d.show_buses;
         self.show_triggers = d.show_triggers;
         self.show_bus_stats = d.show_bus_stats;
@@ -254,7 +251,6 @@ impl App {
             show_tx: false,
             show_network: false,
             show_measurement: false,
-            show_nodes: false,
             show_buses: false,
             show_triggers: false,
             show_bus_stats: false,

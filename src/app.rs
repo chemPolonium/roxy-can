@@ -171,7 +171,6 @@ pub struct App {
     pub show_tx: bool,
     pub show_network: bool,
     pub show_measurement: bool,
-    pub show_nodes: bool,
     pub show_buses: bool,
     pub show_triggers: bool,
     pub show_bus_stats: bool,
@@ -200,8 +199,15 @@ pub struct App {
     /// keyed by the block's stable id: name, log path, id filter text.
     /// Session state only, like the node source drafts.
     pub block_drafts: HashMap<u64, crate::ui::BlockDraft>,
+    /// Script-node editors currently open, by node id in open order.
+    /// Session state; an id whose node is gone closes its editor.
+    pub open_editors: Vec<u64>,
     pub net_selected: usize,
     pub tx_pick: usize,
+    /// Bitrate drafts in the Buses window: row plus the text being typed,
+    /// committed to the model when the edit ends. Session state.
+    pub bus_arb_edit: Option<(usize, String)>,
+    pub bus_data_edit: Option<(usize, String)>,
     /// Generator row whose value-source parameters the modal is editing:
     /// index into `tx_list` plus the DBC signal name.
     pub src_edit: Option<(usize, String)>,
@@ -384,7 +390,6 @@ impl App {
             show_tx: true,
             show_network: true,
             show_measurement: true,
-            show_nodes: false,
             show_buses: false,
             show_triggers: false,
             show_bus_stats: false,
@@ -402,8 +407,11 @@ impl App {
             state_rule_pick: None,
             node_src_draft: HashMap::new(),
             block_drafts: HashMap::new(),
+            open_editors: Vec::new(),
             net_selected: 0,
             tx_pick: 0,
+            bus_arb_edit: None,
+            bus_data_edit: None,
             src_edit: None,
             src_seq_buf: String::new(),
             src_draft: None,
@@ -1141,6 +1149,18 @@ impl App {
     /// Builds the entity table's rows: per bus, its DBC nodes in database
     /// order, then that bus's script nodes by name. The ordering is
     /// derived state -- a flat table has no folders to sort inside.
+    /// Opens the node's script editor (no-op when already open).
+    pub fn open_script_editor(&mut self, id: u64) {
+        if !self.open_editors.contains(&id) {
+            self.open_editors.push(id);
+        }
+    }
+
+    /// Closes the node's script editor.
+    pub fn close_script_editor(&mut self, id: u64) {
+        self.open_editors.retain(|&x| x != id);
+    }
+
     pub fn entity_rows(&self) -> Vec<EntityRow> {
         let mut rows: Vec<EntityRow> = Vec::new();
         let mut script_nodes: Vec<&crate::bus::NodeView> = self.snap.nodes.iter().collect();

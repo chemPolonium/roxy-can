@@ -343,8 +343,6 @@ pub struct DesktopCfg {
     #[serde(default = "true_default")]
     pub show_measurement: bool,
     #[serde(default)]
-    pub show_nodes: bool,
-    #[serde(default)]
     pub show_buses: bool,
     #[serde(default)]
     pub show_triggers: bool,
@@ -499,8 +497,6 @@ pub struct Config {
     #[serde(default = "true_default")]
     pub show_measurement: bool,
     #[serde(default)]
-    pub show_nodes: bool,
-    #[serde(default)]
     pub show_buses: bool,
     #[serde(default)]
     pub show_triggers: bool,
@@ -615,7 +611,6 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_tx: d.show_tx,
         show_network: d.show_network,
         show_measurement: d.show_measurement,
-        show_nodes: d.show_nodes,
         show_buses: d.show_buses,
         show_triggers: d.show_triggers,
         show_bus_stats: d.show_bus_stats,
@@ -677,7 +672,6 @@ impl Config {
             show_tx: app.show_tx,
             show_network: app.show_network,
             show_measurement: app.show_measurement,
-            show_nodes: app.show_nodes,
             show_buses: app.show_buses,
             show_triggers: app.show_triggers,
             show_bus_stats: app.show_bus_stats,
@@ -1137,7 +1131,6 @@ impl Config {
         app.show_tx = self.show_tx;
         app.show_network = self.show_network;
         app.show_measurement = self.show_measurement;
-        app.show_nodes = self.show_nodes;
         app.show_buses = self.show_buses;
         app.show_triggers = self.show_triggers;
         app.show_bus_stats = self.show_bus_stats;
@@ -1253,8 +1246,7 @@ impl Config {
                     show_tx: d.show_tx,
                     show_network: d.show_network,
                     show_measurement: d.show_measurement,
-                    show_nodes: d.show_nodes,
-                    show_buses: d.show_buses,
+                                show_buses: d.show_buses,
                     show_triggers: d.show_triggers,
                     show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,

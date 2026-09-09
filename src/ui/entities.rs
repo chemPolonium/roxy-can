@@ -25,6 +25,16 @@ pub fn render(app: &mut App, ui: &Ui) {
 
 fn content(app: &mut App, ui: &Ui) {
     let rows = app.entity_rows();
+    if ui.small_button("+ 脚本节点") {
+        let name = format!("Node {}", app.snap.nodes.len() + 1);
+        app.send(crate::bus::BusCommand::AddNode { name, channel: 0 });
+        app.settle();
+        // The core minted the id; open the editor for the newest node.
+        if let Some(newest) = app.snap.nodes.iter().map(|n| n.id).max() {
+            app.open_script_editor(newest);
+        }
+    }
+    ui.same_line();
     ui.text_disabled("点击一行打开该实体的界面；右键行内菜单可插入或删除");
     ui.separator();
 
@@ -156,6 +166,12 @@ fn content(app: &mut App, ui: &Ui) {
                             role: NodeRole::ALL[role_idx],
                         });
                     }
+                    if ui.is_item_hovered() {
+                        ui.tooltip(|| {
+                            ui.text(NodeRole::ALL[role_idx].hint());
+                            ui.text_disabled("模拟/离线的区别在声明：接真实硬件后，监听节点的流量来自真实节点");
+                        });
+                    }
                 }
                 EntityKind::Script => {
                     let mut enabled = row.script_enabled.unwrap_or(false);
@@ -185,7 +201,11 @@ fn content(app: &mut App, ui: &Ui) {
 /// node selected.
 fn open_entity_ui(app: &mut App, row: &crate::app::EntityRow) {
     match row.kind {
-        EntityKind::Script => app.show_nodes = true,
+        EntityKind::Script => {
+            if let Some(id) = row.script_id {
+                app.open_script_editor(id);
+            }
+        }
         EntityKind::Replay => app.show_blocks = true,
         EntityKind::Dbc => {
             app.show_network = true;

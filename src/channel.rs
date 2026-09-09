@@ -49,6 +49,18 @@ impl NodeRole {
         }
     }
 
+    /// One-line explanation shown under every role selector. The three
+    /// roles differ in what they *declare*; two of them agree in what
+    /// they *do* today -- the copy has to say so, or the difference is
+    /// invisible.
+    pub fn hint(self) -> &'static str {
+        match self {
+            NodeRole::Simulated => "本工具以它名义发车：名下报文按库声明周期发送",
+            NodeRole::Monitor => "在总线上只收不发；接真实硬件后，它的流量来自真实节点",
+            NodeRole::Absent => "不在仿真总线上：报文需来自回放块或硬件（默认态）",
+        }
+    }
+
     /// Parses the project-file spelling; `None` for anything else, which
     /// the loader drops rather than guessing.
     pub fn parse(s: &str) -> Option<NodeRole> {

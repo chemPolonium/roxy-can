@@ -274,13 +274,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.show_measurement = !app.show_measurement;
                     }
                     if ui
-                        .menu_item_config("Nodes")
-                        .selected(app.show_nodes)
-                        .build()
-                    {
-                        app.show_nodes = !app.show_nodes;
-                    }
-                    if ui
                         .menu_item_config("Entities")
                         .selected(app.show_entities)
                         .build()

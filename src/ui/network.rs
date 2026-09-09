@@ -254,6 +254,9 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let role = crate::app::NodeRole::ALL[role_idx];
                         app.set_node_role(ch as u8, &ni.name, role);
                     }
+                    // The selector alone never explains the roles; the
+                    // selected one's declaration sits right below it.
+                    ui.text_disabled(crate::app::NodeRole::ALL[role_idx].hint());
                     ui.same_line();
                     ui.text_disabled("节点角色");
                     ui.same_line();
@@ -270,6 +273,54 @@ pub fn render(app: &mut App, ui: &Ui) {
                             "  (sends nothing -- the role is still recorded)",
                         );
                     }
+                    ui.separator();
+
+                    // The bus's script nodes, with their editors one click
+                    // away -- this is where "simulate a node with a
+                    // script" lives, next to the node it belongs to.
+                    ui.text("本总线脚本节点");
+                    let mut created = false;
+                    if ui.small_button(format!("+ 脚本节点##netadd{ch}")) {
+                        let name = format!("Node {}", app.snap.nodes.len() + 1);
+                        app.send(crate::bus::BusCommand::AddNode {
+                            name,
+                            channel: ch as u8,
+                        });
+                        app.settle();
+                        if let Some(newest) = app.snap.nodes.iter().map(|n| n.id).max() {
+                            app.open_script_editor(newest);
+                        }
+                        created = true;
+                    }
+                    ui.same_line();
+                    ui.text_disabled("点名字打开脚本编辑器");
+                    let bus_scripts: Vec<(u64, String, bool, bool)> = app
+                        .snap
+                        .nodes
+                        .iter()
+                        .filter(|n| n.channel as usize == ch)
+                        .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled))
+                        .collect();
+                    for (nid, name, running, enabled) in bus_scripts {
+                        let dot = if running {
+                            "●"
+                        } else if enabled {
+                            "○"
+                        } else {
+                            "·"
+                        };
+                        if ui
+                            .selectable_config(format!("{dot} {name}##netscript{nid}"))
+                            .build()
+                        {
+                            app.open_script_editor(nid);
+                        }
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text("● 运行中 / ○ 已启用待测量 / · 未启用");
+                        }
+                    }
+                    let _ = created;
+                    ui.separator();
                     ui.text("Sent messages");
                     for (id, name) in &ni.tx {
                         let (count, cycle) = app
