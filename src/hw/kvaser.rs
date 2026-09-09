@@ -21,9 +21,10 @@ const CAN_MSG_RTR: u32 = 0x0002;
 const CAN_FDMSG: u32 = 0x0080;
 
 /// Kvaser preset bitrate codes (negative = table entry; the tseg
-/// arguments are ignored). Keyed by our kbit/s values.
-fn bitrate_code(kbps: u32) -> i32 {
-    match kbps {
+/// arguments are ignored). Only exact matches are accepted: silently
+/// wiring at the wrong speed would be far worse than refusing.
+fn bitrate_code(kbps: u32) -> Option<i32> {
+    Some(match kbps {
         1000 => -1,
         500 => -4,
         250 => -8,
@@ -33,8 +34,8 @@ fn bitrate_code(kbps: u32) -> i32 {
         62 => -12,
         50 => -13,
         10 => -15,
-        _ => -4, // the de-facto default
-    }
+        _ => return None,
+    })
 }
 
 type CanInitializeLibrary = unsafe extern "system" fn() -> CanStatus;
@@ -140,11 +141,15 @@ impl KvaserChannel {
             (lib.initialize_library)();
             // flags 0 = 默认共享打开；不带 ACCEPT_VIRTUAL 位——它在这部分
             // 驱动上会得到 canERR_PARAM。物理通道直接可开。
+            let Some(code) = bitrate_code(kbps) else {
+                return Err(format!(
+                    "不支持的波特率 {kbps} kbit/s（支持 10/50/62/83/100/125/250/500/1000）"
+                ));
+            };
             let handle = (lib.open_channel)(index, 0);
             if handle < 0 {
                 return Err(format!("打开 Kvaser 通道 {index} 失败（status {handle}）"));
             }
-            let code = bitrate_code(kbps);
             let status = (lib.set_bus_params)(handle, code, 0, 0, 0, 0, 0);
             if status != CAN_OK {
                 (lib.close)(handle);
