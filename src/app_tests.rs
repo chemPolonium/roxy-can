@@ -5332,6 +5332,56 @@ fn removing_a_bus_remaps_state_trackers() {
     );
 }
 
+/// The disk-backed trace: frames the ring trimmed are archived to a temp
+/// file, and Export Trace replays the archive ahead of the hot ring --
+/// the exported ASC covers the whole run, head included.
+#[test]
+fn the_trace_export_includes_archived_head_frames() {
+    let mut app = App::headless();
+    app.set_trace_limit(1_000);
+    app.start_virtual();
+    app.settle();
+    let frames: Vec<CanFrame> = (0..1_200u64)
+        .map(|i| CanFrame {
+            t_us: i * 100,
+            channel: 0,
+            id: 0x300,
+            extended: false,
+            len: 1,
+            data: {
+                let mut d = [0u8; MAX_CAN_FD_LEN];
+                d[0] = (i % 256) as u8;
+                d
+            },
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        })
+        .collect();
+    let last_t = 1_199 * 100;
+    receive(&mut app, last_t, frames);
+    app.settle();
+
+    // The hot ring is capped; the overflow sits in the archive.
+    let (dropped, _) = app.snap.trace.head_loss();
+    assert!(dropped >= 100, "the limit trimmed the head: {dropped}");
+    let (_, archived_n) = app.snap.trace.archive().expect("archive exists");
+    assert!(archived_n >= 100, "the trim was archived, not lost");
+
+    let out = std::env::temp_dir().join("roxy_can_export_archived.asc");
+    app.export_trace(0, out.to_string_lossy().as_ref());
+    assert!(app.status.starts_with("exported"), "{}", app.status);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let exported = crate::log::asc::parse_asc(&text);
+    assert_eq!(
+        exported.len(),
+        1_200,
+        "archive + hot ring = the whole run"
+    );
+    assert_eq!(exported[0].t_us, 0, "the head survived via the archive");
+    assert_eq!(exported[1_199].t_us, last_t, "the tail is the live ring");
+    std::fs::remove_file(&out).ok();
+}
+
 #[test]
 fn a_script_node_round_trips_through_a_project() {
     let mut app = App::headless();

@@ -33,6 +33,15 @@ impl FrameFlags {
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
+    /// The raw bit pattern, for storage formats (trace archive).
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+    /// Rebuilds flags from [`Self::bits`]. Unknown bits are kept: a file
+    /// written by a newer build round-trips without losing them.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
     /// Compact frame-type marker for the UI: "" for classic data, "FD" (with
     /// "·B" for BRS and "·E" for ESI) for CAN FD, plus "ERR" and "RTR" for the
     /// two non-data kinds. Error / RTR are mutually exclusive with FD because

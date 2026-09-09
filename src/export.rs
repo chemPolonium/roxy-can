@@ -2,7 +2,10 @@ use crate::app::{App, MessageAgg};
 use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
 impl App {
-    /// Exports the frames that pass the given Trace window's filter as ASC.
+    /// Exports the frames that pass the given Trace window's filter as
+    /// ASC. Frames the ring archived to disk (the ones the live view
+    /// already trimmed) come first, in trim order -- the export covers
+    /// the whole run, not just the hot ring's window.
     pub fn export_trace(&mut self, win: usize, path: &str) {
         if self.snap.trace.is_empty() {
             self.status = "export: trace is empty".to_string();
@@ -11,12 +14,28 @@ impl App {
         let Some(w) = self.trace_windows.get(win) else {
             return;
         };
-        let frames: Vec<CanFrame> = self
-            .snap
-            .trace
-            .iter()
-            .copied()
-            .filter(|f| self.trace_match(w, f))
+        // The archive leads: its frames are strictly older than anything
+        // in the hot ring.
+        let (archived, archived_total): (Vec<CanFrame>, u64) = match self.snap.trace.archive() {
+            Some((archive_path, total)) => (
+                crate::trace::SpillFile::read_all(archive_path)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|f| self.trace_match(w, f))
+                    .collect(),
+                total,
+            ),
+            None => (Vec::new(), 0),
+        };
+        let frames: Vec<CanFrame> = archived
+            .into_iter()
+            .chain(
+                self.snap
+                    .trace
+                    .iter()
+                    .copied()
+                    .filter(|f| self.trace_match(w, f)),
+            )
             .collect();
         if frames.is_empty() {
             self.status = "export: no frames pass the trace filter".to_string();
@@ -31,7 +50,7 @@ impl App {
                 self.status = format!(
                     "exported {} of {} frames to {path}",
                     frames.len(),
-                    self.snap.trace.len()
+                    self.snap.trace.len() + archived_total as usize
                 );
             }
             Err(e) => self.status = format!("export failed: {e}"),

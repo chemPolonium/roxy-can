@@ -92,17 +92,28 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         shown_count,
         MAX_VISIBLE.min(shown_count)
     ));
-    // Head loss is accounted, never silent: the ring's limit trimmed the
-    // oldest frames, and the window says so with the loss's position.
+    // Head trims are accounted either way: with the archive they are
+    // merely moved to disk (the export still covers them), without it
+    // they are real loss.
     let (dropped, first_dropped_t_us) = app.snap.trace.head_loss();
     if dropped > 0 {
         ui.same_line();
         let since = first_dropped_t_us
             .map(|t| format!("since {:.3} s", t as f64 / 1e6))
             .unwrap_or_default();
-        ui.text_colored([1.0, 0.8, 0.4, 1.0], format!("· head trimmed: {dropped} frame(s) {since}"));
+        let archived = app.snap.trace.archive().is_some();
+        let msg = if archived {
+            format!("· 已归档 {dropped} 帧（导出包含）{since}")
+        } else {
+            format!("· head trimmed: {dropped} frame(s) {since}")
+        };
+        ui.text_colored([1.0, 0.8, 0.4, 1.0], msg);
         if ui.is_item_hovered() {
-            ui.tooltip_text("超出 Trace 容量的旧帧被裁掉；录制文件不受影响");
+            ui.tooltip_text(if archived {
+                "超出容量的旧帧已写入临时归档文件，Export Trace 会包含它们"
+            } else {
+                "超出容量的旧帧被裁掉且归档不可用"
+            });
         }
     }
     let new_scope = scope_combo(

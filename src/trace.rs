@@ -4,6 +4,11 @@
 //! cache: append into a live tail, seal it by move when it outgrows
 //! [`SEAL_FRAMES`], mutate shared chunks only through `Arc::make_mut`,
 //! and publish by refcount bumps plus one tail copy.
+//!
+//! Frames the limit trims are **not** lost: they append to a spill
+//! archive (a plain record file in the temp dir) that the trace export
+//! replays ahead of the hot ring, so a long capture keeps its head in
+//! the file even when the live view has moved past it.
 
 use crate::can::frame::CanFrame;
 use std::sync::Arc;
@@ -12,10 +17,16 @@ use std::sync::Arc;
 /// shared chunk at this size, bounding a publish's copy to one tail.
 const SEAL_FRAMES: usize = 512;
 
-/// The bus-side ring: append at the back, drop from the front once the
-/// limit is exceeded. Head drops are *accounted*, never silent: the
-/// dropped count and the first dropped frame's timestamp surface in the
-/// Trace window.
+/// One archived frame, fixed stride: t_us(8) channel(1) id(4) ext(1)
+/// len(1) dir(1) flags(4) data(64). Simple beats compact -- the archive
+/// is written once, read once per export.
+const RECORD_LEN: usize = 8 + 1 + 4 + 1 + 1 + 1 + 4 + 64;
+
+/// The bus-side ring: append at the back, trim from the front once the
+/// limit is exceeded -- and everything trimmed lands in the spill
+/// archive instead of vanishing. Head trims are accounted either way:
+/// the dropped count and the first trimmed frame's timestamp surface in
+/// the Trace window.
 #[derive(Debug, Default)]
 pub struct TraceRing {
     chunks: Vec<Arc<Vec<CanFrame>>>,
@@ -26,6 +37,10 @@ pub struct TraceRing {
     /// Timestamp of the first frame the ring ever dropped (its own
     /// timeline), so the loss has a visible position, not just a count.
     first_dropped_t_us: Option<u64>,
+    /// The archive the trimmed frames land in. Created lazily on the
+    /// first trim; `None` until then and when the archive file could not
+    /// be created (head loss is then real loss, and the UI says so).
+    spill: Option<SpillFile>,
 }
 
 impl TraceRing {
@@ -72,6 +87,12 @@ impl TraceRing {
         if frames.is_empty() {
             return;
         }
+        if self.spill.is_none() {
+            self.spill = SpillFile::create().ok();
+        }
+        if let Some(spill) = &mut self.spill {
+            spill.append(frames);
+        }
         self.dropped += frames.len() as u64;
         if self.first_dropped_t_us.is_none() {
             self.first_dropped_t_us = Some(frames[0].t_us);
@@ -103,6 +124,10 @@ impl TraceRing {
             total: self.total,
             dropped: self.dropped,
             first_dropped_t_us: self.first_dropped_t_us,
+            archive: self
+                .spill
+                .as_ref()
+                .map(|s| (s.path.clone(), s.frames)),
         })
     }
 
@@ -124,6 +149,9 @@ impl TraceRing {
         self.total = 0;
         self.dropped = 0;
         self.first_dropped_t_us = None;
+        if let Some(spill) = &mut self.spill {
+            spill.reset();
+        }
     }
 
     /// Frames trimmed from the head since the last clear, and where the
@@ -133,6 +161,11 @@ impl TraceRing {
         (self.dropped, self.first_dropped_t_us)
     }
 
+    /// The archive's path and frame count while a spill file exists.
+    pub fn archive(&self) -> Option<(&std::path::Path, u64)> {
+        self.spill.as_ref().map(|s| (s.path.as_path(), s.frames))
+    }
+
     /// Core-side iteration, for test assertions on the working ring.
     #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &CanFrame> {
@@ -140,6 +173,115 @@ impl TraceRing {
             .iter()
             .flat_map(|c| c.iter())
             .chain(self.tail.iter())
+    }
+
+    /// A ring with a test-scoped archive path: parallel tests must not
+    /// share the pid-suffixed default file.
+    #[cfg(test)]
+    fn with_spill_at(path: std::path::PathBuf) -> Self {
+        let mut ring = TraceRing::default();
+        ring.spill = Some(SpillFile::create_at(path).expect("spill file"));
+        ring
+    }
+}
+
+/// The spill archive: an append-only record file the ring's trimmed
+/// frames land in, read back when the trace is exported. Writes happen
+/// on the core thread in whole trim batches (sealed chunks, ~44 KB) --
+/// the same budget the per-frame ASC recorder already spends on this
+/// path. One file per process (pid-suffixed) in the temp dir; a fresh
+/// run truncates it.
+#[derive(Debug)]
+pub struct SpillFile {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    frames: u64,
+}
+
+impl SpillFile {
+    /// The process's archive, created lazily on the first trim.
+    fn create() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "roxy-can-trace-archive-{}.bin",
+            std::process::id()
+        ));
+        Self::create_at(path)
+    }
+
+    /// `create` with an explicit path (tests run in parallel and must
+    /// not share the pid-suffixed default).
+    fn create_at(path: std::path::PathBuf) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)?;
+        Ok(SpillFile { path, file, frames: 0 })
+    }
+
+    /// Appends frames as fixed-stride records, one buffered write per
+    /// call. A failed write keeps the frames counted as dropped but ends
+    /// the archive's growth -- partial records never reach the file.
+    fn append(&mut self, frames: &[CanFrame]) {
+        use std::io::Write;
+        let mut buf = Vec::with_capacity(frames.len() * RECORD_LEN);
+        for f in frames {
+            buf.extend_from_slice(&f.t_us.to_le_bytes());
+            buf.push(f.channel);
+            buf.extend_from_slice(&f.id.to_le_bytes());
+            buf.push(f.extended as u8);
+            buf.push(f.len);
+            buf.push(f.dir as u8);
+            buf.extend_from_slice(&f.flags.bits().to_le_bytes());
+            buf.extend_from_slice(&f.data);
+        }
+        if self.file.write_all(&buf).is_ok() {
+            self.frames += frames.len() as u64;
+        }
+    }
+
+    /// Truncates the archive for a fresh run; the file itself stays
+    /// (the next trim reuses it).
+    fn reset(&mut self) {
+        self.file.set_len(0).ok();
+        self.frames = 0;
+    }
+
+    /// Reads every archived frame back, in trim order. Used by the
+    /// export path, which opens its own handle -- the writer on the core
+    /// thread and a reader elsewhere never hold each other's locks.
+    pub fn read_all(path: &std::path::Path) -> std::io::Result<Vec<CanFrame>> {
+        let raw = std::fs::read(path)?;
+        let mut out = Vec::with_capacity(raw.len() / RECORD_LEN);
+        for record in raw.chunks_exact(RECORD_LEN) {
+            let mut u32le = |off: usize| {
+                u32::from_le_bytes([record[off], record[off + 1], record[off + 2], record[off + 3]])
+            };
+            let t_us = u64::from_le_bytes(record[0..8].try_into().expect("fixed stride"));
+            let channel = record[8];
+            let id = u32le(9);
+            let extended = record[13] != 0;
+            let len = record[14].min(crate::can::frame::MAX_CAN_FD_LEN as u8);
+            let dir = if record[15] == 1 {
+                crate::can::frame::Direction::Tx
+            } else {
+                crate::can::frame::Direction::Rx
+            };
+            let flags = crate::can::frame::FrameFlags::from_bits(u32le(16));
+            let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+            data.copy_from_slice(&record[20..20 + crate::can::frame::MAX_CAN_FD_LEN]);
+            out.push(CanFrame {
+                t_us,
+                channel,
+                id,
+                extended,
+                len,
+                data,
+                dir,
+                flags,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -151,6 +293,9 @@ pub struct TraceView {
     total: usize,
     dropped: u64,
     first_dropped_t_us: Option<u64>,
+    /// The spill archive while one exists: file path plus archived frame
+    /// count. The export replays the archive ahead of the hot ring.
+    archive: Option<(std::path::PathBuf, u64)>,
 }
 
 impl TraceView {
@@ -166,6 +311,15 @@ impl TraceView {
     /// and the first lost frame's timestamp when any were lost.
     pub fn head_loss(&self) -> (u64, Option<u64>) {
         (self.dropped, self.first_dropped_t_us)
+    }
+
+    /// Where the trimmed frames are archived, and how many there are.
+    /// `None` while nothing has been trimmed or the archive could not be
+    /// created.
+    pub fn archive(&self) -> Option<(&std::path::Path, u64)> {
+        self.archive
+            .as_ref()
+            .map(|(p, n)| (p.as_path(), *n))
     }
 
     pub fn last(&self) -> Option<&CanFrame> {
@@ -289,5 +443,53 @@ mod tests {
 
         ring.clear();
         assert_eq!(ring.head_loss(), (0, None), "a fresh run forgets the loss");
+    }
+
+    /// Trimmed frames are archived, not lost: the spill file reads back
+    /// exactly what was trimmed, in order, with payloads and flags
+    /// intact. A fresh run truncates the archive.
+    #[test]
+    fn trimmed_frames_are_archived_and_read_back_exactly() {
+        let path = std::env::temp_dir().join(format!(
+            "roxy_can_spill_{}_{}.bin",
+            std::process::id(),
+            0x51
+        ));
+        let mut ring = TraceRing::with_spill_at(path.clone());
+        for t in 0..10u64 {
+            let mut f = frame(t * 100);
+            f.data[0] = t as u8;
+            if t == 3 {
+                f.flags = crate::can::frame::FrameFlags::FD;
+                f.len = 12;
+            }
+            ring.push(f);
+        }
+        ring.enforce_limit(5);
+
+        let (p, n) = ring.archive().expect("the archive was created on first trim");
+        assert_eq!(p, path, "the test-scoped path is used");
+        assert_eq!(n, 5);
+        let archived = SpillFile::read_all(p).expect("read back");
+        assert_eq!(archived.len(), 5);
+        for (k, f) in archived.iter().enumerate() {
+            assert_eq!(f.t_us, k as u64 * 100);
+            assert_eq!(f.data[0], k as u8, "payloads round-trip");
+        }
+        assert_eq!(archived[3].flags, crate::can::frame::FrameFlags::FD);
+        assert_eq!(archived[3].len, 12, "FD payload length survives");
+
+        // More trims append; a clear truncates for the fresh run.
+        for t in 10..15u64 {
+            ring.push(frame(t * 100));
+        }
+        ring.enforce_limit(5);
+        let (_, n) = ring.archive().expect("archive");
+        assert_eq!(n, 10, "trims append to the same archive");
+        ring.clear();
+        let (p, n) = ring.archive().expect("file kept for reuse");
+        assert_eq!(n, 0);
+        assert!(SpillFile::read_all(p).unwrap().is_empty());
+        std::fs::remove_file(p).ok();
     }
 }
