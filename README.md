@@ -11,9 +11,9 @@
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧；Trace 中错误行铺红底、远程行铺淡紫底，Flags 列统一显示帧类型
 - **信号观测器**：Trace / Messages / Statistics / Data / Graphics 五类窗口均可多开、各自独立过滤；Data / Graphics 可跨总线选择信号，Data 含 Min / Avg / Max 统计与 Sparkline，Graphics 有 14 档时间窗、缩放平移、采样点圆点
 - **总线负载统计**：Statistics 窗口顶部按总线给出线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；仲裁与 CAN FD 数据段比特率按总线设置，BRS 载荷按数据段速率计费
-- **Interactive Generator**：DBC 报文即开即用，按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random / Triangle / Counter 激励随仿真时间连续变化
+- **Interactive Generator**：DBC 报文即开即用，按**总线 → 节点**分组折叠（组头显示节点角色与"N/M 条发送中"），按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random / Triangle / Counter 激励随仿真时间连续变化
 - **Triggers 触发器**：信号越阈 / ID 出现 / 错误帧 / 周期超时四类条件，动作支持开始·停止录制（带预触发上下文与 post-roll）、单帧反应（触发帧信号自动镜像进目标载荷）、插入标记（Graphics 竖线）、清空 Trace；编辑器与持久化齐备
-- **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；节点角色三态声明——**模拟**（按 DBC 声明的周期模拟整个 ECU）/ **监听**（只收不发）/ **离线**（不在仿真总线上，未声明即离线），Nodes 窗口的角色卡片与 Network 视图同源
+- **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；节点角色三态声明（带说明文案）——**模拟**（按 DBC 声明的周期模拟整个 ECU）/ **监听**（只收不发）/ **离线**（不在仿真总线上，未声明即离线），与 Entities 实体表同源；本总线的脚本节点就近列出，点名字打开编辑器
 - **节点角色模型**：DBC 是网络拓扑的唯一事实源，角色声明决定"这个节点现在谁扮演"——缺省即离线，restbus 无需配置；`profiles/<名>.toml` + CLI `--profile` 让同一工程在 simulation / bench / CI 零修改切换，错配整份拒绝
 - **实体表（Entities）**：网络上全部实体——DBC 节点、脚本节点、回放块——一张扁平表，kind 徽标 + 行内开关，点击行直达该实体自己的界面
 - **回放块**：把录制日志按发送节点或 id 过滤后注回仿真总线，按录制间距发车——restbus 的落地方案；仅仿真模式生效，绝不与回放模式二次投递
@@ -59,14 +59,14 @@ cargo test
 ## 上手
 
 1. 工具栏 **Simulation / Replay** 下拉选模式，点 **Play** 启动（仿真跑虚拟总线，回放已加载的 ASC / BLF）
-2. **View → Buses**：为总线加载 DBC、加载日志；**View → Network**：勾选一个 ECU 节点开始模拟它；或在 **Interactive Generator** 里逐条开关报文、调数值、挂激励
+2. **View → Buses**：为总线加载 DBC、加载日志；**View → Network**：把节点角色设为**模拟**开始扮演它；或在 **Interactive Generator** 里按节点分组逐条开关报文、调数值、挂激励
 3. **Measurement Setup**：新增各类观测窗口、选择信号范围、逐个导出；Data / Graphics 的信号在 Signal Selection 弹窗里跨总线勾选
 4. 勾选 **Record** 录制 ASC
 5. 总线挂了 DBC 之后，**View → Specification** 查看实测流量与数据库声明的对账结果
 
 ## 仿真节点
 
-**View → Nodes** 打开节点面板：新建节点、绑定总线、贴入脚本（或保存/加载 `.capl` 文件）、Apply 后随测量启动。一门 C 风格的小语言编译成字节码执行，事件驱动产生总线行为：
+在 **View → Entities** 或 **Network** 视图里新建脚本节点，创建即弹出该节点**独立的脚本编辑器**（源码、绑定总线、运行开关、节点日志；可保存/加载 `.capl`，可多开）。一门 C 风格的小语言编译成字节码执行，事件驱动产生总线行为：
 
 ```c
 // 收到请求 200ms 后应答（完整示例见 examples/）
@@ -80,7 +80,7 @@ on timer "resp" {
 ```
 
 - 内建覆盖：收发帧、DBC 信号读写（`sig` / `set_sig` / `get_sig`）、周期与一次性定时器、帧数据访问、随机数、五类波形（与 TX 发生器共用求值器）、数学与位运算
-- 节点日志走 `print`，面板里直接看；编译/运行错误带行号列号，出错节点熔断待恢复
+- 节点日志走 `print`，编辑器里直接看；编译/运行错误带行号列号，出错节点熔断待恢复
 - 节点源码、绑定与启用状态随工程（`.rxproj`）保存
 - 命令行可脱离界面运行与校验（CI 友好）：`--check-script` 编译节点脚本；`--project <p.rxproj> --duration <s> [--stats <csv>]` 无头仿真整个工程（生成器 + 脚本节点按保存的激活状态上线）；`--profile <名>` 叠加 `profiles/<名>.toml` 角色覆盖，同一工程在 simulation / bench / CI 间零修改切换，错配整份拒绝；`--convert <in> <out.asc>` 把 BLF/ASC 转存为 ASC，非零退出报告失败
 
