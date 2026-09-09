@@ -1292,13 +1292,17 @@ impl BusCore {
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             for (id, ext, data) in node.run_timers(now_us, &input) {
-                self.buf.push(Self::node_frame(
+                let frame = Self::node_frame(
                     node.channel,
                     id,
                     ext,
                     &data,
                     self.sim_t_us,
-                ));
+                );
+                // Script frames follow the same wire-egress switch as the
+                // generator: the node's name is the switch key.
+                self.hw.write_if_directed(node.channel, &node.name, &frame);
+                self.buf.push(frame);
             }
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
@@ -1325,7 +1329,18 @@ impl BusCore {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
-            out.extend(node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input));
+            let node_out =
+                node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input);
+            // The node's own wire egress: reactions go out the attached
+            // hardware under the same per-node switch as everything else.
+            if self.hw.node_sends_via_hw(node.channel, &node.name) {
+                for (id, ext, data) in &node_out {
+                    let frame =
+                        Self::node_frame(node.channel, *id, *ext, data, f.t_us);
+                    self.hw.write_if_directed(node.channel, &node.name, &frame);
+                }
+            }
+            out.extend(node_out);
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }

@@ -5395,6 +5395,47 @@ fn detaching_hardware_clears_the_node_switches() {
     );
 }
 
+/// Script frames ride the same wire-egress switch: a node whose switch
+/// is on sends its `send()` frames to the wire alongside the internal
+/// bus.
+#[test]
+fn script_frames_follow_the_wire_egress_switch() {
+    let mut app = App::headless();
+    let (written, _incoming) = app.hw.attach_mock(0);
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "beacon".to_string(),
+        channel: 0,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 50 { send(0x777, 1); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.hw.set_node_tx(0, "beacon", true);
+    app.start_virtual();
+    app.settle();
+    for t in 1..=300u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let wire_count = || {
+        written
+            .lock()
+            .expect("mock lock")
+            .iter()
+            .filter(|f| f.id == 0x777)
+            .count()
+    };
+    assert!(
+        wire_count() >= 2,
+        "the script's frames reach the wire: {}",
+        wire_count()
+    );
+    app.stop();
+}
+
 /// Removing a bus detaches its hardware and shifts the other buses'
 /// attachments and node switches down with the bus.
 #[test]
