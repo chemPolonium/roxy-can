@@ -888,6 +888,7 @@ impl BusCore {
             }
             BusCommand::SetNodeName { id, name } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+                    let old = n.name.clone();
                     n.name = name.clone();
                     // The selection tree lists streams under the owner's
                     // name: a rename rewrites the owner, not the key.
@@ -895,6 +896,16 @@ impl BusCore {
                         if k.1 & !crate::app::EMITTED_ID_BASE == id as u32 {
                             *owner = name.clone();
                         }
+                    }
+                    // The wire-egress switch follows the node across the
+                    // rename instead of being lost.
+                    if old != name
+                        && self
+                            .hw
+                            .node_tx
+                            .remove(&(n.channel, old))
+                    {
+                        self.hw.node_tx.insert((n.channel, name.clone()));
                     }
                     self.nodes_dirty = true;
                 }
