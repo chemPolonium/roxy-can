@@ -18,6 +18,7 @@ pub const CAN_OK: i32 = 0;
 const CAN_MSG_STD: u32 = 0x0001;
 const CAN_MSG_EXT: u32 = 0x0004;
 const CAN_MSG_RTR: u32 = 0x0002;
+const CAN_FDMSG: u32 = 0x0080;
 
 /// Kvaser preset bitrate codes (negative = table entry; the tseg
 /// arguments are ignored). Keyed by our kbit/s values.
@@ -159,17 +160,21 @@ impl KvaserChannel {
     }
 
     /// Writes one frame out. Ids over 0x7FF go extended; RTR frames keep
-    /// their flag and carry no payload.
+    /// their flag and carry no payload. FD frames (payload up to 64
+    /// bytes) go out with the canFDMSG marker.
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
         let lib = Canlib::lib().ok_or("Kvaser 驱动不可用")?;
         let len = f.payload().len().min(MAX_CAN_FD_LEN);
-        let flag = if f.extended {
+        let mut flag = if f.extended {
             CAN_MSG_EXT
         } else if f.is_remote() {
             CAN_MSG_RTR
         } else {
             CAN_MSG_STD
         };
+        if f.is_fd() {
+            flag |= CAN_FDMSG;
+        }
         let status = unsafe {
             (lib.write)(self.handle, f.id, f.payload().as_ptr(), len as u32, flag)
         };
