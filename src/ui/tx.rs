@@ -228,7 +228,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         }
                     }
                     last_group = Some(group_key.clone());
-                    if query.is_empty() && !group_changed {
+                    if query.is_empty() {
                         let open = app
                             .gen_group_open
                             .get(&group_key)
