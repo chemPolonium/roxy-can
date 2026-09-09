@@ -876,7 +876,14 @@ impl BusCore {
             }
             BusCommand::SetNodeName { id, name } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
-                    n.name = name;
+                    n.name = name.clone();
+                    // The selection tree lists streams under the owner's
+                    // name: a rename rewrites the owner, not the key.
+                    for (k, owner) in &mut self.emitted_streams {
+                        if k.1 & !crate::app::EMITTED_ID_BASE == id as u32 {
+                            *owner = name.clone();
+                        }
+                    }
                     self.nodes_dirty = true;
                 }
             }
@@ -891,6 +898,13 @@ impl BusCore {
                             .get(channel as usize)
                             .and_then(|c| c.dbc.clone());
                         n.start(dbc);
+                    }
+                    // Streams re-home to the new bus so the tree entries
+                    // and subscriptions stay continuous across the move.
+                    for (k, _) in &mut self.emitted_streams {
+                        if k.1 & !crate::app::EMITTED_ID_BASE == id as u32 {
+                            k.0 = channel;
+                        }
                     }
                     self.nodes_dirty = true;
                 }

@@ -5118,6 +5118,99 @@ fn emit_value_works_from_message_handlers() {
     app.stop();
 }
 
+/// Streams track their owner: a rename rewrites the tree's owner label,
+/// a rebinding to another bus re-homes the stream keys, and a handler
+/// that errors after emitting discards its partial outputs (an errored
+/// callback is atomic -- half a computation is not a sample).
+#[test]
+fn derived_streams_follow_their_node_across_edits() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "calc".to_string(),
+        channel: 0,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on start { emit_value(\"X\", 1); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    app.settle();
+    for t in 1..=5u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let key = |ch: u8| (
+        ch,
+        crate::app::EMITTED_ID_BASE | id as u32,
+        false,
+        "X".to_string(),
+    );
+    assert!(
+        app.snap.emitted.iter().any(|(k, _)| *k == key(0)),
+        "the stream opened on the node's bus"
+    );
+
+    // Rename: owner label changes, the key does not.
+    app.send(crate::bus::BusCommand::SetNodeName {
+        id,
+        name: "renamed".to_string(),
+    });
+    app.settle();
+    assert!(
+        app.snap
+            .emitted
+            .iter()
+            .any(|(k, owner)| *k == key(0) && owner == "renamed"),
+        "the tree shows the new owner"
+    );
+
+    // Rebind: the stream re-homes to the new bus.
+    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 1 });
+    app.settle();
+    assert!(
+        app.snap.emitted.iter().any(|(k, _)| *k == key(1)),
+        "the stream follows the node to CAN2"
+    );
+    app.stop();
+}
+
+/// An errored handler discards its partial emissions: `emit_value` calls
+/// before a runtime error never reach the bus -- half a computation is
+/// not a sample.
+#[test]
+fn an_errored_handler_discards_its_emissions() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "boom".to_string(),
+        channel: 0,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        // Reading an unseen signal is the easiest runtime error.
+        source: "on start { emit_value(\"Ghost\", 1); sig(0x999, \"Nope\"); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    app.settle();
+    for t in 1..=5u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("node");
+    assert!(node.errored, "the bad sig() tripped the fuse");
+    assert!(
+        !app.snap.emitted.iter().any(|(k, _)| k.3 == "Ghost"),
+        "the partial emission never published"
+    );
+    app.stop();
+}
+
 /// Removing a bus takes its script nodes, replay blocks, and derived
 /// streams with it and shifts the survivors' bindings down -- the same
 /// remap the tx entries and the windows follow.
