@@ -240,14 +240,7 @@ fn content(app: &mut App, ui: &Ui) {
                         Ok(channels) if !channels.is_empty() => {
                             let labels: Vec<String> = channels
                                 .iter()
-                                .map(|c| {
-                                    format!(
-                                        "ch{}: {}{}",
-                                        c.index,
-                                        c.name,
-                                        if c.is_virtual { " (虚拟)" } else { "" }
-                                    )
-                                })
+                                .map(|c| format!("ch{}: {}", c.index, c.name))
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                             ui.set_next_item_width(120.0);

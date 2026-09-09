@@ -103,6 +103,7 @@ impl Channel {
 
     /// The role declared for `node`; every node without an entry is
     /// `Absent` -- that is the restbus default, not a stored state.
+    #[cfg(test)]
     pub fn role_of(&self, node: &str) -> NodeRole {
         self.node_roles
             .get(node)

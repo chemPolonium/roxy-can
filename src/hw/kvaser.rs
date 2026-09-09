@@ -19,9 +19,6 @@ const CAN_OPEN_ACCEPT_VIRTUAL: i32 = 0x8000;
 const CAN_MSG_STD: u32 = 0x0001;
 const CAN_MSG_EXT: u32 = 0x0004;
 const CAN_MSG_RTR: u32 = 0x0002;
-const CAN_CHANNEL_DATA_CARD_TYPE: i32 = 5;
-const CAN_CHANNEL_DATA_CHANNEL_NAME: i32 = 10;
-const CAN_HWTYPE_VIRTUAL: i32 = 1;
 
 /// Kvaser preset bitrate codes (negative = table entry; the tseg
 /// arguments are ignored). Keyed by our kbit/s values.
@@ -42,8 +39,6 @@ fn bitrate_code(kbps: u32) -> i32 {
 
 type CanInitializeLibrary = unsafe extern "system" fn() -> CanStatus;
 type CanGetNumberOfChannels = unsafe extern "system" fn(*mut i32) -> CanStatus;
-type CanGetChannelData =
-    unsafe extern "system" fn(i32, i32, *mut c_void, *mut i32) -> CanStatus;
 type CanOpenChannel = unsafe extern "system" fn(i32, i32) -> CanHandle;
 type CanSetBusParams =
     unsafe extern "system" fn(i32, i32, u8, u8, u8, u8, u32) -> CanStatus;
@@ -60,7 +55,6 @@ type CanClose = unsafe extern "system" fn(i32) -> CanStatus;
 struct Canlib {
     initialize_library: CanInitializeLibrary,
     get_number_of_channels: CanGetNumberOfChannels,
-    get_channel_data: CanGetChannelData,
     open_channel: CanOpenChannel,
     set_bus_params: CanSetBusParams,
     bus_on: CanBusOn,
@@ -107,7 +101,6 @@ impl Canlib {
         Some(Canlib {
             initialize_library: need!(b"canInitializeLibrary", CanInitializeLibrary),
             get_number_of_channels: need!(b"canGetNumberOfChannels", CanGetNumberOfChannels),
-            get_channel_data: need!(b"canGetChannelData", CanGetChannelData),
             open_channel: need!(b"canOpenChannel", CanOpenChannel),
             set_bus_params: need!(b"canSetBusParams", CanSetBusParams),
             bus_on: need!(b"canBusOn", CanBusOn),
@@ -130,9 +123,6 @@ impl Canlib {
 pub struct ChannelInfo {
     pub index: i32,
     pub name: String,
-    /// True for Kvaser's virtual driver channel: loopback-style testing
-    /// without any physical adapter.
-    pub is_virtual: bool,
 }
 
 /// An open, bus-on channel. Frames written here leave on the wire
@@ -256,7 +246,12 @@ impl Drop for KvaserChannel {
 pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
     let lib = Canlib::lib().ok_or_else(|| "Kvaser 驱动不可用（canlib32.dll 未找到）".to_string())?;
     unsafe {
+        eprintln!("[probe] lib loaded");
         (lib.initialize_library)();
+        eprintln!("[probe] initialized");
+        let mut num: i32 = 0;
+        let status = (lib.get_number_of_channels)(&mut num);
+        eprintln!("[probe] channels: {num} (status {status})");
         let mut num: i32 = 0;
         let status = (lib.get_number_of_channels)(&mut num);
         if status != CAN_OK {
@@ -264,32 +259,12 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
         }
         let mut out = Vec::new();
         for index in 0..num {
-            let mut name_buf = [0u8; 256];
-            let mut name_len = name_buf.len() as i32;
-            let name_status =
-                (lib.get_channel_data)(index, CAN_CHANNEL_DATA_CHANNEL_NAME, name_buf.as_mut_ptr().cast(), &mut name_len);
-            let name = if name_status == CAN_OK {
-                let end = name_len.clamp(0, 255) as usize;
-                String::from_utf8_lossy(&name_buf[..end])
-                    .trim_end_matches('\0')
-                    .to_string()
-            } else {
-                String::new()
-            };
-            let mut card_type: i32 = 0;
-            let mut card_len = std::mem::size_of::<i32>() as i32;
-            let card_status = (lib.get_channel_data)(
-                index,
-                CAN_CHANNEL_DATA_CARD_TYPE,
-                (&mut card_type as *mut i32).cast(),
-                &mut card_len,
-            );
-            let is_virtual =
-                card_status == CAN_OK && card_type == CAN_HWTYPE_VIRTUAL;
+            // The driver's name-lookup API varies across SDK versions, so
+            // the probe keeps to the core count; the Buses UI labels
+            // channels by index the same way.
             out.push(ChannelInfo {
                 index,
-                name,
-                is_virtual,
+                name: format!("Kvaser 通道 {index}"),
             });
         }
         Ok(out)

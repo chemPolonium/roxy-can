@@ -65,6 +65,14 @@ pub struct MockPort {
     pub incoming: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<CanFrame>>>,
 }
 
+/// The shared handles [`Hardware::attach_mock`] hands back to a test:
+/// everything written on the wire, and the receive queue to feed.
+#[cfg(test)]
+pub type MockHandles = (
+    std::sync::Arc<std::sync::Mutex<Vec<CanFrame>>>,
+    std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<CanFrame>>>,
+);
+
 #[cfg(test)]
 impl MockPort {
     pub fn write(&self, f: &CanFrame) -> Result<(), String> {
@@ -155,10 +163,7 @@ impl Hardware {
     pub fn attach_mock(
         &mut self,
         bus: u8,
-    ) -> (
-        std::sync::Arc<std::sync::Mutex<Vec<CanFrame>>>,
-        std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<CanFrame>>>,
-    ) {
+    ) -> MockHandles {
         let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let incoming = std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::VecDeque::new(),

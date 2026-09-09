@@ -19,6 +19,9 @@ pub enum Cli {
     /// Transcode a log to ASC: `--convert <in> <out>`. A pure stream
     /// transform -- no bus, no clock, no window.
     Convert(String, String),
+    /// List the Kvaser channels canlib sees: a quick way to check the
+    /// driver and adapters before using the hardware link.
+    KvaserProbe,
 }
 
 #[derive(Debug)]
@@ -48,6 +51,7 @@ pub fn usage() -> &'static str {
                                  (repeat the flag for more files; non-zero
                                  exit when any script fails)
   roxy-can --convert <in> <out>  transcode a log (.asc/.blf) to ASC
+  roxy-can --kvaser-probe        list the Kvaser channels canlib sees
 
 run options
   --replay <path>    log to replay (.asc or .blf)
@@ -75,6 +79,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut project = None;
     let mut profile = None;
     let mut convert: Option<(String, String)> = None;
+    let mut kvaser_probe = false;
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -98,6 +103,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
                 let output = value(args, &mut i, "--convert output")?;
                 convert = Some((input, output));
             }
+            "--kvaser-probe" => kvaser_probe = true,
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--speed" => {
                 let raw = value(args, &mut i, "--speed")?;
@@ -142,6 +148,12 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             return Err("`--convert` writes ASC; the output must end in .asc".to_string());
         }
         return Ok(Cli::Convert(input, output));
+    }
+    if kvaser_probe {
+        if replay.is_some() || project.is_some() || profile.is_some() {
+            return Err("`--kvaser-probe` runs on its own; drop the other run flags".to_string());
+        }
+        return Ok(Cli::KvaserProbe);
     }
     if replay.is_some() && project.is_some() {
         return Err("`--replay` and `--project` are mutually exclusive".to_string());
@@ -338,6 +350,22 @@ pub fn convert_log(input: &str, output: &str) -> Result<String, String> {
     Ok(format!(
         "converted {n} frame(s)\n  input : {input}\n  output: {output}"
     ))
+}
+
+/// Lists the Kvaser channels canlib discovers: index, name, and whether
+/// the channel is the driver's virtual one. The quickest check that the
+/// driver and adapters are usable before touching the hardware link.
+pub fn kvaser_probe() -> Result<String, String> {
+    match crate::hw::kvaser::enumerate() {
+        Ok(channels) => {
+            let mut s = format!("{} Kvaser channel(s):\n", channels.len());
+            for c in &channels {
+                s.push_str(&format!("  ch{}: {}\n", c.index, c.name));
+            }
+            Ok(s)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Compiles each node script and reports the outcome per file. A file that
