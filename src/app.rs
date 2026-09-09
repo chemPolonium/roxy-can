@@ -205,6 +205,9 @@ pub struct App {
     /// Generator group collapse state, keyed (bus, node name). Session
     /// state; missing keys are expanded.
     pub gen_group_open: std::collections::HashMap<(u8, String), bool>,
+    /// Kvaser channels discovered on this machine, enumerated once on
+    /// first need. `Err` = the driver is unavailable.
+    pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Bitrate drafts in the Buses window: row plus the text being typed,
@@ -412,6 +415,7 @@ impl App {
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
             gen_group_open: std::collections::HashMap::new(),
+            kvaser_channels: None,
             net_selected: 0,
             tx_pick: 0,
             bus_arb_edit: None,

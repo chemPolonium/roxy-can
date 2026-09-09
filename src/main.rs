@@ -13,6 +13,7 @@ mod dbc;
 mod decode;
 mod export;
 mod generator;
+mod hw;
 mod load;
 mod log;
 mod node;

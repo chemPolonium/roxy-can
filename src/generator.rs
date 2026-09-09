@@ -264,6 +264,26 @@ impl App {
         });
     }
 
+    /// Attaches a hardware adapter to a bus.
+    pub fn set_hardware_channel(&mut self, bus: u8, adapter: i32, kbps: u32) {
+        self.send(crate::bus::BusCommand::SetHardwareChannel { bus, adapter, kbps });
+    }
+
+    /// Detaches a bus's hardware adapter.
+    pub fn detach_hardware(&mut self, bus: u8) {
+        self.send(crate::bus::BusCommand::DetachHardware { bus });
+    }
+
+    /// The per-node wire-egress switch: on = the node's generator frames
+    /// also go out the attached hardware.
+    pub fn set_node_hardware_tx(&mut self, ch: u8, node: &str, on: bool) {
+        self.send(crate::bus::BusCommand::SetNodeHardwareTx {
+            ch,
+            node: node.to_string(),
+            on,
+        });
+    }
+
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

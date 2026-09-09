@@ -538,7 +538,7 @@ fn the_threaded_core_honors_node_roles_and_replay_blocks() {
     );
 
     // Leaving the simulation silences the entry; the snapshot's TxView
-    // and the role card both read the new state.
+    // and the bus's role map both read the new state.
     app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
         node: "EngineECU".to_string(),
@@ -558,13 +558,11 @@ fn the_threaded_core_honors_node_roles_and_replay_blocks() {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let engine_card = app
-        .snap
-        .group_cards
-        .iter()
-        .find(|c| c.name == "EngineECU" && c.channel == 0)
-        .expect("EngineECU role card");
-    assert_eq!(engine_card.role, NodeRole::Absent, "the card reads the role");
+    assert_eq!(
+        app.snap.channels[0].role_of("EngineECU"),
+        NodeRole::Absent,
+        "the snapshot reads the role"
+    );
 
     // A replay block enabled mid-run streams its recorded frames onto
     // the live bus -- the block's fixture carries only id 0x777.

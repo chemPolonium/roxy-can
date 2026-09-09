@@ -162,6 +162,7 @@ impl TraceRing {
     }
 
     /// The archive's path and frame count while a spill file exists.
+    #[cfg(test)]
     pub fn archive(&self) -> Option<(&std::path::Path, u64)> {
         self.spill.as_ref().map(|s| (s.path.as_path(), s.frames))
     }
@@ -254,7 +255,7 @@ impl SpillFile {
         let raw = std::fs::read(path)?;
         let mut out = Vec::with_capacity(raw.len() / RECORD_LEN);
         for record in raw.chunks_exact(RECORD_LEN) {
-            let mut u32le = |off: usize| {
+            let u32le = |off: usize| {
                 u32::from_le_bytes([record[off], record[off + 1], record[off + 2], record[off + 3]])
             };
             let t_us = u64::from_le_bytes(record[0..8].try_into().expect("fixed stride"));

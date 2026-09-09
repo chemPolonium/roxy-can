@@ -4710,11 +4710,11 @@ fn the_state_tracker_round_trips_through_a_project() {
     std::fs::remove_file(&path).ok();
 }
 
-/// Every DBC node shows up in the Nodes window as a role card, even
-/// before it is simulated; switching the role flips the card's role.
-/// Script-node cards are unaffected.
+/// Role declarations land in the snapshot the moment the command is
+/// applied -- every role editor (Entities, Network, generator groups)
+/// reads this one state.
 #[test]
-fn generator_groups_appear_as_cards_and_follow_node_roles() {
+fn node_roles_follow_commands_and_land_in_the_snapshot() {
     let mut app = App::headless();
     app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
@@ -4722,32 +4722,24 @@ fn generator_groups_appear_as_cards_and_follow_node_roles() {
         role: NodeRole::Simulated,
     });
     app.settle();
-    let cards = &app.snap.group_cards;
-    assert!(!cards.is_empty(), "the sample DBC has nodes");
-    let engine = cards
-        .iter()
-        .find(|c| c.name == "EngineECU")
-        .expect("EngineECU card");
-    assert_eq!(engine.role, NodeRole::Simulated, "simulated node shows it");
-    assert!(
-        cards.iter().all(|c| c.id & (1 << 63) != 0),
-        "synthetic ids never collide with script-node ids"
-    );
+    let role = app.snap.channels[0]
+        .node_roles
+        .get("EngineECU")
+        .copied()
+        .expect("the declaration is in the snapshot");
+    assert_eq!(role, NodeRole::Simulated);
 
-    // Leaving the simulation keeps the card and reads the new role.
     app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
         node: "EngineECU".to_string(),
         role: NodeRole::Monitor,
     });
     app.settle();
-    let engine = app
-        .snap
-        .group_cards
-        .iter()
-        .find(|c| c.name == "EngineECU")
-        .expect("card stays visible");
-    assert_eq!(engine.role, NodeRole::Monitor, "the card now reads monitor");
+    assert_eq!(
+        app.snap.channels[0].role_of("EngineECU"),
+        NodeRole::Monitor,
+        "the snapshot reads the new role"
+    );
 }
 
 /// The entity table is the flat network directory: per bus, its DBC nodes
@@ -5304,6 +5296,102 @@ fn removing_a_bus_drops_its_triggers_and_shifts_the_rest() {
         app.snap.triggers[1].action,
         TriggerAction::Send { ch: 0, id: 199 },
         "the Send reaction follows its bus down"
+    );
+}
+
+/// The per-node wire-egress switch end to end (mock adapter): with it
+/// on, the simulated node's frames are written to the wire alongside the
+/// internal bus; switching it off stops the wire, not the views.
+#[test]
+fn hardware_tx_follows_the_per_node_switch() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    let (written, _incoming) = app.hw.attach_mock(0);
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.hw.set_node_tx(0, "EngineECU", true);
+    app.start_virtual();
+    app.settle();
+    for t in 1..=500u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let wire_count = || {
+        written
+            .lock()
+            .expect("mock lock")
+            .iter()
+            .filter(|f| f.id == 0x100)
+            .count()
+    };
+    assert!(
+        wire_count() >= 2,
+        "hw egress on: the node's frames reach the wire"
+    );
+
+    // Switching the node's wire egress off stops the writes.
+    app.hw.set_node_tx(0, "EngineECU", false);
+    app.settle();
+    for t in 501..=800u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let after = wire_count();
+    assert!(
+        !written.lock().expect("mock lock").iter().any(|f| f.t_us >= 800_000),
+        "no wire writes after the switch goes off"
+    );
+    assert_eq!(wire_count(), after);
+    app.stop();
+}
+
+/// Hardware RX: frames received on an attached adapter ingest like any
+/// bus traffic -- a real node's frames arrive this way.
+#[test]
+fn hardware_rx_frames_ingest_like_bus_traffic() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    let (_written, incoming) = app.hw.attach_mock(0);
+    app.start_virtual();
+    app.settle();
+    incoming
+        .lock()
+        .expect("mock lock")
+        .push_back(CanFrame {
+            t_us: 0,
+            channel: 0,
+            id: 0x555,
+            extended: false,
+            len: 1,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        });
+    for t in 1..=20u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let agg = app
+        .snap
+        .aggs
+        .iter()
+        .find(|a| a.channel == 0 && a.id == 0x555)
+        .expect("the wire frame reached the bus");
+    assert!(agg.count >= 1, "received hardware frames are ingested");
+    app.stop();
+}
+
+/// Detaching a bus's adapter clears that bus's node switches: a wire
+/// that is gone cannot be sent on.
+#[test]
+fn detaching_hardware_clears_the_node_switches() {
+    let mut app = App::headless();
+    app.hw.attach_mock(0);
+    app.hw.set_node_tx(0, "EngineECU", true);
+    assert!(app.hw.node_sends_via_hw(0, "EngineECU"));
+    app.hw.detach(0);
+    assert!(
+        !app.hw.node_sends_via_hw(0, "EngineECU"),
+        "detach clears the bus's switches"
     );
 }
 

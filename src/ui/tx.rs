@@ -177,10 +177,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                         } else {
                             view.node.clone()
                         };
+                        let role = app.node_role(ch, &view.node);
                         let role_word = if view.node.is_empty() {
                             String::new()
                         } else {
-                            format!("〔{}〕", app.node_role(ch, &view.node).label())
+                            format!("〔{}〕", role.label())
                         };
                         let hint = if view.node.is_empty() {
                             "报文不属于任何 DBC 节点（手动添加）".to_string()
@@ -211,6 +212,27 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         }
                         ui.same_line();
+                        // The wire-egress switch: only meaningful for a
+                        // simulated node on a bus with attached hardware.
+                        let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == ch);
+                        if role == crate::app::NodeRole::Simulated && bus_has_hw {
+                            let mut via_hw = app
+                                .snap
+                                .hw_tx_nodes
+                                .contains(&(ch, view.node.clone()));
+                            if ui.checkbox(
+                                format!("经硬件##hwtx{}_{}", ch, node_label),
+                                &mut via_hw,
+                            ) {
+                                app.set_node_hardware_tx(ch, &view.node, via_hw);
+                            }
+                            if ui.is_item_hovered() {
+                                ui.tooltip_text(
+                                    "该节点的发车同时上真实总线（Kvaser）",
+                                );
+                            }
+                            ui.same_line();
+                        }
                         let header = format!(
                             "{} · {}  {}  {}/{} 发送中###grp{}_{node_label}",
                             app.channel_name(ch),

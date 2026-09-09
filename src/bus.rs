@@ -55,18 +55,6 @@ pub(crate) const POST_ROLL_FRAMES: u32 = 32;
 /// minting names in a loop, not a real limit.
 pub(crate) const MAX_EMITTED_STREAMS: usize = 256;
 
-/// One DBC node on a bus with its declared role: the role card in the
-/// Nodes window. Derived state — switching goes through `SetNodeRole`,
-/// and the card itself is rebuilt from the database and `node_roles` on
-/// every publish.
-#[derive(Clone, Debug)]
-pub struct GroupCardView {
-    pub id: u64,
-    pub name: String,
-    pub channel: u8,
-    pub role: crate::app::NodeRole,
-}
-
 /// One replay block as the frontend sees it this frame: the declaration
 /// plus what the runtime made of it (queue size, load failure).
 #[derive(Clone, Debug)]
@@ -81,6 +69,15 @@ pub struct ReplayBlockView {
     /// Frames in the loaded queue; 0 unless the block loaded successfully.
     pub frames: usize,
     pub last_error: Option<String>,
+}
+
+/// One bus's hardware attachment as the frontend sees it.
+#[derive(Clone, Debug)]
+pub struct HwBusView {
+    pub bus: u8,
+    /// The adapter identity (Kvaser channel index).
+    pub adapter: i32,
+    pub kbps: u32,
 }
 
 /// What the frontend may ask the bus to do. One variant per transport
@@ -260,6 +257,26 @@ pub enum BusCommand {
     SetTraceLimit {
         frames: usize,
     },
+    /// Attach (or re-attach) a hardware adapter to a bus: its received
+    /// frames are ingested, and per-node switches direct generator
+    /// traffic onto the wire. `None` detaches.
+    SetHardwareChannel {
+        bus: u8,
+        adapter: i32,
+        kbps: u32,
+    },
+    DetachHardware {
+        bus: u8,
+    },
+    /// The per-node wire-egress switch: with it on, the node's generator
+    /// frames go out the attached hardware *and* stay on the internal
+    /// bus. Never set automatically -- doubling a real node is the
+    /// user's explicit choice.
+    SetNodeHardwareTx {
+        ch: u8,
+        node: String,
+        on: bool,
+    },
     /// Trigger-recording context, clamped core-side: pre-trigger frames,
     /// post-roll frames, and the marker list cap. Any subset may be set.
     SetRunLimits {
@@ -425,17 +442,6 @@ pub struct NodeView {
     pub log: Vec<String>,
 }
 
-/// Stable-ish synthetic id for a generator-group card: the top bit marks
-/// it synthetic so it can never collide with a minted script-node id.
-fn gen_group_id(ch: usize, name: &str) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325;
-    for b in name.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    (1 << 63) | ((ch as u64) << 32) | (h & 0xFFFF_FFFF)
-}
-
 /// What the frontend may see of the bus: one immutable, frame-shaped
 /// bundle of the read-only facts. Single-threaded it is a plain copy
 /// taken once per UI frame; stage 3 publishes it behind an Arc swap
@@ -474,14 +480,15 @@ pub struct Snapshot {
     /// Simulation nodes as of the last publish: identity, source, state
     /// and log. The Nodes window's data source and the project save.
     pub nodes: Arc<Vec<NodeView>>,
-    /// One role card per DBC node per bus: derived from the attached
-    /// databases and `node_roles`, switched with `SetNodeRole`.
-    pub group_cards: Vec<GroupCardView>,
     /// One view per replay block, as of the last publish.
     pub blocks: Vec<ReplayBlockView>,
     /// Derived-signal streams opened by `emit_value` so far: key plus the
     /// owning node's display name.
     pub emitted: Vec<(SigKey, String)>,
+    /// Hardware attachments: one per wired-up bus.
+    pub hw: Vec<HwBusView>,
+    /// Node names whose generator frames currently go out the wire.
+    pub hw_tx_nodes: Vec<(u8, String)>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -752,8 +759,6 @@ pub struct BusCore {
     /// The node views as of the last publish. Rebuilt only when a command
     /// or a script print changed something.
     pub(crate) published_nodes: Arc<Vec<NodeView>>,
-    /// Generator-group cards published alongside the script nodes.
-    pub(crate) published_groups: Arc<Vec<GroupCardView>>,
     /// Replay-block views as of the last publish.
     pub(crate) published_blocks: Arc<Vec<ReplayBlockView>>,
     /// True when `nodes` changed since `published_nodes` was built.
@@ -766,6 +771,10 @@ pub struct BusCore {
     /// Derived-signal streams a node has opened with `emit_value`:
     /// synthetic key plus the owning node's name, for the selection tree.
     pub(crate) emitted_streams: Vec<(SigKey, String)>,
+    /// Hardware attachments (Kvaser today): bus → adapter, plus the
+    /// per-node wire-egress switches. Session state, per the hardware
+    /// mapping overlay model.
+    pub(crate) hw: crate::hw::Hardware,
     /// How many frames the trace ring retains. Default
     /// [`TRACE_LIMIT`]; user-settable (project-persisted) because the
     /// right capacity depends on bus load and how long a capture runs.
@@ -821,12 +830,12 @@ impl BusCore {
             nodes: Vec::new(),
             node_counter: 0,
             published_nodes: Arc::new(Vec::new()),
-            published_groups: Arc::new(Vec::new()),
             published_blocks: Arc::new(Vec::new()),
             nodes_dirty: false,
             replay_blocks: Vec::new(),
             block_counter: 0,
             emitted_streams: Vec::new(),
+            hw: Default::default(),
             trace_limit: TRACE_LIMIT,
             pre_frames: PRE_BUFFER_FRAMES,
             post_frames: POST_ROLL_FRAMES,
@@ -1093,6 +1102,27 @@ impl BusCore {
             BusCommand::SetTraceLimit { frames } => {
                 self.trace_limit = frames.clamp(1_000, 5_000_000)
             }
+            BusCommand::SetHardwareChannel { bus, adapter, kbps } => {
+                match crate::hw::kvaser::KvaserChannel::open(adapter, kbps) {
+                    Ok(port) => {
+                        self.hw.attach(bus, adapter, kbps, crate::hw::HwPort::Kvaser(port));
+                        *status = format!("hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s");
+                    }
+                    Err(e) => *status = format!("hardware attach failed: {e}"),
+                }
+            }
+            BusCommand::DetachHardware { bus } => {
+                self.hw.detach(bus);
+                *status = format!("hardware detached from bus {}", bus + 1);
+            }
+            BusCommand::SetNodeHardwareTx { ch, node, on } => {
+                self.hw.set_node_tx(ch, &node, on);
+                *status = if on {
+                    format!("{node} 发车上真实总线（经硬件）")
+                } else {
+                    format!("{node} 回到纯虚拟发车")
+                };
+            }
             BusCommand::SetRunLimits {
                 pre_frames,
                 post_frames,
@@ -1219,22 +1249,7 @@ impl BusCore {
                 log: n.log_snapshot(),
             })
             .collect();
-        let mut cards: Vec<GroupCardView> = Vec::new();
-        for (ch_idx, channel) in self.channels.iter().enumerate() {
-            let Some(db) = channel.dbc.as_deref() else {
-                continue;
-            };
-            for node_name in &db.nodes {
-                cards.push(GroupCardView {
-                    id: gen_group_id(ch_idx, node_name),
-                    name: node_name.clone(),
-                    channel: ch_idx as u8,
-                    role: channel.role_of(node_name),
-                });
-            }
-        }
         self.published_nodes = Arc::new(views);
-        self.published_groups = Arc::new(cards);
         self.published_blocks = Arc::new(
             self.replay_blocks
                 .iter()
@@ -1451,9 +1466,19 @@ impl BusCore {
             spec: self.spec.clone(),
             bus_loads: Arc::clone(&self.published_loads),
             nodes: Arc::clone(&self.published_nodes),
-            group_cards: (*self.published_groups).clone(),
             blocks: (*self.published_blocks).clone(),
             emitted: self.emitted_streams.clone(),
+            hw: self
+                .hw
+                .buses
+                .iter()
+                .map(|(&bus, bh)| HwBusView {
+                    bus,
+                    adapter: bh.adapter,
+                    kbps: bh.kbps,
+                })
+                .collect(),
+            hw_tx_nodes: self.hw.node_tx.iter().cloned().collect(),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self
@@ -2629,7 +2654,7 @@ impl BusCore {
                 let slot = tx.next_t_us;
                 tx.next_t_us += tx.cycle_us;
                 let (data, len, flags) = crate::generator::tx_payload(channels, tx, slot);
-                emitted.push(CanFrame {
+                let frame = CanFrame {
                     t_us: slot,
                     channel: tx.channel,
                     id: tx.id,
@@ -2638,7 +2663,14 @@ impl BusCore {
                     data,
                     dir: Direction::Tx,
                     flags,
-                });
+                };
+                // The per-node wire egress: a node switched to hardware
+                // sends its frames onto the real wire *and* keeps them on
+                // the internal bus so every view sees them. Off by
+                // default -- doubling a real node is the user's explicit
+                // choice, never an automatic one.
+                self.hw.write_if_directed(tx.channel, &tx.node, &frame);
+                emitted.push(frame);
             }
         }
         self.buf.extend(emitted);
@@ -2653,6 +2685,13 @@ impl BusCore {
                 block.poll(sim, &mut block_out, MAX_TX_CATCHUP as usize);
             }
             self.buf.extend(block_out);
+
+            // Hardware RX: whatever an attached adapter received is real
+            // bus traffic and ingests like everything else. Replay mode
+            // stays wire-free for the same double-delivery reason.
+            let mut hw_rx: Vec<CanFrame> = Vec::new();
+            self.hw.poll_rx(sim, &mut hw_rx);
+            self.buf.extend(hw_rx);
         }
 
         // Node timers fire before the ingest walk so the frames they

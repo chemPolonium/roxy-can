@@ -43,8 +43,15 @@ fn editor_window(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
 fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     let id = node.id;
 
-    // Header: channel binding, run switch, delete.
-    ui.set_next_item_width(90.0);
+    // Header: node name, channel binding, run switch, delete. The name
+    // commits per keystroke -- it is a cheap string write and the
+    // Entities table shows it live.
+    let mut name = node.name.clone();
+    ui.set_next_item_width(140.0);
+    if ui.input_text(format!("##ename{id}"), &mut name).build() {
+        app.send(crate::bus::BusCommand::SetNodeName { id, name });
+    }
+    ui.same_line();
     let mut channel = node.channel as usize;
     let bus_names: Vec<String> = (0..app.snap.channel_count)
         .map(|ch| app.channel_name(ch as u8))

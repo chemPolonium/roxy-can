@@ -26,6 +26,19 @@ fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
+/// Enumerates the installed Kvaser channels once per session; later calls
+/// reuse the cached answer (including "driver unavailable").
+fn ensure_kvaser_list(
+    app: &mut App,
+) -> Result<Vec<crate::hw::kvaser::ChannelInfo>, String> {
+    let cached = app.kvaser_channels.clone();
+    cached.unwrap_or_else(|| {
+        let fresh = crate::hw::kvaser::enumerate();
+        app.kvaser_channels = Some(fresh.clone());
+        fresh
+    })
+}
+
 fn content(app: &mut App, ui: &Ui) {
     if ui.small_button("+ Add bus") {
         app.add_channel();
@@ -43,7 +56,7 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::SIZING_STRETCH_PROP;
     let mut remove: Option<usize> = None;
     {
-        let Some(_table) = ui.begin_table_with_flags("bus_table", 4, flags) else {
+        let Some(_table) = ui.begin_table_with_flags("bus_table", 5, flags) else {
             return;
         };
         ui.table_setup_column_with(TableColumnSetup {
@@ -58,8 +71,13 @@ fn content(app: &mut App, ui: &Ui) {
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 130.0,
+            init_width_or_weight: 150.0,
             ..TableColumnSetup::new("kbit/s (arb / FD data)")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 140.0,
+            ..TableColumnSetup::new("硬件")
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
@@ -203,6 +221,49 @@ fn content(app: &mut App, ui: &Ui) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text("CAN FD 数据段比特率 kbit/s，直接输入数字");
+            }
+            ui.table_next_column();
+            // Hardware attachment: one adapter per bus, enumerated from
+            // the installed driver on first need.
+            let attached = app.snap.hw.iter().find(|h| h.bus as usize == i);
+            match attached {
+                Some(h) => {
+                    ui.text(format!("Kvaser ch{} @{}k", h.adapter, h.kbps));
+                    ui.same_line();
+                    if ui.small_button(format!("解挂##hwdet{i}")) {
+                        app.detach_hardware(i as u8);
+                    }
+                }
+                None => {
+                    let channels = ensure_kvaser_list(app).clone();
+                    match channels {
+                        Ok(channels) if !channels.is_empty() => {
+                            let labels: Vec<String> = channels
+                                .iter()
+                                .map(|c| {
+                                    format!(
+                                        "ch{}: {}{}",
+                                        c.index,
+                                        c.name,
+                                        if c.is_virtual { " (虚拟)" } else { "" }
+                                    )
+                                })
+                                .collect();
+                            let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                            ui.set_next_item_width(120.0);
+                            let mut pick = 0;
+                            if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
+                                let info = &channels[pick];
+                                app.set_hardware_channel(i as u8, info.index, arb_kbps);
+                            }
+                            if ui.is_item_hovered() {
+                                ui.tooltip_text("挂接 Kvaser 适配器：收到的帧进总线，节点可经它发车");
+                            }
+                        }
+                        Ok(_) => ui.text_disabled("无通道"),
+                        Err(e) => ui.text_disabled(e),
+                    }
+                }
             }
             ui.table_next_column();
             if ui.small_button(format!("x##busrm{i}")) {
