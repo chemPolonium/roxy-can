@@ -208,6 +208,9 @@ pub struct App {
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
+    /// Per-node generator windows currently open: (bus, node name) in
+    /// open order. Session state.
+    pub open_gen_windows: Vec<(u8, String)>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Bitrate drafts in the Buses window: row plus the text being typed,
@@ -416,6 +419,7 @@ impl App {
             open_editors: Vec::new(),
             gen_group_open: std::collections::HashMap::new(),
             kvaser_channels: None,
+            open_gen_windows: Vec::new(),
             net_selected: 0,
             tx_pick: 0,
             bus_arb_edit: None,
@@ -1167,6 +1171,20 @@ impl App {
     /// Closes the node's script editor.
     pub fn close_script_editor(&mut self, id: u64) {
         self.open_editors.retain(|&x| x != id);
+    }
+
+    /// Opens the node's generator window (no-op when already open).
+    pub fn open_gen_window(&mut self, ch: u8, node: &str) {
+        let key = (ch, node.to_string());
+        if !self.open_gen_windows.contains(&key) {
+            self.open_gen_windows.push(key);
+        }
+    }
+
+    /// Closes the node's generator window.
+    pub fn close_gen_window(&mut self, ch: u8, node: &str) {
+        self.open_gen_windows
+            .retain(|(c, n)| !(*c == ch && n == node));
     }
 
     pub fn entity_rows(&self) -> Vec<EntityRow> {

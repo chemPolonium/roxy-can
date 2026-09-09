@@ -46,11 +46,52 @@ fn parse_seq(s: &str) -> Vec<f64> {
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
-    let io = ui.io();
-    let mut open = app.show_tx;
     let kinds = kind_labels();
-    if open {
-        ui.window("Interactive Generator")
+    // The overview window: every message of every bus, grouped by node.
+    let main_open = render_window(app, ui, &kinds, None, "Interactive Generator", "");
+    if main_open {
+        params_modal(app, ui, &kinds);
+        cycle_modal(app, ui);
+    }
+    // Per-node windows: one node's entries only, opened from a group
+    // header. Same rows, same modals, one node at a time.
+    let mut any_node_open = false;
+    for (ch, node) in app.open_gen_windows.clone() {
+        let title = format!("生成器 · {} · {}", app.channel_name(ch), node);
+        let still_open =
+            render_window(app, ui, &kinds, Some((ch, node.clone())), &title, &title);
+        if still_open {
+            any_node_open = true;
+        } else {
+            app.close_gen_window(ch, &node);
+        }
+    }
+    app.show_tx = main_open;
+    if !main_open && !any_node_open {
+        app.src_edit = None;
+        app.src_draft = None;
+        app.tx_cycle_edit = None;
+    }
+}
+
+/// One generator window. `node == None` is the overview (all messages,
+/// grouped by node); `Some((bus, node))` renders a single node's entries
+/// flat -- the node-centric view.
+fn render_window(
+    app: &mut App,
+    ui: &Ui,
+    kinds: &[String],
+    node: Option<(u8, String)>,
+    title: &str,
+    _id_suffix: &str,
+) -> bool {
+    let io = ui.io();
+    let mut open = node.is_some() || app.show_tx;
+    if !open {
+        return false;
+    }
+    {
+        ui.window(title)
             .opened(&mut open)
             .position(
                 [io.display_size[0] * 0.62, TOOLBAR_H + 10.0],
@@ -58,34 +99,61 @@ pub fn render(app: &mut App, ui: &Ui) {
             )
             .size([560.0, 340.0], Condition::FirstUseEver)
             .build(|| {
-                let (ids, names): (Vec<(u8, u32)>, Vec<String>) = {
-                    let mut ids = Vec::new();
-                    let mut names = Vec::new();
-                    for (ch, channel) in app.snap.channels.iter().enumerate() {
-                        let Some(db) = &channel.dbc else {
-                            continue;
-                        };
-                    let mut listed: std::collections::HashSet<u32> =
-                        std::collections::HashSet::new();
-                    for &(id, _) in &db.order {
-                        if !listed.insert(id) {
-                            continue;
+                let (ids, names): (Vec<(u8, u32)>, Vec<String>) = match &node {
+                    // Node view: only this node's own messages, from its bus.
+                    Some((ch, n)) => {
+                        let mut ids = Vec::new();
+                        let mut names = Vec::new();
+                        if let Some(db) = app
+                            .snap
+                            .channels
+                            .get(*ch as usize)
+                            .and_then(|c| c.dbc.as_ref())
+                        {
+                            for &(id, _) in &db.order {
+                                if let Some(m) = db.message_of(id)
+                                    && m.transmitter == *n
+                                {
+                                    ids.push((*ch, id));
+                                    names.push(format!("{:03X}  {}", id, m.name));
+                                }
+                            }
                         }
-                        if let Some(m) = db.message_of(id) {
-                            ids.push((ch as u8, id));
-                            names.push(format!(
-                                "{}  {:03X}  {}",
-                                app.channel_name(ch as u8),
-                                id,
-                                m.name
-                            ));
+                        (ids, names)
+                    }
+                    None => {
+                        let mut ids = Vec::new();
+                        let mut names = Vec::new();
+                        for (ch, channel) in app.snap.channels.iter().enumerate() {
+                            let Some(db) = &channel.dbc else {
+                                continue;
+                            };
+                            let mut listed: std::collections::HashSet<u32> =
+                                std::collections::HashSet::new();
+                            for &(id, _) in &db.order {
+                                if !listed.insert(id) {
+                                    continue;
+                                }
+                                if let Some(m) = db.message_of(id) {
+                                    ids.push((ch as u8, id));
+                                    names.push(format!(
+                                        "{}  {:03X}  {}",
+                                        app.channel_name(ch as u8),
+                                        id,
+                                        m.name
+                                    ));
+                                }
+                            }
                         }
+                        (ids, names)
                     }
-                    }
-                    (ids, names)
                 };
                 if ids.is_empty() {
-                    ui.text("no DBC loaded");
+                    ui.text(if node.is_some() {
+                        "该节点在库中没有报文"
+                    } else {
+                        "no DBC loaded"
+                    });
                 } else {
                     if app.tx_pick >= ids.len() {
                         app.tx_pick = 0;
@@ -105,13 +173,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ));
                 ui.separator();
 
-                ui.set_next_item_width(200.0);
-                ui.input_text("##gsearch", &mut app.gen_search)
-                    .hint("search name / ID")
-                    .build();
-                ui.same_line();
-                if ui.small_button("Clear##gsc") {
-                    app.gen_search.clear();
+                if node.is_none() {
+                    ui.set_next_item_width(200.0);
+                    ui.input_text("##gsearch", &mut app.gen_search)
+                        .hint("search name / ID")
+                        .build();
+                    ui.same_line();
+                    if ui.small_button("Clear##gsc") {
+                        app.gen_search.clear();
+                    }
                 }
 
                 // Per-bus bulk switches: one click enables or disables
@@ -120,25 +190,27 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // here -- aligning would leave the cursor low, and each
                 // later group's `same_line` would inherit that low line,
                 // stacking its buttons a step beneath the first group's.
-                let mut first_bus = true;
-                for ch in 0..app.snap.channel_count {
-                    let ch8 = ch as u8;
-                    if !app.snap.tx.iter().any(|t| t.channel == ch8) {
-                        continue;
-                    }
-                    if !first_bus {
+                if node.is_none() {
+                    let mut first_bus = true;
+                    for ch in 0..app.snap.channel_count {
+                        let ch8 = ch as u8;
+                        if !app.snap.tx.iter().any(|t| t.channel == ch8) {
+                            continue;
+                        }
+                        if !first_bus {
+                            ui.same_line();
+                        }
+                        first_bus = false;
+                        if ui.small_button(format!("All On##gon{ch}")) {
+                            app.set_bus_tx(ch8, true);
+                        }
                         ui.same_line();
+                        if ui.small_button(format!("All Off##goff{ch}")) {
+                            app.set_bus_tx(ch8, false);
+                        }
+                        ui.same_line();
+                        ui.text(app.channel_name(ch8));
                     }
-                    first_bus = false;
-                    if ui.small_button(format!("All On##gon{ch}")) {
-                        app.set_bus_tx(ch8, true);
-                    }
-                    ui.same_line();
-                    if ui.small_button(format!("All Off##goff{ch}")) {
-                        app.set_bus_tx(ch8, false);
-                    }
-                    ui.same_line();
-                    ui.text(app.channel_name(ch8));
                 }
 
                 let query = app.gen_search.trim().to_ascii_lowercase();
@@ -170,7 +242,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     let name = view.name.clone();
                     let group_key = (ch, view.node.clone());
                     let group_changed = last_group.as_ref() != Some(&group_key);
-                    if query.is_empty() && group_changed {
+                    if query.is_empty() && node.is_none() && group_changed {
                         let (active_n, total) = group_counts[&group_key];
                         let node_label = if view.node.is_empty() {
                             "(未分配)".to_string()
@@ -233,6 +305,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                             ui.same_line();
                         }
+                        // The node's own generator window: same rows, one
+                        // node, no overview noise.
+                        if ui.small_button(format!("窗##gwin{}_{}", ch, node_label)) {
+                            app.open_gen_window(ch, &view.node);
+                        }
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text("打开该节点独立的生成器窗口");
+                        }
+                        ui.same_line();
                         let header = format!(
                             "{} · {}  {}  {}/{} 发送中###grp{}_{node_label}",
                             app.channel_name(ch),
@@ -250,7 +331,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         }
                     }
                     last_group = Some(group_key.clone());
-                    if query.is_empty() {
+                    if query.is_empty() && node.is_none() {
                         let open = app
                             .gen_group_open
                             .get(&group_key)
@@ -527,20 +608,45 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     ui.unindent();
                 }
+                if let Some((ch_f, n)) = &node {
+                    // Reactions aimed at this node's messages: the Send
+                    // triggers that answer this node's traffic, listed next
+                    // to it. Managed in the Triggers window.
+                    let node_ids: std::collections::HashSet<u32> = app
+                        .snap
+                        .tx
+                        .iter()
+                        .filter(|v| v.channel == *ch_f && v.node == *n)
+                        .map(|v| v.id)
+                        .collect();
+                    let reactions: Vec<String> = app
+                        .snap
+                        .triggers
+                        .iter()
+                        .filter(|t| {
+                            matches!(&t.action,
+                                crate::trigger::TriggerAction::Send { ch, id }
+                                if *ch == *ch_f && node_ids.contains(id))
+                        })
+                        .map(|t| t.cond.short())
+                        .collect();
+                    if !reactions.is_empty() {
+                        ui.separator();
+                        ui.text("响应规则（触发器 → 发送到本节点报文）");
+                        for r in &reactions {
+                            ui.text(format!("  · {r}"));
+                        }
+                        if ui.small_button("在 Triggers 窗口管理##noder") {
+                            app.show_triggers = true;
+                        }
+                    }
+                }
                 if let Some((ch, id)) = remove {
                     app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
                 }
             });
     }
-    app.show_tx = open;
-    if open {
-        params_modal(app, ui, &kinds);
-        cycle_modal(app, ui);
-    } else {
-        app.src_edit = None;
-        app.src_draft = None;
-        app.tx_cycle_edit = None;
-    }
+    open
 }
 
 /// One row's header.
