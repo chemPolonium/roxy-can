@@ -103,6 +103,55 @@ fn the_record_filter_limits_the_file_but_not_the_bus() {
     std::fs::remove_file(&actual).ok();
 }
 
+/// The filter holds for trigger-started recordings too: the pre-trigger
+/// context the trigger drains into the file only ever held whitelisted
+/// frames, so a filtered recording stays clean end to end.
+#[test]
+fn a_trigger_started_recording_follows_the_record_filter() {
+    let mut app = App::headless();
+    let path = std::env::temp_dir().join("roxy_can_trig_filtered.asc");
+    app.record_path_buf = path.to_string_lossy().to_string();
+    app.set_record_filter(vec![(0x100, false)]);
+    app.toggle_record();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent {
+            ch: 0,
+            id: 0x100,
+        },
+        TriggerAction::StartRecording,
+    ));
+    app.add_tx(0, 0x999);
+    for tx in &mut app.tx_list {
+        tx.active = true;
+        tx.cycle_us = 10_000;
+    }
+    app.start_virtual();
+    for _ in 0..12 {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    app.stop();
+
+    let actual = app.recorder.last_record.clone();
+    let content = std::fs::read_to_string(&actual).unwrap();
+    let frames = crate::log::asc::parse_asc(&content);
+    assert!(frames.len() >= 5, "whitelisted frames flowed: {}", frames.len());
+    assert!(
+        frames.iter().all(|f| f.id == 0x100),
+        "the pre-trigger context and live tail stay filtered"
+    );
+    if let Some(dir) = std::path::Path::new(&actual).parent()
+        && let Ok(rd) = std::fs::read_dir(dir)
+    {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with("roxy_can_trig_filtered") {
+                std::fs::remove_file(e.path()).ok();
+            }
+        }
+    }
+}
+
 #[test]
 fn replay_after_recorded_simulation_creates_no_second_file() {
     let mut app = App::headless();
@@ -5020,6 +5069,52 @@ fn emit_value_publishes_a_derived_signal_stream() {
         app.snap.emitted.is_empty(),
         "a removed node's streams leave the tree"
     );
+    app.stop();
+}
+
+/// Frame-driven handlers can publish too: every matching frame becomes a
+/// derived-signal sample through the dispatch path (mirrors, conversions).
+#[test]
+fn emit_value_works_from_message_handlers() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "mirror".to_string(),
+        channel: 0,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on message 0x200 { emit_value(\"Seen\", 7); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+
+    receive(
+        &mut app,
+        5_000,
+        vec![CanFrame {
+            t_us: 5_000,
+            channel: 0,
+            id: 0x200,
+            extended: false,
+            len: 1,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        }],
+    );
+    app.settle();
+
+    let key = (
+        0u8,
+        crate::app::EMITTED_ID_BASE | id as u32,
+        false,
+        "Seen".to_string(),
+    );
+    let sub = app.subs.get(&key).expect("frame-driven emission published");
+    assert_eq!(sub.latest, 7.0, "the handler ran once for the frame");
     app.stop();
 }
 

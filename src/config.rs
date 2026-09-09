@@ -1612,6 +1612,22 @@ mod tests {
         assert_eq!(restored.limits.marker_cap, 2_048);
     }
 
+    /// The Entities and Replay Blocks panels persist their open state like
+    /// every other panel.
+    #[test]
+    fn the_entity_panels_round_trip() {
+        let mut app = App::headless();
+        app.show_entities = true;
+        app.show_blocks = true;
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert!(restored.show_entities);
+        assert!(restored.show_blocks);
+    }
+
     /// The format version travels with the file: new files carry the
     /// current version, files from before the field existed read as 0.
     /// Both load -- the number is for future migrations to branch on.
