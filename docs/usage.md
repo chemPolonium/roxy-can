@@ -10,6 +10,7 @@ roxy-can --replay <log.asc|blf> [...]     回放日志，不开窗口
 roxy-can --project <p.rxproj> [...]       无头仿真整个工程
 roxy-can --check-script <f.capl> [...]    校验节点脚本（flag 可重复）
 roxy-can --convert <in.log> <out.asc>     BLF/ASC 转存为 ASC
+roxy-can --kvaser-probe                   列出 canlib 可见的 Kvaser 通道
 roxy-can -h                               完整帮助
 ```
 
