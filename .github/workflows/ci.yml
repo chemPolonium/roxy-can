@@ -1,0 +1,26 @@
+# 每次推送/PR 自动跑构建、全量测试与 clippy。
+# 只用官方 checkout 与 runner 预装的 stable Rust，不引第三方 action。
+# 产品面向 Windows，先只开 windows-latest；计时敏感的测试在
+# runner 负载下如出现偶发，再单独加筛减，不预先放宽断言。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build all targets
+        run: cargo build --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      - name: Test
+        run: cargo test
