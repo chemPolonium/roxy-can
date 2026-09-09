@@ -15,7 +15,6 @@ type CanHandle = i32;
 
 pub const CAN_OK: i32 = 0;
 
-const CAN_OPEN_ACCEPT_VIRTUAL: i32 = 0x8000;
 const CAN_MSG_STD: u32 = 0x0001;
 const CAN_MSG_EXT: u32 = 0x0004;
 const CAN_MSG_RTR: u32 = 0x0002;
@@ -138,7 +137,9 @@ impl KvaserChannel {
         let lib = Canlib::lib().ok_or("Kvaser 驱动不可用（canlib32.dll 未找到）")?;
         unsafe {
             (lib.initialize_library)();
-            let handle = (lib.open_channel)(index, CAN_OPEN_ACCEPT_VIRTUAL);
+            // flags 0 = 默认共享打开；不带 ACCEPT_VIRTUAL 位——它在这部分
+            // 驱动上会得到 canERR_PARAM。物理通道直接可开。
+            let handle = (lib.open_channel)(index, 0);
             if handle < 0 {
                 return Err(format!("打开 Kvaser 通道 {index} 失败（status {handle}）"));
             }
@@ -246,12 +247,7 @@ impl Drop for KvaserChannel {
 pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
     let lib = Canlib::lib().ok_or_else(|| "Kvaser 驱动不可用（canlib32.dll 未找到）".to_string())?;
     unsafe {
-        eprintln!("[probe] lib loaded");
         (lib.initialize_library)();
-        eprintln!("[probe] initialized");
-        let mut num: i32 = 0;
-        let status = (lib.get_number_of_channels)(&mut num);
-        eprintln!("[probe] channels: {num} (status {status})");
         let mut num: i32 = 0;
         let status = (lib.get_number_of_channels)(&mut num);
         if status != CAN_OK {
@@ -268,5 +264,56 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             });
         }
         Ok(out)
+    }
+}
+
+/// 手动真机验证（默认跳过）：
+///
+/// ```text
+/// cargo test kvaser_live -- --ignored --nocapture
+/// ```
+///
+/// 依次打开每个通道 BusOn，静默收 300 ms——验证驱动加载、通道打开、
+/// BusOn 与非阻塞 read 全链可用，不往线上写任何帧。
+/// 手动真机验证（默认跳过）：
+///
+/// ```text
+/// cargo test kvaser_live -- --ignored --nocapture
+/// ```
+///
+/// 依次尝试打开每个通道 BusOn，静默收 300 ms——验证驱动加载、通道
+/// 打开、BusOn 与非阻塞 read 全链可用，不往线上写任何帧。单个通道
+/// 打不开只记录并继续。
+#[cfg(test)]
+mod live {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_live -- --ignored --nocapture"]
+    fn kvaser_live_open_and_read() {
+        let channels = enumerate().expect("驱动可用");
+        println!("{} channel(s)", channels.len());
+        let mut opened = 0usize;
+        for c in &channels {
+            match KvaserChannel::open(c.index, 500) {
+                Ok(mut ch) => {
+                    opened += 1;
+                    let t0 = Instant::now();
+                    let mut seen = 0usize;
+                    while t0.elapsed() < Duration::from_millis(300) {
+                        if ch.try_read().is_some() {
+                            seen += 1;
+                        }
+                    }
+                    println!("ch{}: ok, {} frame(s) in 300 ms", c.index, seen);
+                }
+                Err(e) => println!("ch{}: {e}", c.index),
+            }
+        }
+        assert!(
+            opened > 0,
+            "没有一个通道能打开——status -3 (NOTFOUND) 表示通道已配置但适配器未插上/未上电"
+        );
     }
 }
