@@ -54,9 +54,14 @@ pub fn render(app: &mut App, ui: &Ui) {
         cycle_modal(app, ui);
     }
     // Per-node windows: one node's entries only, opened from a group
-    // header. Same rows, same modals, one node at a time.
+    // header. Same rows, same modals, one node at a time. A window whose
+    // bus was removed closes itself.
     let mut any_node_open = false;
     for (ch, node) in app.open_gen_windows.clone() {
+        if ch as usize >= app.snap.channel_count {
+            app.close_gen_window(ch, &node);
+            continue;
+        }
         let title = format!("生成器 · {} · {}", app.channel_name(ch), node);
         let still_open =
             render_window(app, ui, &kinds, Some((ch, node.clone())), &title, &title);
