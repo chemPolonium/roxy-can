@@ -114,6 +114,12 @@
   - 信号选择树"派生信号"分组：`emit_value` 脚本发布后能进 Graphics 画曲线、Data 看数值。
   - 工具栏录制行 "id filter"：只录白名单 id；Measurement Setup 容量下拉与 Trace 窗口"head trimmed"提示。
   - CLI `--profile <名>`：错配报整份拒绝；旧 `.rxproj`（含 `sim_nodes`）打开后节点仍为模拟。
+- **2026-09-10 P1 界面重构 + Kvaser**：
+  - 角色下拉与说明文案；生成器按节点分组（组头 N/M 发送中、组级开/关、"窗"按钮、经硬件开关）。
+  - Nodes 窗口已删除：Entities 行点击脚本节点弹独立编辑器（改名/换总线/经硬件开关在其中）；Network 详情的本总线脚本列表与"+ 脚本节点"。
+  - Buses 波特率直接输入；"硬件"列挂接/解挂/刷新枚举。
+  - Export Trace 含归档帧；Trace 窗口"已归档 N 帧"提示。
+  - 真机 Kvaser：插上适配器后 `--kvaser-probe` 列通道 → Buses 挂接 → 监听真实流量 → 节点"经硬件"发车上线路。
 
 ## 阶段 5：硬件源落地（适配器选型后启动）
 
