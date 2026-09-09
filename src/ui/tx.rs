@@ -146,10 +146,98 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // per-row widgets can send commands without aliasing.
                 let tx = app.snap.tx.clone();
                 let mut remove: Option<(u8, u32)> = None;
+                // Rows group by their DBC node (the "simulate this node"
+                // boundary): a group header shows the role and how many of
+                // the node's entries are actually transmitting, so a
+                // simulated node with everything switched off cannot hide.
+                // Searching flattens the list -- filtering across groups is
+                // the point there.
+                let mut group_counts: std::collections::HashMap<(u8, String), (usize, usize)> =
+                    std::collections::HashMap::new();
+                for view in &tx {
+                    let e = group_counts
+                        .entry((view.channel, view.node.clone()))
+                        .or_insert((0, 0));
+                    e.1 += 1;
+                    if view.active {
+                        e.0 += 1;
+                    }
+                }
+                let mut last_group: Option<(u8, String)> = None;
                 for (i, view) in tx.iter().enumerate() {
                     let id = view.id;
                     let ch = view.channel;
                     let name = view.name.clone();
+                    let group_key = (ch, view.node.clone());
+                    let group_changed = last_group.as_ref() != Some(&group_key);
+                    if query.is_empty() && group_changed {
+                        let (active_n, total) = group_counts[&group_key];
+                        let node_label = if view.node.is_empty() {
+                            "(未分配)".to_string()
+                        } else {
+                            view.node.clone()
+                        };
+                        let role_word = if view.node.is_empty() {
+                            String::new()
+                        } else {
+                            format!("〔{}〕", app.node_role(ch, &view.node).label())
+                        };
+                        let hint = if view.node.is_empty() {
+                            "报文不属于任何 DBC 节点（手动添加）".to_string()
+                        } else {
+                            app.node_role(ch, &view.node).hint().to_string()
+                        };
+                        if ui.small_button(format!("开##gon{}_{}", ch, node_label)) {
+                            for v in tx.iter().filter(|v| {
+                                v.channel == ch && v.node == view.node && !v.active
+                            }) {
+                                app.send(crate::bus::BusCommand::SetEntryActive {
+                                    ch: v.channel,
+                                    id: v.id,
+                                    on: true,
+                                });
+                            }
+                        }
+                        ui.same_line();
+                        if ui.small_button(format!("关##goff{}_{}", ch, node_label)) {
+                            for v in tx.iter().filter(|v| {
+                                v.channel == ch && v.node == view.node && v.active
+                            }) {
+                                app.send(crate::bus::BusCommand::SetEntryActive {
+                                    ch: v.channel,
+                                    id: v.id,
+                                    on: false,
+                                });
+                            }
+                        }
+                        ui.same_line();
+                        let header = format!(
+                            "{} · {}  {}  {}/{} 发送中###grp{}_{node_label}",
+                            app.channel_name(ch),
+                            node_label,
+                            role_word,
+                            active_n,
+                            total,
+                            ch,
+                        );
+                        let header_open =
+                            ui.collapsing_header(header, imgui::TreeNodeFlags::empty());
+                        app.gen_group_open.insert(group_key.clone(), header_open);
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(&hint);
+                        }
+                    }
+                    last_group = Some(group_key.clone());
+                    if query.is_empty() && !group_changed {
+                        let open = app
+                            .gen_group_open
+                            .get(&group_key)
+                            .copied()
+                            .unwrap_or(true);
+                        if !open {
+                            continue;
+                        }
+                    }
                     if !query.is_empty() {
                         let hay = format!("{} {} {:X}", app.channel_name(ch), name, id)
                             .to_ascii_lowercase();

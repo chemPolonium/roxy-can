@@ -595,6 +595,9 @@ pub struct TxView {
     pub channel: u8,
     pub id: u32,
     pub name: String,
+    /// The DBC transmitter stamped on the entry ("" when unassigned) --
+    /// what the generator groups its rows by.
+    pub node: String,
     pub active: bool,
     pub fd: bool,
     pub cycle_us: u64,
@@ -1499,6 +1502,7 @@ impl BusCore {
                         channel: t.channel,
                         id: t.id,
                         name: t.name.clone(),
+                        node: t.node.clone(),
                         active: t.active,
                         fd: t.flags.contains(crate::can::frame::FrameFlags::FD),
                         cycle_us: t.cycle_us,

@@ -202,6 +202,9 @@ pub struct App {
     /// Script-node editors currently open, by node id in open order.
     /// Session state; an id whose node is gone closes its editor.
     pub open_editors: Vec<u64>,
+    /// Generator group collapse state, keyed (bus, node name). Session
+    /// state; missing keys are expanded.
+    pub gen_group_open: std::collections::HashMap<(u8, String), bool>,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// Bitrate drafts in the Buses window: row plus the text being typed,
@@ -408,6 +411,7 @@ impl App {
             node_src_draft: HashMap::new(),
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
+            gen_group_open: std::collections::HashMap::new(),
             net_selected: 0,
             tx_pick: 0,
             bus_arb_edit: None,
