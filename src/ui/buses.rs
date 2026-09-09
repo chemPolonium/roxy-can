@@ -256,6 +256,13 @@ fn content(app: &mut App, ui: &Ui) {
                         Ok(_) => ui.text_disabled("无通道"),
                         Err(e) => ui.text_disabled(e),
                     }
+                    ui.same_line();
+                    if ui.small_button(format!("刷新##hwref{i}")) {
+                        app.kvaser_channels = None;
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("重新枚举 Kvaser 通道");
+                    }
                 }
             }
             ui.table_next_column();
