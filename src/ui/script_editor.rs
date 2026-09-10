@@ -64,10 +64,15 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         });
     }
     ui.same_line();
-    // The wire-egress switch: only shown when the node's bus has
-    // hardware attached.
-    let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == node.channel);
-    if bus_has_hw {
+    // The wire-egress switch: only shown when the node's bus has a
+    // hardware attachment that can transmit.
+    let bus_can_tx = app
+        .snap
+        .hw
+        .iter()
+        .find(|h| h.bus == node.channel)
+        .is_some_and(|h| h.can_tx);
+    if bus_can_tx {
         let mut via_hw = app
             .snap
             .hw_tx_nodes

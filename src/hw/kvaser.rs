@@ -19,6 +19,9 @@ const CAN_MSG_STD: u32 = 0x0001;
 const CAN_MSG_EXT: u32 = 0x0004;
 const CAN_MSG_RTR: u32 = 0x0002;
 const CAN_FDMSG: u32 = 0x0080;
+/// canOPEN_NO_INIT_ACCESS: open for receiving only. Succeeds even when
+/// another program holds the channel's init access (e.g. CAN King).
+const CAN_OPEN_NO_INIT_ACCESS: i32 = 0x0020;
 
 /// Kvaser preset bitrate codes (negative = table entry; the tseg
 /// arguments are ignored). Only exact matches are accepted: silently
@@ -43,12 +46,15 @@ type CanGetNumberOfChannels = unsafe extern "system" fn(*mut i32) -> CanStatus;
 type CanOpenChannel = unsafe extern "system" fn(i32, i32) -> CanHandle;
 type CanSetBusParams =
     unsafe extern "system" fn(i32, i32, u8, u8, u8, u8, u32) -> CanStatus;
+type CanGetChannelData =
+    unsafe extern "system" fn(i32, i32, *mut c_void, *mut usize) -> CanStatus;
 type CanBusOn = unsafe extern "system" fn(i32) -> CanStatus;
 type CanBusOff = unsafe extern "system" fn(i32) -> CanStatus;
 type CanWrite = unsafe extern "system" fn(i32, u32, *const u8, u32, u32) -> CanStatus;
 type CanRead =
     unsafe extern "system" fn(i32, *mut u32, *mut u8, *mut u32, *mut u32, *mut u32) -> CanStatus;
 type CanClose = unsafe extern "system" fn(i32) -> CanStatus;
+type CanGetVersion = unsafe extern "system" fn() -> u32;
 
 /// Every canlib entry the tool needs. `None` members mean the DLL or the
 /// export was missing -- the wrapper reports "driver not available".
@@ -56,6 +62,9 @@ type CanClose = unsafe extern "system" fn(i32) -> CanStatus;
 struct Canlib {
     initialize_library: CanInitializeLibrary,
     get_number_of_channels: CanGetNumberOfChannels,
+    /// Serves the ignored live bring-up test.
+    #[allow(dead_code)]
+    get_channel_data: CanGetChannelData,
     open_channel: CanOpenChannel,
     set_bus_params: CanSetBusParams,
     bus_on: CanBusOn,
@@ -63,6 +72,9 @@ struct Canlib {
     write: CanWrite,
     read: CanRead,
     close: CanClose,
+    /// Serves the ignored live bring-up test.
+    #[allow(dead_code)]
+    get_version: CanGetVersion,
 }
 
 impl Canlib {
@@ -102,6 +114,7 @@ impl Canlib {
         Some(Canlib {
             initialize_library: need!(b"canInitializeLibrary", CanInitializeLibrary),
             get_number_of_channels: need!(b"canGetNumberOfChannels", CanGetNumberOfChannels),
+            get_channel_data: need!(b"canGetChannelData", CanGetChannelData),
             open_channel: need!(b"canOpenChannel", CanOpenChannel),
             set_bus_params: need!(b"canSetBusParams", CanSetBusParams),
             bus_on: need!(b"canBusOn", CanBusOn),
@@ -109,6 +122,7 @@ impl Canlib {
             write: need!(b"canWrite", CanWrite),
             read: need!(b"canRead", CanRead),
             close: need!(b"canClose", CanClose),
+            get_version: need!(b"canGetVersion", CanGetVersion),
         })
     }
 
@@ -135,21 +149,26 @@ pub struct KvaserChannel {
 
 impl KvaserChannel {
     /// Opens a channel and puts the bus on at the given bitrate.
-    pub fn open(index: i32, kbps: u32) -> Result<KvaserChannel, String> {
+    ///
+    /// `init_access = false` opens receive-only (canOPEN_NO_INIT_ACCESS):
+    /// it succeeds even when another program holds the channel — the
+    /// monitoring path. `init_access = true` allows writing frames but
+    /// fails while the channel is held elsewhere.
+    pub fn open(index: i32, kbps: u32, init_access: bool) -> Result<KvaserChannel, String> {
         let lib = Canlib::lib().ok_or("Kvaser 驱动不可用（canlib32.dll 未找到）")?;
         unsafe {
             (lib.initialize_library)();
-            // flags 0 = 默认共享打开；不带 ACCEPT_VIRTUAL 位——它在这部分
-            // 驱动上会得到 canERR_PARAM。物理通道直接可开。
+            let flags = if init_access { 0 } else { CAN_OPEN_NO_INIT_ACCESS };
+            let handle = (lib.open_channel)(index, flags);
+            if handle < 0 {
+                return Err(format!("打开 Kvaser 通道 {index} 失败（status {handle}）"));
+            }
             let Some(code) = bitrate_code(kbps) else {
+                (lib.close)(handle);
                 return Err(format!(
                     "不支持的波特率 {kbps} kbit/s（支持 10/50/62/83/100/125/250/500/1000）"
                 ));
             };
-            let handle = (lib.open_channel)(index, 0);
-            if handle < 0 {
-                return Err(format!("打开 Kvaser 通道 {index} 失败（status {handle}）"));
-            }
             let status = (lib.set_bus_params)(handle, code, 0, 0, 0, 0, 0);
             if status != CAN_OK {
                 (lib.close)(handle);
@@ -297,33 +316,57 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
 #[cfg(test)]
 mod live {
     use super::*;
-    use std::time::{Duration, Instant};
 
     #[test]
     #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_live -- --ignored --nocapture"]
     fn kvaser_live_open_and_read() {
         let channels = enumerate().expect("驱动可用");
+        let lib = Canlib::lib().expect("lib");
+        println!("canlib version raw: {:#x}", unsafe { (lib.get_version)() });
         println!("{} channel(s)", channels.len());
-        let mut opened = 0usize;
-        for c in &channels {
-            match KvaserChannel::open(c.index, 500) {
-                Ok(mut ch) => {
-                    opened += 1;
-                    let t0 = Instant::now();
-                    let mut seen = 0usize;
-                    while t0.elapsed() < Duration::from_millis(300) {
-                        if ch.try_read().is_some() {
-                            seen += 1;
-                        }
+
+        // 开放矩阵：通道 0..2 × 全部单一位标志，摸清这台驱动上哪个位能
+        // 打开虚拟通道。
+        let flag_candidates: [(i32, &str); 12] = [
+            (0x0000, "0"),
+            (0x0001, "0x0001"),
+            (0x0002, "0x0002"),
+            (0x0004, "0x0004"),
+            (0x0008, "0x0008"),
+            (0x0010, "0x0010"),
+            (0x0020, "0x0020"),
+            (0x0040, "0x0040"),
+            (0x0080, "0x0080"),
+            (0x0100, "0x0100"),
+            (0x0400, "0x0400"),
+            (0x8000, "0x8000"),
+        ];
+        for channel in 0..2i32 {
+            for (flag, label) in flag_candidates {
+                let handle = unsafe { (lib.open_channel)(channel, flag) };
+                if handle >= 0 {
+                    println!("ch{channel}: {label} → OPEN");
+                    unsafe {
+                        (lib.bus_off)(handle);
+                        (lib.close)(handle);
                     }
-                    println!("ch{}: ok, {} frame(s) in 300 ms", c.index, seen);
+                } else {
+                    println!("ch{channel}: {label} → status {handle}");
                 }
-                Err(e) => println!("ch{}: {e}", c.index),
             }
         }
-        assert!(
-            opened > 0,
-            "没有一个通道能打开——status -3 (NOTFOUND) 表示通道已配置但适配器未插上/未上电"
-        );
+
+        // 真实路径验证：只收挂接总是可行；收发挂接视占用情况而定。
+        for c in &channels {
+            let rx_only = KvaserChannel::open(c.index, 500, false)
+                .unwrap_or_else(|e| panic!("ch{} rx-only: {e}", c.index));
+            println!("ch{}: rx-only open ok", c.index);
+            drop(rx_only);
+
+            match KvaserChannel::open(c.index, 500, true) {
+                Ok(_) => println!("ch{}: init access ok（可发）", c.index),
+                Err(e) => println!("ch{}: init access 不可用：{e}", c.index),
+            }
+        }
     }
 }

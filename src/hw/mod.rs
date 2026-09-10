@@ -25,6 +25,10 @@ pub struct BusHardware {
     /// Human-facing adapter identity (Kvaser channel index for now).
     pub adapter: i32,
     pub kbps: u32,
+    /// Whether the port holds init access (can transmit). A receive-only
+    /// attachment (another program holds the channel) still feeds RX into
+    /// every view, but node switches cannot direct traffic to the wire.
+    pub can_tx: bool,
     port: HwPort,
 }
 
@@ -96,8 +100,16 @@ pub struct Hardware {
 }
 
 impl Hardware {
+    /// Whether a bus has any hardware attachment.
+    #[cfg(test)]
     pub fn is_attached(&self, bus: u8) -> bool {
         self.buses.contains_key(&bus)
+    }
+
+    /// Whether the bus's attachment can transmit (holds init access).
+    #[cfg(test)]
+    pub fn can_tx(&self, bus: u8) -> bool {
+        self.buses.get(&bus).is_some_and(|bh| bh.can_tx)
     }
 
     pub fn node_sends_via_hw(&self, bus: u8, node: &str) -> bool {
@@ -105,12 +117,13 @@ impl Hardware {
     }
 
     /// Attaches a port to a bus, replacing any previous attachment.
-    pub fn attach(&mut self, bus: u8, adapter: i32, kbps: u32, port: HwPort) {
+    pub fn attach(&mut self, bus: u8, adapter: i32, kbps: u32, can_tx: bool, port: HwPort) {
         self.buses.insert(
             bus,
             BusHardware {
                 adapter,
                 kbps,
+                can_tx,
                 port,
             },
         );
@@ -151,7 +164,13 @@ impl Hardware {
 
     pub fn set_node_tx(&mut self, bus: u8, node: &str, on: bool) {
         if on {
-            if self.is_attached(bus) {
+            // Enabling the switch needs a port that can actually
+            // transmit; receive-only attachments stay switch-free.
+            if self
+                .buses
+                .get(&bus)
+                .is_some_and(|bh| bh.can_tx)
+            {
                 self.node_tx.insert((bus, node.to_string()));
             }
         } else {
@@ -160,13 +179,16 @@ impl Hardware {
     }
 
     /// Writes one frame out the bus's wire, if a node switch directs it
-    /// there. Failures degrade to "virtual only" -- the frame already
-    /// lives on the internal bus, so the views never lose it.
+    /// there and the port holds init access. Failures degrade to "virtual
+    /// only" -- the frame already lives on the internal bus, so the views
+    /// never lose it.
     pub fn write_if_directed(&mut self, bus: u8, node: &str, f: &CanFrame) {
         if node.is_empty() || !self.node_sends_via_hw(bus, node) {
             return;
         }
-        if let Some(bh) = self.buses.get_mut(&bus) {
+        if let Some(bh) = self.buses.get_mut(&bus)
+            && bh.can_tx
+        {
             bh.port.write_frame(f).ok();
         }
     }
@@ -198,6 +220,7 @@ impl Hardware {
             bus,
             -1,
             500,
+            true,
             HwPort::Mock(MockPort {
                 written: written.clone(),
                 incoming: incoming.clone(),

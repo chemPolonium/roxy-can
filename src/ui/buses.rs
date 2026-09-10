@@ -225,13 +225,29 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             // Hardware attachment: one adapter per bus, enumerated from
             // the installed driver on first need.
-            let attached = app.snap.hw.iter().find(|h| h.bus as usize == i);
+            let attached = app
+                .snap
+                .hw
+                .iter()
+                .find(|h| h.bus as usize == i)
+                .map(|h| (h.adapter, h.kbps, h.can_tx));
             match attached {
-                Some(h) => {
-                    ui.text(format!("Kvaser ch{} @{}k", h.adapter, h.kbps));
+                Some((adapter, kbps, can_tx)) => {
+                    ui.text(if can_tx {
+                        format!("Kvaser ch{adapter} @{kbps}k")
+                    } else {
+                        format!("Kvaser ch{adapter} @{kbps}k（只收）")
+                    });
                     ui.same_line();
                     if ui.small_button(format!("解挂##hwdet{i}")) {
                         app.detach_hardware(i as u8);
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(if can_tx {
+                            "挂接中（收发）"
+                        } else {
+                            "挂接中（只收：通道初始化访问被其他程序占用）"
+                        });
                     }
                 }
                 None => {

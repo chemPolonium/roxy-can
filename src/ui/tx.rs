@@ -290,9 +290,11 @@ fn render_window(
                         }
                         ui.same_line();
                         // The wire-egress switch: only meaningful for a
-                        // simulated node on a bus with attached hardware.
-                        let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == ch);
-                        if role == crate::app::NodeRole::Simulated && bus_has_hw {
+                        // simulated node on a bus whose attachment can
+                        // transmit (holds init access).
+                        let bus_hw = app.snap.hw.iter().find(|h| h.bus == ch);
+                        let bus_can_tx = bus_hw.is_some_and(|h| h.can_tx);
+                        if role == crate::app::NodeRole::Simulated && bus_can_tx {
                             let mut via_hw = app
                                 .snap
                                 .hw_tx_nodes

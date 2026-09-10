@@ -78,6 +78,8 @@ pub struct HwBusView {
     /// The adapter identity (Kvaser channel index).
     pub adapter: i32,
     pub kbps: u32,
+    /// Whether the attachment can transmit (holds init access).
+    pub can_tx: bool,
 }
 
 /// What the frontend may ask the bus to do. One variant per transport
@@ -1114,12 +1116,33 @@ impl BusCore {
                 self.trace_limit = frames.clamp(1_000, 5_000_000)
             }
             BusCommand::SetHardwareChannel { bus, adapter, kbps } => {
-                match crate::hw::kvaser::KvaserChannel::open(adapter, kbps) {
+                // Prefer init access (the wire-egress switches can then
+                // direct traffic onto the wire). When another program
+                // holds the channel, fall back to receive-only.
+                match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, true) {
                     Ok(port) => {
-                        self.hw.attach(bus, adapter, kbps, crate::hw::HwPort::Kvaser(port));
-                        *status = format!("hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s");
+                        self.hw.attach(bus, adapter, kbps, true, crate::hw::HwPort::Kvaser(port));
+                        *status = format!(
+                            "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s (收发)"
+                        );
                     }
-                    Err(e) => *status = format!("hardware attach failed: {e}"),
+                    Err(init_err) => {
+                        match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, false) {
+                            Ok(port) => {
+                                self.hw.attach(
+                                    bus,
+                                    adapter,
+                                    kbps,
+                                    false,
+                                    crate::hw::HwPort::Kvaser(port),
+                                );
+                                *status = format!(
+                                    "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s（只收——通道被其他程序占用）"
+                                );
+                            }
+                            Err(e) => *status = format!("hardware attach failed: {init_err} / {e}"),
+                        }
+                    }
                 }
             }
             BusCommand::DetachHardware { bus } => {
@@ -1502,6 +1525,7 @@ impl BusCore {
                     bus,
                     adapter: bh.adapter,
                     kbps: bh.kbps,
+                    can_tx: bh.can_tx,
                 })
                 .collect(),
             hw_tx_nodes: self.hw.node_tx.iter().cloned().collect(),
