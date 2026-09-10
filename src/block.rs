@@ -26,6 +26,11 @@ pub struct ReplayBlock {
     pub path: String,
     /// Replay only the frames this DBC node sends; `None` = no node filter.
     pub node_filter: Option<String>,
+    /// The DBC node this block belongs to: `(bus, node name)`. The node
+    /// is the management home (tree placement, node detail) -- the
+    /// `node_filter` above still decides which frames the block carries.
+    /// `None` = a free, bus-level block.
+    pub attached: Option<(u8, String)>,
     /// Replay only these `(id, extended)` frames; empty = no id filter.
     pub ids: Vec<(u32, bool)>,
     pub enabled: bool,
@@ -45,12 +50,14 @@ pub struct ReplayBlock {
 }
 
 impl ReplayBlock {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: u64,
         name: String,
         channel: u8,
         path: String,
         node_filter: Option<String>,
+        attached: Option<(u8, String)>,
         ids: Vec<(u32, bool)>,
         enabled: bool,
     ) -> Self {
@@ -60,6 +67,7 @@ impl ReplayBlock {
             channel,
             path,
             node_filter,
+            attached,
             ids,
             enabled,
             last_error: None,

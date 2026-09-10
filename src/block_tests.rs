@@ -36,7 +36,16 @@ fn write_log(name: &str) -> String {
 }
 
 fn block(path: &str, node: Option<&str>, ids: Vec<(u32, bool)>) -> ReplayBlock {
-    ReplayBlock::new(1, "blk".to_string(), 0, path.to_string(), node.map(String::from), ids, true)
+    ReplayBlock::new(
+        1,
+        "blk".to_string(),
+        0,
+        path.to_string(),
+        node.map(String::from),
+        None,
+        ids,
+        true,
+    )
 }
 
 /// The id filter keeps only the frames it names, timestamps renormalize

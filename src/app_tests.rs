@@ -117,10 +117,7 @@ fn a_trigger_started_recording_follows_the_record_filter() {
     app.set_record_filter(vec![(0x100, false)]);
     app.toggle_record();
     app.triggers.push(Trigger::new(
-        TriggerCond::IdPresent {
-            ch: 0,
-            id: 0x100,
-        },
+        TriggerCond::IdPresent { ch: 0, id: 0x100 },
         TriggerAction::StartRecording,
     ));
     app.add_tx(0, 0x999);
@@ -139,7 +136,11 @@ fn a_trigger_started_recording_follows_the_record_filter() {
     let actual = app.recorder.last_record.clone();
     let content = std::fs::read_to_string(&actual).unwrap();
     let frames = crate::log::asc::parse_asc(&content);
-    assert!(frames.len() >= 5, "whitelisted frames flowed: {}", frames.len());
+    assert!(
+        frames.len() >= 5,
+        "whitelisted frames flowed: {}",
+        frames.len()
+    );
     assert!(
         frames.iter().all(|f| f.id == 0x100),
         "the pre-trigger context and live tail stay filtered"
@@ -805,11 +806,7 @@ fn simulate_node_and_enable(app: &mut App, ch: u8, node: &str) {
         .map(|t| t.id)
         .collect();
     for id in ids {
-        app.send(crate::bus::BusCommand::SetEntryActive {
-            ch,
-            id,
-            on: true,
-        });
+        app.send(crate::bus::BusCommand::SetEntryActive { ch, id, on: true });
     }
     app.settle();
 }
@@ -867,7 +864,11 @@ fn ticking_a_node_creates_the_entries_it_lacks() {
     let mut app = App::headless();
     app.tx_list.clear();
     app.set_node_role(1, "ABS", NodeRole::Simulated);
-    assert_eq!(app.tx_list.iter().filter(|t| t.channel == 1).count(), 3, "the generator refills from the DBC");
+    assert_eq!(
+        app.tx_list.iter().filter(|t| t.channel == 1).count(),
+        3,
+        "the generator refills from the DBC"
+    );
     assert_eq!(app.tx_list.len(), 3, "and only this node's messages");
     assert_eq!(entry_of(&app, 1, 201).name, "ABSdata");
     assert_eq!(entry_of(&app, 1, 201).cycle_us, 50_000);
@@ -895,7 +896,11 @@ fn simulating_a_node_creates_entries_but_leaves_them_off() {
         .map(|t| t.id)
         .collect();
     for id in ids {
-        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id, on: true });
+        app.send(crate::bus::BusCommand::SetEntryActive {
+            ch: 1,
+            id,
+            on: true,
+        });
     }
     app.settle();
     assert_eq!(active_ids(&app, 1), [199, 200, 201]);
@@ -941,13 +946,21 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     let before = app.tx_list.len();
 
     // 逐条目开关是自定义：关掉后条目、激励、周期原样保留。
-    app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: 201, on: false });
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 1,
+        id: 201,
+        on: false,
+    });
     assert!(active_ids(&app, 1).is_empty(), "stopped sending");
     assert_eq!(app.tx_list.len(), before, "entries survive");
     assert_eq!(app.tx_list[i].srcs.len(), 1, "with the waveform attached");
     assert_eq!(app.tx_list[i].cycle_us, 50_000, "and the declared period");
 
-    app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: 201, on: true });
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 1,
+        id: 201,
+        on: true,
+    });
     assert_eq!(
         app.tx_list[i].srcs.len(),
         1,
@@ -969,7 +982,11 @@ fn node_gate_does_not_touch_entry_switches() {
         .map(|t| t.id)
         .collect();
     for id in ids {
-        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id, on: true });
+        app.send(crate::bus::BusCommand::SetEntryActive {
+            ch: 1,
+            id,
+            on: true,
+        });
     }
     app.settle();
 
@@ -1006,7 +1023,11 @@ fn the_role_gate_silences_a_node_even_after_its_dbc_is_gone() {
         .map(|t| t.id)
         .collect();
     for id in &ids {
-        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: *id, on: true });
+        app.send(crate::bus::BusCommand::SetEntryActive {
+            ch: 1,
+            id: *id,
+            on: true,
+        });
     }
     app.settle();
     assert_eq!(active_ids(&app, 1).len(), 3);
@@ -1056,7 +1077,11 @@ fn a_monitoring_node_declares_presence_without_traffic() {
         .map(|t| t.id)
         .collect();
     for id in &ids {
-        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: *id, on: true });
+        app.send(crate::bus::BusCommand::SetEntryActive {
+            ch: 1,
+            id: *id,
+            on: true,
+        });
     }
     app.settle();
     assert_eq!(active_ids(&app, 1).len(), 3);
@@ -1064,9 +1089,10 @@ fn a_monitoring_node_declares_presence_without_traffic() {
     app.set_node_role(1, "ABS", NodeRole::Monitor);
     assert_eq!(app.node_role(1, "ABS"), NodeRole::Monitor);
     assert!(
-        [199, 200, 201]
+        [199, 200, 201].iter().all(|id| app
+            .tx_list
             .iter()
-            .all(|id| app.tx_list.iter().any(|t| t.channel == 1 && t.id == *id && t.active)),
+            .any(|t| t.channel == 1 && t.id == *id && t.active)),
         "its entries survive, ready for a return to Simulated"
     );
     assert!(
@@ -3501,17 +3527,17 @@ fn simulate_all_activates_every_dbc_node() {
             on: true,
         });
     }
-    let flowing = app.tx_list.iter().filter(|t| t.channel == 0 && t.active).count();
+    let flowing = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == 0 && t.active)
+        .count();
     assert!(flowing > 0, "entries exist for the whole bus");
 
     // The reverse sweep closes every gate on the bus (switches preserved).
     app.stop_all_nodes(0);
     app.settle();
-    let any_gate = app
-        .snap
-        .tx
-        .iter()
-        .any(|t| t.channel == 0 && t.gate_open);
+    let any_gate = app.snap.tx.iter().any(|t| t.channel == 0 && t.gate_open);
     assert!(!any_gate, "stop-all closes every gate on the bus");
 }
 
@@ -3757,7 +3783,11 @@ BO_ 300 FirstMsg: 1 ECU
     app.settle();
     app.set_node_role(0, "ECU", NodeRole::Simulated);
     // 新语义：模拟只开放闸门，条目默认关——用户显式启用后发车。
-    app.send(crate::bus::BusCommand::SetEntryActive { ch: 0, id: 300, on: true });
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 300,
+        on: true,
+    });
     app.settle();
     assert_eq!(
         active_ids(&app, 0),
@@ -4987,6 +5017,7 @@ fn a_replay_block_streams_its_log_into_the_simulation() {
         "restbus".to_string(),
         path.to_string_lossy().into_owned(),
         None,
+        None,
     );
     app.settle();
     // A fresh block starts disabled -- adding a block must not begin
@@ -5008,6 +5039,7 @@ fn a_replay_block_streams_its_log_into_the_simulation() {
         channel: 0,
         path: path.to_string_lossy().into_owned(),
         node_filter: None,
+        attached: None,
         ids: vec![(0x100, false)],
     });
     app.settle();
@@ -5031,7 +5063,10 @@ fn a_replay_block_streams_its_log_into_the_simulation() {
         .expect("the block's frames reached the bus");
     assert_eq!(agg.count, 5, "all five frames arrived");
     assert!(
-        !app.snap.aggs.iter().any(|a| a.channel == 0 && a.id == 0x999),
+        !app.snap
+            .aggs
+            .iter()
+            .any(|a| a.channel == 0 && a.id == 0x999),
         "the id filter kept the stray frame out"
     );
     let cycles: Vec<u64> = app
@@ -5076,6 +5111,7 @@ fn a_replay_block_stays_silent_in_replay_mode() {
         0,
         "b".to_string(),
         path.to_string_lossy().into_owned(),
+        None,
         None,
     );
     app.settle();
@@ -5130,6 +5166,7 @@ fn replay_blocks_round_trip_through_a_project() {
         "engine_log".to_string(),
         path.to_string_lossy().into_owned(),
         None,
+        None,
     );
     app.settle();
     let id = app.snap.blocks[0].id;
@@ -5163,7 +5200,7 @@ fn emit_value_publishes_a_derived_signal_stream() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "calc".to_string(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5179,7 +5216,12 @@ fn emit_value_publishes_a_derived_signal_stream() {
         app.tick(t * 1_000);
     }
 
-    let key = (0u8, crate::app::EMITTED_ID_BASE | id as u32, false, "SpeedKmh".to_string());
+    let key = (
+        0u8,
+        crate::app::EMITTED_ID_BASE | id as u32,
+        false,
+        "SpeedKmh".to_string(),
+    );
     assert!(
         app.snap
             .emitted
@@ -5213,7 +5255,7 @@ fn emit_value_works_from_message_handlers() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "mirror".to_string(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5262,7 +5304,7 @@ fn derived_streams_follow_their_node_across_edits() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "calc".to_string(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5277,12 +5319,14 @@ fn derived_streams_follow_their_node_across_edits() {
         app.advance_clock(t * 1_000);
         app.tick(t * 1_000);
     }
-    let key = |ch: u8| (
-        ch,
-        crate::app::EMITTED_ID_BASE | id as u32,
-        false,
-        "X".to_string(),
-    );
+    let key = |ch: u8| {
+        (
+            ch,
+            crate::app::EMITTED_ID_BASE | id as u32,
+            false,
+            "X".to_string(),
+        )
+    };
     assert!(
         app.snap.emitted.iter().any(|(k, _)| *k == key(0)),
         "the stream opened on the node's bus"
@@ -5321,7 +5365,7 @@ fn an_errored_handler_discards_its_emissions() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "boom".to_string(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5356,12 +5400,12 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "gone".to_string(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     app.send(crate::bus::BusCommand::AddNode {
         name: "stay".to_string(),
         channel: 1,
-            attached: None,
+        attached: None,
     });
     app.settle();
     let stay_id = app
@@ -5375,8 +5419,11 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
         id: stay_id,
         source: "on start { emit_value(\"X\", 1); }".to_string(),
     });
-    app.send(crate::bus::BusCommand::SetNodeEnabled { id: stay_id, on: true });
-    app.add_replay_block(1, "blk".to_string(), String::new(), None);
+    app.send(crate::bus::BusCommand::SetNodeEnabled {
+        id: stay_id,
+        on: true,
+    });
+    app.add_replay_block(1, "blk".to_string(), String::new(), None, None);
     app.settle();
 
     app.start_virtual();
@@ -5540,7 +5587,11 @@ fn hardware_tx_follows_the_per_node_switch() {
     }
     let after = wire_count();
     assert!(
-        !written.lock().expect("mock lock").iter().any(|f| f.t_us >= 800_000),
+        !written
+            .lock()
+            .expect("mock lock")
+            .iter()
+            .any(|f| f.t_us >= 800_000),
         "no wire writes after the switch goes off"
     );
     assert_eq!(wire_count(), after);
@@ -5556,19 +5607,16 @@ fn hardware_rx_frames_ingest_like_bus_traffic() {
     let (_written, incoming) = app.hw.attach_mock(0);
     app.start_virtual();
     app.settle();
-    incoming
-        .lock()
-        .expect("mock lock")
-        .push_back(CanFrame {
-            t_us: 0,
-            channel: 0,
-            id: 0x555,
-            extended: false,
-            len: 1,
-            data: [0; MAX_CAN_FD_LEN],
-            dir: Direction::Rx,
-            flags: FrameFlags::NONE,
-        });
+    incoming.lock().expect("mock lock").push_back(CanFrame {
+        t_us: 0,
+        channel: 0,
+        id: 0x555,
+        extended: false,
+        len: 1,
+        data: [0; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    });
     for t in 1..=20u64 {
         app.advance_clock(t * 1_000);
         app.tick(t * 1_000);
@@ -5608,7 +5656,7 @@ fn script_frames_follow_the_wire_egress_switch() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "beacon".to_string(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5728,11 +5776,7 @@ fn the_trace_export_includes_archived_head_frames() {
     assert!(app.status.starts_with("exported"), "{}", app.status);
     let text = std::fs::read_to_string(&out).unwrap();
     let exported = crate::log::asc::parse_asc(&text);
-    assert_eq!(
-        exported.len(),
-        1_200,
-        "archive + hot ring = the whole run"
-    );
+    assert_eq!(exported.len(), 1_200, "archive + hot ring = the whole run");
     assert_eq!(exported[0].t_us, 0, "the head survived via the archive");
     assert_eq!(exported[1_199].t_us, last_t, "the tail is the live ring");
     std::fs::remove_file(&out).ok();
@@ -5744,7 +5788,7 @@ fn a_script_node_round_trips_through_a_project() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "gen".into(),
         channel: 0,
-            attached: None,
+        attached: None,
     });
     let id = app.snap.nodes[0].id;
     let source = "on timer 100 { print(1); }";

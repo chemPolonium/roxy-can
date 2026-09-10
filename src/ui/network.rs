@@ -82,15 +82,59 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                 .nodes
                 .iter()
                 .filter(|n| {
-                    n.channel as usize == ch
-                        && n.attached.as_ref().is_some_and(|a| a.1 == ni.name)
+                    n.channel as usize == ch && n.attached.as_ref().is_some_and(|a| a.1 == ni.name)
                 })
-                .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled, n.errored))
+                .map(|n| {
+                    (
+                        n.id,
+                        n.name.clone(),
+                        n.running && !n.errored,
+                        n.enabled,
+                        n.errored,
+                    )
+                })
                 .collect();
             if !bound.is_empty() {
                 ui.indent();
                 for (nid, name, running, enabled, errored) in bound {
                     draw_script_leaf(app, ui, nid, &name, running, enabled, errored);
+                }
+                ui.unindent();
+            }
+            // 绑定到该节点的回放块同样挂在节点下：点击打开 Replay
+            // Blocks 窗口编辑。
+            let blocks: Vec<(u64, String, bool)> = app
+                .snap
+                .blocks
+                .iter()
+                .filter(|b| {
+                    b.attached
+                        .as_ref()
+                        .is_some_and(|a| a.0 == ch as u8 && a.1 == ni.name)
+                })
+                .map(|b| (b.id, b.name.clone(), b.enabled))
+                .collect();
+            if !blocks.is_empty() {
+                ui.indent();
+                for (bid, name, enabled) in blocks {
+                    let (marker, color) = if enabled {
+                        ("o", [0.45, 0.62, 0.80, 1.0])
+                    } else {
+                        (".", [0.5, 0.5, 0.55, 1.0])
+                    };
+                    ui.text_colored(color, marker);
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("[R] 回放块 / o 启用 / . 停用");
+                    }
+                    ui.same_line();
+                    ui.text_colored([0.75, 0.55, 1.00, 1.0], "[R]");
+                    ui.same_line();
+                    if ui
+                        .selectable_config(format!("{name}##netblock{bid}"))
+                        .build()
+                    {
+                        app.show_blocks = true;
+                    }
                 }
                 ui.unindent();
             }
@@ -101,7 +145,15 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
             .nodes
             .iter()
             .filter(|n| n.channel as usize == ch && n.attached.is_none())
-            .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled, n.errored))
+            .map(|n| {
+                (
+                    n.id,
+                    n.name.clone(),
+                    n.running && !n.errored,
+                    n.enabled,
+                    n.errored,
+                )
+            })
             .collect();
         if !free.is_empty() {
             ui.indent();
@@ -335,6 +387,52 @@ pub fn render(app: &mut App, ui: &Ui) {
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text("* 运行中 / o 已启用待测量 / . 未启用");
+                        }
+                    }
+                    ui.separator();
+
+                    // 回放块也是节点的一种驱动：该节点名下的块就近列出，
+                    // 新建即绑定到本节点并默认只回放它的报文。
+                    ui.text("本节点回放块");
+                    ui.same_line();
+                    if ui.small_button(format!("+ 回放块##netaddblk{ch}")) {
+                        let name = format!("Block {}", app.snap.blocks.len() + 1);
+                        app.add_replay_block(
+                            ch as u8,
+                            name,
+                            String::new(),
+                            Some(ni.name.clone()),
+                            Some((ch as u8, ni.name.clone())),
+                        );
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "把该节点录制的真实流量注回仿真总线（restbus）；日志路径在 Replay Blocks 窗口选择",
+                        );
+                    }
+                    let node_blocks: Vec<(u64, String, bool, usize)> = app
+                        .snap
+                        .blocks
+                        .iter()
+                        .filter(|b| {
+                            b.attached.as_ref().is_some_and(|a| a.0 == ch as u8 && a.1 == ni.name)
+                        })
+                        .map(|b| (b.id, b.name.clone(), b.enabled, b.frames))
+                        .collect();
+                    for (bid, name, enabled, frames) in node_blocks {
+                        let marker = if enabled { "o" } else { "." };
+                        if ui
+                            .selectable_config(format!(
+                                "[R] {marker} {name}（{frames} 帧）##netblock{bid}"
+                            ))
+                            .build()
+                        {
+                            app.show_blocks = true;
+                        }
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(
+                                "[R] 回放块 / o 启用 / . 停用；点击打开 Replay Blocks 窗口编辑",
+                            );
                         }
                     }
                     ui.separator();

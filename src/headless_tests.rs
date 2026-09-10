@@ -613,6 +613,7 @@ fn the_threaded_core_honors_node_roles_and_replay_blocks() {
         channel: 0,
         path: log.to_string_lossy().into_owned(),
         node_filter: None,
+        attached: None,
         ids: Vec::new(),
     });
     app.settle();

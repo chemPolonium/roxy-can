@@ -27,15 +27,23 @@ pub fn render(app: &mut App, ui: &Ui) {
 fn content(app: &mut App, ui: &Ui) {
     if ui.small_button("+ Block") {
         let n = app.snap.blocks.len();
-        app.add_replay_block(0, format!("Block {}", n + 1), String::new(), None);
+        app.add_replay_block(0, format!("Block {}", n + 1), String::new(), None, None);
     }
     ui.same_line();
-    ui.text_disabled("回放块：把录制的日志按过滤条件注回仿真总线，仅仿真模式发车");
+    ui.text_disabled(
+        "回放块：把节点的录制流量注回仿真总线（仅仿真模式）；从 Network 节点详情新建会绑定到该节点",
+    );
 
     ui.separator();
     let blocks: Vec<crate::bus::ReplayBlockView> = app.snap.blocks.clone();
     for b in &blocks {
-        block_card(app, ui, b);
+        let label = match &b.attached {
+            Some((ch, node)) => {
+                format!("绑定节点 {} · {}", app.channel_name(*ch), node)
+            }
+            None => "自由块（未绑定节点）".to_string(),
+        };
+        block_card(app, ui, b, &label);
         ui.spacing();
     }
 }
@@ -51,18 +59,21 @@ fn parse_ids(text: &str) -> Vec<(u32, bool)> {
     crate::ui::parse_id_filter(text)
 }
 
-fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView) {
+fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView, bound_label: &str) {
     let id = b.id;
     // Seed the drafts from the published declaration the first time.
-    app.block_drafts.entry(id).or_insert_with(|| crate::ui::BlockDraft {
-        name: b.name.clone(),
-        path: b.path.clone(),
-        ids_text: String::new(),
-    });
+    app.block_drafts
+        .entry(id)
+        .or_insert_with(|| crate::ui::BlockDraft {
+            name: b.name.clone(),
+            path: b.path.clone(),
+            ids_text: String::new(),
+        });
     let open_token = ui
         .tree_node_config(format!("{}##block{}", b.name, id))
         .push();
     let Some(_t) = open_token else { return };
+    ui.text_disabled(bound_label);
 
     // Header: name draft, bus, enable toggle.
     ui.set_next_item_width(130.0);
@@ -87,6 +98,7 @@ fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView) {
             channel: channel as u8,
             path: d.path,
             node_filter: b.node_filter.clone(),
+            attached: b.attached.clone(),
             ids: b.ids.clone(),
         });
     }
@@ -152,6 +164,7 @@ fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView) {
             channel: b.channel,
             path: d.path,
             node_filter,
+            attached: b.attached.clone(),
             ids: b.ids.clone(),
         });
     }
@@ -176,6 +189,7 @@ fn block_card(app: &mut App, ui: &Ui, b: &crate::bus::ReplayBlockView) {
             channel: b.channel,
             path: d.path,
             node_filter: b.node_filter.clone(),
+            attached: b.attached.clone(),
             ids: parse_ids(&d.ids_text),
         });
     }

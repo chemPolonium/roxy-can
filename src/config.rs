@@ -263,6 +263,10 @@ pub struct BlockCfg {
     pub path: String,
     #[serde(default)]
     pub node_filter: Option<String>,
+    /// The DBC node the block belongs to `(bus, node)`; absent on old
+    /// projects and on free, bus-level blocks.
+    #[serde(default)]
+    pub attached: Option<(u8, String)>,
     #[serde(default)]
     pub ids: Vec<(u32, bool)>,
     /// Disabled blocks are kept so the declaration survives; nothing
@@ -795,6 +799,7 @@ impl Config {
                     channel: b.channel,
                     path: b.path.clone(),
                     node_filter: b.node_filter.clone(),
+                    attached: b.attached.clone(),
                     ids: b.ids.clone(),
                     enabled: b.enabled,
                 })
@@ -1244,7 +1249,7 @@ impl Config {
                     show_tx: d.show_tx,
                     show_network: d.show_network,
                     show_measurement: d.show_measurement,
-                                show_buses: d.show_buses,
+                    show_buses: d.show_buses,
                     show_triggers: d.show_triggers,
                     show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,
@@ -1486,7 +1491,10 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.channels[0].sim_nodes, ["ABS"]);
         assert_eq!(
-            cfg.channels[0].node_roles.get("DashBoard").map(String::as_str),
+            cfg.channels[0]
+                .node_roles
+                .get("DashBoard")
+                .map(String::as_str),
             Some("Bogus"),
             "the raw file keeps unknown names; the restore filters them"
         );

@@ -64,6 +64,8 @@ pub struct ReplayBlockView {
     pub channel: u8,
     pub path: String,
     pub node_filter: Option<String>,
+    /// The DBC node this block belongs to (tree placement, node detail).
+    pub attached: Option<(u8, String)>,
     pub ids: Vec<(u32, bool)>,
     pub enabled: bool,
     /// Frames in the loaded queue; 0 unless the block loaded successfully.
@@ -330,12 +332,15 @@ pub enum BusCommand {
     },
     /// Add a replay block: recorded traffic from `path`, filtered, injected
     /// onto bus `ch` when a simulation runs. New blocks start disabled --
-    /// nothing transmits until the user says so.
+    /// nothing transmits until the user says so. `attached` names the DBC
+    /// node the block belongs to (its management home); `None` is a free,
+    /// bus-level block.
     AddReplayBlock {
         name: String,
         channel: u8,
         path: String,
         node_filter: Option<String>,
+        attached: Option<(u8, String)>,
         ids: Vec<(u32, bool)>,
     },
     /// Edit a replay block's declaration wholesale. An enabled block
@@ -346,6 +351,7 @@ pub enum BusCommand {
         channel: u8,
         path: String,
         node_filter: Option<String>,
+        attached: Option<(u8, String)>,
         ids: Vec<(u32, bool)>,
     },
     /// Remove a replay block wholesale.
@@ -935,12 +941,7 @@ impl BusCore {
                     }
                     // The wire-egress switch follows the node across the
                     // rename instead of being lost.
-                    if old != name
-                        && self
-                            .hw
-                            .node_tx
-                            .remove(&(n.channel, old))
-                    {
+                    if old != name && self.hw.node_tx.remove(&(n.channel, old)) {
                         self.hw.node_tx.insert((n.channel, name.clone()));
                     }
                     self.nodes_dirty = true;
@@ -1033,16 +1034,18 @@ impl BusCore {
                 channel,
                 path,
                 node_filter,
+                attached,
                 ids,
-            } => self.add_replay_block(name, channel, path, node_filter, ids, status),
+            } => self.add_replay_block(name, channel, path, node_filter, attached, ids, status),
             BusCommand::SetReplayBlock {
                 id,
                 name,
                 channel,
                 path,
                 node_filter,
+                attached,
                 ids,
-            } => self.set_replay_block(id, name, channel, path, node_filter, ids, status),
+            } => self.set_replay_block(id, name, channel, path, node_filter, attached, ids, status),
             BusCommand::RemoveReplayBlock { id } => {
                 self.replay_blocks.retain(|b| b.id != id);
                 self.nodes_dirty = true;
@@ -1061,6 +1064,7 @@ impl BusCore {
                             cfg.channel,
                             cfg.path,
                             cfg.node_filter,
+                            cfg.attached,
                             cfg.ids,
                             cfg.enabled,
                         );
@@ -1157,7 +1161,9 @@ impl BusCore {
                 bitrate_kbps,
                 fd_data_kbps,
                 node_roles,
-            } => self.set_channel_config(ch, name, dbc_path, bitrate_kbps, fd_data_kbps, node_roles),
+            } => {
+                self.set_channel_config(ch, name, dbc_path, bitrate_kbps, fd_data_kbps, node_roles)
+            }
             BusCommand::LoadDbc { ch, paths } => self.load_dbc(ch, paths, status),
             BusCommand::SetBusCounter(n) => self.bus_counter = n,
             BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
@@ -1177,7 +1183,8 @@ impl BusCore {
                 match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, fd_data_kbps, true) {
                     Ok(port) => {
                         let fd = port.fd;
-                        self.hw.attach(bus, adapter, kbps, true, crate::hw::HwPort::Kvaser(port));
+                        self.hw
+                            .attach(bus, adapter, kbps, true, crate::hw::HwPort::Kvaser(port));
                         *status = format!(
                             "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s (收发){}",
                             hw_fd_note(fd_data_kbps, fd)
@@ -1204,9 +1211,7 @@ impl BusCore {
                                     hw_fd_note(fd_data_kbps, fd)
                                 );
                             }
-                            Err(e) => {
-                                *status = format!("hardware attach failed: {init_err} / {e}")
-                            }
+                            Err(e) => *status = format!("hardware attach failed: {init_err} / {e}"),
                         }
                     }
                 }
@@ -1360,6 +1365,7 @@ impl BusCore {
                     channel: b.channel,
                     path: b.path.clone(),
                     node_filter: b.node_filter.clone(),
+                    attached: b.attached.clone(),
                     ids: b.ids.clone(),
                     enabled: b.enabled,
                     frames: b.queue_len(),
@@ -1394,22 +1400,13 @@ impl BusCore {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线/监听时
             // 脚本同样不发车（模拟 = 闸门放行）。
-            let script_allowed = node
-                .attached
-                .as_ref()
-                .is_none_or(|(ach, anode)| {
-                    self.channels
-                        .get(*ach as usize)
-                        .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
-                });
+            let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
+                self.channels
+                    .get(*ach as usize)
+                    .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+            });
             for (id, ext, data) in node.run_timers(now_us, &input) {
-                let frame = Self::node_frame(
-                    node.channel,
-                    id,
-                    ext,
-                    &data,
-                    self.sim_t_us,
-                );
+                let frame = Self::node_frame(node.channel, id, ext, &data, self.sim_t_us);
                 // Script frames follow the same wire-egress switch as the
                 // generator: the node's name is the switch key.
                 if script_allowed {
@@ -1443,22 +1440,18 @@ impl BusCore {
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色闸（见 run_node_timers）。
-            let script_allowed = node
-                .attached
-                .as_ref()
-                .is_none_or(|(ach, anode)| {
-                    self.channels
-                        .get(*ach as usize)
-                        .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
-                });
+            let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
+                self.channels
+                    .get(*ach as usize)
+                    .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+            });
             let node_out =
                 node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input);
             // The node's own wire egress: reactions go out the attached
             // hardware under the same per-node switch as everything else.
             if script_allowed && self.hw.node_sends_via_hw(node.channel, &node.name) {
                 for (id, ext, data) in &node_out {
-                    let frame =
-                        Self::node_frame(node.channel, *id, *ext, data, f.t_us);
+                    let frame = Self::node_frame(node.channel, *id, *ext, data, f.t_us);
                     self.hw.write_if_directed(node.channel, &node.name, &frame);
                 }
             }
@@ -1496,7 +1489,8 @@ impl BusCore {
             if self.emitted_streams.len() >= MAX_EMITTED_STREAMS {
                 return;
             }
-            self.emitted_streams.push((key.clone(), node_name.to_string()));
+            self.emitted_streams
+                .push((key.clone(), node_name.to_string()));
             self.nodes_dirty = true;
         }
         self.subscribe_signal(key.clone());
@@ -2173,8 +2167,7 @@ impl BusCore {
         let removed = ch as u8;
         self.triggers.retain(|t| {
             let cond_gone = t.cond.bus() == removed;
-            let action_gone =
-                matches!(&t.action, TriggerAction::Send { ch, .. } if *ch == removed);
+            let action_gone = matches!(&t.action, TriggerAction::Send { ch, .. } if *ch == removed);
             !cond_gone && !action_gone
         });
         for t in &mut self.triggers {
@@ -2217,7 +2210,6 @@ impl BusCore {
         *status = format!("{name} removed");
     }
 
-
     /// Declares a DBC node's role.
     ///
     /// `Simulated` adds whatever generator entry the node is missing and
@@ -2253,10 +2245,7 @@ impl BusCore {
             // 那是用户的逐条自定义，角色切换无权触碰。
             let sim = self.sim_t_us;
             for t in &mut self.tx_list {
-                if t.channel == channel
-                    && (ids.contains(&t.id) || t.node == node)
-                    && t.active
-                {
+                if t.channel == channel && (ids.contains(&t.id) || t.node == node) && t.active {
                     t.next_t_us = sim;
                 }
             }
@@ -2281,12 +2270,14 @@ impl BusCore {
 
     /// Adds a replay block. New blocks start disabled: nothing transmits
     /// until the user says so, whichever way the toggle flips later.
+    #[allow(clippy::too_many_arguments)]
     fn add_replay_block(
         &mut self,
         name: String,
         channel: u8,
         path: String,
         node_filter: Option<String>,
+        attached: Option<(u8, String)>,
         ids: Vec<(u32, bool)>,
         status: &mut String,
     ) {
@@ -2297,6 +2288,7 @@ impl BusCore {
             channel,
             path,
             node_filter,
+            attached,
             ids,
             false,
         );
@@ -2325,6 +2317,7 @@ impl BusCore {
         channel: u8,
         path: String,
         node_filter: Option<String>,
+        attached: Option<(u8, String)>,
         ids: Vec<(u32, bool)>,
         status: &mut String,
     ) {
@@ -2335,6 +2328,7 @@ impl BusCore {
         block.channel = channel;
         block.path = path;
         block.node_filter = node_filter;
+        block.attached = attached;
         block.ids = ids;
         if block.enabled {
             let dbc = self
@@ -2538,7 +2532,10 @@ impl BusCore {
         *status = if block_notes.is_empty() {
             "measuring (virtual)".to_string()
         } else {
-            format!("measuring (virtual); replay block {}", block_notes.join("; "))
+            format!(
+                "measuring (virtual); replay block {}",
+                block_notes.join("; ")
+            )
         };
         if self.recorder.recording {
             match self.recorder.open() {

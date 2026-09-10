@@ -211,13 +211,14 @@ impl App {
     /// Adds a replay block: recorded traffic from `path`, filtered,
     /// injected onto this bus when a simulation runs. New blocks start
     /// disabled; the whole membership/activation semantics live with the
-    /// command.
+    /// command. `attached` names the DBC node the block belongs to.
     pub fn add_replay_block(
         &mut self,
         channel: u8,
         name: String,
         path: String,
         node_filter: Option<String>,
+        attached: Option<(u8, String)>,
     ) {
         if channel as usize >= self.snap.channel_count {
             return;
@@ -227,6 +228,7 @@ impl App {
             channel,
             path,
             node_filter,
+            attached,
             ids: Vec::new(),
         });
     }
@@ -265,7 +267,13 @@ impl App {
 
     /// Attaches a hardware adapter to a bus. `fd_data_kbps` opts the
     /// channel into CAN FD (data-phase preset must exist for it).
-    pub fn set_hardware_channel(&mut self, bus: u8, adapter: i32, kbps: u32, fd_data_kbps: Option<u32>) {
+    pub fn set_hardware_channel(
+        &mut self,
+        bus: u8,
+        adapter: i32,
+        kbps: u32,
+        fd_data_kbps: Option<u32>,
+    ) {
         self.send(crate::bus::BusCommand::SetHardwareChannel {
             bus,
             adapter,
