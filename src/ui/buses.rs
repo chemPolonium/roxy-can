@@ -45,6 +45,15 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.same_line();
     ui.text(format!("{} bus(es)", app.snap.channel_count));
+    ui.same_line();
+    // One global re-enumeration for the whole window: the channel list is
+    // machine-wide, not per bus.
+    if ui.small_button("刷新通道##hwref") {
+        app.kvaser_channels = None;
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("重新枚举本机 Kvaser 通道");
+    }
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -280,13 +289,6 @@ fn content(app: &mut App, ui: &Ui) {
                         }
                         Ok(_) => ui.text_disabled("无通道"),
                         Err(e) => ui.text_disabled(e),
-                    }
-                    ui.same_line();
-                    if ui.small_button(format!("刷新##hwref{i}")) {
-                        app.kvaser_channels = None;
-                    }
-                    if ui.is_item_hovered() {
-                        ui.tooltip_text("重新枚举 Kvaser 通道");
                     }
                 }
             }
