@@ -249,7 +249,7 @@ pub fn render_node_generator(app: &mut App, ui: &Ui, nch: u8, nname: &str) {
         .collect();
     if !reactions.is_empty() {
         ui.separator();
-        ui.text("响应规则（触发器 → 发送到本节点报文）");
+        ui.text("响应规则（触发器 -> 发送到本节点报文）");
         for r in &reactions {
             ui.text(format!("  · {r}"));
         }
