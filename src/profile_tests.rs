@@ -64,9 +64,14 @@ role = "Monitor"
     app.settle();
 
     assert_eq!(app.node_role(0, "EngineECU"), NodeRole::Simulated);
+    // 默认关：角色应用不改写条目开关——Simulated 只开放闸门，用户在
+    // 生成器里逐条启用后才会发车。
     assert!(
-        app.tx_list.iter().any(|t| t.channel == 0 && t.active),
-        "the override actually puts the node on the wire"
+        app.tx_list
+            .iter()
+            .filter(|t| t.channel == 0 && t.node == "EngineECU")
+            .all(|t| !t.active),
+        "the muted project stays muted until the user enables entries"
     );
     assert_eq!(app.node_role(1, "ABS"), NodeRole::Monitor);
     assert!(summary.contains("2 role override(s)"), "{summary}");

@@ -164,13 +164,7 @@ impl Hardware {
 
     pub fn set_node_tx(&mut self, bus: u8, node: &str, on: bool) {
         if on {
-            // Enabling the switch needs a port that can actually
-            // transmit; receive-only attachments stay switch-free.
-            if self
-                .buses
-                .get(&bus)
-                .is_some_and(|bh| bh.can_tx)
-            {
+            if self.buses.contains_key(&bus) {
                 self.node_tx.insert((bus, node.to_string()));
             }
         } else {
@@ -179,16 +173,13 @@ impl Hardware {
     }
 
     /// Writes one frame out the bus's wire, if a node switch directs it
-    /// there and the port holds init access. Failures degrade to "virtual
-    /// only" -- the frame already lives on the internal bus, so the views
-    /// never lose it.
+    /// there. Kvaser 虚拟通道的只收句柄同样能发车；物理适配器的只收
+    /// 句柄写入失败时静默降级——帧已留在内部总线，视图不丢。
     pub fn write_if_directed(&mut self, bus: u8, node: &str, f: &CanFrame) {
         if node.is_empty() || !self.node_sends_via_hw(bus, node) {
             return;
         }
-        if let Some(bh) = self.buses.get_mut(&bus)
-            && bh.can_tx
-        {
+        if let Some(bh) = self.buses.get_mut(&bus) {
             bh.port.write_frame(f).ok();
         }
     }

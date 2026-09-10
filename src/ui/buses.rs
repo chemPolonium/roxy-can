@@ -233,12 +233,13 @@ fn content(app: &mut App, ui: &Ui) {
                 .map(|h| (h.adapter, h.kbps, h.can_tx));
             match attached {
                 Some((adapter, kbps, can_tx)) => {
+                    // 两行布局：上行状态、下行解挂按钮——任何列宽下都完整
+                    // 可见可点（单行塞不下时按钮会被单元格裁掉）。
                     ui.text(if can_tx {
-                        format!("Kvaser ch{adapter} @{kbps}k")
+                        format!("ch{adapter} {kbps}k")
                     } else {
-                        format!("Kvaser ch{adapter} @{kbps}k（只收）")
+                        format!("ch{adapter} {kbps}k 只收")
                     });
-                    ui.same_line();
                     if ui.small_button(format!("解挂##hwdet{i}")) {
                         app.detach_hardware(i as u8);
                     }

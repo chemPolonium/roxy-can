@@ -290,11 +290,9 @@ fn render_window(
                         }
                         ui.same_line();
                         // The wire-egress switch: only meaningful for a
-                        // simulated node on a bus whose attachment can
-                        // transmit (holds init access).
-                        let bus_hw = app.snap.hw.iter().find(|h| h.bus == ch);
-                        let bus_can_tx = bus_hw.is_some_and(|h| h.can_tx);
-                        if role == crate::app::NodeRole::Simulated && bus_can_tx {
+                        // simulated node on a bus with attached hardware.
+                        let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == ch);
+                        if role == crate::app::NodeRole::Simulated && bus_has_hw {
                             let mut via_hw = app
                                 .snap
                                 .hw_tx_nodes
@@ -321,13 +319,21 @@ fn render_window(
                             ui.tooltip_text("打开该节点独立的生成器窗口");
                         }
                         ui.same_line();
+                        // 模拟 = 发送中（按条目各自开关）；其余角色 = 总关，
+                        // 启用数照常显示（闸开即按它们发车）。
+                        let count_word = if role == crate::app::NodeRole::Simulated {
+                            "发送中"
+                        } else {
+                            "条启用 · 总关"
+                        };
                         let header = format!(
-                            "{} · {}  {}  {}/{} 发送中###grp{}_{node_label}",
+                            "{} · {}  {}  {}/{} {}###grp{}_{node_label}",
                             app.channel_name(ch),
                             node_label,
                             role_word,
                             active_n,
                             total,
+                            count_word,
                             ch,
                         );
                         let header_open =
@@ -365,9 +371,16 @@ fn render_window(
                     // list scans without expanding anything. MUTE is the
                     // replay silencing, precomputed by the bus: the checkbox
                     // keeps its state, but an id the replayed log carries
-                    // must not double-send.
+                    // must not double-send. 总关 is the node-role gate: the
+                    // entry is on, but its node is not simulated.
                     let (chip, color, hint) = if !view.active {
-                        ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：On 勾选框未勾选。")
+                        ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：条目生成开关未勾选。")
+                    } else if !view.gate_open {
+                        (
+                            "总关",
+                            [0.45, 0.60, 0.80, 1.0],
+                            "条目已启用，但所属节点的角色不是「模拟」——总开关关闭中。把节点角色切回「模拟」即恢复发车。",
+                        )
                     } else if view.muted {
                         (
                             "MUTE",

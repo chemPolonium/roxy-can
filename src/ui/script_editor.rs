@@ -64,15 +64,10 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         });
     }
     ui.same_line();
-    // The wire-egress switch: only shown when the node's bus has a
-    // hardware attachment that can transmit.
-    let bus_can_tx = app
-        .snap
-        .hw
-        .iter()
-        .find(|h| h.bus == node.channel)
-        .is_some_and(|h| h.can_tx);
-    if bus_can_tx {
+    // The wire-egress switch: shown whenever the node's bus has hardware
+    // attached. 只收挂接在虚拟通道上同样能发车（驱动行为）。
+    let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == node.channel);
+    if bus_has_hw {
         let mut via_hw = app
             .snap
             .hw_tx_nodes

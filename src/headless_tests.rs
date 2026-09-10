@@ -46,6 +46,8 @@ fn write_test_log(name: &str, frames: usize, step_us: u64) -> std::path::PathBuf
 #[test]
 fn a_full_virtual_run_composes_through_commands_and_snapshots() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     // Drive one DBC-known entry by a sine, subscribe its signal, all via
     // the command path. 0x100 EngineSpeed: factor 0.25, range 0..8000.
@@ -114,6 +116,8 @@ fn a_headless_recording_writes_a_readable_log() {
     let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_headless_record.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -145,6 +149,8 @@ fn a_headless_recording_writes_a_readable_log() {
 #[test]
 fn a_headless_export_reports_the_run() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -196,6 +202,8 @@ fn a_headless_replay_runs_the_log_and_mutes_the_twin() {
 #[test]
 fn the_deadline_follows_the_next_generator_slot() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -225,6 +233,8 @@ fn the_deadline_follows_the_next_generator_slot() {
 #[test]
 fn step_to_advances_the_clocks_and_the_bus() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -253,6 +263,8 @@ fn step_to_advances_the_clocks_and_the_bus() {
 #[test]
 fn the_threaded_core_serves_frames_on_its_own_thread() {
     let mut app = App::new();
+    // 角色闸放行（EngineECU 模拟 + 条目启用）。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
         id: 0x100,
@@ -417,6 +429,8 @@ fn a_script_node_prints_sends_and_keeps_time() {
 #[test]
 fn a_script_node_reads_signals_and_logs_them() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.send(crate::bus::BusCommand::AddNode {
         name: "monitor".into(),
         channel: 0,
@@ -512,11 +526,18 @@ fn a_script_node_responds_to_a_diagnostic_request() {
 fn the_threaded_core_honors_node_roles_and_replay_blocks() {
     let mut app = App::new();
 
-    // Simulating EngineECU arms its generator entries (0x100 among them).
+    // Simulating EngineECU creates its entries (0x100 among them); the
+    // per-entry switches stay off — enable 0x100 explicitly (new model:
+    // 角色 = 闸门，条目开关 = 自定义).
     app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
         node: "EngineECU".to_string(),
         role: NodeRole::Simulated,
+    });
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
     });
     app.start_virtual();
 
@@ -662,6 +683,8 @@ fn the_threaded_core_replays_a_log_and_survives_a_pause() {
         .to_string_lossy()
         .to_string();
     src.toggle_record();
+    // 角色闸放行：EngineECU 模拟，0x100 才能上内部总线被录进日志。
+    src.set_node_role(0, "EngineECU", NodeRole::Simulated);
     src.start_virtual();
     src.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -730,6 +753,8 @@ fn the_threaded_core_records_to_the_dated_file() {
     let base = std::env::temp_dir().join("roxy_can_threaded_record");
     app.record_path_buf = base.to_string_lossy().to_string();
     app.toggle_record();
+    // 角色闸放行：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -875,6 +900,8 @@ fn perf_snapshot_publish_under_load() {
 #[test]
 fn the_bus_statistics_read_the_snapshot() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
@@ -906,6 +933,8 @@ fn the_bus_statistics_read_the_snapshot() {
 #[test]
 fn send_now_fires_exactly_one_frame_off_the_schedule() {
     let mut app = App::headless();
+    // 角色闸：EngineECU 模拟，0x100 才能发车。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,

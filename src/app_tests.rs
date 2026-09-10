@@ -27,6 +27,8 @@ fn record_survives_start_and_writes_frames() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
+    open_all_gates(&mut app);
     app.start_virtual();
     assert!(
         app.recorder.recording,
@@ -74,6 +76,7 @@ fn the_record_filter_limits_the_file_but_not_the_bus() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..12 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -125,6 +128,7 @@ fn a_trigger_started_recording_follows_the_record_filter() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..12 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -162,6 +166,7 @@ fn replay_after_recorded_simulation_creates_no_second_file() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..12 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -191,6 +196,7 @@ fn loading_log_does_not_start_replay() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..12 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -249,6 +255,8 @@ fn aggregates_frames_per_message_id() {
         .expect("EngineStatus pre-populated in generator");
     tx.active = true;
     tx.cycle_us = 10_000;
+    // 角色闸放行：0x100 属 EngineECU。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     for _ in 0..8 {
         std::thread::sleep(std::time::Duration::from_millis(12));
@@ -405,6 +413,7 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     app.graphics[0].opened = true;
     app.graphics[0].time_window_s = 1.0;
@@ -485,6 +494,8 @@ fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App 
         crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
     ));
     app.add_tx(0, 0x300);
+    // 测试 DBC 的发送节点 ECU 需要角色闸放行。
+    app.set_node_role(0, "ECU", NodeRole::Simulated);
     let tx = app.tx_list.last_mut().expect("tx entry added");
     tx.cycle_us = 20_000;
     tx.active = true;
@@ -698,6 +709,7 @@ fn an_event_triggered_message_is_never_auto_sent() {
     for t in &mut app.tx_list {
         t.active = true;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     run_sim(&mut app, 20, 10_000);
     assert!(
@@ -742,6 +754,36 @@ fn active_ids(app: &App, ch: u8) -> Vec<u32> {
     ids
 }
 
+/// 测试助手（新语义）：声明节点角色为模拟，并启用它名下全部条目。
+/// 角色本身不再触碰条目开关——需要旧行为（角色切了就发车）的测试
+/// 用这个助手显式补上“启用”一步。
+fn simulate_node_and_enable(app: &mut App, ch: u8, node: &str) {
+    app.set_node_role(ch, node, NodeRole::Simulated);
+    let ids: Vec<u32> = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == ch && t.node == node)
+        .map(|t| t.id)
+        .collect();
+    for id in ids {
+        app.send(crate::bus::BusCommand::SetEntryActive {
+            ch,
+            id,
+            on: true,
+        });
+    }
+    app.settle();
+}
+
+/// 测试助手：把所有总线的所有 DBC 节点角色设为模拟（打开全部闸门）。
+/// 手动武装（tx.active = true）的测试需要它，否则闸门拦截发车。
+fn open_all_gates(app: &mut App) {
+    for ch in 0..app.snap.channel_count as u8 {
+        app.simulate_all_nodes(ch);
+    }
+    app.settle();
+}
+
 fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
     app.tx_list
         .iter()
@@ -749,11 +791,21 @@ fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
         .expect("entry exists")
 }
 
+/// 模拟角色补建条目但不发车；逐条启用（SetEntryActive）后只有启用的
+/// 条目上线，且不影响其他总线。
 #[test]
 fn ticking_a_node_activates_only_its_own_messages() {
     let mut app = App::headless();
     app.set_node_role(1, "ABS", NodeRole::Simulated);
     // assets/motbus.dbc:31,35,54 -- ABS owns these three, nobody else.
+    assert_eq!(
+        app.tx_list
+            .iter()
+            .filter(|t| t.channel == 1 && t.node == "ABS")
+            .count(),
+        3
+    );
+    simulate_node_and_enable(&mut app, 1, "ABS");
     assert_eq!(active_ids(&app, 1), [199, 200, 201]);
     assert!(active_ids(&app, 0).is_empty(), "the other bus untouched");
     assert!(
@@ -776,14 +828,39 @@ fn ticking_a_node_creates_the_entries_it_lacks() {
     let mut app = App::headless();
     app.tx_list.clear();
     app.set_node_role(1, "ABS", NodeRole::Simulated);
-    assert_eq!(
-        active_ids(&app, 1),
-        [199, 200, 201],
-        "the generator refills from the DBC"
-    );
+    assert_eq!(app.tx_list.iter().filter(|t| t.channel == 1).count(), 3, "the generator refills from the DBC");
     assert_eq!(app.tx_list.len(), 3, "and only this node's messages");
     assert_eq!(entry_of(&app, 1, 201).name, "ABSdata");
     assert_eq!(entry_of(&app, 1, 201).cycle_us, 50_000);
+}
+
+/// 新模型：角色 = 总开关，条目开/关 = 自定义。模拟创建条目但不改写
+/// 任何开关；条目的启停只经由 SetEntryActive。
+#[test]
+fn simulating_a_node_creates_entries_but_leaves_them_off() {
+    let mut app = App::headless();
+    app.tx_list.clear();
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
+    // 条目已补建（inactive），角色闸已开——但没有任何一条在发车。
+    assert_eq!(app.tx_list.iter().filter(|t| t.channel == 1).count(), 3);
+    assert!(
+        active_ids(&app, 1).is_empty(),
+        "模拟不自动发车：条目开关是用户自定义"
+    );
+
+    // 逐条启用后按各自周期发车。
+    let ids: Vec<u32> = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == 1)
+        .map(|t| t.id)
+        .collect();
+    for id in ids {
+        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id, on: true });
+    }
+    app.settle();
+    assert_eq!(active_ids(&app, 1), [199, 200, 201]);
+    assert_eq!(entry_of(&app, 1, 201).name, "ABSdata");
 }
 
 #[test]
@@ -802,13 +879,17 @@ fn ticking_a_node_never_overwrites_a_tuned_cycle() {
         app.tx_list[i].cycle_us, 250_000,
         "a period someone dialed in outlives the click"
     );
-    assert!(app.tx_list[i].active, "but the entry is switched on");
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 1,
+        id: 201,
+        on: true,
+    });
+    assert!(app.tx_list[i].active, "and the entry is switched on");
 }
 
 #[test]
 fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     let mut app = App::headless();
-    app.set_node_role(1, "ABS", NodeRole::Simulated);
     let i = app
         .tx_list
         .iter()
@@ -820,13 +901,14 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     );
     let before = app.tx_list.len();
 
-    app.set_node_role(1, "ABS", NodeRole::Absent);
+    // 逐条目开关是自定义：关掉后条目、激励、周期原样保留。
+    app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: 201, on: false });
     assert!(active_ids(&app, 1).is_empty(), "stopped sending");
     assert_eq!(app.tx_list.len(), before, "entries survive");
     assert_eq!(app.tx_list[i].srcs.len(), 1, "with the waveform attached");
     assert_eq!(app.tx_list[i].cycle_us, 50_000, "and the declared period");
 
-    app.set_node_role(1, "ABS", NodeRole::Simulated);
+    app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: 201, on: true });
     assert_eq!(
         app.tx_list[i].srcs.len(),
         1,
@@ -835,20 +917,75 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     assert!(app.tx_list[i].active);
 }
 
-/// Loading a different database does not rebuild the generator, so the
-/// only thing left to go by is the node stamped on each entry.
+/// 角色闸关闭（节点离线/监听）不影响条目开关：条目仍是"启用"，
+/// 只是闸门不让它上线；切回模拟即恢复。
 #[test]
-fn unticking_still_silences_a_node_after_its_dbc_is_gone() {
+fn node_gate_does_not_touch_entry_switches() {
     let mut app = App::headless();
     app.set_node_role(1, "ABS", NodeRole::Simulated);
+    let ids: Vec<u32> = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == 1)
+        .map(|t| t.id)
+        .collect();
+    for id in ids {
+        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id, on: true });
+    }
+    app.settle();
+
+    // 切到监听：闸门关闭（条目开/关保留），再切回模拟：原样恢复发车。
+    app.set_node_role(1, "ABS", NodeRole::Monitor);
+    app.settle();
+    for t in app.snap.tx.iter().filter(|t| t.channel == 1) {
+        assert!(!t.gate_open, "monitor closes the gate: {}", t.id);
+        assert!(t.active, "switches stay as customized: {}", t.id);
+    }
+
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
+    app.settle();
+    for t in app
+        .snap
+        .tx
+        .iter()
+        .filter(|t| t.channel == 1 && t.node == "ABS")
+    {
+        assert!(t.gate_open, "gate reopens: {}", t.id);
+    }
+}
+
+/// 闸门模型下，DBC 消失不影响“角色闸关闭即停发”：生成器用 base
+/// 字节就能发车，DBC 只影响解码与补建。
+#[test]
+fn the_role_gate_silences_a_node_even_after_its_dbc_is_gone() {
+    let mut app = App::headless();
+    app.set_node_role(1, "ABS", NodeRole::Simulated);
+    let ids: Vec<u32> = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == 1 && t.node == "ABS")
+        .map(|t| t.id)
+        .collect();
+    for id in &ids {
+        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: *id, on: true });
+    }
+    app.settle();
     assert_eq!(active_ids(&app, 1).len(), 3);
+
     app.channels[1].dbc = None;
     app.refresh_snapshot();
     app.set_node_role(1, "ABS", NodeRole::Absent);
-    assert!(
-        active_ids(&app, 1).is_empty(),
-        "unchecking must work even with nothing to look up"
-    );
+    app.settle();
+    // 闸门语义：开关原样保留（自定义不丢），但角色离线即不发车。
+    // 只检查 ABS 名下的三条（其余节点的条目本就是关）。
+    for id in &ids {
+        let t = app
+            .tx_list
+            .iter()
+            .find(|t| t.channel == 1 && t.id == *id)
+            .expect("entry survives");
+        assert!(t.active, "switch preserved: {id}");
+    }
     assert_eq!(app.node_role(1, "ABS"), NodeRole::Absent);
 }
 
@@ -870,16 +1007,27 @@ fn a_receive_only_node_can_still_be_simulated() {
 #[test]
 fn a_monitoring_node_declares_presence_without_traffic() {
     let mut app = App::headless();
+    // 模拟并启用全部条目，然后切到监听：条目开关原样保留（自定义不
+    // 被角色切换改写），闸门关闭即停发。
     app.set_node_role(1, "ABS", NodeRole::Simulated);
+    let ids: Vec<u32> = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == 1 && t.node == "ABS")
+        .map(|t| t.id)
+        .collect();
+    for id in &ids {
+        app.send(crate::bus::BusCommand::SetEntryActive { ch: 1, id: *id, on: true });
+    }
+    app.settle();
     assert_eq!(active_ids(&app, 1).len(), 3);
 
     app.set_node_role(1, "ABS", NodeRole::Monitor);
-    assert!(active_ids(&app, 1).is_empty(), "a monitor sends nothing");
     assert_eq!(app.node_role(1, "ABS"), NodeRole::Monitor);
     assert!(
         [199, 200, 201]
             .iter()
-            .all(|id| app.tx_list.iter().any(|t| t.channel == 1 && t.id == *id)),
+            .all(|id| app.tx_list.iter().any(|t| t.channel == 1 && t.id == *id && t.active)),
         "its entries survive, ready for a return to Simulated"
     );
     assert!(
@@ -1006,6 +1154,7 @@ fn export_trace_writes_parseable_asc() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..6 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -1074,6 +1223,8 @@ fn two_channels_aggregate_separately() {
     for (ch, c) in app.channels.iter().enumerate() {
         assert!(c.dbc.is_some(), "CAN{} should load its DBC", ch + 1);
     }
+    // 角色闸：两条总线的节点全部模拟，条目才能上线。
+    open_all_gates(&mut app);
     assert!(
         app.tx_list.iter().any(|t| t.channel == 0 && t.id == 0x100)
             && app.tx_list.iter().any(|t| t.channel == 1 && t.id == 0xC8),
@@ -1120,6 +1271,7 @@ fn csv_exports_match_window_state() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..8 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -1285,6 +1437,7 @@ fn replay_position_tracks_playback() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..12 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -1599,6 +1752,7 @@ fn app_with_replayable_recording(
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..iters {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -1988,6 +2142,8 @@ fn replay_injection_lands_on_the_log_timeline() {
     app.tx_list[0].active = true;
     app.tx_list[0].cycle_us = 40_000;
     app.tx_list[0].data = [0xDE; MAX_CAN_FD_LEN];
+    // 角色闸放行：条目 node 戳仍是 EngineECU。
+    app.set_node_role(tx_ch, "EngineECU", NodeRole::Simulated);
     app.replay();
     // Drive the replay by hand: 50 ms wall steps release the log frames at
     // 0 / 100 / 200 ms. Injection at 40 ms into a quiet stretch must wait
@@ -2347,6 +2503,7 @@ fn signal_stats_track_min_avg_max() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     for _ in 0..8 {
         std::thread::sleep(std::time::Duration::from_millis(11));
@@ -2397,6 +2554,8 @@ fn recording_captures_generator_data_faithfully() {
     let mut app = App::headless();
     app.tx_list[0].active = true;
     app.tx_list[0].cycle_us = 10_000;
+    // 角色闸放行：0x100 属 EngineECU。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     let mut payload = [0u8; MAX_CAN_FD_LEN];
     payload[..8].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
     app.tx_list[0].data = payload;
@@ -3291,8 +3450,9 @@ fn the_rearm_command_resets_latches_but_not_real_levels() {
     assert!(app.triggers[1].level);
 }
 
-/// "Switch All Blocks to Simulation" at the bus level: simulate-all arms
-/// every DBC transmitter's generator entries; stop-all silences the bus.
+/// "Switch All Blocks to Simulation" at the bus level: simulate-all 补建
+/// 全部条目并把角色闸全开（条目保持默认关——发车由用户逐条或经
+/// All On 打开）；stop-all 关闭全部闸门。
 #[test]
 fn simulate_all_activates_every_dbc_node() {
     let mut app = App::headless();
@@ -3307,15 +3467,24 @@ fn simulate_all_activates_every_dbc_node() {
     for id in &expected {
         let entry = app.tx_list.iter().find(|t| t.channel == 0 && t.id == *id);
         assert!(
-            entry.is_some_and(|t| t.active),
-            "node message 0x{id:X} should be simulated"
+            entry.is_some(),
+            "node message 0x{id:X} should have an entry"
         );
     }
-    // The reverse sweep silences every entry on the bus.
+    // 全部闸门开放：All On 后按条目开关发车。
+    app.set_bus_tx(0, true);
+    let flowing = app.tx_list.iter().filter(|t| t.channel == 0 && t.active).count();
+    assert!(flowing > 0, "entries exist for the whole bus");
+
+    // The reverse sweep closes every gate on the bus (switches preserved).
     app.stop_all_nodes(0);
     app.settle();
-    let any_active = app.tx_list.iter().any(|t| t.channel == 0 && t.active);
-    assert!(!any_active, "stop-all silences every entry on the bus");
+    let any_gate = app
+        .snap
+        .tx
+        .iter()
+        .any(|t| t.channel == 0 && t.gate_open);
+    assert!(!any_gate, "stop-all closes every gate on the bus");
 }
 
 /// The State Tracker CSV export mirrors what the bands draw: one row per
@@ -3559,11 +3728,13 @@ BO_ 300 FirstMsg: 1 ECU
     });
     app.settle();
     app.set_node_role(0, "ECU", NodeRole::Simulated);
+    // 新语义：模拟只开放闸门，条目默认关——用户显式启用后发车。
+    app.send(crate::bus::BusCommand::SetEntryActive { ch: 0, id: 300, on: true });
     app.settle();
     assert_eq!(
         active_ids(&app, 0),
         [300],
-        "the declared node starts on its declared message"
+        "the enabled entry transmits under the open gate"
     );
 
     // External edit: the node gains a second message.
@@ -3600,7 +3771,7 @@ BO_ 301 SecondMsg: 1 ECU
     assert_eq!(
         active_ids(&app, 0),
         [300],
-        "the previously simulated message keeps transmitting"
+        "the previously enabled message keeps transmitting"
     );
     std::fs::remove_file(&a).ok();
 }
@@ -4455,6 +4626,7 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
         tx.active = true;
         tx.cycle_us = 10_000;
     }
+    open_all_gates(&mut app);
     app.start_virtual();
     app.graphics[0].opened = true;
     app.graphics[0].time_window_s = 1.0;
@@ -5308,6 +5480,11 @@ fn hardware_tx_follows_the_per_node_switch() {
     app.tx_list.retain(|t| t.channel != 0);
     let (written, _incoming) = app.hw.attach_mock(0);
     app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
     app.hw.set_node_tx(0, "EngineECU", true);
     app.start_virtual();
     app.settle();
@@ -5811,6 +5988,8 @@ fn a_log_id_stays_silent_during_replay_and_returns_in_simulation() {
     let mut app = App::headless();
     // The sample config pre-populates a generator entry for the log's 0x100;
     // add one id the log lacks as the stirring control.
+    // 角色闸放行：EngineECU 模拟（否则闸门拦截发车）。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     let twin = app
         .tx_list
         .iter()

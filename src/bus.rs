@@ -608,6 +608,9 @@ pub struct TxView {
     /// what the generator groups its rows by.
     pub node: String,
     pub active: bool,
+    /// 角色闸是否放行（绑定节点的角色为「模拟」，或条目无节点归属）。
+    /// 闸关时即便 active 也不发车——UI 用它区分「条目关」与「总关」。
+    pub gate_open: bool,
     pub fd: bool,
     pub cycle_us: u64,
     /// Base payload as hex text -- also the no-DBC message's editable box.
@@ -1579,6 +1582,9 @@ impl BusCore {
                         name: t.name.clone(),
                         node: t.node.clone(),
                         active: t.active,
+                        gate_open: t.node.is_empty()
+                            || self.channels[t.channel as usize].role_of(&t.node)
+                                == crate::app::NodeRole::Simulated,
                         fd: t.flags.contains(crate::can::frame::FrameFlags::FD),
                         cycle_us: t.cycle_us,
                         data_text: t.data_text.clone(),
@@ -2163,34 +2169,31 @@ impl BusCore {
             for id in &ids {
                 self.add_entry(channel, *id);
             }
+            // 闸门刚开：把该节点已启用条目的排程锚定到当前时钟。闸关
+            // 期间发射循环不跑、next_t_us 冻结，不锚定会在开闸瞬间把
+            // 陈旧排程倾泻成突发。只动排程，绝不改写条目的开/关——
+            // 那是用户的逐条自定义，角色切换无权触碰。
             let sim = self.sim_t_us;
             for t in &mut self.tx_list {
-                if t.channel == channel && ids.contains(&t.id) && !t.active {
-                    t.active = true;
+                if t.channel == channel
+                    && (ids.contains(&t.id) || t.node == node)
+                    && t.active
+                {
                     t.next_t_us = sim;
                 }
             }
-        } else {
-            // The stamped name is included on the way out only, so leaving
-            // the simulated role still silences a node whose database has
-            // since been swapped or unloaded. "I unchecked it and it is
-            // still transmitting" is the one outcome a user cannot recover
-            // from by guessing.
-            for t in &mut self.tx_list {
-                if t.channel == channel && t.active && (ids.contains(&t.id) || t.node == node) {
-                    t.active = false;
-                }
-            }
         }
+        // 切出「模拟」（监听/离线）：条目开/关原样保留，闸门关闭即停发。
         let bus = self
             .channels
             .get(channel as usize)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("CAN{}", channel + 1));
         *status = match role {
-            NodeRole::Simulated => {
-                format!("simulating {node} on {bus} ({} message(s))", ids.len())
-            }
+            NodeRole::Simulated => format!(
+                "simulating {node} on {bus} ({} message(s), 条目按各自开关发车)",
+                ids.len()
+            ),
             NodeRole::Monitor => format!("{node} monitors {bus} (receiving only)"),
             NodeRole::Absent => format!("{node} absent from {bus}"),
         };
@@ -2566,7 +2569,14 @@ impl BusCore {
                 let min_next = self
                     .tx_list
                     .iter()
-                    .filter(|t| t.active && t.cycle_us != 0)
+                    // 角色闸同发射循环：闸关的条目不产生死线。
+                    .filter(|t| {
+                        t.active
+                            && t.cycle_us != 0
+                            && (t.node.is_empty()
+                                || self.channels[t.channel as usize].role_of(&t.node)
+                                    == NodeRole::Simulated)
+                    })
                     .map(|t| t.next_t_us)
                     .min()?;
                 Some(now_us + min_next.saturating_sub(self.sim_t_us))
@@ -2691,6 +2701,11 @@ impl BusCore {
             }
             let muted =
                 matches!(self.mode, Mode::Replay) && self.replay_ids.contains(&(tx.channel, tx.id));
+            // 角色闸：绑定到 DBC 节点的条目只有在节点角色为「模拟」时才
+            // 发车；未分配条目（无 node 戳）不受闸。闸关时循环不跑、
+            // next_t_us 冻结，切回模拟由 set_node_role 锚定排程。
+            let gate_open = tx.node.is_empty()
+                || channels[tx.channel as usize].role_of(&tx.node) == NodeRole::Simulated;
             // Every slot the clock has passed goes out at its own stamp.
             // Skipping the backlog after a UI stall (the old policy) kept the
             // tick cheap but punched a hole into the bus's own timeline --
@@ -2699,7 +2714,13 @@ impl BusCore {
             // slides on. Frames carry their slot's timestamp, so spacing
             // stays exactly `cycle_us` even in the catch-up burst.
             let mut budget = MAX_TX_CATCHUP;
-            while budget > 0 && tx.active && !muted && tx.cycle_us != 0 && tx.next_t_us <= sim {
+            while budget > 0
+                && tx.active
+                && gate_open
+                && !muted
+                && tx.cycle_us != 0
+                && tx.next_t_us <= sim
+            {
                 budget -= 1;
                 // Values are read at the slot, not at `sim`: a frame stamped
                 // `slot` must carry the waveform's value at `slot`, or every

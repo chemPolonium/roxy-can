@@ -4,6 +4,7 @@
 
 use super::{convert_log, Cli, CliOpts, parse_args, run};
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+use crate::channel::NodeRole;
 use crate::log::AscWriter;
 
 fn flag_set(args: &[&str]) -> Vec<String> {
@@ -278,6 +279,8 @@ fn a_project_simulates_headless_until_the_duration_stops_it() {
         id: 0x100,
         on: true,
     });
+    // 角色闸放行：EngineECU 模拟（随工程保存）。
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.send(crate::bus::BusCommand::SetEntryCycle {
         ch: 0,
         id: 0x100,
@@ -476,8 +479,15 @@ fn a_profile_overlay_drives_a_muted_project() {
     fs::create_dir_all(dir.join("profiles")).unwrap();
     let project = dir.join("net.rxproj");
 
-    // The fixture project: nothing active, nothing simulated.
-    let app = crate::app::App::headless();
+    // The fixture project: 0x100 entry enabled (the simulation setup the
+    // user configured), everything else at defaults.
+    let mut app = crate::app::App::headless();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.settle();
     let proj = crate::config::ProjectFile {
         version: 1,
         layout: String::new(),

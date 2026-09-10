@@ -15,10 +15,13 @@ type CanHandle = i32;
 
 pub const CAN_OK: i32 = 0;
 
-const CAN_MSG_STD: u32 = 0x0001;
+// canlib32.h 的消息标志位值（canMSG_MASK = 0x003F）。
+const CAN_MSG_RTR: u32 = 0x0001;
+const CAN_MSG_STD: u32 = 0x0002;
 const CAN_MSG_EXT: u32 = 0x0004;
-const CAN_MSG_RTR: u32 = 0x0002;
-const CAN_FDMSG: u32 = 0x0080;
+const CAN_MSG_ERROR_FRAME: u32 = 0x0020;
+/// canFDMSG：标记 CAN FD 帧。
+const CAN_FDMSG: u32 = 0x0100;
 /// canOPEN_NO_INIT_ACCESS: open for receiving only. Succeeds even when
 /// another program holds the channel's init access (e.g. CAN King).
 const CAN_OPEN_NO_INIT_ACCESS: i32 = 0x0020;
@@ -234,7 +237,7 @@ impl KvaserChannel {
         }
         let extended = flag & CAN_MSG_EXT != 0;
         let is_remote = flag & CAN_MSG_RTR != 0;
-        let is_error = flag & 0x0008 != 0;
+        let is_error = flag & CAN_MSG_ERROR_FRAME != 0;
         let len = dlc.min(MAX_CAN_FD_LEN as u32) as u8;
         let mut flags = FrameFlags::NONE;
         if flag & 0x0080 != 0 {
@@ -316,6 +319,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
 #[cfg(test)]
 mod live {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_live -- --ignored --nocapture"]
@@ -325,48 +329,59 @@ mod live {
         println!("canlib version raw: {:#x}", unsafe { (lib.get_version)() });
         println!("{} channel(s)", channels.len());
 
-        // 开放矩阵：通道 0..2 × 全部单一位标志，摸清这台驱动上哪个位能
-        // 打开虚拟通道。
-        let flag_candidates: [(i32, &str); 12] = [
-            (0x0000, "0"),
-            (0x0001, "0x0001"),
-            (0x0002, "0x0002"),
-            (0x0004, "0x0004"),
-            (0x0008, "0x0008"),
-            (0x0010, "0x0010"),
-            (0x0020, "0x0020"),
-            (0x0040, "0x0040"),
-            (0x0080, "0x0080"),
-            (0x0100, "0x0100"),
-            (0x0400, "0x0400"),
-            (0x8000, "0x8000"),
-        ];
-        for channel in 0..2i32 {
-            for (flag, label) in flag_candidates {
-                let handle = unsafe { (lib.open_channel)(channel, flag) };
-                if handle >= 0 {
-                    println!("ch{channel}: {label} → OPEN");
-                    unsafe {
-                        (lib.bus_off)(handle);
-                        (lib.close)(handle);
-                    }
-                } else {
-                    println!("ch{channel}: {label} → status {handle}");
+        // 回环诊断：ch0 只收收听，ch1 只收发送——若虚拟网络在通道间
+        // 路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发车）。
+        let (h_rx, h_tx) = {
+            let rx = unsafe { (lib.open_channel)(0, 0x0020) };
+            let tx = unsafe { (lib.open_channel)(1, 0x0020) };
+            if rx < 0 || tx < 0 {
+                panic!("open failed: rx {rx}, tx {tx}");
+            }
+            unsafe {
+                (lib.bus_on)(rx);
+                (lib.bus_on)(tx);
+            }
+            (rx, tx)
+        };
+        unsafe {
+            let mut data = [0u8; 8];
+            data[0] = 0x42;
+            let mut sent = 0usize;
+            let mut seen = 0usize;
+            let mut rtr_seen = 0usize;
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_millis(2000) {
+                if sent < 5
+                    && (lib.write)(h_tx, 0x555, data.as_ptr(), 3, 0x0002) == CAN_OK
+                {
+                    sent += 1;
                 }
+                let mut rid: u32 = 0;
+                let mut rdata = [0u8; 64];
+                let mut rdlc: u32 = 0;
+                let mut rflag: u32 = 0;
+                let mut rtime: u32 = 0;
+                if (lib.read)(
+                    h_rx,
+                    &mut rid,
+                    rdata.as_mut_ptr(),
+                    &mut rdlc,
+                    &mut rflag,
+                    &mut rtime,
+                ) == CAN_OK
+                {
+                    seen += 1;
+                    if rflag & 0x0001 != 0 {
+                        rtr_seen += 1;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(2));
             }
-        }
-
-        // 真实路径验证：只收挂接总是可行；收发挂接视占用情况而定。
-        for c in &channels {
-            let rx_only = KvaserChannel::open(c.index, 500, false)
-                .unwrap_or_else(|e| panic!("ch{} rx-only: {e}", c.index));
-            println!("ch{}: rx-only open ok", c.index);
-            drop(rx_only);
-
-            match KvaserChannel::open(c.index, 500, true) {
-                Ok(_) => println!("ch{}: init access ok（可发）", c.index),
-                Err(e) => println!("ch{}: init access 不可用：{e}", c.index),
-            }
+            println!("sent {sent}, ch0 received {seen} (rtr {rtr_seen})");
+            (lib.bus_off)(h_rx);
+            (lib.close)(h_rx);
+            (lib.bus_off)(h_tx);
+            (lib.close)(h_tx);
         }
     }
 }
