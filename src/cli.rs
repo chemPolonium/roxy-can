@@ -213,10 +213,9 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
                 });
             }
         }
-        // The profile overlays role declarations on the freshly opened
-        // project and WINS over the saved entry states -- it is the more
-        // specific, later declaration. A refused profile aborts the run
-        // before any traffic.
+        // The profile overlays role declarations (and the hardware
+        // mapping) on the freshly opened project. A refused profile
+        // aborts the run before any traffic.
         if let Some(name) = &opts.profile {
             let dir = std::path::Path::new(project)
                 .parent()

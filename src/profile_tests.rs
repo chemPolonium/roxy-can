@@ -142,7 +142,8 @@ fn a_missing_profile_file_names_the_path() {
 /// The parse layer: shape and vocabulary errors point at the entry.
 #[test]
 fn parse_errors_name_the_offending_entry() {
-    assert!(parse("").unwrap().is_empty(), "no [[node]] is a no-op");
+    let (roles, hw) = parse("").unwrap();
+    assert!(roles.is_empty() && hw.is_empty(), "no tables is a no-op");
     assert!(parse("node = 3\n").is_err(), "not an array of tables");
     assert!(
         parse("[[node]]\nbus = \"A\"\nnode = \"B\"\n").is_err(),
@@ -153,5 +154,36 @@ fn parse_errors_name_the_offending_entry() {
         "an unknown role word is a parse error, not a default"
     );
     let doc = "[[node]]\nbus = \"A\"\nnode = \"B\"\nrole = \"Monitor\"\n";
-    assert_eq!(parse(doc).unwrap().len(), 1);
+    let (roles, hw) = parse(doc).unwrap();
+    assert_eq!(roles.len(), 1);
+    assert!(hw.is_empty());
+}
+
+/// The `[[hw]]` layer: integer channel required, negatives refused, and
+/// a hw-only profile (no [[node]]) parses to an empty role list.
+#[test]
+fn hw_entries_parse_their_channel_field() {
+    let doc = "[[hw]]\nbus = \"A\"\nchannel = 2\n";
+    let (roles, hw) = parse(doc).unwrap();
+    assert!(roles.is_empty(), "a hw-only profile carries no roles");
+    assert_eq!(hw.len(), 1);
+    assert_eq!(hw[0].bus, "A");
+    assert_eq!(hw[0].channel, 2);
+
+    assert!(
+        parse("[[hw]]\nbus = \"A\"\n").is_err(),
+        "missing channel"
+    );
+    assert!(
+        parse("[[hw]]\nbus = \"A\"\nchannel = -1\n").is_err(),
+        "negative channel"
+    );
+    assert!(
+        parse("[[hw]]\nbus = \"A\"\nchannel = \"0\"\n").is_err(),
+        "channel must be an integer, not a string"
+    );
+    assert!(
+        parse("hw = 3\n").is_err(),
+        "hw must be an array of tables"
+    );
 }

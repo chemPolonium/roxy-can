@@ -69,7 +69,7 @@
 
 落地情况：✅ canlib32 运行时加载（LoadLibrary + GetProcAddress，零构建依赖，驱动缺失优雅降级）；✅ 安全封装（枚举、open、波特率预设、BusOn/Off、write、非阻塞 read、close/Drop；消息标志位值经回环实证修正）；✅ 核心集成（挂接表、RX poll、TX 出口开关、命令、快照视图）；✅ UI（Buses"硬件"列下拉挂接/解挂、生成器组头/节点窗口/脚本编辑器"经硬件"开关）；✅ 测试（mock 端口测门控/RX/解挂清开关）；✅ 回环实证（虚拟通道对互相收发、RTR/STD 标志解码正确）。硬件映射为会话状态。
 
-余量：硬件映射入 Profile 持久化；多适配器同总线多句柄。物理适配器只收句柄写入静默失败（见 usage.md 硬件节）。
+余量：多适配器同总线多句柄。物理适配器只收句柄写入静默失败（见 usage.md 硬件节）。~~硬件映射入 Profile 持久化~~ ✅（2026-09-11）：`profiles/<名>.toml` 增 `[[hw]]` 节（bus + channel），波特率取总线自身设置；**全量声明**——未列出的总线应用档案时解挂；GUI Profile 行与 CLI `--profile` 同源；校验 all-or-nothing，硬件运行时打不开进状态行不中止。
 
 **FD 上硬件（2026-09-11 落地 ✅）**：查证 Kvaser 官方 canstat.h 发现并修正标志位错位——FD 标志住在高位字节（`canFDMSG_FDF=0x010000` / BRS / ESI），旧代码 TX 用 0x0100、RX 用 0x0080 判 FD（实为 canMSG_TXRQ），FD 帧会被完全误标。修复后：挂接按总线 FD 数据段波特率申请 FD 能力（`canOPEN_CAN_FD` + `canFD_BITRATE_*` 预设 500k/1M/2M/4M/8M，无预设/硬件不支持降级经典并如实标注）；FD 帧 TX 带 FDF/BRS 标志、RX 解码 FD/BRS/ESI；Buses 行与状态行显示 FD 态。虚拟通道回环实证：经典 5/5、FD 5/5、RTR 误判 0。
 
@@ -145,10 +145,14 @@
   - 节点窗口（组头"窗"按钮）：只列本节点条目 + Add 限本节点报文 + 响应规则区；总览窗口只剩未分配条目。
   - 脚本绑定：Network 详情"+ 脚本节点"建的脚本出现在该节点详情列表；所属节点切"离线/监听"后脚本停发，切回"模拟"恢复；编辑器里"经硬件"开关出现且生效。
   - Network 顶部 Profile 行：下拉枚举 profiles/*.toml、应用后角色立即生效；错配 profile 应用后状态行报整份拒绝原因。
+- **2026-09-11 FD 上硬件 + Profile 硬件映射**：
+  - FD 帧上硬件：挂接申请 FD 能力（Buses 行与状态行显示 FD 态），FD 帧经"经硬件"开关带 FDF/BRS 上线，收到的 FD/BRS/ESI 徽标正常。
+  - Profile `[[hw]]`：档案声明"总线 → Kvaser 通道"，应用档案即挂接（含 GUI Profile 行）；未列出总线解挂；错配整份拒绝；旧档案（无 [[hw]]）不受影响。
+  - 真机验收：`--profile bench` 一条命令完成角色切换 + 通道挂接；虚拟通道 FD 回环已实证（经典 5/5、FD 5/5）。
 
-## 阶段 5：硬件源落地（适配器选型后启动）
+## 阶段 5：更多硬件源（适配器选型后启动）
 
-适配器作为核心的又一个 `FrameSource`：RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器。硬件映射走 P0 的 Profile overlay。
+适配器作为核心的又一个 `FrameSource`：RX 由驱动线程喂入，硬件时间戳锚定到核心时间轴；发生器 TX 由核心调度线程直接写适配器。硬件映射的 Profile overlay 已随 Kvaser 落地（`[[hw]]` 节），接入新适配器即复用。
 
 - 分期：只收（2–4 天）→ 发送（约 1 周）→ CAN FD 与错误状态（数周）。
 - 选型：CANable/candleLight（全 Rust 生态，无厂商 SDK 授权）或 PCAN-USB（PCanBasic.dll，行业最常见）。
