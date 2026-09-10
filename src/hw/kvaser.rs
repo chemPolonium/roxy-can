@@ -266,7 +266,13 @@ impl KvaserChannel {
     /// guide uses, with the FD bits in the high flag byte.
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
         let lib = Canlib::lib().ok_or("Kvaser 驱动不可用")?;
-        let len = f.payload().len().min(MAX_CAN_FD_LEN);
+        // RTR carries no payload but its `len` is the requested byte
+        // count: the DLC goes out as the request, not the empty payload.
+        let len = if f.is_remote() {
+            f.len as u32
+        } else {
+            f.payload().len().min(MAX_CAN_FD_LEN) as u32
+        };
         let mut flag = if f.extended {
             CAN_MSG_EXT
         } else if f.is_remote() {
@@ -283,9 +289,11 @@ impl KvaserChannel {
                 flag |= CAN_FDMSG_ESI;
             }
         }
-        let status = unsafe {
-            (lib.write)(self.handle, f.id, f.payload().as_ptr(), len as u32, flag)
-        };
+        // canWrite copies `len` bytes from the buffer even for RTR
+        // frames (whose payload slice is empty, its pointer dangling):
+        // point it at the full fixed array, whose first `len` bytes are
+        // in-bounds by construction.
+        let status = unsafe { (lib.write)(self.handle, f.id, f.data.as_ptr(), len, flag) };
         if status == CAN_OK {
             Ok(())
         } else {
@@ -497,8 +505,13 @@ mod live {
         fd_frame.id = 0x556;
         fd_frame.len = 12;
         fd_frame.flags = FrameFlags::FD.union(FrameFlags::BRS);
+        let mut rtr = classic;
+        rtr.id = 0x557;
+        rtr.len = 8; // the requested byte count goes out as the DLC
+        rtr.flags = FrameFlags::RTR;
         let mut sent_c = 0usize;
         let mut sent_f = 0usize;
+        let mut sent_r = 0usize;
         let mut seen_c = 0usize;
         let mut seen_f = 0usize;
         let mut rtr_seen = 0usize;
@@ -511,6 +524,9 @@ mod live {
             }
             if sent_f < 5 && tx.write_frame(&fd_frame).is_ok() {
                 sent_f += 1;
+            }
+            if sent_r < 5 && tx.write_frame(&rtr).is_ok() {
+                sent_r += 1;
             }
             while let Some(f) = rx.try_read() {
                 if f.flags.contains(FrameFlags::FD) {
@@ -525,7 +541,7 @@ mod live {
             std::thread::sleep(Duration::from_millis(2));
         }
         println!(
-            "sent classic {sent_c}, fd {sent_f}; received classic {seen_c}, fd {seen_f} (rtr {rtr_seen})"
+            "sent classic {sent_c}, fd {sent_f}, rtr {sent_r}; received classic {seen_c}, fd {seen_f} (rtr {rtr_seen})"
         );
         drop(rx);
         drop(tx);
