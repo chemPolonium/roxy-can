@@ -8,3 +8,6 @@ roxy-can.autosave.rxproj
 record_*.asc
 
 /target
+
+# 助手会话的本地计划文件
+/.zcode/
