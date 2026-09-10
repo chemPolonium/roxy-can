@@ -442,6 +442,10 @@ fn a_project_node_script_drives_a_headless_simulation() {
         }],
     });
     app.settle();
+    // The orphan script gets adopted by the bus's first DBC node, and a
+    // bound script is gated by its node's role: open the gate.
+    app.set_node_role(0, "EngineECU", crate::app::NodeRole::Simulated);
+    app.settle();
     let project = std::env::temp_dir().join("roxy_can_cli_node.rxproj");
     assert!(app.save_project(Some(project.clone())), "save writes");
     app.stop();

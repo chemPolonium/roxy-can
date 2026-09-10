@@ -5345,14 +5345,6 @@ fn derived_streams_follow_their_node_across_edits() {
             .any(|(k, owner)| *k == key(0) && owner == "renamed"),
         "the tree shows the new owner"
     );
-
-    // Rebind: the stream re-homes to the new bus.
-    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 1 });
-    app.settle();
-    assert!(
-        app.snap.emitted.iter().any(|(k, _)| *k == key(1)),
-        "the stream follows the node to CAN2"
-    );
     app.stop();
 }
 
@@ -5455,54 +5447,49 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     app.stop();
 }
 
-/// A script binding follows its node across a bus move when the target
-/// bus declares the same DBC node, and dissolves when it does not -- a
-/// stale (bus, node) pair would gate the script by the old bus's role
-/// while the node lists the script under the new one.
+/// Legacy projects carry scripts with no node binding; the free script
+/// is gone from the model. When the bus carries a database, a restored
+/// orphan is adopted by the database's first node, so it hangs under a
+/// node in the tree and is gated by that node's role like any other.
 #[test]
-fn a_script_binding_follows_or_dissolves_on_a_bus_move() {
+fn an_orphan_script_is_adopted_by_the_first_dbc_node_on_its_bus() {
     let mut app = App::headless();
-    // Twin the database onto CAN2 so "EngineECU" exists on both buses.
-    let dbc = app.channels[0].dbc.clone();
-    app.channels[1].dbc = dbc;
+    // Simulate the restore shape: nodes restored before their adoption
+    // pass, still carrying no binding.
     app.send(crate::bus::BusCommand::AddNode {
-        name: "player".to_string(),
+        name: "orphan".to_string(),
         channel: 0,
-        attached: Some((0, "EngineECU".to_string())),
+        attached: None,
     });
     app.settle();
-    let id = app.snap.nodes[0].id;
-    let bound = |app: &App| {
-        app.snap
-            .nodes
-            .iter()
-            .find(|n| n.id == id)
-            .expect("node")
-            .attached
-            .clone()
-    };
-    assert_eq!(bound(&app), Some((0, "EngineECU".to_string())));
-
-    // Move to the twin bus: the binding follows.
-    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 1 });
-    app.settle();
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.name == "orphan")
+        .expect("node");
     assert_eq!(
-        bound(&app),
-        Some((1, "EngineECU".to_string())),
-        "the binding followed the node to the twin bus"
+        node.attached,
+        None,
+        "fixture precondition: the script restored unbound"
     );
 
-    // A bus that does not declare the node: the binding dissolves
-    // instead of gating by a stale bus.
-    app.channels[1].dbc = None;
-    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 0 });
+    // A database load sweeps the bus: the orphan gets adopted.
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec!["assets/sample.dbc".to_string()],
+    });
     app.settle();
-    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 1 });
-    app.settle();
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.name == "orphan")
+        .expect("node");
     assert_eq!(
-        bound(&app),
-        None,
-        "no DBC node to bind to: the script stands free"
+        node.attached,
+        Some((0, "EngineECU".to_string())),
+        "the first DBC node gives the orphan a home"
     );
     app.stop();
 }

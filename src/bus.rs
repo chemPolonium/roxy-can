@@ -309,10 +309,6 @@ pub enum BusCommand {
         id: u64,
         name: String,
     },
-    SetNodeChannel {
-        id: u64,
-        channel: u8,
-    },
     /// Replace a node's source. While measuring the node recompiles and
     /// restarts in place; while stopped the edit simply waits.
     SetNodeSource {
@@ -947,44 +943,6 @@ impl BusCore {
                     self.nodes_dirty = true;
                 }
             }
-            BusCommand::SetNodeChannel { id, channel } => {
-                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
-                    n.channel = channel;
-                    // A binding follows its node across buses when the same
-                    // DBC node exists there; otherwise it dissolves -- a
-                    // stale (bus, node) pair would gate the script by the
-                    // old bus's role while the node lists it under the new.
-                    if let Some((_, ref anode)) = n.attached {
-                        let known = self
-                            .channels
-                            .get(channel as usize)
-                            .and_then(|c| c.dbc.as_ref())
-                            .is_some_and(|db| db.nodes.iter().any(|name| name == anode));
-                        n.attached = if known {
-                            Some((channel, anode.clone()))
-                        } else {
-                            None
-                        };
-                    }
-                    // The signal builtins read the new channel's database:
-                    // a running node restarts so its extern hook rebinds.
-                    if self.measuring && n.running() {
-                        let dbc = self
-                            .channels
-                            .get(channel as usize)
-                            .and_then(|c| c.dbc.clone());
-                        n.start(dbc);
-                    }
-                    // Streams re-home to the new bus so the tree entries
-                    // and subscriptions stay continuous across the move.
-                    for (k, _) in &mut self.emitted_streams {
-                        if k.1 & !crate::app::EMITTED_ID_BASE == id as u32 {
-                            k.0 = channel;
-                        }
-                    }
-                    self.nodes_dirty = true;
-                }
-            }
             BusCommand::SetNodeSource { id, source } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
@@ -1024,6 +982,9 @@ impl BusCore {
                         n
                     })
                     .collect();
+                // Legacy projects predate bindings: every restored script
+                // whose bus carries a database gets a node to hang under.
+                self.adopt_orphan_scripts_all();
                 // Wholesale replacement mints new node ids: every existing
                 // derived-signal stream loses its owner.
                 self.emitted_streams.clear();
@@ -1854,6 +1815,9 @@ impl BusCore {
         // fresh table has to meet them: Simulated nodes get entries for
         // messages the database newly declares.
         self.seed_entries_for_simulated(ch);
+        // Free scripts are legacy: the moment a database exists on their
+        // bus, they get a node to hang under.
+        self.adopt_orphan_scripts(ch);
         *status = match first_error {
             Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
             None => format!("{name} DBC loaded: {total} messages"),
@@ -1881,6 +1845,37 @@ impl BusCore {
             for id in ids {
                 self.add_entry(ch as u8, id);
             }
+        }
+    }
+
+    /// Binds every free script node on the bus to the database's first
+    /// node. Projects from before script bindings existed carry scripts
+    /// with no node; the free script is gone from the model, so an orphan
+    /// gets a home as soon as a database can host one.
+    fn adopt_orphan_scripts(&mut self, ch: usize) {
+        let first = self.channels[ch]
+            .dbc
+            .as_ref()
+            .and_then(|db| db.nodes.first().cloned());
+        let Some(first) = first else {
+            return;
+        };
+        let mut changed = false;
+        for node in &mut self.nodes {
+            if node.channel as usize == ch && node.attached.is_none() {
+                node.attached = Some((ch as u8, first.clone()));
+                changed = true;
+            }
+        }
+        if changed {
+            self.nodes_dirty = true;
+        }
+    }
+
+    /// Adoption pass across every bus -- the project-restore shape.
+    fn adopt_orphan_scripts_all(&mut self) {
+        for ch in 0..self.channels.len() {
+            self.adopt_orphan_scripts(ch);
         }
     }
 

@@ -52,24 +52,23 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         app.send(crate::bus::BusCommand::SetNodeName { id, name });
     }
     ui.same_line();
-    if let Some((ach, anode)) = &node.attached {
-        // 绑定脚本的 bus 跟随所属 DBC 节点，不再提供选择——脚本依附
-        // 于节点，节点在总线上，脚本就在总线上。
-        ui.text_disabled(format!(
-            "总线 {}（跟随节点 {anode}）",
-            app.channel_name(*ach),
-        ));
-    } else {
-        let mut channel = node.channel as usize;
-        let bus_names: Vec<String> = (0..app.snap.channel_count)
-            .map(|ch| app.channel_name(ch as u8))
-            .collect();
-        let refs: Vec<&str> = bus_names.iter().map(|s| s.as_str()).collect();
-        if ui.combo_simple_string(format!("##ech{id}"), &mut channel, &refs) {
-            app.send(crate::bus::BusCommand::SetNodeChannel {
-                id,
-                channel: channel as u8,
-            });
+    // The script lives where its node lives: the binding is shown
+    // read-only, there is no bus choice anywhere in the flow.
+    match &node.attached {
+        Some((ach, anode)) => {
+            ui.text_disabled(format!(
+                "节点 {anode} · 总线 {}",
+                app.channel_name(*ach),
+            ));
+        }
+        None => {
+            ui.text_colored(
+                [1.0, 0.8, 0.4, 1.0],
+                format!(
+                    "未绑定节点（总线 {}）——挂接 DBC 后自动收养",
+                    app.channel_name(node.channel),
+                ),
+            );
         }
     }
     ui.same_line();
