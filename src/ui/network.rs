@@ -42,9 +42,10 @@ fn collect(app: &App) -> Vec<Vec<NodeInfo>> {
 }
 
 /// One bus's tree section: the bus as the root, its DBC nodes as leaves.
-/// The role marker colours the leaf (amber ● simulated / slate ● monitor
-/// / gray ○ absent), a green tail marks "seen transmitting this run",
-/// and clicking a leaf opens the node's detail below.
+/// The role tag colours the leaf ([S] simulated / [M] monitor / [-]
+/// absent -- plain ASCII, the merged font has no geometric glyphs), a
+/// green `*` tail marks "seen transmitting this run", and clicking a
+/// leaf opens the node's detail below.
 fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base: usize) {
     let token = ui
         .tree_node_config(app.channel_name(ch as u8))
@@ -57,12 +58,12 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
         }
         for (i, ni) in infos.iter().enumerate() {
             let role = app.node_role(ch as u8, &ni.name);
-            let (marker, marker_color) = match role {
-                crate::app::NodeRole::Simulated => ("●", [0.95, 0.70, 0.20, 1.0]),
-                crate::app::NodeRole::Monitor => ("●", [0.45, 0.62, 0.80, 1.0]),
-                crate::app::NodeRole::Absent => ("○", [0.45, 0.45, 0.55, 1.0]),
+            let (tag, tag_color) = match role {
+                crate::app::NodeRole::Simulated => ("[S]", [0.95, 0.70, 0.20, 1.0]),
+                crate::app::NodeRole::Monitor => ("[M]", [0.45, 0.62, 0.80, 1.0]),
+                crate::app::NodeRole::Absent => ("[-]", [0.45, 0.45, 0.55, 1.0]),
             };
-            ui.text_colored(marker_color, marker);
+            ui.text_colored(tag_color, tag);
             if ui.is_item_hovered() {
                 ui.tooltip_text(role.hint());
             }
@@ -82,7 +83,7 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
             });
             if active {
                 ui.same_line();
-                ui.text_colored([0.45, 0.95, 0.45, 1.0], "●");
+                ui.text_colored([0.45, 0.95, 0.45, 1.0], "*");
                 if ui.is_item_hovered() {
                     ui.tooltip_text("本次运行已见到该节点发车");
                 }
@@ -268,11 +269,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .collect();
                     for (nid, name, running, enabled) in node_scripts {
                         let dot = if running {
-                            "●"
+                            "*"
                         } else if enabled {
-                            "○"
+                            "o"
                         } else {
-                            "·"
+                            "."
                         };
                         if ui
                             .selectable_config(format!("{dot} {name}##netscript{nid}"))
@@ -281,7 +282,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             app.open_script_editor(nid);
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("● 运行中 / ○ 已启用待测量 / · 未启用");
+                            ui.tooltip_text("* 运行中 / o 已启用待测量 / . 未启用");
                         }
                     }
                     ui.separator();
