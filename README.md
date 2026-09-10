@@ -11,14 +11,15 @@
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧；Trace 中错误行铺红底、远程行铺淡紫底，Flags 列统一显示帧类型
 - **信号观测器**：Trace / Messages / Statistics / Data / Graphics 五类窗口均可多开、各自独立过滤；Data / Graphics 可跨总线选择信号，Data 含 Min / Avg / Max 统计与 Sparkline，Graphics 有 14 档时间窗、缩放平移、采样点圆点
 - **总线负载统计**：Statistics 窗口顶部按总线给出线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；仲裁与 CAN FD 数据段比特率按总线设置，BRS 载荷按数据段速率计费
-- **Interactive Generator**：DBC 报文即开即用，按**总线 → 节点**分组折叠（组头显示节点角色与"N/M 条发送中"），按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random / Triangle / Counter 激励随仿真时间连续变化
+- **Interactive Generator**：DBC 报文即开即用，按**总线 → 节点**分组折叠，按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random / Triangle / Counter 激励随仿真时间连续变化；**角色是总开关、条目开关是自定义**——切角色不改写逐条目开关，新建条目默认不发车，行内显示的是最近一次实际发射的载荷；每节点有专属生成器窗口（条目 + 响应规则聚在一处）
 - **Triggers 触发器**：信号越阈 / ID 出现 / 错误帧 / 周期超时四类条件，动作支持开始·停止录制（带预触发上下文与 post-roll）、单帧反应（触发帧信号自动镜像进目标载荷）、插入标记（Graphics 竖线）、清空 Trace；编辑器与持久化齐备
-- **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；节点角色三态声明（带说明文案）——**模拟**（按 DBC 声明的周期模拟整个 ECU）/ **监听**（只收不发）/ **离线**（不在仿真总线上，未声明即离线），与 Entities 实体表同源；本总线的脚本节点就近列出，点名字打开编辑器
-- **节点角色模型**：DBC 是网络拓扑的唯一事实源，角色声明决定"这个节点现在谁扮演"——缺省即离线，restbus 无需配置；`profiles/<名>.toml` + CLI `--profile` 让同一工程在 simulation / bench / CI 零修改切换，错配整份拒绝
+- **Network 视图**：每条总线一段拓扑，点击节点查看收发详情；顶部 Profile 行下拉应用 `profiles/*.toml` 角色覆盖（all-or-nothing）；节点角色三态声明（带说明文案）——**模拟**（允许按 DBC 声明的周期模拟整个 ECU）/ **监听**（只收不发）/ **离线**（不在仿真总线上，未声明即离线），与 Entities 实体表同源；本节点绑定的脚本就近列出，点名字打开编辑器
+- **节点角色模型**：DBC 是网络拓扑的唯一事实源，角色声明决定"这个节点现在谁扮演"——角色只是闸门，条目发不发还看生成器逐条开关；缺省即离线，restbus 无需配置；`profiles/<名>.toml` + CLI `--profile` / Network 窗口 Profile 行让同一工程在 simulation / bench / CI 零修改切换，错配整份拒绝
+- **Kvaser 硬件联动**：canlib32 运行时加载（驱动未装优雅降级）；Buses 窗口挂接通道（被占用自动降级只收并标注），适配器收到的帧照常进总线；逐节点"经硬件"开关把该节点的生成器条目、脚本 `send` 与触发反应帧同时发上真实总线——默认关，接真实硬件由你显式决定
 - **实体表（Entities）**：网络上全部实体——DBC 节点、脚本节点、回放块——一张扁平表，kind 徽标 + 行内开关，点击行直达该实体自己的界面
 - **回放块**：把录制日志按发送节点或 id 过滤后注回仿真总线，按录制间距发车——restbus 的落地方案；仅仿真模式生效，绝不与回放模式二次投递
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布——表达式即求值逻辑（`sig()` 读数、数学与波形内建自由组合），派生信号像数据库信号一样进 Graphics / Data / State Tracker
-- **仿真节点**：类 CAPL 脚本语言（编译成字节码跑在自带 VM 上）驱动的自定义 ECU 节点——`on start` / `on message`（含 `*` 通配与错误帧事件）/ `on timer`（周期与一次性）事件驱动，读写 DBC 信号、收发帧、随机与波形内建；每回调 10 万指令预算，坏脚本卡不死总线。语言参考见 `docs/script_language.md`，可运行示例见 `examples/`
+- **仿真节点**：类 CAPL 脚本语言（编译成字节码跑在自带 VM 上）驱动的自定义 ECU 节点——`on start` / `on message`（含 `*` 通配与错误帧事件）/ `on timer`（周期与一次性）事件驱动，读写 DBC 信号、收发帧、随机与波形内建；每回调 10 万指令预算，坏脚本卡不死总线；可**绑定**到 DBC 节点，绑定后发帧受该节点角色闸。语言参考见 `docs/script_language.md`，可运行示例见 `examples/`
 - **Specification（规格监视）**：实测流量与数据库声明逐条对账，四类判定——Unknown（未知 ID）、Dlc（长度不符）、Cycle（周期漂移）、Missing（掉线）；容差与宽限可调并随工程保存
 - **State Tracker（状态带观察器）**：订阅信号按状态分段绘制——VAL_ 值表标签、二进制方波、会话稳定配色，支持自定义阈值区间（名字 + 颜色）与颜色钉住；碎带按最短显示时长合并，区段表可导出 CSV
 - **录制与回放**：读写 Vector ASC（经典 / FD / 错误 / 远程帧），读取 Vector BLF（raw 与 zlib 压缩容器）；大文件走 mmap 流式加载；播放器式走带控制——倍速增减、倍速直选、可拖动时间轴任意定位；录制支持 id 白名单过滤，Trace 容量可调（50k–2M 帧）且头部被裁时明确提示
@@ -59,7 +60,7 @@ cargo test
 ## 上手
 
 1. 工具栏 **Simulation / Replay** 下拉选模式，点 **Play** 启动（仿真跑虚拟总线，回放已加载的 ASC / BLF）
-2. **View → Buses**：为总线加载 DBC、加载日志；**View → Network**：把节点角色设为**模拟**开始扮演它；或在 **Interactive Generator** 里按节点分组逐条开关报文、调数值、挂激励
+2. **View → Buses**：为总线加载 DBC、加载日志；**View → Network**：把节点角色设为**模拟**（总开关），再在 **Interactive Generator** 里逐条打开要发的报文、调数值、挂激励——新建条目默认关，发不发由你逐条决定
 3. **Measurement Setup**：新增各类观测窗口、选择信号范围、逐个导出；Data / Graphics 的信号在 Signal Selection 弹窗里跨总线勾选
 4. 勾选 **Record** 录制 ASC
 5. 总线挂了 DBC 之后，**View → Specification** 查看实测流量与数据库声明的对账结果
