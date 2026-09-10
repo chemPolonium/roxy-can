@@ -57,6 +57,15 @@ impl HwPort {
             HwPort::Mock(m) => m.try_read(),
         }
     }
+
+    /// Whether FD data-phase params are active on this port.
+    pub fn fd(&self) -> bool {
+        match self {
+            HwPort::Kvaser(ch) => ch.fd,
+            #[cfg(test)]
+            HwPort::Mock(_) => false,
+        }
+    }
 }
 
 /// Test double: records everything written, hands back whatever the test
@@ -108,6 +117,13 @@ impl Hardware {
 
     pub fn node_sends_via_hw(&self, bus: u8, node: &str) -> bool {
         self.node_tx.contains(&(bus, node.to_string()))
+    }
+
+    /// Whether the bus's attachment has FD data-phase params applied.
+    pub fn fd(&self, bus: u8) -> bool {
+        self.buses
+            .get(&bus)
+            .is_some_and(|bh| bh.port.fd())
     }
 
     /// Attaches a port to a bus, replacing any previous attachment.

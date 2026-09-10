@@ -230,22 +230,26 @@ fn content(app: &mut App, ui: &Ui) {
                 .hw
                 .iter()
                 .find(|h| h.bus as usize == i)
-                .map(|h| (h.adapter, h.kbps, h.can_tx));
+                .map(|h| (h.adapter, h.kbps, h.can_tx, h.fd));
             match attached {
-                Some((adapter, kbps, can_tx)) => {
+                Some((adapter, kbps, can_tx, fd)) => {
                     // 两行布局：上行状态、下行解挂按钮——任何列宽下都完整
                     // 可见可点（单行塞不下时按钮会被单元格裁掉）。
                     ui.text(if can_tx {
-                        format!("ch{adapter} {kbps}k")
+                        format!("ch{adapter} {kbps}k{}", if fd { " FD" } else { "" })
                     } else {
-                        format!("ch{adapter} {kbps}k 只收")
+                        format!("ch{adapter} {kbps}k 只收{}", if fd { " FD" } else { "" })
                     });
                     if ui.small_button(format!("解挂##hwdet{i}")) {
                         app.detach_hardware(i as u8);
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text(if can_tx {
-                            "挂接中（收发）"
+                            if fd {
+                                "挂接中（收发，FD 数据段参数已应用）"
+                            } else {
+                                "挂接中（收发）"
+                            }
                         } else {
                             "挂接中（只收：通道初始化访问被其他程序占用）"
                         });
@@ -264,7 +268,7 @@ fn content(app: &mut App, ui: &Ui) {
                             let mut pick = 0;
                             if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
                                 let info = &channels[pick];
-                                app.set_hardware_channel(i as u8, info.index, arb_kbps);
+                                app.set_hardware_channel(i as u8, info.index, arb_kbps, Some(data_kbps));
                             }
                             if ui.is_item_hovered() {
                                 ui.tooltip_text("挂接 Kvaser 适配器：收到的帧进总线，节点可经它发车");

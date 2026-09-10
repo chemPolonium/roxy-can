@@ -69,7 +69,9 @@
 
 落地情况：✅ canlib32 运行时加载（LoadLibrary + GetProcAddress，零构建依赖，驱动缺失优雅降级）；✅ 安全封装（枚举、open、波特率预设、BusOn/Off、write、非阻塞 read、close/Drop；消息标志位值经回环实证修正）；✅ 核心集成（挂接表、RX poll、TX 出口开关、命令、快照视图）；✅ UI（Buses"硬件"列下拉挂接/解挂、生成器组头/节点窗口/脚本编辑器"经硬件"开关）；✅ 测试（mock 端口测门控/RX/解挂清开关）；✅ 回环实证（虚拟通道对互相收发、RTR/STD 标志解码正确）。硬件映射为会话状态。
 
-余量：CAN FD 帧上硬件（canWriteFD）；硬件映射入 Profile 持久化；多适配器同总线多句柄。物理适配器只收句柄写入静默失败（见 usage.md 硬件节）。
+余量：硬件映射入 Profile 持久化；多适配器同总线多句柄。物理适配器只收句柄写入静默失败（见 usage.md 硬件节）。
+
+**FD 上硬件（2026-09-11 落地 ✅）**：查证 Kvaser 官方 canstat.h 发现并修正标志位错位——FD 标志住在高位字节（`canFDMSG_FDF=0x010000` / BRS / ESI），旧代码 TX 用 0x0100、RX 用 0x0080 判 FD（实为 canMSG_TXRQ），FD 帧会被完全误标。修复后：挂接按总线 FD 数据段波特率申请 FD 能力（`canOPEN_CAN_FD` + `canFD_BITRATE_*` 预设 500k/1M/2M/4M/8M，无预设/硬件不支持降级经典并如实标注）；FD 帧 TX 带 FDF/BRS 标志、RX 解码 FD/BRS/ESI；Buses 行与状态行显示 FD 态。虚拟通道回环实证：经典 5/5、FD 5/5、RTR 误判 0。
 
 ## P3：节点中心化（2026-09-09 深夜指令，随 P4 全部落地 ✅）
 

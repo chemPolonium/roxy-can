@@ -15,16 +15,23 @@ type CanHandle = i32;
 
 pub const CAN_OK: i32 = 0;
 
-// canlib32.h 的消息标志位值（canMSG_MASK = 0x003F）。
+// canlib32.h 的消息标志位值（canstat.h，canMSG_MASK = 0x00ff）。
 const CAN_MSG_RTR: u32 = 0x0001;
 const CAN_MSG_STD: u32 = 0x0002;
 const CAN_MSG_EXT: u32 = 0x0004;
 const CAN_MSG_ERROR_FRAME: u32 = 0x0020;
-/// canFDMSG：标记 CAN FD 帧。
-const CAN_FDMSG: u32 = 0x0100;
+// CAN FD 标志住在高位字节（canFDMSG_MASK = 0xff0000）——低位字节的
+// 0x0080 是 canMSG_TXRQ，与 FD 无关。TX 用 canWrite + FDF 标志
+//（与官方迁移指南、python-can 一致），BRS 可选。
+const CAN_FDMSG_FDF: u32 = 0x0001_0000;
+const CAN_FDMSG_BRS: u32 = 0x0002_0000;
+const CAN_FDMSG_ESI: u32 = 0x0004_0000;
 /// canOPEN_NO_INIT_ACCESS: open for receiving only. Succeeds even when
 /// another program holds the channel's init access (e.g. CAN King).
 const CAN_OPEN_NO_INIT_ACCESS: i32 = 0x0020;
+/// canOPEN_CAN_FD: open the channel with FD capability (needed before
+/// FD data-phase params can be set / FD frames can leave).
+const CAN_OPEN_CAN_FD: i32 = 0x0400;
 
 /// Kvaser preset bitrate codes (negative = table entry; the tseg
 /// arguments are ignored). Only exact matches are accepted: silently
@@ -44,11 +51,26 @@ fn bitrate_code(kbps: u32) -> Option<i32> {
     })
 }
 
+/// FD data-phase presets (canFD_BITRATE_*): bitrate + 80%/60% sample
+/// point pairs, same exact-match policy as the arbitration table.
+fn fd_bitrate_code(kbps: u32) -> Option<i32> {
+    Some(match kbps {
+        500 => -1000,  // canFD_BITRATE_500K_80P
+        1000 => -1001, // canFD_BITRATE_1M_80P
+        2000 => -1002, // canFD_BITRATE_2M_80P
+        4000 => -1003, // canFD_BITRATE_4M_80P
+        8000 => -1004, // canFD_BITRATE_8M_60P
+        _ => return None,
+    })
+}
+
 type CanInitializeLibrary = unsafe extern "system" fn() -> CanStatus;
 type CanGetNumberOfChannels = unsafe extern "system" fn(*mut i32) -> CanStatus;
 type CanOpenChannel = unsafe extern "system" fn(i32, i32) -> CanHandle;
 type CanSetBusParams =
     unsafe extern "system" fn(i32, i32, u8, u8, u8, u8, u32) -> CanStatus;
+type CanSetBusParamsFd =
+    unsafe extern "system" fn(i32, i32, u8, u8, u8) -> CanStatus;
 type CanGetChannelData =
     unsafe extern "system" fn(i32, i32, *mut c_void, *mut usize) -> CanStatus;
 type CanBusOn = unsafe extern "system" fn(i32) -> CanStatus;
@@ -70,6 +92,8 @@ struct Canlib {
     get_channel_data: CanGetChannelData,
     open_channel: CanOpenChannel,
     set_bus_params: CanSetBusParams,
+    /// FD data-phase bitrate; absent on very old drivers.
+    set_bus_params_fd: Option<CanSetBusParamsFd>,
     bus_on: CanBusOn,
     bus_off: CanBusOff,
     write: CanWrite,
@@ -114,12 +138,20 @@ impl Canlib {
                 }
             };
         }
+        macro_rules! want {
+            ($name:expr, $ty:ty) => {
+                // Optional export: missing on old drivers, degrades the
+                // related feature instead of the whole binding.
+                unsafe { std::mem::transmute::<*mut c_void, Option<$ty>>(sym($name)) }
+            };
+        }
         Some(Canlib {
             initialize_library: need!(b"canInitializeLibrary", CanInitializeLibrary),
             get_number_of_channels: need!(b"canGetNumberOfChannels", CanGetNumberOfChannels),
             get_channel_data: need!(b"canGetChannelData", CanGetChannelData),
             open_channel: need!(b"canOpenChannel", CanOpenChannel),
             set_bus_params: need!(b"canSetBusParams", CanSetBusParams),
+            set_bus_params_fd: want!(b"canSetBusParamsFd", CanSetBusParamsFd),
             bus_on: need!(b"canBusOn", CanBusOn),
             bus_off: need!(b"canBusOff", CanBusOff),
             write: need!(b"canWrite", CanWrite),
@@ -148,6 +180,9 @@ pub struct ChannelInfo {
 #[derive(Debug)]
 pub struct KvaserChannel {
     handle: CanHandle,
+    /// FD data-phase params were applied at open time; FD frames can
+    /// leave this channel.
+    pub fd: bool,
 }
 
 impl KvaserChannel {
@@ -157,12 +192,34 @@ impl KvaserChannel {
     /// it succeeds even when another program holds the channel — the
     /// monitoring path. `init_access = true` allows writing frames but
     /// fails while the channel is held elsewhere.
-    pub fn open(index: i32, kbps: u32, init_access: bool) -> Result<KvaserChannel, String> {
+    ///
+    /// `fd_data_kbps` opts the channel into CAN FD: the channel opens
+    /// with canOPEN_CAN_FD and the FD data-phase preset is applied. When
+    /// no preset matches (or the channel/hardware refuses FD), the
+    /// channel degrades to classic and `fd` comes back false — the
+    /// status line reports it, FD frames then fail on write instead of
+    /// leaving at a silently wrong speed.
+    pub fn open(
+        index: i32,
+        kbps: u32,
+        fd_data_kbps: Option<u32>,
+        init_access: bool,
+    ) -> Result<KvaserChannel, String> {
         let lib = Canlib::lib().ok_or("Kvaser 驱动不可用（canlib32.dll 未找到）")?;
+        let fd_code = fd_data_kbps.and_then(fd_bitrate_code);
         unsafe {
             (lib.initialize_library)();
-            let flags = if init_access { 0 } else { CAN_OPEN_NO_INIT_ACCESS };
-            let handle = (lib.open_channel)(index, flags);
+            let mut flags = if init_access { 0 } else { CAN_OPEN_NO_INIT_ACCESS };
+            if fd_code.is_some() {
+                flags |= CAN_OPEN_CAN_FD;
+            }
+            let mut handle = (lib.open_channel)(index, flags);
+            let mut fd = fd_code.is_some();
+            if handle < 0 && fd_code.is_some() {
+                // Adapter or driver without FD support: retry classic.
+                fd = false;
+                handle = (lib.open_channel)(index, flags & !CAN_OPEN_CAN_FD);
+            }
             if handle < 0 {
                 return Err(format!("打开 Kvaser 通道 {index} 失败（status {handle}）"));
             }
@@ -177,18 +234,36 @@ impl KvaserChannel {
                 (lib.close)(handle);
                 return Err(format!("设置波特率失败（status {status}）"));
             }
+            if let (true, Some(code)) = (fd, fd_code) {
+                match lib.set_bus_params_fd {
+                    Some(set_fd) => {
+                        let status = set_fd(handle, code, 0, 0, 0);
+                        if status != CAN_OK {
+                            (lib.close)(handle);
+                            return Err(format!("设置 FD 数据段波特率失败（status {status}）"));
+                        }
+                    }
+                    None => {
+                        // Driver predates FD: fall back to classic.
+                        (lib.close)(handle);
+                        return Self::open(index, kbps, None, init_access);
+                    }
+                }
+            }
             let status = (lib.bus_on)(handle);
             if status != CAN_OK {
                 (lib.close)(handle);
                 return Err(format!("BusOn 失败（status {status}）"));
             }
-            Ok(KvaserChannel { handle })
+            Ok(KvaserChannel { handle, fd })
         }
     }
 
     /// Writes one frame out. Ids over 0x7FF go extended; RTR frames keep
     /// their flag and carry no payload. FD frames (payload up to 64
-    /// bytes) go out with the canFDMSG marker.
+    /// bytes) go out with the canFDMSG_FDF marker, BRS following the
+    /// frame's flag — the same canWrite call the official migration
+    /// guide uses, with the FD bits in the high flag byte.
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
         let lib = Canlib::lib().ok_or("Kvaser 驱动不可用")?;
         let len = f.payload().len().min(MAX_CAN_FD_LEN);
@@ -200,7 +275,13 @@ impl KvaserChannel {
             CAN_MSG_STD
         };
         if f.is_fd() {
-            flag |= CAN_FDMSG;
+            flag |= CAN_FDMSG_FDF;
+            if f.flags.contains(FrameFlags::BRS) {
+                flag |= CAN_FDMSG_BRS;
+            }
+            if f.flags.contains(FrameFlags::ESI) {
+                flag |= CAN_FDMSG_ESI;
+            }
         }
         let status = unsafe {
             (lib.write)(self.handle, f.id, f.payload().as_ptr(), len as u32, flag)
@@ -238,10 +319,17 @@ impl KvaserChannel {
         let extended = flag & CAN_MSG_EXT != 0;
         let is_remote = flag & CAN_MSG_RTR != 0;
         let is_error = flag & CAN_MSG_ERROR_FRAME != 0;
+        let is_fd = flag & CAN_FDMSG_FDF != 0;
         let len = dlc.min(MAX_CAN_FD_LEN as u32) as u8;
         let mut flags = FrameFlags::NONE;
-        if flag & 0x0080 != 0 {
+        if is_fd {
             flags = flags.union(FrameFlags::FD);
+        }
+        if flag & CAN_FDMSG_BRS != 0 {
+            flags = flags.union(FrameFlags::BRS);
+        }
+        if flag & CAN_FDMSG_ESI != 0 {
+            flags = flags.union(FrameFlags::ESI);
         }
         if is_error {
             flags = flags.union(FrameFlags::ERROR);
@@ -299,23 +387,72 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
     }
 }
 
+#[cfg(test)]
+mod tables {
+    use super::*;
+
+    #[test]
+    fn bitrate_tables_accept_only_their_declared_preset_values() {
+        // Arbitration presets: every documented value, then a near miss.
+        for (kbps, code) in [
+            (1000, -1),
+            (500, -4),
+            (250, -8),
+            (125, -9),
+            (100, -10),
+            (83, -11),
+            (62, -12),
+            (50, -13),
+            (10, -15),
+        ] {
+            assert_eq!(bitrate_code(kbps), Some(code), "{kbps} kbit/s");
+        }
+        for bad in [0, 1, 95, 200, 333, 999, 2000] {
+            assert_eq!(bitrate_code(bad), None, "{bad} kbit/s must refuse");
+        }
+
+        // FD data-phase presets: same exact-match policy.
+        for (kbps, code) in [
+            (500, -1000),
+            (1000, -1001),
+            (2000, -1002),
+            (4000, -1003),
+            (8000, -1004),
+        ] {
+            assert_eq!(fd_bitrate_code(kbps), Some(code), "FD {kbps} kbit/s");
+        }
+        for bad in [0, 250, 750, 400, 5000] {
+            assert_eq!(fd_bitrate_code(bad), None, "FD {bad} must refuse");
+        }
+    }
+
+    /// The flag bits are load-bearing for both directions: TX sets them,
+    /// RX decodes them. A wrong constant would mislabel every FD frame
+    /// (0x0080, once guessed, is actually canMSG_TXRQ). These mirror
+    /// canstat.h; keep them in sync with it.
+    #[test]
+    fn fd_flag_bits_match_canstat_h() {
+        assert_eq!(CAN_FDMSG_FDF, 0x0001_0000);
+        assert_eq!(CAN_FDMSG_BRS, 0x0002_0000);
+        assert_eq!(CAN_FDMSG_ESI, 0x0004_0000);
+        assert_eq!(CAN_MSG_RTR, 0x0001);
+        assert_eq!(CAN_MSG_STD, 0x0002);
+        assert_eq!(CAN_MSG_EXT, 0x0004);
+        assert_eq!(CAN_MSG_ERROR_FRAME, 0x0020);
+        assert_eq!(CAN_OPEN_NO_INIT_ACCESS, 0x0020);
+        assert_eq!(CAN_OPEN_CAN_FD, 0x0400);
+    }
+}
+
 /// 手动真机验证（默认跳过）：
 ///
 /// ```text
 /// cargo test kvaser_live -- --ignored --nocapture
 /// ```
 ///
-/// 依次打开每个通道 BusOn，静默收 300 ms——验证驱动加载、通道打开、
-/// BusOn 与非阻塞 read 全链可用，不往线上写任何帧。
-/// 手动真机验证（默认跳过）：
-///
-/// ```text
-/// cargo test kvaser_live -- --ignored --nocapture
-/// ```
-///
-/// 依次尝试打开每个通道 BusOn，静默收 300 ms——验证驱动加载、通道
-/// 打开、BusOn 与非阻塞 read 全链可用，不往线上写任何帧。单个通道
-/// 打不开只记录并继续。
+/// 虚拟通道回环诊断：ch0 只收收听，ch1 只收发送——若虚拟网络在通道
+/// 间路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发车），并
+/// 顺带验证经典帧与 FD 帧的标志位编解码。单个通道打不开只记录并继续。
 #[cfg(test)]
 mod live {
     use super::*;
@@ -331,57 +468,66 @@ mod live {
 
         // 回环诊断：ch0 只收收听，ch1 只收发送——若虚拟网络在通道间
         // 路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发车）。
-        let (h_rx, h_tx) = {
-            let rx = unsafe { (lib.open_channel)(0, 0x0020) };
-            let tx = unsafe { (lib.open_channel)(1, 0x0020) };
-            if rx < 0 || tx < 0 {
-                panic!("open failed: rx {rx}, tx {tx}");
+        // 走封装的 open（含 FD 预设路径），而不是裸标志。
+        let (mut rx, tx) = {
+            let rx = KvaserChannel::open(0, 500, Some(2000), false);
+            let tx = KvaserChannel::open(1, 500, Some(2000), false);
+            println!("rx fd={:?}", rx.as_ref().map(|c| c.fd));
+            println!("tx fd={:?}", tx.as_ref().map(|c| c.fd));
+            match (rx, tx) {
+                (Ok(rx), Ok(tx)) => (rx, tx),
+                (e, _) => panic!("open failed: {e:?}"),
             }
-            unsafe {
-                (lib.bus_on)(rx);
-                (lib.bus_on)(tx);
-            }
-            (rx, tx)
         };
-        unsafe {
-            let mut data = [0u8; 8];
-            data[0] = 0x42;
-            let mut sent = 0usize;
-            let mut seen = 0usize;
-            let mut rtr_seen = 0usize;
-            let t0 = Instant::now();
-            while t0.elapsed() < Duration::from_millis(2000) {
-                if sent < 5
-                    && (lib.write)(h_tx, 0x555, data.as_ptr(), 3, 0x0002) == CAN_OK
-                {
-                    sent += 1;
-                }
-                let mut rid: u32 = 0;
-                let mut rdata = [0u8; 64];
-                let mut rdlc: u32 = 0;
-                let mut rflag: u32 = 0;
-                let mut rtime: u32 = 0;
-                if (lib.read)(
-                    h_rx,
-                    &mut rid,
-                    rdata.as_mut_ptr(),
-                    &mut rdlc,
-                    &mut rflag,
-                    &mut rtime,
-                ) == CAN_OK
-                {
-                    seen += 1;
-                    if rflag & 0x0001 != 0 {
-                        rtr_seen += 1;
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(2));
+        let classic = CanFrame {
+            t_us: 0,
+            channel: 0,
+            id: 0x555,
+            extended: false,
+            len: 3,
+            data: {
+                let mut d = [0u8; MAX_CAN_FD_LEN];
+                d[0] = 0x42;
+                d
+            },
+            dir: Direction::Tx,
+            flags: FrameFlags::NONE,
+        };
+        let mut fd_frame = classic;
+        fd_frame.id = 0x556;
+        fd_frame.len = 12;
+        fd_frame.flags = FrameFlags::FD.union(FrameFlags::BRS);
+        let mut sent_c = 0usize;
+        let mut sent_f = 0usize;
+        let mut seen_c = 0usize;
+        let mut seen_f = 0usize;
+        let mut rtr_seen = 0usize;
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_millis(2000) {
+            if sent_c < 5
+                && tx.write_frame(&classic).is_ok()
+            {
+                sent_c += 1;
             }
-            println!("sent {sent}, ch0 received {seen} (rtr {rtr_seen})");
-            (lib.bus_off)(h_rx);
-            (lib.close)(h_rx);
-            (lib.bus_off)(h_tx);
-            (lib.close)(h_tx);
+            if sent_f < 5 && tx.write_frame(&fd_frame).is_ok() {
+                sent_f += 1;
+            }
+            while let Some(f) = rx.try_read() {
+                if f.flags.contains(FrameFlags::FD) {
+                    seen_f += 1;
+                } else {
+                    seen_c += 1;
+                }
+                if f.flags.contains(FrameFlags::RTR) {
+                    rtr_seen += 1;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
+        println!(
+            "sent classic {sent_c}, fd {sent_f}; received classic {seen_c}, fd {seen_f} (rtr {rtr_seen})"
+        );
+        drop(rx);
+        drop(tx);
     }
 }

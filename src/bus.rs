@@ -80,6 +80,8 @@ pub struct HwBusView {
     pub kbps: u32,
     /// Whether the attachment can transmit (holds init access).
     pub can_tx: bool,
+    /// FD data-phase params were applied; FD frames can leave.
+    pub fd: bool,
 }
 
 /// What the frontend may ask the bus to do. One variant per transport
@@ -261,11 +263,13 @@ pub enum BusCommand {
     },
     /// Attach (or re-attach) a hardware adapter to a bus: its received
     /// frames are ingested, and per-node switches direct generator
-    /// traffic onto the wire. `None` detaches.
+    /// traffic onto the wire. `None` detaches. `fd_data_kbps` opts the
+    /// channel into CAN FD when a data-phase preset exists for it.
     SetHardwareChannel {
         bus: u8,
         adapter: i32,
         kbps: u32,
+        fd_data_kbps: Option<u32>,
     },
     DetachHardware {
         bus: u8,
@@ -659,6 +663,16 @@ fn scan_log_ids(path: &std::path::Path) -> Option<std::collections::HashSet<(u8,
         ids.insert((f.channel, f.id));
     }
     Some(ids)
+}
+
+/// Status-line note about the FD state of a fresh hardware attach: active
+/// data-phase bitrate, classic-mode degradation, or nothing for classic buses.
+fn hw_fd_note(fd_data_kbps: Option<u32>, fd_active: bool) -> String {
+    match (fd_data_kbps, fd_active) {
+        (Some(k), true) => format!("，FD 数据段 {k} kbit/s"),
+        (Some(_), false) => "，经典模式（FD 预设不匹配或硬件不支持）".to_string(),
+        (None, _) => String::new(),
+    }
 }
 
 /// The simulation half of the application. Fields move here from `App` in
@@ -1128,20 +1142,33 @@ impl BusCore {
             BusCommand::SetTraceLimit { frames } => {
                 self.trace_limit = frames.clamp(1_000, 5_000_000)
             }
-            BusCommand::SetHardwareChannel { bus, adapter, kbps } => {
+            BusCommand::SetHardwareChannel {
+                bus,
+                adapter,
+                kbps,
+                fd_data_kbps,
+            } => {
                 // Prefer init access (the wire-egress switches can then
                 // direct traffic onto the wire). When another program
                 // holds the channel, fall back to receive-only.
-                match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, true) {
+                match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, fd_data_kbps, true) {
                     Ok(port) => {
+                        let fd = port.fd;
                         self.hw.attach(bus, adapter, kbps, true, crate::hw::HwPort::Kvaser(port));
                         *status = format!(
-                            "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s (收发)"
+                            "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s (收发){}",
+                            hw_fd_note(fd_data_kbps, fd)
                         );
                     }
                     Err(init_err) => {
-                        match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, false) {
+                        match crate::hw::kvaser::KvaserChannel::open(
+                            adapter,
+                            kbps,
+                            fd_data_kbps,
+                            false,
+                        ) {
                             Ok(port) => {
+                                let fd = port.fd;
                                 self.hw.attach(
                                     bus,
                                     adapter,
@@ -1150,10 +1177,13 @@ impl BusCore {
                                     crate::hw::HwPort::Kvaser(port),
                                 );
                                 *status = format!(
-                                    "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s（只收——通道被其他程序占用）"
+                                    "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s（只收——通道被其他程序占用）{}",
+                                    hw_fd_note(fd_data_kbps, fd)
                                 );
                             }
-                            Err(e) => *status = format!("hardware attach failed: {init_err} / {e}"),
+                            Err(e) => {
+                                *status = format!("hardware attach failed: {init_err} / {e}")
+                            }
                         }
                     }
                 }
@@ -1561,6 +1591,7 @@ impl BusCore {
                     adapter: bh.adapter,
                     kbps: bh.kbps,
                     can_tx: bh.can_tx,
+                    fd: self.hw.fd(bus),
                 })
                 .collect(),
             hw_tx_nodes: self.hw.node_tx.iter().cloned().collect(),
