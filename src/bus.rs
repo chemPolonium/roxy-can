@@ -904,7 +904,13 @@ impl BusCore {
                 let id = self.node_counter;
                 self.nodes
                     .push(crate::node::ScriptNode::new(id, name, channel));
-                self.nodes.last_mut().expect("just added").attached = attached;
+                let last = self.nodes.last_mut().expect("just added");
+                last.attached = attached.clone();
+                // A bound script lives on its node's bus: the binding, not
+                // the passed-in channel, decides the wire (and the gate).
+                if let Some((ach, _)) = attached {
+                    last.channel = ach;
+                }
                 if self.measuring {
                     let dbc = self
                         .channels
