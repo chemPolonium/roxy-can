@@ -1,0 +1,296 @@
+{
+  "version": 1,
+  "layout": "[Window][Debug##Default]\nPos=60,60\nSize=400,400\nCollapsed=0\n\n[Window][###trace0]\nPos=0,54\nSize=704,346\nCollapsed=0\n\n[Window][###msgs0]\nPos=320,360\nSize=700,336\nCollapsed=0\n\n[Window][###stats0]\nPos=768,360\nSize=640,336\nCollapsed=0\n\n[Window][Measurement Setup]\nPos=51,240\nSize=620,320\nCollapsed=0\n\n[Window][Interactive Generator]\nPos=645,104\nSize=560,340\nCollapsed=0\n\n[Window][Network]\nPos=630,158\nSize=720,520\nCollapsed=0\n\n[Window][###data0]\nPos=237,328\nSize=480,360\nCollapsed=0\n\n[Window][###gfx0]\nPos=478,167\nSize=760,320\nCollapsed=0\n\n[Window][Rename Desktop##deskrename]\nPos=536,376\nSize=367,77\nCollapsed=0\n\n[Window][Bus Load]\nPos=590,330\nSize=760,331\nCollapsed=0\n\n[Window][Unsaved Project##projmodal]\nPos=487,354\nSize=305,92\nCollapsed=0\n\n[Window][Message Selection — Trace 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Window][Signal Selection — Data 1]\nPos=399,150\nSize=460,480\nCollapsed=0\n\n[Window][Message Selection — Messages 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Window][Buses]\nPos=547,207\nSize=480,240\nCollapsed=0\n\n[Window][Signal Selection — Graphics 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Docking][Data]\nDockSpace ID=0x0F2FFE08 Window=0x9CE471E1 Pos=0,54 Size=1440,725 CentralNode=1\n\n",
+  "project": null,
+  "config": {
+    "channels": [
+      {
+        "name": "CAN1",
+        "dbc_path": "sample.dbc",
+        "sim_nodes": [],
+        "bitrate_kbps": 500,
+        "fd_data_kbps": 2000
+      },
+      {
+        "name": "CAN2",
+        "dbc_path": "motbus.dbc",
+        "sim_nodes": [],
+        "bitrate_kbps": 500,
+        "fd_data_kbps": 2000
+      }
+    ],
+    "bus_counter": 2,
+    "show_tx": false,
+    "show_network": true,
+    "show_measurement": false,
+    "show_buses": false,
+    "show_triggers": false,
+    "show_bus_stats": false,
+    "show_spec": false,
+    "show_id_filter": false,
+    "replay_speed": 1.0,
+    "text_rate_hz": 10,
+    "trace_windows": [
+      {
+        "name": "Trace 1",
+        "opened": false,
+        "scope": "All",
+        "manual": [],
+        "filter": "",
+        "dir": 0,
+        "dbc_only": false
+      }
+    ],
+    "msg_windows": [
+      {
+        "name": "Messages 1",
+        "opened": false,
+        "scope": "All",
+        "manual": [],
+        "filter": "",
+        "dbc_only": false
+      }
+    ],
+    "stats_windows": [
+      {
+        "name": "Message Statistics 1",
+        "opened": false,
+        "scope": "All",
+        "manual": []
+      }
+    ],
+    "graphics": [
+      {
+        "name": "Graphics 1",
+        "opened": false,
+        "signals": [],
+        "time_window_s": 10.0,
+        "stacked": false,
+        "show_cursor": true,
+        "zoom_enabled": false,
+        "show_markers": true
+      }
+    ],
+    "data_windows": [
+      {
+        "name": "Data 1",
+        "opened": false,
+        "signals": []
+      }
+    ],
+    "tx": [
+      {
+        "channel": 0,
+        "id": 256,
+        "active": false,
+        "data_text": "00 00 00 00 00 00 00 00",
+        "data": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 0,
+        "id": 512,
+        "active": false,
+        "data_text": "00 00 00 00 00 00 00 00",
+        "data": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 0,
+        "id": 800,
+        "active": false,
+        "data_text": "00 00 00 00 00 00 00 00",
+        "data": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 1,
+        "id": 100,
+        "active": false,
+        "data_text": "00 00 00 00",
+        "data": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 133000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 1,
+        "id": 199,
+        "active": false,
+        "data_text": "00 00 00 00 00 00 00 00",
+        "data": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 1,
+        "id": 200,
+        "active": false,
+        "data_text": "00 00 00 00 00 00 00 00",
+        "data": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 1,
+        "id": 201,
+        "active": false,
+        "data_text": "00 00 00",
+        "data": [
+          0,
+          0,
+          0
+        ],
+        "cycle_us": 50000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 1,
+        "id": 300,
+        "active": false,
+        "data_text": "00",
+        "data": [
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      },
+      {
+        "channel": 1,
+        "id": 1020,
+        "active": false,
+        "data_text": "00",
+        "data": [
+          0
+        ],
+        "cycle_us": 100000,
+        "fd": false,
+        "srcs": []
+      }
+    ],
+    "counters": {
+      "trace": 1,
+      "msg": 1,
+      "stats": 1,
+      "graphics": 1,
+      "data": 1
+    },
+    "recent_dbc": [],
+    "recent_log": [],
+    "desktops": [
+      {
+        "name": "Network",
+        "layout": "[Window][Debug##Default]\nPos=60,60\nSize=400,400\nCollapsed=0\n\n[Window][###trace0]\nPos=0,54\nSize=704,346\nCollapsed=0\n\n[Window][###msgs0]\nPos=320,360\nSize=700,336\nCollapsed=0\n\n[Window][###stats0]\nPos=768,360\nSize=640,336\nCollapsed=0\n\n[Window][Measurement Setup]\nPos=51,240\nSize=620,320\nCollapsed=0\n\n[Window][Interactive Generator]\nPos=645,104\nSize=560,340\nCollapsed=0\n\n[Window][Network]\nPos=630,158\nSize=720,520\nCollapsed=0\n\n[Window][###data0]\nPos=237,328\nSize=480,360\nCollapsed=0\n\n[Window][###gfx0]\nPos=478,167\nSize=760,320\nCollapsed=0\n\n[Window][Rename Desktop##deskrename]\nPos=536,376\nSize=367,77\nCollapsed=0\n\n[Window][Bus Load]\nPos=590,330\nSize=760,331\nCollapsed=0\n\n[Window][Unsaved Project##projmodal]\nPos=487,354\nSize=305,92\nCollapsed=0\n\n[Window][Message Selection — Trace 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Window][Signal Selection — Data 1]\nPos=399,150\nSize=460,480\nCollapsed=0\n\n[Window][Message Selection — Messages 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Window][Buses]\nPos=547,207\nSize=480,240\nCollapsed=0\n\n[Window][Signal Selection — Graphics 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Docking][Data]\nDockSpace ID=0x0F2FFE08 Window=0x9CE471E1 Pos=0,54 Size=1440,725 CentralNode=1\n\n",
+        "open": [],
+        "show_tx": false,
+        "show_network": true,
+        "show_measurement": false,
+        "show_buses": false,
+        "show_triggers": false,
+        "show_bus_stats": false,
+        "show_spec": false,
+        "show_id_filter": false
+      },
+      {
+        "name": "Measure",
+        "layout": "[Window][Debug##Default]\nPos=60,60\nSize=400,400\nCollapsed=0\n\n[Window][###trace0]\nPos=0,54\nSize=721,248\nCollapsed=0\nDockId=0x00000009,0\n\n[Window][###msgs0]\nPos=0,304\nSize=721,224\nCollapsed=0\nDockId=0x0000000B,0\n\n[Window][###stats0]\nPos=723,576\nSize=717,203\nCollapsed=0\nDockId=0x00000008,0\n\n[Window][Measurement Setup]\nPos=0,530\nSize=721,249\nCollapsed=0\nDockId=0x0000000C,0\n\n[Window][Interactive Generator]\nPos=176,153\nSize=560,340\nCollapsed=0\n\n[Window][Network]\nPos=133,237\nSize=720,520\nCollapsed=0\n\n[Window][###data0]\nPos=723,424\nSize=717,150\nCollapsed=0\nDockId=0x00000002,0\n\n[Window][###gfx0]\nPos=723,54\nSize=717,368\nCollapsed=0\nDockId=0x00000001,0\n\n[Window][Rename Desktop##deskrename]\nPos=536,376\nSize=367,77\nCollapsed=0\n\n[Window][Bus Load]\nPos=590,330\nSize=760,331\nCollapsed=0\n\n[Window][Unsaved Project##projmodal]\nPos=487,354\nSize=305,92\nCollapsed=0\n\n[Window][Message Selection — Trace 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Window][Signal Selection — Data 1]\nPos=399,150\nSize=460,480\nCollapsed=0\n\n[Window][Message Selection — Messages 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Window][Buses]\nPos=547,207\nSize=480,240\nCollapsed=0\n\n[Window][Signal Selection — Graphics 1]\nPos=504,149\nSize=460,480\nCollapsed=0\n\n[Docking][Data]\nDockSpace       ID=0x0F2FFE08 Window=0x9CE471E1 Pos=0,54 Size=1440,725 Split=X\n  DockNode      ID=0x00000005 Parent=0x0F2FFE08 SizeRef=721,725 Split=Y Selected=0xA76347A0\n    DockNode    ID=0x00000009 Parent=0x00000005 SizeRef=540,248 Selected=0xA76347A0\n    DockNode    ID=0x0000000A Parent=0x00000005 SizeRef=540,475 Split=Y Selected=0xEA990324\n      DockNode  ID=0x0000000B Parent=0x0000000A SizeRef=540,224 Selected=0xEA990324\n      DockNode  ID=0x0000000C Parent=0x0000000A SizeRef=540,249 Selected=0x162DB2AD\n  DockNode      ID=0x00000006 Parent=0x0F2FFE08 SizeRef=717,725 Split=Y\n    DockNode    ID=0x00000007 Parent=0x00000006 SizeRef=737,232 Split=Y Selected=0xB775619C\n      DockNode  ID=0x00000001 Parent=0x00000007 SizeRef=717,368 CentralNode=1 Selected=0xB775619C\n      DockNode  ID=0x00000002 Parent=0x00000007 SizeRef=717,150 Selected=0x608CA6EA\n    DockNode    ID=0x00000008 Parent=0x00000006 SizeRef=737,203 Selected=0x41536695\n\n",
+        "open": [
+          [
+            0,
+            "Trace 1"
+          ],
+          [
+            1,
+            "Messages 1"
+          ],
+          [
+            2,
+            "Message Statistics 1"
+          ],
+          [
+            3,
+            "Graphics 1"
+          ],
+          [
+            4,
+            "Data 1"
+          ]
+        ],
+        "show_tx": false,
+        "show_network": false,
+        "show_measurement": true,
+        "show_buses": false,
+        "show_triggers": false,
+        "show_bus_stats": false,
+        "show_spec": false,
+        "show_id_filter": false
+      }
+    ],
+    "active_desktop": 0,
+    "spec": {
+      "tolerance_percent": 10,
+      "grace_cycles": 3
+    },
+    "triggers": []
+  }
+}

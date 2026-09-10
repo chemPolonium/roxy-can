@@ -121,7 +121,6 @@ pub struct Desktop {
     pub show_bus_stats: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
-    pub show_entities: bool,
     pub show_blocks: bool,
 }
 
@@ -174,7 +173,6 @@ impl App {
             show_bus_stats: self.show_bus_stats,
             show_spec: self.show_spec,
             show_id_filter: self.show_id_filter,
-            show_entities: self.show_entities,
             show_blocks: self.show_blocks,
         }
     }
@@ -210,7 +208,6 @@ impl App {
         self.show_bus_stats = d.show_bus_stats;
         self.show_spec = d.show_spec;
         self.show_id_filter = d.show_id_filter;
-        self.show_entities = d.show_entities;
         self.show_blocks = d.show_blocks;
         let layout = if d.layout.is_empty() {
             self.default_layout.clone()
@@ -256,7 +253,6 @@ impl App {
             show_bus_stats: false,
             show_spec: false,
             show_id_filter: false,
-            show_entities: false,
             show_blocks: false,
         };
         self.desktops.push(snap);

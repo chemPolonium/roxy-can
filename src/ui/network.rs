@@ -75,22 +75,74 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
             {
                 app.net_selected = flat_base + i;
             }
-            let active = ni.tx.iter().any(|(id, _)| {
-                app.snap
-                    .aggs
-                    .iter()
-                    .any(|a| a.channel == ch as u8 && a.id == *id && a.count > 0)
-            });
-            if active {
-                ui.same_line();
-                ui.text_colored([0.45, 0.95, 0.45, 1.0], "*");
-                if ui.is_item_hovered() {
-                    ui.tooltip_text("本次运行已见到该节点发车");
+            // 绑定到该节点的脚本作为下一层树叶挂在节点下：点击打开
+            // 该脚本的编辑器。
+            let bound: Vec<(u64, String, bool, bool, bool)> = app
+                .snap
+                .nodes
+                .iter()
+                .filter(|n| {
+                    n.channel as usize == ch
+                        && n.attached.as_ref().is_some_and(|a| a.1 == ni.name)
+                })
+                .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled, n.errored))
+                .collect();
+            if !bound.is_empty() {
+                ui.indent();
+                for (nid, name, running, enabled, errored) in bound {
+                    draw_script_leaf(app, ui, nid, &name, running, enabled, errored);
                 }
-                ui.same_line();
-                ui.text_disabled("已在总线上");
+                ui.unindent();
             }
         }
+        // 自由脚本（未绑定 DBC 节点）挂在总线根下，旧工程仍可见。
+        let free: Vec<(u64, String, bool, bool, bool)> = app
+            .snap
+            .nodes
+            .iter()
+            .filter(|n| n.channel as usize == ch && n.attached.is_none())
+            .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled, n.errored))
+            .collect();
+        if !free.is_empty() {
+            ui.indent();
+            for (nid, name, running, enabled, errored) in free {
+                draw_script_leaf(app, ui, nid, &name, running, enabled, errored);
+            }
+            ui.unindent();
+        }
+    }
+}
+
+/// One script node as a tree leaf: state marker + name, click opens the
+/// script editor.
+fn draw_script_leaf(
+    app: &mut App,
+    ui: &Ui,
+    id: u64,
+    name: &str,
+    running: bool,
+    enabled: bool,
+    errored: bool,
+) {
+    let (marker, color) = if errored {
+        ("!", [1.0, 0.55, 0.3, 1.0])
+    } else if running {
+        ("*", [0.45, 0.95, 0.45, 1.0])
+    } else if enabled {
+        ("o", [0.45, 0.62, 0.80, 1.0])
+    } else {
+        (".", [0.5, 0.5, 0.55, 1.0])
+    };
+    ui.text_colored(color, marker);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("* 运行中 / o 已启用待测量 / . 未启用 / ! 出错（编辑器里看日志）");
+    }
+    ui.same_line();
+    if ui
+        .selectable_config(format!("{name}##netscript{id}"))
+        .build()
+    {
+        app.open_script_editor(id);
     }
 }
 

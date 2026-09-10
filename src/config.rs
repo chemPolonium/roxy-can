@@ -357,8 +357,6 @@ pub struct DesktopCfg {
     #[serde(default)]
     pub show_id_filter: bool,
     #[serde(default)]
-    pub show_entities: bool,
-    #[serde(default)]
     pub show_blocks: bool,
 }
 
@@ -511,8 +509,6 @@ pub struct Config {
     #[serde(default)]
     pub show_id_filter: bool,
     #[serde(default)]
-    pub show_entities: bool,
-    #[serde(default)]
     pub show_blocks: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
@@ -620,7 +616,6 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_bus_stats: d.show_bus_stats,
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
-        show_entities: d.show_entities,
         show_blocks: d.show_blocks,
     }
 }
@@ -681,7 +676,6 @@ impl Config {
             show_bus_stats: app.show_bus_stats,
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
-            show_entities: app.show_entities,
             show_blocks: app.show_blocks,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
@@ -1141,7 +1135,6 @@ impl Config {
         app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
-        app.show_entities = self.show_entities;
         app.show_blocks = self.show_blocks;
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
@@ -1256,7 +1249,6 @@ impl Config {
                     show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
-                    show_entities: d.show_entities,
                     show_blocks: d.show_blocks,
                 })
                 .collect();
@@ -1609,19 +1601,17 @@ mod tests {
         assert_eq!(restored.limits.marker_cap, 2_048);
     }
 
-    /// The Entities and Replay Blocks panels persist their open state like
-    /// every other panel.
+    /// The Replay Blocks panel persists its open state like every other
+    /// panel.
     #[test]
-    fn the_entity_panels_round_trip() {
+    fn the_blocks_panel_round_trips() {
         let mut app = App::headless();
-        app.show_entities = true;
         app.show_blocks = true;
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
-        assert!(restored.show_entities);
         assert!(restored.show_blocks);
     }
 

@@ -4942,59 +4942,7 @@ fn node_roles_follow_commands_and_land_in_the_snapshot() {
     );
 }
 
-/// The entity table is the flat network directory: per bus, its DBC nodes
-/// in database order, then that bus's script nodes. The `network_select`
-/// index must walk exactly like the Network view's flat selection.
-#[test]
-fn entity_rows_list_dbc_nodes_and_script_nodes_flat() {
-    let mut app = App::headless();
-    app.send(crate::bus::BusCommand::AddNode {
-        name: "sniffer".to_string(),
-        channel: 0,
-            attached: None,
-    });
-    app.settle();
-    let rows = app.entity_rows();
-
-    let ch0_node_count = app.channel_dbc(0).expect("sample DBC").nodes.len();
-    let script = rows
-        .iter()
-        .find(|r| r.kind == EntityKind::Script)
-        .expect("script row");
-    assert_eq!(script.name, "sniffer");
-    assert_eq!(script.channel, 0);
-    assert!(!script.transmits, "a stopped script drives nothing");
-    assert_eq!(script.network_select, None, "no Network entry to select");
-
-    let first_dbc = rows
-        .iter()
-        .find(|r| r.kind == EntityKind::Dbc)
-        .expect("the sample DBC declares nodes");
-    assert_eq!(first_dbc.network_select, Some(0), "database order");
-    assert_eq!(first_dbc.role, Some(NodeRole::Absent));
-
-    let first_ch1_dbc = rows
-        .iter()
-        .find(|r| r.kind == EntityKind::Dbc && r.channel == 1)
-        .expect("CAN2's DBC declares nodes");
-    assert_eq!(
-        first_ch1_dbc.network_select,
-        Some(ch0_node_count),
-        "CAN2's flat index starts after CAN1's node count"
-    );
-
-    // The Simulated role is what "transmits" reads on a DBC row.
-    app.set_node_role(0, &first_dbc.name.clone(), NodeRole::Simulated);
-    app.settle();
-    let row = app
-        .entity_rows()
-        .into_iter()
-        .find(|r| r.kind == EntityKind::Dbc && r.name == first_dbc.name)
-        .expect("row still there");
-    assert!(row.transmits, "a simulated node drives the bus");
-}
-
-/// The whole replay-block path, from the entity table to the wire: an
+/// The whole replay-block path, from creation to the wire: an
 /// enabled block streams its filtered log traffic into a running
 /// simulation, with recorded spacing; nothing flows while the block is
 /// disabled, and nothing flows in Replay mode either (the log is already
@@ -5041,18 +4989,9 @@ fn a_replay_block_streams_its_log_into_the_simulation() {
         None,
     );
     app.settle();
-    // The block entity is visible and starts disabled -- adding a block
-    // must not begin transmitting on its own.
-    let row = app
-        .entity_rows()
-        .into_iter()
-        .find(|r| r.kind == EntityKind::Replay)
-        .expect("the block joined the entity table");
-    let id = row.block_id.expect("block id");
-    assert!(
-        !row.transmits,
-        "a fresh block is off"
-    );
+    // A fresh block starts disabled -- adding a block must not begin
+    // transmitting on its own.
+    let id = app.snap.blocks.first().expect("block exists").id;
     assert!(
         app.snap
             .blocks

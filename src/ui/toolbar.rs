@@ -274,13 +274,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.show_measurement = !app.show_measurement;
                     }
                     if ui
-                        .menu_item_config("Entities")
-                        .selected(app.show_entities)
-                        .build()
-                    {
-                        app.show_entities = !app.show_entities;
-                    }
-                    if ui
                         .menu_item_config("Replay Blocks")
                         .selected(app.show_blocks)
                         .build()
