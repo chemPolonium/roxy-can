@@ -1,9 +1,5 @@
 use crate::app::App;
-use imgui::{Condition, Ui};
-
-const BOX_W: f32 = 118.0;
-const BOX_H: f32 = 36.0;
-const SECTION_H: f32 = 150.0;
+use imgui::{Condition, TreeNodeFlags, Ui};
 
 struct NodeInfo {
     name: String,
@@ -45,141 +41,56 @@ fn collect(app: &App) -> Vec<Vec<NodeInfo>> {
     dbc_nodes
 }
 
-fn draw_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base: usize) {
-    let p0 = ui.cursor_screen_pos();
-    let avail = ui.content_region_avail();
-    let w = avail[0].max(120.0);
-    let dl = ui.get_window_draw_list();
-
-    dl.add_rect(
-        [p0[0], p0[1]],
-        [p0[0] + w, p0[1] + SECTION_H],
-        [0.08, 0.08, 0.10, 1.0],
-    )
-    .filled(true)
-    .build();
-    dl.add_rect(
-        [p0[0], p0[1]],
-        [p0[0] + w, p0[1] + SECTION_H],
-        [0.20, 0.20, 0.25, 1.0],
-    )
-    .build();
-
-    let bus_y = p0[1] + SECTION_H - 30.0;
-    dl.add_line(
-        [p0[0] + 12.0, bus_y],
-        [p0[0] + w - 12.0, bus_y],
-        [0.30, 0.80, 1.00, 1.0],
-    )
-    .thickness(2.0)
-    .build();
-    dl.add_line(
-        [p0[0] + 12.0, bus_y + 4.0],
-        [p0[0] + w - 12.0, bus_y + 4.0],
-        [0.30, 0.80, 1.00, 1.0],
-    )
-    .thickness(2.0)
-    .build();
-    dl.add_text(
-        [p0[0] + 16.0, bus_y - 18.0],
-        [0.30, 0.80, 1.00, 1.0],
-        app.channel_name(ch as u8),
-    );
-
-    if infos.is_empty() {
-        dl.add_text(
-            [p0[0] + 16.0, p0[1] + 30.0],
-            [0.5, 0.5, 0.6, 1.0],
-            "no DBC loaded on this bus",
-        );
-        ui.set_cursor_screen_pos([p0[0], p0[1] + SECTION_H + 4.0]);
-        return;
-    }
-
-    let total = infos.len();
-    let box_y = p0[1] + 18.0;
-    let x_of = |i: usize| p0[0] + w * (i + 1) as f32 / (total + 1) as f32;
-
-    for (i, ni) in infos.iter().enumerate() {
-        let cx = x_of(i);
-        let bx = cx - BOX_W / 2.0;
-        dl.add_line([cx, box_y + BOX_H], [cx, bus_y], [0.45, 0.45, 0.55, 1.0])
-            .build();
-
-        let sel = app.net_selected == flat_base + i;
-        let active = ni.tx.iter().any(|(id, _)| {
-            app.snap
-                .aggs
-                .iter()
-                .any(|a| a.channel == ch as u8 && a.id == *id && a.count > 0)
-        });
-        let bg = if sel {
-            [0.16, 0.28, 0.42, 1.0]
-        } else {
-            [0.12, 0.12, 0.16, 1.0]
-        };
-        let border = if sel {
-            [0.30, 0.80, 1.00, 1.0]
-        } else {
-            [0.35, 0.35, 0.45, 1.0]
-        };
-        dl.add_rect([bx, box_y], [bx + BOX_W, box_y + BOX_H], bg)
-            .rounding(6.0)
-            .filled(true)
-            .build();
-        dl.add_rect([bx, box_y], [bx + BOX_W, box_y + BOX_H], border)
-            .rounding(6.0)
-            .build();
-        // Amber bar on the left edge: "I transmit as this ECU"; the dimmer
-        // slate bar: "present, listening only". Deliberately a different
-        // channel from the green dot, which means "I have seen this ECU
-        // send" -- a simulated node that is also real shows both.
-        match app.node_role(ch as u8, &ni.name) {
-            crate::app::NodeRole::Simulated => {
-                dl.add_rect(
-                    [bx + 3.0, box_y + 7.0],
-                    [bx + 6.0, box_y + BOX_H - 7.0],
-                    [0.95, 0.70, 0.20, 1.0],
-                )
-                .filled(true)
-                .build();
+/// One bus's tree section: the bus as the root, its DBC nodes as leaves.
+/// The role marker colours the leaf (amber ● simulated / slate ● monitor
+/// / gray ○ absent), a green tail marks "seen transmitting this run",
+/// and clicking a leaf opens the node's detail below.
+fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base: usize) {
+    let token = ui
+        .tree_node_config(app.channel_name(ch as u8))
+        .flags(TreeNodeFlags::DEFAULT_OPEN)
+        .push();
+    if let Some(_t) = token {
+        if infos.is_empty() {
+            ui.text_disabled("no DBC loaded on this bus");
+            return;
+        }
+        for (i, ni) in infos.iter().enumerate() {
+            let role = app.node_role(ch as u8, &ni.name);
+            let (marker, marker_color) = match role {
+                crate::app::NodeRole::Simulated => ("●", [0.95, 0.70, 0.20, 1.0]),
+                crate::app::NodeRole::Monitor => ("●", [0.45, 0.62, 0.80, 1.0]),
+                crate::app::NodeRole::Absent => ("○", [0.45, 0.45, 0.55, 1.0]),
+            };
+            ui.text_colored(marker_color, marker);
+            if ui.is_item_hovered() {
+                ui.tooltip_text(role.hint());
             }
-            crate::app::NodeRole::Monitor => {
-                dl.add_rect(
-                    [bx + 3.0, box_y + 7.0],
-                    [bx + 6.0, box_y + BOX_H - 7.0],
-                    [0.45, 0.62, 0.80, 1.0],
-                )
-                .filled(true)
-                .build();
+            ui.same_line();
+            if ui
+                .selectable_config(format!("{}##net{ch}_{i}", ni.name))
+                .selected(app.net_selected == flat_base + i)
+                .build()
+            {
+                app.net_selected = flat_base + i;
             }
-            crate::app::NodeRole::Absent => {}
-        }
-        let size = ui.calc_text_size(ni.name.clone());
-        dl.add_text(
-            [cx - size[0] / 2.0, box_y + (BOX_H - size[1]) / 2.0],
-            [0.9, 0.9, 0.95, 1.0],
-            ni.name.clone(),
-        );
-        if active {
-            dl.add_circle(
-                [bx + BOX_W - 8.0, box_y + 8.0],
-                4.0,
-                [0.45, 0.95, 0.45, 1.0],
-            )
-            .filled(true)
-            .build();
-        }
-    }
-
-    for i in 0..infos.len() {
-        let cx = x_of(i);
-        ui.set_cursor_screen_pos([cx - BOX_W / 2.0, box_y]);
-        if ui.invisible_button(format!("node{ch}_{i}##net"), [BOX_W, BOX_H]) {
-            app.net_selected = flat_base + i;
+            let active = ni.tx.iter().any(|(id, _)| {
+                app.snap
+                    .aggs
+                    .iter()
+                    .any(|a| a.channel == ch as u8 && a.id == *id && a.count > 0)
+            });
+            if active {
+                ui.same_line();
+                ui.text_colored([0.45, 0.95, 0.45, 1.0], "●");
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("本次运行已见到该节点发车");
+                }
+                ui.same_line();
+                ui.text_disabled("已在总线上");
+            }
         }
     }
-    ui.set_cursor_screen_pos([p0[0], p0[1] + SECTION_H + 4.0]);
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
@@ -245,7 +156,7 @@ pub fn render(app: &mut App, ui: &Ui) {
 
                 let mut flat_base = 0usize;
                 for (ch, infos) in dbc_nodes.iter().enumerate() {
-                    draw_section(app, ui, ch, infos, flat_base);
+                    draw_tree_section(app, ui, ch, infos, flat_base);
                     flat_base += infos.len();
                 }
                 ui.separator();
