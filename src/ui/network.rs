@@ -103,7 +103,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 [io.display_size[0] * 0.3, io.display_size[1] * 0.55],
                 Condition::FirstUseEver,
             )
-            .size([720.0, 520.0], Condition::FirstUseEver)
+            .size([860.0, 540.0], Condition::FirstUseEver)
             .build(|| {
                 // Profile row: enumerate the project's profiles/*.toml and
                 // apply the selected one (all-or-nothing role overrides).
@@ -146,25 +146,33 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();
-                if total_dbc == 0 {
-                    ui.text("no DBC nodes to display");
-                    return;
-                }
-                if app.net_selected >= total_dbc {
+                if app.net_selected >= total_dbc.max(1) {
                     app.net_selected = 0;
                 }
 
-                let mut flat_base = 0usize;
-                for (ch, infos) in dbc_nodes.iter().enumerate() {
-                    draw_tree_section(app, ui, ch, infos, flat_base);
-                    flat_base += infos.len();
-                }
-                ui.separator();
+                // 左右分栏：左边树形拓扑，右边所选节点的详情。两栏各自
+                // 滚动——树的长度与详情的长度互不挤占。
+                const TREE_W: f32 = 240.0;
+                ui.child_window("net_tree")
+                    .size([TREE_W, 0.0])
+                    .border(true)
+                    .build(|| {
+                        let mut flat_base = 0usize;
+                        for (ch, infos) in dbc_nodes.iter().enumerate() {
+                            draw_tree_section(app, ui, ch, infos, flat_base);
+                            flat_base += infos.len();
+                        }
+                    });
+                ui.same_line();
 
                 // Details scroll inside their own panel (which always fills the
                 // remaining space), so long content never adds a scrollbar to the
                 // outer window and shifts the topology sections.
                 ui.child_window("node_details").size([0.0, 0.0]).build(|| {
+                    if total_dbc == 0 {
+                        ui.text("no DBC nodes to display");
+                        return;
+                    }
                     // Locate the selected DBC node (channel, index).
                     let mut remaining = app.net_selected;
                     let mut selected: Option<(usize, usize)> = None;
