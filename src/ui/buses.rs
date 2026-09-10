@@ -244,9 +244,13 @@ fn content(app: &mut App, ui: &Ui) {
                         app.detach_hardware(i as u8);
                     }
                     if ui.is_item_hovered() {
+                        // FD 数据段配在总线上但通道没带上 FD：降级原因
+                        // 常驻提示（状态行早已被后续事件冲掉）。
                         ui.tooltip_text(if can_tx {
                             if fd {
                                 "挂接中（收发，FD 数据段参数已应用）"
+                            } else if data_kbps > 0 {
+                                "挂接中（收发）。总线配了 FD 数据段波特率，但通道未带 FD——预设不匹配或硬件不支持，FD 帧上不了硬件。"
                             } else {
                                 "挂接中（收发）"
                             }
