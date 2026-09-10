@@ -275,33 +275,37 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     ui.separator();
 
-                    // The bus's script nodes, with their editors one click
-                    // away -- this is where "simulate a node with a
-                    // script" lives, next to the node it belongs to.
-                    ui.text("本总线脚本节点");
-                    let mut created = false;
+                    // 脚本编辑入口在节点之下（而非总线）：新建的脚本
+                    // 自动绑定到当前选中的 DBC 节点，发帧受其角色闸。
+                    ui.text("本节点脚本");
                     if ui.small_button(format!("+ 脚本节点##netadd{ch}")) {
                         let name = format!("Node {}", app.snap.nodes.len() + 1);
+                        let attached = Some((ch as u8, ni.name.clone()));
                         app.send(crate::bus::BusCommand::AddNode {
                             name,
                             channel: ch as u8,
+                            attached,
                         });
                         app.settle();
                         if let Some(newest) = app.snap.nodes.iter().map(|n| n.id).max() {
                             app.open_script_editor(newest);
                         }
-                        created = true;
                     }
                     ui.same_line();
                     ui.text_disabled("点名字打开脚本编辑器");
-                    let bus_scripts: Vec<(u64, String, bool, bool)> = app
+                    let node_scripts: Vec<(u64, String, bool, bool)> = app
                         .snap
                         .nodes
                         .iter()
-                        .filter(|n| n.channel as usize == ch)
+                        .filter(|n| {
+                            n.channel as usize == ch
+                                && n.attached
+                                    .as_ref()
+                                    .is_some_and(|a| a.1 == ni.name)
+                        })
                         .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled))
                         .collect();
-                    for (nid, name, running, enabled) in bus_scripts {
+                    for (nid, name, running, enabled) in node_scripts {
                         let dot = if running {
                             "●"
                         } else if enabled {
@@ -319,7 +323,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                             ui.tooltip_text("● 运行中 / ○ 已启用待测量 / · 未启用");
                         }
                     }
-                    let _ = created;
                     ui.separator();
                     ui.text("Sent messages");
                     for (id, name) in &ni.tx {

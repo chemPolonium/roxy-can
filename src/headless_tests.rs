@@ -297,6 +297,7 @@ fn the_threaded_core_runs_script_nodes() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "beacon".into(),
         channel: 0,
+        attached: None,
     });
     // Commands are async on the threaded drive: wait for the core to
     // apply the add and publish the node before addressing it by id.
@@ -362,6 +363,7 @@ fn a_script_node_prints_sends_and_keeps_time() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "gen".into(),
         channel: 0,
+        attached: None,
     });
     let id = app.snap.nodes[0].id;
     app.send(crate::bus::BusCommand::SetNodeSource {
@@ -434,6 +436,7 @@ fn a_script_node_reads_signals_and_logs_them() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "monitor".into(),
         channel: 0,
+        attached: None,
     });
     let id = app.snap.nodes[0].id;
     app.send(crate::bus::BusCommand::SetNodeSource {
@@ -481,6 +484,7 @@ fn a_script_node_responds_to_a_diagnostic_request() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "responder".into(),
         channel: 0,
+        attached: None,
     });
     let id = app.snap.nodes[0].id;
     app.send(crate::bus::BusCommand::SetNodeSource {

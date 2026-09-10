@@ -27,7 +27,11 @@ fn content(app: &mut App, ui: &Ui) {
     let rows = app.entity_rows();
     if ui.small_button("+ 脚本节点") {
         let name = format!("Node {}", app.snap.nodes.len() + 1);
-        app.send(crate::bus::BusCommand::AddNode { name, channel: 0 });
+        app.send(crate::bus::BusCommand::AddNode {
+            name,
+            channel: 0,
+            attached: None,
+        });
         app.settle();
         // The core minted the id; open the editor for the newest node.
         if let Some(newest) = app.snap.nodes.iter().map(|n| n.id).max() {
@@ -130,6 +134,7 @@ fn content(app: &mut App, ui: &Ui) {
                     app.send(crate::bus::BusCommand::AddNode {
                         name,
                         channel: row.channel,
+                        attached: None,
                     });
                 }
                 if ui.menu_item("插入回放块") {

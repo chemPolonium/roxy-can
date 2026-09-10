@@ -291,6 +291,9 @@ pub enum BusCommand {
     AddNode {
         name: String,
         channel: u8,
+        /// 绑定的 DBC 节点 (总线, 节点名)：绑定脚本的发帧受该节点
+        /// 角色闸控制。
+        attached: Option<(u8, String)>,
     },
     /// Remove a node wholesale: source, runtime, log.
     RemoveNode {
@@ -436,6 +439,8 @@ pub struct NodeView {
     /// standalone `.capl` file.
     #[allow(dead_code)]
     pub file_path: Option<String>,
+    /// 绑定的 DBC 节点 (总线, 节点名)（节点窗口按此聚合脚本）。
+    pub attached: Option<(u8, String)>,
     /// Runtime present and error-free (while measuring).
     pub running: bool,
     /// A handler failed: the node is stopped until restart or edit.
@@ -868,11 +873,16 @@ impl BusCore {
             BusCommand::SetNodeRole { ch, node, role } => {
                 self.set_node_role(ch, &node, role, status)
             }
-            BusCommand::AddNode { name, channel } => {
+            BusCommand::AddNode {
+                name,
+                channel,
+                attached,
+            } => {
                 self.node_counter += 1;
                 let id = self.node_counter;
                 self.nodes
                     .push(crate::node::ScriptNode::new(id, name, channel));
+                self.nodes.last_mut().expect("just added").attached = attached;
                 if self.measuring {
                     let dbc = self
                         .channels
@@ -1281,6 +1291,7 @@ impl BusCore {
                 source: n.source.clone(),
                 enabled: n.enabled,
                 file_path: n.file_path.clone(),
+                attached: n.attached.clone(),
                 running: n.running(),
                 errored: n.errored(),
                 log: n.log_snapshot(),
@@ -1328,6 +1339,16 @@ impl BusCore {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
+            // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线/监听时
+            // 脚本同样不发车（模拟 = 闸门放行）。
+            let script_allowed = node
+                .attached
+                .as_ref()
+                .is_none_or(|(ach, anode)| {
+                    self.channels
+                        .get(*ach as usize)
+                        .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                });
             for (id, ext, data) in node.run_timers(now_us, &input) {
                 let frame = Self::node_frame(
                     node.channel,
@@ -1338,8 +1359,10 @@ impl BusCore {
                 );
                 // Script frames follow the same wire-egress switch as the
                 // generator: the node's name is the switch key.
-                self.hw.write_if_directed(node.channel, &node.name, &frame);
-                self.buf.push(frame);
+                if script_allowed {
+                    self.hw.write_if_directed(node.channel, &node.name, &frame);
+                    self.buf.push(frame);
+                }
             }
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
@@ -1366,11 +1389,20 @@ impl BusCore {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
+            // 绑定脚本的发帧受所属 DBC 节点的角色闸（见 run_node_timers）。
+            let script_allowed = node
+                .attached
+                .as_ref()
+                .is_none_or(|(ach, anode)| {
+                    self.channels
+                        .get(*ach as usize)
+                        .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                });
             let node_out =
                 node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input);
             // The node's own wire egress: reactions go out the attached
             // hardware under the same per-node switch as everything else.
-            if self.hw.node_sends_via_hw(node.channel, &node.name) {
+            if script_allowed && self.hw.node_sends_via_hw(node.channel, &node.name) {
                 for (id, ext, data) in &node_out {
                     let frame =
                         Self::node_frame(node.channel, *id, *ext, data, f.t_us);

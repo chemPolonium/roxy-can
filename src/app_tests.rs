@@ -4923,6 +4923,7 @@ fn entity_rows_list_dbc_nodes_and_script_nodes_flat() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "sniffer".to_string(),
         channel: 0,
+            attached: None,
     });
     app.settle();
     let rows = app.entity_rows();
@@ -5195,6 +5196,7 @@ fn emit_value_publishes_a_derived_signal_stream() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "calc".to_string(),
         channel: 0,
+            attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5244,6 +5246,7 @@ fn emit_value_works_from_message_handlers() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "mirror".to_string(),
         channel: 0,
+            attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5292,6 +5295,7 @@ fn derived_streams_follow_their_node_across_edits() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "calc".to_string(),
         channel: 0,
+            attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5350,6 +5354,7 @@ fn an_errored_handler_discards_its_emissions() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "boom".to_string(),
         channel: 0,
+            attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5384,10 +5389,12 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "gone".to_string(),
         channel: 0,
+            attached: None,
     });
     app.send(crate::bus::BusCommand::AddNode {
         name: "stay".to_string(),
         channel: 1,
+            attached: None,
     });
     app.settle();
     let stay_id = app
@@ -5582,6 +5589,7 @@ fn script_frames_follow_the_wire_egress_switch() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "beacon".to_string(),
         channel: 0,
+            attached: None,
     });
     app.settle();
     let id = app.snap.nodes[0].id;
@@ -5717,6 +5725,7 @@ fn a_script_node_round_trips_through_a_project() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "gen".into(),
         channel: 0,
+            attached: None,
     });
     let id = app.snap.nodes[0].id;
     let source = "on timer 100 { print(1); }";

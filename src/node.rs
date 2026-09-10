@@ -28,6 +28,9 @@ pub struct ScriptNode {
     /// the user saves or loads a node script from disk. Persisted with
     /// the project so the user can find their files again.
     pub file_path: Option<String>,
+    /// 绑定的 DBC 节点（总线, 节点名）。绑定脚本的发帧受该节点角色
+    /// 闸控制——节点离线/监听时脚本同样不发车。None = 独立脚本。
+    pub attached: Option<(u8, String)>,
     /// Present only while measuring: recompiled from `source` at every
     /// start, so edits apply without a separate compile action.
     runtime: Option<NodeRuntime>,
@@ -72,6 +75,7 @@ impl ScriptNode {
             source: String::new(),
             enabled: true,
             file_path: None,
+            attached: None,
             runtime: None,
             log: VecDeque::new(),
             log_dirty: false,

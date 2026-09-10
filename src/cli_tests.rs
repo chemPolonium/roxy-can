@@ -438,6 +438,7 @@ fn a_project_node_script_drives_a_headless_simulation() {
             channel: 0,
             source: "on timer 50 { send(0x555, 1); }".to_string(),
             enabled: true,
+            attached: None,
         }],
     });
     app.settle();
