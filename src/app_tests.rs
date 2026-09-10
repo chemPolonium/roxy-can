@@ -277,6 +277,45 @@ fn aggregates_frames_per_message_id() {
     app.stop();
 }
 
+/// The observer Clear buttons mean "empty the view": the trace ring and
+/// the per-message counters blank out while the run keeps going, and the
+/// next arrivals re-populate both. (They used to reset the window's
+/// filter settings instead, which read as "does nothing".)
+#[test]
+fn clearing_the_trace_and_message_counters_empties_the_views() {
+    let mut app = App::headless();
+    app.add_tx(0, 0x777);
+    let tx = app.tx_list.last_mut().unwrap();
+    tx.cycle_us = 10_000;
+    tx.active = true;
+    // 0x777 is not in the database: unassigned, no role gate applies.
+    app.start_virtual();
+    run_sim(&mut app, 5, 10_000);
+    assert!(app.trace.len() > 0, "frames on the trace before the clear");
+    assert!(
+        app.aggs.contains_key(&(0, 0x777, false)),
+        "a counter exists before the clear"
+    );
+
+    app.send(crate::bus::BusCommand::ClearTrace);
+    app.send(crate::bus::BusCommand::ClearAggregates);
+    assert_eq!(app.trace.len(), 0, "the trace view is blank");
+    assert!(app.aggs.is_empty(), "the counters are blank");
+
+    // Still measuring: the next cycles repopulate both views (the clock
+    // keeps advancing -- a manual clear happens mid-run).
+    for i in 6..=10u64 {
+        app.sim_t_us = i * 10_000;
+        app.tick(app.sim_t_us);
+    }
+    assert!(app.trace.len() > 0, "frames arrive after the clear");
+    assert!(
+        app.aggs.contains_key(&(0, 0x777, false)),
+        "counters resume after the clear"
+    );
+    app.stop();
+}
+
 /// Drives `ticks` steps of the loop, each `step_us` of simulation time
 /// apart. `tick` reads `sim_t_us` directly, so no wall clock is involved.
 fn run_sim(app: &mut App, ticks: u32, step_us: u64) {

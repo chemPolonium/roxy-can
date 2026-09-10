@@ -1,4 +1,4 @@
-use crate::app::{App, PopupTarget, SigScope};
+use crate::app::{App, PopupTarget};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
 use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TreeNodeFlags, Ui};
@@ -56,11 +56,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         &mut app.msg_windows[i].dbc_only,
     );
     ui.same_line();
+    // Clear resets the per-message counters this window reads; the
+    // filter controls keep their settings.
     if ui.small_button(format!("Clear##mf{i}")) {
-        let w = &mut app.msg_windows[i];
-        w.filter.clear();
-        w.dbc_only = false;
-        w.scope = SigScope::All;
+        app.send(crate::bus::BusCommand::ClearAggregates);
     }
     ui.same_line();
     if ui.small_button(format!("Export##mx{i}")) {

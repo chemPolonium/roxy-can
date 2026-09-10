@@ -149,6 +149,8 @@
   - FD 帧上硬件：挂接申请 FD 能力（Buses 行与状态行显示 FD 态），FD 帧经"经硬件"开关带 FDF/BRS 上线，收到的 FD/BRS/ESI 徽标正常。
   - Profile `[[hw]]`：档案声明"总线 → Kvaser 通道"，应用档案即挂接（含 GUI Profile 行）；未列出总线解挂；错配整份拒绝；旧档案（无 [[hw]]）不受影响。
   - 真机验收：`--profile bench` 一条命令完成角色切换 + 通道挂接；虚拟通道 FD 回环已实证（经典 5/5、FD 5/5）。
+- **2026-09-11 GUI 验收反馈**：
+  - ~~Trace / Messages 的 Clear 不工作~~ ✅：两个按钮原来只重置窗口的过滤条件，不清内容——语义接错了。改为真清空：Trace 的 Clear 清显示与归档、Messages 的 Clear 清逐报文计数（与 Statistics 同源），测量照常进行，过滤器设置不再顺带重置。其余窗口的 Clear（规格 / id filter / 搜索框 / State Tracker 规则）核对过语义无误。
 
 ## 阶段 5：更多硬件源（适配器选型后启动）
 

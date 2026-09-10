@@ -141,12 +141,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         &mut app.trace_windows[i].dbc_only,
     );
     ui.same_line();
+    // Clear empties the display (ring + archive); the filter controls
+    // keep their settings -- they are the viewer's lens, not its content.
     if ui.small_button(format!("Clear##tf{i}")) {
-        let w = &mut app.trace_windows[i];
-        w.filter.clear();
-        w.dir = 0;
-        w.dbc_only = false;
-        w.scope = SigScope::All;
+        app.send(crate::bus::BusCommand::ClearTrace);
     }
     ui.same_line();
     if ui.small_button(format!("Export##tx{i}")) {

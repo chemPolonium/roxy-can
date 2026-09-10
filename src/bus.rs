@@ -105,6 +105,12 @@ pub enum BusCommand {
     /// present / error frame) so they fire again on their next
     /// occurrence. Real-level conditions are untouched.
     RearmTriggers,
+    /// Blanks the trace view: the ring and its disk archive are dropped,
+    /// everything else (recording, aggregates, triggers) keeps running.
+    ClearTrace,
+    /// Resets the per-message counters the Messages / Statistics windows
+    /// read. Load, spec memory and the trace are untouched.
+    ClearAggregates,
     /// Select the bus kind the next start will run (Simulation / Replay).
     SetRunMode(crate::app::Mode),
     /// Add a bus with the sample DBC path, load it, and pre-populate its
@@ -880,6 +886,8 @@ impl BusCore {
             BusCommand::SetTracePaused(on) => self.trace_paused = on,
             BusCommand::ToggleRecord => self.toggle_record(status),
             BusCommand::RearmTriggers => self.rearm_latched_triggers(status),
+            BusCommand::ClearTrace => self.clear_trace_view(status),
+            BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
@@ -2636,6 +2644,25 @@ impl BusCore {
             }
         }
         *status = format!("re-armed {n} latched trigger(s)");
+    }
+
+    /// Blanks the trace the way the Clear button means it: the frames on
+    /// display (and their archive) go away; the measurement itself keeps
+    /// running -- recording stays open, counts keep counting, arrivals
+    /// after the clear show up as usual.
+    fn clear_trace_view(&mut self, status: &mut String) {
+        self.trace.clear();
+        self.publish_trace();
+        *status = "trace cleared".to_string();
+    }
+
+    /// Resets the per-message counters behind the Messages and Statistics
+    /// rows. Deliberately narrower than `reset_run`: load, spec memory and
+    /// the recording are mid-run state the user did not ask to lose.
+    fn clear_aggregates(&mut self, status: &mut String) {
+        let n = self.aggs.len();
+        self.aggs.clear();
+        *status = format!("cleared {n} message counter(s)");
     }
 
     /// The wall-clock instant the bus next has work due: the next replay
