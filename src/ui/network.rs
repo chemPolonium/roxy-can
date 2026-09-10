@@ -345,7 +345,9 @@ pub fn render(app: &mut App, ui: &Ui) {
 
                     // 脚本编辑入口在节点之下（而非总线）：新建的脚本
                     // 自动绑定到当前选中的 DBC 节点，发帧受其角色闸。
+                    // 两个新建按钮统一排在标签同一行。
                     ui.text("本节点脚本");
+                    ui.same_line();
                     if ui.small_button(format!("+ 脚本节点##netadd{ch}")) {
                         let name = format!("Node {}", app.snap.nodes.len() + 1);
                         let attached = Some((ch as u8, ni.name.clone()));
@@ -421,6 +423,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .collect();
                     for (bid, name, enabled, frames) in node_blocks {
                         let marker = if enabled { "o" } else { "." };
+                        // Bound the selectable's width so its hit-rect does
+                        // not extend under the delete button -- an overlap
+                        // let the row steal the button's click.
+                        ui.set_next_item_width(ui.content_region_avail()[0] - 44.0);
                         if ui
                             .selectable_config(format!(
                                 "[R] {marker} {name}（{frames} 帧）##netblock{bid}"
