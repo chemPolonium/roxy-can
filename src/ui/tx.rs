@@ -47,650 +47,507 @@ fn parse_seq(s: &str) -> Vec<f64> {
 
 pub fn render(app: &mut App, ui: &Ui) {
     let kinds = kind_labels();
-    // The overview window: every message of every bus, grouped by node.
-    let main_open = render_window(app, ui, &kinds, None, "Interactive Generator", "");
-    if main_open {
-        params_modal(app, ui, &kinds);
-        cycle_modal(app, ui);
-    }
-    // Per-node windows: one node's entries only, opened from a group
-    // header. Same rows, same modals, one node at a time. A window whose
-    // bus was removed closes itself.
-    let mut any_node_open = false;
-    for (ch, node) in app.open_gen_windows.clone() {
-        if ch as usize >= app.snap.channel_count {
-            app.close_gen_window(ch, &node);
-            continue;
-        }
-        let title = format!("生成器 · {} · {}", app.channel_name(ch), node);
-        let still_open =
-            render_window(app, ui, &kinds, Some((ch, node.clone())), &title, &title);
-        if still_open {
-            any_node_open = true;
-        } else {
-            app.close_gen_window(ch, &node);
-        }
-    }
+    // The overview window: unassigned entries, the bulk switches and
+    // add-by-id. Every DBC node's generator lives in the Network
+    // window's node detail now.
+    let main_open = render_overview(app, ui);
+    // The modals serve the overview and the Network-embedded node
+    // panels alike; they early-return while nothing is being edited.
+    params_modal(app, ui, &kinds);
+    cycle_modal(app, ui);
     app.show_tx = main_open;
-    if !main_open && !any_node_open {
-        app.src_edit = None;
-        app.src_draft = None;
-        app.tx_cycle_edit = None;
-    }
 }
 
-/// One generator window. `node == None` is the overview (all messages,
-/// grouped by node); `Some((bus, node))` renders a single node's entries
-/// flat -- the node-centric view.
-fn render_window(
-    app: &mut App,
-    ui: &Ui,
-    kinds: &[String],
-    node: Option<(u8, String)>,
-    title: &str,
-    _id_suffix: &str,
-) -> bool {
+/// Which entries the shared row renderer shows.
+enum Scope {
+    /// Entries that belong to no DBC node: the overview's whole list.
+    Unassigned,
+    /// One node's entries: the Network detail's generator panel.
+    Node(u8, String),
+}
+
+/// The Interactive Generator overview: everything that has no node to
+/// live under. Node-owned entries are edited in the Network window.
+fn render_overview(app: &mut App, ui: &Ui) -> bool {
     let io = ui.io();
-    let mut open = node.is_some() || app.show_tx;
+    let kinds = kind_labels();
+    let mut open = app.show_tx;
     if !open {
         return false;
     }
-    {
-        ui.window(title)
-            .opened(&mut open)
-            .position(
-                [io.display_size[0] * 0.62, TOOLBAR_H + 10.0],
-                Condition::FirstUseEver,
-            )
-            .size([560.0, 340.0], Condition::FirstUseEver)
-            .build(|| {
-                let (ids, names): (Vec<(u8, u32)>, Vec<String>) = match &node {
-                    // Node view: only this node's own messages, from its bus.
-                    Some((ch, n)) => {
-                        let mut ids = Vec::new();
-                        let mut names = Vec::new();
-                        if let Some(db) = app
-                            .snap
-                            .channels
-                            .get(*ch as usize)
-                            .and_then(|c| c.dbc.as_ref())
-                        {
-                            for &(id, _) in &db.order {
-                                if let Some(m) = db.message_of(id)
-                                    && m.transmitter == *n
-                                {
-                                    ids.push((*ch, id));
-                                    names.push(format!("{:03X}  {}", id, m.name));
-                                }
-                            }
-                        }
-                        (ids, names)
-                    }
-                    None => {
-                        let mut ids = Vec::new();
-                        let mut names = Vec::new();
-                        for (ch, channel) in app.snap.channels.iter().enumerate() {
-                            let Some(db) = &channel.dbc else {
-                                continue;
-                            };
-                            let mut listed: std::collections::HashSet<u32> =
-                                std::collections::HashSet::new();
-                            for &(id, _) in &db.order {
-                                if !listed.insert(id) {
-                                    continue;
-                                }
-                                if let Some(m) = db.message_of(id) {
-                                    ids.push((ch as u8, id));
-                                    names.push(format!(
-                                        "{}  {:03X}  {}",
-                                        app.channel_name(ch as u8),
-                                        id,
-                                        m.name
-                                    ));
-                                }
-                            }
-                        }
-                        (ids, names)
-                    }
-                };
-                if ids.is_empty() {
-                    ui.text(if node.is_some() {
-                        "该节点在库中没有报文"
-                    } else {
-                        "no DBC loaded"
-                    });
-                } else {
-                    if app.tx_pick >= ids.len() {
-                        app.tx_pick = 0;
-                    }
-                    ui.set_next_item_width(260.0);
-                    ui.combo_simple_string("Message##ig", &mut app.tx_pick, &names);
-                    ui.same_line();
-                    if ui.button("Add") {
-                        let (ch, id) = ids[app.tx_pick];
-                        app.add_tx(ch, id);
-                    }
+    ui.window("Interactive Generator")
+        .opened(&mut open)
+        .position(
+            [io.display_size[0] * 0.62, TOOLBAR_H + 10.0],
+            Condition::FirstUseEver,
+        )
+        .size([560.0, 340.0], Condition::FirstUseEver)
+        .build(|| {
+            ui.set_next_item_width(200.0);
+            ui.input_text("##gsearch", &mut app.gen_search)
+                .hint("search name / ID")
+                .build();
+            ui.same_line();
+            if ui.small_button("Clear##gsc") {
+                app.gen_search.clear();
+            }
+            ui.same_line();
+            let active_count = app
+                .snap
+                .tx
+                .iter()
+                .filter(|t| t.active && t.node.is_empty())
+                .count();
+            ui.text(format!("{active_count} active (未分配)"));
+            ui.separator();
+
+            // Per-bus lines: the bulk switches plus add-by-id -- the way
+            // to put a message the database does not know onto the wire.
+            for ch in 0..app.snap.channel_count {
+                let ch8 = ch as u8;
+                if ui.small_button(format!("All On##gon{ch}")) {
+                    app.set_bus_tx(ch8, true);
                 }
                 ui.same_line();
-                let active_count = match &node {
-                    Some((nch, nname)) => app
-                        .snap
-                        .tx
-                        .iter()
-                        .filter(|t| t.active && t.channel == *nch && t.node == *nname)
-                        .count(),
-                    None => app.snap.tx.iter().filter(|t| t.active).count(),
+                if ui.small_button(format!("All Off##goff{ch}")) {
+                    app.set_bus_tx(ch8, false);
+                }
+                ui.same_line();
+                ui.text(app.channel_name(ch8));
+                ui.same_line();
+                let editing = matches!(&app.gen_add_buf, Some((r, _)) if *r == ch8);
+                let mut buf = match &app.gen_add_buf {
+                    Some((r, s)) if *r == ch8 => s.clone(),
+                    _ => String::new(),
                 };
-                ui.text(format!("{active_count} active"));
-                ui.separator();
-
-                if node.is_none() {
-                    ui.set_next_item_width(200.0);
-                    ui.input_text("##gsearch", &mut app.gen_search)
-                        .hint("search name / ID")
-                        .build();
-                    ui.same_line();
-                    if ui.small_button("Clear##gsc") {
-                        app.gen_search.clear();
-                    }
+                ui.set_next_item_width(90.0);
+                ui.input_text(format!("##gaddid{ch}"), &mut buf)
+                    .hint("hex id")
+                    .flags(InputTextFlags::CHARS_HEXADECIMAL)
+                    .build();
+                if ui.is_item_active() {
+                    app.gen_add_buf = Some((ch8, buf.clone()));
                 }
-
-                // Per-bus bulk switches: one click enables or disables
-                // every message of that bus. Small buttons are exactly
-                // text-height, so the bus name needs no baseline alignment
-                // here -- aligning would leave the cursor low, and each
-                // later group's `same_line` would inherit that low line,
-                // stacking its buttons a step beneath the first group's.
-                if node.is_none() {
-                    let mut first_bus = true;
-                    for ch in 0..app.snap.channel_count {
-                        let ch8 = ch as u8;
-                        if !app.snap.tx.iter().any(|t| t.channel == ch8) {
-                            continue;
-                        }
-                        if !first_bus {
-                            ui.same_line();
-                        }
-                        first_bus = false;
-                        if ui.small_button(format!("All On##gon{ch}")) {
-                            app.set_bus_tx(ch8, true);
-                        }
-                        ui.same_line();
-                        if ui.small_button(format!("All Off##goff{ch}")) {
-                            app.set_bus_tx(ch8, false);
-                        }
-                        ui.same_line();
-                        ui.text(app.channel_name(ch8));
-                    }
+                let add = ui.small_button(format!("Add##gadd{ch}"));
+                if ui.is_item_deactivated_after_edit() && !buf.is_empty() {
+                    app.gen_add_buf = None;
+                    add_hex_id(app, ch8, &buf);
+                } else if editing && !ui.is_item_active() {
+                    app.gen_add_buf = None;
+                } else if add {
+                    app.gen_add_buf = None;
+                    add_hex_id(app, ch8, &buf);
                 }
+            }
+            ui.separator();
 
-                let query = app.gen_search.trim().to_ascii_lowercase();
-                // The rows read this frame's snapshot, cloned once so the
-                // per-row widgets can send commands without aliasing.
-                let tx = app.snap.tx.clone();
-                let mut remove: Option<(u8, u32)> = None;
-                // Rows group by their DBC node (the "simulate this node"
-                // boundary): a group header shows the role and how many of
-                // the node's entries are actually transmitting, so a
-                // simulated node with everything switched off cannot hide.
-                // Searching flattens the list -- filtering across groups is
-                // the point there.
-                let mut group_counts: std::collections::HashMap<(u8, String), (usize, usize)> =
-                    std::collections::HashMap::new();
-                for view in &tx {
-                    let e = group_counts
-                        .entry((view.channel, view.node.clone()))
-                        .or_insert((0, 0));
-                    e.1 += 1;
-                    if view.active {
-                        e.0 += 1;
-                    }
+            let tx = app.snap.tx.clone();
+            render_rows(app, ui, &tx, &kinds, &Scope::Unassigned);
+        });
+    open
+}
+
+/// Adds one manual entry by hex id (standard frames only -- extended
+/// messages arrive through their DBC node). A duplicate is a no-op.
+fn add_hex_id(app: &mut App, ch: u8, text: &str) {
+    match u32::from_str_radix(text.trim(), 16) {
+        Ok(id) if id <= 0x7FF => app.add_tx(ch, id),
+        Ok(_) => app.status = "手动添加只支持标准帧 id（≤ 7FF）".to_string(),
+        Err(_) => app.status = format!("hex id 解析失败：{text}"),
+    }
+}
+
+/// One node's generator panel for the Network detail: the summary and
+/// wire switch, this node's entries, its add combo, and its reaction
+/// rules -- the interactive half of the node (the scripts are the other
+/// half, right below in the same detail pane).
+pub fn render_node_generator(app: &mut App, ui: &Ui, nch: u8, nname: &str) {
+    let kinds = kind_labels();
+    let total = app
+        .snap
+        .tx
+        .iter()
+        .filter(|t| t.channel == nch && t.node == nname)
+        .count();
+    let active_n = app
+        .snap
+        .tx
+        .iter()
+        .filter(|t| t.active && t.channel == nch && t.node == nname)
+        .count();
+    let role = app.node_role(nch, nname);
+    let count_word = if role == crate::app::NodeRole::Simulated {
+        "发送中"
+    } else {
+        "条启用 · 总关"
+    };
+    ui.text(format!("生成器：{active_n}/{total} {count_word}"));
+    if ui.is_item_hovered() {
+        ui.tooltip_text(role.hint());
+    }
+    let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == nch);
+    if role == crate::app::NodeRole::Simulated && bus_has_hw {
+        ui.same_line();
+        let mut via_hw = app.snap.hw_tx_nodes.contains(&(nch, nname.to_string()));
+        if ui.checkbox("经硬件##netnodehw", &mut via_hw) {
+            app.set_node_hardware_tx(nch, nname, via_hw);
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("该节点的发车同时上真实总线（Kvaser）");
+        }
+    }
+
+    // Add: this node's own messages from its bus's databases.
+    let mut ids: Vec<u32> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    if let Some(db) = app
+        .snap
+        .channels
+        .get(nch as usize)
+        .and_then(|c| c.dbc.as_ref())
+    {
+        let mut listed: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for &(id, _) in &db.order {
+            if !listed.insert(id) {
+                continue;
+            }
+            if let Some(m) = db.message_of(id)
+                && m.transmitter == nname
+            {
+                ids.push(id);
+                names.push(format!("{id:03X}  {}", m.name));
+            }
+        }
+    }
+    if !ids.is_empty() {
+        if app.tx_pick >= ids.len() {
+            app.tx_pick = 0;
+        }
+        ui.set_next_item_width(260.0);
+        ui.combo_simple_string("Message##netnode", &mut app.tx_pick, &names);
+        ui.same_line();
+        if ui.button("Add##netnodeadd") {
+            app.add_tx(nch, ids[app.tx_pick]);
+        }
+    }
+
+    let tx = app.snap.tx.clone();
+    render_rows(app, ui, &tx, &kinds, &Scope::Node(nch, nname.to_string()));
+
+    // Reactions aimed at this node's messages: the Send triggers that
+    // answer this node's traffic. Managed in the Triggers window.
+    let node_ids: std::collections::HashSet<u32> = tx
+        .iter()
+        .filter(|v| v.channel == nch && v.node == nname)
+        .map(|v| v.id)
+        .collect();
+    let reactions: Vec<String> = app
+        .snap
+        .triggers
+        .iter()
+        .filter(|t| {
+            matches!(&t.action,
+                crate::trigger::TriggerAction::Send { ch, id }
+                if *ch == nch && node_ids.contains(id))
+        })
+        .map(|t| t.cond.short())
+        .collect();
+    if !reactions.is_empty() {
+        ui.separator();
+        ui.text("响应规则（触发器 → 发送到本节点报文）");
+        for r in &reactions {
+            ui.text(format!("  · {r}"));
+        }
+        if ui.small_button("在 Triggers 窗口管理##noder") {
+            app.show_triggers = true;
+        }
+    }
+}
+/// The shared entry-row renderer: chip, row header, schedule controls
+/// and the per-signal handles. `scope` picks whose entries show --
+/// unassigned ones in the overview, one node's in the Network detail.
+fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[String], scope: &Scope) {
+    let query = app.gen_search.trim().to_ascii_lowercase();
+    let mut remove: Option<(u8, u32)> = None;
+    for (i, view) in tx.iter().enumerate() {
+        let id = view.id;
+        let ch = view.channel;
+        let name = view.name.clone();
+        match scope {
+            Scope::Unassigned => {
+                if !view.node.is_empty() {
+                    continue;
                 }
-                let mut last_group: Option<(u8, String)> = None;
-                for (i, view) in tx.iter().enumerate() {
-                    let id = view.id;
-                    let ch = view.channel;
-                    let name = view.name.clone();
-                    let group_key = (ch, view.node.clone());
-                    // A node window lists only its own node's entries --
-                    // every other bus's rows stay in the overview.
-                    if let Some((nch, nname)) = &node {
-                        if ch != *nch || view.node != *nname {
-                            continue;
-                        }
-                    }
-                    let group_changed = last_group.as_ref() != Some(&group_key);
-                    // The header renders in the overview for every group,
-                    // and in a node window once for its own group -- the
-                    // role hint and the wire-egress switch live there.
-                    if query.is_empty()
-                        && group_changed
-                        && node
-                            .as_ref()
-                            .is_none_or(|(nch, nname)| *nch == ch && nname == &view.node)
-                    {
-                        let (active_n, total) = group_counts[&group_key];
-                        let node_label = if view.node.is_empty() {
-                            "(未分配)".to_string()
-                        } else {
-                            view.node.clone()
-                        };
-                        let role = app.node_role(ch, &view.node);
-                        let role_word = if view.node.is_empty() {
-                            String::new()
-                        } else {
-                            format!("〔{}〕", role.label())
-                        };
-                        let hint = if view.node.is_empty() {
-                            "报文不属于任何 DBC 节点（手动添加）".to_string()
-                        } else {
-                            app.node_role(ch, &view.node).hint().to_string()
-                        };
-                        if ui.small_button(format!("开##gon{}_{}", ch, node_label)) {
-                            for v in tx.iter().filter(|v| {
-                                v.channel == ch && v.node == view.node && !v.active
-                            }) {
-                                app.send(crate::bus::BusCommand::SetEntryActive {
-                                    ch: v.channel,
-                                    id: v.id,
-                                    on: true,
-                                });
-                            }
-                        }
-                        ui.same_line();
-                        if ui.small_button(format!("关##goff{}_{}", ch, node_label)) {
-                            for v in tx.iter().filter(|v| {
-                                v.channel == ch && v.node == view.node && v.active
-                            }) {
-                                app.send(crate::bus::BusCommand::SetEntryActive {
-                                    ch: v.channel,
-                                    id: v.id,
-                                    on: false,
-                                });
-                            }
-                        }
-                        ui.same_line();
-                        // The wire-egress switch: only meaningful for a
-                        // simulated node on a bus with attached hardware.
-                        let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == ch);
-                        if role == crate::app::NodeRole::Simulated && bus_has_hw {
-                            let mut via_hw = app
-                                .snap
-                                .hw_tx_nodes
-                                .contains(&(ch, view.node.clone()));
-                            if ui.checkbox(
-                                format!("经硬件##hwtx{}_{}", ch, node_label),
-                                &mut via_hw,
-                            ) {
-                                app.set_node_hardware_tx(ch, &view.node, via_hw);
-                            }
-                            if ui.is_item_hovered() {
-                                ui.tooltip_text(
-                                    "该节点的发车同时上真实总线（Kvaser）",
-                                );
-                            }
-                            ui.same_line();
-                        }
-                        // The node's own generator window: same rows, one
-                        // node, no overview noise. Inside that window the
-                        // button is pointless -- it is already there.
-                        if node.is_none() {
-                            if ui.small_button(format!("窗##gwin{}_{}", ch, node_label)) {
-                                app.open_gen_window(ch, &view.node);
-                            }
-                            if ui.is_item_hovered() {
-                                ui.tooltip_text("打开该节点独立的生成器窗口");
-                            }
-                            ui.same_line();
-                        }
-                        // 模拟 = 发送中（按条目各自开关）；其余角色 = 总关，
-                        // 启用数照常显示（闸开即按它们发车）。
-                        let count_word = if role == crate::app::NodeRole::Simulated {
-                            "发送中"
-                        } else {
-                            "条启用 · 总关"
-                        };
-                        let header = format!(
-                            "{} · {}  {}  {}/{} {}###grp{}_{node_label}",
-                            app.channel_name(ch),
-                            node_label,
-                            role_word,
-                            active_n,
-                            total,
-                            count_word,
-                            ch,
-                        );
-                        let header_open =
-                            ui.collapsing_header(header, imgui::TreeNodeFlags::empty());
-                        app.gen_group_open.insert(group_key.clone(), header_open);
-                        if ui.is_item_hovered() {
-                            ui.tooltip_text(&hint);
-                        }
-                    }
-                    last_group = Some(group_key.clone());
-                    if query.is_empty() && node.is_none() {
-                        let open = app
-                            .gen_group_open
-                            .get(&group_key)
-                            .copied()
-                            .unwrap_or(true);
-                        if !open {
-                            continue;
-                        }
-                    }
-                    if !query.is_empty() {
-                        let hay = format!("{} {} {:X}", app.channel_name(ch), name, id)
-                            .to_ascii_lowercase();
-                        if !hay.contains(&query) {
-                            continue;
-                        }
-                    }
-                    let sigs: Vec<SignalInfo> = app
-                        .channel_dbc(ch)
-                        .and_then(|db| db.message_of(id))
-                        .map(|m| m.signals.clone())
-                        .unwrap_or_default();
-                    let driven = view.srcs.len();
-                    // The transmit state rides the header line, so the whole
-                    // list scans without expanding anything. MUTE is the
-                    // replay silencing, precomputed by the bus: the checkbox
-                    // keeps its state, but an id the replayed log carries
-                    // must not double-send. 总关 is the node-role gate: the
-                    // entry is on, but its node is not simulated.
-                    let (chip, color, hint) = if !view.active {
-                        ("OFF", [0.55, 0.58, 0.65, 1.0], "未发送：条目生成开关未勾选。")
-                    } else if !view.gate_open {
-                        (
-                            "总关",
-                            [0.45, 0.60, 0.80, 1.0],
-                            "条目已启用，但所属节点的角色不是「模拟」——总开关关闭中。把节点角色切回「模拟」即恢复发车。",
-                        )
-                    } else if view.muted {
-                        (
-                            "MUTE",
-                            [1.0, 0.65, 0.2, 1.0],
-                            "本次回放期间静音：已加载的日志中带有此 ID，若再有第二个发送者，同一条信号的两路数据会混进曲线、统计等所有视图。On 勾选框保持原样——退出回放后照常发送。",
-                        )
-                    } else {
-                        (
-                            "ON",
-                            [0.4, 0.95, 0.5, 1.0],
-                            "正在发送：条目已勾选，且没有被任何机制抑制。",
-                        )
-                    };
-                    // Four cells wide in the monospace font, so the three
-                    // words -- and every row's header -- line up.
-                    ui.text_colored(color, format!("{chip:<4}"));
-                    if ui.is_item_hovered() {
-                        ui.tooltip_text(hint);
-                    }
-                    ui.same_line();
-                    let header_open = ui.collapsing_header(
-                        row_header(ch, &app.channel_name(ch), &name, id, driven),
-                        imgui::TreeNodeFlags::empty(),
-                    );
-                    if !header_open {
+                if !query.is_empty() {
+                    let hay =
+                        format!("{} {} {:X}", app.channel_name(ch), name, id).to_ascii_lowercase();
+                    if !hay.contains(&query) {
                         continue;
                     }
-                    ui.indent();
-                    let mut act = view.active;
-                    if ui.checkbox(format!("On##{i}"), &mut act) {
-                        // Routes through the model: activating anchors the
-                        // schedule at the current clock, so re-enabling an
-                        // entry never re-emits frames dated across the time
-                        // it was off.
-                        app.send(crate::bus::BusCommand::SetEntryActive { ch, id, on: act });
-                    }
-                    ui.same_line();
-                    // Not an inline number box any more: dragging one edits its
-                    // text in place, and every keystroke was applied, so dialing
-                    // in 100 put the message on the wire at 1 ms first. The
-                    // dialog drafts it and only writes on Apply.
-                    let cycle = view.cycle_us;
-                    let cyc = if cycle == 0 {
-                        "event".to_string()
-                    } else {
-                        format!("{} ms", cycle / 1000)
-                    };
-                    if ui.button_with_size(format!("{cyc}##cyc{i}"), [84.0, 0.0]) {
-                        app.tx_cycle_edit = Some(i);
-                        app.tx_cycle_buf = (cycle / 1000).to_string();
-                    }
-                    ui.same_line();
-                    let mut fd = view.fd;
-                    if ui.checkbox(format!("FD##{i}"), &mut fd) {
-                        app.send(crate::bus::BusCommand::SetEntryFd { ch, id, fd });
-                    }
-                    ui.same_line();
-                    // One frame now, off the schedule: base bytes and
-                    // waveforms as they stand, without touching the active
-                    // flag. A stopped bus drops the request silently.
-                    if ui.small_button(format!("Send now##now{i}")) {
-                        app.send(crate::bus::BusCommand::SendNow { ch, id });
-                    }
-                    // Only ever shown when the two disagree, so a row that
-                    // matches its database stays exactly as wide as before.
-                    let off = app.dbc_cycle_us(ch, id).filter(|d| *d != cycle);
-                    if let Some(declared) = off {
-                        ui.same_line();
-                        let label = if declared == 0 {
-                            "DBC event".to_string()
-                        } else {
-                            format!("DBC {}ms", declared / 1000)
-                        };
-                        if ui.small_button(format!("{label}##dbc{i}")) {
-                            app.send(crate::bus::BusCommand::SetEntryCycle {
-                                ch,
-                                id,
-                                cycle_us: declared,
-                            });
-                        }
-                    }
-                    ui.same_line();
-                    // Values are edited through the signal handles below. For
-                    // a message the database knows, the box only shows the
-                    // bytes that actually go out -- base payload with every
-                    // driven source's value already laid over it, computed by
-                    // the bus into this frame's snapshot. Only a message
-                    // without DBC signals keeps an editable box, because it
-                    // has no handles to edit instead.
-                    if sigs.is_empty() {
-                        // The live edit buffer is frontend draft state: while
-                        // the box has focus the text lives in `tx_data_edit`,
-                        // and the bus only sees the payload when the edit
-                        // commits. Decoding waits for the box to be left --
-                        // parsing each keystroke meant retyping "11 22 33"
-                        // briefly put a one-byte frame on the bus.
-                        let editing = matches!(&app.tx_data_edit, Some((r, _)) if *r == i);
-                        let mut buf = match &app.tx_data_edit {
-                            Some((r, s)) if *r == i => s.clone(),
-                            _ => view.data_text.clone(),
-                        };
-                        ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
-                        ui.input_text(format!("##data{i}"), &mut buf).build();
-                        if ui.is_item_active() {
-                            app.tx_data_edit = Some((i, buf.clone()));
-                        }
-                        if ui.is_item_deactivated_after_edit() {
-                            app.tx_data_edit = None;
-                            app.send(crate::bus::BusCommand::SetEntryHex { ch, id, text: buf });
-                        } else if editing && !ui.is_item_active() {
-                            app.tx_data_edit = None;
-                        }
-                    } else {
-                        ui.text_disabled(&view.sent_text);
-                    }
-                    ui.same_line();
-                    if ui.small_button(format!("x##{i}")) {
-                        remove = Some((ch, id));
-                    }
+                }
+            }
+            Scope::Node(nch, nname) => {
+                if ch != *nch || view.node != *nname {
+                    continue;
+                }
+            }
+        }
+        let sigs: Vec<SignalInfo> = app
+            .channel_dbc(ch)
+            .and_then(|db| db.message_of(id))
+            .map(|m| m.signals.clone())
+            .unwrap_or_default();
+        let driven = view.srcs.len();
+        // The transmit state rides the header line, so the whole
+        // list scans without expanding anything. MUTE is the
+        // replay silencing, precomputed by the bus: the checkbox
+        // keeps its state, but an id the replayed log carries
+        // must not double-send. 总关 is the node-role gate: the
+        // entry is on, but its node is not simulated.
+        let (chip, color, hint) = if !view.active {
+            (
+                "OFF",
+                [0.55, 0.58, 0.65, 1.0],
+                "未发送：条目生成开关未勾选。",
+            )
+        } else if !view.gate_open {
+            (
+                "总关",
+                [0.45, 0.60, 0.80, 1.0],
+                "条目已启用，但所属节点的角色不是「模拟」——总开关关闭中。把节点角色切回「模拟」即恢复发车。",
+            )
+        } else if view.muted {
+            (
+                "MUTE",
+                [1.0, 0.65, 0.2, 1.0],
+                "本次回放期间静音：已加载的日志中带有此 ID，若再有第二个发送者，同一条信号的两路数据会混进曲线、统计等所有视图。On 勾选框保持原样——退出回放后照常发送。",
+            )
+        } else {
+            (
+                "ON",
+                [0.4, 0.95, 0.5, 1.0],
+                "正在发送：条目已勾选，且没有被任何机制抑制。",
+            )
+        };
+        // Four cells wide in the monospace font, so the three
+        // words -- and every row's header -- line up.
+        ui.text_colored(color, format!("{chip:<4}"));
+        if ui.is_item_hovered() {
+            ui.tooltip_text(hint);
+        }
+        ui.same_line();
+        let header_open = ui.collapsing_header(
+            row_header(ch, &app.channel_name(ch), &name, id, driven),
+            imgui::TreeNodeFlags::empty(),
+        );
+        if !header_open {
+            continue;
+        }
+        ui.indent();
+        let mut act = view.active;
+        if ui.checkbox(format!("On##{i}"), &mut act) {
+            // Routes through the model: activating anchors the
+            // schedule at the current clock, so re-enabling an
+            // entry never re-emits frames dated across the time
+            // it was off.
+            app.send(crate::bus::BusCommand::SetEntryActive { ch, id, on: act });
+        }
+        ui.same_line();
+        // Not an inline number box any more: dragging one edits its
+        // text in place, and every keystroke was applied, so dialing
+        // in 100 put the message on the wire at 1 ms first. The
+        // dialog drafts it and only writes on Apply.
+        let cycle = view.cycle_us;
+        let cyc = if cycle == 0 {
+            "event".to_string()
+        } else {
+            format!("{} ms", cycle / 1000)
+        };
+        if ui.button_with_size(format!("{cyc}##cyc{i}"), [84.0, 0.0]) {
+            app.tx_cycle_edit = Some(i);
+            app.tx_cycle_buf = (cycle / 1000).to_string();
+        }
+        ui.same_line();
+        let mut fd = view.fd;
+        if ui.checkbox(format!("FD##{i}"), &mut fd) {
+            app.send(crate::bus::BusCommand::SetEntryFd { ch, id, fd });
+        }
+        ui.same_line();
+        // One frame now, off the schedule: base bytes and
+        // waveforms as they stand, without touching the active
+        // flag. A stopped bus drops the request silently.
+        if ui.small_button(format!("Send now##now{i}")) {
+            app.send(crate::bus::BusCommand::SendNow { ch, id });
+        }
+        // Only ever shown when the two disagree, so a row that
+        // matches its database stays exactly as wide as before.
+        let off = app.dbc_cycle_us(ch, id).filter(|d| *d != cycle);
+        if let Some(declared) = off {
+            ui.same_line();
+            let label = if declared == 0 {
+                "DBC event".to_string()
+            } else {
+                format!("DBC {}ms", declared / 1000)
+            };
+            if ui.small_button(format!("{label}##dbc{i}")) {
+                app.send(crate::bus::BusCommand::SetEntryCycle {
+                    ch,
+                    id,
+                    cycle_us: declared,
+                });
+            }
+        }
+        ui.same_line();
+        // Values are edited through the signal handles below. For
+        // a message the database knows, the box only shows the
+        // bytes that actually go out -- base payload with every
+        // driven source's value already laid over it, computed by
+        // the bus into this frame's snapshot. Only a message
+        // without DBC signals keeps an editable box, because it
+        // has no handles to edit instead.
+        if sigs.is_empty() {
+            // The live edit buffer is frontend draft state: while
+            // the box has focus the text lives in `tx_data_edit`,
+            // and the bus only sees the payload when the edit
+            // commits. Decoding waits for the box to be left --
+            // parsing each keystroke meant retyping "11 22 33"
+            // briefly put a one-byte frame on the bus.
+            let editing = matches!(&app.tx_data_edit, Some((r, _)) if *r == i);
+            let mut buf = match &app.tx_data_edit {
+                Some((r, s)) if *r == i => s.clone(),
+                _ => view.data_text.clone(),
+            };
+            ui.set_next_item_width(if off.is_some() { 200.0 } else { 260.0 });
+            ui.input_text(format!("##data{i}"), &mut buf).build();
+            if ui.is_item_active() {
+                app.tx_data_edit = Some((i, buf.clone()));
+            }
+            if ui.is_item_deactivated_after_edit() {
+                app.tx_data_edit = None;
+                app.send(crate::bus::BusCommand::SetEntryHex { ch, id, text: buf });
+            } else if editing && !ui.is_item_active() {
+                app.tx_data_edit = None;
+            }
+        } else {
+            ui.text_disabled(&view.sent_text);
+        }
+        ui.same_line();
+        if ui.small_button(format!("x##{i}")) {
+            remove = Some((ch, id));
+        }
 
-                    if sigs.is_empty() {
-                        ui.text("(no signals in DBC)");
-                    }
-                    // The bytes that actually go out this instant: base with
-                    // every driven source laid over them, from the snapshot.
-                    // Driven rows read their displayed value back out of
-                    // these, so what you see is what the bus sees --
-                    // byte-width truncation and all. The raw computed number
-                    // never reaches the wire.
-                    let data = view.sent_data;
-                    for s in &sigs {
-                        let held = view
-                            .srcs
-                            .iter()
-                            .find(|x| x.name == s.name)
-                            .cloned();
-                        let raw =
-                            crate::decode::extract_raw(&data, s.start_bit, s.size, s.big_endian);
-                        let cur =
-                            crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset);
-                        let (lo, hi) = sig_range(s);
-                        // A driven row shows the live value, so the handle rides
-                        // the wave. The value belongs to the source, so there
-                        // the handle is disabled: grabbing it used to pin the
-                        // signal and silently drop the source, which read like
-                        // the wave simply breaking. Un-drive through the kind
-                        // combo's "Constant" instead.
-                        let model_shown = match held.as_ref() {
-                            Some(_) => {
-                                let raw = crate::decode::extract_raw(
-                                    &data,
-                                    s.start_bit,
-                                    s.size,
-                                    s.big_endian,
-                                );
-                                crate::decode::to_physical(
-                                    raw,
-                                    s.size,
-                                    s.signed,
-                                    s.factor,
-                                    s.offset,
-                                ) as f32
-                            }
-                            None => cur as f32,
-                        };
-                        // Pinning rewrites the base payload and clears this
-                        // signal's source, so doing it per keystroke would let a
-                        // half-typed 100 encode as 1 and cut the wave off with
-                        // it. The draft carries the preview; the model waits.
-                        let key = format!("sig{i}{}", s.name);
-                        let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
-                        ui.set_next_item_width(180.0);
-                        let mut v = shown;
-                        let _read_only = held.is_some().then(|| ui.begin_disabled(true));
-                        let moved = imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
-                            .display_format("%g")
-                            .speed(((hi - lo) / 200.0).max(0.01))
-                            .range(lo, hi)
-                            .build(ui, &mut v);
-                        let ends = ui.is_item_deactivated();
-                        let committed = app.num_draft.step(
-                            &key,
-                            v as f64,
-                            moved,
-                            ui.is_item_deactivated_after_edit(),
-                            ends,
-                        );
-                        drop(_read_only);
-                        if let Some(val) = committed {
-                            // Fire-and-forget from the UI: whether the
-                            // database can encode the value is the bus's
-                            // call, and a failed pin simply changes nothing.
-                            app.send(crate::bus::BusCommand::PinEntrySignal {
-                                ch,
-                                id,
-                                name: s.name.clone(),
-                                phys: val,
-                            });
-                            shown = val as f32;
-                        }
-                        ui.same_line();
-                        ui.set_next_item_width(90.0);
-                        let mut pick = match held.as_ref() {
-                            None => 0,
-                            Some(h) => 1 + KINDS.iter().position(|k| *k == h.kind).unwrap_or(0),
-                        };
-                        if ui.combo_simple_string(format!("##src{i}_{}", s.name), &mut pick, kinds)
-                        {
-                            if pick == 0 {
-                                app.send(crate::bus::BusCommand::ClearEntrySource {
-                                    ch,
-                                    id,
-                                    name: s.name.clone(),
-                                });
-                            } else {
-                                let kind = KINDS[pick - 1];
-                                // Enabling snapshots lo/hi from the DBC range;
-                                // changing shape afterwards keeps whatever the
-                                // user has since edited in the modal.
-                                let src = match held.as_ref() {
-                                    Some(h) => ValueSrc { kind, ..h.clone() },
-                                    None => ValueSrc::new(&s.name, kind, lo as f64, hi as f64),
-                                };
-                                app.send(crate::bus::BusCommand::SetEntrySource { ch, id, src });
-                            }
-                        }
-                        if let Some(h) = &held {
-                            ui.same_line();
-                            if ui.small_button(format!("...##pp{i}_{}", s.name)) {
-                                app.src_edit = Some((i, s.name.clone()));
-                                app.src_draft = Some(h.clone());
-                                app.src_seq_buf = h
-                                    .seq
-                                    .iter()
-                                    .map(|v| format!("{v}"))
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                            }
-                            ui.same_line();
-                            ui.text(format!("~{shown} {}", s.unit));
-                        } else {
-                            ui.same_line();
-                            ui.text(format!("{} {}", cur, s.unit));
-                        }
-                    }
-                    ui.unindent();
+        if sigs.is_empty() {
+            ui.text("(no signals in DBC)");
+        }
+        // The bytes that actually go out this instant: base with
+        // every driven source laid over them, from the snapshot.
+        // Driven rows read their displayed value back out of
+        // these, so what you see is what the bus sees --
+        // byte-width truncation and all. The raw computed number
+        // never reaches the wire.
+        let data = view.sent_data;
+        for s in &sigs {
+            let held = view.srcs.iter().find(|x| x.name == s.name).cloned();
+            let raw = crate::decode::extract_raw(&data, s.start_bit, s.size, s.big_endian);
+            let cur = crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset);
+            let (lo, hi) = sig_range(s);
+            // A driven row shows the live value, so the handle rides
+            // the wave. The value belongs to the source, so there
+            // the handle is disabled: grabbing it used to pin the
+            // signal and silently drop the source, which read like
+            // the wave simply breaking. Un-drive through the kind
+            // combo's "Constant" instead.
+            let model_shown = match held.as_ref() {
+                Some(_) => {
+                    let raw = crate::decode::extract_raw(&data, s.start_bit, s.size, s.big_endian);
+                    crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset) as f32
                 }
-                if let Some((ch_f, n)) = &node {
-                    // Reactions aimed at this node's messages: the Send
-                    // triggers that answer this node's traffic, listed next
-                    // to it. Managed in the Triggers window.
-                    let node_ids: std::collections::HashSet<u32> = app
-                        .snap
-                        .tx
+                None => cur as f32,
+            };
+            // Pinning rewrites the base payload and clears this
+            // signal's source, so doing it per keystroke would let a
+            // half-typed 100 encode as 1 and cut the wave off with
+            // it. The draft carries the preview; the model waits.
+            let key = format!("sig{i}{}", s.name);
+            let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
+            ui.set_next_item_width(180.0);
+            let mut v = shown;
+            let _read_only = held.is_some().then(|| ui.begin_disabled(true));
+            let moved = imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
+                .display_format("%g")
+                .speed(((hi - lo) / 200.0).max(0.01))
+                .range(lo, hi)
+                .build(ui, &mut v);
+            let ends = ui.is_item_deactivated();
+            let committed = app.num_draft.step(
+                &key,
+                v as f64,
+                moved,
+                ui.is_item_deactivated_after_edit(),
+                ends,
+            );
+            drop(_read_only);
+            if let Some(val) = committed {
+                // Fire-and-forget from the UI: whether the
+                // database can encode the value is the bus's
+                // call, and a failed pin simply changes nothing.
+                app.send(crate::bus::BusCommand::PinEntrySignal {
+                    ch,
+                    id,
+                    name: s.name.clone(),
+                    phys: val,
+                });
+                shown = val as f32;
+            }
+            ui.same_line();
+            ui.set_next_item_width(90.0);
+            let mut pick = match held.as_ref() {
+                None => 0,
+                Some(h) => 1 + KINDS.iter().position(|k| *k == h.kind).unwrap_or(0),
+            };
+            if ui.combo_simple_string(format!("##src{i}_{}", s.name), &mut pick, kinds) {
+                if pick == 0 {
+                    app.send(crate::bus::BusCommand::ClearEntrySource {
+                        ch,
+                        id,
+                        name: s.name.clone(),
+                    });
+                } else {
+                    let kind = KINDS[pick - 1];
+                    // Enabling snapshots lo/hi from the DBC range;
+                    // changing shape afterwards keeps whatever the
+                    // user has since edited in the modal.
+                    let src = match held.as_ref() {
+                        Some(h) => ValueSrc { kind, ..h.clone() },
+                        None => ValueSrc::new(&s.name, kind, lo as f64, hi as f64),
+                    };
+                    app.send(crate::bus::BusCommand::SetEntrySource { ch, id, src });
+                }
+            }
+            if let Some(h) = &held {
+                ui.same_line();
+                if ui.small_button(format!("...##pp{i}_{}", s.name)) {
+                    app.src_edit = Some((i, s.name.clone()));
+                    app.src_draft = Some(h.clone());
+                    app.src_seq_buf = h
+                        .seq
                         .iter()
-                        .filter(|v| v.channel == *ch_f && v.node == *n)
-                        .map(|v| v.id)
-                        .collect();
-                    let reactions: Vec<String> = app
-                        .snap
-                        .triggers
-                        .iter()
-                        .filter(|t| {
-                            matches!(&t.action,
-                                crate::trigger::TriggerAction::Send { ch, id }
-                                if *ch == *ch_f && node_ids.contains(id))
-                        })
-                        .map(|t| t.cond.short())
-                        .collect();
-                    if !reactions.is_empty() {
-                        ui.separator();
-                        ui.text("响应规则（触发器 → 发送到本节点报文）");
-                        for r in &reactions {
-                            ui.text(format!("  · {r}"));
-                        }
-                        if ui.small_button("在 Triggers 窗口管理##noder") {
-                            app.show_triggers = true;
-                        }
-                    }
+                        .map(|v| format!("{v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                 }
-                if let Some((ch, id)) = remove {
-                    app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
-                }
-            });
+                ui.same_line();
+                ui.text(format!("~{shown} {}", s.unit));
+            } else {
+                ui.same_line();
+                ui.text(format!("{} {}", cur, s.unit));
+            }
+        }
+        ui.unindent();
     }
-    open
+    if let Some((ch, id)) = remove {
+        app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
+    }
 }
 
 /// One row's header.

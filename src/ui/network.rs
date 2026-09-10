@@ -314,6 +314,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     ui.separator();
 
+                    // 节点生成器：这个节点的条目、添加与响应规则，
+                    // 就近挂在角色声明之下——节点就是编辑单元。
+                    crate::ui::tx::render_node_generator(app, ui, ch as u8, &ni.name);
+                    ui.separator();
+
                     // 脚本编辑入口在节点之下（而非总线）：新建的脚本
                     // 自动绑定到当前选中的 DBC 节点，发帧受其角色闸。
                     ui.text("本节点脚本");
@@ -338,9 +343,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .iter()
                         .filter(|n| {
                             n.channel as usize == ch
-                                && n.attached
-                                    .as_ref()
-                                    .is_some_and(|a| a.1 == ni.name)
+                                && n.attached.as_ref().is_some_and(|a| a.1 == ni.name)
                         })
                         .map(|n| (n.id, n.name.clone(), n.running && !n.errored, n.enabled))
                         .collect();

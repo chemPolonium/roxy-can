@@ -202,9 +202,6 @@ pub struct App {
     /// Script-node editors currently open, by node id in open order.
     /// Session state; an id whose node is gone closes its editor.
     pub open_editors: Vec<u64>,
-    /// Generator group collapse state, keyed (bus, node name). Session
-    /// state; missing keys are expanded.
-    pub gen_group_open: std::collections::HashMap<(u8, String), bool>,
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
@@ -215,11 +212,11 @@ pub struct App {
     pub profile_names: Option<Result<Vec<String>, String>>,
     /// The selected index in the Network-window profile dropdown.
     pub profile_pick: usize,
-    /// Per-node generator windows currently open: (bus, node name) in
-    /// open order. Session state.
-    pub open_gen_windows: Vec<(u8, String)>,
     pub net_selected: usize,
     pub tx_pick: usize,
+    /// The generator overview's add-by-id draft: the bus row being typed
+    /// in plus its hex text, committed to the model on Add. Session state.
+    pub gen_add_buf: Option<(u8, String)>,
     /// Bitrate drafts in the Buses window: row plus the text being typed,
     /// committed to the model when the edit ends. Session state.
     pub bus_arb_edit: Option<(usize, String)>,
@@ -424,13 +421,12 @@ impl App {
             node_src_draft: HashMap::new(),
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
-            gen_group_open: std::collections::HashMap::new(),
             kvaser_channels: None,
             profile_names: None,
             profile_pick: 0,
-            open_gen_windows: Vec::new(),
             net_selected: 0,
             tx_pick: 0,
+            gen_add_buf: None,
             bus_arb_edit: None,
             bus_data_edit: None,
             src_edit: None,
@@ -1180,20 +1176,6 @@ impl App {
     /// Closes the node's script editor.
     pub fn close_script_editor(&mut self, id: u64) {
         self.open_editors.retain(|&x| x != id);
-    }
-
-    /// Opens the node's generator window (no-op when already open).
-    pub fn open_gen_window(&mut self, ch: u8, node: &str) {
-        let key = (ch, node.to_string());
-        if !self.open_gen_windows.contains(&key) {
-            self.open_gen_windows.push(key);
-        }
-    }
-
-    /// Closes the node's generator window.
-    pub fn close_gen_window(&mut self, ch: u8, node: &str) {
-        self.open_gen_windows
-            .retain(|(c, n)| !(*c == ch && n == node));
     }
 
     pub fn entity_rows(&self) -> Vec<EntityRow> {
