@@ -172,10 +172,16 @@ fn render_window(
                     }
                 }
                 ui.same_line();
-                ui.text(format!(
-                    "{} active",
-                    app.snap.tx.iter().filter(|t| t.active).count()
-                ));
+                let active_count = match &node {
+                    Some((nch, nname)) => app
+                        .snap
+                        .tx
+                        .iter()
+                        .filter(|t| t.active && t.channel == *nch && t.node == *nname)
+                        .count(),
+                    None => app.snap.tx.iter().filter(|t| t.active).count(),
+                };
+                ui.text(format!("{active_count} active"));
                 ui.separator();
 
                 if node.is_none() {
@@ -246,8 +252,23 @@ fn render_window(
                     let ch = view.channel;
                     let name = view.name.clone();
                     let group_key = (ch, view.node.clone());
+                    // A node window lists only its own node's entries --
+                    // every other bus's rows stay in the overview.
+                    if let Some((nch, nname)) = &node {
+                        if ch != *nch || view.node != *nname {
+                            continue;
+                        }
+                    }
                     let group_changed = last_group.as_ref() != Some(&group_key);
-                    if query.is_empty() && node.is_none() && group_changed {
+                    // The header renders in the overview for every group,
+                    // and in a node window once for its own group -- the
+                    // role hint and the wire-egress switch live there.
+                    if query.is_empty()
+                        && group_changed
+                        && node
+                            .as_ref()
+                            .is_none_or(|(nch, nname)| *nch == ch && nname == &view.node)
+                    {
                         let (active_n, total) = group_counts[&group_key];
                         let node_label = if view.node.is_empty() {
                             "(未分配)".to_string()
@@ -311,14 +332,17 @@ fn render_window(
                             ui.same_line();
                         }
                         // The node's own generator window: same rows, one
-                        // node, no overview noise.
-                        if ui.small_button(format!("窗##gwin{}_{}", ch, node_label)) {
-                            app.open_gen_window(ch, &view.node);
+                        // node, no overview noise. Inside that window the
+                        // button is pointless -- it is already there.
+                        if node.is_none() {
+                            if ui.small_button(format!("窗##gwin{}_{}", ch, node_label)) {
+                                app.open_gen_window(ch, &view.node);
+                            }
+                            if ui.is_item_hovered() {
+                                ui.tooltip_text("打开该节点独立的生成器窗口");
+                            }
+                            ui.same_line();
                         }
-                        if ui.is_item_hovered() {
-                            ui.tooltip_text("打开该节点独立的生成器窗口");
-                        }
-                        ui.same_line();
                         // 模拟 = 发送中（按条目各自开关）；其余角色 = 总关，
                         // 启用数照常显示（闸开即按它们发车）。
                         let count_word = if role == crate::app::NodeRole::Simulated {
