@@ -5775,7 +5775,7 @@ fn a_script_node_round_trips_through_a_project() {
     app.send(crate::bus::BusCommand::AddNode {
         name: "gen".into(),
         channel: 0,
-        attached: None,
+        attached: Some((0, "EngineECU".to_string())),
     });
     let id = app.snap.nodes[0].id;
     let source = "on timer 100 { print(1); }";
@@ -5796,6 +5796,13 @@ fn a_script_node_round_trips_through_a_project() {
     assert_eq!(node.channel, 0);
     assert_eq!(node.source, source);
     assert!(node.enabled, "enabled defaults ride the round trip");
+    // The binding must survive the restore: a lost binding would flag a
+    // perfectly bound script as an orphan for adoption.
+    assert_eq!(
+        node.attached,
+        Some((0, "EngineECU".to_string())),
+        "the node binding rides the round trip"
+    );
     assert!(
         restored.node_src_draft.is_empty(),
         "drafts are keyed by id and ids are minted fresh"

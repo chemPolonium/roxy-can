@@ -972,18 +972,25 @@ impl BusCore {
                             crate::node::ScriptNode::new(self.node_counter, cfg.name, cfg.channel);
                         n.source = cfg.source;
                         n.enabled = cfg.enabled;
+                        // The saved binding is the whole point: without it
+                        // every restored script would look like an orphan
+                        // and get adopted by an arbitrary node.
+                        n.attached = cfg.attached.clone();
+                        if let Some((ach, _)) = &n.attached {
+                            n.channel = *ach;
+                        }
                         if self.measuring && n.enabled {
                             let dbc = self
                                 .channels
-                                .get(cfg.channel as usize)
+                                .get(n.channel as usize)
                                 .and_then(|c| c.dbc.clone());
                             n.start(dbc);
                         }
                         n
                     })
                     .collect();
-                // Legacy projects predate bindings: every restored script
-                // whose bus carries a database gets a node to hang under.
+                // Only genuinely orphan scripts (legacy saves with no
+                // binding) are adopted; bound ones keep their node.
                 self.adopt_orphan_scripts_all();
                 // Wholesale replacement mints new node ids: every existing
                 // derived-signal stream loses its owner.
