@@ -25,13 +25,11 @@ pub fn render(app: &mut App, ui: &Ui) {
 }
 
 fn content(app: &mut App, ui: &Ui) {
-    if ui.small_button("+ Block") {
-        let n = app.snap.blocks.len();
-        app.add_replay_block(0, format!("Block {}", n + 1), String::new(), None, None);
-    }
-    ui.same_line();
+    // No "+ Block" here: blocks are created from their node (Network
+    // detail, "+ 回放块"), so creation and attachment live in one place.
+    // This window edits the blocks that exist.
     ui.text_disabled(
-        "回放块：把节点的录制流量注回仿真总线（仅仿真模式）；从 Network 节点详情新建会绑定到该节点",
+        "回放块：把节点的录制流量注回仿真总线（仅仿真模式）；在 Network 节点详情里“+ 回放块”新建",
     );
 
     ui.separator();

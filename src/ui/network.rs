@@ -434,6 +434,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                                 "[R] 回放块 / o 启用 / . 停用；点击打开 Replay Blocks 窗口编辑",
                             );
                         }
+                        ui.same_line();
+                        if ui.small_button(format!("x##netblockrm{bid}")) {
+                            app.remove_replay_block(bid);
+                        }
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text("删除该回放块");
+                        }
                     }
                     ui.separator();
                     ui.text("Sent messages");
