@@ -942,6 +942,22 @@ impl BusCore {
             BusCommand::SetNodeChannel { id, channel } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     n.channel = channel;
+                    // A binding follows its node across buses when the same
+                    // DBC node exists there; otherwise it dissolves -- a
+                    // stale (bus, node) pair would gate the script by the
+                    // old bus's role while the node lists it under the new.
+                    if let Some((_, ref anode)) = n.attached {
+                        let known = self
+                            .channels
+                            .get(channel as usize)
+                            .and_then(|c| c.dbc.as_ref())
+                            .is_some_and(|db| db.nodes.iter().any(|name| name == anode));
+                        n.attached = if known {
+                            Some((channel, anode.clone()))
+                        } else {
+                            None
+                        };
+                    }
                     // The signal builtins read the new channel's database:
                     // a running node restarts so its extern hook rebinds.
                     if self.measuring && n.running() {

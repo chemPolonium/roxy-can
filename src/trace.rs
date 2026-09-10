@@ -197,7 +197,8 @@ impl TraceRing {
 #[derive(Debug)]
 pub struct SpillFile {
     path: std::path::PathBuf,
-    file: std::fs::File,
+    /// `None` only inside `Drop` (handle closed before deletion).
+    file: Option<std::fs::File>,
     frames: u64,
 }
 
@@ -219,7 +220,11 @@ impl SpillFile {
             .truncate(true)
             .write(true)
             .open(&path)?;
-        Ok(SpillFile { path, file, frames: 0 })
+        Ok(SpillFile {
+            path,
+            file: Some(file),
+            frames: 0,
+        })
     }
 
     /// Appends frames as fixed-stride records, one buffered write per
@@ -227,6 +232,9 @@ impl SpillFile {
     /// the archive's growth -- partial records never reach the file.
     fn append(&mut self, frames: &[CanFrame]) {
         use std::io::Write;
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
         let mut buf = Vec::with_capacity(frames.len() * RECORD_LEN);
         for f in frames {
             buf.extend_from_slice(&f.t_us.to_le_bytes());
@@ -238,7 +246,7 @@ impl SpillFile {
             buf.extend_from_slice(&f.flags.bits().to_le_bytes());
             buf.extend_from_slice(&f.data);
         }
-        if self.file.write_all(&buf).is_ok() {
+        if file.write_all(&buf).is_ok() {
             self.frames += frames.len() as u64;
         }
     }
@@ -246,7 +254,9 @@ impl SpillFile {
     /// Truncates the archive for a fresh run; the file itself stays
     /// (the next trim reuses it).
     fn reset(&mut self) {
-        self.file.set_len(0).ok();
+        if let Some(file) = self.file.as_mut() {
+            file.set_len(0).ok();
+        }
         self.frames = 0;
     }
 
@@ -285,6 +295,16 @@ impl SpillFile {
             });
         }
         Ok(out)
+    }
+}
+
+impl Drop for SpillFile {
+    fn drop(&mut self) {
+        // The archive is session scratch: it dies with the process that
+        // owns it. Close the handle first -- Windows refuses to remove
+        // a file that still has an open handle without FILE_SHARE_DELETE.
+        self.file = None;
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -494,5 +514,24 @@ mod tests {
         assert_eq!(n, 0);
         assert!(SpillFile::read_all(p).unwrap().is_empty());
         std::fs::remove_file(p).ok();
+    }
+
+    /// The archive is session scratch: dropping the ring (process exit,
+    /// workspace reset) removes the file instead of littering the temp
+    /// directory.
+    #[test]
+    fn the_spill_file_dies_with_its_ring() {
+        let path = std::env::temp_dir().join(format!(
+            "roxy_can_spill_{}_{}.bin",
+            std::process::id(),
+            0x52
+        ));
+        {
+            let mut ring = TraceRing::with_spill_at(path.clone());
+            ring.push(frame(0));
+            ring.enforce_limit(0); // force the first trim -> file created
+            assert!(path.exists(), "the archive exists while the ring does");
+        }
+        assert!(!path.exists(), "dropping the ring removes the archive");
     }
 }

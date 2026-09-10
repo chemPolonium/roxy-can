@@ -5441,6 +5441,58 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     app.stop();
 }
 
+/// A script binding follows its node across a bus move when the target
+/// bus declares the same DBC node, and dissolves when it does not -- a
+/// stale (bus, node) pair would gate the script by the old bus's role
+/// while the node lists the script under the new one.
+#[test]
+fn a_script_binding_follows_or_dissolves_on_a_bus_move() {
+    let mut app = App::headless();
+    // Twin the database onto CAN2 so "EngineECU" exists on both buses.
+    let dbc = app.channels[0].dbc.clone();
+    app.channels[1].dbc = dbc;
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "player".to_string(),
+        channel: 0,
+        attached: Some((0, "EngineECU".to_string())),
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    let bound = |app: &App| {
+        app.snap
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .expect("node")
+            .attached
+            .clone()
+    };
+    assert_eq!(bound(&app), Some((0, "EngineECU".to_string())));
+
+    // Move to the twin bus: the binding follows.
+    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 1 });
+    app.settle();
+    assert_eq!(
+        bound(&app),
+        Some((1, "EngineECU".to_string())),
+        "the binding followed the node to the twin bus"
+    );
+
+    // A bus that does not declare the node: the binding dissolves
+    // instead of gating by a stale bus.
+    app.channels[1].dbc = None;
+    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 0 });
+    app.settle();
+    app.send(crate::bus::BusCommand::SetNodeChannel { id, channel: 1 });
+    app.settle();
+    assert_eq!(
+        bound(&app),
+        None,
+        "no DBC node to bind to: the script stands free"
+    );
+    app.stop();
+}
+
 /// Triggers bind to a bus by index too: a rule watching the removed bus
 /// is meaningless, and a Send reaction aimed at it has no target -- both
 /// are dropped; the survivors shift down.
