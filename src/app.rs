@@ -208,6 +208,13 @@ pub struct App {
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
+    /// Profile names from the project's `profiles/` directory, listed
+    /// once on first need (`Err` = driver/unavailable? no — parse or IO
+    /// failure of the directory scan). Session cache; refresh via
+    /// [`App::refresh_profiles`].
+    pub profile_names: Option<Result<Vec<String>, String>>,
+    /// The selected index in the Network-window profile dropdown.
+    pub profile_pick: usize,
     /// Per-node generator windows currently open: (bus, node name) in
     /// open order. Session state.
     pub open_gen_windows: Vec<(u8, String)>,
@@ -419,6 +426,8 @@ impl App {
             open_editors: Vec::new(),
             gen_group_open: std::collections::HashMap::new(),
             kvaser_channels: None,
+            profile_names: None,
+            profile_pick: 0,
             open_gen_windows: Vec::new(),
             net_selected: 0,
             tx_pick: 0,

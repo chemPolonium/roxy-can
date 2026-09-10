@@ -144,6 +144,9 @@ impl App {
             Ok(()) => {
                 self.push_recent_project(path.to_string_lossy().to_string());
                 self.project_path = Some(path.clone());
+                // A Save As into another folder points the profile row at a
+                // different profiles/ directory; force a re-enumeration.
+                self.profile_names = None;
                 self.baseline = self.config_snapshot();
                 self.status = format!("project saved: {}", path.display());
                 true

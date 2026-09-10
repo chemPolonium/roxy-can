@@ -194,6 +194,45 @@ pub fn render(app: &mut App, ui: &Ui) {
             )
             .size([720.0, 520.0], Condition::FirstUseEver)
             .build(|| {
+                // Profile row: enumerate the project's profiles/*.toml and
+                // apply the selected one (all-or-nothing role overrides).
+                if app.profile_names.is_none() {
+                    let dir = app
+                        .project_path
+                        .as_ref()
+                        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                        .unwrap_or_default();
+                    app.profile_names = Some(Ok(crate::profile::list_profiles(&dir)));
+                }
+                let Some(Ok(profile_list)) = app.profile_names.as_ref() else {
+                    return;
+                };
+                if !profile_list.is_empty() {
+                    ui.text_disabled("Profile");
+                    ui.same_line();
+                    let mut pick = app.profile_pick.min(profile_list.len() - 1);
+                    ui.set_next_item_width(140.0);
+                    if ui.combo_simple_string("##prof", &mut pick, profile_list) {
+                        app.profile_pick = pick;
+                    }
+                    ui.same_line();
+                    if ui.button("应用##profapply") {
+                        let dir = app
+                            .project_path
+                            .as_ref()
+                            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                            .unwrap_or_default();
+                        let name =
+                            profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
+                        match crate::profile::apply_profile(app, &dir, &name) {
+                            Ok(s) => app.status = s,
+                            Err(e) => app.status = e,
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("按 profiles/*.toml 覆盖角色（all-or-nothing）");
+                    }
+                }
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();
                 if total_dbc == 0 {

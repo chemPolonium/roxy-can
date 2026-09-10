@@ -90,6 +90,28 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
     ))
 }
 
+/// Lists the profile names available in the project's `profiles/`
+/// directory (`*.toml`, sorted, extension stripped). An unreadable or
+/// missing directory yields an empty list.
+pub fn list_profiles(project_dir: &Path) -> Vec<String> {
+    let dir = project_dir.join("profiles");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = rd
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+        .filter_map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .strip_suffix(".toml")
+                .map(|s| s.to_string())
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 #[cfg(test)]
 #[path = "profile_tests.rs"]
 mod tests;

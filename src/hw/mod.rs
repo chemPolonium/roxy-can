@@ -106,12 +106,6 @@ impl Hardware {
         self.buses.contains_key(&bus)
     }
 
-    /// Whether the bus's attachment can transmit (holds init access).
-    #[cfg(test)]
-    pub fn can_tx(&self, bus: u8) -> bool {
-        self.buses.get(&bus).is_some_and(|bh| bh.can_tx)
-    }
-
     pub fn node_sends_via_hw(&self, bus: u8, node: &str) -> bool {
         self.node_tx.contains(&(bus, node.to_string()))
     }
