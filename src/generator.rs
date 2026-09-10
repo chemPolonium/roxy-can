@@ -148,12 +148,6 @@ pub(crate) fn encode_mirror(
 use crate::app::App;
 
 impl App {
-    /// Enables or disables every generator message of one bus; freshly
-    /// enabled messages restart their cycle immediately.
-    pub fn set_bus_tx(&mut self, ch: u8, on: bool) {
-        self.send(crate::bus::BusCommand::SetBusTx { ch, on });
-    }
-
     /// Ticks one entry's On checkbox. The anchoring semantics live with the
     /// command (`SetEntryActive`); this wrapper keeps the index-based call
     /// sites and tests working.

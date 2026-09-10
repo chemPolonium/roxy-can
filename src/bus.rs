@@ -121,12 +121,6 @@ pub enum BusCommand {
     RemoveChannel {
         ch: usize,
     },
-    /// Enable/disable every generator entry of one bus; freshly enabled
-    /// entries anchor at the current clock.
-    SetBusTx {
-        ch: u8,
-        on: bool,
-    },
     /// Declare the role of a DBC node: `Simulated` transmits its DBC
     /// traffic through the generator; `Monitor`/`Absent` do not.
     SetNodeRole {
@@ -891,7 +885,6 @@ impl BusCore {
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
-            BusCommand::SetBusTx { ch, on } => self.set_bus_tx(ch, on),
             BusCommand::SetNodeRole { ch, node, role } => {
                 self.set_node_role(ch, &node, role, status)
             }
@@ -2224,19 +2217,6 @@ impl BusCore {
         *status = format!("{name} removed");
     }
 
-    /// Enables or disables every generator message of one bus; freshly
-    /// enabled messages restart their cycle immediately.
-    fn set_bus_tx(&mut self, ch: u8, on: bool) {
-        let sim = self.sim_t_us;
-        for t in &mut self.tx_list {
-            if t.channel == ch && t.active != on {
-                t.active = on;
-                if on {
-                    t.next_t_us = sim;
-                }
-            }
-        }
-    }
 
     /// Declares a DBC node's role.
     ///

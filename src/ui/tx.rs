@@ -101,18 +101,12 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
             ui.text(format!("{active_count} active (未分配)"));
             ui.separator();
 
-            // Per-bus lines: the bulk switches plus add-by-id -- the way
-            // to put a message the database does not know onto the wire.
+            // Per-bus lines: add-by-id -- the way to put a message the
+            // database does not know onto the wire. Bulk switches live
+            // with the node entries in the Network window; this window
+            // only owns the unassigned entries.
             for ch in 0..app.snap.channel_count {
                 let ch8 = ch as u8;
-                if ui.small_button(format!("All On##gon{ch}")) {
-                    app.set_bus_tx(ch8, true);
-                }
-                ui.same_line();
-                if ui.small_button(format!("All Off##goff{ch}")) {
-                    app.set_bus_tx(ch8, false);
-                }
-                ui.same_line();
                 ui.text(app.channel_name(ch8));
                 ui.same_line();
                 let editing = matches!(&app.gen_add_buf, Some((r, _)) if *r == ch8);
@@ -128,6 +122,7 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
                 if ui.is_item_active() {
                     app.gen_add_buf = Some((ch8, buf.clone()));
                 }
+                ui.same_line();
                 let add = ui.small_button(format!("Add##gadd{ch}"));
                 if ui.is_item_deactivated_after_edit() && !buf.is_empty() {
                     app.gen_add_buf = None;

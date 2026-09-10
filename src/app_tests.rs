@@ -2623,29 +2623,6 @@ fn recording_captures_generator_data_faithfully() {
     std::fs::remove_file(&path).ok();
 }
 
-#[test]
-fn set_bus_tx_toggles_a_whole_bus() {
-    let mut app = App::headless();
-    assert!(app.tx_list.iter().all(|t| !t.active));
-    app.set_bus_tx(0, true);
-    assert!(
-        app.tx_list
-            .iter()
-            .filter(|t| t.channel == 0)
-            .all(|t| t.active),
-        "bus 0 fully enabled"
-    );
-    assert!(
-        app.tx_list
-            .iter()
-            .filter(|t| t.channel == 1)
-            .all(|t| !t.active),
-        "other buses untouched"
-    );
-    app.set_bus_tx(0, false);
-    assert!(app.tx_list.iter().all(|t| !t.active));
-}
-
 use crate::spec::Kind;
 
 /// A database covering the three declarations the monitor distinguishes:
@@ -3510,8 +3487,20 @@ fn simulate_all_activates_every_dbc_node() {
             "node message 0x{id:X} should have an entry"
         );
     }
-    // 全部闸门开放：All On 后按条目开关发车。
-    app.set_bus_tx(0, true);
+    // 全部闸门开放：逐条目打开后按条目开关发车。
+    let bus_entries: Vec<(u8, u32)> = app
+        .tx_list
+        .iter()
+        .filter(|t| t.channel == 0)
+        .map(|t| (t.channel, t.id))
+        .collect();
+    for (ch, id) in &bus_entries {
+        app.send(crate::bus::BusCommand::SetEntryActive {
+            ch: *ch,
+            id: *id,
+            on: true,
+        });
+    }
     let flowing = app.tx_list.iter().filter(|t| t.channel == 0 && t.active).count();
     assert!(flowing > 0, "entries exist for the whole bus");
 
