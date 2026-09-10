@@ -1574,8 +1574,13 @@ impl BusCore {
                 .tx_list
                 .iter()
                 .map(|t| {
-                    let (sent_data, sent_len, _) =
-                        crate::generator::tx_payload(&self.channels, t, self.sim_t_us);
+                    // 显示值读发射时存储的载荷（随消息周期跳变）；
+                    // 从未发射过的条目回退显示 base 字节。
+                    let (sent_data, sent_len) = if t.last_len > 0 {
+                        (t.last_sent, t.last_len)
+                    } else {
+                        (t.data, t.len)
+                    };
                     TxView {
                         channel: t.channel,
                         id: t.id,
@@ -2344,6 +2349,8 @@ impl BusCore {
             cycle_us,
             active: false,
             next_t_us: 0,
+            last_sent: [0; crate::can::frame::MAX_CAN_FD_LEN],
+            last_len: 0,
         });
     }
 
@@ -2728,6 +2735,10 @@ impl BusCore {
                 let slot = tx.next_t_us;
                 tx.next_t_us += tx.cycle_us;
                 let (data, len, flags) = crate::generator::tx_payload(channels, tx, slot);
+                // 发射时计算并存储：快照直接读存储值，UI 显示随消息周期
+                // 跳变，不再逐帧重算。
+                tx.last_sent = data;
+                tx.last_len = len;
                 let frame = CanFrame {
                     t_us: slot,
                     channel: tx.channel,
@@ -3286,6 +3297,9 @@ impl BusCore {
                 );
             }
         }
+        // 发送反应帧同样更新条目的最近发射载荷，显示与发送一致。
+        self.tx_list[i].last_sent = data;
+        self.tx_list[i].last_len = len;
         self.buf.push(CanFrame {
             t_us: at_us,
             channel: tch,

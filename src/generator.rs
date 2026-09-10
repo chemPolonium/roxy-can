@@ -25,6 +25,11 @@ pub struct TxMsg {
     /// `data` says. Applied on top of the base payload at emit time; `data`
     /// itself is never rewritten by them. See [`crate::sim`].
     pub srcs: Vec<ValueSrc>,
+    /// 最近一次发射的载荷与长度：发射 slot 时计算并存储，快照直接读
+    /// 它——显示值随消息周期跳变，而非逐帧重算。`last_len == 0` 表示
+    /// 尚未发射过（显示层回退到 base）。
+    pub last_sent: [u8; MAX_CAN_FD_LEN],
+    pub last_len: u8,
 }
 
 /// Whitespace-separated hex bytes, as typed in the generator's data box.
