@@ -532,7 +532,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
                         .join(", ");
                 }
                 ui.same_line();
-                ui.text(format!("~{shown} {}", s.unit));
+                ui.text(format!("{shown} {}", s.unit));
             } else {
                 ui.same_line();
                 ui.text(format!("{} {}", cur, s.unit));
