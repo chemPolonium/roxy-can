@@ -254,6 +254,9 @@ pub struct Script {
     /// R2 response mapping: `(arming handler label, timer name)` for
     /// every literal `set_timer` call, attributed to its handler.
     pub timer_arms: Vec<(String, String)>,
+    /// R2 静态事实表 -- 接收集：`on message <id>` / `on extended message
+    /// <id>` 声明监听的 `(id, extended)`。`on message *` 不入列（无界）。
+    pub recv_refs: Vec<(u32, bool)>,
 }
 
 impl Script {

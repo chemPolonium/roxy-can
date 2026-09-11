@@ -401,6 +401,27 @@ pub fn check_scripts(paths: &[String]) -> Result<String, String> {
                             replies
                         ));
                     }
+                    // R2 静态事实表：发送集与接收集一目了然。
+                    let sends = script
+                        .send_refs
+                        .iter()
+                        .map(|(_, id, ext)| format!("{id:#X}{}", if *ext { "x" } else { "" }))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let recvs = script
+                        .recv_refs
+                        .iter()
+                        .map(|(id, ext)| format!("{id:#X}{}", if *ext { "x" } else { "" }))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(format!(
+                        "        sends: {}",
+                        if sends.is_empty() { "-".to_string() } else { sends }
+                    ));
+                    lines.push(format!(
+                        "        receives: {}",
+                        if recvs.is_empty() { "-".to_string() } else { recvs }
+                    ));
                 }
                 Err(e) => {
                     lines.push(format!("failed {path}\n  {e}"));

@@ -34,6 +34,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         signal_refs: Vec::new(),
         cur_handler: None,
         send_refs: Vec::new(),
+        recv_refs: Vec::new(),
         opaque_sends: Vec::new(),
         timer_arms: Vec::new(),
     };
@@ -140,6 +141,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         host_fns: HOST_FNS.iter().map(|(n, _, _)| n.to_string()).collect(),
         signal_refs: c.signal_refs,
         send_refs: c.send_refs,
+        recv_refs: c.recv_refs,
         opaque_sends: c.opaque_sends,
         timer_arms: c.timer_arms,
     })
@@ -184,6 +186,9 @@ struct Comp {
     /// R2 response mapping: `(arming handler label, timer name)` per
     /// literal `set_timer` call.
     timer_arms: Vec<(String, String)>,
+    /// R2 静态事实表 -- 接收集：`on message <id>` / `on extended message
+    /// <id>` 声明监听的 `(id, extended)`。
+    recv_refs: Vec<(u32, bool)>,
 }
 
 impl Comp {
@@ -751,6 +756,20 @@ impl Comp {
             },
             OnKind::Oneshot { name } => HandlerKind::Oneshot { name: name.clone() },
         };
+        // 接收集（R2 静态事实表）：帧事件 handler 声明监听的 id。
+        match &on.kind {
+            OnKind::Message { id } => {
+                if !self.recv_refs.contains(&(*id, false)) {
+                    self.recv_refs.push((*id, false));
+                }
+            }
+            OnKind::ExtendedMessage { id }
+                if !self.recv_refs.contains(&(*id, true)) =>
+            {
+                self.recv_refs.push((*id, true));
+            }
+            _ => {}
+        }
         let saved_code = std::mem::take(&mut self.code);
         let saved_marks = std::mem::take(&mut self.line_marks);
         let saved_cur = self.cur_line;
