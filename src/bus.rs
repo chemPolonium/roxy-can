@@ -453,7 +453,7 @@ pub struct NodeView {
     pub source: String,
     pub enabled: bool,
     /// Optional file path if the node source was saved to or loaded from a
-    /// standalone `.capl` file.
+    /// standalone `.rxcan` file.
     #[allow(dead_code)]
     pub file_path: Option<String>,
     /// 绑定的 DBC 节点 (总线, 节点名)（节点窗口按此聚合脚本）。

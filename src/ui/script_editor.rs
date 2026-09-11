@@ -132,7 +132,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         let source = app.node_src_draft.get(&id).cloned().unwrap_or_default();
         if let Some(path) = rfd::FileDialog::new()
             .set_title("保存节点脚本")
-            .add_filter("节点脚本", &["capl"])
+            .add_filter("节点脚本", &["rxcan"])
             .save_file()
         {
             let path = path.to_string_lossy().into_owned();
@@ -147,7 +147,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     if ui.small_button(format!("加载##eload{id}")) {
         let picked = rfd::FileDialog::new()
             .set_title("加载节点脚本")
-            .add_filter("节点脚本", &["capl"])
+            .add_filter("节点脚本", &["rxcan"])
             .pick_file();
         if let Some(p) = picked {
             let path = p.to_string_lossy().into_owned();

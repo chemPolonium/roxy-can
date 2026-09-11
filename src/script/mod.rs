@@ -616,7 +616,7 @@ mod tests {
     fn the_example_scripts_compile() {
         for entry in std::fs::read_dir("examples").expect("examples dir exists") {
             let path = entry.expect("readable entry").path();
-            if path.extension().is_some_and(|e| e == "capl") {
+            if path.extension().is_some_and(|e| e == "rxcan") {
                 let src = std::fs::read_to_string(&path).unwrap();
                 compile(&src).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             }

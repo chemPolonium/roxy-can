@@ -24,7 +24,7 @@ pub struct ScriptNode {
     pub channel: u8,
     pub source: String,
     pub enabled: bool,
-    /// Optional file path for standalone `.capl` source files. Set when
+    /// Optional file path for standalone `.rxcan` source files. Set when
     /// the user saves or loads a node script from disk. Persisted with
     /// the project so the user can find their files again.
     pub file_path: Option<String>,

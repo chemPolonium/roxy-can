@@ -79,7 +79,7 @@ fn usage_errors_name_their_flag() {
         ),
         (&["--speed", "2"], "--replay"), // run needs its log
         (
-            &["--check-script", "a.capl", "--replay", "a.asc"],
+            &["--check-script", "a.rxcan", "--replay", "a.asc"],
             "drop `--replay`",
         ),
         (
@@ -112,33 +112,33 @@ fn the_profile_flag_travels_with_the_project() {
 
 #[test]
 fn check_script_flags_collect_files() {
-    let cli = parse_args(&flag_set(&["--check-script", "a.capl"])).unwrap();
+    let cli = parse_args(&flag_set(&["--check-script", "a.rxcan"])).unwrap();
     match cli {
-        Cli::CheckScripts(files) => assert_eq!(files, ["a.capl"]),
+        Cli::CheckScripts(files) => assert_eq!(files, ["a.rxcan"]),
         other => panic!("expected CheckScripts, got {other:?}"),
     }
     let cli = parse_args(&flag_set(&[
         "--check-script",
-        "a.capl",
+        "a.rxcan",
         "--check-script",
-        "b.capl",
+        "b.rxcan",
     ]))
     .unwrap();
     match cli {
-        Cli::CheckScripts(files) => assert_eq!(files, ["a.capl", "b.capl"]),
+        Cli::CheckScripts(files) => assert_eq!(files, ["a.rxcan", "b.rxcan"]),
         other => panic!("expected CheckScripts, got {other:?}"),
     }
 }
 
-/// The checker is the automation story for `.capl` files: a broken script
+/// The checker is the automation story for `.rxcan` files: a broken script
 /// must name its file and its compile error, a good one must pass.
 #[test]
 fn check_scripts_compile_and_report() {
     use super::check_scripts;
     let dir = std::env::temp_dir();
-    let good = dir.join("roxy_can_check_good.capl");
-    let bad = dir.join("roxy_can_check_bad.capl");
-    let missing = dir.join("roxy_can_check_missing.capl");
+    let good = dir.join("roxy_can_check_good.rxcan");
+    let bad = dir.join("roxy_can_check_bad.rxcan");
+    let missing = dir.join("roxy_can_check_missing.rxcan");
     std::fs::write(&good, "on start { print(\"up\"); }").unwrap();
     std::fs::write(&bad, "on timer 0 { }").unwrap();
 

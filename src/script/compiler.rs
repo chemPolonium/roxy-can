@@ -957,7 +957,7 @@ mod tests {
         let mut files = 0usize;
         for file in rd.flatten() {
             let path = file.path();
-            if path.extension().is_none_or(|e| e != "capl") {
+            if path.extension().is_none_or(|e| e != "rxcan") {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();
