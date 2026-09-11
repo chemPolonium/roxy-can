@@ -9,7 +9,7 @@
 - **动态总线**：总线数量不固定，在 Buses 窗口增删、改名，为每条总线单独加载 DBC；删除总线时观测器、过滤器、生成器自动重映射
 - **DBC 解码**：复用报文只解当前组（`M` / `mN` / `mNM` 嵌套、`SG_MUL_VAL_` 区间扩展复用）；`VAL_` 值表显示枚举文本；`SIG_VALTYPE_` 浮点按位模式解码；数值带类型标记（`[u16]` / `[f32]`）
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧；Trace 中错误行铺红底、远程行铺淡紫底，Flags 列统一显示帧类型
-- **信号观测器**：Trace / Messages / Statistics / Data / Graphics 五类窗口均可多开、各自独立过滤；Data / Graphics 可跨总线选择信号，Data 含 Min / Avg / Max 统计与 Sparkline，Graphics 有 14 档时间窗、缩放平移、采样点圆点
+- **信号观测器**：Trace / Messages / Statistics / Data / Graphics 五类窗口均可多开、各自独立过滤；Data / Graphics 可跨总线选择信号，Data 以范围条对照声明区间显示物理值与 Raw 值，Graphics 有 14 档时间窗、缩放平移、采样点圆点
 - **总线负载统计**：Statistics 窗口顶部按总线给出线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；仲裁与 CAN FD 数据段比特率按总线设置，BRS 载荷按数据段速率计费
 - **Interactive Generator（节点中心）**：DBC 报文按数据库声明的周期发送（`GenMsgCycleTime` 优先于 `CycleTime`，事件触发不上定时器），按信号拖拽编辑物理值或按 hex 编辑；每个信号可挂 Ramp / Sine / Step / Random / Triangle / Counter 激励随仿真时间连续变化；**每个节点的生成器在 Network 窗口的节点详情里**（条目 + Add + 响应规则 + 经硬件开关），总览窗口只留未分配条目与按 id 添加；**角色是总开关、条目开关是自定义**——切角色不改写逐条目开关，新建条目默认不发车，行内显示最近一次实际发射的载荷
 - **Triggers 触发器**：信号越阈 / ID 出现 / 错误帧 / 周期超时四类条件，动作支持开始·停止录制（带预触发上下文与 post-roll）、单帧反应（触发帧信号自动镜像进目标载荷）、插入标记（Graphics 竖线）、清空 Trace；编辑器与持久化齐备
@@ -89,6 +89,7 @@ on timer "resp" {
 - [使用说明](docs/usage.md)：命令行、仿真节点、触发器、State Tracker 的操作语义与口径说明
 - [架构文档](docs/architecture.md)：核心线程模型、命令/快照边界、数据共享、帧键模型与开发约定
 - [节点脚本语言参考](docs/script_language.md)：完整的语言参考手册
+- [路线建议](docs/roadmap.md)：定位取舍、优先级排序与脚本语言决策（建议，未立项）
 
 ## 主要依赖
 
