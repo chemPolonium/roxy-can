@@ -12,10 +12,18 @@ pub struct MessageAgg {
     pub channel: u8,
     pub dir: Direction,
     pub count: u64,
+    /// Frames seen in each direction. The aggregate key does not split by
+    /// direction (one row per (bus, id)), so a message both sent and
+    /// received carries two counts.
+    pub rx: u64,
+    pub tx: u64,
     pub last_t_us: u64,
     pub cycle_us: f64,
     pub min_us: f64,
     pub max_us: f64,
+    /// Mean absolute deviation of the intervals from the running mean
+    /// cycle (an EMA, same smoothing as `cycle_us`).
+    pub jitter_us: f64,
     pub len: u8,
     pub data: [u8; MAX_CAN_FD_LEN],
     pub flags: FrameFlags,

@@ -3088,10 +3088,13 @@ impl BusCore {
                 channel: f.channel,
                 dir: f.dir,
                 count: 0,
+                rx: 0,
+                tx: 0,
                 last_t_us: 0,
                 cycle_us: 0.0,
                 min_us: f64::MAX,
                 max_us: 0.0,
+                jitter_us: 0.0,
                 len: f.len,
                 data: f.data,
                 flags: f.flags,
@@ -3103,10 +3106,19 @@ impl BusCore {
         // resumes blending at the next real interval.
         if agg.count > 0 && f.t_us > agg.last_t_us {
             let dt = (f.t_us - agg.last_t_us) as f64;
+            let prev_cycle = agg.cycle_us;
             agg.cycle_us = if agg.count == 1 {
                 dt
             } else {
                 agg.cycle_us * 0.9 + dt * 0.1
+            };
+            // Jitter: EMA of the intervals' absolute deviation from the
+            // running mean cycle, smoothed like the cycle itself.
+            let dev = (dt - prev_cycle).abs();
+            agg.jitter_us = if agg.count == 1 {
+                dev
+            } else {
+                agg.jitter_us * 0.9 + dev * 0.1
             };
             if dt < agg.min_us {
                 agg.min_us = dt;
@@ -3114,6 +3126,10 @@ impl BusCore {
             if dt > agg.max_us {
                 agg.max_us = dt;
             }
+        }
+        match f.dir {
+            Direction::Rx => agg.rx += 1,
+            Direction::Tx => agg.tx += 1,
         }
         agg.count += 1;
         agg.last_t_us = f.t_us;

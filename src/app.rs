@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::can::frame::{CanFrame, Direction, FrameFlags};
+use crate::can::frame::{CanFrame, FrameFlags};
+// The tests module reaches `Direction` through this module's namespace.
+#[allow(unused_imports)]
+use crate::can::frame::Direction;
 use crate::log::open_stream;
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
@@ -981,13 +984,14 @@ impl App {
             rows.push(MsgRowText {
                 label: format!("{id_str}  {name}"),
                 bus: self.channel_name(agg.channel),
-                dir: match agg.dir {
-                    Direction::Rx => "Rx",
-                    Direction::Tx => "Tx",
+                dir: match (agg.rx > 0, agg.tx > 0) {
+                    (true, true) => "Rx+Tx",
+                    (false, true) => "Tx",
+                    _ => "Rx",
                 },
                 count: agg.count.to_string(),
                 cycle: if agg.count > 1 {
-                    format!("{:.1}", agg.cycle_us / 1000.0)
+                    format!("{:.1} ±{:.1}", agg.cycle_us / 1000.0, agg.jitter_us / 1000.0)
                 } else {
                     "-".to_string()
                 },
