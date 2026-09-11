@@ -33,6 +33,62 @@ pub struct TraceFilter {
     pub dbc_only: bool,
     pub payload: String,
     pub flags_kind: usize,
+    /// Signal-value conditions parsed from the filter text
+    /// (`Name>10`, `Name<=5`, ...).
+    pub value_conds: Vec<ValueCond>,
+}
+
+/// One signal-value condition from the filter text: `Name>10`,
+/// `Name<=5`, `Name==3`, ... The name matches a decoded signal on the
+/// frame, the comparison runs on the physical value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValueCond {
+    pub signal: String,
+    pub op: CmpOp,
+    pub value: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CmpOp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
+}
+
+/// Parses one `Name<op>number` condition. Operators longest-first so
+/// `>=` wins over `>`. `None` when the text is not a condition.
+pub fn parse_value_cond(text: &str) -> Option<ValueCond> {
+    let ops = [
+        (">=", CmpOp::Ge),
+        ("<=", CmpOp::Le),
+        ("!=", CmpOp::Ne),
+        ("==", CmpOp::Eq),
+        (">", CmpOp::Gt),
+        ("<", CmpOp::Lt),
+        ("=", CmpOp::Eq),
+    ];
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    for (sym, op) in ops {
+        if let Some(pos) = t.find(sym) {
+            let signal = t[..pos].trim().to_string();
+            let value = t[pos + sym.len()..].trim().parse::<f64>().ok()?;
+            if signal.is_empty() {
+                return None;
+            }
+            return Some(ValueCond {
+                signal,
+                op,
+                value,
+            });
+        }
+    }
+    None
 }
 
 #[derive(Clone)]
@@ -70,11 +126,18 @@ impl TraceWin {
         TraceFilter {
             scope: self.scope,
             manual: self.manual.clone(),
-            filter: self.filter.clone(),
+            // A `Name>10` style text is a signal-value condition, not an
+            // id/name search.
+            filter: if parse_value_cond(&self.filter).is_some() {
+                String::new()
+            } else {
+                self.filter.clone()
+            },
             dir: self.dir,
             dbc_only: self.dbc_only,
             payload: self.payload.clone(),
             flags_kind: self.flags_kind,
+            value_conds: parse_value_cond(&self.filter).into_iter().collect(),
         }
     }
 }
@@ -498,20 +561,9 @@ impl App {
     }
 
     /// Applies one Trace window's filter: scope, direction, DBC-only,
-    /// and ID/name substring.
+    /// payload search, frame kind, and ID/name substring.
     pub fn trace_match(&self, w: &TraceWin, f: &CanFrame) -> bool {
-        self.trace_match_lens(
-            &TraceFilter {
-                scope: w.scope,
-                manual: w.manual.clone(),
-                filter: w.filter.clone(),
-                dir: w.dir,
-                dbc_only: w.dbc_only,
-                payload: w.payload.clone(),
-                flags_kind: w.flags_kind,
-            },
-            f,
-        )
+        self.trace_match_lens(&w.filter_lens(), f)
     }
 
     /// The filter as a borrowable value: the per-gate row refresh walks
@@ -536,7 +588,9 @@ impl App {
             return false;
         }
         let q = flt.filter.trim();
-        if !q.is_empty() {
+        // With value conditions present the filter text IS the condition
+        // (e.g. `EngineSpeed>100`), so the id/name search is skipped.
+        if flt.value_conds.is_empty() && !q.is_empty() {
             let q = q.to_ascii_uppercase();
             let hex = format!("{:X}", f.id);
             let in_name = name.is_some_and(|n| n.to_ascii_uppercase().contains(&q));
@@ -568,6 +622,39 @@ impl App {
         }) && !ok
         {
             return false;
+        }
+        // Signal-value conditions written into the filter box, like
+        // `EngineSpeed>100` (operators: > >= < <= == !=). A frame whose
+        // database decodes to no matching signal value is dropped. Frames
+        // without a database skip decoding entirely.
+        for cond in &flt.value_conds {
+            let Some(db) = self.channel_dbc(f.channel) else {
+                return false;
+            };
+            let Some(m) = db.messages.get(&(f.id, f.extended)) else {
+                return false;
+            };
+            let Some(sig) = m.signals.iter().find(|s| s.name == cond.signal) else {
+                return false;
+            };
+            let raw = crate::decode::extract_raw(
+                &f.data[..f.len as usize],
+                sig.start_bit,
+                sig.size,
+                sig.big_endian,
+            );
+            let v = crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
+            let ok = match cond.op {
+                CmpOp::Gt => v > cond.value,
+                CmpOp::Ge => v >= cond.value,
+                CmpOp::Lt => v < cond.value,
+                CmpOp::Le => v <= cond.value,
+                CmpOp::Eq => v == cond.value,
+                CmpOp::Ne => v != cond.value,
+            };
+            if !ok {
+                return false;
+            }
         }
         true
     }

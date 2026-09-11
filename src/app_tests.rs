@@ -6032,6 +6032,21 @@ fn graphics_legends_hold_still_until_the_text_gate_fires() {
 }
 
 #[test]
+fn a_signal_value_condition_filters_the_trace() {
+    let mut app = quiet_app();
+    // Filter text of the `Signal>value` form is a signal-value condition:
+    // only frames whose decoded EngineSpeed passes it match.
+    app.trace_windows[0].filter = "EngineSpeed>=200".to_string();
+    feed_rpm(&mut app, &[(10_000, 100.0), (30_000, 300.0)]);
+
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 1, "only the >=200 frame");
+    assert_eq!(app.trace_windows[0].rows[0].t_us, 30_000);
+    app.stop();
+}
+
+#[test]
 fn trace_rows_reveal_in_batches_on_the_text_gate() {
     let mut app = quiet_app();
     if app.trace_windows.is_empty() {
