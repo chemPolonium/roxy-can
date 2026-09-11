@@ -29,10 +29,10 @@ const MARKER_SIDE_PX: f32 = 4.4;
 /// the window's total budget (40 000) still bounds the worst case.
 const MAX_CURVE_POINTS: usize = 8_192;
 
-/// Vertices any one Graphics window may submit. Comfortably under the 65 536
-/// ceiling: the frame, grid, axis labels and legend live in the same list, and
-/// stacked mode draws every curve into it.
-const WINDOW_VERTEX_BUDGET: usize = 40_000;
+/// Vertices any one Graphics window may submit. Under the 65 536 ceiling
+/// with ~9 k headroom for the frame, grid, axis labels and legend, all of
+/// which live in the same list -- and stacked mode draws every curve into it.
+const WINDOW_VERTEX_BUDGET: usize = 56_000;
 
 /// Vertices one square marker costs.
 const DOT_VERTS: usize = 4;
@@ -44,9 +44,9 @@ const DOT_VERTS: usize = 4;
 const DOT_MIN_SPACING_PX: f32 = MARKER_SIDE_PX;
 
 /// Markers read as points only when they are clearly separated. If the dots
-/// a curve would draw land closer than this -- three sides apart, where they
-/// smear into a band anyway -- none are drawn at all.
-const DOT_MIN_GAP_PX: f32 = MARKER_SIDE_PX * 3.0;
+/// a curve would draw land closer than this -- two sides apart, where they
+/// start to smear into a band -- none are drawn at all.
+const DOT_MIN_GAP_PX: f32 = MARKER_SIDE_PX * 2.0;
 
 /// What one curve may submit this frame, after the window's budget has been
 /// shared out between all the curves drawn into the same draw list.
@@ -935,9 +935,13 @@ mod tests {
         let few = CurveBudget::split(1, 1920.0, true);
         let many = CurveBudget::split(16, 1920.0, true);
         assert!(
-            many.points < few.points && many.dots < few.dots,
-            "16 curves must get a smaller share each: {many:?} vs {few:?}"
+            many.points < few.points,
+            "16 curves must get a smaller point share each: {many:?} vs {few:?}"
         );
+        // Dots clamp to pixel spacing (one per DOT_MIN_SPACING across the
+        // plot), so their count may clamp equal even when the vertex
+        // budget under them shrinks per curve.
+        assert!(many.dots <= few.dots, "{many:?} vs {few:?}");
         assert!(few.points == MAX_CURVE_POINTS, "a lone curve takes the cap");
     }
 
