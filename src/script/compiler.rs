@@ -582,9 +582,13 @@ impl Comp {
                             self.signal_refs.push(r);
                         }
                     }
-                    // R2 spike: record statically derived sends, attributed
-                    // to the handler being compiled. User functions have
-                    // no handler context, so their sends stay opaque.
+                    // R2 fail-closed rule: every `send` / `send_ext` id
+                    // must be statically derivable -- a literal, constant
+                    // arithmetic, or `frame_id()`. The derived set is
+                    // recorded for the host's assembly checks; anything
+                    // non-derivable is a compile error, not a runtime
+                    // surprise. A wildcard forward is the one declared
+                    // exception: reported, not rejected.
                     if (*name == "send" || *name == "send_ext")
                         && !args.is_empty()
                         && let Some((kind, from)) = self.cur_handler.clone()
@@ -605,20 +609,29 @@ impl Comp {
                                 HandlerKind::AnyMessage => self.opaque_sends.push(format!(
                                     "{from}: wildcard forward (frame_id), set = received set"
                                 )),
-                                _ => self
-                                    .opaque_sends
-                                    .push(format!("{from}: frame_id outside a frame event")),
+                                _ => {
+                                    return self.err(&from, "frame_id outside a frame event");
+                                }
                             }
                         } else if let Some(v) = self.const_int(&args[0]) {
                             match u32::try_from(v) {
-                                Ok(id) => self.send_refs.push((from, id, ext_call)),
-                                Err(_) => self
-                                    .opaque_sends
-                                    .push(format!("{from}: id {v} outside the frame-id range")),
+                                // 29 bits: the largest id any CAN frame carries.
+                                Ok(id) if id <= 0x1FFF_FFFF => {
+                                    self.send_refs.push((from, id, ext_call));
+                                }
+                                _ => {
+                                    return self.err(
+                                        &from,
+                                        &format!("send id {v} outside the frame-id range"),
+                                    )
+                                }
                             }
                         } else {
-                            self.opaque_sends
-                                .push(format!("{from}: send id not statically derivable"));
+                            return self.err(
+                                &from,
+                                "send id must be statically derivable: a literal, \
+                                 constant arithmetic, or frame_id()",
+                            );
                         }
                     }
                     self.emit(Op::CallHost(id, args.len() as u8));
@@ -830,10 +843,11 @@ mod tests {
 
     #[test]
     fn variables_make_the_send_opaque() {
-        let script = compile_ok("on timer 100 { let n = 0x100; send(n, 1); }");
-        assert!(script.send_refs.is_empty());
-        assert_eq!(script.opaque_sends.len(), 1);
-        assert!(script.opaque_sends[0].contains("not statically derivable"));
+        // Fail-closed: a send id the compiler cannot derive is a compile
+        // error, not a runtime surprise. (`let n = 0x100;` is not tracked
+        // -- write the literal in the call.)
+        let err = compile_err("on timer 100 { let n = 0x100; send(n, 1); }");
+        assert!(err.contains("must be statically derivable"), "{err}");
     }
 
     #[test]
@@ -842,6 +856,18 @@ mod tests {
         assert!(script.send_refs.is_empty());
         assert_eq!(script.opaque_sends.len(), 1);
         assert!(script.opaque_sends[0].contains("wildcard forward"));
+    }
+
+    #[test]
+    fn frame_id_outside_a_frame_event_is_rejected() {
+        let err = compile_err("on start { send(frame_id(), 1); }");
+        assert!(err.contains("frame_id outside a frame event"), "{err}");
+    }
+
+    #[test]
+    fn an_out_of_range_send_id_is_rejected() {
+        let err = compile_err("on timer 10 { send(0x20000000, 1); }");
+        assert!(err.contains("outside the frame-id range"), "{err}");
     }
 
     /// R2 spike deliverable: run the static send-set derivation over the
