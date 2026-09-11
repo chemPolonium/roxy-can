@@ -120,11 +120,11 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                     let (marker, color) = if enabled {
                         ("[o]", [0.45, 0.62, 0.80, 1.0])
                     } else {
-                        ("[.]", [0.5, 0.5, 0.55, 1.0])
+                        ("[-]", [0.5, 0.5, 0.55, 1.0])
                     };
                     ui.text_colored(color, marker);
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("回放块 / [o] 启用 / [.] 停用");
+                        ui.tooltip_text("回放块 / [o] 启用 / [-] 停用");
                     }
                     ui.same_line();
                     if ui
@@ -185,7 +185,7 @@ fn draw_script_leaf(
     };
     ui.text_colored(color, marker);
     if ui.is_item_hovered() {
-        ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [.] 未启用 / [!] 出错（编辑器里看日志）");
+        ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [-] 未启用 / [!] 出错（编辑器里看日志）");
     }
     ui.same_line();
     if ui
@@ -386,7 +386,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             app.open_script_editor(nid);
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [.] 未启用");
+                            ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [-] 未启用");
                         }
                     }
                     ui.separator();
@@ -420,7 +420,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .map(|b| (b.id, b.name.clone(), b.enabled, b.frames))
                         .collect();
                     for (bid, name, enabled, frames) in node_blocks {
-                        let marker = if enabled { "[o]" } else { "[.]" };
+                        let marker = if enabled { "[o]" } else { "[-]" };
                         // ImGui's Selectable ignores SetNextItemWidth when
                         // its size.x is 0 (it fills the work rect) -- the
                         // explicit size keeps the hit-rect off the delete
@@ -436,9 +436,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             app.show_blocks = true;
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text(
-                                "回放块 / [o] 启用 / [.] 停用；点击打开 Replay Blocks 窗口编辑",
-                            );
+                            ui.tooltip_text("回放块 / [o] 启用 / [-] 停用；点击打开 Replay Blocks 窗口编辑");
                         }
                         ui.same_line();
                         if ui.small_button(format!("x##netblockrm{bid}")) {
