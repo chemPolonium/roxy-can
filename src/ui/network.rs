@@ -124,10 +124,8 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                     };
                     ui.text_colored(color, marker);
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("[R] 回放块 / o 启用 / . 停用");
+                        ui.tooltip_text("回放块 / o 启用 / . 停用");
                     }
-                    ui.same_line();
-                    ui.text_colored([0.75, 0.55, 1.00, 1.0], "[R]");
                     ui.same_line();
                     if ui
                         .selectable_config(format!("{name}##netblock{bid}"))
@@ -423,21 +421,23 @@ pub fn render(app: &mut App, ui: &Ui) {
                         .collect();
                     for (bid, name, enabled, frames) in node_blocks {
                         let marker = if enabled { "o" } else { "." };
-                        // Bound the selectable's width so its hit-rect does
-                        // not extend under the delete button -- an overlap
-                        // let the row steal the button's click.
-                        ui.set_next_item_width(ui.content_region_avail()[0] - 44.0);
+                        // ImGui's Selectable ignores SetNextItemWidth when
+                        // its size.x is 0 (it fills the work rect) -- the
+                        // explicit size keeps the hit-rect off the delete
+                        // button, whose click the row used to swallow.
+                        let w = (ui.content_region_avail()[0] - 48.0).max(60.0);
                         if ui
                             .selectable_config(format!(
-                                "[R] {marker} {name}（{frames} 帧）##netblock{bid}"
+                                "{marker} {name}（{frames} 帧）##netblock{bid}"
                             ))
+                            .size([w, 0.0])
                             .build()
                         {
                             app.show_blocks = true;
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "[R] 回放块 / o 启用 / . 停用；点击打开 Replay Blocks 窗口编辑",
+                                "回放块 / o 启用 / . 停用；点击打开 Replay Blocks 窗口编辑",
                             );
                         }
                         ui.same_line();
