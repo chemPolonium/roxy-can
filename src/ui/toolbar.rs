@@ -436,6 +436,18 @@ pub fn render(app: &mut App, ui: &Ui) {
                     app.pick_log();
                 }
                 open.end();
+                ui.same_line();
+                // Offline analysis: ingest the whole log for browsing
+                // without playing it. A rescan is refused, a replay
+                // restart resets it.
+                if ui.button("Scan") {
+                    app.scan_log();
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(
+                        "一次性把整份日志灌进统计 / 规格 / 曲线 / Trace——不用回放即可浏览全量结果",
+                    );
+                }
             }
         });
 }

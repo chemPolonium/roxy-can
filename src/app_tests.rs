@@ -2141,6 +2141,52 @@ fn a_plot_window_decodes_without_waiting_for_playback() {
     std::fs::remove_file(&file).ok();
 }
 
+/// R1 offline scan: one command ingests the whole log with no playback
+/// clock -- aggregates, Trace and the load history hold the full file
+/// for browsing, and no trigger or node runs. The scan parks the replay
+/// (measuring stays off); a rescan re-measures from zero, and Play
+/// afterwards restarts the replay normally with no double counting.
+#[test]
+fn an_offline_scan_ingests_the_whole_log_for_browsing() {
+    let (mut app, _key, file) = app_with_replayable_recording("scan_browse", 40);
+
+    app.scan_log();
+    app.settle();
+    assert!(!app.snap.measuring, "the scan parks the replay");
+    let (pos, _dur) = app.replay_position().expect("the source stays open");
+    assert_eq!(pos, 0.0, "the playhead is parked at the start");
+
+    let total: u64 = app.snap.aggs.iter().map(|a| a.count).sum();
+    assert!(total > 0, "the whole file was ingested");
+    assert_eq!(
+        app.snap.trace_len, total as usize,
+        "the trace ring holds every frame of the file"
+    );
+
+    // A rescan starts from zero again, so the totals do not double.
+    app.scan_log();
+    app.settle();
+    let total_after: u64 = app.snap.aggs.iter().map(|a| a.count).sum();
+    assert_eq!(total_after, total, "a rescan re-measures, not accumulates");
+
+    // Play afterwards restarts the replay from zero: it runs to the end
+    // and the tallies land on the same full-file figures, not double.
+    app.replay();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.snap.measuring && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    assert!(!app.snap.measuring, "the replay ran out on its own");
+    let total_played: u64 = app.snap.aggs.iter().map(|a| a.count).sum();
+    assert_eq!(
+        total_played, total,
+        "playback after a scan recounts the same file"
+    );
+    app.stop();
+    std::fs::remove_file(&file).ok();
+}
+
 #[test]
 fn a_second_replay_run_samples_from_the_top() {
     let (mut app, key, file) = app_with_replayable_recording("resample", 60);

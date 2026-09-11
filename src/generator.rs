@@ -287,6 +287,29 @@ impl App {
         self.send(crate::bus::BusCommand::DetachHardware { bus });
     }
 
+    /// Offline analysis (R1): ingests the whole loaded log once so every
+    /// observer holds the full file -- no playback, no trigger actions,
+    /// no node dispatch, no recording.
+    pub fn scan_log(&mut self) {
+        let path = {
+            let p = self.log_path.trim();
+            if p.is_empty() {
+                self.snap.last_record.clone()
+            } else {
+                p.to_string()
+            }
+        };
+        if path.is_empty() {
+            self.status = "scan: no log selected".to_string();
+            return;
+        }
+        self.send(crate::bus::BusCommand::ScanLog {
+            path,
+            tol_pct: self.spec_tol_pct,
+            grace: self.spec_grace,
+        });
+    }
+
     /// The per-node wire-egress switch: on = the node's generator frames
     /// also go out the attached hardware.
     pub fn set_node_hardware_tx(&mut self, ch: u8, node: &str, on: bool) {
