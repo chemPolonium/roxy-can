@@ -377,7 +377,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         } else if enabled {
                             "[o]"
                         } else {
-                            "[.]"
+                            "[-]"
                         };
                         if ui
                             .selectable_config(format!("{dot} {name}##netscript{nid}"))
