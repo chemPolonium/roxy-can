@@ -185,6 +185,7 @@
 9. **50k Trace 环静默丢帧**（未纠正 → 结构待办 #9）：长抓取丢头部。磁盘支撑方案见结构待办。
 10. **UI 用了字体缺字形的符号**（✅ 已纠正，2026-09-11）：内嵌 Inconsolata + 系统中文字体的合并字体没有 ●○（U+25CF/U+25CB）等几何符号，Network 树里全部渲染成"？"；全角"·"和"→"在中文字体里有（→ 后仍换成了 `->` 更稳）。教训重申：**UI 字符串优先用 ASCII 能表达的东西**（色标用 `[S]`/`[M]`/`[-]`、状态点用 `*`/`o`/`.`），图形符号需要字体方案立项时一并解决。
 11. **CanKingService 常驻占虚拟通道 init access**（✅ 已实证定位，2026-09-11）：CAN King 的后台服务 `CanKing`（自启动，GUI 关了也在跑）持有 Kvaser 虚拟通道的 init access，导致 roxy-can 收发挂接始终 canERR_NOTFOUND、降级只收。裸标志矩阵实证：该驱动 `ACCEPT_VIRTUAL(0x8000)` 一律 PARAM（不可用），唯一出路是停掉服务（管理员：`sc stop CanKing` + `sc config CanKing start= demand`）。注意虚拟通道的只收句柄其实仍能发车——"只收"标签在虚拟通道上不代表不能 TX。
+12. **canGetChannelData 在本机必 AV；通道名走 canGetHandleData**（✅ 已实证，2026-09-11）：umbrella canlib32 的 canGetChannelData 在本机对任何 item（含文档内 item 13/26、256 字节缓冲、先 canLocateHardware）都 AV 杀进程。可行路径：**开一个 NO_INIT 句柄（不动总线参数不 BusOn）后用 canGetHandleData(item 13)** 读用户友好通道名（"Kvaser Leaf Light v2 #0 (Channel 0)"），item 码与通道级共用（canCHANNELDATA_*）。enumerate() 已改走此路径，下拉显示真实设备名。教训：FFI 探针必须单 item 单进程隔离，AV 会带走整个测试进程。
 
 ## 备注
 

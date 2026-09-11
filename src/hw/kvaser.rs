@@ -80,6 +80,7 @@ type CanRead =
     unsafe extern "system" fn(i32, *mut u32, *mut u8, *mut u32, *mut u32, *mut u32) -> CanStatus;
 type CanClose = unsafe extern "system" fn(i32) -> CanStatus;
 type CanGetVersion = unsafe extern "system" fn() -> u32;
+type CanLocateHardware = unsafe extern "system" fn() -> CanStatus;
 
 /// Every canlib entry the tool needs. `None` members mean the DLL or the
 /// export was missing -- the wrapper reports "driver not available".
@@ -102,6 +103,13 @@ struct Canlib {
     /// Serves the ignored live bring-up test.
     #[allow(dead_code)]
     get_version: CanGetVersion,
+    /// Serves the channel-name probe: canGetChannelData requires the
+    /// device table this populates.
+    #[allow(dead_code)]
+    locate_hardware: CanLocateHardware,
+    /// Serves the handle-data probe (optional export).
+    #[allow(dead_code)]
+    get_handle_data: Option<CanGetChannelData>,
 }
 
 impl Canlib {
@@ -158,6 +166,8 @@ impl Canlib {
             read: need!(b"canRead", CanRead),
             close: need!(b"canClose", CanClose),
             get_version: need!(b"canGetVersion", CanGetVersion),
+            locate_hardware: need!(b"canLocateHardware", CanLocateHardware),
+            get_handle_data: want!(b"canGetHandleData", CanGetChannelData),
         })
     }
 
@@ -186,6 +196,12 @@ pub struct KvaserChannel {
 }
 
 impl KvaserChannel {
+    /// The raw canlib handle, for the diagnostic probes.
+    #[cfg(test)]
+    pub fn raw_handle(&self) -> CanHandle {
+        self.handle
+    }
+
     /// Opens a channel and puts the bus on at the given bitrate.
     ///
     /// `init_access = false` opens receive-only (canOPEN_NO_INIT_ACCESS):
@@ -383,15 +399,43 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
         }
         let mut out = Vec::new();
         for index in 0..num {
-            // The driver's name-lookup API varies across SDK versions, so
-            // the probe keeps to the core count; the Buses UI labels
-            // channels by index the same way.
-            out.push(ChannelInfo {
-                index,
-                name: format!("Kvaser 通道 {index}"),
-            });
+            // The friendly name ("Kvaser Leaf Light v2 #0 (Channel 0)")
+            // comes from a listen-only probe handle: it is opened without
+            // touching bus parameters or BusOn, so a channel another
+            // program is using is not disturbed. canGetChannelData --
+            // the non-handle variant -- crashes this process on some
+            // driver builds and is never called.
+            let name = probe_channel_name(lib, index)
+                .unwrap_or_else(|| format!("Kvaser 通道 {index}"));
+            out.push(ChannelInfo { index, name });
         }
         Ok(out)
+    }
+}
+
+/// Reads the user-friendly channel name (canCHANNELDATA_CHANNEL_NAME,
+/// item 13) through a transient listen-only handle. `None` when the
+/// channel will not open or the driver build lacks the export.
+fn probe_channel_name(lib: &Canlib, index: i32) -> Option<String> {
+    unsafe {
+        let h = (lib.open_channel)(index, CAN_OPEN_NO_INIT_ACCESS);
+        if h < 0 {
+            return None;
+        }
+        let mut buf = [0u8; 256];
+        let mut size = buf.len();
+        let status = match lib.get_handle_data {
+            Some(get) => get(h, 13, buf.as_mut_ptr() as *mut core::ffi::c_void, &mut size),
+            None => return None,
+        };
+        (lib.bus_off)(h);
+        (lib.close)(h);
+        if status == CAN_OK {
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(size);
+            Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+        } else {
+            None
+        }
     }
 }
 
@@ -507,6 +551,124 @@ mod live {
                     Ok(h) => println!("ch{} {label}: OK (fd={})", c.index, h.fd),
                     Err(e) => println!("ch{} {label}: FAIL ({e})", c.index),
                 }
+            }
+        }
+    }
+
+    /// 导出表探针：列出候选符号在 canlib32.dll 里是否存在——找一条
+    /// 不经 canGetChannelData（本机必 AV）就能拿到通道设备名的路。
+    #[test]
+    #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_exports -- --ignored --nocapture"]
+    fn kvaser_exports() {
+        use std::ffi::c_void;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn LoadLibraryW(name: *const u16) -> *mut c_void;
+            fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+        }
+        const NAME: &[u16] = &[
+            b'c' as u16, b'a' as u16, b'n' as u16, b'l' as u16, b'i' as u16, b'b' as u16,
+            b'3' as u16, b'2' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+        ];
+        unsafe {
+            let module = LoadLibraryW(NAME.as_ptr());
+            assert!(!module.is_null(), "canlib32.dll not loadable");
+            let candidates = [
+                "canGetChannelData",
+                "canGetDeviceName",
+                "canGetChannelName",
+                "canGetChannelInfo",
+                "canLocateHardware",
+                "canGetNumberOfChannels",
+                "canGetHandleData",
+                "kvGetDeviceInfo",
+                "kvGetServiceInfo",
+                "canGetBusParams",
+                "canGetDriverName",
+                "canSetDriverMode",
+                "canGetDriverMode",
+                "canProbeVirtualBus",
+                "canProbeVirtualBusEx",
+            ];
+            for name in candidates {
+                let mut bytes = name.as_bytes().to_vec();
+                bytes.push(0);
+                let p = GetProcAddress(module, bytes.as_ptr());
+                println!("{name}: {}", if p.is_null() { "absent" } else { "present" });
+            }
+        }
+    }
+
+    /// canGetChannelData 探针：单 item 单进程（无效 item 会 AV 杀死
+    /// 进程，必须隔离）。用 PROBE_ITEM 环境变量指定 item 码。
+    #[test]
+    #[ignore = "需要本机 Kvaser 驱动：PROBE_ITEM=15 cargo test kvaser_channel_data -- --ignored --nocapture"]
+    fn kvaser_channel_data() {
+        let item: i32 = std::env::var("PROBE_ITEM")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
+        let channels = enumerate().expect("驱动可用");
+        let lib = Canlib::lib().expect("lib");
+        for c in &channels {
+            unsafe {
+                (lib.initialize_library)();
+                // canGetChannelData 的文档要求先 canLocateHardware()：
+                // 让驱动把设备信息表填好。
+                println!("ch{} locating hardware...", c.index);
+                (lib.locate_hardware)();
+                println!("ch{} located; querying item {item}", c.index);
+                let mut buf = [0u8; 256];
+                let mut size = buf.len();
+                let status = (lib.get_channel_data)(
+                    c.index,
+                    item,
+                    buf.as_mut_ptr() as *mut core::ffi::c_void,
+                    &mut size,
+                );
+                if status == CAN_OK {
+                    let text = String::from_utf8_lossy(&buf[..size.min(buf.len())]);
+                    println!("ch{} item {item}: OK ({size}B) = {text:?}", c.index);
+                } else {
+                    println!("ch{} item {item}: status {status}", c.index);
+                }
+            }
+        }
+    }
+
+    /// canGetHandleData 探针：先开一个 NO_INIT 句柄（本机稳定可用），
+    /// 再按 PROBE_ITEM 逐项查询（无效 item 同样会 AV，须单进程隔离）。
+    #[test]
+    #[ignore = "需要本机 Kvaser 驱动：PROBE_ITEM=0 cargo test kvaser_handle_data -- --ignored --nocapture"]
+    fn kvaser_handle_data() {
+        let item: i32 = std::env::var("PROBE_ITEM")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let lib = Canlib::lib().expect("lib");
+        // The channel must stay open for the handle to stay valid.
+        let ch = KvaserChannel::open(0, 500, None, false).expect("open ch0");
+        let h = ch.raw_handle();
+        println!("handle {h}, probing item {item}");
+        unsafe {
+            (lib.initialize_library)();
+            let mut buf = [0u8; 256];
+            let mut size = buf.len();
+            let Some(get_handle_data) = lib.get_handle_data else {
+                println!("canGetHandleData export absent on this driver");
+                return;
+            };
+            let status = get_handle_data(
+                h,
+                item,
+                buf.as_mut_ptr() as *mut core::ffi::c_void,
+                &mut size,
+            );
+            if status == CAN_OK {
+                let text = String::from_utf8_lossy(&buf[..size.min(buf.len())]);
+                println!("item {item}: OK ({size}B) = {text:?}");
+            } else {
+                println!("item {item}: status {status}");
             }
         }
     }
