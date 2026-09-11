@@ -466,12 +466,60 @@ mod live {
     use super::*;
     use std::time::{Duration, Instant};
 
+    /// 诊断矩阵：逐通道试 init access / FD 的开关组合，找出虚拟通道
+    /// 拒绝收发挂接的确切条件。只开即关，不往线上写任何帧。
+    #[test]
+    #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_open_matrix -- --ignored --nocapture"]
+    fn kvaser_open_matrix() {
+        let channels = enumerate().expect("驱动可用");
+        println!("canlib version raw: {:#x}", unsafe {
+            (Canlib::lib().expect("lib").get_version)()
+        });
+        println!("{} channel(s)", channels.len());
+        let lib = Canlib::lib().expect("lib");
+        for c in &channels {
+            // 裸标志矩阵：ACCEPT_VIRTUAL(0x8000) 与 init access 的组合
+            // ——python-can 开虚拟通道默认带 ACCEPT_VIRTUAL + init。
+            for (label, flags) in [
+                ("0x8000 AV", 0x8000),
+                ("0x8020 AV|NOINIT", 0x8020),
+                ("0x8400 AV|FD", 0x8400),
+                ("0x0000 init", 0x0000),
+            ] {
+                let h = unsafe { (lib.open_channel)(c.index, flags) };
+                println!("ch{} {label}: handle {h}", c.index);
+                if h >= 0 {
+                    unsafe {
+                        (lib.bus_off)(h);
+                        (lib.close)(h);
+                    }
+                }
+            }
+        }
+        for c in &channels {
+            for (label, fd, init) in [
+                ("init+FD", Some(2000u32), true),
+                ("init classic", None, true),
+                ("rx+FD", Some(2000), false),
+                ("rx classic", None, false),
+            ] {
+                match KvaserChannel::open(c.index, 500, fd, init) {
+                    Ok(h) => println!("ch{} {label}: OK (fd={})", c.index, h.fd),
+                    Err(e) => println!("ch{} {label}: FAIL ({e})", c.index),
+                }
+            }
+        }
+    }
+
+    /// 虚拟通道回环：ch1 发、ch0 收，验证经典/FD/RTR 的标志位编解码
+    /// 与 NO_INIT 句柄的可发车性。
     #[test]
     #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_live -- --ignored --nocapture"]
     fn kvaser_live_open_and_read() {
         let channels = enumerate().expect("驱动可用");
-        let lib = Canlib::lib().expect("lib");
-        println!("canlib version raw: {:#x}", unsafe { (lib.get_version)() });
+        println!("canlib version raw: {:#x}", unsafe {
+            (Canlib::lib().expect("lib").get_version)()
+        });
         println!("{} channel(s)", channels.len());
 
         // 回环诊断：ch0 只收收听，ch1 只收发送——若虚拟网络在通道间
@@ -517,9 +565,7 @@ mod live {
         let mut rtr_seen = 0usize;
         let t0 = Instant::now();
         while t0.elapsed() < Duration::from_millis(2000) {
-            if sent_c < 5
-                && tx.write_frame(&classic).is_ok()
-            {
+            if sent_c < 5 && tx.write_frame(&classic).is_ok() {
                 sent_c += 1;
             }
             if sent_f < 5 && tx.write_frame(&fd_frame).is_ok() {
