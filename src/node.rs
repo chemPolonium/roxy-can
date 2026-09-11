@@ -152,6 +152,36 @@ impl ScriptNode {
                 }
             }
         }
+        // R2 装配层校验：发送集对照 DBC 发送者声明。脚本绑定了 DBC 节点
+        // 时，发送了不属于该节点的报文 → warning；不在 DBC 中的自定义
+        // 报文 → info。
+        if let Some((_, ref attached_node)) = self.attached
+            && let Some(db) = &dbc
+        {
+            for (_, id, ext) in &script.send_refs {
+                let key = (*id, *ext);
+                match db.messages.get(&key) {
+                    Some(m) if m.transmitter == *attached_node => {} // own message
+                    Some(m) => {
+                        Self::push_log_into(
+                            &mut self.log,
+                            &mut self.log_dirty,
+                            format!(
+                                "[check] 0x{id:X} 是 {} 的报文，不是 {} 的",
+                                m.transmitter, attached_node
+                            ),
+                        );
+                    }
+                    None => {
+                        Self::push_log_into(
+                            &mut self.log,
+                            &mut self.log_dirty,
+                            format!("[check] 0x{id:X} 不在 DBC 中（自定义报文）"),
+                        );
+                    }
+                }
+            }
+        }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.host_extern = Some(Box::new(move |name, args| {

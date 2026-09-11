@@ -6083,6 +6083,37 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     app.stop();
 }
 
+/// R2 装配层校验：脚本发送了不属于自己节点的报文 → 节点日志出 warning。
+/// 脚本绑定 EngineECU，但 send 的是 0x200（ChassisECU 的 VehicleState）。
+#[test]
+fn a_send_to_another_nodes_message_logs_a_warning() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gateway".to_string(),
+        channel: 0,
+        attached: Some((0, "EngineECU".to_string())),
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 100 { send(0x200, 1); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    app.settle();
+    // Give the node a moment to produce the warning.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    app.update();
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("node");
+    assert!(
+        node.log.iter().any(|l| l.contains("0x200") && l.contains("ChassisECU")),
+        "log should warn about the foreign message: {:?}",
+        node.log
+    );
+    app.stop();
+}
+
 #[test]
 fn a_rewound_or_restarted_run_reveals_its_rows_at_once() {
     let mut app = quiet_app();
