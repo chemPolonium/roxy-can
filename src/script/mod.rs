@@ -251,16 +251,52 @@ pub struct Script {
     /// derivable, with the reason. The fail-closed rule (roadmap §4)
     /// would turn these into compile errors; the spike only reports.
     pub opaque_sends: Vec<String>,
+    /// R2 response mapping: `(arming handler label, timer name)` for
+    /// every literal `set_timer` call, attributed to its handler.
+    pub timer_arms: Vec<(String, String)>,
 }
 
-/// One statically derived send (R2 spike): which handler may emit which
-/// frame. `ext` comes from the call (`send_ext`) or, for `frame_id()`,
-/// from the handler's own event binding.
+impl Script {
+    /// The static response mapping: one row per one-shot timer handler --
+    /// the events that arm it (handlers calling `set_timer` with its
+    /// name) and the frames it sends. Periodic handlers are not
+    /// responses and do not appear.
+    pub fn response_map(&self) -> Vec<ResponseRow> {
+        let mut out = Vec::new();
+        for h in &self.handlers {
+            let HandlerKind::Oneshot { name } = &h.kind else {
+                continue;
+            };
+            let timer_label = format!("<on timer \"{name}\">");
+            let armed_by: Vec<String> = self
+                .timer_arms
+                .iter()
+                .filter(|(_, n)| n == name)
+                .map(|(from, _)| from.clone())
+                .collect();
+            let sends: Vec<(u32, bool)> = self
+                .send_refs
+                .iter()
+                .filter(|(from, _, _)| from == &timer_label)
+                .map(|(_, id, ext)| (*id, *ext))
+                .collect();
+            out.push(ResponseRow {
+                timer_label,
+                armed_by,
+                sends,
+            });
+        }
+        out
+    }
+}
+
+/// One row of the static response mapping: a one-shot timer handler,
+/// the handlers that arm it, and the frames it sends.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SendRef {
-    pub from: String,
-    pub id: u32,
-    pub ext: bool,
+pub struct ResponseRow {
+    pub timer_label: String,
+    pub armed_by: Vec<String>,
+    pub sends: Vec<(u32, bool)>,
 }
 
 /// The host functions every script can call. The compiler resolves names

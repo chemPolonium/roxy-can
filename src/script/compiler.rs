@@ -35,6 +35,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         cur_handler: None,
         send_refs: Vec::new(),
         opaque_sends: Vec::new(),
+        timer_arms: Vec::new(),
     };
 
     // Pass 1: function signatures, so later items may call earlier names.
@@ -140,6 +141,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         signal_refs: c.signal_refs,
         send_refs: c.send_refs,
         opaque_sends: c.opaque_sends,
+        timer_arms: c.timer_arms,
     })
 }
 
@@ -179,6 +181,9 @@ struct Comp {
     send_refs: Vec<(String, u32, bool)>,
     /// R2 spike: sends whose id the compiler could not derive.
     opaque_sends: Vec<String>,
+    /// R2 response mapping: `(arming handler label, timer name)` per
+    /// literal `set_timer` call.
+    timer_arms: Vec<(String, String)>,
 }
 
 impl Comp {
@@ -634,6 +639,29 @@ impl Comp {
                             );
                         }
                     }
+                    // R2 response mapping: literal `set_timer("name", ms)`
+                    // calls are recorded with the handler that arms them,
+                    // so the report can tie events to their responses.
+                    if *name == "set_timer"
+                        && args.len() == 2
+                        && let Some((kind, _)) = self.cur_handler.clone()
+                        && let Expr::Str(tname) = &args[0]
+                    {
+                        let label = match &kind {
+                            HandlerKind::Start => "<on start>".to_string(),
+                            HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+                            HandlerKind::ExtendedMessage { id } => {
+                                format!("<on extended message {id:#x}>")
+                            }
+                            HandlerKind::AnyMessage => "<on message *>".to_string(),
+                            HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
+                            HandlerKind::Timer { period_ms } => {
+                                format!("<on timer {period_ms}>")
+                            }
+                            HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
+                        };
+                        self.timer_arms.push((label, tname.clone()));
+                    }
                     self.emit(Op::CallHost(id, args.len() as u8));
                 } else {
                     // Neither a script function nor a builtin: a
@@ -856,6 +884,31 @@ mod tests {
         assert!(script.send_refs.is_empty());
         assert_eq!(script.opaque_sends.len(), 1);
         assert!(script.opaque_sends[0].contains("wildcard forward"));
+    }
+
+    /// The static response mapping: the request event that arms the
+    /// "resp" timer shows up as the arming handler, and the reply frame
+    /// shows up in that row's sends. The periodic handler is absent.
+    #[test]
+    fn the_response_map_ties_events_to_their_replies() {
+        let script = compile_ok(
+            r#"
+            on message 0x6A0 {
+                set_timer("resp", 200);
+            }
+            on timer "resp" {
+                send(0x6A1, 1);
+            }
+            on timer 100 {
+                send(0x200, 1);
+            }
+        "#,
+        );
+        let map = script.response_map();
+        assert_eq!(map.len(), 1, "one one-shot timer, one response row");
+        let row = &map[0];
+        assert_eq!(row.armed_by, vec!["<on message 0x6a0>".to_string()]);
+        assert_eq!(row.sends, vec![(0x6A1, false)]);
     }
 
     #[test]
