@@ -29,6 +29,10 @@ pub(crate) const MIN_STRIDE_US: u64 = 1_000;
 /// a dense hour-wide window cannot lock the UI; the plot shows what it got and
 /// asks again on the next change.
 pub(crate) const MAX_SCAN_FRAMES: usize = 300_000;
+/// Row cache cap of one Trace window (R1 virtual scrolling): the newest
+/// matching frames the clipper draws from. Memory ≈ 88 B per frame, so
+/// 200 k rows ≈ 18 MB per window in the worst case.
+pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// Synthetic id prefix for derived signals: `emit_value` streams are
 /// keyed `(ch, EMITTED_ID_BASE | node_id, false, name)`. The prefix sits
 /// far above every real identifier (max 0x1FFFFFFF), so a derived stream
@@ -1011,17 +1015,31 @@ impl App {
     /// *new* rows may appear. A run restart or a backward seek re-stamps
     /// frames below the watermark, and [`App::trace_revealed`] shows those
     /// immediately -- only the fresh tail is batched.
-    pub(crate) fn sync_trace_text(&mut self, i: usize) {
+    /// Rebuilds Trace window `i`'s filtered row cache on the text gate:
+    /// the whole revealed ring is walked once against the window's filter
+    /// and the matches become the row cache the clipper draws from. The
+    /// newest tail stays hidden until the gate fires, like every readout.
+    pub(crate) fn sync_trace_rows(&mut self, i: usize) {
         if !self.text_fresh {
             return;
         }
         let newest = self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX);
-        let shown = self.snap.trace.len();
+        self.trace_windows[i].shown_t_us = newest;
+        self.trace_windows[i].shown_count = self.snap.trace.len();
+        let flt = self.trace_windows[i].filter_lens();
+        let mut rows: Vec<CanFrame> = Vec::with_capacity(1_024);
+        for f in self.trace_revealed(&self.trace_windows[i]) {
+            if self.trace_match_lens(&flt, f) {
+                rows.push(*f);
+                if rows.len() >= MAX_CACHED_ROWS {
+                    break;
+                }
+            }
+        }
         let w = &mut self.trace_windows[i];
-        w.shown_t_us = newest;
-        w.shown_count = shown;
+        w.shown_count = rows.len();
+        w.rows = rows;
     }
-
     /// Trace window `w`'s revealed frames, newest first: the whole buffer
     /// minus the not-yet-revealed tail beyond the watermark.
     pub(crate) fn trace_revealed<'a>(

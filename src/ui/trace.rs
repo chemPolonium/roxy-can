@@ -10,8 +10,6 @@ use imgui::{
     Ui,
 };
 
-const MAX_VISIBLE: usize = 1_000;
-
 /// Window index and frame targeted by the row context menu; must survive
 /// across frames while the popup is open.
 static CTX: Mutex<Option<(usize, CanFrame)>> = Mutex::new(None);
@@ -83,14 +81,13 @@ fn fmt_row(app: &App, f: &CanFrame) -> String {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
-    // New rows stream in batches on the text gate, like every number
-    // readout; the rows already drawn are immutable history.
-    app.sync_trace_text(i);
-    let shown_count = app.trace_windows[i].shown_count;
+    // The filtered row cache rebuilds on the text gate, like every number
+    // readout; the clipper then submits only the visible slice per frame.
+    app.sync_trace_rows(i);
+    let matching = app.trace_windows[i].rows.len();
     ui.text(format!(
-        "{} frames (showing newest {})",
-        shown_count,
-        MAX_VISIBLE.min(shown_count)
+        "{matching} matching frames · ring holds {}",
+        app.snap.trace_len
     ));
     // Head trims are accounted either way: with the archive they are
     // merely moved to disk (the export still covers them), without it
@@ -224,24 +221,16 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_headers_row();
 
-    // Frozen while rendering so row drawing and the right-click popup can
-    // share one copy of the window settings.
-    let w = app.trace_windows[i].clone();
+    ui.table_headers_row();
+
+    // Take the row cache out: the sort needs `app` for names while the
+    // clipper below needs the rows as an owned list, and the right-click
+    // popup afterwards needs `app` mutably again.
+    let mut rows = std::mem::take(&mut app.trace_windows[i].rows);
 
     // Newest first (the default order); sorted when a column header is
-    // clicked, back to default on the third click (tri-state). Only rows at
-    // or before the reveal watermark are visible: the fresh tail waits for
-    // the text gate, while anything re-stamped below it -- a run restart, a
-    // backward seek -- shows up at once.
-    let mut rows: Vec<CanFrame> = app
-        .trace_revealed(&w)
-        .filter(|f| app.trace_match(&w, f))
-        .take(MAX_VISIBLE)
-        .copied()
-        .collect();
-
-    // imgui-rs builds the specs slice unconditionally; with no active sort
-    // the pointer is NULL, so only read it when SpecsCount > 0.
+    // clicked, back to default on the third click (tri-state). The row
+    // cache is the app's; a sort re-orders it in place.
     let specs_active = unsafe {
         let raw = imgui::sys::igTableGetSortSpecs();
         !raw.is_null() && (*raw).SpecsCount > 0
@@ -256,7 +245,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         specs.set_sorted();
     }
 
-    for f in rows.iter().take(MAX_VISIBLE) {
+    // Virtual scrolling: the clipper submits only the visible slice of
+    // the (possibly very long) filtered row list.
+    let clip = imgui::ListClipper::new(rows.len() as i32).begin(ui);
+    for r in clip.iter() {
+        let f = &rows[r as usize];
         let mut hovered = false;
         ui.table_next_row();
         if f.is_error() {
@@ -301,6 +294,9 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             ui.open_popup(format!("trace_row_ctx{i}"));
         }
     }
+    // The rows go back before the popup: its menu mutates the window's
+    // filter state.
+    app.trace_windows[i].rows = rows;
 
     if let Some(_p) = ui.begin_popup(format!("trace_row_ctx{i}"))
         && let Some((pi, f)) = *CTX.lock().unwrap()

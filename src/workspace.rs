@@ -22,6 +22,19 @@ pub enum PopupTarget {
     State(usize),
 }
 
+/// A trace window's filter lens, cloned out of the window so the per-gate
+/// row refresh can walk the ring without holding the window borrowed.
+#[derive(Clone)]
+pub struct TraceFilter {
+    pub scope: SigScope,
+    pub manual: HashSet<(u8, u32)>,
+    pub filter: String,
+    pub dir: usize,
+    pub dbc_only: bool,
+    pub payload: String,
+    pub flags_kind: usize,
+}
+
 #[derive(Clone)]
 pub struct TraceWin {
     pub name: String,
@@ -36,14 +49,34 @@ pub struct TraceWin {
     pub payload: String,
     /// Frame-kind filter: 0 any / 1 classic data / 2 FD / 3 RTR / 4 error.
     pub flags_kind: usize,
+    /// The filtered, newest-first row cache the window draws (virtual
+    /// scrolling: only the visible slice is submitted per frame).
+    /// Rebuilt on the text gate; session state only.
+    pub(crate) rows: Vec<CanFrame>,
     /// The newest frame timestamp this window has revealed. Rows stream in
-    /// batches on the text gate (see [`crate::app::App::sync_trace_text`])
+    /// batches on the text gate (see [`crate::app::App::sync_trace_rows`])
     /// instead of churning every frame; `u64::MAX` means everything so far.
     /// Survives ring wrap-around because committed rows only ever leave the
     /// front of the deque. Session state only.
     pub(crate) shown_t_us: u64,
-    /// Buffer length as of the last reveal, for the throttled header count.
+    /// Matching-row count as of the last refresh, for the throttled header.
     pub(crate) shown_count: usize,
+}
+
+impl TraceWin {
+    /// The filter lens, cloned out of the window: the per-gate row refresh
+    /// walks the ring without holding the window borrowed.
+    pub fn filter_lens(&self) -> TraceFilter {
+        TraceFilter {
+            scope: self.scope,
+            manual: self.manual.clone(),
+            filter: self.filter.clone(),
+            dir: self.dir,
+            dbc_only: self.dbc_only,
+            payload: self.payload.clone(),
+            flags_kind: self.flags_kind,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -357,6 +390,7 @@ impl App {
             dbc_only: false,
             payload: String::new(),
             flags_kind: 0,
+            rows: Vec::new(),
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
             shown_count: self.snap.trace.len(),
         });
@@ -466,10 +500,27 @@ impl App {
     /// Applies one Trace window's filter: scope, direction, DBC-only,
     /// and ID/name substring.
     pub fn trace_match(&self, w: &TraceWin, f: &CanFrame) -> bool {
-        if !Self::scope_match(w.scope, &w.manual, f.channel, f.id) {
+        self.trace_match_lens(
+            &TraceFilter {
+                scope: w.scope,
+                manual: w.manual.clone(),
+                filter: w.filter.clone(),
+                dir: w.dir,
+                dbc_only: w.dbc_only,
+                payload: w.payload.clone(),
+                flags_kind: w.flags_kind,
+            },
+            f,
+        )
+    }
+
+    /// The filter as a borrowable value: the per-gate row refresh walks
+    /// the ring against this without holding the window borrowed.
+    pub fn trace_match_lens(&self, flt: &TraceFilter, f: &CanFrame) -> bool {
+        if !Self::scope_match(flt.scope, &flt.manual, f.channel, f.id) {
             return false;
         }
-        match w.dir {
+        match flt.dir {
             1 => {
                 if !matches!(f.dir, Direction::Rx) {
                     return false;
@@ -481,10 +532,10 @@ impl App {
             _ => {}
         }
         let name = self.message_name(f.channel, f.id);
-        if w.dbc_only && name.is_none() {
+        if flt.dbc_only && name.is_none() {
             return false;
         }
-        let q = w.filter.trim();
+        let q = flt.filter.trim();
         if !q.is_empty() {
             let q = q.to_ascii_uppercase();
             let hex = format!("{:X}", f.id);
@@ -495,7 +546,7 @@ impl App {
         }
         // Payload byte search: hex pairs, spaces optional. A pattern that
         // does not parse is ignored rather than filtering everything away.
-        let pat = w.payload.replace(' ', "");
+        let pat = flt.payload.replace(' ', "");
         if !pat.is_empty()
             && pat.len().is_multiple_of(2)
             && let Ok(needle) = (0..pat.len() / 2)
@@ -506,7 +557,7 @@ impl App {
             return false;
         }
         // Frame-kind filter: 0 any / 1 classic data / 2 FD / 3 RTR / 4 error.
-        if let Some(ok) = (match w.flags_kind {
+        if let Some(ok) = (match flt.flags_kind {
             1 => Some(!f.flags.contains(FrameFlags::FD)
                 && !f.flags.contains(FrameFlags::RTR)
                 && !f.flags.contains(FrameFlags::ERROR)),

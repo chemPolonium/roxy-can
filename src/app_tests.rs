@@ -6040,8 +6040,8 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     feed_rpm(&mut app, &[(10_000, 100.0), (30_000, 110.0)]);
 
     app.text_fresh = true;
-    app.sync_trace_text(0);
-    assert_eq!(app.trace_windows[0].shown_count, 2, "first reveal");
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 2, "first reveal");
     assert_eq!(
         app.trace_revealed(&app.trace_windows[0]).count(),
         2,
@@ -6052,7 +6052,7 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     // drawn rows hold still.
     feed_rpm(&mut app, &[(50_000, 120.0)]);
     app.text_fresh = false;
-    app.sync_trace_text(0);
+    app.sync_trace_rows(0);
     assert_eq!(app.trace.len(), 3, "the frame did arrive");
     assert_eq!(
         app.trace_revealed(&app.trace_windows[0]).count(),
@@ -6062,9 +6062,9 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
 
     // The gate fires and the row appears in one step.
     app.text_fresh = true;
-    app.sync_trace_text(0);
+    app.sync_trace_rows(0);
     assert_eq!(app.trace_revealed(&app.trace_windows[0]).count(), 3);
-    assert_eq!(app.trace_windows[0].shown_count, 3);
+    assert_eq!(app.trace_windows[0].rows.len(), 3);
     app.stop();
 }
 
@@ -6076,14 +6076,14 @@ fn a_rewound_or_restarted_run_reveals_its_rows_at_once() {
     }
     feed_rpm(&mut app, &[(10_000, 100.0), (30_000, 110.0)]);
     app.text_fresh = true;
-    app.sync_trace_text(0);
+    app.sync_trace_rows(0);
     assert_eq!(app.trace_windows[0].shown_t_us, 30_000);
 
     // A backward seek re-stamps frames below the watermark; those must not
     // wait for the gate -- only the fresh tail is batched.
     feed_rpm(&mut app, &[(5_000, 40.0)]);
     app.text_fresh = false;
-    app.sync_trace_text(0);
+    app.sync_trace_rows(0);
     assert_eq!(
         app.trace_revealed(&app.trace_windows[0]).count(),
         3,
