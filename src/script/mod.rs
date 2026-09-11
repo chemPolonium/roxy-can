@@ -84,6 +84,12 @@ pub enum Value {
     /// through any alias is visible everywhere. Arc + Mutex because the
     /// VM runs on the core thread and the value must stay Send.
     Bytes(std::sync::Arc<std::sync::Mutex<Vec<u8>>>),
+    /// A bounded array (R2 语言增量): fixed length from `array(n)`,
+    /// reference semantics like Bytes, elements are full values —
+    /// calibration tables of floats, not just bytes. The length is the
+    /// bound: an out-of-range index is a runtime error, and the size
+    /// being constant keeps index domains analyzable.
+    Array(std::sync::Arc<std::sync::Mutex<Vec<Value>>>),
 }
 
 impl PartialEq for Value {
@@ -97,6 +103,9 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Bytes(a), Value::Bytes(b)) => {
                 *a.lock().expect("buffer poisoned") == *b.lock().expect("buffer poisoned")
+            }
+            (Value::Array(a), Value::Array(b)) => {
+                *a.lock().expect("array poisoned") == *b.lock().expect("array poisoned")
             }
             _ => false,
         }
@@ -121,6 +130,11 @@ impl std::fmt::Display for Value {
                     .collect::<Vec<_>>()
                     .join(" ");
                 write!(f, "[{hex}]")
+            }
+            Value::Array(a) => {
+                let a = a.lock().expect("array poisoned");
+                let items = a.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+                write!(f, "[{}]", items.join(", "))
             }
         }
     }
@@ -293,6 +307,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("min", 2, 2),
     ("max", 2, 2),
     ("clamp", 3, 3),
+    // R2 语言增量：有界定长数组（元素为任意值，引用语义）。
+    ("array", 1, 1),
 ];
 
 /// One external simulation function, callable from any script once

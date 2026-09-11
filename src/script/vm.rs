@@ -270,61 +270,94 @@ impl Vm {
             Op::Gt => self.compare(|o| o == std::cmp::Ordering::Greater)?,
             Op::Ge => self.compare(|o| o != std::cmp::Ordering::Less)?,
             Op::GetIndex => {
-                // (container, index) on the stack: byte buffers only.
+                // (container, index) on the stack: byte buffers (elements
+                // are bytes) and arrays (elements are full values).
                 let idx = self.pop()?;
                 let container = self.pop()?;
-                let Value::Bytes(b) = container else {
-                    return Err(VmError("indexing needs a byte buffer".into()));
-                };
                 let Value::Int(i) = idx else {
                     return Err(VmError("index must be an int".into()));
                 };
-                let b = b.lock().expect("buffer poisoned");
-                let i = usize::try_from(i).unwrap_or(usize::MAX);
-                let byte = *b
-                    .get(i)
-                    .ok_or_else(|| VmError(format!("index {i} outside 0..{}", b.len())))?;
-                self.stack.push(Value::Int(byte as i64));
+                match container {
+                    Value::Bytes(b) => {
+                        let b = b.lock().expect("buffer poisoned");
+                        let i = usize::try_from(i).unwrap_or(usize::MAX);
+                        let byte = *b
+                            .get(i)
+                            .ok_or_else(|| VmError(format!("index {i} outside 0..{}", b.len())))?;
+                        self.stack.push(Value::Int(byte as i64));
+                    }
+                    Value::Array(a) => {
+                        let a = a.lock().expect("array poisoned");
+                        let i = usize::try_from(i).unwrap_or(usize::MAX);
+                        let v = a
+                            .get(i)
+                            .ok_or_else(|| VmError(format!("index {i} outside 0..{}", a.len())))?
+                            .clone();
+                        self.stack.push(v);
+                    }
+                    other => {
+                        return Err(VmError(format!(
+                            "indexing needs a buffer or array, got {}",
+                            kind(&other)
+                        )));
+                    }
+                }
             }
             Op::SetIndex => {
                 // (container, index, value) on the stack.
                 let value = self.pop()?;
                 let idx = self.pop()?;
                 let container = self.pop()?;
-                let Value::Bytes(b) = container else {
-                    return Err(VmError("indexing needs a byte buffer".into()));
-                };
                 let Value::Int(i) = idx else {
                     return Err(VmError("index must be an int".into()));
                 };
-                // Floats truncate, matching `send`: a waveform value can
-                // flow straight into a buffer element.
-                let byte = match value {
-                    Value::Int(n) => n,
-                    Value::Float(f) if f.is_finite() => f.trunc() as i64,
+                match container {
+                    Value::Bytes(b) => {
+                        // Floats truncate, matching `send`: a waveform value can
+                        // flow straight into a buffer element.
+                        let byte = match value {
+                            Value::Int(n) => n,
+                            Value::Float(f) if f.is_finite() => f.trunc() as i64,
+                            other => {
+                                return Err(VmError(format!(
+                                    "buffer elements must be ints, got {}",
+                                    kind(&other)
+                                )));
+                            }
+                        };
+                        if !(0..=255).contains(&byte) {
+                            return Err(VmError(format!(
+                                "buffer elements must be 0..255, got {byte}"
+                            )));
+                        }
+                        let mut b = b.lock().expect("buffer poisoned");
+                        let i = usize::try_from(i).unwrap_or(usize::MAX);
+                        if i >= b.len() {
+                            return Err(VmError(format!("index {i} outside 0..{}", b.len())));
+                        }
+                        b[i] = byte as u8;
+                    }
+                    Value::Array(a) => {
+                        let mut a = a.lock().expect("array poisoned");
+                        let i = usize::try_from(i).unwrap_or(usize::MAX);
+                        if i >= a.len() {
+                            return Err(VmError(format!("index {i} outside 0..{}", a.len())));
+                        }
+                        a[i] = value;
+                    }
                     other => {
                         return Err(VmError(format!(
-                            "buffer elements must be ints, got {}",
+                            "index assignment needs a buffer or array, got {}",
                             kind(&other)
                         )));
                     }
-                };
-                if !(0..=255).contains(&byte) {
-                    return Err(VmError(format!(
-                        "buffer elements must be 0..255, got {byte}"
-                    )));
                 }
-                let mut b = b.lock().expect("buffer poisoned");
-                let i = usize::try_from(i).unwrap_or(usize::MAX);
-                if i >= b.len() {
-                    return Err(VmError(format!("index {i} outside 0..{}", b.len())));
-                }
-                b[i] = byte as u8;
             }
             Op::Len => {
                 let v = self.pop()?;
                 let n = match v {
                     Value::Bytes(b) => b.lock().expect("buffer poisoned").len(),
+                    Value::Array(a) => a.lock().expect("array poisoned").len(),
                     Value::Str(s) => s.chars().count(),
                     other => {
                         return Err(VmError(format!(
@@ -657,9 +690,30 @@ impl Vm {
                     ))));
                 return Ok(());
             }
+            "array" => {
+                // array(n): a bounded, fixed-length array of full values
+                // (nil-filled). Reference semantics like bytes; the fixed
+                // length is the analyzable bound.
+                let Value::Int(n) = &args[0] else {
+                    return Err(VmError("array(n) needs an int".into()));
+                };
+                if !(0..=65_536).contains(n) {
+                    return Err(VmError(format!("array: size {n} out of 0..65536")));
+                }
+                self.stack
+                    .push(Value::Array(std::sync::Arc::new(std::sync::Mutex::new(
+                        vec![Value::Nil; *n as usize],
+                    ))));
+                return Ok(());
+            }
             "len" => match &args[0] {
                 Value::Bytes(b) => {
                     let n = b.lock().expect("buffer poisoned").len() as i64;
+                    self.stack.push(Value::Int(n));
+                    return Ok(());
+                }
+                Value::Array(a) => {
+                    let n = a.lock().expect("array poisoned").len() as i64;
                     self.stack.push(Value::Int(n));
                     return Ok(());
                 }
@@ -869,6 +923,7 @@ fn kind(v: &Value) -> &'static str {
         Value::Float(_) => "float",
         Value::Str(_) => "string",
         Value::Bytes(_) => "buffer",
+        Value::Array(_) => "array",
     }
 }
 
@@ -1131,6 +1186,35 @@ mod tests {
             print(buf[0], buf[1]);
         "#;
         assert_eq!(out(src), ["0 9"]);
+    }
+
+    #[test]
+    fn bounded_arrays_hold_full_values_with_reference_semantics() {
+        let src = r#"
+            let a = array(3);
+            a[0] = 1.5;
+            a[1] = "hi";
+            a[2] = a[0] + 1;
+            print(a[0], a[1], a[2], len(a));
+            fn poke() {
+                a[0] = 99;
+            }
+            poke();
+            print(a[0]);
+        "#;
+        assert_eq!(
+            out(src),
+            ["1.5 hi 2.5 3", "99"],
+            "floats and strings store as-is, and aliases see writes"
+        );
+    }
+
+    #[test]
+    fn array_indexing_bounds_are_checked() {
+        let script = compile("let a = array(2); print(a[2]);").unwrap();
+        let mut vm = Vm::new(script);
+        let e = vm.run().unwrap_err();
+        assert!(e.to_string().contains("outside"), "{e}");
     }
 
     #[test]
