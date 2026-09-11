@@ -361,6 +361,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             }
         }
         ui.separator();
+        // R1-3 跳转时刻：回放模式下可跳到该帧的时间点。
+        if ui.menu_item(format!(
+            "跳转到此时刻 ({:.3}s)",
+            f.t_us as f64 / 1e6
+        )) {
+            app.seek_replay_seconds(f.t_us as f64 / 1e6);
+        }
         if ui.menu_item("Copy row") {
             ui.set_clipboard_text(fmt_row(app, &f));
         }
