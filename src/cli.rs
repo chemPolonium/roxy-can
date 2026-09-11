@@ -377,10 +377,31 @@ pub fn check_scripts(paths: &[String]) -> Result<String, String> {
     for path in paths {
         match std::fs::read_to_string(path) {
             Ok(src) => match crate::script::compile(&src) {
-                Ok(script) => lines.push(format!(
-                    "ok      {path} ({} handlers)",
-                    script.handlers.len()
-                )),
+                Ok(script) => {
+                    lines.push(format!(
+                        "ok      {path} ({} handlers)",
+                        script.handlers.len()
+                    ));
+                    // The static response mapping (R2): events → timers →
+                    // replies, derived from the compiled script itself.
+                    for row in script.response_map() {
+                        if row.armed_by.is_empty() {
+                            continue; // a timer nobody arms: not a response
+                        }
+                        let replies = row
+                            .sends
+                            .iter()
+                            .map(|(id, ext)| format!("{id:#X}{}", if *ext { "x" } else { "" }))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        lines.push(format!(
+                            "        response: {} arms \"{}\" -> sends {}",
+                            row.armed_by.join(", "),
+                            row.timer_label,
+                            replies
+                        ));
+                    }
+                }
                 Err(e) => {
                     lines.push(format!("failed {path}\n  {e}"));
                     failed = true;
