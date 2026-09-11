@@ -136,6 +136,21 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         &["All", "Rx", "Tx"],
     );
     ui.same_line();
+    ui.set_next_item_width(96.0);
+    ui.input_text(format!("##tpayload{i}"), &mut app.trace_windows[i].payload)
+        .hint("payload 如 11 22")
+        .build();
+    if ui.is_item_hovered() {
+        ui.tooltip_text("payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤");
+    }
+    ui.same_line();
+    ui.set_next_item_width(64.0);
+    ui.combo_simple_string(
+        format!("##tflags{i}"),
+        &mut app.trace_windows[i].flags_kind,
+        &["Any", "Data", "FD", "RTR", "Error"],
+    );
+    ui.same_line();
     ui.checkbox(
         format!("DBC only##tdbc{i}"),
         &mut app.trace_windows[i].dbc_only,

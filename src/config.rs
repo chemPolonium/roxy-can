@@ -146,6 +146,10 @@ pub struct TraceCfg {
     pub dir: usize,
     #[serde(default)]
     pub dbc_only: bool,
+    #[serde(default)]
+    pub payload: String,
+    #[serde(default)]
+    pub flags_kind: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -690,6 +694,8 @@ impl Config {
                     filter: w.filter.clone(),
                     dir: w.dir,
                     dbc_only: w.dbc_only,
+                    payload: w.payload.clone(),
+                    flags_kind: w.flags_kind,
                 })
                 .collect(),
             msg_windows: app
@@ -1012,6 +1018,8 @@ impl Config {
                     filter: w.filter,
                     dir: w.dir.min(2),
                     dbc_only: w.dbc_only,
+                    payload: w.payload,
+                    flags_kind: w.flags_kind,
                     shown_t_us: u64::MAX,
                     shown_count: 0,
                 })

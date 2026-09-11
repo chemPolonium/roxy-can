@@ -31,6 +31,11 @@ pub struct TraceWin {
     pub filter: String,
     pub dir: usize,
     pub dbc_only: bool,
+    /// Payload byte search: hex pairs, spaces optional (`11 22 3F` or
+    /// `11223f`). Rows whose payload contains the sequence match.
+    pub payload: String,
+    /// Frame-kind filter: 0 any / 1 classic data / 2 FD / 3 RTR / 4 error.
+    pub flags_kind: usize,
     /// The newest frame timestamp this window has revealed. Rows stream in
     /// batches on the text gate (see [`crate::app::App::sync_trace_text`])
     /// instead of churning every frame; `u64::MAX` means everything so far.
@@ -124,7 +129,7 @@ pub struct Desktop {
 }
 
 use crate::app::App;
-use crate::can::frame::{CanFrame, Direction};
+use crate::can::frame::{CanFrame, Direction, FrameFlags};
 use crate::observe::{DataWindow, GfxSignal, GraphicsWindow};
 impl App {
     /// Live snapshot of the current window/panel arrangement.
@@ -350,6 +355,8 @@ impl App {
             filter: String::new(),
             dir: 0,
             dbc_only: false,
+            payload: String::new(),
+            flags_kind: 0,
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
             shown_count: self.snap.trace.len(),
         });
@@ -485,6 +492,31 @@ impl App {
             if !hex.contains(&q) && !in_name {
                 return false;
             }
+        }
+        // Payload byte search: hex pairs, spaces optional. A pattern that
+        // does not parse is ignored rather than filtering everything away.
+        let pat = w.payload.replace(' ', "");
+        if !pat.is_empty()
+            && pat.len().is_multiple_of(2)
+            && let Ok(needle) = (0..pat.len() / 2)
+                .map(|i| u8::from_str_radix(&pat[i * 2..i * 2 + 2], 16))
+                .collect::<Result<Vec<u8>, _>>()
+            && !f.payload().windows(needle.len().max(1)).any(|w| w == needle)
+        {
+            return false;
+        }
+        // Frame-kind filter: 0 any / 1 classic data / 2 FD / 3 RTR / 4 error.
+        if let Some(ok) = (match w.flags_kind {
+            1 => Some(!f.flags.contains(FrameFlags::FD)
+                && !f.flags.contains(FrameFlags::RTR)
+                && !f.flags.contains(FrameFlags::ERROR)),
+            2 => Some(f.flags.contains(FrameFlags::FD)),
+            3 => Some(f.flags.contains(FrameFlags::RTR)),
+            4 => Some(f.flags.contains(FrameFlags::ERROR)),
+            _ => None,
+        }) && !ok
+        {
+            return false;
         }
         true
     }
