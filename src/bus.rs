@@ -647,6 +647,9 @@ pub struct SubView {
     pub type_tag: String,
     pub min: f64,
     pub max: f64,
+    /// Running average over the samples taken this run (the Data window's
+    /// Avg column).
+    pub avg: f64,
     /// Sampled history at the frame's stride, for the curve windows --
     /// shared by Arc and rebuilt only when the cache actually changed,
     /// never deep-copied per frame.
@@ -1613,6 +1616,7 @@ impl BusCore {
                     type_tag: s.type_tag.clone(),
                     min: s.min,
                     max: s.max,
+                    avg: s.avg,
                     history: s.published.clone(),
                     color: s.color,
                 })

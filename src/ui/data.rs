@@ -77,12 +77,12 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         return;
     }
     let tbl_flags = TableFlags::BORDERS_INNER | TableFlags::ROW_BG | TableFlags::SCROLL_Y;
-    if let Some(_table) = ui.begin_table_with_flags("data_table", 5, tbl_flags) {
+    if let Some(_table) = ui.begin_table_with_flags("data_table", 8, tbl_flags) {
         // Fixed widths for the text columns; the Bar column stretches and
         // takes whatever is left.
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 150.0,
+            init_width_or_weight: 130.0,
             ..TableColumnSetup::new("Name")
         });
         ui.table_setup_column_with(TableColumnSetup {
@@ -92,13 +92,28 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 60.0,
+            init_width_or_weight: 56.0,
             ..TableColumnSetup::new("Unit")
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 85.0,
-            ..TableColumnSetup::new("Raw Value")
+            init_width_or_weight: 76.0,
+            ..TableColumnSetup::new("Raw")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 70.0,
+            ..TableColumnSetup::new("Min")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 70.0,
+            ..TableColumnSetup::new("Avg")
+        });
+        ui.table_setup_column_with(TableColumnSetup {
+            flags: TableColumnFlags::WIDTH_FIXED,
+            init_width_or_weight: 70.0,
+            ..TableColumnSetup::new("Max")
         });
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_STRETCH,
@@ -121,6 +136,12 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             ui.text(&text[1]);
             ui.table_next_column();
             ui.text(&text[2]);
+            ui.table_next_column();
+            ui.text(&text[3]);
+            ui.table_next_column();
+            ui.text(&text[4]);
+            ui.table_next_column();
+            ui.text(&text[5]);
             ui.table_next_column();
             let frac = match app.declared_range(key) {
                 Some((lo, hi)) => ((sub.latest - lo) / (hi - lo)).clamp(0.0, 1.0),

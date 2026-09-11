@@ -504,7 +504,7 @@ pub struct DataWindow {
     /// table draws these so digits hold still long enough to read, while
     /// the bar next to them animates at full frame rate.
     pub(crate) text_keys: Vec<SigKey>,
-    pub(crate) text_cache: Vec<[String; 3]>,
+    pub(crate) text_cache: Vec<[String; 6]>,
 }
 
 /// A signal's custom state definitions -- CANoe's "Value Definition"
@@ -718,6 +718,9 @@ impl App {
                     .unwrap_or_else(|| crate::dbc::fmt_decoded(&sub.type_tag, sub.latest)),
                 sub.unit.clone(),
                 sub.last_raw.to_string(),
+                crate::dbc::fmt_decoded(&sub.type_tag, sub.min),
+                crate::dbc::fmt_decoded(&sub.type_tag, sub.avg),
+                crate::dbc::fmt_decoded(&sub.type_tag, sub.max),
             ]);
         }
         let win = &mut self.data_windows[i];
