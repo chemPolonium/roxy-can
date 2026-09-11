@@ -273,13 +273,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                     {
                         app.show_measurement = !app.show_measurement;
                     }
-                    if ui
-                        .menu_item_config("Replay Blocks")
-                        .selected(app.show_blocks)
-                        .build()
-                    {
-                        app.show_blocks = !app.show_blocks;
-                    }
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {

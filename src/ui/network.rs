@@ -131,7 +131,8 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                         .selectable_config(format!("{name}##netblock{bid}"))
                         .build()
                     {
-                        app.show_blocks = true;
+                        // 块的编辑就在所属节点的详情里：点击树叶选中节点。
+                        app.net_selected = flat_base + i;
                     }
                 }
                 ui.unindent();
@@ -181,7 +182,7 @@ fn draw_script_leaf(
     } else if enabled {
         ("[o]", [0.45, 0.62, 0.80, 1.0])
     } else {
-        ("[.]", [0.5, 0.5, 0.55, 1.0])
+        ("[-]", [0.5, 0.5, 0.55, 1.0])
     };
     ui.text_colored(color, marker);
     if ui.is_item_hovered() {
@@ -407,44 +408,121 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text(
-                            "把该节点录制的真实流量注回仿真总线（restbus）；日志路径在 Replay Blocks 窗口选择",
+                            "把该节点录制的真实流量注回仿真总线（restbus）；新建后在下方选择日志文件，启用即发车",
                         );
                     }
-                    let node_blocks: Vec<(u64, String, bool, usize)> = app
+                    let node_blocks: Vec<(u64, String, bool, usize, Option<String>)> = app
                         .snap
                         .blocks
                         .iter()
                         .filter(|b| {
                             b.attached.as_ref().is_some_and(|a| a.0 == ch as u8 && a.1 == ni.name)
                         })
-                        .map(|b| (b.id, b.name.clone(), b.enabled, b.frames))
+                        .map(|b| {
+                            (
+                                b.id,
+                                b.name.clone(),
+                                b.enabled,
+                                b.frames,
+                                b.last_error.clone(),
+                            )
+                        })
                         .collect();
-                    for (bid, name, enabled, frames) in node_blocks {
-                        let marker = if enabled { "[o]" } else { "[-]" };
-                        // ImGui's Selectable ignores SetNextItemWidth when
-                        // its size.x is 0 (it fills the work rect) -- the
-                        // explicit size keeps the hit-rect off the delete
-                        // button, whose click the row used to swallow.
-                        let w = (ui.content_region_avail()[0] - 48.0).max(60.0);
-                        if ui
-                            .selectable_config(format!(
-                                "{marker} {name}（{frames} 帧）##netblock{bid}"
-                            ))
-                            .size([w, 0.0])
-                            .build()
-                        {
-                            app.show_blocks = true;
+                    for (bid, name, enabled, frames, last_error) in node_blocks {
+                        // 启用开关即行首 checkbox；x 删除该块。
+                        let mut on = enabled;
+                        if ui.checkbox(format!("##blkon{bid}"), &mut on) {
+                            app.set_replay_block_enabled(bid, on);
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("回放块 / [o] 启用 / [-] 停用；点击打开 Replay Blocks 窗口编辑");
+                            ui.tooltip_text("启用后测量中按录制间距发车（仅仿真模式）");
+                        }
+                        ui.same_line();
+                        ui.text(&name);
+                        ui.same_line();
+                        ui.text_disabled(format!("{frames} 帧"));
+                        if let Some(e) = &last_error {
+                            ui.same_line();
+                            ui.text_colored([1.0, 0.55, 0.3, 1.0], format!("载入失败：{e}"));
                         }
                         ui.same_line();
                         if ui.small_button(format!("x##netblockrm{bid}")) {
                             app.remove_replay_block(bid);
+                            app.block_drafts.remove(&bid);
+                            continue;
                         }
-                        if ui.is_item_hovered() {
-                            ui.tooltip_text("删除该回放块");
+                        // 日志行（缩进）：路径草稿 + 文件选择，Apply 一并提交。
+                        ui.indent();
+                        let mut draft = app
+                            .block_drafts
+                            .entry(bid)
+                            .or_insert_with(|| crate::ui::BlockDraft {
+                                path: app
+                                    .snap
+                                    .blocks
+                                    .iter()
+                                    .find(|b| b.id == bid)
+                                    .map(|b| b.path.clone())
+                                    .unwrap_or_default(),
+                                ids_text: String::new(),
+                            })
+                            .clone();
+                        ui.set_next_item_width(-72.0);
+                        if ui
+                            .input_text(format!("##blpath{bid}"), &mut draft.path)
+                            .build()
+                            && let Some(d) = app.block_drafts.get_mut(&bid)
+                        {
+                            d.path = draft.path.clone();
                         }
+                        ui.same_line();
+                        if ui.small_button(format!("...##blfile{bid}"))
+                            && let Some(p) = rfd::FileDialog::new()
+                                .set_title("选择回放日志")
+                                .add_filter("日志文件", &["asc", "blf"])
+                                .pick_file()
+                            && let Some(d) = app.block_drafts.get_mut(&bid)
+                        {
+                            d.path = p.to_string_lossy().into_owned();
+                            draft.path = d.path.clone();
+                        }
+                        // id 过滤（可选）：留空 = 该节点的全部报文。
+                        ui.set_next_item_width(140.0);
+                        if ui
+                            .input_text(format!("##blids{bid}"), &mut draft.ids_text)
+                            .hint("id 过滤，如 100, 3F4x")
+                            .build()
+                            && let Some(d) = app.block_drafts.get_mut(&bid)
+                        {
+                            d.ids_text = draft.ids_text.clone();
+                        }
+                        ui.same_line();
+                        let saved = app
+                            .snap
+                            .blocks
+                            .iter()
+                            .find(|b| b.id == bid)
+                            .map(|b| b.path.clone())
+                            .unwrap_or_default();
+                        if ui.small_button(format!("Apply##blapply{bid}")) {
+                            if let Some(d) = app.block_drafts.get(&bid) {
+                                let block = app.snap.blocks.iter().find(|b| b.id == bid);
+                                app.send(crate::bus::BusCommand::SetReplayBlock {
+                                    id: bid,
+                                    name: name.clone(),
+                                    channel: ch as u8,
+                                    path: d.path.clone(),
+                                    node_filter: block.and_then(|b| b.node_filter.clone()),
+                                    attached: block.and_then(|b| b.attached.clone()),
+                                    ids: crate::ui::parse_id_filter(&d.ids_text),
+                                });
+                            }
+                        }
+                        if draft.path != saved {
+                            ui.same_line();
+                            ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
+                        }
+                        ui.unindent();
                     }
                     ui.separator();
                     ui.text("Sent messages");

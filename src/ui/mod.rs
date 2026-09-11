@@ -1,6 +1,5 @@
 pub mod buses;
 pub mod busstats;
-pub mod blocks;
 pub mod data;
 pub mod desktops;
 pub mod dockspace;
@@ -60,7 +59,6 @@ pub fn render(app: &mut App, ui: &Ui) {
     triggers::render(app, ui);
     tx::render(app, ui);
     network::render(app, ui);
-    blocks::render(app, ui);
     spec::render(app, ui);
     data::render(app, ui);
     graphics::render(app, ui);
@@ -87,11 +85,10 @@ pub(crate) struct Draft {
     open: bool,
 }
 
-/// Text a Replay Blocks editor card is typing but has not applied yet.
-/// Committed wholesale by the card's Apply button, like a node's source.
+/// Text a replay block's editor is typing but has not applied yet
+/// (the log path and the optional id filter, in the node detail).
 #[derive(Default, Clone)]
 pub struct BlockDraft {
-    pub name: String,
     pub path: String,
     pub ids_text: String,
 }

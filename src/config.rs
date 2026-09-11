@@ -360,8 +360,6 @@ pub struct DesktopCfg {
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
-    #[serde(default)]
-    pub show_blocks: bool,
 }
 
 fn cycle_default() -> u64 {
@@ -512,8 +510,6 @@ pub struct Config {
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
-    #[serde(default)]
-    pub show_blocks: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
@@ -620,7 +616,6 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_bus_stats: d.show_bus_stats,
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
-        show_blocks: d.show_blocks,
     }
 }
 
@@ -680,7 +675,6 @@ impl Config {
             show_bus_stats: app.show_bus_stats,
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
-            show_blocks: app.show_blocks,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
             trace_limit: app.trace_limit,
@@ -1140,7 +1134,6 @@ impl Config {
         app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
-        app.show_blocks = self.show_blocks;
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
         app.set_trace_limit(self.trace_limit);
@@ -1254,7 +1247,6 @@ impl Config {
                     show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
-                    show_blocks: d.show_blocks,
                 })
                 .collect();
             app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);
@@ -1607,20 +1599,6 @@ mod tests {
         assert_eq!(restored.limits.pre_frames, 1_024);
         assert_eq!(restored.limits.post_frames, 128);
         assert_eq!(restored.limits.marker_cap, 2_048);
-    }
-
-    /// The Replay Blocks panel persists its open state like every other
-    /// panel.
-    #[test]
-    fn the_blocks_panel_round_trips() {
-        let mut app = App::headless();
-        app.show_blocks = true;
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
-            .unwrap()
-            .apply(&mut restored);
-        assert!(restored.show_blocks);
     }
 
     /// The format version travels with the file: new files carry the
