@@ -32,6 +32,9 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         break_jumps: Vec::new(),
         continue_jumps: Vec::new(),
         signal_refs: Vec::new(),
+        cur_handler: None,
+        send_refs: Vec::new(),
+        opaque_sends: Vec::new(),
     };
 
     // Pass 1: function signatures, so later items may call earlier names.
@@ -135,6 +138,8 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         handlers: c.handlers,
         host_fns: HOST_FNS.iter().map(|(n, _, _)| n.to_string()).collect(),
         signal_refs: c.signal_refs,
+        send_refs: c.send_refs,
+        opaque_sends: c.opaque_sends,
     })
 }
 
@@ -167,6 +172,13 @@ struct Comp {
     /// calls, deduped: metadata the host can check against the database
     /// at node-assembly time.
     signal_refs: Vec<(u32, String)>,
+    /// R2 spike: the handler being compiled, for attributing derived
+    /// sends. `None` inside plain user functions.
+    cur_handler: Option<(HandlerKind, String)>,
+    /// R2 spike: statically derived sends, attributed to their handler.
+    send_refs: Vec<(String, u32, bool)>,
+    /// R2 spike: sends whose id the compiler could not derive.
+    opaque_sends: Vec<String>,
 }
 
 impl Comp {
@@ -570,6 +582,45 @@ impl Comp {
                             self.signal_refs.push(r);
                         }
                     }
+                    // R2 spike: record statically derived sends, attributed
+                    // to the handler being compiled. User functions have
+                    // no handler context, so their sends stay opaque.
+                    if (*name == "send" || *name == "send_ext")
+                        && !args.is_empty()
+                        && let Some((kind, from)) = self.cur_handler.clone()
+                    {
+                        let ext_call = *name == "send_ext";
+                        // `frame_id()` echoes the frame that triggered the
+                        // handler: bounded by the event binding itself.
+                        let is_frame_id =
+                            matches!(&args[0], Expr::Call(n, a) if n == "frame_id" && a.is_empty());
+                        if is_frame_id {
+                            match &kind {
+                                HandlerKind::Message { id } => {
+                                    self.send_refs.push((from, *id, false));
+                                }
+                                HandlerKind::ExtendedMessage { id } => {
+                                    self.send_refs.push((from, *id, true));
+                                }
+                                HandlerKind::AnyMessage => self.opaque_sends.push(format!(
+                                    "{from}: wildcard forward (frame_id), set = received set"
+                                )),
+                                _ => self
+                                    .opaque_sends
+                                    .push(format!("{from}: frame_id outside a frame event")),
+                            }
+                        } else if let Some(v) = self.const_int(&args[0]) {
+                            match u32::try_from(v) {
+                                Ok(id) => self.send_refs.push((from, id, ext_call)),
+                                Err(_) => self
+                                    .opaque_sends
+                                    .push(format!("{from}: id {v} outside the frame-id range")),
+                            }
+                        } else {
+                            self.opaque_sends
+                                .push(format!("{from}: send id not statically derivable"));
+                        }
+                    }
                     self.emit(Op::CallHost(id, args.len() as u8));
                 } else {
                     // Neither a script function nor a builtin: a
@@ -593,6 +644,9 @@ impl Comp {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
+        // A plain function has no handler context: sends inside one are
+        // attributed by whoever calls it -- beyond the spike's dataflow.
+        let saved_handler = self.cur_handler.take();
         self.code = Vec::new();
         self.cur_line = 0;
         self.in_fn = true;
@@ -614,7 +668,31 @@ impl Comp {
         self.locals = saved_locals;
         self.depth = saved_depth;
         self.in_fn = saved_in_fn;
+        self.cur_handler = saved_handler;
         Ok(())
+    }
+
+    /// Constant-folds an expression to an integer, for the R2 spike's
+    /// static id derivation: literals, `neg`, and arithmetic over
+    /// constants. Anything else (variables, host calls, floats) is
+    /// `None` -- the fail-closed direction.
+    fn const_int(&self, e: &Expr) -> Option<i64> {
+        match e {
+            Expr::Int(v) => Some(*v),
+            Expr::Unary(UnOp::Neg, x) => self.const_int(x)?.checked_neg(),
+            Expr::Binary(op, l, r) => {
+                let (l, r) = (self.const_int(l)?, self.const_int(r)?);
+                match op {
+                    BinOp::Add => l.checked_add(r),
+                    BinOp::Sub => l.checked_sub(r),
+                    BinOp::Mul => l.checked_mul(r),
+                    BinOp::Div if r != 0 => l.checked_div(r),
+                    BinOp::Mod if r != 0 => l.checked_rem(r),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Compiles one event handler body into its own chunk and registers
@@ -638,15 +716,7 @@ impl Comp {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
-        self.code = Vec::new();
-        self.cur_line = 0;
-        self.in_fn = true;
-        self.depth = 1;
-        self.block(&on.body)?;
-        let nil = self.constant(Value::Nil);
-        self.emit(Op::Const(nil));
-        self.emit(Op::Return);
-        let chunk = self.functions.len() as u16;
+        let saved_handler = self.cur_handler.take();
         let label = match &kind {
             HandlerKind::Start => "<on start>".to_string(),
             HandlerKind::Message { id } => format!("<on message {id:#x}>"),
@@ -656,6 +726,18 @@ impl Comp {
             HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
             HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
         };
+        self.code = Vec::new();
+        self.cur_line = 0;
+        self.in_fn = true;
+        self.depth = 1;
+        // The handler context must be live while the body compiles: the
+        // R2 spike attributes every derived send to this handler.
+        self.cur_handler = Some((kind.clone(), label.clone()));
+        self.block(&on.body)?;
+        let nil = self.constant(Value::Nil);
+        self.emit(Op::Const(nil));
+        self.emit(Op::Return);
+        let chunk = self.functions.len() as u16;
         let lines = std::mem::take(&mut self.line_marks);
         self.functions.push(Function {
             name: label,
@@ -664,6 +746,7 @@ impl Comp {
             lines,
         });
         self.handlers.push(Handler { kind, chunk });
+        self.cur_handler = saved_handler;
         self.code = saved_code;
         self.line_marks = saved_marks;
         self.cur_line = saved_cur;
@@ -693,8 +776,7 @@ mod tests {
     #[test]
     fn forward_calls_resolve() {
         let script = compile_ok("print(later(1)); fn later(n) { return n + 1; }");
-        assert_eq!(script.functions.len(), 2);
-        // The call lives in main (chunk 0); `later`'s own body has none.
+        assert_eq!(script.functions.len(), 2);        // The call lives in main (chunk 0); `later`'s own body has none.
         assert!(
             script.functions[0]
                 .code
@@ -720,5 +802,94 @@ mod tests {
             .iter()
             .any(|op| matches!(op, Op::Jump(t) if *t < 4));
         assert!(has_back_jump);
+    }
+
+    // ---- R2 spike: static send-set derivation ----------------------------
+
+    #[test]
+    fn literal_and_arithmetic_sends_are_derived() {
+        let script = compile_ok(
+            "on timer 100 { send(0x100, 1); send_ext(0x100 + 0x20, 1); }",
+        );
+        assert!(
+            script.opaque_sends.is_empty(),
+            "both sends are derivable: {:?}",
+            script.opaque_sends
+        );
+        assert_eq!(script.send_refs.len(), 2);
+        assert_eq!(script.send_refs[0], ("<on timer 100>".to_string(), 0x100, false));
+        assert_eq!(script.send_refs[1], ("<on timer 100>".to_string(), 0x120, true));
+    }
+
+    #[test]
+    fn frame_id_sends_are_bounded_by_the_event() {
+        let script = compile_ok("on message 0x6A0 { send(frame_id(), 1); }");
+        assert_eq!(script.send_refs.len(), 1);
+        assert_eq!(script.send_refs[0], ("<on message 0x6a0>".to_string(), 0x6A0, false));
+    }
+
+    #[test]
+    fn variables_make_the_send_opaque() {
+        let script = compile_ok("on timer 100 { let n = 0x100; send(n, 1); }");
+        assert!(script.send_refs.is_empty());
+        assert_eq!(script.opaque_sends.len(), 1);
+        assert!(script.opaque_sends[0].contains("not statically derivable"));
+    }
+
+    #[test]
+    fn a_wildcard_forward_is_named_as_such() {
+        let script = compile_ok("on message * { send(frame_id(), 1); }");
+        assert!(script.send_refs.is_empty());
+        assert_eq!(script.opaque_sends.len(), 1);
+        assert!(script.opaque_sends[0].contains("wildcard forward"));
+    }
+
+    /// R2 spike deliverable: run the static send-set derivation over the
+    /// shipped examples and print the coverage report. The examples are
+    /// the "expected user scripts" sample the roadmap asked for -- the
+    /// spike's question is whether the derivable set covers their sends.
+    #[test]
+    fn r2_spike_reports_static_send_coverage_on_examples() {
+        let Ok(rd) = std::fs::read_dir("examples") else {
+            println!("examples/ not present -- skipped");
+            return;
+        };
+        let mut total_derived = 0usize;
+        let mut total_opaque = 0usize;
+        let mut files = 0usize;
+        for file in rd.flatten() {
+            let path = file.path();
+            if path.extension().is_none_or(|e| e != "capl") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let script = match crate::script::compile(&src) {
+                Ok(s) => s,
+                Err(e) => {
+                    println!("{}: compile error {e}", path.display());
+                    total_opaque += 1;
+                    continue;
+                }
+            };
+            files += 1;
+            total_derived += script.send_refs.len();
+            total_opaque += script.opaque_sends.len();
+            println!(
+                "{}: {} derived send(s), {} opaque",
+                path.display(),
+                script.send_refs.len(),
+                script.opaque_sends.len()
+            );
+            for (from, id, ext) in &script.send_refs {
+                println!("    + {}  {id:#X}{}", from, if *ext { "x" } else { "" });
+            }
+            for why in &script.opaque_sends {
+                println!("    ? {why}");
+            }
+        }
+        println!(
+            "coverage: {total_derived} derived, {total_opaque} opaque over {files} example(s)"
+        );
+        assert!(files >= 4, "the shipped examples were swept");
     }
 }

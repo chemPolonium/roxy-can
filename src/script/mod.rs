@@ -230,6 +230,23 @@ pub struct Script {
     /// `sig` / `set_sig` calls, deduped. Pure metadata for the host's
     /// load-time checks; the kernel itself attaches no meaning to them.
     pub signal_refs: Vec<(u32, String)>,
+    /// R2 spike: sends whose `(from, id, extended)` the compiler derived
+    /// statically. Pure metadata -- the runtime behaviour is unchanged.
+    pub send_refs: Vec<(String, u32, bool)>,
+    /// R2 spike: `send` / `send_ext` calls whose id was NOT statically
+    /// derivable, with the reason. The fail-closed rule (roadmap §4)
+    /// would turn these into compile errors; the spike only reports.
+    pub opaque_sends: Vec<String>,
+}
+
+/// One statically derived send (R2 spike): which handler may emit which
+/// frame. `ext` comes from the call (`send_ext`) or, for `frame_id()`,
+/// from the handler's own event binding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SendRef {
+    pub from: String,
+    pub id: u32,
+    pub ext: bool,
 }
 
 /// The host functions every script can call. The compiler resolves names
