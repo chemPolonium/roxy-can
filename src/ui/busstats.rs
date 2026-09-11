@@ -28,6 +28,9 @@ pub fn render(app: &mut App, ui: &Ui) {
 }
 
 fn content(app: &mut App, ui: &Ui) {
+    load_history_section(app, ui);
+    ui.separator();
+
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
     let flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
@@ -232,4 +235,62 @@ fn opt_ms_f(us: Option<f64>) -> String {
 
 fn opt_num_u(v: Option<u64>) -> String {
     v.map(|x| x.to_string()).unwrap_or_else(|| "-".to_string())
+}
+
+/// One sparkline per bus: the load history BusLoad already keeps (60 x
+/// 100 ms buckets) drawn as a polyline. Y scales to the window's own
+/// peak (floor 25%) so light loads stay readable; the 100% overload line
+/// appears only when the peak reaches it.
+fn load_history_section(app: &mut App, ui: &Ui) {
+    for (i, ch) in app.snap.channels.iter().enumerate() {
+        let Some(load) = app.snap.bus_loads.get(i) else {
+            continue;
+        };
+        let pts: Vec<(u64, f64)> = load.history().collect();
+        if pts.len() < 2 {
+            continue;
+        }
+        ui.text_colored(
+            [0.35, 0.65, 1.0, 1.0],
+            format!("{} 负载历史（近 1 分钟）", ch.name),
+        );
+        ui.same_line();
+        ui.text_disabled(format!("当前 {:.2} %", load.load() * 100.0));
+
+        let avail = ui.content_region_avail();
+        let rect_min = ui.cursor_screen_pos();
+        let rect_max = [rect_min[0] + avail[0], rect_min[1] + 64.0];
+        ui.dummy([avail[0], 64.0]);
+        let dl = ui.get_window_draw_list();
+        dl.add_rect(rect_min, rect_max, [0.08, 0.08, 0.10, 1.0])
+            .filled(true)
+            .build();
+        dl.add_rect(rect_min, rect_max, [0.20, 0.20, 0.25, 1.0])
+            .build();
+
+        let peak = pts.iter().map(|&(_, v)| v).fold(0.0f64, f64::max).max(0.25);
+        let t0 = pts[0].0;
+        let t1 = pts[pts.len() - 1].0 + crate::load::BUCKET_US;
+        let span = (t1 - t0).max(1) as f32;
+        let w = rect_max[0] - rect_min[0];
+        let h = rect_max[1] - rect_min[1];
+        let xy: Vec<[f32; 2]> = pts
+            .iter()
+            .map(|&(t, v)| {
+                [
+                    rect_min[0] + ((t - t0) as f32 / span) * w,
+                    rect_max[1] - (v as f32 / peak as f32) * h,
+                ]
+            })
+            .collect();
+        // The 100% overload reference, drawn only when the scale shows it.
+        if peak >= 1.0 {
+            let y = rect_max[1] - (1.0 / peak as f32) * h;
+            dl.add_line([rect_min[0], y], [rect_max[0], y], [0.90, 0.30, 0.30, 0.55])
+                .build();
+        }
+        dl.add_polyline(xy, [0.35, 0.80, 1.00, 1.0])
+            .thickness(1.5)
+            .build();
+    }
 }

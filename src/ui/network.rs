@@ -504,19 +504,19 @@ pub fn render(app: &mut App, ui: &Ui) {
                             .find(|b| b.id == bid)
                             .map(|b| b.path.clone())
                             .unwrap_or_default();
-                        if ui.small_button(format!("Apply##blapply{bid}")) {
-                            if let Some(d) = app.block_drafts.get(&bid) {
-                                let block = app.snap.blocks.iter().find(|b| b.id == bid);
-                                app.send(crate::bus::BusCommand::SetReplayBlock {
-                                    id: bid,
-                                    name: name.clone(),
-                                    channel: ch as u8,
-                                    path: d.path.clone(),
-                                    node_filter: block.and_then(|b| b.node_filter.clone()),
-                                    attached: block.and_then(|b| b.attached.clone()),
-                                    ids: crate::ui::parse_id_filter(&d.ids_text),
-                                });
-                            }
+                        if ui.small_button(format!("Apply##blapply{bid}"))
+                            && let Some(d) = app.block_drafts.get(&bid)
+                        {
+                            let block = app.snap.blocks.iter().find(|b| b.id == bid);
+                            app.send(crate::bus::BusCommand::SetReplayBlock {
+                                id: bid,
+                                name: name.clone(),
+                                channel: ch as u8,
+                                path: d.path.clone(),
+                                node_filter: block.and_then(|b| b.node_filter.clone()),
+                                attached: block.and_then(|b| b.attached.clone()),
+                                ids: crate::ui::parse_id_filter(&d.ids_text),
+                            });
                         }
                         if draft.path != saved {
                             ui.same_line();

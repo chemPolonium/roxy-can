@@ -424,9 +424,9 @@ fn probe_channel_name(lib: &Canlib, index: i32) -> Option<String> {
         }
         let mut buf = [0u8; 256];
         let mut size = buf.len();
-        let status = match lib.get_handle_data {
-            Some(get) => get(h, 13, buf.as_mut_ptr() as *mut core::ffi::c_void, &mut size),
-            None => return None,
+        let status = {
+            let get = lib.get_handle_data?;
+            get(h, 13, buf.as_mut_ptr() as *mut core::ffi::c_void, &mut size)
         };
         (lib.bus_off)(h);
         (lib.close)(h);
