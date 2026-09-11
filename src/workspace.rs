@@ -33,6 +33,9 @@ pub struct TraceFilter {
     pub dbc_only: bool,
     pub payload: String,
     pub flags_kind: usize,
+    /// Time-range filter (seconds); blank = no bound.
+    pub time_from: String,
+    pub time_to: String,
     /// Signal-value conditions parsed from the filter text
     /// (`Name>10`, `Name<=5`, ...).
     pub value_conds: Vec<ValueCond>,
@@ -105,6 +108,10 @@ pub struct TraceWin {
     pub payload: String,
     /// Frame-kind filter: 0 any / 1 classic data / 2 FD / 3 RTR / 4 error.
     pub flags_kind: usize,
+    /// Time-range filter text (seconds): blank = no bound. Parsed to f64
+    /// at match time; invalid text is ignored.
+    pub time_from: String,
+    pub time_to: String,
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only.
@@ -137,6 +144,8 @@ impl TraceWin {
             dbc_only: self.dbc_only,
             payload: self.payload.clone(),
             flags_kind: self.flags_kind,
+            time_from: self.time_from.clone(),
+            time_to: self.time_to.clone(),
             value_conds: parse_value_cond(&self.filter).into_iter().collect(),
         }
     }
@@ -453,6 +462,8 @@ impl App {
             dbc_only: false,
             payload: String::new(),
             flags_kind: 0,
+            time_from: String::new(),
+            time_to: String::new(),
             rows: Vec::new(),
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
             shown_count: self.snap.trace.len(),
@@ -620,6 +631,19 @@ impl App {
             4 => Some(f.flags.contains(FrameFlags::ERROR)),
             _ => None,
         }) && !ok
+        {
+            return false;
+        }
+        // Time-range check: if either bound is set and the frame is outside
+        // it, drop the frame.
+        let t_s = f.t_us as f64 / 1e6;
+        if let Ok(from) = flt.time_from.trim().parse::<f64>()
+            && t_s < from
+        {
+            return false;
+        }
+        if let Ok(to) = flt.time_to.trim().parse::<f64>()
+            && t_s > to
         {
             return false;
         }
