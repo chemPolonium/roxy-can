@@ -25,8 +25,9 @@ const MARKER_SIDE_PX: f32 = 4.4;
 /// 16-bit indices, so one window cannot exceed 65 536 vertices -- and several
 /// curves, their markers and the axis labels all share it. An hour retained at
 /// the 50 ms stride is 72 000 points, so anything past this is folded rather
-/// than submitted whole.
-const MAX_CURVE_POINTS: usize = 2_048;
+/// than submitted whole. 8 192 points render an hour at ~0.44 s resolution;
+/// the window's total budget (40 000) still bounds the worst case.
+const MAX_CURVE_POINTS: usize = 8_192;
 
 /// Vertices any one Graphics window may submit. Comfortably under the 65 536
 /// ceiling: the frame, grid, axis labels and legend live in the same list, and
