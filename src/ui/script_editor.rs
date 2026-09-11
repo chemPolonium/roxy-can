@@ -110,14 +110,26 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     }
 
     // Source editor: local draft, applied on Apply (per-keystroke
-    // recompiles would churn the core thread).
-    let draft = app
-        .node_src_draft
-        .entry(id)
-        .or_insert_with(|| node.source.clone());
-    ui.set_next_item_width(-1.0);
-    ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
-        .build();
+    // recompiles would churn the core thread). A sidebar on the left
+    // lists available functions and constructs for one-click insertion.
+    let avail = ui.content_region_avail();
+    const SIDEBAR_W: f32 = 180.0;
+    ui.child_window(format!("##esidebar{id}"))
+        .size([SIDEBAR_W, avail[1] - SOURCE_HEIGHT - 28.0])
+        .border(true)
+        .build(|| sidebar(app, ui, id));
+    ui.same_line();
+    ui.child_window(format!("##emain{id}"))
+        .size([0.0, 0.0])
+        .build(|| {
+            let draft = app
+                .node_src_draft
+                .entry(id)
+                .or_insert_with(|| node.source.clone());
+            ui.set_next_item_width(-1.0);
+            ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
+                .build();
+        });
     let dirty = *app.node_src_draft.get(&id).unwrap() != node.source;
     if ui.small_button(format!("Apply##eapply{id}")) {
         let source = app.node_src_draft.get(&id).cloned().unwrap_or_default();
@@ -172,5 +184,81 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                     ui.text(line);
                 }
             });
+    }
+}
+
+/// One insertable sidebar entry: display label and the text that goes
+/// into the source when clicked.
+const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[
+    // (category, label, insert_text) -- category "" = separator
+    ("事件处理器", "on start", "on start {\n    \n}"),
+    ("事件处理器", "on message", "on message 0x000 {\n    \n}"),
+    ("事件处理器", "on ext message", "on extended message 0x000 {\n    \n}"),
+    ("事件处理器", "on message *", "on message * {\n    \n}"),
+    ("事件处理器", "on errorFrame", "on errorFrame {\n    \n}"),
+    ("事件处理器", "on timer", "on timer 100 {\n    \n}"),
+    ("事件处理器", "on timer \"name\"", "on timer \"name\" {\n    \n}"),
+    ("总线控制", "send", "send(0x000, 0x00);"),
+    ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
+    ("总线控制", "sig", "sig(0x000, \"Signal\")"),
+    ("总线控制", "set_sig", "set_sig(buf, 0x000, \"Signal\", 0)"),
+    ("总线控制", "emit_value", "emit_value(\"Name\", 0)"),
+    ("帧数据", "frame_byte", "frame_byte(0)"),
+    ("帧数据", "frame_dlc", "frame_dlc()"),
+    ("帧数据", "frame_id", "frame_id()"),
+    ("定时器", "set_timer", "set_timer(\"name\", 100)"),
+    ("定时器", "cancel_timer", "cancel_timer()"),
+    ("定时器", "set_period", "set_period(100)"),
+    ("波形", "ramp", "ramp(0, 255, 1000)"),
+    ("波形", "sine_wave", "sine_wave(0, 255, 1000)"),
+    ("波形", "triangle", "triangle(0, 255, 1000)"),
+    ("波形", "square", "square(0, 255, 1000)"),
+    ("波形", "counter", "counter(0, 255, 1000)"),
+    ("波形", "random", "random(0, 255)"),
+    ("缓冲/数组", "bytes", "bytes(8)"),
+    ("缓冲/数组", "array", "array(4)"),
+    ("缓冲/数组", "len", "len(v)"),
+    ("数学", "abs", "abs(x)"),
+    ("数学", "floor", "floor(x)"),
+    ("数学", "ceil", "ceil(x)"),
+    ("数学", "round", "round(x)"),
+    ("数学", "sin", "sin(x)"),
+    ("数学", "cos", "cos(x)"),
+    ("数学", "min", "min(a, b)"),
+    ("数学", "max", "max(a, b)"),
+    ("数学", "clamp", "clamp(v, lo, hi)"),
+    ("位运算", "bit_and", "bit_and(a, b)"),
+    ("位运算", "bit_or", "bit_or(a, b)"),
+    ("位运算", "bit_xor", "bit_xor(a, b)"),
+    ("位运算", "bit_not", "bit_not(a)"),
+    ("位运算", "bit_shl", "bit_shl(a, b)"),
+    ("位运算", "bit_shr", "bit_shr(a, b)"),
+    ("其他", "now", "now()"),
+    ("其他", "srand", "srand(seed)"),
+];
+
+/// The sidebar: categories with clickable items that append a template
+/// to the source draft.
+fn sidebar(app: &mut App, ui: &Ui, id: u64) {
+    let mut last_cat = "";
+    for (cat, label, insert) in SIDEBAR_ITEMS {
+        if *cat != last_cat {
+            if !last_cat.is_empty() {
+                ui.separator();
+            }
+            ui.text_disabled(*cat);
+            last_cat = *cat;
+        }
+        if ui.selectable_config(*label).build() {
+            let draft = app
+                .node_src_draft
+                .entry(id)
+                .or_default();
+            if !draft.is_empty() && !draft.ends_with('\n') {
+                draft.push('\n');
+            }
+            draft.push_str(insert);
+            draft.push('\n');
+        }
     }
 }
