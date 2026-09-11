@@ -117,7 +117,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.child_window(format!("##esidebar{id}"))
         .size([SIDEBAR_W, avail[1] - SOURCE_HEIGHT - 28.0])
         .border(true)
-        .build(|| sidebar(app, ui, id));
+        .build(|| sidebar(app, ui, id, node));
     ui.same_line();
     ui.child_window(format!("##emain{id}"))
         .size([0.0, 0.0])
@@ -189,8 +189,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
 
 /// One insertable sidebar entry: display label and the text that goes
 /// into the source when clicked.
-const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[
-    // (category, label, insert_text) -- category "" = separator
+const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_text)
     ("事件处理器", "on start", "on start {\n    \n}"),
     ("事件处理器", "on message", "on message 0x000 {\n    \n}"),
     ("事件处理器", "on ext message", "on extended message 0x000 {\n    \n}"),
@@ -238,8 +237,9 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[
 ];
 
 /// The sidebar: categories with clickable items that append a template
-/// to the source draft.
-fn sidebar(app: &mut App, ui: &Ui, id: u64) {
+/// to the source draft. When the script is bound to a DBC node, a
+/// signal/message section appears listing that node's own signals.
+fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let mut last_cat = "";
     for (cat, label, insert) in SIDEBAR_ITEMS {
         if *cat != last_cat {
@@ -259,6 +259,57 @@ fn sidebar(app: &mut App, ui: &Ui, id: u64) {
             }
             draft.push_str(insert);
             draft.push('\n');
+        }
+    }
+
+    // DBC-aware section: the bound node's messages and signals.
+    if let Some((_, ref attached_node)) = node.attached {
+        // Collect owned data so the DBC borrow doesn't conflict with
+        // the draft mutation below.
+        type DbcItem = (u32, bool, String, Vec<(String, u64)>);
+        let dbc_items: Vec<DbcItem> = {
+            let Some(db) = app.channel_dbc(node.channel) else {
+                return;
+            };
+            db.order
+                .iter()
+                .filter_map(|&(id, ext)| {
+                    let m = db.messages.get(&(id, ext))?;
+                    if m.transmitter != *attached_node {
+                        return None;
+                    }
+                    let sigs: Vec<(String, u64)> =
+                        m.signals.iter().map(|s| (s.name.clone(), s.start_bit)).collect();
+                    Some((id, ext, m.name.clone(), sigs))
+                })
+                .collect()
+        };
+        ui.separator();
+        ui.text_disabled("DBC 报文/信号");
+        for (msg_id, ext, msg_name, sigs) in &dbc_items {
+            let id_str = format!("{msg_id:03X}{}", if *ext { "x" } else { "" });
+            if ui
+                .selectable_config(format!("{} {}##dbcmsg{}", msg_name, id_str, msg_id))
+                .build()
+            {
+                let draft = app.node_src_draft.entry(id).or_default();
+                if !draft.is_empty() && !draft.ends_with('\n') {
+                    draft.push('\n');
+                }
+                draft.push_str(&format!("send({:#x});", msg_id));
+            }
+            for (sig_name, _) in sigs {
+                if ui
+                    .selectable_config(format!("  {}##dbcsig{}_{}", sig_name, msg_id, sig_name))
+                    .build()
+                {
+                    let draft = app.node_src_draft.entry(id).or_default();
+                    if !draft.is_empty() && !draft.ends_with('\n') {
+                        draft.push('\n');
+                    }
+                    draft.push_str(&format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                }
+            }
         }
     }
 }
