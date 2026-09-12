@@ -164,116 +164,17 @@ impl ScriptNode {
             }
         };
         let handlers = script.handlers.clone();
-        // Static check: literal signal references in `sig` / `set_sig`
-        // are validated against the channel database, so a typo'd name is
-        // reported at Apply instead of failing silently at runtime.
+        // 装配层校验（DBC 部分）：信号引用、发送集对照、反向漏实现、
+        // set_sig 字面量范围。GUI 与 `--check-script --dbc` 共用同一套。
         if let Some(db) = &dbc {
-            for (id, sig) in &script.signal_refs {
-                let known = db
-                    .message_of(*id)
-                    .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
-                if !known {
-                    Self::push_log_into(
-                        &mut self.log,
-                        &mut self.log_dirty,
-                        &mut self.pending_lines,
-                        format!("[check] 信号未在 DBC 中找到: 0x{id:X} \"{sig}\""),
-                    );
-                }
-            }
-        }
-        // R2 装配层校验：发送集对照 DBC 发送者声明。脚本绑定了 DBC 节点
-        // 时，发送了不属于该节点的报文 → warning；不在 DBC 中的自定义
-        // 报文 → info。
-        if let Some((_, ref attached_node)) = self.attached
-            && let Some(db) = &dbc
-        {
-            for (_, id, ext) in &script.send_refs {
-                let key = (*id, *ext);
-                match db.messages.get(&key) {
-                    Some(m) if m.transmitter == *attached_node => {} // own message
-                    Some(m) => {
-                        Self::push_log_into(
-                            &mut self.log,
-                            &mut self.log_dirty,
-                            &mut self.pending_lines,
-                            format!(
-                                "[check] 0x{id:X} 是 {} 的报文，不是 {} 的",
-                                m.transmitter, attached_node
-                            ),
-                        );
-                    }
-                    None => {
-                        Self::push_log_into(
-                            &mut self.log,
-                            &mut self.log_dirty,
-                            &mut self.pending_lines,
-                            format!("[check] 0x{id:X} 不在 DBC 中（自定义报文）"),
-                        );
-                    }
-                }
-            }
-        }
-        // R2 反向漏实现检查：DBC 声明本节点发送、脚本却从不发送的报文。
-        // 只是 info——生成器代发、脚本只做响应/监听都是常态；通配脚本
-        // （转发者/记录者）不检查。列出条目封顶，全量看收发 tab。
-        if let Some((_, ref attached_node)) = self.attached
-            && let Some(db) = &dbc
-            && !script.recv_wildcard
-        {
-            let mut missing: Vec<(u32, bool, &str)> = db
-                .messages
-                .iter()
-                .filter(|(k, m)| {
-                    m.transmitter == *attached_node
-                        && !script.send_refs.iter().any(|(_, id, ext)| (*id, *ext) == **k)
-                })
-                .map(|(k, m)| (k.0, k.1, m.name.as_str()))
-                .collect();
-            missing.sort();
-            if !missing.is_empty() {
-                const SHOW: usize = 8;
-                let list = missing
-                    .iter()
-                    .take(SHOW)
-                    .map(|(id, ext, name)| format!("0x{id:X}{} {name}", if *ext { "x" } else { "" }))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let more = if missing.len() > SHOW {
-                    format!(" 等 {} 条", missing.len())
-                } else {
-                    String::new()
-                };
+            let attached = self.attached.as_ref().map(|(_, n)| n.as_str());
+            for line in dbc_checks(&script, db, attached) {
                 Self::push_log_into(
                     &mut self.log,
                     &mut self.log_dirty,
                     &mut self.pending_lines,
-                    format!("[info] DBC 声明本节点发送、脚本未发送（可能由生成器代发）: {list}{more}"),
+                    line,
                 );
-            }
-        }
-        // R2 静态写入集：set_sig 的字面量值对照 DBC 信号物理界限。字面量
-        // 才能静态判定；表达式的越界交给运行时（编码函数自然截断）。
-        // min == max 的区间在 DBC 里表示"未声明界限"，不检查。
-        if let Some(db) = &dbc {
-            for (id, sig, v) in &script.set_sig_values {
-                let Some(m) = db.message_of(*id) else {
-                    continue; // 未知名已由信号引用检查报告
-                };
-                let Some(s) = m.signals.iter().find(|s| s.name == *sig) else {
-                    continue;
-                };
-                if s.max > s.min && (*v < s.min || *v > s.max) {
-                    Self::push_log_into(
-                        &mut self.log,
-                        &mut self.log_dirty,
-                        &mut self.pending_lines,
-                        format!(
-                            "[check] set_sig 0x{id:X} \"{sig}\" 值 {v} 超出 DBC 声明范围 {}..{}",
-                            s.min, s.max
-                        ),
-                    );
-                }
             }
         }
         // 装配层校验：脚本引用的系统变量须已在系统变量管理器中定义，
@@ -689,6 +590,99 @@ impl ScriptNode {
     pub fn note(&mut self, line: String) {
         self.push_log(line);
     }
+}
+
+/// The DBC-backed assembly checks a compiled script must pass at start:
+/// literal signal references exist, the send set matches the DBC's
+/// transmitter declarations (both directions), and literal `set_sig`
+/// values sit inside their declared ranges. `attached` is the bound DBC
+/// node's name when the script has one; the send-set and reverse checks
+/// only apply to bound scripts. Returns formatted log lines -- shared
+/// verbatim by the GUI's node start and the headless `--check-script
+/// --dbc` gate.
+pub fn dbc_checks(
+    script: &crate::script::Script,
+    db: &crate::dbc::SymbolTable,
+    attached: Option<&str>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    // Literal signal references in `sig` / `set_sig` must exist, so a
+    // typo'd name is reported at assembly instead of silently missing.
+    for (id, sig) in &script.signal_refs {
+        let known = db
+            .message_of(*id)
+            .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
+        if !known {
+            lines.push(format!("[check] 信号未在 DBC 中找到: 0x{id:X} \"{sig}\""));
+        }
+    }
+    // 发送集对照 DBC 发送者声明：发送了不属于绑定节点的报文 →
+    // warning；不在 DBC 中的自定义报文 → info。
+    if let Some(attached_node) = attached {
+        for (_, id, ext) in &script.send_refs {
+            let key = (*id, *ext);
+            match db.messages.get(&key) {
+                Some(m) if m.transmitter == attached_node => {} // own message
+                Some(m) => lines.push(format!(
+                    "[check] 0x{id:X} 是 {} 的报文，不是 {attached_node} 的",
+                    m.transmitter
+                )),
+                None => lines.push(format!("[check] 0x{id:X} 不在 DBC 中（自定义报文）")),
+            }
+        }
+    }
+    // 反向漏实现：DBC 声明本节点发送、脚本却从不发送的报文。只是
+    // info——生成器代发、脚本只做响应/监听都是常态；通配脚本（转发者/
+    // 记录者）不检查。列出条目封顶，全量看编辑器收发 tab。
+    if let Some(attached_node) = attached
+        && !script.recv_wildcard
+    {
+        let mut missing: Vec<(u32, bool, &str)> = db
+            .messages
+            .iter()
+            .filter(|(k, m)| {
+                m.transmitter == attached_node
+                    && !script.send_refs.iter().any(|(_, id, ext)| (*id, *ext) == **k)
+            })
+            .map(|(k, m)| (k.0, k.1, m.name.as_str()))
+            .collect();
+        missing.sort();
+        if !missing.is_empty() {
+            const SHOW: usize = 8;
+            let list = missing
+                .iter()
+                .take(SHOW)
+                .map(|(id, ext, name)| format!("0x{id:X}{} {name}", if *ext { "x" } else { "" }))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if missing.len() > SHOW {
+                format!(" 等 {} 条", missing.len())
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "[info] DBC 声明本节点发送、脚本未发送（可能由生成器代发）: {list}{more}"
+            ));
+        }
+    }
+    // 静态写入集：set_sig 的字面量值对照 DBC 信号物理界限。字面量才能
+    // 静态判定；表达式的越界交给运行时（编码函数自然截断）。min==max
+    // 的区间在 DBC 里表示"未声明界限"，不检查。
+    for (id, sig, v) in &script.set_sig_values {
+        let Some(m) = db.message_of(*id) else {
+            continue; // 未知名已由信号引用检查报告
+        };
+        let Some(s) = m.signals.iter().find(|s| s.name == *sig) else {
+            continue;
+        };
+        if s.max > s.min && (*v < s.min || *v > s.max) {
+            lines.push(format!(
+                "[check] set_sig 0x{id:X} \"{sig}\" 值 {v} 超出 DBC 声明范围 {}..{}",
+                s.min, s.max
+            ));
+        }
+    }
+    lines
 }
 
 /// The node's host-registered builtins -- the S4 seam made real: anything

@@ -2,7 +2,7 @@
 //! real log on disk at high playback speed so the wall-clock loop finishes
 //! in milliseconds.
 
-use super::{convert_log, Cli, CliOpts, parse_args, run};
+use super::{check_scripts, convert_log, parse_args, run, Cli, CliOpts, ScriptCheck};
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::channel::NodeRole;
 use crate::log::AscWriter;
@@ -76,6 +76,93 @@ fn every_shipped_example_compiles() {
     assert!(failures.is_empty(), "examples must compile: {failures:?}");
 }
 
+/// `--dbc` / `--node` only mean something alongside `--check-script`.
+#[test]
+fn dbc_and_node_flags_require_check_script() {
+    for args in [
+        vec!["--dbc", "a.dbc"],
+        vec!["--node", "EngineECU"],
+        vec!["--replay", "a.asc", "--dbc", "a.dbc"],
+    ] {
+        let err = parse_args(&flag_set(&args)).unwrap_err();
+        assert!(err.contains("--check-script"), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn check_script_flag_set_parses_with_dbc_and_node() {
+    let cli = parse_args(&flag_set(&[
+        "--check-script",
+        "a.rxcan",
+        "--check-script",
+        "b.rxcan",
+        "--dbc",
+        "sample.dbc",
+        "--node",
+        "EngineECU",
+    ]))
+    .unwrap();
+    let Cli::CheckScripts(check) = cli else {
+        panic!("expected CheckScripts, got {cli:?}")
+    };
+    assert_eq!(check.scripts, ["a.rxcan", "b.rxcan"]);
+    assert_eq!(check.dbcs, ["sample.dbc"]);
+    assert_eq!(check.node.as_deref(), Some("EngineECU"));
+}
+
+/// End to end: the headless gate runs the same assembly checks the GUI
+/// does at node start -- reverse check names the node's unsent DBC
+/// traffic, the range check names the out-of-bounds literal.
+#[test]
+fn check_scripts_with_dbc_runs_the_assembly_checks() {
+    let dir = std::env::temp_dir();
+    let dbc_path = dir.join("roxy_can_gate.dbc");
+    let script_path = dir.join("roxy_can_gate.rxcan");
+    std::fs::write(
+        &dbc_path,
+        r#"
+VERSION ""
+
+BS_:
+
+BU_: EngineECU GearBox
+
+BO_ 256 EngineStatus: 8 EngineECU
+ SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm" GearBox
+
+BO_ 257 EngineCmd: 8 EngineECU
+ SG_ Target : 0|8@1+ (1,0) [0|100] "%" GearBox
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &script_path,
+        r#"
+on start {
+    let b = bytes(8);
+    send(0x100);
+    set_sig(b, 0x100, "RPM", 9999);
+}
+"#,
+    )
+    .unwrap();
+
+    let check = ScriptCheck {
+        scripts: vec![script_path.to_string_lossy().into_owned()],
+        dbcs: vec![dbc_path.to_string_lossy().into_owned()],
+        node: Some("EngineECU".into()),
+    };
+    // The report carries the findings either way; only compile failures
+    // flip the exit code, and this script compiles.
+    let report = check_scripts(&check).unwrap_or_else(|r| r);
+    assert!(report.contains("0x101"), "reverse check names EngineCmd: {report}");
+    assert!(report.contains("脚本未发送"), "{report}");
+    assert!(report.contains("9999"), "range check named: {report}");
+    assert!(report.contains("sends: 0x100"), "the send set is printed");
+    std::fs::remove_file(&dbc_path).ok();
+    std::fs::remove_file(&script_path).ok();
+}
+
 #[test]
 fn defaults_apply_when_flags_are_absent() {
     let cli = parse_args(&flag_set(&["--replay", "x.blf"])).unwrap();
@@ -136,7 +223,7 @@ fn the_profile_flag_travels_with_the_project() {
 fn check_script_flags_collect_files() {
     let cli = parse_args(&flag_set(&["--check-script", "a.rxcan"])).unwrap();
     match cli {
-        Cli::CheckScripts(files) => assert_eq!(files, ["a.rxcan"]),
+        Cli::CheckScripts(check) => assert_eq!(check.scripts, ["a.rxcan"]),
         other => panic!("expected CheckScripts, got {other:?}"),
     }
     let cli = parse_args(&flag_set(&[
@@ -147,7 +234,7 @@ fn check_script_flags_collect_files() {
     ]))
     .unwrap();
     match cli {
-        Cli::CheckScripts(files) => assert_eq!(files, ["a.rxcan", "b.rxcan"]),
+        Cli::CheckScripts(check) => assert_eq!(check.scripts, ["a.rxcan", "b.rxcan"]),
         other => panic!("expected CheckScripts, got {other:?}"),
     }
 }
@@ -156,7 +243,6 @@ fn check_script_flags_collect_files() {
 /// must name its file and its compile error, a good one must pass.
 #[test]
 fn check_scripts_compile_and_report() {
-    use super::check_scripts;
     let dir = std::env::temp_dir();
     let good = dir.join("roxy_can_check_good.rxcan");
     let bad = dir.join("roxy_can_check_bad.rxcan");
@@ -164,14 +250,23 @@ fn check_scripts_compile_and_report() {
     std::fs::write(&good, "on start { print(\"up\"); }").unwrap();
     std::fs::write(&bad, "on timer 0 { }").unwrap();
 
-    let ok = check_scripts(&[good.to_string_lossy().to_string()]).unwrap();
+    let ok = check_scripts(&ScriptCheck {
+        scripts: vec![good.to_string_lossy().to_string()],
+        dbcs: Vec::new(),
+        node: None,
+    })
+    .unwrap();
     assert!(ok.contains("ok"), "{ok}");
     assert!(ok.contains("1 handlers"), "{ok}");
 
-    let report = check_scripts(&[
-        bad.to_string_lossy().to_string(),
-        missing.to_string_lossy().to_string(),
-    ])
+    let report = check_scripts(&ScriptCheck {
+        scripts: vec![
+            bad.to_string_lossy().to_string(),
+            missing.to_string_lossy().to_string(),
+        ],
+        dbcs: Vec::new(),
+        node: None,
+    })
     .unwrap_err();
     assert!(report.contains("positive"), "{report}");
     assert!(

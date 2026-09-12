@@ -470,9 +470,9 @@ fn main() {
             // Printed the report; do not fall through into the window.
             return;
         }
-        Ok(cli::Cli::CheckScripts(paths)) => {
+        Ok(cli::Cli::CheckScripts(check)) => {
             cli::attach_parent_console();
-            match cli::check_scripts(&paths) {
+            match cli::check_scripts(&check) {
                 Ok(report) => println!("{report}"),
                 Err(report) => {
                     eprintln!("{report}");

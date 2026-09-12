@@ -15,7 +15,7 @@ pub enum Cli {
     /// Run the replay headless.
     Run(CliOpts),
     /// Compile node scripts and report; exit non-zero on any failure.
-    CheckScripts(Vec<String>),
+    CheckScripts(ScriptCheck),
     /// Transcode a log to ASC: `--convert <in> <out>`. A pure stream
     /// transform -- no bus, no clock, no window.
     Convert(String, String),
@@ -41,6 +41,18 @@ pub struct CliOpts {
     pub stats_csv: Option<String>,
 }
 
+/// Inputs of the `--check-script` headless gate: the scripts to check,
+/// optionally the DBCs (repeatable, merged in order) to run the
+/// database-backed assembly checks against, and optionally the DBC node
+/// name the scripts act as -- which turns on the send-set and reverse
+/// implementation checks.
+#[derive(Debug, Default)]
+pub struct ScriptCheck {
+    pub scripts: Vec<String>,
+    pub dbcs: Vec<String>,
+    pub node: Option<String>,
+}
+
 pub fn usage() -> &'static str {
     "roxy-can -- CAN bus analysis
 
@@ -49,7 +61,11 @@ pub fn usage() -> &'static str {
   roxy-can --project <p> ...     simulate a saved project without any window
   roxy-can --check-script <f>    compile node scripts, no window needed
                                  (repeat the flag for more files; non-zero
-                                 exit when any script fails)
+                                 exit when any script fails). With
+                                 --dbc/--node the DBC-backed assembly
+                                 checks (signal refs, send set vs the
+                                 node's declarations, reverse check,
+                                 set_sig ranges) run here too
   roxy-can --convert <in> <out>  transcode a log (.asc/.blf) to ASC
   roxy-can --kvaser-probe        list the Kvaser channels canlib sees
 
@@ -65,6 +81,10 @@ run options
                      (replay default: run to the end of the log;
                       project: required, a simulation has no end)
   --stats <path>     write the message-statistics CSV when the run ends
+  --dbc <path>       DBC for --check-script's assembly checks (repeatable,
+                     merged in order, first library wins on clashes)
+  --node <name>      the DBC node name the checked scripts act as; turns
+                     on the send-set and reverse implementation checks
   -h, --help         this text"
 }
 
@@ -84,6 +104,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut duration_s = None;
     let mut stats_csv = None;
     let mut scripts = Vec::new();
+    let mut script_check = ScriptCheck::default();
     let mut i = 0;
     while i < args.len() {
         // Reads the value after `flag`, refusing an empty or missing one.
@@ -105,6 +126,8 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             }
             "--kvaser-probe" => kvaser_probe = true,
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
+            "--dbc" => script_check.dbcs.push(value(args, &mut i, "--dbc")?),
+            "--node" => script_check.node = Some(value(args, &mut i, "--node")?),
             "--speed" => {
                 let raw = value(args, &mut i, "--speed")?;
                 speed = raw
@@ -136,9 +159,11 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
                     .to_string(),
             );
         }
-        return Ok(Cli::CheckScripts(scripts));
-    }
-    if let Some((input, output)) = convert {
+        script_check.scripts = scripts;
+        return Ok(Cli::CheckScripts(script_check));
+    } else if !script_check.dbcs.is_empty() || script_check.node.is_some() {
+        return Err("`--dbc`/`--node` belong to `--check-script`".to_string());
+    } else if let Some((input, output)) = convert {
         if replay.is_some() || project.is_some() || profile.is_some() {
             return Err(
                 "`--convert` transcodes a log on its own; drop the other run flags".to_string(),
@@ -370,11 +395,31 @@ pub fn kvaser_probe() -> Result<String, String> {
 /// Compiles each node script and reports the outcome per file. A file that
 /// fails to read or compile prints its error and makes the whole run fail,
 /// so a CI job or a pre-save hook can refuse broken scripts. Success prints
-/// one `ok` line per script.
-pub fn check_scripts(paths: &[String]) -> Result<String, String> {
+/// one `ok` line per script plus the static facts (response mapping, send
+/// / receive sets). With `--dbc`/`--node` the database-backed assembly
+/// checks the GUI runs at node start execute here too, printed under the
+/// script that raised them.
+pub fn check_scripts(check: &ScriptCheck) -> Result<String, String> {
+    // Merge `--dbc` files in order into one table, matching the GUI's
+    // multi-database loading semantics (first library wins on clashes).
+    let dbc = if check.dbcs.is_empty() {
+        None
+    } else {
+        let mut table: Option<crate::dbc::SymbolTable> = None;
+        for path in &check.dbcs {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            let parsed =
+                crate::dbc::load_dbc_str(&text).map_err(|e| format!("{path}: {e}"))?;
+            match &mut table {
+                Some(t) => crate::dbc::absorb(t, parsed),
+                None => table = Some(parsed),
+            }
+        }
+        table
+    };
     let mut lines = Vec::new();
     let mut failed = false;
-    for path in paths {
+    for path in &check.scripts {
         match std::fs::read_to_string(path) {
             Ok(src) => match crate::script::compile(&src) {
                 Ok(script) => {
@@ -422,6 +467,14 @@ pub fn check_scripts(paths: &[String]) -> Result<String, String> {
                         "        receives: {}",
                         if recvs.is_empty() { "-".to_string() } else { recvs }
                     ));
+                    // The assembly checks, same code path as the GUI's
+                    // node start: only exit-code-relevant failure is the
+                    // compile above; [check]/[info] lines are the report.
+                    if let Some(db) = &dbc {
+                        for line in crate::node::dbc_checks(&script, db, check.node.as_deref()) {
+                            lines.push(format!("        {line}"));
+                        }
+                    }
                 }
                 Err(e) => {
                     lines.push(format!("failed {path}\n  {e}"));
