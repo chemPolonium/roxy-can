@@ -73,8 +73,19 @@ pub(crate) struct EditorFacts {
     pub recv_wildcard: bool,
     /// `ns::name` keys this script accesses.
     pub sysvars: Vec<String>,
+    /// Response mapping: one row per armed one-shot timer.
+    pub responses: Vec<ResponseRowLite>,
     /// Compile error, when the draft no longer compiles.
     pub error: Option<String>,
+}
+
+/// One response row as the editor shows it: the timer, what arms it,
+/// and what it sends.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ResponseRowLite {
+    pub timer_label: String,
+    pub armed_by: Vec<String>,
+    pub sends: Vec<(u32, bool)>,
 }
 
 /// Derives the static facts of a draft. The outline comes from a line
@@ -129,6 +140,17 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
                 if !facts.sysvars.contains(key) {
                     facts.sysvars.push(key.clone());
                 }
+            }
+            for row in script.response_map() {
+                // A timer nobody arms never fires: not a response.
+                if row.armed_by.is_empty() {
+                    continue;
+                }
+                facts.responses.push(ResponseRowLite {
+                    timer_label: row.timer_label,
+                    armed_by: row.armed_by,
+                    sends: row.sends,
+                });
             }
         }
         Err(e) => facts.error = Some(e.to_string()),
@@ -714,6 +736,24 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     for key in &facts.sysvars {
         ui.text(format!("  {key}"));
     }
+
+    ui.separator();
+    ui.text_disabled(format!("响应映射（{}）", facts.responses.len()));
+    if facts.responses.is_empty() {
+        ui.text_disabled("  （无未被武装的单次定时器）");
+    }
+    for row in &facts.responses {
+        let replies = row
+            .sends
+            .iter()
+            .map(|(id, ext)| format!("{id:#X}{}", if *ext { "x" } else { "" }))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ui.text(format!("  {} -> {replies}", row.timer_label));
+        if ui.is_item_hovered() {
+            ui.tooltip_text(format!("由 {} 武装", row.armed_by.join(", ")));
+        }
+    }
 }
 
 /// The defined system variables, grouped by namespace: 读 inserts a
@@ -744,5 +784,32 @@ fn sysvar_tab(app: &mut App, ui: &Ui, id: u64) {
                 insert(app, id, &format!("sys_set(\"{ns}::{name}\", 0)"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod facts_tests {
+    use super::*;
+
+    /// The response mapping rides the facts: a one-shot timer someone
+    /// actually arms, with its replies. A timer nobody arms is not a
+    /// response and does not appear.
+    #[test]
+    fn facts_carry_the_response_mapping() {
+        let src = r#"
+            on message 0x100 { set_timer("resp", 200); }
+            on timer "resp" { send(0x200); }
+            on timer "idle" { send(0x300); }
+        "#;
+        let f = compute_facts(src, 7);
+        assert_eq!(f.responses.len(), 1, "only the armed timer maps: {:?}", f.responses);
+        let row = &f.responses[0];
+        assert_eq!(row.timer_label, "<on timer \"resp\">");
+        assert!(
+            row.armed_by.iter().any(|a| a.contains("0x100")),
+            "the arming handler is recorded: {:?}",
+            row.armed_by
+        );
+        assert_eq!(row.sends, &[(0x200, false)]);
     }
 }

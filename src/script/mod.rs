@@ -244,6 +244,9 @@ pub struct Script {
     /// `sig` / `set_sig` calls, deduped. Pure metadata for the host's
     /// load-time checks; the kernel itself attaches no meaning to them.
     pub signal_refs: Vec<(u32, String)>,
+    /// Literal `set_sig` write values `(id, signal, value)` (only calls
+    /// whose value constant-folded), for the host's range check.
+    pub set_sig_values: Vec<(u32, String, f64)>,
     /// R2 spike: sends whose `(from, id, extended)` the compiler derived
     /// statically. Pure metadata -- the runtime behaviour is unchanged.
     pub send_refs: Vec<(String, u32, bool)>,

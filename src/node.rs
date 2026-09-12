@@ -214,6 +214,68 @@ impl ScriptNode {
                 }
             }
         }
+        // R2 反向漏实现检查：DBC 声明本节点发送、脚本却从不发送的报文。
+        // 只是 info——生成器代发、脚本只做响应/监听都是常态；通配脚本
+        // （转发者/记录者）不检查。列出条目封顶，全量看收发 tab。
+        if let Some((_, ref attached_node)) = self.attached
+            && let Some(db) = &dbc
+            && !script.recv_wildcard
+        {
+            let mut missing: Vec<(u32, bool, &str)> = db
+                .messages
+                .iter()
+                .filter(|(k, m)| {
+                    m.transmitter == *attached_node
+                        && !script.send_refs.iter().any(|(_, id, ext)| (*id, *ext) == **k)
+                })
+                .map(|(k, m)| (k.0, k.1, m.name.as_str()))
+                .collect();
+            missing.sort();
+            if !missing.is_empty() {
+                const SHOW: usize = 8;
+                let list = missing
+                    .iter()
+                    .take(SHOW)
+                    .map(|(id, ext, name)| format!("0x{id:X}{} {name}", if *ext { "x" } else { "" }))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let more = if missing.len() > SHOW {
+                    format!(" 等 {} 条", missing.len())
+                } else {
+                    String::new()
+                };
+                Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    format!("[info] DBC 声明本节点发送、脚本未发送（可能由生成器代发）: {list}{more}"),
+                );
+            }
+        }
+        // R2 静态写入集：set_sig 的字面量值对照 DBC 信号物理界限。字面量
+        // 才能静态判定；表达式的越界交给运行时（编码函数自然截断）。
+        // min == max 的区间在 DBC 里表示"未声明界限"，不检查。
+        if let Some(db) = &dbc {
+            for (id, sig, v) in &script.set_sig_values {
+                let Some(m) = db.message_of(*id) else {
+                    continue; // 未知名已由信号引用检查报告
+                };
+                let Some(s) = m.signals.iter().find(|s| s.name == *sig) else {
+                    continue;
+                };
+                if s.max > s.min && (*v < s.min || *v > s.max) {
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!(
+                            "[check] set_sig 0x{id:X} \"{sig}\" 值 {v} 超出 DBC 声明范围 {}..{}",
+                            s.min, s.max
+                        ),
+                    );
+                }
+            }
+        }
         // 装配层校验：脚本引用的系统变量须已在系统变量管理器中定义，
         // 否则 sys_get 读到 0、sys_set 的写入被丢弃——提前报出来。
         for key in &script.sysvar_refs {
@@ -723,6 +785,93 @@ mod tests {
         let mut n = ScriptNode::new(1, "n".into(), 0);
         n.source = source.to_string();
         n
+    }
+
+    /// Two-node mini database: EngineECU transmits 0x100 + 0x101, GearBox
+    /// transmits 0x200. RPM is range-limited to 0..8000.
+    fn engine_dbc() -> std::sync::Arc<crate::dbc::SymbolTable> {
+        std::sync::Arc::new(crate::dbc::load_dbc_str(
+            r#"
+VERSION ""
+
+BS_:
+
+BU_: EngineECU GearBox
+
+BO_ 256 EngineStatus: 8 EngineECU
+ SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm" GearBox
+
+BO_ 257 EngineCmd: 8 EngineECU
+ SG_ Target : 0|8@1+ (1,0) [0|100] "%" GearBox
+
+BO_ 512 GearInfo: 8 GearBox
+ SG_ Ratio : 0|8@1+ (1,0) [0|255] "" EngineECU
+"#,
+        )
+        .expect("test dbc parses"))
+    }
+
+    /// R2 reverse check: DBC traffic the bound node declares but the
+    /// script never sends surfaces as an info line; what the script does
+    /// send is not flagged.
+    #[test]
+    fn reverse_check_reports_dbc_traffic_the_script_never_sends() {
+        let mut n = node("on start { send(0x100); }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        let logs = n.log_snapshot();
+        assert!(
+            logs.iter().any(|l| l.contains("0x101") && l.contains("脚本未发送")),
+            "EngineCmd (0x101) is named: {logs:?}"
+        );
+        assert!(
+            !logs.iter().any(|l| l.contains("未发送") && l.contains("0x100")),
+            "the implemented EngineStatus is not flagged"
+        );
+        // Foreign DBC traffic (GearBox's 0x200) is nobody's business here.
+        assert!(
+            !logs.iter().any(|l| l.contains("未发送") && l.contains("0x200")),
+            "another node's messages are not this script's job"
+        );
+    }
+
+    /// A wildcard script is a forwarder or recorder by declaration: the
+    /// reverse check does not apply to it.
+    #[test]
+    fn reverse_check_skips_wildcard_scripts() {
+        let mut n = node("on message * { }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        assert!(
+            !n.log_snapshot().iter().any(|l| l.contains("脚本未发送")),
+            "a wildcard forwarder is exempt"
+        );
+    }
+
+    /// Literal `set_sig` values are range-checked against the database;
+    /// in-range writes stay silent.
+    #[test]
+    fn set_sig_literal_outside_dbc_range_is_reported() {
+        let mut n = node(
+            r#"
+                on start {
+                    let b = bytes(8);
+                    set_sig(b, 0x100, "RPM", 9999);
+                    set_sig(b, 0x100, "RPM", 3000);
+                }
+            "#,
+        );
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        let logs = n.log_snapshot();
+        assert!(
+            logs.iter().any(|l| l.contains("9999") && l.contains("超出")),
+            "the out-of-range literal is named: {logs:?}"
+        );
+        assert!(
+            !logs.iter().any(|l| l.contains("3000")),
+            "the in-range literal stays silent"
+        );
     }
 
     /// The start check reports literal `sys_get` / `sys_set` keys that

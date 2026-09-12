@@ -32,6 +32,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         break_jumps: Vec::new(),
         continue_jumps: Vec::new(),
         signal_refs: Vec::new(),
+        set_sig_values: Vec::new(),
         sysvar_refs: Vec::new(),
         recv_wildcard: false,
         cur_handler: None,
@@ -143,6 +144,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         handlers: c.handlers,
         host_fns: HOST_FNS.iter().map(|(n, _, _)| n.to_string()).collect(),
         signal_refs: c.signal_refs,
+        set_sig_values: c.set_sig_values,
         send_refs: c.send_refs,
         recv_refs: c.recv_refs,
         recv_wildcard: c.recv_wildcard,
@@ -181,6 +183,9 @@ struct Comp {
     /// calls, deduped: metadata the host can check against the database
     /// at node-assembly time.
     signal_refs: Vec<(u32, String)>,
+    /// Literal `set_sig` values: `(id, signal, value)` where the value
+    /// constant-folded, for the host's range check at node start.
+    set_sig_values: Vec<(u32, String, f64)>,
     /// System variable keys (`"ns::name"`) named by literal-argument
     /// `sys_get` / `sys_set` calls, deduped, for the host's start check.
     sysvar_refs: Vec<String>,
@@ -592,16 +597,6 @@ impl Comp {
                             self.signal_refs.push(r);
                         }
                     }
-                    if *name == "set_sig"
-                        && args.len() == 4
-                        && let (Expr::Int(id), Expr::Str(sig)) = (&args[1], &args[2])
-                        && *id >= 0
-                    {
-                        let r = (*id as u32, sig.clone());
-                        if !self.signal_refs.contains(&r) {
-                            self.signal_refs.push(r);
-                        }
-                    }
                     // System variable accesses are recorded the same way:
                     // the host checks the keys against the defined
                     // registry when the node starts.
@@ -696,6 +691,26 @@ impl Comp {
                     // functions the compiler has never seen.
                     let name_const = self.constant(Value::Str(name.clone()));
                     self.emit(Op::CallExtern(name_const, args.len() as u8));
+                    // `set_sig` rides this path (it is a node extern, not a
+                    // builtin), so its signal reference -- and a literal
+                    // write value, for the host's range check at node
+                    // start -- is recorded here.
+                    if *name == "set_sig"
+                        && args.len() == 4
+                        && let (Expr::Int(id), Expr::Str(sig)) = (&args[1], &args[2])
+                        && *id >= 0
+                    {
+                        let r = (*id as u32, sig.clone());
+                        if !self.signal_refs.contains(&r) {
+                            self.signal_refs.push(r);
+                        }
+                        if let Some(v) = self.const_f64(&args[3]) {
+                            let entry = (*id as u32, sig.clone(), v);
+                            if !self.set_sig_values.contains(&entry) {
+                                self.set_sig_values.push(entry);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -757,6 +772,18 @@ impl Comp {
                     _ => None,
                 }
             }
+            _ => None,
+        }
+    }
+
+    /// Constant-folds an expression to a float: number literals and
+    /// negation. Values written as arithmetic go unchecked by design --
+    /// a computed setpoint is runtime business.
+    fn const_f64(&self, e: &Expr) -> Option<f64> {
+        match e {
+            Expr::Int(v) => Some(*v as f64),
+            Expr::Float(v) => Some(*v),
+            Expr::Unary(UnOp::Neg, x) => Some(-self.const_f64(x)?),
             _ => None,
         }
     }
