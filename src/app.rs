@@ -211,6 +211,10 @@ pub struct App {
     /// Script-node editors currently open, by node id in open order.
     /// Session state; an id whose node is gone closes its editor.
     pub open_editors: Vec<u64>,
+    /// Per-editor static facts (outline, send/receive/sysvar sets),
+    /// keyed by node id and re-derived from the draft text when its hash
+    /// changes. Session state.
+    pub(crate) editor_facts: HashMap<u64, crate::ui::script_editor::EditorFacts>,
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
@@ -430,6 +434,7 @@ impl App {
             node_src_draft: HashMap::new(),
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
+            editor_facts: HashMap::new(),
             kvaser_channels: None,
             profile_names: None,
             profile_pick: 0,

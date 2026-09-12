@@ -257,6 +257,8 @@ pub struct Script {
     /// R2 静态事实表 -- 接收集：`on message <id>` / `on extended message
     /// <id>` 声明监听的 `(id, extended)`。`on message *` 不入列（无界）。
     pub recv_refs: Vec<(u32, bool)>,
+    /// 脚本声明了 `on message *`（监听一切帧）。
+    pub recv_wildcard: bool,
     /// System variables referenced by literal-argument `sys_get` /
     /// `sys_set` calls (`"ns::name"`), deduped. The host checks the set
     /// against the defined registry at node start.

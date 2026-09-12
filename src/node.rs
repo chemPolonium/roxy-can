@@ -9,7 +9,7 @@
 //! an outbox that the core drains onto the bus as real frames.
 
 use crate::script::{Handler, HandlerKind, HostInput, Value, Vm, compile};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 /// Log lines kept per node, oldest first.
 const LOG_CAP: usize = 200;
@@ -672,6 +672,7 @@ fn node_extern(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn node(source: &str) -> ScriptNode {
         let mut n = ScriptNode::new(1, "n".into(), 0);

@@ -5,9 +5,105 @@
 
 use crate::app::App;
 use imgui::{Condition, Ui};
+use std::hash::{Hash, Hasher};
 
 const SOURCE_HEIGHT: f32 = 220.0;
 const LOG_LINES: usize = 10;
+
+/// Static facts of one editor's draft text: the handler outline and the
+/// compile-derived send/receive/system-variable sets. Recomputed only
+/// when the draft's hash changes, not per frame.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EditorFacts {
+    pub hash: u64,
+    /// `(line, label)` in draft order.
+    pub outline: Vec<(u32, String)>,
+    /// `(id, extended, arming handler)` from the compiler's send set.
+    pub sends: Vec<(u32, bool, String)>,
+    /// `(id, extended)` the handlers listen for.
+    pub recvs: Vec<(u32, bool)>,
+    pub recv_wildcard: bool,
+    /// `ns::name` keys this script accesses.
+    pub sysvars: Vec<String>,
+    /// Compile error, when the draft no longer compiles.
+    pub error: Option<String>,
+}
+
+/// Derives the static facts of a draft. The outline comes from a line
+/// scan (it must work on broken, half-typed source); the sets come from
+/// the compiler and are absent when it fails.
+fn compute_facts(src: &str, hash: u64) -> EditorFacts {
+    let mut facts = EditorFacts {
+        hash,
+        ..Default::default()
+    };
+    for (i, raw) in src.lines().enumerate() {
+        let line = raw.trim_start();
+        let label = if line.starts_with("on start") {
+            Some("on start".to_string())
+        } else if line.starts_with("on errorFrame") {
+            Some("on errorFrame".to_string())
+        } else if line.starts_with("on extended message") {
+            Some(line.split('{').next().unwrap_or("").trim().to_string())
+        } else if line.starts_with("on message") {
+            Some(line.split('{').next().unwrap_or("").trim().to_string())
+        } else if line.starts_with("on timer") {
+            Some(line.split('{').next().unwrap_or("").trim().to_string())
+        } else if line.starts_with("fn ") {
+            Some(line.split('{').next().unwrap_or("").trim().to_string())
+        } else {
+            None
+        };
+        if let Some(label) = label {
+            facts.outline.push((i as u32 + 1, label));
+        }
+    }
+    match crate::script::compile(src) {
+        Ok(script) => {
+            for (_, id, ext) in &script.send_refs {
+                let entry = (*id, *ext);
+                if !facts.sends.iter().any(|(i, e, _)| (*i, *e) == entry) {
+                    let from = script
+                        .send_refs
+                        .iter()
+                        .find(|(_, i, e)| (*i, *e) == entry)
+                        .map(|(f, _, _)| f.clone())
+                        .unwrap_or_default();
+                    facts.sends.push((*id, *ext, from));
+                }
+            }
+            for (id, ext) in &script.recv_refs {
+                let entry = (*id, *ext);
+                if !facts.recvs.contains(&entry) {
+                    facts.recvs.push(entry);
+                }
+            }
+            facts.recv_wildcard = script.recv_wildcard;
+            for key in &script.sysvar_refs {
+                if !facts.sysvars.contains(key) {
+                    facts.sysvars.push(key.clone());
+                }
+            }
+        }
+        Err(e) => facts.error = Some(e.to_string()),
+    }
+    facts
+}
+
+/// Cached facts for a draft, recomputed when its hash changed.
+fn facts_for(app: &mut App, id: u64) -> EditorFacts {
+    let src = app.node_src_draft.get(&id).cloned().unwrap_or_default();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    let hash = h.finish();
+    let cached = app.editor_facts.get(&id);
+    if cached.is_some_and(|f| f.hash == hash) {
+        return cached.unwrap().clone();
+    }
+    let facts = compute_facts(&src, hash);
+    app.editor_facts.insert(id, facts.clone());
+    facts
+}
 
 pub fn render(app: &mut App, ui: &Ui) {
     let ids = app.open_editors.clone();
@@ -16,6 +112,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             // The node went away (deleted, project replaced): its editor
             // has nothing left to edit.
             app.close_script_editor(id);
+            app.editor_facts.remove(&id);
             continue;
         };
         editor_window(app, ui, &node);
@@ -242,12 +339,41 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("其他", "srand", "srand(seed)"),
 ];
 
-/// The sidebar: categories with clickable items that append a template
-/// to the source draft. When the script is bound to a DBC node, a
-/// signal/message section appears listing that node's own signals.
+/// The sidebar: four tabs. 函数 lists the insertable templates; 大纲 is
+/// the draft's handler outline; 收发 is the static send/receive/sysvar
+/// fact table; SysVar lists the defined variables for one-click access.
 fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+    let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
+        return;
+    };
+    if let Some(_t) = ui.tab_item("函数") {
+        fns_tab(app, ui, id);
+    }
+    if let Some(_t) = ui.tab_item("大纲") {
+        outline_tab(app, ui, id);
+    }
+    if let Some(_t) = ui.tab_item("收发") {
+        io_tab(app, ui, id, node);
+    }
+    if let Some(_t) = ui.tab_item("SysVar") {
+        sysvar_tab(app, ui, id);
+    }
+}
+
+/// Appends an insert snippet to the draft, on its own line.
+fn insert(app: &mut App, id: u64, text: &str) {
+    let draft = app.node_src_draft.entry(id).or_default();
+    if !draft.is_empty() && !draft.ends_with('\n') {
+        draft.push('\n');
+    }
+    draft.push_str(text);
+    draft.push('\n');
+}
+
+/// The insertable templates: categories with clickable items.
+fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
     let mut last_cat = "";
-    for (cat, label, insert) in SIDEBAR_ITEMS {
+    for (cat, label, insert_text) in SIDEBAR_ITEMS {
         if *cat != last_cat {
             if !last_cat.is_empty() {
                 ui.separator();
@@ -256,40 +382,13 @@ fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
             last_cat = *cat;
         }
         if ui.selectable_config(*label).build() {
-            let draft = app
-                .node_src_draft
-                .entry(id)
-                .or_default();
-            if !draft.is_empty() && !draft.ends_with('\n') {
-                draft.push('\n');
-            }
-            draft.push_str(insert);
-            draft.push('\n');
+            insert(app, id, insert_text);
         }
     }
 
     // DBC-aware section: the bound node's messages and signals.
-    if let Some((_, ref attached_node)) = node.attached {
-        // Collect owned data so the DBC borrow doesn't conflict with
-        // the draft mutation below.
-        type DbcItem = (u32, bool, String, Vec<(String, u64)>);
-        let dbc_items: Vec<DbcItem> = {
-            let Some(db) = app.channel_dbc(node.channel) else {
-                return;
-            };
-            db.order
-                .iter()
-                .filter_map(|&(id, ext)| {
-                    let m = db.messages.get(&(id, ext))?;
-                    if m.transmitter != *attached_node {
-                        return None;
-                    }
-                    let sigs: Vec<(String, u64)> =
-                        m.signals.iter().map(|s| (s.name.clone(), s.start_bit)).collect();
-                    Some((id, ext, m.name.clone(), sigs))
-                })
-                .collect()
-        };
+    let dbc_items = owned_dbc_items(app, id);
+    if !dbc_items.is_empty() {
         ui.separator();
         ui.text_disabled("DBC 报文/信号");
         for (msg_id, ext, msg_name, sigs) in &dbc_items {
@@ -298,23 +397,159 @@ fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
                 .selectable_config(format!("{} {}##dbcmsg{}", msg_name, id_str, msg_id))
                 .build()
             {
-                let draft = app.node_src_draft.entry(id).or_default();
-                if !draft.is_empty() && !draft.ends_with('\n') {
-                    draft.push('\n');
-                }
-                draft.push_str(&format!("send({:#x});", msg_id));
+                insert(app, id, &format!("send({:#x});", msg_id));
             }
             for (sig_name, _) in sigs {
                 if ui
                     .selectable_config(format!("  {}##dbcsig{}_{}", sig_name, msg_id, sig_name))
                     .build()
                 {
-                    let draft = app.node_src_draft.entry(id).or_default();
-                    if !draft.is_empty() && !draft.ends_with('\n') {
-                        draft.push('\n');
-                    }
-                    draft.push_str(&format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                    insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
                 }
+            }
+        }
+    }
+}
+
+/// `(bus, node)` binding of the editor's node, if any.
+fn binding_of(app: &App, id: u64) -> Option<(u8, String)> {
+    let n = app.snap.nodes.iter().find(|n| n.id == id)?;
+    n.attached.clone()
+}
+
+/// The bound node's own DBC messages: `(id, ext, name, signals)`.
+type DbcItem = (u32, bool, String, Vec<(String, u64)>);
+
+fn owned_dbc_items(app: &App, id: u64) -> Vec<DbcItem> {
+    let Some((bus, attached_node)) = binding_of(app, id) else {
+        return Vec::new();
+    };
+    let Some(db) = app.channel_dbc(bus) else {
+        return Vec::new();
+    };
+    db.order
+        .iter()
+        .filter_map(|&(id, ext)| {
+            let m = db.messages.get(&(id, ext))?;
+            if m.transmitter != attached_node {
+                return None;
+            }
+            let sigs: Vec<(String, u64)> =
+                m.signals.iter().map(|s| (s.name.clone(), s.start_bit)).collect();
+            Some((id, ext, m.name.clone(), sigs))
+        })
+        .collect()
+}
+
+/// The draft's handler outline: every event handler and function with
+/// its line number. Works on half-typed source; a compile error shows
+/// alongside so the outline degrades gracefully.
+fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
+    let facts = facts_for(app, id);
+    if let Some(e) = &facts.error {
+        ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
+        if ui.is_item_hovered() {
+            ui.tooltip_text(e);
+        }
+    }
+    if facts.outline.is_empty() {
+        ui.text_disabled("（尚无处理器）");
+        return;
+    }
+    for (line, label) in &facts.outline {
+        ui.selectable_config(format!("{label}##ol{line}")).build();
+        if ui.is_item_hovered() {
+            ui.tooltip_text(format!("第 {line} 行"));
+        }
+    }
+}
+
+/// The static fact table: what this script sends, what it listens for,
+/// and which system variables it touches. Sends are marked against the
+/// DBC's transmitter declaration when the script is bound: `*` own,
+/// `!` foreign, `-` unknown.
+fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+    let facts = facts_for(app, id);
+    if let Some(e) = &facts.error {
+        ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
+        if ui.is_item_hovered() {
+            ui.tooltip_text(e);
+        }
+        return;
+    }
+
+    ui.text_disabled(format!("发送（{}）", facts.sends.len()));
+    let dbc = node
+        .attached
+        .as_ref()
+        .and_then(|(bus, _)| app.channel_dbc(*bus));
+    let attached_node = node.attached.as_ref().map(|(_, n)| n.clone());
+    if facts.sends.is_empty() {
+        ui.text_disabled("  （无）");
+    }
+    for (msg_id, ext, from) in &facts.sends {
+        let mark = match (&dbc, &attached_node) {
+            (Some(db), Some(owner)) => match db.messages.get(&(*msg_id, *ext)) {
+                Some(m) if &m.transmitter == owner => "*",
+                Some(_) => "!",
+                None => "-",
+            },
+            _ => "-",
+        };
+        ui.text(format!("{mark} 0x{msg_id:03X}{}", if *ext { "x" } else { "" }));
+        if ui.is_item_hovered() {
+            ui.tooltip_text(format!("来自 {from}"));
+        }
+    }
+
+    ui.separator();
+    ui.text_disabled(format!("接收（{}）", facts.recvs.len() + usize::from(facts.recv_wildcard)));
+    if facts.recv_wildcard {
+        ui.text("  *  所有帧");
+    }
+    if facts.recvs.is_empty() && !facts.recv_wildcard {
+        ui.text_disabled("  （无）");
+    }
+    for (msg_id, ext) in &facts.recvs {
+        ui.text(format!("  0x{msg_id:03X}{}", if *ext { "x" } else { "" }));
+    }
+
+    ui.separator();
+    ui.text_disabled(format!("系统变量（{}）", facts.sysvars.len()));
+    if facts.sysvars.is_empty() {
+        ui.text_disabled("  （无）");
+    }
+    for key in &facts.sysvars {
+        ui.text(format!("  {key}"));
+    }
+}
+
+/// The defined system variables, grouped by namespace: 读 inserts a
+/// `sys_get`, 写 inserts a `sys_set` template.
+fn sysvar_tab(app: &mut App, ui: &Ui, id: u64) {
+    let mut vars: Vec<(String, Vec<(String, bool)>)> = Vec::new(); // (ns, [(name, has_bounds)])
+    for v in &app.snap.sysvars {
+        match vars.iter_mut().find(|(ns, _)| *ns == v.def.namespace) {
+            Some((_, list)) => list.push((v.def.name.clone(), v.def.min.is_some() || v.def.max.is_some())),
+            None => vars.push((
+                v.def.namespace.clone(),
+                vec![(v.def.name.clone(), v.def.min.is_some() || v.def.max.is_some())],
+            )),
+        }
+    }
+    if vars.is_empty() {
+        ui.text_disabled("（尚未定义）");
+        ui.text_disabled("View > System Variables 中管理");
+        return;
+    }
+    for (ns, names) in &vars {
+        ui.text_disabled(ns);
+        for (name, _) in names {
+            if ui.selectable_config(format!("读  {name}##svr{ns}{name}")).build() {
+                insert(app, id, &format!("sys_get(\"{ns}::{name}\")"));
+            }
+            if ui.selectable_config(format!("写  {name}##svw{ns}{name}")).build() {
+                insert(app, id, &format!("sys_set(\"{ns}::{name}\", 0)"));
             }
         }
     }
