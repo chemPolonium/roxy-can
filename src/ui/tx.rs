@@ -88,7 +88,7 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
                 .hint("search name / ID")
                 .build();
             ui.same_line();
-            if ui.small_button("Clear##gsc") {
+            if ui.button("Clear##gsc") {
                 app.gen_search.clear();
             }
             ui.same_line();
@@ -123,7 +123,7 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
                     app.gen_add_buf = Some((ch8, buf.clone()));
                 }
                 ui.same_line();
-                let add = ui.small_button(format!("Add##gadd{ch}"));
+                let add = ui.button(format!("Add##gadd{ch}"));
                 if ui.is_item_deactivated_after_edit() && !buf.is_empty() {
                     app.gen_add_buf = None;
                     add_hex_id(app, ch8, &buf);
@@ -253,7 +253,7 @@ pub fn render_node_generator(app: &mut App, ui: &Ui, nch: u8, nname: &str) {
         for r in &reactions {
             ui.text(format!("  · {r}"));
         }
-        if ui.small_button("在 Triggers 窗口管理##noder") {
+        if ui.button("在 Triggers 窗口管理##noder") {
             app.show_triggers = true;
         }
     }
@@ -384,7 +384,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
             } else {
                 format!("DBC {}ms", declared / 1000)
             };
-            if ui.small_button(format!("{label}##dbc{i}")) {
+            if ui.button(format!("{label}##dbc{i}")) {
                 app.send(crate::bus::BusCommand::SetEntryCycle {
                     ch,
                     id,
@@ -637,7 +637,7 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
                 }
             ));
             ui.same_line();
-            if ui.small_button("use it") {
+            if ui.button("use it") {
                 app.tx_cycle_buf = (d / 1000).to_string();
             }
         }

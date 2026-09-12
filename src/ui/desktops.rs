@@ -43,7 +43,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 } else {
                     format!("{name}##desk{k}")
                 };
-                if ui.small_button(label) {
+                if ui.button(label) {
                     app.switch_desktop(k);
                 }
                 if ui.is_item_hovered() && ui.is_mouse_released(imgui::MouseButton::Right) {
@@ -77,7 +77,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 });
                 ui.same_line();
             }
-            if ui.small_button("+##deskadd") {
+            if ui.button("+##deskadd") {
                 app.add_desktop();
             }
         });

@@ -151,7 +151,7 @@ impl State {
         context.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
         context.io_mut().config_windows_move_from_title_bar_only = true;
         context.io_mut().set_platform_ime_data_fn = Some(ime_data_callback);
-        context.style_mut().frame_padding = [1.0, 1.0];
+        context.style_mut().frame_padding = [4.0, 1.0];
         let font_size = 13.0 * dpi as f32;
         let font_config = imgui::FontConfig {
             oversample_h: 1,

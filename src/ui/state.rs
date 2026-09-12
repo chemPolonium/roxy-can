@@ -191,14 +191,14 @@ fn custom_panel(
         ui.same_line();
         ui.text("cut");
         ui.same_line();
-        if ui.small_button(format!("x##srcutrm{ci}")) {
+        if ui.button(format!("x##srcutrm{ci}")) {
             rm_cut = Some(ci);
         }
     }
     if let Some(ci) = rm_cut {
         rule.remove_cut(ci);
     }
-    if ui.small_button("Add cut##sradd") {
+    if ui.button("Add cut##sradd") {
         let next = rule.cuts.last().copied().unwrap_or(0.0) + 1.0;
         rule.add_cut(next);
     }
@@ -244,7 +244,7 @@ fn custom_panel(
         }
     }
     ui.separator();
-    if ui.small_button("Clear##srclear") {
+    if ui.button("Clear##srclear") {
         w.rules.remove(key);
         purge_band_slots(w, key);
     }
@@ -330,7 +330,7 @@ fn default_panel(
             ui.tooltip_text("automatic");
         }
     }
-    if ui.small_button("清除颜色##srdclear") {
+    if ui.button("清除颜色##srdclear") {
         w.overrides.remove(key);
     }
 }

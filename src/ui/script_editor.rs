@@ -93,7 +93,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: enabled });
     }
     ui.same_line();
-    if ui.small_button(format!("删除##erm{id}")) {
+    if ui.button(format!("删除##erm{id}")) {
         app.send(crate::bus::BusCommand::RemoveNode { id });
         app.node_src_draft.remove(&id);
         app.close_script_editor(id);
@@ -135,7 +135,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             ui.set_next_item_width(-1.0);
             ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
                 .build();
-            if ui.small_button(format!("Apply##eapply{id}")) {
+            if ui.button(format!("Apply##eapply{id}")) {
                 let source =
                     app.node_src_draft.get(&id).cloned().unwrap_or_default();
                 app.send(crate::bus::BusCommand::SetNodeSource { id, source });
@@ -145,7 +145,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
             }
             ui.same_line();
-            if ui.small_button(format!("保存##esave{id}")) {
+            if ui.button(format!("保存##esave{id}")) {
                 let source =
                     app.node_src_draft.get(&id).cloned().unwrap_or_default();
                 if let Some(path) = rfd::FileDialog::new()
@@ -162,7 +162,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 }
             }
             ui.same_line();
-            if ui.small_button(format!("加载##eload{id}")) {
+            if ui.button(format!("加载##eload{id}")) {
                 let picked = rfd::FileDialog::new()
                     .set_title("加载节点脚本")
                     .add_filter("节点脚本", &["rxcan"])

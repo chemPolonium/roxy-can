@@ -47,7 +47,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     );
     app.stats_windows[i].scope = new_scope;
     ui.same_line();
-    if ui.small_button(format!("Export##sx{i}")) {
+    if ui.button(format!("Export##sx{i}")) {
         app.export_stats_dialog(i);
     }
     ui.separator();
@@ -106,6 +106,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         init_width_or_weight: 52.0,
         ..TableColumnSetup::new("Share")
     });
+    ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 
     for row in &app.stats_windows[i].text_rows {

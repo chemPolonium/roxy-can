@@ -58,11 +58,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.same_line();
     // Clear resets the per-message counters this window reads; the
     // filter controls keep their settings.
-    if ui.small_button(format!("Clear##mf{i}")) {
+    if ui.button(format!("Clear##mf{i}")) {
         app.send(crate::bus::BusCommand::ClearAggregates);
     }
     ui.same_line();
-    if ui.small_button(format!("Export##mx{i}")) {
+    if ui.button(format!("Export##mx{i}")) {
         app.export_messages_dialog(i);
     }
 
@@ -120,6 +120,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         init_width_or_weight: 2.0,
         ..TableColumnSetup::new("Data")
     });
+    ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 
     for row in &app.msg_windows[i].text_rows {

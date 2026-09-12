@@ -62,11 +62,11 @@ fn content(app: &mut App, ui: &Ui) {
         }
     }
     ui.same_line();
-    if ui.small_button("Export##spec") {
+    if ui.button("Export##spec") {
         app.export_spec_dialog();
     }
     ui.same_line();
-    if ui.small_button("Clear##spec") {
+    if ui.button("Clear##spec") {
         app.send(crate::bus::BusCommand::ClearSpec);
     }
     ui.separator();

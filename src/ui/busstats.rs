@@ -66,6 +66,7 @@ fn content(app: &mut App, ui: &Ui) {
         init_width_or_weight: 70.0,
         ..TableColumnSetup::new("Avg")
     });
+    ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 
     for (i, ch) in app.snap.channels.iter().enumerate() {

@@ -165,7 +165,7 @@ fn message_content(app: &mut App, ui: &Ui) {
     ui.input_text("##idf_search", &mut app.id_filter_search)
         .hint("search messages / signals")
         .build();
-    if ui.small_button("Select all matching") {
+    if ui.button("Select all matching") {
         let q = app.id_filter_search.trim().to_ascii_uppercase();
         let mut keys: Vec<(u8, u32)> = Vec::new();
         for (ch, channel) in app.snap.channels.iter().enumerate() {
@@ -186,7 +186,7 @@ fn message_content(app: &mut App, ui: &Ui) {
         set_target_scope(app, SigScope::Manual);
     }
     ui.same_line();
-    if ui.small_button("Clear") {
+    if ui.button("Clear") {
         if let Some(m) = app.win_manual_mut(target) {
             m.clear();
         }
@@ -307,7 +307,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
     ui.input_text("##sig_search", &mut app.symbol_search)
         .hint("search messages / signals")
         .build();
-    if ui.small_button("Clear##sigsel") {
+    if ui.button("Clear##sigsel") {
         for key in selected.clone() {
             app.set_win_signal(target, key, false);
         }

@@ -118,9 +118,10 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
         ui.table_setup_column_with(TableColumnSetup {
             flags: TableColumnFlags::WIDTH_STRETCH,
             init_width_or_weight: 1.0,
-            ..TableColumnSetup::new("Bar")
-        });
-        ui.table_headers_row();
+        ..TableColumnSetup::new("Bar")
+    });
+    ui.table_setup_scroll_freeze(0, 1);
+    ui.table_headers_row();
         for (key, text) in keys.iter().zip(cache.iter()) {
             let Some(sub) = app.sub_view(key) else {
                 continue;

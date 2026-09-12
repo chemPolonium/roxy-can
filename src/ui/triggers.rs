@@ -218,11 +218,11 @@ fn content(app: &mut App, ui: &Ui) {
             ui.align_text_to_frame_padding();
             ui.text(format!("{}", app.snap.triggers[i].fired));
             ui.table_next_column();
-            if ui.small_button(format!("edit##triged{i}")) {
+            if ui.button(format!("edit##triged{i}")) {
                 app.trig_draft = TrigDraft::for_index(app, i);
             }
             ui.table_next_column();
-            if ui.small_button(format!("x##trigrm{i}")) {
+            if ui.button(format!("x##trigrm{i}")) {
                 remove = Some(i);
             }
         }

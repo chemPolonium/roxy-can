@@ -40,7 +40,7 @@ fn ensure_kvaser_list(
 }
 
 fn content(app: &mut App, ui: &Ui) {
-    if ui.small_button("+ Add bus") {
+    if ui.button("+ Add bus") {
         app.add_channel();
     }
     ui.same_line();
@@ -48,7 +48,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
-    if ui.small_button("刷新通道##hwref") {
+    if ui.button("刷新通道##hwref") {
         app.kvaser_channels = None;
     }
     if ui.is_item_hovered() {
@@ -153,19 +153,19 @@ fn content(app: &mut App, ui: &Ui) {
                 file_name(&path)
             });
             ui.same_line();
-            if ui.small_button(format!("Open...##busdbc{i}")) {
+            if ui.button(format!("Open...##busdbc{i}")) {
                 app.pick_dbc_for(i);
             }
             // Extra attached databases: one row each with a detach button.
             for (e, extra) in extras.iter().enumerate() {
                 ui.text(file_name(extra));
                 ui.same_line();
-                if ui.small_button(format!("x##busdbx{i}_{e}")) {
+                if ui.button(format!("x##busdbx{i}_{e}")) {
                     app.detach_dbc_extra(i, e);
                 }
             }
             ui.same_line();
-            if ui.small_button(format!("+##busdbadd{i}")) {
+            if ui.button(format!("+##busdbadd{i}")) {
                 app.attach_dbc_dialog(i);
             }
             if ui.is_item_hovered() {
@@ -249,7 +249,7 @@ fn content(app: &mut App, ui: &Ui) {
                     } else {
                         format!("ch{adapter} {kbps}k 只收{}", if fd { " FD" } else { "" })
                     });
-                    if ui.small_button(format!("解挂##hwdet{i}")) {
+                    if ui.button(format!("解挂##hwdet{i}")) {
                         app.detach_hardware(i as u8);
                     }
                     if ui.is_item_hovered() {
@@ -293,7 +293,7 @@ fn content(app: &mut App, ui: &Ui) {
                 }
             }
             ui.table_next_column();
-            if ui.small_button(format!("x##busrm{i}")) {
+            if ui.button(format!("x##busrm{i}")) {
                 remove = Some(i);
             }
         }

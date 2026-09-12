@@ -27,7 +27,7 @@ fn signals_mut(app: &mut App, kind: ListKind) -> &mut Vec<GfxSignal> {
 /// signal's own value-axis policy badge. Adding/removing signals happens
 /// in the Signal Selection popup (Measurement Setup).
 pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
-    if ui.small_button("Show all") {
+    if ui.button("Show all") {
         for s in signals_mut(app, kind).iter_mut() {
             s.visible = true;
         }
@@ -107,7 +107,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         // (CANoe's Value Definition); Graphics rows keep the Y-axis badge.
         if let ListKind::State(wi) = kind {
             ui.same_line_with_pos(super::graphics::PANEL_W - 30.0);
-            if ui.small_button(format!("S##srule{j}")) {
+            if ui.button(format!("S##srule{j}")) {
                 app.state_rule_edit = Some((wi, key.clone()));
             }
             if ui.is_item_hovered() {
@@ -121,7 +121,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
             let mode = signals_mut(app, kind)[j].y_mode;
             let menu_id = format!("Y scale##{gi}-{j}");
             ui.same_line_with_pos(super::graphics::PANEL_W - 44.0);
-            if ui.small_button(format!("{}##ym{j}", mode.short())) {
+            if ui.button(format!("{}##ym{j}", mode.short())) {
                 ui.open_popup(&menu_id);
             }
             let badge_hovered = ui.is_item_hovered();

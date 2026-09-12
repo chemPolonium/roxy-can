@@ -155,11 +155,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.same_line();
     // Clear empties the display (ring + archive); the filter controls
     // keep their settings -- they are the viewer's lens, not its content.
-    if ui.small_button(format!("Clear##tf{i}")) {
+    if ui.button(format!("Clear##tf{i}")) {
         app.send(crate::bus::BusCommand::ClearTrace);
     }
     ui.same_line();
-    if ui.small_button(format!("Export##tx{i}")) {
+    if ui.button(format!("Export##tx{i}")) {
         app.export_trace_dialog(i);
     }
     ui.separator();
@@ -219,6 +219,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         init_width_or_weight: 34.0,
         ..TableColumnSetup::new("Dir")
     });
+    // Freeze the header row so it stays visible while scrolling.
+    ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 
     // Take the row cache out: the sort needs `app` for names while the

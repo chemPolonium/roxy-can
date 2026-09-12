@@ -322,11 +322,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.same_line();
                     ui.text_disabled("节点角色");
                     ui.same_line();
-                    if ui.small_button(format!("Simulate all##netsimall{ch}")) {
+                    if ui.button(format!("Simulate all##netsimall{ch}")) {
                         app.simulate_all_nodes(ch as u8);
                     }
                     ui.same_line();
-                    if ui.small_button(format!("Stop all##netstop{ch}")) {
+                    if ui.button(format!("Stop all##netstop{ch}")) {
                         app.stop_all_nodes(ch as u8);
                     }
                     if ni.tx.is_empty() {
@@ -347,7 +347,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     // 两个新建按钮统一排在标签同一行。
                     ui.text("本节点脚本");
                     ui.same_line();
-                    if ui.small_button(format!("+ 脚本节点##netadd{ch}")) {
+                    if ui.button(format!("+ 脚本节点##netadd{ch}")) {
                         let name = format!("Node {}", app.snap.nodes.len() + 1);
                         let attached = Some((ch as u8, ni.name.clone()));
                         app.send(crate::bus::BusCommand::AddNode {
@@ -396,7 +396,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     // 新建即绑定到本节点并默认只回放它的报文。
                     ui.text("本节点回放块");
                     ui.same_line();
-                    if ui.small_button(format!("+ 回放块##netaddblk{ch}")) {
+                    if ui.button(format!("+ 回放块##netaddblk{ch}")) {
                         let name = format!("Block {}", app.snap.blocks.len() + 1);
                         app.add_replay_block(
                             ch as u8,
@@ -446,7 +446,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             ui.text_colored([1.0, 0.55, 0.3, 1.0], format!("载入失败：{e}"));
                         }
                         ui.same_line();
-                        if ui.small_button(format!("x##netblockrm{bid}")) {
+                        if ui.button(format!("x##netblockrm{bid}")) {
                             app.remove_replay_block(bid);
                             app.block_drafts.remove(&bid);
                             continue;
@@ -476,7 +476,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             d.path = draft.path.clone();
                         }
                         ui.same_line();
-                        if ui.small_button(format!("...##blfile{bid}"))
+                        if ui.button(format!("...##blfile{bid}"))
                             && let Some(p) = rfd::FileDialog::new()
                                 .set_title("选择回放日志")
                                 .add_filter("日志文件", &["asc", "blf"])
@@ -504,7 +504,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             .find(|b| b.id == bid)
                             .map(|b| b.path.clone())
                             .unwrap_or_default();
-                        if ui.small_button(format!("Apply##blapply{bid}"))
+                        if ui.button(format!("Apply##blapply{bid}"))
                             && let Some(d) = app.block_drafts.get(&bid)
                         {
                             let block = app.snap.blocks.iter().find(|b| b.id == bid);
