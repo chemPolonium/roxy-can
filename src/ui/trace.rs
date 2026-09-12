@@ -221,8 +221,6 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     });
     ui.table_headers_row();
 
-    ui.table_headers_row();
-
     // Take the row cache out: the sort needs `app` for names while the
     // clipper below needs the rows as an owned list, and the right-click
     // popup afterwards needs `app` mutably again.
