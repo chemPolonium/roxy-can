@@ -2747,8 +2747,6 @@ impl BusCore {
     /// 1:1 with the wall in Virtual). `None` means nothing is scheduled --
     /// the event loop may sleep until a command arrives. Paused or stopped
     /// buses are never due.
-    // Wired into the core thread's event loop (阶段 3).
-    #[allow(dead_code)]
     pub(crate) fn next_deadline(&self, now_us: u64) -> Option<u64> {
         if !self.measuring || self.trace_paused {
             return None;

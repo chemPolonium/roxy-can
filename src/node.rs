@@ -283,7 +283,7 @@ impl ScriptNode {
             Some(rt) if self.enabled && !self.errored => rt
                 .timers
                 .iter()
-                .filter(|t| t.next_due_us != 0)
+                .filter(|t| t.next_due_us != 0 && !t.stopped)
                 .map(|t| t.next_due_us)
                 .collect(),
             _ => Vec::new(),
@@ -406,7 +406,20 @@ impl ScriptNode {
                         slot.stopped = true;
                         slot.next_due_us = 0;
                     } else {
-                        slot.next_due_us = now_us.saturating_add(slot.period_ms * 1_000);
+                        // Anchor the next beat on the schedule, not on
+                        // the late fire: one late wake must not shift
+                        // every beat after it. Beats missed outright (a
+                        // long pause) collapse into the next due.
+                        let period = slot.period_ms.saturating_mul(1_000);
+                        slot.next_due_us = if period == 0 {
+                            now_us
+                        } else {
+                            let mut due = slot.next_due_us.saturating_add(period);
+                            while due <= now_us {
+                                due = due.saturating_add(period);
+                            }
+                            due
+                        };
                     }
                     (slot_index, chunk)
                 })
@@ -784,6 +797,29 @@ BO_ 256 Real: 2 ECU
             .filter(|l| l.starts_with("t "))
             .count();
         assert_eq!(ticks, 2);
+    }
+
+    /// A periodic slot re-anchors each beat on the schedule, not on the
+    /// (late) fire: wake jitter must not drift every beat after it.
+    #[test]
+    fn periodic_beats_stay_on_schedule_after_a_late_wake() {
+        let mut n = node(
+            r#"
+                let ticks = 0;
+                on timer 100 { ticks = ticks + 1; print("t", ticks); }
+            "#,
+        );
+        n.start(None);
+        n.run_timers(50_000, &HostInput::default()); // arms: due 150_000
+        n.run_timers(160_000, &HostInput::default()); // late wake: tick 1 at 160
+        n.run_timers(249_999, &HostInput::default()); // not yet
+        n.run_timers(250_000, &HostInput::default()); // beat 2 at 250, not 260
+        let ticks = n
+            .log_snapshot()
+            .iter()
+            .filter(|l| l.starts_with("t "))
+            .count();
+        assert_eq!(ticks, 2, "beats 150+100=250, unaffected by the late wake");
     }
 
     #[test]

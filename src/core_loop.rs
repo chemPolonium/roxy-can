@@ -16,6 +16,39 @@ use crate::bus::{BusCommand, BusCore, SnapshotMailbox};
 /// slots, replay frames) usually wake it well before this.
 const IDLE_SLEEP_US: u64 = 10_000;
 
+/// Windows resolves condvar waits (and sleeps) on the system timer
+/// interrupt, 15.625 ms apart by default -- every `recv_timeout` here
+/// would overshoot its target by up to one such tick, and a 10 ms cyclic
+/// timer would fire every ~15.6 ms. `timeBeginPeriod(1)` is the OS's own
+/// switch for 1 ms wait resolution (per-process since Windows 10 2004);
+/// the guard holds it for the thread's lifetime and restores on drop.
+#[cfg(windows)]
+struct WaitResolution;
+
+#[cfg(windows)]
+impl WaitResolution {
+    fn raise() -> Self {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn timeBeginPeriod(ms: u32) -> u32;
+        }
+        // TIMERR_NOERROR == 0; a failure only means coarser wakes.
+        unsafe { timeBeginPeriod(1) };
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WaitResolution {
+    fn drop(&mut self) {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn timeEndPeriod(ms: u32) -> u32;
+        }
+        unsafe { timeEndPeriod(1) };
+    }
+}
+
 /// The frontend's continuously-tuned stepping policy, handed to the core
 /// thread through atomics rather than commands: these are knobs, not
 /// events -- the frontend writes them every frame, the core reads them
@@ -125,6 +158,10 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
     let _ = std::thread::Builder::new()
         .name("bus-core".to_string())
         .spawn(move || {
+            // Deadline waits only mean something at 1 ms resolution (see
+            // `WaitResolution`); held until the thread exits.
+            #[cfg(windows)]
+            let _wait_resolution = WaitResolution::raise();
             let mut clock_zero = Instant::now();
             // Stamp for the current pause, fed to `advance_clock` on the
             // first post-resume lap so replay shifts its log clock by the
