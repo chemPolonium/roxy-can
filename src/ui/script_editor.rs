@@ -4,11 +4,43 @@
 //! and the directory (Entities) is where you decide which one to open.
 
 use crate::app::App;
-use imgui::{Condition, Ui};
+use imgui::{
+    Condition, InputTextCallbackHandler, InputTextMultilineCallback, TextCallbackData, Ui,
+};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 const SOURCE_HEIGHT: f32 = 220.0;
 const LOG_LINES: usize = 10;
+
+/// The source editor's cursor state: byte offset into the draft plus the
+/// active selection, in bytes. Recorded every frame the edit widget is
+/// active; sidebar inserts land here.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct EditorCursor {
+    pub pos: usize,
+    pub sel: Option<(usize, usize)>,
+}
+
+/// Records the cursor while the source widget runs (`CALLBACK_ALWAYS`
+/// only fires while the widget is active, which is exactly the span the
+/// position is meaningful and changing).
+struct CursorSync<'a> {
+    cursors: &'a mut HashMap<u64, EditorCursor>,
+    id: u64,
+}
+
+impl InputTextCallbackHandler for CursorSync<'_> {
+    fn on_always(&mut self, data: TextCallbackData) {
+        let sel = data.selection();
+        let sel = if sel.start < sel.end {
+            Some((sel.start, sel.end))
+        } else {
+            None
+        };
+        self.cursors.insert(self.id, EditorCursor { pos: data.cursor_pos(), sel });
+    }
+}
 
 /// Static facts of one editor's draft text: the handler outline and the
 /// compile-derived send/receive/system-variable sets. Recomputed only
@@ -229,8 +261,15 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 .node_src_draft
                 .entry(id)
                 .or_insert_with(|| node.source.clone());
+            // Field-level split borrow: the cursor tracker takes the
+            // cursors map while `draft` holds the source draft.
+            let sync = CursorSync {
+                cursors: &mut app.editor_cursors,
+                id,
+            };
             ui.set_next_item_width(-1.0);
             ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
+                .callback(InputTextMultilineCallback::ALWAYS, sync)
                 .build();
             if ui.button(format!("Apply##eapply{id}")) {
                 let source =
@@ -360,14 +399,57 @@ fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     }
 }
 
-/// Appends an insert snippet to the draft, on its own line.
+/// Inserts a template at the editor's tracked cursor (replacing the
+/// selection, if any), falling back to the end of the draft when the
+/// editor was never touched. The snippet always lands on its own line.
 fn insert(app: &mut App, id: u64, text: &str) {
+    let cur = app.editor_cursors.get(&id).copied();
     let draft = app.node_src_draft.entry(id).or_default();
-    if !draft.is_empty() && !draft.ends_with('\n') {
-        draft.push('\n');
+
+    // Clamp onto char boundaries; imgui reports byte offsets, but a
+    // stale record could point into the middle of a multi-byte char.
+    let at_boundary = |s: &str, mut i: usize| {
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    };
+    let (start, end) = match cur {
+        Some(c) => {
+            let a = at_boundary(draft, c.pos.min(draft.len()));
+            let (s, e) = match c.sel {
+                Some((sel_a, sel_z)) => (
+                    at_boundary(draft, sel_a.min(draft.len())),
+                    at_boundary(draft, sel_z.min(draft.len())),
+                ),
+                None => (a, a),
+            };
+            (s.min(e), e.max(s))
+        }
+        None => (draft.len(), draft.len()),
+    };
+
+    // Own-line guarantee: break before unless we are at a line start
+    // (or at the very end of a line-terminated draft), break after
+    // unless the snippet already ends with one.
+    let mut snippet = String::new();
+    let before = &draft[..start];
+    if !before.is_empty() && !before.ends_with('\n') {
+        snippet.push('\n');
     }
-    draft.push_str(text);
-    draft.push('\n');
+    snippet.push_str(text);
+    if !snippet.ends_with('\n') {
+        snippet.push('\n');
+    }
+    draft.replace_range(start..end, &snippet);
+    // The next insert chains right after this one.
+    app.editor_cursors.insert(
+        id,
+        EditorCursor {
+            pos: start + snippet.len(),
+            sel: None,
+        },
+    );
 }
 
 /// The insertable templates: categories with clickable items.

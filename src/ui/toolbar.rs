@@ -280,6 +280,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                     {
                         app.show_sysvars = !app.show_sysvars;
                     }
+                    if ui
+                        .menu_item_config("Write")
+                        .selected(app.show_write)
+                        .build()
+                    {
+                        app.show_write = !app.show_write;
+                    }
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {

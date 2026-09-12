@@ -109,6 +109,10 @@ impl CoreLoop {
         let mut status = String::new();
         self.core.handle(cmd, &mut status);
         if !status.is_empty() {
+            // Command news also lands in the Write window (the status bar
+            // shows each line once; the Write ring keeps them).
+            self.core
+                .write_push(crate::bus::WriteKind::Info, status.clone());
             self.pending_status = Some(status);
         }
         clock_reset
@@ -131,6 +135,7 @@ impl CoreLoop {
     pub(crate) fn publish(&mut self) {
         self.core.publish_loads();
         self.core.publish_nodes();
+        self.core.publish_write();
         let status = self.pending_status.take();
         let snap = Arc::new(self.core.snapshot_with_status(status));
         *self.mail.lock().expect("snapshot mailbox poisoned") = snap;

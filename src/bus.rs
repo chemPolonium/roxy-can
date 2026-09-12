@@ -7,7 +7,7 @@
 //! UI thread; the command/snapshot boundary and the dedicated thread are
 //! stages 2 and 3.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::aggregate::MessageAgg;
@@ -457,12 +457,38 @@ pub enum BusCommand {
         name: String,
         value: f64,
     },
+    /// Empties the Write window's ring.
+    ClearWrite,
 }
 
 /// The synthetic stream id system variables publish under: an id no node
 /// can ever mint (`node_counter` counts up from 1), so a sysvar stream
 /// cannot collide with a script's derived signals.
 pub(crate) const SYSVAR_STREAM_ID: u64 = u64::MAX;
+
+/// Oldest Write-window lines fall off once the list outgrows this.
+pub(crate) const WRITE_LOG_CAP: usize = 1000;
+
+/// One line of the Write window: a system event stamped on the bus
+/// timeline. `kind` only drives the color.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WriteKind {
+    /// Script `print` output.
+    Script,
+    /// Everything informational the bus itself reports.
+    Info,
+    /// Checks and recoverable misbehaviour.
+    Warning,
+    /// A handler failed, a command failed outright.
+    Error,
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteLine {
+    pub t_us: u64,
+    pub kind: WriteKind,
+    pub text: String,
+}
 
 /// One system variable definition: CANoe-style namespaced value with
 /// optional clamping bounds and display metadata. Also the persisted
@@ -575,6 +601,8 @@ pub struct Snapshot {
     /// The system variables as of this frame: definition plus live value.
     /// The manager window's data source and the project save.
     pub sysvars: Vec<SysVarView>,
+    /// The Write window's ring as of the last publish, oldest first.
+    pub write: Arc<Vec<WriteLine>>,
     /// Hardware attachments: one per wired-up bus.
     pub hw: Vec<HwBusView>,
     /// Node names whose generator frames currently go out the wire.
@@ -885,6 +913,13 @@ pub struct BusCore {
     /// the observers as one synthetic stream per variable. The live value
     /// rides next to the definition; resets to `init` at every run start.
     pub(crate) sysvars: Vec<(SysVarDef, f64)>,
+    /// The Write window's line ring, oldest first: node prints, checks,
+    /// warnings and bus events, in one system-wide stream.
+    pub(crate) write_log: VecDeque<WriteLine>,
+    /// The write ring as of the last publish.
+    pub(crate) published_write: Arc<Vec<WriteLine>>,
+    /// True when `write_log` changed since `published_write` was built.
+    pub(crate) write_dirty: bool,
     /// Hardware attachments (Kvaser today): bus → adapter, plus the
     /// per-node wire-egress switches. Session state, per the hardware
     /// mapping overlay model.
@@ -951,6 +986,9 @@ impl BusCore {
             scan_done: false,
             emitted_streams: Vec::new(),
             sysvars: Vec::new(),
+            write_log: VecDeque::new(),
+            published_write: Arc::new(Vec::new()),
+            write_dirty: false,
             hw: Default::default(),
             trace_limit: TRACE_LIMIT,
             pre_frames: PRE_BUFFER_FRAMES,
@@ -1147,6 +1185,10 @@ impl BusCore {
                 if !self.sysvar_write(&key, value) {
                     *status = format!("[sysvar] 未定义: \"{key}\"");
                 }
+            }
+            BusCommand::ClearWrite => {
+                self.write_log.clear();
+                self.write_dirty = true;
             }
             BusCommand::AddReplayBlock {
                 name,
@@ -1500,10 +1542,46 @@ impl BusCore {
         self.nodes_dirty = false;
     }
 
+    /// Appends one line to the Write ring, stamped with the bus clock.
+    pub(crate) fn write_push(&mut self, kind: WriteKind, text: String) {
+        let t_us = self.sim_t_us;
+        self.write_log.push_back(WriteLine { t_us, kind, text });
+        if self.write_log.len() > WRITE_LOG_CAP {
+            self.write_log.pop_front();
+        }
+        self.write_dirty = true;
+    }
+
+    /// Classifies a node log line and mirrors it into the Write ring
+    /// under the node's name.
+    fn write_node_line(&mut self, node_name: &str, line: &str) {
+        let kind = if line.starts_with("[error]") {
+            WriteKind::Error
+        } else if line.starts_with("[check]")
+            || line.starts_with("[timer]")
+            || line.starts_with("[sysvar]")
+            || line.starts_with("[compile]")
+            || line.starts_with("[start]")
+        {
+            WriteKind::Warning
+        } else {
+            WriteKind::Script
+        };
+        self.write_push(kind, format!("[{node_name}] {line}"));
+    }
+
+    /// Rebuilds the published Write ring after a change.
+    pub(crate) fn publish_write(&mut self) {
+        if !self.write_dirty {
+            return;
+        }
+        self.published_write = Arc::new(self.write_log.iter().cloned().collect());
+        self.write_dirty = false;
+    }
+
     /// Arms every enabled node for a measurement: recompile from source,
     /// run the main chunk, fire `on start`.
-    fn nodes_start(&mut self) {
-        let keys = self.sysvar_keys();
+    fn nodes_start(&mut self) {        let keys = self.sysvar_keys();
         for node in &mut self.nodes {
             if node.enabled {
                 let dbc = self
@@ -1537,6 +1615,7 @@ impl BusCore {
     fn run_node_timers(&mut self, now_us: u64, inputs: &HashMap<u8, HostInput>) {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
+        let mut node_lines: Vec<(String, String)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线/监听时
@@ -1561,6 +1640,10 @@ impl BusCore {
             for (key, v) in node.take_sys_sets() {
                 sys_writes.push((node.id, key, v));
             }
+            let node_name = node.name.clone();
+            for line in node.take_new_lines() {
+                node_lines.push((node_name.clone(), line));
+            }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
@@ -1569,6 +1652,9 @@ impl BusCore {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
         self.apply_sys_writes(sys_writes);
+        for (node_name, line) in node_lines {
+            self.write_node_line(&node_name, &line);
+        }
     }
 
     /// Delivers one frame to the matching node handlers; the frames they
@@ -1583,6 +1669,7 @@ impl BusCore {
         let mut out = Vec::new();
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
+        let mut node_lines: Vec<(String, String)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色闸（见 run_node_timers）。
@@ -1608,6 +1695,10 @@ impl BusCore {
             for (key, v) in node.take_sys_sets() {
                 sys_writes.push((node.id, key, v));
             }
+            let node_name = node.name.clone();
+            for line in node.take_new_lines() {
+                node_lines.push((node_name.clone(), line));
+            }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
@@ -1616,6 +1707,9 @@ impl BusCore {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
         self.apply_sys_writes(sys_writes);
+        for (node_name, line) in node_lines {
+            self.write_node_line(&node_name, &line);
+        }
         out
     }
 
@@ -1817,6 +1911,7 @@ impl BusCore {
                     value: *v,
                 })
                 .collect(),
+            write: Arc::clone(&self.published_write),
             hw: self
                 .hw
                 .buses

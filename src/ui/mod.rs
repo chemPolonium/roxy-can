@@ -21,6 +21,7 @@ pub mod toolbar;
 pub mod trace;
 pub mod triggers;
 pub mod tx;
+pub mod write;
 
 use crate::app::App;
 use crate::can::frame::FrameFlags;
@@ -65,6 +66,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     graphics::render(app, ui);
     state::render(app, ui);
     sysvars::render(app, ui);
+    write::render(app, ui);
     script_editor::render(app, ui);
     statusbar::render(app, ui);
     desktops::render(app, ui);

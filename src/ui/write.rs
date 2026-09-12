@@ -1,0 +1,55 @@
+//! The Write window: the system-wide output panel in the CANoe mold.
+//! Node prints, static checks, timer/sysvar advisories and command news
+//! all land in one scrolling log on the bus core; this window only
+//! shapes and displays it.
+
+use crate::app::App;
+use crate::bus::WriteKind;
+use imgui::{Condition, StyleVar, Ui};
+
+pub fn render(app: &mut App, ui: &Ui) {
+    if !app.show_write {
+        return;
+    }
+    let io = ui.io();
+    let mut open = app.show_write;
+    let min = ui.push_style_var(StyleVar::WindowMinSize([420.0, 160.0]));
+    ui.window("Write")
+        .opened(&mut open)
+        .position(
+            [io.display_size[0] * 0.55, io.display_size[1] * 0.35],
+            Condition::FirstUseEver,
+        )
+        .size([640.0, 280.0], Condition::FirstUseEver)
+        .build(|| content(app, ui));
+    min.pop();
+    app.show_write = open;
+}
+
+fn content(app: &mut App, ui: &Ui) {
+    if ui.button("清空") {
+        app.send(crate::bus::BusCommand::ClearWrite);
+    }
+    ui.same_line();
+    ui.align_text_to_frame_padding();
+    ui.text_disabled("脚本输出、检查告警与系统事件");
+
+    // Stick to the bottom while the user hasn't scrolled up to read
+    // something: arrivals keep appending below otherwise.
+    let at_bottom = ui.scroll_y() + 2.0 >= ui.scroll_max_y();
+    for line in app.snap.write.iter() {
+        let t = line.t_us as f64 / 1e6;
+        let color = match line.kind {
+            WriteKind::Error => [1.0, 0.55, 0.3, 1.0],
+            WriteKind::Warning => [1.0, 0.8, 0.4, 1.0],
+            WriteKind::Info => [0.55, 0.75, 1.0, 1.0],
+            WriteKind::Script => [1.0, 1.0, 1.0, 1.0],
+        };
+        ui.text_colored([0.45, 0.45, 0.45, 1.0], format!("[{t:10.3}]"));
+        ui.same_line();
+        ui.text_colored(color, &line.text);
+    }
+    if at_bottom && ui.scroll_max_y() > 0.0 {
+        ui.set_scroll_here_y_with_ratio(1.0);
+    }
+}

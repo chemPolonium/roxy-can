@@ -232,6 +232,7 @@ pub struct Desktop {
     pub show_spec: bool,
     pub show_id_filter: bool,
     pub show_sysvars: bool,
+    pub show_write: bool,
 }
 
 use crate::app::App;
@@ -284,6 +285,7 @@ impl App {
             show_spec: self.show_spec,
             show_id_filter: self.show_id_filter,
             show_sysvars: self.show_sysvars,
+            show_write: self.show_write,
         }
     }
 
@@ -319,6 +321,7 @@ impl App {
         self.show_spec = d.show_spec;
         self.show_id_filter = d.show_id_filter;
         self.show_sysvars = d.show_sysvars;
+        self.show_write = d.show_write;
         let layout = if d.layout.is_empty() {
             self.default_layout.clone()
         } else {
@@ -364,6 +367,7 @@ impl App {
             show_spec: false,
             show_id_filter: false,
             show_sysvars: false,
+            show_write: true,
         };
         self.desktops.push(snap);
         self.active_desktop = self.desktops.len() - 1;

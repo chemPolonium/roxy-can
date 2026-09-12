@@ -187,6 +187,7 @@ pub struct App {
     pub show_spec: bool,
     pub show_id_filter: bool,
     pub show_sysvars: bool,
+    pub show_write: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
     pub id_filter_search: String,
@@ -215,6 +216,10 @@ pub struct App {
     /// keyed by node id and re-derived from the draft text when its hash
     /// changes. Session state.
     pub(crate) editor_facts: HashMap<u64, crate::ui::script_editor::EditorFacts>,
+    /// Per-editor cursor position of the source text (byte offset plus
+    /// the active selection), tracked from the edit widget itself. The
+    /// sidebar inserts its templates here instead of at the file end.
+    pub(crate) editor_cursors: HashMap<u64, crate::ui::script_editor::EditorCursor>,
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
@@ -423,6 +428,7 @@ impl App {
             show_spec: false,
             show_id_filter: false,
             show_sysvars: false,
+            show_write: true,
             show_shortcuts: false,
             show_about: false,
             id_filter_search: String::new(),
@@ -435,6 +441,7 @@ impl App {
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
             editor_facts: HashMap::new(),
+            editor_cursors: HashMap::new(),
             kvaser_channels: None,
             profile_names: None,
             profile_pick: 0,

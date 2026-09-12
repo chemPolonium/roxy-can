@@ -44,6 +44,9 @@ pub struct ScriptNode {
     /// Set when a handler failed: the node stops executing until the next
     /// start or source edit, so one bad loop cannot spam the log.
     errored: bool,
+    /// Lines pushed to `log` and not yet mirrored into the bus's Write
+    /// ring. Drained by the bus on the same step.
+    pending_lines: Vec<String>,
 }
 
 struct NodeRuntime {
@@ -88,6 +91,7 @@ impl ScriptNode {
             log: VecDeque::new(),
             log_dirty: false,
             errored: false,
+            pending_lines: Vec::new(),
         }
     }
 
@@ -115,17 +119,34 @@ impl ScriptNode {
 
     /// Appends one log line, capping the ring.
     fn push_log(&mut self, line: String) {
-        Self::push_log_into(&mut self.log, &mut self.log_dirty, line);
+        Self::push_log_into(
+            &mut self.log,
+            &mut self.log_dirty,
+            &mut self.pending_lines,
+            line,
+        );
     }
 
     /// The ring logic over borrowed pieces: handlers run while `runtime`
-    /// is mutably borrowed, and the log is a disjoint field.
-    fn push_log_into(log: &mut VecDeque<String>, dirty: &mut bool, line: String) {
+    /// is mutably borrowed, and the log fields are disjoint node fields.
+    /// Every line also lands in `pending` for the bus's Write ring.
+    fn push_log_into(
+        log: &mut VecDeque<String>,
+        dirty: &mut bool,
+        pending: &mut Vec<String>,
+        line: String,
+    ) {
         if log.len() == LOG_CAP {
             log.pop_front();
         }
-        log.push_back(line);
+        log.push_back(line.clone());
         *dirty = true;
+        pending.push(line);
+    }
+
+    /// Drains the lines the bus has not yet mirrored into the Write ring.
+    pub fn take_new_lines(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_lines)
     }
 
     /// Arms the node for a measurement: recompile, run the main chunk
@@ -155,6 +176,7 @@ impl ScriptNode {
                     Self::push_log_into(
                         &mut self.log,
                         &mut self.log_dirty,
+                        &mut self.pending_lines,
                         format!("[check] 信号未在 DBC 中找到: 0x{id:X} \"{sig}\""),
                     );
                 }
@@ -174,6 +196,7 @@ impl ScriptNode {
                         Self::push_log_into(
                             &mut self.log,
                             &mut self.log_dirty,
+                            &mut self.pending_lines,
                             format!(
                                 "[check] 0x{id:X} 是 {} 的报文，不是 {} 的",
                                 m.transmitter, attached_node
@@ -184,6 +207,7 @@ impl ScriptNode {
                         Self::push_log_into(
                             &mut self.log,
                             &mut self.log_dirty,
+                            &mut self.pending_lines,
                             format!("[check] 0x{id:X} 不在 DBC 中（自定义报文）"),
                         );
                     }
@@ -197,6 +221,7 @@ impl ScriptNode {
                 Self::push_log_into(
                     &mut self.log,
                     &mut self.log_dirty,
+                    &mut self.pending_lines,
                     format!("[check] 系统变量未定义: \"{key}\""),
                 );
             }
@@ -249,7 +274,12 @@ impl ScriptNode {
                 return;
             }
         }
-        Self::drain_vm(&mut rt, &mut self.log, &mut self.log_dirty);
+        Self::drain_vm(
+            &mut rt,
+            &mut self.log,
+            &mut self.log_dirty,
+            &mut self.pending_lines,
+        );
         self.runtime = Some(rt);
     }
 
@@ -341,7 +371,7 @@ impl ScriptNode {
         let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
         for op in pending {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
             }
         }
         let matches: Vec<u16> = rt
@@ -366,18 +396,23 @@ impl ScriptNode {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
             rt.vm.host_input = input.clone();
             if let Err(e) = rt.vm.run_handler(chunk) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, format!("[error] {e}"));
+                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,format!("[error] {e}"));
                 self.errored = true;
                 return out;
             }
-            Self::drain_vm(rt, &mut self.log, &mut self.log_dirty);
+            Self::drain_vm(
+                rt,
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+            );
             // Named one-shot ops stay meaningful from any handler. The
             // running-timer ops (`set_period`/`stop_timer`) name no slot
             // here and are dropped.
             let ops: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
             for op in ops {
                 if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                    Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+                    Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
                 }
             }
             out.append(&mut rt.vm.outbox);
@@ -403,7 +438,7 @@ impl ScriptNode {
         let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
         for op in pending {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
             }
         }
         let due: Vec<(usize, u16)> = rt
@@ -449,7 +484,7 @@ impl ScriptNode {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
             rt.vm.timer_ops.clear();
             if let Err(e) = rt.vm.run_handler(chunk) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, format!("[error] {e}"));
+                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,format!("[error] {e}"));
                 self.errored = true;
                 return out;
             }
@@ -458,10 +493,15 @@ impl ScriptNode {
             let ops: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
             for op in ops {
                 if let Some(warn) = Self::apply_timer_op(rt, op, now_us, Some(slot_index)) {
-                    Self::push_log_into(&mut self.log, &mut self.log_dirty, warn);
+                    Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
                 }
             }
-            Self::drain_vm(rt, &mut self.log, &mut self.log_dirty);
+            Self::drain_vm(
+                rt,
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+            );
             out.append(&mut rt.vm.outbox);
         }
         out
@@ -548,9 +588,14 @@ impl ScriptNode {
 
     /// Moves freshly printed lines from the VM into the node's log ring,
     /// and derived-signal samples into the runtime's emission queue.
-    fn drain_vm(rt: &mut NodeRuntime, log: &mut VecDeque<String>, dirty: &mut bool) {
+    fn drain_vm(
+        rt: &mut NodeRuntime,
+        log: &mut VecDeque<String>,
+        dirty: &mut bool,
+        pending: &mut Vec<String>,
+    ) {
         for line in rt.vm.output.drain(..) {
-            Self::push_log_into(log, dirty, line);
+            Self::push_log_into(log, dirty, pending, line);
         }
         rt.emitted.append(&mut rt.vm.emitted);
         rt.pending_sys.append(&mut rt.vm.sys_sets);

@@ -5409,11 +5409,58 @@ fn a_script_sys_set_publishes_the_value_and_the_stream() {
     app.stop();
 }
 
+/// The Write ring mirrors node prints and command news into one
+/// system-wide stream, classified by kind, and the Clear command
+/// empties it.
+#[test]
+fn the_write_ring_collects_node_and_command_lines() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "talker".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 10 { print(\"beat\"); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    assert!(
+        app.snap.write.iter().any(|l| {
+            l.kind == crate::bus::WriteKind::Info && l.text.contains("measuring")
+        }),
+        "run start news lands as info"
+    );
+    for t in 1..=20 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let script_lines: Vec<_> = app
+        .snap
+        .write
+        .iter()
+        .filter(|l| l.kind == crate::bus::WriteKind::Script && l.text.contains("beat"))
+        .collect();
+    assert!(
+        !script_lines.is_empty(),
+        "node prints land in the ring under the node's name"
+    );
+    assert!(script_lines[0].text.starts_with("[talker]"), "attribution");
+
+    app.send(crate::bus::BusCommand::ClearWrite);
+    app.settle();
+    assert!(app.snap.write.is_empty(), "Clear empties the ring");
+    app.stop();
+}
+
 /// A script writing an undefined variable gets a warning in its log and
 /// the write is dropped; the node keeps running.
 #[test]
-fn an_undefined_sysvar_write_warns_and_is_dropped() {
-    let mut app = App::headless();
+fn an_undefined_sysvar_write_warns_and_is_dropped() {    let mut app = App::headless();
     app.send(crate::bus::BusCommand::AddNode {
         name: "loose".to_string(),
         channel: 0,

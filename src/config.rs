@@ -382,6 +382,8 @@ pub struct DesktopCfg {
     pub show_id_filter: bool,
     #[serde(default)]
     pub show_sysvars: bool,
+    #[serde(default = "true_default")]
+    pub show_write: bool,
 }
 
 fn cycle_default() -> u64 {
@@ -534,6 +536,8 @@ pub struct Config {
     pub show_id_filter: bool,
     #[serde(default)]
     pub show_sysvars: bool,
+    #[serde(default = "true_default")]
+    pub show_write: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
@@ -645,6 +649,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
         show_sysvars: d.show_sysvars,
+        show_write: d.show_write,
     }
 }
 
@@ -705,6 +710,7 @@ impl Config {
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
             show_sysvars: app.show_sysvars,
+            show_write: app.show_write,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
             trace_limit: app.trace_limit,
@@ -1173,6 +1179,7 @@ impl Config {
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
         app.show_sysvars = self.show_sysvars;
+        app.show_write = self.show_write;
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
         app.set_trace_limit(self.trace_limit);
@@ -1293,6 +1300,7 @@ impl Config {
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
                     show_sysvars: d.show_sysvars,
+                    show_write: d.show_write,
                 })
                 .collect();
             app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);
