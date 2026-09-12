@@ -451,9 +451,14 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             cond: draft.cond,
             action: draft.action,
         });
-    }
-    if confirmed || dismissed || !open {
         app.trig_draft = None;
+    } else if dismissed || !open {
+        app.trig_draft = None;
+    } else {
+        // Write the edited draft back: the widgets type into this
+        // frame's clone, and without this the next frame would restart
+        // from the stale copy -- typed text lost, Apply a no-op.
+        app.trig_draft = Some(draft);
     }
 }
 

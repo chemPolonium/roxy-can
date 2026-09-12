@@ -16,12 +16,14 @@ const LOG_LINES: usize = 10;
 /// The source editor's cursor state: byte offset into the draft plus the
 /// active selection, in bytes, and the inner scroll of the multiline's
 /// text viewport. Recorded every frame the edit widget is active; the
-/// sidebar inserts land here and the line-number gutter scrolls with it.
+/// sidebar inserts land here, the gutter scrolls with the offset, and
+/// the space-dot overlay lines up with it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct EditorCursor {
     pub pos: usize,
     pub sel: Option<(usize, usize)>,
     pub scroll: f32,
+    pub hscroll: f32,
 }
 
 /// Records the cursor while the source widget runs (`CALLBACK_ALWAYS`
@@ -43,12 +45,14 @@ impl InputTextCallbackHandler for CursorSync<'_> {
             None
         };
         let scroll = unsafe { imgui::sys::igGetScrollY() };
+        let hscroll = unsafe { imgui::sys::igGetScrollX() };
         self.cursors.insert(
             self.id,
             EditorCursor {
                 pos: data.cursor_pos(),
                 sel,
                 scroll,
+                hscroll,
             },
         );
     }
@@ -83,21 +87,19 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
     };
     for (i, raw) in src.lines().enumerate() {
         let line = raw.trim_start();
-        let label = if line.starts_with("on start") {
-            Some("on start".to_string())
-        } else if line.starts_with("on errorFrame") {
-            Some("on errorFrame".to_string())
-        } else if line.starts_with("on extended message") {
-            Some(line.split('{').next().unwrap_or("").trim().to_string())
-        } else if line.starts_with("on message") {
-            Some(line.split('{').next().unwrap_or("").trim().to_string())
-        } else if line.starts_with("on timer") {
-            Some(line.split('{').next().unwrap_or("").trim().to_string())
-        } else if line.starts_with("fn ") {
-            Some(line.split('{').next().unwrap_or("").trim().to_string())
-        } else {
-            None
-        };
+        const PREFIXES: [&str; 6] = [
+            // Extended before plain: both are `starts_with` matches.
+            "on extended message",
+            "on message",
+            "on timer",
+            "on start",
+            "on errorFrame",
+            "fn ",
+        ];
+        let label = PREFIXES
+            .iter()
+            .find(|p| line.starts_with(**p))
+            .map(|_| line.split('{').next().unwrap_or("").trim().to_string());
         if let Some(label) = label {
             facts.outline.push((i as u32 + 1, label));
         }
@@ -303,6 +305,54 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 .callback(InputTextMultilineCallback::ALWAYS, sync)
                 .build();
 
+            // Space dots: the multiline never wraps, so every glyph sits
+            // at a computable position -- row y is the line index times
+            // the font pitch, glyph x is the sum of advances before it.
+            // Spaces render nothing, so a faint dot is drawn over each
+            // one's cell to make indentation and runs visible.
+            let (scroll, hscroll) = app
+                .editor_cursors
+                .get(&id)
+                .map(|c| (c.scroll, c.hscroll))
+                .unwrap_or((0.0, 0.0));
+            let frame_pad_x = unsafe { ui.style() }.frame_padding[0];
+            let widget_min = [gutter_max[0], gutter_min[1]];
+            // The vertical scrollbar overlaps the widget's right edge.
+            let widget_max = [
+                widget_min[0] + ui.calc_item_width(),
+                widget_min[1] + SOURCE_HEIGHT,
+            ];
+            let mut adv = |c: char| -> f32 {
+                let w = app
+                    .char_advance
+                    .entry(c)
+                    .or_insert_with(|| ui.calc_text_size(c.to_string())[0]);
+                *w
+            };
+            let dot_r = (lh * 0.12).max(1.2);
+            let dot_color = [0.62, 0.64, 0.68, 0.55];
+            let draw_list = ui.get_window_draw_list();
+            draw_list.with_clip_rect(widget_min, widget_max, || {
+                for (li, line) in draft.split('\n').enumerate() {
+                    let y = widget_min[1] + frame_pad_y + li as f32 * lh - scroll;
+                    if y + lh < widget_min[1] || y > widget_max[1] {
+                        continue;
+                    }
+                    let mut x = widget_min[0] + frame_pad_x - hscroll;
+                    for c in line.chars() {
+                        let w = adv(c);
+                        if c == ' ' && x + w > widget_min[0] && x < widget_max[0] {
+                            let cy = y + lh * 0.55;
+                            draw_list
+                                .add_circle([x + w * 0.5, cy], dot_r, dot_color)
+                                .filled(true)
+                                .build();
+                        }
+                        x += w;
+                    }
+                }
+            });
+
             // The callback has run by now when the widget is active, so
             // this reflects the current viewport.
             let scroll = app
@@ -500,13 +550,14 @@ fn insert(app: &mut App, id: u64, text: &str) {
     draft.replace_range(start..end, &snippet);
     // The next insert chains right after this one; the scroll is
     // untouched (nothing scrolled).
-    let scroll = cur.map(|c| c.scroll).unwrap_or(0.0);
+    let (scroll, hscroll) = cur.map(|c| (c.scroll, c.hscroll)).unwrap_or((0.0, 0.0));
     app.editor_cursors.insert(
         id,
         EditorCursor {
             pos: start + snippet.len(),
             sel: None,
             scroll,
+            hscroll,
         },
     );
 }

@@ -17,6 +17,11 @@ pub(crate) struct SysVarDraft {
     pub max: String,
     pub unit: String,
     pub comment: String,
+    /// Validation failure from the last Apply, shown until it succeeds.
+    pub error: Option<String>,
+    /// The validated definition of a successful Apply, taken by the
+    /// window code on the next pass.
+    pub built: Option<SysVarDef>,
 }
 
 impl SysVarDraft {
@@ -30,6 +35,8 @@ impl SysVarDraft {
             max: String::new(),
             unit: String::new(),
             comment: String::new(),
+            error: None,
+            built: None,
         }
     }
 
@@ -43,6 +50,8 @@ impl SysVarDraft {
             max: def.max.map(fmt_f64).unwrap_or_default(),
             unit: def.unit.clone(),
             comment: def.comment.clone(),
+            error: None,
+            built: None,
         }
     }
 
@@ -248,10 +257,10 @@ fn content(app: &mut App, ui: &Ui) {
             ui.text(format!("{unit} {comment}"));
         }
         ui.table_next_column();
-        if ui.button(format!("edit##sved{i}")) {
-            if let Some(d) = app.snap.sysvars.get(i) {
-                app.sysvar_draft = Some(SysVarDraft::for_edit(&d.def));
-            }
+        if ui.button(format!("edit##sved{i}"))
+            && let Some(d) = app.snap.sysvars.get(i)
+        {
+            app.sysvar_draft = Some(SysVarDraft::for_edit(&d.def));
         }
         ui.same_line();
         if ui.button(format!("x##svrm{i}")) {
@@ -278,8 +287,6 @@ fn editor_modal(app: &mut App, ui: &Ui) {
     }
     let mut open = true;
     let mut dismissed = false;
-    let mut confirmed: Option<SysVarDef> = None;
-    let mut error: Option<String> = None;
     let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
     ui.modal_popup_config(ID).opened(&mut open).build(|| {
         ui.text(match &draft.editing {
@@ -341,8 +348,8 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             ui.input_text("##svcomment", &mut draft.comment).build();
         });
         ui.separator();
-        if let Some(e) = &error {
-            ui.text_disabled(e);
+        if let Some(e) = &draft.error {
+            ui.text_colored([1.0, 0.55, 0.3, 1.0], e);
         }
         if ui.is_key_pressed(Key::Escape) {
             dismissed = true;
@@ -350,10 +357,11 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         if ui.button_with_size("Apply", [90.0, 0.0]) {
             match draft.build() {
                 Ok(def) => {
-                    confirmed = Some(def);
+                    draft.built = Some(def);
+                    draft.error = None;
                     ui.close_current_popup();
                 }
-                Err(e) => error = Some(e),
+                Err(e) => draft.error = Some(e),
             }
         }
         ui.same_line();
@@ -362,11 +370,15 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         }
     });
     min.pop();
-    let was_confirmed = confirmed.is_some();
-    if let Some(def) = confirmed {
+    // Write the (possibly edited) draft back first: the widgets type
+    // into this frame's clone, and without this the next frame would
+    // restart from the stale copy -- typed text lost, Apply a no-op.
+    let built = draft.built.take();
+    app.sysvar_draft = Some(draft);
+    if let Some(def) = built {
         // A rename leaves the old key behind: delete it after defining
         // the new one so a script is never left pointing at nothing.
-        if let Some((old_ns, old_name)) = &draft.editing
+        if let Some((old_ns, old_name)) = &app.sysvar_draft.as_ref().unwrap().editing
             && (*old_ns != def.namespace || *old_name != def.name)
         {
             app.send(crate::bus::BusCommand::DeleteSysVar {
@@ -375,8 +387,8 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             });
         }
         app.send(crate::bus::BusCommand::DefineSysVar(def));
-    }
-    if was_confirmed || dismissed || !open {
+        app.sysvar_draft = None;
+    } else if dismissed || !open {
         app.sysvar_draft = None;
     }
 }

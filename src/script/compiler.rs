@@ -608,10 +608,9 @@ impl Comp {
                     if (*name == "sys_get" || *name == "sys_set")
                         && !args.is_empty()
                         && let Expr::Str(key) = &args[0]
+                        && !self.sysvar_refs.contains(key)
                     {
-                        if !self.sysvar_refs.contains(key) {
-                            self.sysvar_refs.push(key.clone());
-                        }
+                        self.sysvar_refs.push(key.clone());
                     }
                     // R2 fail-closed rule: every `send` / `send_ext` id
                     // must be statically derivable -- a literal, constant

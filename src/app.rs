@@ -220,6 +220,9 @@ pub struct App {
     /// the active selection), tracked from the edit widget itself. The
     /// sidebar inserts its templates here instead of at the file end.
     pub(crate) editor_cursors: HashMap<u64, crate::ui::script_editor::EditorCursor>,
+    /// Glyph advance cache for the space-dot overlay, keyed by char.
+    /// The font is global, so advances are too.
+    pub(crate) char_advance: HashMap<char, f32>,
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
@@ -442,6 +445,7 @@ impl App {
             open_editors: Vec::new(),
             editor_facts: HashMap::new(),
             editor_cursors: HashMap::new(),
+            char_advance: HashMap::new(),
             kvaser_channels: None,
             profile_names: None,
             profile_pick: 0,
