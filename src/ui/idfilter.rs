@@ -43,7 +43,7 @@ pub fn scope_combo(
     ui.set_next_item_width(140.0);
     ui.combo_simple_string(id, &mut cur, &items);
     ui.same_line();
-    if ui.small_button(format!("…{id}")) {
+    if ui.button(format!("…{id}")) {
         app.popup_target = Some(target);
         app.show_id_filter = true;
     }

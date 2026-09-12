@@ -565,6 +565,30 @@ mod tests {
         assert!(e.contains("line 1:12"), "{e}");
     }
 
+    /// `else if` chains parse and execute correctly: the else block
+    /// wraps a nested if-statement, so the chain falls through to the
+    /// first true condition.
+    #[test]
+    fn else_if_chains_work() {
+        let src = r#"
+            let x = 2;
+            if (x == 1) { print("one"); }
+            else if (x == 2) { print("two"); }
+            else if (x == 3) { print("three"); }
+            else { print("other"); }
+        "#;
+        assert_eq!(out(src), ["two"]);
+
+        // The else branch catches unmatched cases.
+        let src2 = r#"
+            let x = 9;
+            if (x == 1) { print("one"); }
+            else if (x == 2) { print("two"); }
+            else { print("fallback"); }
+        "#;
+        assert_eq!(out(src2), ["fallback"]);
+    }
+
     /// S4: an external component registers at startup, every script
     /// calls it -- no per-node hook needed, no bytecode change.
     #[test]

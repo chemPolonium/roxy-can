@@ -427,7 +427,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         } else {
             format!("{label}##stw{i}")
         };
-        if ui.small_button(text) {
+        if ui.button(text) {
             app.state_trackers[i].time_window_s = val;
         }
         ui.same_line();

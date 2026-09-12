@@ -371,7 +371,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
         // One frame now, off the schedule: base bytes and
         // waveforms as they stand, without touching the active
         // flag. A stopped bus drops the request silently.
-        if ui.small_button(format!("Send now##now{i}")) {
+        if ui.button(format!("Send now##now{i}")) {
             app.send(crate::bus::BusCommand::SendNow { ch, id });
         }
         // Only ever shown when the two disagree, so a row that
@@ -427,7 +427,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
             ui.text_disabled(&view.sent_text);
         }
         ui.same_line();
-        if ui.small_button(format!("x##{i}")) {
+        if ui.button(format!("x##{i}")) {
             remove = Some((ch, id));
         }
 
@@ -495,7 +495,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
                 shown = val as f32;
             }
             ui.same_line();
-            ui.set_next_item_width(90.0);
+            ui.set_next_item_width(80.0);
             let mut pick = match held.as_ref() {
                 None => 0,
                 Some(h) => 1 + KINDS.iter().position(|k| *k == h.kind).unwrap_or(0),
@@ -521,7 +521,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
             }
             if let Some(h) = &held {
                 ui.same_line();
-                if ui.small_button(format!("...##pp{i}_{}", s.name)) {
+                if ui.button(format!("…##pp{i}_{}", s.name)) {
                     app.src_edit = Some((i, s.name.clone()));
                     app.src_draft = Some(h.clone());
                     app.src_seq_buf = h

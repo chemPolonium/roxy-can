@@ -31,27 +31,27 @@ pub fn render(app: &mut App, ui: &Ui) {
 }
 
 fn content(app: &mut App, ui: &Ui) {
-    if ui.small_button("+ Trace") {
+    if ui.button("+ Trace") {
         app.new_trace_window();
     }
     ui.same_line();
-    if ui.small_button("+ Messages") {
+    if ui.button("+ Messages") {
         app.new_msg_window();
     }
     ui.same_line();
-    if ui.small_button("+ Statistics") {
+    if ui.button("+ Statistics") {
         app.new_stats_window();
     }
     ui.same_line();
-    if ui.small_button("+ Graphics") {
+    if ui.button("+ Graphics") {
         app.new_graphics_window();
     }
     ui.same_line();
-    if ui.small_button("+ Data") {
+    if ui.button("+ Data") {
         app.new_data_window();
     }
     ui.same_line();
-    if ui.small_button("+ State Tracker") {
+    if ui.button("+ State Tracker") {
         app.new_state_window();
     }
     ui.same_line();
@@ -262,11 +262,11 @@ fn trace_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     );
     app.trace_windows[i].scope = s;
     ui.table_next_column();
-    if ui.small_button(format!("ASC##save_t{i}")) {
+    if ui.button(format!("ASC##save_t{i}")) {
         app.export_trace_dialog(i);
     }
     ui.table_next_column();
-    if ui.small_button(format!("x##t{i}")) {
+    if ui.button(format!("x##t{i}")) {
         *rm = Some(i);
     }
 }
@@ -296,11 +296,11 @@ fn messages_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     );
     app.msg_windows[i].scope = s;
     ui.table_next_column();
-    if ui.small_button(format!("CSV##save_m{i}")) {
+    if ui.button(format!("CSV##save_m{i}")) {
         app.export_messages_dialog(i);
     }
     ui.table_next_column();
-    if ui.small_button(format!("x##m{i}")) {
+    if ui.button(format!("x##m{i}")) {
         *rm = Some(i);
     }
 }
@@ -330,11 +330,11 @@ fn stats_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     );
     app.stats_windows[i].scope = s;
     ui.table_next_column();
-    if ui.small_button(format!("CSV##save_s{i}")) {
+    if ui.button(format!("CSV##save_s{i}")) {
         app.export_stats_dialog(i);
     }
     ui.table_next_column();
-    if ui.small_button(format!("x##s{i}")) {
+    if ui.button(format!("x##s{i}")) {
         *rm = Some(i);
     }
 }
@@ -371,7 +371,7 @@ fn signal_cell(app: &mut App, ui: &Ui, kind: ListKind) {
             )
         }
     };
-    if ui.small_button(format!("…##selsig{prefix}{i}")) {
+    if ui.button(format!("…##selsig{prefix}{i}")) {
         app.popup_target = Some(match kind {
             ListKind::Graphics(i) => PopupTarget::Graphics(i),
             ListKind::Data(i) => PopupTarget::Data(i),
@@ -401,11 +401,11 @@ fn graphics_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     ui.table_next_column();
     signal_cell(app, ui, ListKind::Graphics(i));
     ui.table_next_column();
-    if ui.small_button(format!("CSV##save_g{i}")) {
+    if ui.button(format!("CSV##save_g{i}")) {
         app.export_graphics_dialog(i);
     }
     ui.table_next_column();
-    if ui.small_button(format!("x##g{i}")) {
+    if ui.button(format!("x##g{i}")) {
         *rm = Some(i);
     }
 }
@@ -428,11 +428,11 @@ fn data_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     ui.table_next_column();
     signal_cell(app, ui, ListKind::Data(i));
     ui.table_next_column();
-    if ui.small_button(format!("CSV##save_d{i}")) {
+    if ui.button(format!("CSV##save_d{i}")) {
         app.export_data_dialog(i);
     }
     ui.table_next_column();
-    if ui.small_button(format!("x##d{i}")) {
+    if ui.button(format!("x##d{i}")) {
         *rm = Some(i);
     }
 }
@@ -458,7 +458,7 @@ fn state_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
     signal_cell(app, ui, ListKind::State(i));
     ui.table_next_column();
     ui.table_next_column();
-    if ui.small_button(format!("x##st{i}")) {
+    if ui.button(format!("x##st{i}")) {
         *rm = Some(i);
     }
 }

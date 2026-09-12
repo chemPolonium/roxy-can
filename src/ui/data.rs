@@ -156,6 +156,7 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             // to it is throttled, so a live number on the bar would read
             // as truth while the text column lags behind.
             imgui::ProgressBar::new(frac as f32)
+                .size([-1.0, 13.0])
                 .overlay_text("")
                 .build(ui);
         }

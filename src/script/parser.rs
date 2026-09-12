@@ -468,7 +468,9 @@ impl P {
         self.expect(&Tok::RParen, "')'")?;
         let then = self.block()?;
         let els = if self.eat(&Tok::Else) {
-            if self.at(&Tok::If) {
+            // Consume the `if` token before recursing: `if_stmt()` starts
+            // at the `(` of the condition.
+            if self.eat(&Tok::If) {
                 Some(vec![self.if_stmt()?])
             } else {
                 Some(self.block()?)
