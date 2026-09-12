@@ -14,17 +14,21 @@ const SOURCE_HEIGHT: f32 = 220.0;
 const LOG_LINES: usize = 10;
 
 /// The source editor's cursor state: byte offset into the draft plus the
-/// active selection, in bytes. Recorded every frame the edit widget is
-/// active; sidebar inserts land here.
+/// active selection, in bytes, and the inner scroll of the multiline's
+/// text viewport. Recorded every frame the edit widget is active; the
+/// sidebar inserts land here and the line-number gutter scrolls with it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct EditorCursor {
     pub pos: usize,
     pub sel: Option<(usize, usize)>,
+    pub scroll: f32,
 }
 
 /// Records the cursor while the source widget runs (`CALLBACK_ALWAYS`
 /// only fires while the widget is active, which is exactly the span the
-/// position is meaningful and changing).
+/// position is meaningful and changing). During the callback the
+/// multiline's inner child window is ImGui's current window, so the
+/// scroll read there is the text viewport's own.
 struct CursorSync<'a> {
     cursors: &'a mut HashMap<u64, EditorCursor>,
     id: u64,
@@ -38,7 +42,15 @@ impl InputTextCallbackHandler for CursorSync<'_> {
         } else {
             None
         };
-        self.cursors.insert(self.id, EditorCursor { pos: data.cursor_pos(), sel });
+        let scroll = unsafe { imgui::sys::igGetScrollY() };
+        self.cursors.insert(
+            self.id,
+            EditorCursor {
+                pos: data.cursor_pos(),
+                sel,
+                scroll,
+            },
+        );
     }
 }
 
@@ -261,6 +273,25 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 .node_src_draft
                 .entry(id)
                 .or_insert_with(|| node.source.clone());
+
+            // Line-number gutter: the multiline never soft-wraps (ImGui
+            // 1.89), so row k of the text viewport is exactly draft line k
+            // at pitch `font_size`, offset by the widget's own scroll.
+            let lh = ui.current_font_size();
+            let frame_pad_y = unsafe { ui.style() }.frame_padding[1];
+            let mut rows = draft.lines().count().max(1);
+            if draft.ends_with('\n') {
+                rows += 1;
+            }
+            let digits = (rows as f32).log10().floor() as usize + 1;
+            let digit_w = ui.calc_text_size("0")[0];
+            const GUTTER_PAD: f32 = 6.0;
+            let gutter_w = GUTTER_PAD + digits as f32 * digit_w + GUTTER_PAD;
+
+            let gutter_min = ui.cursor_screen_pos();
+            let gutter_max = [gutter_min[0] + gutter_w, gutter_min[1] + SOURCE_HEIGHT];
+            ui.dummy([gutter_w, SOURCE_HEIGHT]);
+            ui.same_line();
             // Field-level split borrow: the cursor tracker takes the
             // cursors map while `draft` holds the source draft.
             let sync = CursorSync {
@@ -271,6 +302,31 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
                 .callback(InputTextMultilineCallback::ALWAYS, sync)
                 .build();
+
+            // The callback has run by now when the widget is active, so
+            // this reflects the current viewport.
+            let scroll = app
+                .editor_cursors
+                .get(&id)
+                .map(|c| c.scroll)
+                .unwrap_or(0.0);
+            let first_row = ((scroll / lh).floor() as i32).max(0) as usize;
+            let visible = (SOURCE_HEIGHT / lh).ceil() as usize + 1;
+            let last_row = (first_row + visible).min(rows);
+            let draw_list = ui.get_window_draw_list();
+            draw_list.with_clip_rect(gutter_min, gutter_max, || {
+                for i in first_row..last_row {
+                    let y = gutter_min[1] + frame_pad_y + i as f32 * lh - scroll;
+                    if y + lh < gutter_min[1] || y > gutter_max[1] {
+                        continue;
+                    }
+                    draw_list.add_text(
+                        [gutter_min[0] + GUTTER_PAD, y],
+                        [0.5, 0.5, 0.5, 1.0],
+                        format!("{:>width$}", i + 1, width = digits),
+                    );
+                }
+            });
             if ui.button(format!("Apply##eapply{id}")) {
                 let source =
                     app.node_src_draft.get(&id).cloned().unwrap_or_default();
@@ -442,12 +498,15 @@ fn insert(app: &mut App, id: u64, text: &str) {
         snippet.push('\n');
     }
     draft.replace_range(start..end, &snippet);
-    // The next insert chains right after this one.
+    // The next insert chains right after this one; the scroll is
+    // untouched (nothing scrolled).
+    let scroll = cur.map(|c| c.scroll).unwrap_or(0.0);
     app.editor_cursors.insert(
         id,
         EditorCursor {
             pos: start + snippet.len(),
             sel: None,
+            scroll,
         },
     );
 }
