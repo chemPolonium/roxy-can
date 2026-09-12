@@ -109,18 +109,24 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         ui.text_disabled("已停止");
     }
 
-    // Source editor: local draft, applied on Apply (per-keystroke
-    // recompiles would churn the core thread). A sidebar on the left
-    // lists available functions and constructs for one-click insertion.
+    // Source editor + sidebar: a two-column layout where the sidebar
+    // lists available functions/constructs and the right side holds the
+    // source editor, Apply/Save/Load, and the log. Both columns fill the
+    // remaining height.
     let avail = ui.content_region_avail();
     const SIDEBAR_W: f32 = 180.0;
+
+    // Left sidebar (full remaining height).
     ui.child_window(format!("##esidebar{id}"))
-        .size([SIDEBAR_W, avail[1] - SOURCE_HEIGHT - 28.0])
+        .size([SIDEBAR_W, avail[1]])
         .border(true)
         .build(|| sidebar(app, ui, id, node));
+
     ui.same_line();
+
+    // Right main area: source + Apply/Save/Load + log.
     ui.child_window(format!("##emain{id}"))
-        .size([0.0, 0.0])
+        .size([0.0, avail[1]])
         .build(|| {
             let draft = app
                 .node_src_draft
@@ -129,62 +135,62 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             ui.set_next_item_width(-1.0);
             ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
                 .build();
+            if ui.small_button(format!("Apply##eapply{id}")) {
+                let source =
+                    app.node_src_draft.get(&id).cloned().unwrap_or_default();
+                app.send(crate::bus::BusCommand::SetNodeSource { id, source });
+            }
+            if *app.node_src_draft.get(&id).unwrap() != node.source {
+                ui.same_line();
+                ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
+            }
+            ui.same_line();
+            if ui.small_button(format!("保存##esave{id}")) {
+                let source =
+                    app.node_src_draft.get(&id).cloned().unwrap_or_default();
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("保存节点脚本")
+                    .add_filter("节点脚本", &["rxcan"])
+                    .save_file()
+                {
+                    let path = path.to_string_lossy().into_owned();
+                    if let Err(e) = std::fs::write(&path, &source) {
+                        app.status = format!("保存失败: {e}");
+                    } else {
+                        app.status = format!("已保存 {path}");
+                    }
+                }
+            }
+            ui.same_line();
+            if ui.small_button(format!("加载##eload{id}")) {
+                let picked = rfd::FileDialog::new()
+                    .set_title("加载节点脚本")
+                    .add_filter("节点脚本", &["rxcan"])
+                    .pick_file();
+                if let Some(p) = picked {
+                    let path = p.to_string_lossy().into_owned();
+                    match std::fs::read_to_string(&path) {
+                        Ok(src) => {
+                            app.node_src_draft.insert(id, src);
+                        }
+                        Err(e) => {
+                            app.status = format!("加载失败: {e}");
+                        }
+                    }
+                }
+            }
+            // Log tail, newest at the bottom.
+            if !node.log.is_empty() {
+                ui.child_window(format!("##elog{id}"))
+                    .size([0.0, 110.0])
+                    .build(|| {
+                        let show = node.log.len().saturating_sub(LOG_LINES);
+                        for line in &node.log[show..] {
+                            ui.text(line);
+                        }
+                    });
+            }
         });
-    let dirty = *app.node_src_draft.get(&id).unwrap() != node.source;
-    if ui.small_button(format!("Apply##eapply{id}")) {
-        let source = app.node_src_draft.get(&id).cloned().unwrap_or_default();
-        app.send(crate::bus::BusCommand::SetNodeSource { id, source });
-    }
-    if dirty {
-        ui.same_line();
-        ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
-    }
-    ui.same_line();
-    if ui.small_button(format!("保存##esave{id}")) {
-        let source = app.node_src_draft.get(&id).cloned().unwrap_or_default();
-        if let Some(path) = rfd::FileDialog::new()
-            .set_title("保存节点脚本")
-            .add_filter("节点脚本", &["rxcan"])
-            .save_file()
-        {
-            let path = path.to_string_lossy().into_owned();
-            if let Err(e) = std::fs::write(&path, &source) {
-                app.status = format!("保存失败: {e}");
-            } else {
-                app.status = format!("已保存 {path}");
-            }
-        }
-    }
-    ui.same_line();
-    if ui.small_button(format!("加载##eload{id}")) {
-        let picked = rfd::FileDialog::new()
-            .set_title("加载节点脚本")
-            .add_filter("节点脚本", &["rxcan"])
-            .pick_file();
-        if let Some(p) = picked {
-            let path = p.to_string_lossy().into_owned();
-            match std::fs::read_to_string(&path) {
-                Ok(src) => {
-                    app.node_src_draft.insert(id, src);
-                }
-                Err(e) => {
-                    app.status = format!("加载失败: {e}");
-                }
-            }
-        }
-    }
-
-    // Log tail, newest at the bottom.
-    if !node.log.is_empty() {
-        ui.child_window(format!("##elog{id}"))
-            .size([0.0, 110.0])
-            .build(|| {
-                let show = node.log.len().saturating_sub(LOG_LINES);
-                for line in &node.log[show..] {
-                    ui.text(line);
-                }
-            });
-    }
 }
 
 /// One insertable sidebar entry: display label and the text that goes
