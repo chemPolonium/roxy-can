@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
+use crate::config::{state_path, AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
 
 use crate::app::App;
 
@@ -211,13 +211,13 @@ impl App {
             config: Config::from_app(self, base.as_deref()),
         };
         if let Ok(json) = serde_json::to_string_pretty(&proj) {
-            let _ = std::fs::write(AUTOSAVE_PATH, json);
+            let _ = std::fs::write(state_path(AUTOSAVE_PATH), json);
         }
     }
 
     /// Restores the crash cache left behind by an abnormal exit.
     pub fn load_autosave(&mut self) -> bool {
-        let Ok(text) = std::fs::read_to_string(AUTOSAVE_PATH) else {
+        let Ok(text) = std::fs::read_to_string(state_path(AUTOSAVE_PATH)) else {
             return false;
         };
         let Ok(proj) = serde_json::from_str::<ProjectFile>(&text) else {
@@ -277,7 +277,7 @@ impl App {
             recent_projects: self.recent_projects.clone(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&meta) {
-            let _ = std::fs::write(META_PATH, json);
+            let _ = std::fs::write(state_path(META_PATH), json);
         }
     }
 
@@ -285,13 +285,13 @@ impl App {
     /// last project when one is known, then the legacy `roxy-can.json`
     /// import on a very first launch, else defaults.
     pub fn startup_workspace(&mut self) {
-        if Path::new(AUTOSAVE_PATH).exists() {
+        if state_path(AUTOSAVE_PATH).exists() {
             if self.load_autosave() {
                 return;
             }
-            let _ = std::fs::remove_file(AUTOSAVE_PATH);
+            let _ = std::fs::remove_file(state_path(AUTOSAVE_PATH));
         }
-        if let Ok(text) = std::fs::read_to_string(META_PATH)
+        if let Ok(text) = std::fs::read_to_string(state_path(META_PATH))
             && let Ok(meta) = serde_json::from_str::<Meta>(&text)
         {
             self.recent_projects = meta.recent_projects;

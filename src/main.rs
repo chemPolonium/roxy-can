@@ -203,7 +203,8 @@ impl State {
         app.startup_workspace();
         // The default layout for New Project is whatever imgui persisted
         // last; empty when there is no ini yet.
-        app.default_layout = std::fs::read_to_string("roxy-can.ini").unwrap_or_default();
+        app.default_layout =
+            std::fs::read_to_string(config::state_path("roxy-can.ini")).unwrap_or_default();
 
         State {
             context,
@@ -428,7 +429,7 @@ impl ApplicationHandler for Program {
             }
             st.app.write_meta();
             // Clean exit: the crash cache is no longer needed.
-            let _ = std::fs::remove_file(config::AUTOSAVE_PATH);
+            let _ = std::fs::remove_file(config::state_path(config::AUTOSAVE_PATH));
         }
     }
 }

@@ -2452,7 +2452,7 @@ fn autosave_round_trips_the_workspace() {
     );
     assert!(!restored.is_dirty(), "restored autosave starts clean");
     std::fs::remove_file(&path).ok();
-    std::fs::remove_file(crate::config::AUTOSAVE_PATH).ok();
+    std::fs::remove_file(crate::config::state_path(crate::config::AUTOSAVE_PATH)).ok();
 }
 
 #[test]

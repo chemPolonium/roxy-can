@@ -20,6 +20,22 @@ pub const META_PATH: &str = "roxy-can.meta.json";
 pub const AUTOSAVE_PATH: &str = "roxy-can.autosave.rxproj";
 pub const PROJECT_EXT: &str = "rxproj";
 
+/// The directory where roxy-can stores its state files (meta, autosave).
+/// Uses `%APPDATA%\roxy-can\` on Windows; created on first access.
+/// Falls back to the current directory when `APPDATA` is not set.
+pub fn state_dir() -> std::path::PathBuf {
+    let base = std::env::var("APPDATA")
+        .map(|d| std::path::PathBuf::from(d).join("roxy-can"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    std::fs::create_dir_all(&base).ok();
+    base
+}
+
+/// Full path for a state file: the state directory joined with the name.
+pub fn state_path(name: &str) -> std::path::PathBuf {
+    state_dir().join(name)
+}
+
 /// Stores a DBC path relative to the project directory when possible, so a
 /// project folder can be moved or shared; paths outside the project are
 /// stored absolute.
@@ -1278,7 +1294,7 @@ impl App {
     /// Restores the legacy `roxy-can.json` workspace if one exists; used
     /// only as a one-time migration when no project meta file is found.
     pub fn load_config(&mut self) {
-        let Ok(text) = std::fs::read_to_string(CONFIG_PATH) else {
+        let Ok(text) = std::fs::read_to_string(state_path(CONFIG_PATH)) else {
             return;
         };
         match serde_json::from_str::<Config>(&text) {
