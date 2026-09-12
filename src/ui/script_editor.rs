@@ -5,7 +5,8 @@
 
 use crate::app::App;
 use imgui::{
-    Condition, InputTextCallbackHandler, InputTextMultilineCallback, TextCallbackData, Ui,
+    Condition, InputTextCallbackHandler, InputTextMultilineCallback, StyleColor, TextCallbackData,
+    Ui,
 };
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -457,14 +458,25 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             let dot_r = (lh * 0.12).max(1.2);
             let dot_color = [0.62, 0.64, 0.68, 0.55];
             let draw_list = ui.get_window_draw_list();
-            // Tint per highlight class: translucent bands drawn over the
-            // glyphs, so keywords / numbers / strings / comments read as
-            // colored without repainting the glyphs themselves.
-            let tint_of = |class: u8| match class {
-                KEYWORD => [0.45, 0.65, 1.0, 0.16],
-                NUMBER => [1.0, 0.62, 0.25, 0.14],
-                STRING => [0.4, 0.9, 0.5, 0.15],
-                COMMENT => [0.65, 0.65, 0.68, 0.24],
+            // Text coloring: the multiline paints every glyph in one
+            // color, but the glyphs sit at exactly computable positions
+            // (no soft wrap), so a non-plain run is covered with the
+            // widget's own background and its text redrawn in the class
+            // color at the same position -- real per-glyph highlighting
+            // without reimplementing the edit widget. While a selection
+            // is active the repaint is skipped: covering the selection
+            // highlight would read as broken.
+            let sel_active = app
+                .editor_cursors
+                .get(&id)
+                .and_then(|c| c.sel)
+                .is_some();
+            let frame_bg = ui.style_color(StyleColor::FrameBg);
+            let class_color = |class: u8| match class {
+                KEYWORD => [0.55, 0.75, 1.0, 1.0],
+                NUMBER => [1.0, 0.7, 0.45, 1.0],
+                STRING => [0.65, 0.9, 0.55, 1.0],
+                COMMENT => [0.56, 0.58, 0.62, 1.0],
                 _ => [0.0, 0.0, 0.0, 0.0],
             };
             draw_list.with_clip_rect(widget_min, widget_max, || {
@@ -474,34 +486,40 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                         continue;
                     }
                     let line_cls = facts.classes.get(li);
+                    let chars: Vec<char> = line.chars().collect();
                     let mut x = widget_min[0] + frame_pad_x - hscroll;
-                    let (mut run_class, mut run_w, mut run_x) = (PLAIN, 0.0f32, x);
-                    let flush = |class: u8, w: f32, sx: f32| {
-                        if class != PLAIN && w > 0.0 {
-                            draw_list
-                                .add_rect(
-                                    [sx, y + lh * 0.08],
-                                    [sx + w, y + lh * 0.92],
-                                    tint_of(class),
-                                )
-                                .filled(true)
-                                .build();
+                    let (mut run_class, mut run_w, mut run_x, mut run_start) =
+                        (PLAIN, 0.0f32, x, 0usize);
+                    let flush = |class: u8, w: f32, sx: f32, s: usize, e: usize| {
+                        if class == PLAIN || w <= 0.0 || sel_active {
+                            return;
                         }
+                        // Cover the plain-painted glyphs with the
+                        // widget's background, then draw the span in
+                        // color. The ±1 px skirt hides the antialiasing
+                        // halo of the covered glyphs.
+                        draw_list
+                            .add_rect([sx - 1.0, y], [sx + w + 1.0, y + lh + 0.5], frame_bg)
+                            .filled(true)
+                            .build();
+                        let text: String = chars[s..e].iter().collect();
+                        draw_list.add_text([sx, y], class_color(class), text);
                     };
-                    for (ci, c) in line.chars().enumerate() {
-                        let w = adv(c);
+                    for (ci, c) in chars.iter().enumerate() {
+                        let w = adv(*c);
                         let cl = line_cls
                             .and_then(|v| v.get(ci))
                             .copied()
                             .unwrap_or(PLAIN);
                         if cl != run_class {
-                            flush(run_class, run_w, run_x);
+                            flush(run_class, run_w, run_x, run_start, ci);
                             run_class = cl;
                             run_x = x;
                             run_w = 0.0;
+                            run_start = ci;
                         }
                         run_w += w;
-                        if c == ' ' && x + w > widget_min[0] && x < widget_max[0] {
+                        if *c == ' ' && cl == PLAIN && x + w > widget_min[0] && x < widget_max[0] {
                             let cy = y + lh * 0.55;
                             draw_list
                                 .add_circle([x + w * 0.5, cy], dot_r, dot_color)
@@ -510,14 +528,13 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                         }
                         x += w;
                     }
-                    flush(run_class, run_w, run_x);
+                    flush(run_class, run_w, run_x, run_start, chars.len());
                 }
             });
 
             let first_row = ((scroll / lh).floor() as i32).max(0) as usize;
             let visible = (SOURCE_HEIGHT / lh).ceil() as usize + 1;
             let last_row = (first_row + visible).min(rows);
-            let draw_list = ui.get_window_draw_list();
             draw_list.with_clip_rect(gutter_min, gutter_max, || {
                 for i in first_row..last_row {
                     let y = gutter_min[1] + frame_pad_y + i as f32 * lh - scroll;
