@@ -16,6 +16,7 @@ pub mod spec;
 pub mod state;
 pub mod stats;
 pub mod statusbar;
+pub mod sysvars;
 pub mod toolbar;
 pub mod trace;
 pub mod triggers;
@@ -63,6 +64,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     data::render(app, ui);
     graphics::render(app, ui);
     state::render(app, ui);
+    sysvars::render(app, ui);
     script_editor::render(app, ui);
     statusbar::render(app, ui);
     desktops::render(app, ui);

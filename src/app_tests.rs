@@ -5296,6 +5296,186 @@ fn emit_value_publishes_a_derived_signal_stream() {
     app.stop();
 }
 
+/// The manager's lifecycle via commands: define with bounds, manual set
+/// clamps, and every run start resets the value to the declared init.
+#[test]
+fn sysvars_define_clamp_and_reset_on_run_start() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+        init: 100.0,
+        min: Some(0.0),
+        max: Some(500.0),
+        unit: "rpm".to_string(),
+        comment: "target speed".to_string(),
+    }));
+    app.settle();
+    assert_eq!(app.snap.sysvars.len(), 1, "defined");
+    assert_eq!(app.snap.sysvars[0].value, 100.0, "starts at init");
+
+    app.send(crate::bus::BusCommand::SetSysVar {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+        value: 900.0,
+    });
+    app.send(crate::bus::BusCommand::SetSysVar {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+        value: -3.0,
+    });
+    app.settle();
+    assert_eq!(
+        app.snap.sysvars[0].value, 0.0,
+        "writes clamp into the declared bounds"
+    );
+
+    // A run start rewinds every variable to init.
+    app.send(crate::bus::BusCommand::SetSysVar {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+        value: 250.0,
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    assert_eq!(app.snap.sysvars[0].value, 100.0, "run start resets to init");
+    app.stop();
+
+    // Deleting removes the definition.
+    app.send(crate::bus::BusCommand::DeleteSysVar {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+    });
+    app.settle();
+    assert!(app.snap.sysvars.is_empty(), "deleted");
+}
+
+/// A script's `sys_set` writes flow through the node into the live value
+/// and publish as an observable stream grouped under the namespace, the
+/// same tree Data and Graphics browse.
+#[test]
+fn a_script_sys_set_publishes_the_value_and_the_stream() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+        init: 10.0,
+        min: None,
+        max: None,
+        unit: String::new(),
+        comment: String::new(),
+    }));
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "calc".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 10 { sys_set(\"Demo::Setpoint\", 7 * 6); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    for t in 1..=30 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    assert_eq!(
+        app.snap.sysvars[0].value, 42.0,
+        "the script write landed"
+    );
+    let key = (
+        0u8,
+        crate::app::EMITTED_ID_BASE | (crate::bus::SYSVAR_STREAM_ID as u32),
+        false,
+        "Setpoint".to_string(),
+    );
+    assert!(
+        app.snap
+            .emitted
+            .iter()
+            .any(|(k, owner)| k == &key && owner == "Demo"),
+        "the stream shows under its namespace"
+    );
+    assert_eq!(
+        app.subs.get(&key).expect("subscribed").latest,
+        42.0,
+        "observers see the sample"
+    );
+    app.stop();
+}
+
+/// A script writing an undefined variable gets a warning in its log and
+/// the write is dropped; the node keeps running.
+#[test]
+fn an_undefined_sysvar_write_warns_and_is_dropped() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "loose".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 10 { sys_set(\"Nowhere::X\", 1); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    for t in 1..=20 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    let node = app.snap.nodes.first().expect("node present");
+    assert!(
+        !node.errored,
+        "a bad sysvar write does not stop the node"
+    );
+    assert!(
+        node.log.iter().any(|l| l.contains("Nowhere::X")),
+        "the undefined write is named in the log: {:?}",
+        node.log
+    );
+    app.stop();
+}
+
+/// System variable definitions persist with the project and restore via
+/// the Define path.
+#[test]
+fn sysvars_survive_a_project_roundtrip() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
+        namespace: "Demo".to_string(),
+        name: "Rate".to_string(),
+        init: 2.5,
+        min: Some(0.0),
+        max: Some(10.0),
+        unit: "Hz".to_string(),
+        comment: String::new(),
+    }));
+    app.settle();
+    let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+    assert!(json.contains("\"sysvars\""), "the section is in the file");
+    let mut restored = App::headless();
+    serde_json::from_str::<Config>(&json)
+        .unwrap()
+        .apply(&mut restored);
+    restored.settle();
+    assert_eq!(restored.snap.sysvars.len(), 1, "restored");
+    let v = &restored.snap.sysvars[0];
+    assert_eq!(v.def.namespace, "Demo");
+    assert_eq!(v.def.name, "Rate");
+    assert_eq!(v.def.unit, "Hz");
+    assert_eq!(v.def.init, 2.5);
+    assert_eq!(v.value, 2.5, "value starts at init");
+}
+
 /// Frame-driven handlers can publish too: every matching frame becomes a
 /// derived-signal sample through the dispatch path (mirrors, conversions).
 #[test]

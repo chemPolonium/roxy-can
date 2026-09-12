@@ -182,6 +182,7 @@ pub enum BusCommand {
         id: u32,
         src: crate::sim::ValueSrc,
     },
+
     /// Stop driving one signal; the base bytes take over again.
     ClearEntrySource {
         ch: u8,
@@ -440,6 +441,68 @@ pub enum BusCommand {
         cond: crate::trigger::TriggerCond,
         action: crate::trigger::TriggerAction,
     },
+    /// Define a system variable, or replace an existing definition with
+    /// the same `namespace::name` (the live value resets to `init`).
+    DefineSysVar(SysVarDef),
+    /// Drop the system variable. Script reads of it fall back to 0 and
+    /// writes are reported at the writing node.
+    DeleteSysVar {
+        namespace: String,
+        name: String,
+    },
+    /// Set a system variable's live value (manager edit or script write
+    /// relay), clamped against the definition's bounds.
+    SetSysVar {
+        namespace: String,
+        name: String,
+        value: f64,
+    },
+}
+
+/// The synthetic stream id system variables publish under: an id no node
+/// can ever mint (`node_counter` counts up from 1), so a sysvar stream
+/// cannot collide with a script's derived signals.
+pub(crate) const SYSVAR_STREAM_ID: u64 = u64::MAX;
+
+/// One system variable definition: CANoe-style namespaced value with
+/// optional clamping bounds and display metadata. Also the persisted
+/// form -- the live value stays core-side, the definition is the config.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SysVarDef {
+    pub namespace: String,
+    pub name: String,
+    /// Value applied at every measurement start and at definition time.
+    pub init: f64,
+    /// Inclusive clamp bounds for numeric writes; `None` = unbounded.
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub comment: String,
+}
+
+impl SysVarDef {
+    /// The full lookup key scripts and commands use.
+    pub fn key(&self) -> String {
+        format!("{}::{}", self.namespace, self.name)
+    }
+
+    /// Clamps `v` into the declared bounds.
+    pub fn clamp(&self, v: f64) -> f64 {
+        let v = self.min.map(|lo| v.max(lo)).unwrap_or(v);
+        self.max.map(|hi| v.min(hi)).unwrap_or(v)
+    }
+}
+
+/// One system variable as of the last publish: the definition plus its
+/// live value. The manager window's data source.
+#[derive(Clone, Debug)]
+pub struct SysVarView {
+    pub def: SysVarDef,
+    pub value: f64,
 }
 
 /// One simulation node as of this frame: identity, source, runtime state
@@ -509,6 +572,9 @@ pub struct Snapshot {
     /// Derived-signal streams opened by `emit_value` so far: key plus the
     /// owning node's display name.
     pub emitted: Vec<(SigKey, String)>,
+    /// The system variables as of this frame: definition plus live value.
+    /// The manager window's data source and the project save.
+    pub sysvars: Vec<SysVarView>,
     /// Hardware attachments: one per wired-up bus.
     pub hw: Vec<HwBusView>,
     /// Node names whose generator frames currently go out the wire.
@@ -814,6 +880,11 @@ pub struct BusCore {
     /// Derived-signal streams a node has opened with `emit_value`:
     /// synthetic key plus the owning node's name, for the selection tree.
     pub(crate) emitted_streams: Vec<(SigKey, String)>,
+    /// System variables: namespaced, typed values defined in the manager,
+    /// read/written by scripts (`sys_get` / `sys_set`), and published to
+    /// the observers as one synthetic stream per variable. The live value
+    /// rides next to the definition; resets to `init` at every run start.
+    pub(crate) sysvars: Vec<(SysVarDef, f64)>,
     /// Hardware attachments (Kvaser today): bus → adapter, plus the
     /// per-node wire-egress switches. Session state, per the hardware
     /// mapping overlay model.
@@ -879,6 +950,7 @@ impl BusCore {
             block_counter: 0,
             scan_done: false,
             emitted_streams: Vec::new(),
+            sysvars: Vec::new(),
             hw: Default::default(),
             trace_limit: TRACE_LIMIT,
             pre_frames: PRE_BUFFER_FRAMES,
@@ -929,7 +1001,10 @@ impl BusCore {
                         .channels
                         .get(channel as usize)
                         .and_then(|c| c.dbc.clone());
-                    self.nodes.last_mut().expect("just added").start(dbc);
+                    let keys = self.sysvar_keys();
+                    let last = self.nodes.last_mut().expect("just added");
+                    last.sysvar_keys = keys;
+                    last.start(dbc);
                 }
                 self.nodes_dirty = true;
             }
@@ -962,26 +1037,31 @@ impl BusCore {
                 }
             }
             BusCommand::SetNodeSource { id, source } => {
+                let keys = self.sysvar_keys();
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
                         .channels
                         .get(n.channel as usize)
                         .and_then(|c| c.dbc.clone());
+                    n.sysvar_keys = keys;
                     n.set_source(source, dbc, self.measuring);
                     self.nodes_dirty = true;
                 }
             }
             BusCommand::SetNodeEnabled { id, on } => {
+                let keys = self.sysvar_keys();
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
                         .channels
                         .get(n.channel as usize)
                         .and_then(|c| c.dbc.clone());
+                    n.sysvar_keys = keys;
                     n.set_enabled(on, dbc, self.measuring);
                     self.nodes_dirty = true;
                 }
             }
             BusCommand::SetNodes { nodes } => {
+                let keys = self.sysvar_keys();
                 self.nodes = nodes
                     .into_iter()
                     .map(|cfg| {
@@ -1002,6 +1082,7 @@ impl BusCore {
                                 .channels
                                 .get(n.channel as usize)
                                 .and_then(|c| c.dbc.clone());
+                            n.sysvar_keys = keys.clone();
                             n.start(dbc);
                         }
                         n
@@ -1013,7 +1094,59 @@ impl BusCore {
                 // Wholesale replacement mints new node ids: every existing
                 // derived-signal stream loses its owner.
                 self.emitted_streams.clear();
+                // Sysvar streams are not node-owned; recreate them right
+                // away so observer selections survive the replacement.
+                let live: Vec<(String, String, f64)> = self
+                    .sysvars
+                    .iter()
+                    .map(|(d, v)| (d.namespace.clone(), d.name.clone(), *v))
+                    .collect();
+                for (ns, name, v) in live {
+                    self.ingest_sysvar(&ns, &name, v);
+                }
                 self.nodes_dirty = true;
+            }
+            BusCommand::DefineSysVar(def) => {
+                let key = def.key();
+                match self.sysvars.iter().position(|(d, _)| d.key() == key) {
+                    Some(i) => {
+                        let v = def.init;
+                        self.sysvars[i] = (def, v);
+                    }
+                    None => {
+                        let v = def.init;
+                        self.sysvars.push((def, v));
+                    }
+                }
+                self.refresh_node_sysvar_keys();
+                if let Some((d, v)) = self.sysvars.iter().find(|(d, _)| d.key() == key) {
+                    let (ns, name, val) = (d.namespace.clone(), d.name.clone(), *v);
+                    self.ingest_sysvar(&ns, &name, val);
+                }
+                self.nodes_dirty = true;
+            }
+            BusCommand::DeleteSysVar { namespace, name } => {
+                let before = self.sysvars.len();
+                self.sysvars
+                    .retain(|(d, _)| d.namespace != namespace || d.name != name);
+                if self.sysvars.len() != before {
+                    self.refresh_node_sysvar_keys();
+                    // The dead variable's stream has no future writer.
+                    let dead = crate::app::EMITTED_ID_BASE | (SYSVAR_STREAM_ID as u32);
+                    self.emitted_streams
+                        .retain(|(k, owner)| !(k.1 == dead && k.3 == name && *owner == namespace));
+                    self.nodes_dirty = true;
+                }
+            }
+            BusCommand::SetSysVar {
+                namespace,
+                name,
+                value,
+            } => {
+                let key = format!("{namespace}::{name}");
+                if !self.sysvar_write(&key, value) {
+                    *status = format!("[sysvar] 未定义: \"{key}\"");
+                }
             }
             BusCommand::AddReplayBlock {
                 name,
@@ -1370,16 +1503,32 @@ impl BusCore {
     /// Arms every enabled node for a measurement: recompile from source,
     /// run the main chunk, fire `on start`.
     fn nodes_start(&mut self) {
+        let keys = self.sysvar_keys();
         for node in &mut self.nodes {
             if node.enabled {
                 let dbc = self
                     .channels
                     .get(node.channel as usize)
                     .and_then(|c| c.dbc.clone());
+                node.sysvar_keys = keys.clone();
                 node.start(dbc);
             }
         }
         self.nodes_dirty = true;
+    }
+
+    /// The defined system variable keys ("ns::name").
+    fn sysvar_keys(&self) -> Vec<String> {
+        self.sysvars.iter().map(|(d, _)| d.key()).collect()
+    }
+
+    /// Pushes the current key set to every node: the start check reports
+    /// a script's references outside this set.
+    fn refresh_node_sysvar_keys(&mut self) {
+        let keys = self.sysvar_keys();
+        for n in &mut self.nodes {
+            n.sysvar_keys = keys.clone();
+        }
     }
 
     /// Node timer handlers that are due at wall clock `now_us`; their
@@ -1387,6 +1536,7 @@ impl BusCore {
     /// `now()`/`sig()` read, per channel.
     fn run_node_timers(&mut self, now_us: u64, inputs: &HashMap<u8, HostInput>) {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
+        let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线/监听时
@@ -1408,6 +1558,9 @@ impl BusCore {
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
+            for (key, v) in node.take_sys_sets() {
+                sys_writes.push((node.id, key, v));
+            }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
@@ -1415,6 +1568,7 @@ impl BusCore {
         for (ch, node_id, node_name, name, v) in derived {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
+        self.apply_sys_writes(sys_writes);
     }
 
     /// Delivers one frame to the matching node handlers; the frames they
@@ -1428,6 +1582,7 @@ impl BusCore {
     ) -> Vec<(u32, bool, Vec<u8>)> {
         let mut out = Vec::new();
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
+        let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色闸（见 run_node_timers）。
@@ -1450,6 +1605,9 @@ impl BusCore {
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
+            for (key, v) in node.take_sys_sets() {
+                sys_writes.push((node.id, key, v));
+            }
             if node.take_log_if_dirty().is_some() {
                 self.nodes_dirty = true;
             }
@@ -1457,7 +1615,58 @@ impl BusCore {
         for (ch, node_id, node_name, name, v) in derived {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
+        self.apply_sys_writes(sys_writes);
         out
+    }
+
+    /// Applies the system variable writes a handler run queued: clamp
+    /// against the definition, publish to the observers, and report an
+    /// undefined key to the writing node's log.
+    fn apply_sys_writes(&mut self, writes: Vec<(u64, String, f64)>) {
+        for (node_id, key, v) in writes {
+            if !self.sysvar_write(&key, v)
+                && let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id)
+            {
+                n.note(format!("[sysvar] 未定义，写入被丢弃: \"{key}\""));
+            }
+        }
+    }
+
+    /// Stores one system variable write, clamped to its bounds, and
+    /// publishes the sample to the observers under the sysvar stream id.
+    /// Returns false when no such variable is defined.
+    fn sysvar_write(&mut self, key: &str, value: f64) -> bool {
+        let Some(i) = self.sysvars.iter().position(|(d, _)| d.key() == key) else {
+            return false;
+        };
+        let (def, v) = &mut self.sysvars[i];
+        *v = def.clamp(value);
+        let (ns, name, val) = (def.namespace.clone(), def.name.clone(), *v);
+        self.ingest_sysvar(&ns, &name, val);
+        true
+    }
+
+    /// Publishes one system variable value to the observers. Each
+    /// variable is a synthetic stream grouped under its namespace, the
+    /// same tree Data and Graphics browse.
+    fn ingest_sysvar(&mut self, namespace: &str, name: &str, v: f64) {
+        self.ingest_emitted(0, SYSVAR_STREAM_ID, namespace, name, v);
+    }
+
+    /// Run start: every system variable returns to its declared init
+    /// value and republishes, so observers never plot a stale tail.
+    fn init_sysvars(&mut self) {
+        let defs: Vec<(String, String, f64)> = self
+            .sysvars
+            .iter()
+            .map(|(d, _)| (d.namespace.clone(), d.name.clone(), d.init))
+            .collect();
+        for (d, v) in &mut self.sysvars {
+            *v = d.init;
+        }
+        for (ns, name, v) in defs {
+            self.ingest_sysvar(&ns, &name, v);
+        }
     }
 
     /// Folds one `emit_value` sample into its synthetic subscription,
@@ -1507,7 +1716,17 @@ impl BusCore {
             inputs.entry(node.channel).or_insert_with(|| HostInput {
                 now_s: now_us as f64 / 1e6,
                 signals: HashMap::new(),
+                sysvars: HashMap::new(),
             });
+        }
+        // System variables are global: every channel's nodes read the
+        // same live set.
+        let mut sysmap: HashMap<String, f64> = HashMap::with_capacity(self.sysvars.len());
+        for (d, v) in &self.sysvars {
+            sysmap.insert(d.key(), *v);
+        }
+        for input in inputs.values_mut() {
+            input.sysvars = sysmap.clone();
         }
         for (&(ch, id, extended), agg) in &self.aggs {
             let Some(input) = inputs.get_mut(&ch) else {
@@ -1590,6 +1809,14 @@ impl BusCore {
             nodes: Arc::clone(&self.published_nodes),
             blocks: (*self.published_blocks).clone(),
             emitted: self.emitted_streams.clone(),
+            sysvars: self
+                .sysvars
+                .iter()
+                .map(|(d, v)| SysVarView {
+                    def: d.clone(),
+                    value: *v,
+                })
+                .collect(),
             hw: self
                 .hw
                 .buses
@@ -2607,6 +2834,9 @@ impl BusCore {
         for sub in self.subs.values_mut() {
             sub.reset_measurement();
         }
+        // Every run starts from the declared values, CANoe-style -- and
+        // republishes them, so observers never plot the last run's tail.
+        self.init_sysvars();
         self.refresh_sub_histories();
     }
 

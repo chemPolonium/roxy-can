@@ -273,6 +273,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                     {
                         app.show_measurement = !app.show_measurement;
                     }
+                    if ui
+                        .menu_item_config("System Variables")
+                        .selected(app.show_sysvars)
+                        .build()
+                    {
+                        app.show_sysvars = !app.show_sysvars;
+                    }
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {

@@ -166,6 +166,9 @@ pub struct App {
     /// The Triggers window's editor popup, if open: the row it edits plus
     /// the not-yet-applied shape. `None` while the popup is closed.
     pub(crate) trig_draft: Option<crate::ui::triggers::TrigDraft>,
+    /// The System Variables manager's add/edit popup, if open. Session
+    /// state, like the trigger editor's.
+    pub(crate) sysvar_draft: Option<crate::ui::sysvars::SysVarDraft>,
     /// Which violation kinds the report window lists, indexed by
     /// [`crate::spec::Kind::ALL`]. A noise control, deliberately not part of the
     /// project: hiding third-party traffic today should not hide it next week.
@@ -183,6 +186,7 @@ pub struct App {
     pub show_bus_stats: bool,
     pub show_spec: bool,
     pub show_id_filter: bool,
+    pub show_sysvars: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
     pub id_filter_search: String,
@@ -401,6 +405,7 @@ impl App {
             replay_speed: 1.0,
             replay_reset_pending: false,
             trig_draft: None,
+            sysvar_draft: None,
             spec_show: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
@@ -413,6 +418,7 @@ impl App {
             show_bus_stats: false,
             show_spec: false,
             show_id_filter: false,
+            show_sysvars: false,
             show_shortcuts: false,
             show_about: false,
             id_filter_search: String::new(),

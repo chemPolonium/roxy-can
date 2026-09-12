@@ -9,7 +9,7 @@
 //! an outbox that the core drains onto the bus as real frames.
 
 use crate::script::{Handler, HandlerKind, HostInput, Value, Vm, compile};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 /// Log lines kept per node, oldest first.
 const LOG_CAP: usize = 200;
@@ -31,6 +31,10 @@ pub struct ScriptNode {
     /// 绑定的 DBC 节点（总线, 节点名）。绑定脚本的发帧受该节点角色
     /// 闸控制——节点离线/监听时脚本同样不发车。None = 独立脚本。
     pub attached: Option<(u8, String)>,
+    /// Defined system variable keys ("ns::name"), refreshed by the bus
+    /// before every (re)start: the start check reports script references
+    /// outside this set.
+    pub sysvar_keys: Vec<String>,
     /// Present only while measuring: recompiled from `source` at every
     /// start, so edits apply without a separate compile action.
     runtime: Option<NodeRuntime>,
@@ -48,6 +52,9 @@ struct NodeRuntime {
     /// Derived-signal samples queued by `emit_value` and not yet taken by
     /// the bus. Drained from the VM after every handler run.
     emitted: Vec<(String, f64)>,
+    /// System variable writes queued by `sys_set` and not yet taken by
+    /// the bus. Same lifecycle as `emitted`.
+    pending_sys: Vec<(String, f64)>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.
@@ -76,6 +83,7 @@ impl ScriptNode {
             enabled: true,
             file_path: None,
             attached: None,
+            sysvar_keys: Vec::new(),
             runtime: None,
             log: VecDeque::new(),
             log_dirty: false,
@@ -182,6 +190,17 @@ impl ScriptNode {
                 }
             }
         }
+        // 装配层校验：脚本引用的系统变量须已在系统变量管理器中定义，
+        // 否则 sys_get 读到 0、sys_set 的写入被丢弃——提前报出来。
+        for key in &script.sysvar_refs {
+            if !self.sysvar_keys.iter().any(|k| k == key) {
+                Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    format!("[check] 系统变量未定义: \"{key}\""),
+                );
+            }
+        }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.host_extern = Some(Box::new(move |name, args| {
@@ -218,6 +237,7 @@ impl ScriptNode {
             vm,
             handlers,
             emitted: Vec::new(),
+            pending_sys: Vec::new(),
             timers,
         };
         // `on start` handlers, in declaration order.
@@ -533,6 +553,7 @@ impl ScriptNode {
             Self::push_log_into(log, dirty, line);
         }
         rt.emitted.append(&mut rt.vm.emitted);
+        rt.pending_sys.append(&mut rt.vm.sys_sets);
     }
 
     /// Hands the bus everything `emit_value` queued since the last call.
@@ -543,9 +564,23 @@ impl ScriptNode {
             .unwrap_or_default()
     }
 
+    /// Hands the bus everything `sys_set` queued since the last call.
+    pub fn take_sys_sets(&mut self) -> Vec<(String, f64)> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.pending_sys))
+            .unwrap_or_default()
+    }
+
     fn fail(&mut self, msg: &str) {
         self.errored = true;
         self.push_log(format!("[error] {msg}"));
+    }
+
+    /// Bus-side advisory into the node's log ring (an undefined system
+    /// variable write, today): visible without failing the node.
+    pub fn note(&mut self, line: String) {
+        self.push_log(line);
     }
 }
 
@@ -642,6 +677,53 @@ mod tests {
         let mut n = ScriptNode::new(1, "n".into(), 0);
         n.source = source.to_string();
         n
+    }
+
+    /// The start check reports literal `sys_get` / `sys_set` keys that
+    /// are not in the defined set the bus pushed in.
+    #[test]
+    fn undefined_sysvar_references_are_reported_at_start() {
+        let mut n = node(
+            r#"
+                on start {
+                    let v = sys_get("Demo::Speed");
+                    sys_set("Demo::Setpoint", v + 1);
+                }
+            "#,
+        );
+        n.sysvar_keys = vec!["Demo::Speed".to_string()];
+        n.start(None);
+        let logs = n.log_snapshot();
+        assert!(
+            logs.iter().any(|l| l.contains("Demo::Setpoint")),
+            "the undefined write is reported: {logs:?}"
+        );
+        assert!(
+            !logs.iter().any(|l| l.contains("Demo::Speed")),
+            "the defined read is silent"
+        );
+    }
+
+    /// A `sys_set` in a handler reaches `take_sys_sets`; `sys_get` reads
+    /// the values the bus published into the host input.
+    #[test]
+    fn sys_set_from_a_handler_reaches_the_drain() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    sys_set("Demo::Setpoint", sys_get("Demo::Speed") * 2);
+                }
+            "#,
+        );
+        n.sysvar_keys = vec!["Demo::Speed".to_string(), "Demo::Setpoint".to_string()];
+        n.start(None);
+        let mut hit = HostInput::default();
+        hit.sysvars.insert("Demo::Speed".to_string(), 21.0);
+        n.dispatch_frame(0, 0x100, false, false, &[], &hit);
+        assert_eq!(
+            n.take_sys_sets(),
+            vec![("Demo::Setpoint".to_string(), 42.0)]
+        );
     }
 
     #[test]
@@ -1119,6 +1201,7 @@ BO_ 256 Real: 2 ECU
         let input = HostInput {
             now_s: 1.5,
             signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
+            sysvars: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1.5", "2400.0"]);

@@ -257,6 +257,10 @@ pub struct Script {
     /// R2 静态事实表 -- 接收集：`on message <id>` / `on extended message
     /// <id>` 声明监听的 `(id, extended)`。`on message *` 不入列（无界）。
     pub recv_refs: Vec<(u32, bool)>,
+    /// System variables referenced by literal-argument `sys_get` /
+    /// `sys_set` calls (`"ns::name"`), deduped. The host checks the set
+    /// against the defined registry at node start.
+    pub sysvar_refs: Vec<String>,
 }
 
 impl Script {
@@ -312,6 +316,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("send", 1, 9),
     ("send_ext", 1, 9),
     ("emit_value", 2, 2),
+    ("sys_get", 1, 1),
+    ("sys_set", 2, 2),
     ("now", 0, 0),
     ("sig", 2, 2),
     ("bytes", 1, 1),
@@ -393,12 +399,15 @@ pub(crate) fn extern_lookup(name: &str) -> Option<ExternFn> {
 }
 
 /// What the host publishes for a script to read between events: the bus
-/// clock in seconds and the latest physical value of every decoded
-/// signal on the node's channel, keyed by `(message id, signal name)`./// The node runtime refreshes this before each handler run.
+/// clock in seconds, the latest physical value of every decoded
+/// signal on the node's channel, keyed by `(message id, signal name)`,
+/// and the live system variables keyed by `"namespace::name"`.
+/// The node runtime refreshes this before each handler run.
 #[derive(Clone, Debug, Default)]
 pub struct HostInput {
     pub now_s: f64,
     pub signals: HashMap<(u32, String), f64>,
+    pub sysvars: HashMap<String, f64>,
 }
 
 /// A compile-time error, positioned at the offending source line and,

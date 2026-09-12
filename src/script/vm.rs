@@ -76,9 +76,12 @@ pub struct Vm {
     /// synthetic subscription stream that Graphics and Data select like
     /// any database signal.
     pub emitted: Vec<(String, f64)>,
-    /// Host-published read values: the clock and latest signal values.
-    /// The node runtime refreshes this before each handler run; `now()`
-    /// and `sig()` read it.
+    /// System variable writes queued by `sys_set("ns::name", v)`. The
+    /// node runtime drains this after each handler run; the bus clamps
+    /// the value against the definition and publishes it.
+    pub sys_sets: Vec<(String, f64)>,
+    /// Host-published read values: the clock, latest signal values, and
+    /// the live system variables (`sys_get` reads this).
     pub host_input: HostInput,
     /// Extension point for host-registered builtins (see
     /// [`HostExternFn`]). Called when the builtin table has no entry for
@@ -111,6 +114,7 @@ impl Vm {
             output: Vec::new(),
             outbox: Vec::new(),
             emitted: Vec::new(),
+            sys_sets: Vec::new(),
             host_input: HostInput::default(),
             host_extern: None,
             timer_ops: Vec::new(),
@@ -623,6 +627,47 @@ impl Vm {
                 };
                 self.emitted.push((name.clone(), v));
             }
+            "sys_get" => {
+                // sys_get("ns::name"): reads the live system variable.
+                // An undefined key reads 0.0 -- the host reports unknown
+                // keys at node start, so a silent zero here only happens
+                // to a variable deleted mid-run.
+                let Value::Str(key) = &args[0] else {
+                    return Err(VmError("sys_get(\"ns::name\") needs a string".into()));
+                };
+                let v = self
+                    .host_input
+                    .sysvars
+                    .get(key.as_str())
+                    .copied()
+                    .unwrap_or(0.0);
+                self.stack.push(Value::Float(v));
+                return Ok(());
+            }
+            "sys_set" => {
+                // sys_set("ns::name", v): queues a write. Clamping against
+                // the definition's bounds happens on the bus, which owns
+                // the registry.
+                let (Value::Str(key), v) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "sys_set(\"ns::name\", value) needs a string and a number".into(),
+                    ));
+                };
+                if key.is_empty() {
+                    return Err(VmError("sys_set: variable key must not be empty".into()));
+                }
+                let v = match v {
+                    Value::Float(f) if f.is_finite() => *f,
+                    Value::Int(n) => *n as f64,
+                    other => {
+                        return Err(VmError(format!(
+                            "sys_set: value must be a number, got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                self.sys_sets.push((key.clone(), v));
+            }
             // Stimulus math: floats in and out; `now()` reads the same
             // clock, so e.g. sin(now()) animates with the bus.
             "abs" | "floor" | "ceil" | "round" | "sin" | "cos" => {
@@ -1108,6 +1153,50 @@ mod tests {
         let mut vm = Vm::new(script);
         let e = vm.run().unwrap_err();
         assert!(e.to_string().contains("number"), "{e}");
+    }
+
+    /// `sys_get` reads the host-published variable table; an undefined
+    /// key reads 0.0 (the host reports unknown keys at node start).
+    #[test]
+    fn sys_get_reads_the_host_table_and_defaults_to_zero() {
+        let script = compile(
+            r#"
+                let a = sys_get("Demo::Speed");
+                let b = sys_get("Demo::Missing");
+                print(a, b);
+            "#,
+        )
+        .unwrap();
+        let mut vm = Vm::new(script);
+        vm.host_input
+            .sysvars
+            .insert("Demo::Speed".to_string(), 42.5);
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["42.5 0.0"], "undefined keys read zero");
+    }
+
+    /// `sys_set` queues a write for the host; the queue drains like the
+    /// `emit_value` one.
+    #[test]
+    fn sys_set_queues_a_write() {
+        let script = compile("sys_set(\"Demo::Setpoint\", 12); sys_set(\"Demo::Rate\", 1.5);")
+            .unwrap();
+        let mut vm = Vm::new(script);
+        vm.run().unwrap();
+        assert_eq!(
+            vm.sys_sets,
+            vec![
+                ("Demo::Setpoint".to_string(), 12.0),
+                ("Demo::Rate".to_string(), 1.5),
+            ]
+        );
+    }
+
+    #[test]
+    fn sys_get_rejects_a_non_string_key() {
+        let script = compile("sys_get(3);").unwrap();
+        let mut vm = Vm::new(script);
+        assert!(vm.run().is_err());
     }
 
     /// The periodic shapes must match the TX generator sample for

@@ -380,6 +380,8 @@ pub struct DesktopCfg {
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
+    #[serde(default)]
+    pub show_sysvars: bool,
 }
 
 fn cycle_default() -> u64 {
@@ -530,6 +532,8 @@ pub struct Config {
     pub show_spec: bool,
     #[serde(default)]
     pub show_id_filter: bool,
+    #[serde(default)]
+    pub show_sysvars: bool,
     #[serde(default = "one_default")]
     pub replay_speed: f64,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
@@ -556,6 +560,10 @@ pub struct Config {
     pub nodes: Vec<NodeCfg>,
     #[serde(default)]
     pub blocks: Vec<BlockCfg>,
+    /// System variable definitions. The live values stay runtime-only;
+    /// only the declarations persist.
+    #[serde(default)]
+    pub sysvars: Vec<crate::bus::SysVarDef>,
     #[serde(default)]
     pub tx: Vec<TxCfg>,
     #[serde(default)]
@@ -636,6 +644,7 @@ fn desktop_cfg(d: &Desktop) -> DesktopCfg {
         show_bus_stats: d.show_bus_stats,
         show_spec: d.show_spec,
         show_id_filter: d.show_id_filter,
+        show_sysvars: d.show_sysvars,
     }
 }
 
@@ -695,6 +704,7 @@ impl Config {
             show_bus_stats: app.show_bus_stats,
             show_spec: app.show_spec,
             show_id_filter: app.show_id_filter,
+            show_sysvars: app.show_sysvars,
             replay_speed: app.replay_speed,
             text_rate_hz: app.text_rate_hz,
             trace_limit: app.trace_limit,
@@ -820,6 +830,7 @@ impl Config {
                     enabled: b.enabled,
                 })
                 .collect(),
+            sysvars: app.snap.sysvars.iter().map(|v| v.def.clone()).collect(),
             tx: app
                 .snap
                 .tx
@@ -1161,6 +1172,7 @@ impl Config {
         app.show_bus_stats = self.show_bus_stats;
         app.show_spec = self.show_spec;
         app.show_id_filter = self.show_id_filter;
+        app.show_sysvars = self.show_sysvars;
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
         app.set_trace_limit(self.trace_limit);
@@ -1177,6 +1189,12 @@ impl Config {
         app.send(crate::bus::BusCommand::SetNodes {
             nodes: self.nodes.clone(),
         });
+        // System variables restore as one Define per entry: existing
+        // definitions with the same key are replaced, values start at
+        // their declared init.
+        for def in &self.sysvars {
+            app.send(crate::bus::BusCommand::DefineSysVar(def.clone()));
+        }
         // Replay blocks cross wholesale like the nodes: ids are minted
         // fresh, and enabled blocks load their queues right away so a
         // broken log path surfaces at restore, not at the first start.
@@ -1274,6 +1292,7 @@ impl Config {
                     show_bus_stats: d.show_bus_stats,
                     show_spec: d.show_spec,
                     show_id_filter: d.show_id_filter,
+                    show_sysvars: d.show_sysvars,
                 })
                 .collect();
             app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);

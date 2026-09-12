@@ -32,6 +32,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         break_jumps: Vec::new(),
         continue_jumps: Vec::new(),
         signal_refs: Vec::new(),
+        sysvar_refs: Vec::new(),
         cur_handler: None,
         send_refs: Vec::new(),
         recv_refs: Vec::new(),
@@ -142,6 +143,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         signal_refs: c.signal_refs,
         send_refs: c.send_refs,
         recv_refs: c.recv_refs,
+        sysvar_refs: c.sysvar_refs,
         opaque_sends: c.opaque_sends,
         timer_arms: c.timer_arms,
     })
@@ -176,6 +178,9 @@ struct Comp {
     /// calls, deduped: metadata the host can check against the database
     /// at node-assembly time.
     signal_refs: Vec<(u32, String)>,
+    /// System variable keys (`"ns::name"`) named by literal-argument
+    /// `sys_get` / `sys_set` calls, deduped, for the host's start check.
+    sysvar_refs: Vec<String>,
     /// R2 spike: the handler being compiled, for attributing derived
     /// sends. `None` inside plain user functions.
     cur_handler: Option<(HandlerKind, String)>,
@@ -590,6 +595,17 @@ impl Comp {
                         let r = (*id as u32, sig.clone());
                         if !self.signal_refs.contains(&r) {
                             self.signal_refs.push(r);
+                        }
+                    }
+                    // System variable accesses are recorded the same way:
+                    // the host checks the keys against the defined
+                    // registry when the node starts.
+                    if (*name == "sys_get" || *name == "sys_set")
+                        && !args.is_empty()
+                        && let Expr::Str(key) = &args[0]
+                    {
+                        if !self.sysvar_refs.contains(key) {
+                            self.sysvar_refs.push(key.clone());
                         }
                     }
                     // R2 fail-closed rule: every `send` / `send_ext` id
