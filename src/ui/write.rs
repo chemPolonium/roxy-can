@@ -32,12 +32,32 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.same_line();
     ui.align_text_to_frame_padding();
+    ui.text_disabled("按类别：");
+    // Per-kind visibility; the order mirrors WriteKind's variants.
+    const LABELS: [&str; 4] = ["脚本", "信息", "告警", "错误"];
+    for (slot, label) in app.write_filter.iter_mut().zip(LABELS) {
+        ui.same_line();
+        ui.checkbox(label, slot);
+    }
+    ui.same_line();
+    ui.align_text_to_frame_padding();
     ui.text_disabled("脚本输出、检查告警与系统事件");
 
     // Stick to the bottom while the user hasn't scrolled up to read
     // something: arrivals keep appending below otherwise.
     let at_bottom = ui.scroll_y() + 2.0 >= ui.scroll_max_y();
-    for line in app.snap.write.iter() {
+    let want = |k: &WriteKind| -> bool {
+        let i = match k {
+            WriteKind::Script => 0,
+            WriteKind::Info => 1,
+            WriteKind::Warning => 2,
+            WriteKind::Error => 3,
+        };
+        app.write_filter[i]
+    };
+    let lines: Vec<&crate::bus::WriteLine> =
+        app.snap.write.iter().filter(|l| want(&l.kind)).collect();
+    for line in lines {
         let t = line.t_us as f64 / 1e6;
         let color = match line.kind {
             WriteKind::Error => [1.0, 0.55, 0.3, 1.0],

@@ -866,6 +866,36 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
         }
     }
 
+    // Reverse check mirrored in place: what the node's DBC declares but
+    // the draft never sends (the start log reports the same as [info]).
+    if let (Some(db), Some(owner)) = (&dbc, &attached_node)
+        && !facts.recv_wildcard
+    {
+        let mut missing: Vec<(u32, bool, &str)> = db
+            .messages
+            .iter()
+            .filter(|(k, m)| {
+                m.transmitter == *owner
+                    && !facts.sends.iter().any(|(id, ext, _)| (*id, *ext) == **k)
+            })
+            .map(|(k, m)| (k.0, k.1, m.name.as_str()))
+            .collect();
+        missing.sort();
+        if !missing.is_empty() {
+            ui.separator();
+            ui.text_disabled(format!("未实现（{}）", missing.len()));
+            for (msg_id, ext, name) in &missing {
+                ui.text(format!(
+                    "  0x{msg_id:03X}{} {name}",
+                    if *ext { "x" } else { "" }
+                ));
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("可能由生成器代发；启动日志有同款 [info]");
+            }
+        }
+    }
+
     ui.separator();
     ui.text_disabled(format!("接收（{}）", facts.recvs.len() + usize::from(facts.recv_wildcard)));
     if facts.recv_wildcard {

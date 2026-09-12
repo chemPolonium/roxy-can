@@ -223,6 +223,9 @@ pub struct App {
     /// Glyph advance cache for the space-dot overlay, keyed by char.
     /// The font is global, so advances are too.
     pub(crate) char_advance: HashMap<char, f32>,
+    /// Write window's per-kind visibility, ordered
+    /// `[Script, Info, Warning, Error]`. Session state.
+    pub write_filter: [bool; 4],
     /// Kvaser channels discovered on this machine, enumerated once on
     /// first need. `Err` = the driver is unavailable.
     pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
@@ -446,6 +449,7 @@ impl App {
             editor_facts: HashMap::new(),
             editor_cursors: HashMap::new(),
             char_advance: HashMap::new(),
+            write_filter: [true; 4],
             kvaser_channels: None,
             profile_names: None,
             profile_pick: 0,
