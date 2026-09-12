@@ -54,6 +54,28 @@ fn a_full_flag_set_parses() {
     assert_eq!(o.stats_csv.as_deref(), Some("out.csv"));
 }
 
+/// The shipped `examples/` folder doubles as the language's living
+/// corpus: every `.rxcan` there must compile against the current
+/// language, so a regression (or a broken new example) fails loudly.
+#[test]
+fn every_shipped_example_compiles() {
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    for entry in std::fs::read_dir("examples").expect("examples dir exists") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rxcan") {
+            continue;
+        }
+        checked += 1;
+        let src = std::fs::read_to_string(&path).expect("readable example");
+        if let Err(e) = crate::script::compile(&src) {
+            failures.push(format!("{}: {e}", path.display()));
+        }
+    }
+    assert!(checked >= 6, "the corpus is intact, found {checked}");
+    assert!(failures.is_empty(), "examples must compile: {failures:?}");
+}
+
 #[test]
 fn defaults_apply_when_flags_are_absent() {
     let cli = parse_args(&flag_set(&["--replay", "x.blf"])).unwrap();

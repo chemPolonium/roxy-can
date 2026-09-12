@@ -1,0 +1,32 @@
+// 系统变量节点：sys_get / sys_set 读写 View > System Variables 里
+// 定义的命名空间变量，写入自动夹到界限内；每个变量同时是一条
+// 可观测流（信号选择树里按 namespace 分组），Data / Graphics 可直接
+// 画曲线。变量定义随工程保存，每次测量开始复位为初值。
+//
+// 行为（需要先在 System Variables 管理器里定义，见下方"建变量"）：
+//   - 每 50ms 把 EngineStatus 的转速镜像进 Demo::EngineRpm，
+//     供 Data / Graphics 观察或在其他节点间共享
+//   - 每 500ms 读一次 Demo::Setpoint（手动在管理窗口改值即可，
+//     无需改脚本），按它是否超过当前转速决定是否发加速请求帧
+//   - 周期打印两个变量的当前值
+//
+// 建变量（View > System Variables > "+ Variable"）：
+//   namespace=Demo  name=EngineRpm  init=0
+//   namespace=Demo  name=Setpoint   init=1500  min=0  max=8000
+//
+// 注意：引用未定义的变量会在节点启动时告警，运行中写入未定义
+// 变量被丢弃并记日志（节点不熔断）。
+
+on timer 50 {
+    sys_set("Demo::EngineRpm", sig(0x100, "EngineSpeed"));
+}
+
+on timer 500 {
+    let target = sys_get("Demo::Setpoint");
+    let rpm = sys_get("Demo::EngineRpm");
+    if (rpm < target - 100) {
+        // 没到目标转速：发一帧油门请求（示例载荷）
+        send(0x101, 0x01, 0x00);
+    }
+    print("t =", now(), "s  target =", target, "rpm  rpm =", rpm);
+}

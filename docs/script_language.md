@@ -273,6 +273,23 @@ on timer 10 {
 }
 ```
 
+### sys_get("ns::name") / sys_set("ns::name", value)
+
+读写**系统变量**——在 View > System Variables 管理器里定义的
+命名空间值（namespace + name + 初值 + 可选界限 + 单位/备注，定义随
+工程保存）。每次测量开始所有变量复位为声明的初值；每个变量同时发布
+为一条可观测流（信号选择树里按 namespace 分组），Data / Graphics
+像数据库信号一样选用。写入会被夹到定义的界限内；引用未定义的变量
+在节点启动时报出来，运行中写未定义变量被丢弃并记日志（节点不停跑）。
+
+```c
+on timer 50 {
+    // 读控制器写的目标值，向下发布实际值
+    let target = sys_get("Demo::Setpoint");
+    sys_set("Demo::Actual", target * 0.9);
+}
+```
+
 ## 帧数据访问内建
 
 | 内建 | 说明 |
