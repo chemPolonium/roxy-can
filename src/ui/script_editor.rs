@@ -75,6 +75,11 @@ pub(crate) struct EditorFacts {
     pub sysvars: Vec<String>,
     /// Response mapping: one row per armed one-shot timer.
     pub responses: Vec<ResponseRowLite>,
+    /// Per-character highlight classes, aligned with the draft's
+    /// `split('\n')` segments.
+    pub classes: Vec<Vec<u8>>,
+    /// Source line (1-based) of the compile error, for the gutter mark.
+    pub error_line: Option<u32>,
     /// Compile error, when the draft no longer compiles.
     pub error: Option<String>,
 }
@@ -88,12 +93,107 @@ pub(crate) struct ResponseRowLite {
     pub sends: Vec<(u32, bool)>,
 }
 
+/// Per-character highlight classes (the tint overlay's input): 0 plain,
+/// 1 keyword, 2 number, 3 string, 4 comment.
+pub(crate) const PLAIN: u8 = 0;
+pub(crate) const KEYWORD: u8 = 1;
+pub(crate) const NUMBER: u8 = 2;
+pub(crate) const STRING: u8 = 3;
+pub(crate) const COMMENT: u8 = 4;
+
+/// Classifies the draft character by character. A tiny lexer mirroring
+/// `script/lexer`'s token shapes (`//` and `/* */` comments, `"strings"`
+/// with backslash escapes, hex-friendly numbers, the keyword set); it
+/// feeds the tint overlay only, never the compiler.
+pub(crate) fn classify_lines(src: &str) -> Vec<Vec<u8>> {
+    const KEYWORDS: [&str; 12] = [
+        "on", "fn", "if", "else", "while", "for", "return", "break", "continue", "true", "false",
+        "let",
+    ];
+    let mut out = Vec::new();
+    let mut in_block = false;
+    for line in src.split('\n') {
+        let chars: Vec<char> = line.chars().collect();
+        let mut classes = vec![PLAIN; chars.len()];
+        let mut i = 0usize;
+        while i < chars.len() {
+            if in_block {
+                classes[i] = COMMENT;
+                if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                    if i + 1 < classes.len() {
+                        classes[i + 1] = COMMENT;
+                    }
+                    in_block = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            match chars[i] {
+                '/' if chars.get(i + 1) == Some(&'/') => {
+                    while i < classes.len() {
+                        classes[i] = COMMENT;
+                        i += 1;
+                    }
+                }
+                '/' if chars.get(i + 1) == Some(&'*') => {
+                    in_block = true;
+                    classes[i] = COMMENT;
+                    if i + 1 < classes.len() {
+                        classes[i + 1] = COMMENT;
+                    }
+                    i += 2;
+                }
+                '"' => {
+                    classes[i] = STRING;
+                    i += 1;
+                    while i < chars.len() {
+                        classes[i] = STRING;
+                        if chars[i] == '\\' && i + 1 < chars.len() {
+                            i += 1;
+                            classes[i] = STRING;
+                        } else if chars[i] == '"' {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                c if c.is_ascii_digit() => {
+                    while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_')
+                    {
+                        classes[i] = NUMBER;
+                        i += 1;
+                    }
+                }
+                c if c.is_alphabetic() || c == '_' => {
+                    let start = i;
+                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                        i += 1;
+                    }
+                    let word: String = chars[start..i].iter().collect();
+                    if KEYWORDS.contains(&word.as_str()) {
+                        for cl in &mut classes[start..i] {
+                            *cl = KEYWORD;
+                        }
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        out.push(classes);
+    }
+    out
+}
+
 /// Derives the static facts of a draft. The outline comes from a line
 /// scan (it must work on broken, half-typed source); the sets come from
 /// the compiler and are absent when it fails.
 fn compute_facts(src: &str, hash: u64) -> EditorFacts {
     let mut facts = EditorFacts {
         hash,
+        classes: classify_lines(src),
         ..Default::default()
     };
     for (i, raw) in src.lines().enumerate() {
@@ -153,7 +253,10 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
                 });
             }
         }
-        Err(e) => facts.error = Some(e.to_string()),
+        Err(e) => {
+            facts.error_line = Some(e.line);
+            facts.error = Some(e.to_string());
+        }
     }
     facts
 }
@@ -293,6 +396,9 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.child_window(format!("##emain{id}"))
         .size([0.0, avail[1]])
         .build(|| {
+            // Cached per-draft facts (highlight classes, error line, ...)
+            // before the draft borrow starts.
+            let facts = facts_for(app, id);
             let draft = app
                 .node_src_draft
                 .entry(id)
@@ -327,11 +433,8 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 .callback(InputTextMultilineCallback::ALWAYS, sync)
                 .build();
 
-            // Space dots: the multiline never wraps, so every glyph sits
-            // at a computable position -- row y is the line index times
-            // the font pitch, glyph x is the sum of advances before it.
-            // Spaces render nothing, so a faint dot is drawn over each
-            // one's cell to make indentation and runs visible.
+            // The callback has run by now when the widget is active, so
+            // the stored viewport reflects the current frame.
             let (scroll, hscroll) = app
                 .editor_cursors
                 .get(&id)
@@ -354,15 +457,50 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             let dot_r = (lh * 0.12).max(1.2);
             let dot_color = [0.62, 0.64, 0.68, 0.55];
             let draw_list = ui.get_window_draw_list();
+            // Tint per highlight class: translucent bands drawn over the
+            // glyphs, so keywords / numbers / strings / comments read as
+            // colored without repainting the glyphs themselves.
+            let tint_of = |class: u8| match class {
+                KEYWORD => [0.45, 0.65, 1.0, 0.16],
+                NUMBER => [1.0, 0.62, 0.25, 0.14],
+                STRING => [0.4, 0.9, 0.5, 0.15],
+                COMMENT => [0.65, 0.65, 0.68, 0.24],
+                _ => [0.0, 0.0, 0.0, 0.0],
+            };
             draw_list.with_clip_rect(widget_min, widget_max, || {
                 for (li, line) in draft.split('\n').enumerate() {
                     let y = widget_min[1] + frame_pad_y + li as f32 * lh - scroll;
                     if y + lh < widget_min[1] || y > widget_max[1] {
                         continue;
                     }
+                    let line_cls = facts.classes.get(li);
                     let mut x = widget_min[0] + frame_pad_x - hscroll;
-                    for c in line.chars() {
+                    let (mut run_class, mut run_w, mut run_x) = (PLAIN, 0.0f32, x);
+                    let flush = |class: u8, w: f32, sx: f32| {
+                        if class != PLAIN && w > 0.0 {
+                            draw_list
+                                .add_rect(
+                                    [sx, y + lh * 0.08],
+                                    [sx + w, y + lh * 0.92],
+                                    tint_of(class),
+                                )
+                                .filled(true)
+                                .build();
+                        }
+                    };
+                    for (ci, c) in line.chars().enumerate() {
                         let w = adv(c);
+                        let cl = line_cls
+                            .and_then(|v| v.get(ci))
+                            .copied()
+                            .unwrap_or(PLAIN);
+                        if cl != run_class {
+                            flush(run_class, run_w, run_x);
+                            run_class = cl;
+                            run_x = x;
+                            run_w = 0.0;
+                        }
+                        run_w += w;
                         if c == ' ' && x + w > widget_min[0] && x < widget_max[0] {
                             let cy = y + lh * 0.55;
                             draw_list
@@ -372,16 +510,10 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                         }
                         x += w;
                     }
+                    flush(run_class, run_w, run_x);
                 }
             });
 
-            // The callback has run by now when the widget is active, so
-            // this reflects the current viewport.
-            let scroll = app
-                .editor_cursors
-                .get(&id)
-                .map(|c| c.scroll)
-                .unwrap_or(0.0);
             let first_row = ((scroll / lh).floor() as i32).max(0) as usize;
             let visible = (SOURCE_HEIGHT / lh).ceil() as usize + 1;
             let last_row = (first_row + visible).min(rows);
@@ -392,9 +524,27 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                     if y + lh < gutter_min[1] || y > gutter_max[1] {
                         continue;
                     }
+                    // The compile-error line gets a red bar and a red
+                    // number instead of the plain gray one.
+                    let is_err = facts.error_line == Some(i as u32 + 1);
+                    let num_color = if is_err {
+                        [1.0, 0.45, 0.35, 1.0]
+                    } else {
+                        [0.5, 0.5, 0.5, 1.0]
+                    };
+                    if is_err {
+                        draw_list
+                            .add_rect(
+                                [gutter_min[0] + 1.0, y],
+                                [gutter_min[0] + 3.5, y + lh],
+                                num_color,
+                            )
+                            .filled(true)
+                            .build();
+                    }
                     draw_list.add_text(
                         [gutter_min[0] + GUTTER_PAD, y],
-                        [0.5, 0.5, 0.5, 1.0],
+                        num_color,
                         format!("{:>width$}", i + 1, width = digits),
                     );
                 }
@@ -811,5 +961,57 @@ mod facts_tests {
             row.armed_by
         );
         assert_eq!(row.sends, &[(0x200, false)]);
+    }
+
+    /// The compile error's line rides the facts for the gutter mark.
+    #[test]
+    fn facts_carry_the_error_line() {
+        let ok = compute_facts("on start { }", 1);
+        assert_eq!(ok.error_line, None);
+        let bad = compute_facts("on start {\n    send();\n}", 2);
+        assert_eq!(bad.error_line, Some(2), "the send line is the offender");
+    }
+
+    /// Classification mirrors the lexer's shapes: keywords, numbers
+    /// (including hex), strings with escapes, // and /* */ comments --
+    /// and multi-byte characters stay plain without breaking alignment.
+    #[test]
+    fn classification_covers_keywords_numbers_strings_comments() {
+        let src = concat!(
+            "on start {\n",                        // 1: keyword
+            "    // line note\n",                  // 2: comment
+            "    let id = 0x1F4 + 7;\n",           // 3: keyword + numbers
+            "    /* block\n",                      // 4: comment start
+            "    still */ print(\"a\\\"b\");\n",   // 5: comment tail + string
+            "    sig(0x100, \"转速\");\n",         // 6: number + string with CJK
+            "}\n",                                 // 7: keyword? no: plain brace
+        );
+        let classes = classify_lines(src);
+        assert_eq!(classes.len(), 8, "trailing newline makes an empty last line");
+
+        let kw = |row: &[u8], i: usize| row[i] == KEYWORD;
+        assert!(kw(&classes[0], 0) && kw(&classes[0], 1) && !kw(&classes[0], 3));
+
+        assert!(
+            classes[1].iter().skip(4).all(|&c| c == COMMENT),
+            "// to EOL (leading spaces stay plain)"
+        );
+
+        assert!(kw(&classes[2], 4), "let");
+        assert_eq!(classes[2][13], NUMBER, "0x1F4 all classified");
+        assert_eq!(classes[2][21], NUMBER, "the 7 too");
+
+        assert!(
+            classes[3].iter().skip(4).all(|&c| c == COMMENT),
+            "block opener from the slash on"
+        );
+        assert!(classes[4].iter().take(9).all(|&c| c == COMMENT), "block tail");
+        assert!(
+            classes[4].iter().skip(19).take(6).all(|&c| c == STRING),
+            "escaped string incl. quotes"
+        );
+
+        assert!(classes[5].iter().any(|&c| c == NUMBER), "hex id");
+        assert!(classes[5].iter().filter(|&&c| c == STRING).count() >= 4, "CJK string");
     }
 }
