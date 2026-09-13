@@ -34,9 +34,9 @@ pub fn configure_new_editor(editor: &mut dear_imgui_cte::TextEditor) {
 }
 
 /// The script language keywords, for the autocomplete vocabulary.
-const KEYWORDS: [&str; 12] = [
-    "on", "fn", "if", "else", "while", "for", "return", "break", "continue", "true", "false",
-    "let",
+const KEYWORDS: [&str; 15] = [
+    "on", "fn", "if", "else", "while", "for", "return", "break", "continue", "switch", "case",
+    "default", "true", "false", "let",
 ];
 
 /// The autocomplete vocabulary for one node's editor: language keywords,
@@ -467,6 +467,7 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("事件处理器", "on errorFrame", "on errorFrame {\n    \n}"),
     ("事件处理器", "on timer", "on timer 100 {\n    \n}"),
     ("事件处理器", "on timer \"name\"", "on timer \"name\" {\n    \n}"),
+    ("控制流", "switch/case", "switch (value) {\n    case 1: {\n        \n    }\n    case 2: {\n        \n    }\n    default: {\n        \n    }\n}"),
     ("总线控制", "send", "send(0x000, 0x00);"),
     ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
     ("总线控制", "sig", "sig(0x000, \"Signal\")"),

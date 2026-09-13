@@ -550,6 +550,11 @@ impl Comp {
                         BinOp::Le => Op::Le,
                         BinOp::Gt => Op::Gt,
                         BinOp::Ge => Op::Ge,
+                        BinOp::BitAnd => Op::BitAnd,
+                        BinOp::BitOr => Op::BitOr,
+                        BinOp::BitXor => Op::BitXor,
+                        BinOp::Shl => Op::Shl,
+                        BinOp::Shr => Op::Shr,
                         BinOp::And | BinOp::Or => unreachable!("handled above"),
                     });
                 }
@@ -769,6 +774,25 @@ impl Comp {
                     BinOp::Mul => l.checked_mul(r),
                     BinOp::Div if r != 0 => l.checked_div(r),
                     BinOp::Mod if r != 0 => l.checked_rem(r),
+                    // Bit arithmetic folds too, so `send(0x100 | 0x8)`
+                    // stays inside the statically derivable id set.
+                    BinOp::BitAnd => Some(l & r),
+                    BinOp::BitOr => Some(l | r),
+                    BinOp::BitXor => Some(l ^ r),
+                    BinOp::Shl => {
+                        if (0..64).contains(&r) {
+                            l.checked_shl(r as u32)
+                        } else {
+                            None
+                        }
+                    }
+                    BinOp::Shr => {
+                        if (0..64).contains(&r) {
+                            l.checked_shr(r as u32)
+                        } else {
+                            None
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -987,6 +1011,107 @@ mod tests {
     fn an_out_of_range_send_id_is_rejected() {
         let err = compile_err("on timer 10 { send(0x20000000, 1); }");
         assert!(err.contains("outside the frame-id range"), "{err}");
+    }
+
+    // ---- R2 表达力增量：位运算 / 复合赋值 / switch ------------------------
+
+    /// Bit arithmetic on constants folds, so id arithmetic with `|` / `&`
+    /// stays inside the statically derivable send set.
+    #[test]
+    fn bit_arithmetic_keeps_send_ids_derivable() {
+        let script = compile_ok("on timer 100 { send(0x100 | 0x8, 1); send(1 << 4, 2); }");
+        assert!(
+            script.opaque_sends.is_empty(),
+            "folded through the bitwise ops: {:?}",
+            script.opaque_sends
+        );
+        assert_eq!(script.send_refs[0].1, 0x108);
+        assert_eq!(script.send_refs[1].1, 0x10);
+    }
+
+    /// The bitwise ops compute at runtime; floats refuse to promote and
+    /// out-of-range shifts are errors, not silent masks.
+    #[test]
+    fn bitwise_ops_run_and_reject_nonsense() {
+        let script = compile_ok(
+            r#"
+            let packed = 0xF0 | 0x0F;
+            let masked = packed & 0x3C;
+            let flipped = 0xFF ^ 0x0F;
+            let high = 1 << 6;
+            let low = 0x100 >> 4;
+            print(packed, masked, flipped, high, low);
+        "#,
+        );
+        let mut vm = crate::script::Vm::new(script);
+        vm.run().unwrap();
+        // One print call joins its arguments on one line.
+        assert_eq!(vm.output[0], "255 60 240 64 16");
+
+        // Floats do not promote into bit land.
+        let script = compile_ok("print(1.5 & 1);");
+        let mut vm = crate::script::Vm::new(script);
+        let err = vm.run().unwrap_err().to_string();
+        assert!(err.contains("ints"), "{err}");
+
+        // Shifts outside 0..64 are errors.
+        let script = compile_ok("print(1 << 64);");
+        let mut vm = crate::script::Vm::new(script);
+        assert!(vm.run().is_err());
+    }
+
+    /// Compound stores compile as the expanded form, on globals, locals
+    /// and buffer elements alike.
+    #[test]
+    fn compound_assignment_stores() {
+        let script = compile_ok(
+            r#"
+            let total = 10;
+            fn bump(by) {
+                let local = 1;
+                local += by;
+                return local;
+            }
+            total += 5;
+            total *= 2;
+            let buf = bytes(2);
+            buf[0] = 1;
+            buf[0] <<= 3;
+            print(total, bump(4), buf[0]);
+        "#,
+        );
+        let mut vm = crate::script::Vm::new(script);
+        vm.run().unwrap();
+        assert_eq!(vm.output[0], "30 5 8");
+    }
+
+    /// Each case is exclusive (no fallthrough), `default` catches the
+    /// rest, and a call subject evaluates exactly once.
+    #[test]
+    fn switch_selects_one_case() {
+        let script = compile_ok(
+            r#"
+            let state = 2;
+            let calls = 0;
+            fn subject() {
+                calls += 1;
+                return 2;
+            }
+            switch (state) {
+                case 1: { print("one"); }
+                case 2: { print("two"); }
+                default: { print("other"); }
+            }
+            switch (subject()) {
+                case 1: { print("again-one"); }
+                case 2: { print("again-two"); }
+            }
+            print(calls);
+        "#,
+        );
+        let mut vm = crate::script::Vm::new(script);
+        vm.run().unwrap();
+        assert_eq!(vm.output, vec!["two", "again-two", "1"], "one case each, subject called once");
     }
 
     /// R2 spike deliverable: run the static send-set derivation over the

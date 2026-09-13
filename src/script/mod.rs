@@ -32,6 +32,7 @@
 //! on timer 100 {                      // every 100 ms
 //!     let buf = bytes(8);             // zero-filled byte buffer
 //!     buf[0] = 0xAB;                  // element store (0..255)
+//!     buf[1] |= 0x80;                 // compound stores: += -= *= /= %= &= |= ^= <<= >>=
 //!     set_sig(buf, 0x200, "RPM", 1000 + random(0, 50));  // DBC encode
 //!     send(0x200, buf);               // buffer as payload
 //!     print("t", now(), limit(buf[0]));                  // text log
@@ -40,12 +41,23 @@
 //! on timer "resp" {                   // named one-shot: fires once per
 //!     send(0x200, 0x40);              // `set_timer("resp", ms)` armed
 //! }                                   // from any handler (e.g. on message)
+//!
+//! on message 0x300 {                  // dispatch on a value -- each case
+//!     switch (frame_byte(0)) {        // is exclusive, no fallthrough
+//!         case 1: { send(0x301, 1); }
+//!         case 2: { send(0x302, 2); }
+//!         default: { send(0x3FF, 0); }
+//!     }
+//! }
 //! ```
 //!
 //! Types: int, float, bool, string, bytes (reference semantics). Math is
-//! int-exact / float-promoting; `+` with a string concatenates. Control
-//! flow: `if (..) .. else ..`, `while (..) ..`, `for (init; cond; step) ..`,
-//! `break`/`continue` inside loops, early `return` inside functions.
+//! int-exact / float-promoting; `+` with a string concatenates. Bitwise
+//! `& | ^ << >>` are int-only (floats do not promote; shifts outside
+//! 0..64 are errors). Control flow: `if (..) .. else ..`, `while (..) ..`,
+//! `for (init; cond; step) ..`, `switch (..) { case ..: }` with optional
+//! `default:` (no fallthrough, no case-level break), `break`/`continue`
+//! inside loops, early `return` inside functions.
 //! Bytecode: constants + ops, stack VM
 //! with per-callback instruction budget and frame-depth cap.
 //!
@@ -155,6 +167,11 @@ pub enum Op {
     Mul,
     Div,
     Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Neg,
     Not,
     Eq,

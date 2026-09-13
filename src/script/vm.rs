@@ -239,6 +239,11 @@ impl Vm {
             Op::Mul => self.binary(|a, b| arith(a, b, Arith::Mul))?,
             Op::Div => self.binary(|a, b| arith(a, b, Arith::Div))?,
             Op::Mod => self.binary(|a, b| arith(a, b, Arith::Mod))?,
+            Op::BitAnd => self.binary(|a, b| bitwise(a, b, BitOp::And))?,
+            Op::BitOr => self.binary(|a, b| bitwise(a, b, BitOp::Or))?,
+            Op::BitXor => self.binary(|a, b| bitwise(a, b, BitOp::Xor))?,
+            Op::Shl => self.binary(|a, b| bitwise(a, b, BitOp::Shl))?,
+            Op::Shr => self.binary(|a, b| bitwise(a, b, BitOp::Shr))?,
             Op::Neg => {
                 let v = self.pop()?;
                 match v {
@@ -1013,8 +1018,7 @@ fn arith(a: Value, b: Value, op: Arith) -> Result<Value, String> {
         Arith::Mul => "*",
         Arith::Div => "/",
         Arith::Mod => "%",
-    };
-    // String concatenation on '+' with either side a string: the other
+    };    // String concatenation on '+' with either side a string: the other
     // value renders as it would in print, so log lines read naturally.
     if matches!(op, Arith::Add) && (matches!(a, Value::Str(_)) || matches!(b, Value::Str(_))) {
         let mut s = match a {
@@ -1062,6 +1066,55 @@ fn arith(a: Value, b: Value, op: Arith) -> Result<Value, String> {
         Arith::Mod => x % y,
     };
     Ok(Float(r))
+}
+
+#[derive(Clone, Copy)]
+enum BitOp {
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+}
+
+/// Pure integer bit arithmetic: no float promotion (a float operand is
+/// an error, matching the fail-closed taste of the language), shifts
+/// outside 0..64 are runtime errors rather than silent masks.
+fn bitwise(a: Value, b: Value, op: BitOp) -> Result<Value, String> {
+    use Value::Int;
+    let (sign, name) = match op {
+        BitOp::And => ("&", "bitwise and"),
+        BitOp::Or => ("|", "bitwise or"),
+        BitOp::Xor => ("^", "bitwise xor"),
+        BitOp::Shl => ("<<", "shift left"),
+        BitOp::Shr => (">>", "shift right"),
+    };
+    let (Value::Int(x), Value::Int(y)) = (&a, &b) else {
+        let bad = if matches!(a, Value::Int(_)) { &b } else { &a };
+        if is_num(bad) {
+            return Err(format!(
+                "{name} ('{sign}') needs two ints; floats do not promote"
+            ));
+        }
+        return Err(format!("cannot use {} in '{sign}'", kind(bad)));
+    };
+    match op {
+        BitOp::And => Ok(Int(x & y)),
+        BitOp::Or => Ok(Int(x | y)),
+        BitOp::Xor => Ok(Int(x ^ y)),
+        BitOp::Shl => {
+            let n = u32::try_from(*y).unwrap_or(u32::MAX);
+            x.checked_shl(n)
+                .map(Int)
+                .ok_or_else(|| format!("shift left by {y} outside 0..64 or overflows"))
+        }
+        BitOp::Shr => {
+            let n = u32::try_from(*y).unwrap_or(u32::MAX);
+            x.checked_shr(n)
+                .map(Int)
+                .ok_or_else(|| format!("shift right by {y} outside 0..64"))
+        }
+    }
 }
 
 #[cfg(test)]

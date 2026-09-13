@@ -97,7 +97,7 @@ pub enum Stmt {
     Expr(Expr),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Int(i64),
     Float(f64),
@@ -132,6 +132,33 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    /// Pure integer bit arithmetic: no floats, no short circuit, no
+    /// effect on the static send/derive sets (R2 语言增量).
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+}
+
+impl BinOp {
+    /// The operator token family that stores back through compound
+    /// assignment: `x |= e` compiles as `x = x | e`.
+    pub fn assign_token(self) -> Option<Tok> {
+        Some(match self {
+            BinOp::Add => Tok::AssignAdd,
+            BinOp::Sub => Tok::AssignSub,
+            BinOp::Mul => Tok::AssignMul,
+            BinOp::Div => Tok::AssignDiv,
+            BinOp::Mod => Tok::AssignMod,
+            BinOp::BitAnd => Tok::AssignBitAnd,
+            BinOp::BitOr => Tok::AssignBitOr,
+            BinOp::BitXor => Tok::AssignBitXor,
+            BinOp::Shl => Tok::AssignShl,
+            BinOp::Shr => Tok::AssignShr,
+            _ => return None,
+        })
+    }
 }
 
 pub fn parse(toks: Vec<Token>) -> Result<Program, ScriptError> {
@@ -139,6 +166,7 @@ pub fn parse(toks: Vec<Token>) -> Result<Program, ScriptError> {
         toks,
         pos: 0,
         fn_depth: 0,
+        switch_temps: 0,
     };
     let mut items = Vec::new();
     while !p.at(&Tok::Eof) {
@@ -159,6 +187,18 @@ struct P {
     /// Nonzero while parsing a function body: `return` and nested `fn`
     /// are only legal where this says so.
     fn_depth: u32,
+    /// Counter for the hidden `switch` subject temps (`__switch0`, ...),
+    /// so nested switches never share one.
+    switch_temps: usize,
+}
+
+/// What can follow an identifier at statement position.
+#[derive(Clone, Copy, PartialEq)]
+enum AssignAhead {
+    /// `x = v` or `x op= v`.
+    Plain,
+    /// `x[i] = v` or `x[i] op= v`.
+    Index,
 }
 
 impl P {
@@ -399,6 +439,9 @@ impl P {
         if self.eat(&Tok::For) {
             return Ok(self.for_stmt()?.stmt);
         }
+        if self.eat(&Tok::Switch) {
+            return self.switch_stmt();
+        }
         if self.eat(&Tok::Return) {
             if self.at(&Tok::Semi) {
                 self.advance();
@@ -426,37 +469,192 @@ impl P {
             return Ok(Stmt::Continue);
         }
         // Assignment or a bare expression, told apart by the next token.
-        // `name[i] = v` (buffer element store) is a third shape.
+        // `name = v`, `name op= v`, and `name[i] (op=)= v` (buffer
+        // element store) are the shapes; the compound forms desugar
+        // here, so the compiler only ever sees plain stores.
         if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(
-                self.toks.get(self.pos + 1).map(|t| &t.tok),
-                Some(Tok::Assign)
-            )
+            && self.assign_ahead().is_some()
         {
-            let name = self.ident("variable name")?;
-            self.expect(&Tok::Assign, "'='")?;
-            let expr = self.expr()?;
+            let stmt = self.assign_stmt()?;
             self.expect(&Tok::Semi, "';'")?;
-            return Ok(Stmt::Assign(name, expr));
-        }
-        if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(
-                self.toks.get(self.pos + 1).map(|t| &t.tok),
-                Some(Tok::LBracket)
-            )
-        {
-            let name = self.ident("variable name")?;
-            self.advance();
-            let idx = self.expr()?;
-            self.expect(&Tok::RBracket, "']'")?;
-            self.expect(&Tok::Assign, "'='")?;
-            let value = self.expr()?;
-            self.expect(&Tok::Semi, "';'")?;
-            return Ok(Stmt::AssignIndex(name, idx, value));
+            return Ok(stmt);
         }
         let expr = self.expr()?;
         self.expect(&Tok::Semi, "';'")?;
         Ok(Stmt::Expr(expr))
+    }
+
+    /// The shapes an identifier at statement position can start: a plain
+    /// store, an index store, or a compound store. The lookahead only
+    /// peeks; [`P::assign_stmt`] consumes.
+    fn assign_ahead(&self) -> Option<(AssignAhead, Option<BinOp>)> {
+        let second = self.toks.get(self.pos + 1).map(|t| t.tok.clone())?;
+        let (shape, op) = match second {
+            Tok::Assign => (AssignAhead::Plain, None),
+            Tok::LBracket => (AssignAhead::Index, None),
+            Tok::AssignAdd => (AssignAhead::Plain, Some(BinOp::Add)),
+            Tok::AssignSub => (AssignAhead::Plain, Some(BinOp::Sub)),
+            Tok::AssignMul => (AssignAhead::Plain, Some(BinOp::Mul)),
+            Tok::AssignDiv => (AssignAhead::Plain, Some(BinOp::Div)),
+            Tok::AssignMod => (AssignAhead::Plain, Some(BinOp::Mod)),
+            Tok::AssignBitAnd => (AssignAhead::Plain, Some(BinOp::BitAnd)),
+            Tok::AssignBitOr => (AssignAhead::Plain, Some(BinOp::BitOr)),
+            Tok::AssignBitXor => (AssignAhead::Plain, Some(BinOp::BitXor)),
+            Tok::AssignShl => (AssignAhead::Plain, Some(BinOp::Shl)),
+            Tok::AssignShr => (AssignAhead::Plain, Some(BinOp::Shr)),
+            _ => return None,
+        };
+        Some((shape, op))
+    }
+
+    /// Parses one assignment (no trailing `;`): `x = v`, `x op= v`
+    /// (compiled as `x = x op v`), and the index forms of both.
+    fn assign_stmt(&mut self) -> Result<Stmt, ScriptError> {
+        let Some((shape, op)) = self.assign_ahead() else {
+            return self.err("expected an assignment");
+        };
+        let name = self.ident("variable name")?;
+        if shape == AssignAhead::Index {
+            self.advance();
+            let idx = self.expr()?;
+            self.expect(&Tok::RBracket, "']'")?;
+            // The compound operator (if any) follows the closing bracket
+            // -- past the index expression, beyond the shallow peek. The
+            // store target reads back through the same index, so
+            // `x[i] op= v` compiles as `x[i] = x[i] op v`.
+            let op = self.assign_op_here();
+            let value = if let Some(op) = op {
+                let lhs = Expr::Index(
+                    Box::new(Expr::Ident(name.clone())),
+                    Box::new(idx.clone()),
+                );
+                self.advance();
+                let rhs = self.expr()?;
+                Expr::Binary(op, Box::new(lhs), Box::new(rhs))
+            } else {
+                self.expect(&Tok::Assign, "'='")?;
+                self.expr()?
+            };
+            return Ok(Stmt::AssignIndex(name, idx, value));
+        }
+        let expr = if let Some(op) = op {
+            let lhs = Expr::Ident(name.clone());
+            self.advance();
+            let rhs = self.expr()?;
+            Expr::Binary(op, Box::new(lhs), Box::new(rhs))
+        } else {
+            self.advance();
+            self.expr()?
+        };
+        Ok(Stmt::Assign(name, expr))
+    }
+
+    /// The compound-assignment operator at the current position, if one
+    /// sits there.
+    fn assign_op_here(&self) -> Option<BinOp> {
+        let op = self.toks.get(self.pos).map(|t| t.tok.clone())?;
+        Some(match op {
+            Tok::AssignAdd => BinOp::Add,
+            Tok::AssignSub => BinOp::Sub,
+            Tok::AssignMul => BinOp::Mul,
+            Tok::AssignDiv => BinOp::Div,
+            Tok::AssignMod => BinOp::Mod,
+            Tok::AssignBitAnd => BinOp::BitAnd,
+            Tok::AssignBitOr => BinOp::BitOr,
+            Tok::AssignBitXor => BinOp::BitXor,
+            Tok::AssignShl => BinOp::Shl,
+            Tok::AssignShr => BinOp::Shr,
+            _ => return None,
+        })
+    }
+
+    /// `switch (subject) { case label: body ... default: body }`,
+    /// desugared here into an if-chain -- each case is exclusive, there
+    /// is no fallthrough and no case-level `break` (loops keep `break`).
+    /// A plain identifier subject re-reads the variable per comparison;
+    /// anything else (a call, an expression) is captured in a hidden
+    /// temp first so it evaluates exactly once.
+    fn switch_stmt(&mut self) -> Result<Stmt, ScriptError> {
+        let head = self.toks.get(self.pos);
+        let head_line = head.map_or(1, |t| t.line);
+        let head_col = head.map_or(1, |t| t.col);
+        self.expect(&Tok::LParen, "'('")?;
+        let subject = self.expr()?;
+        self.expect(&Tok::RParen, "')'")?;
+        self.expect(&Tok::LBrace, "'{'")?;
+        let mut cases: Vec<(Expr, u32, u32, Vec<SpannedStmt>)> = Vec::new();
+        let mut default: Option<Vec<SpannedStmt>> = None;
+        while !self.at(&Tok::RBrace) {
+            if self.at(&Tok::Eof) {
+                return self.err("unexpected end of input inside a switch");
+            }
+            let at = self.toks.get(self.pos);
+            let (line, col) = (at.map_or(1, |t| t.line), at.map_or(1, |t| t.col));
+            if self.eat(&Tok::Default) {
+                if default.is_some() {
+                    return self.err("duplicate default case");
+                }
+                self.expect(&Tok::Colon, "':'")?;
+                let body = self.block()?;
+                // Case and default bodies wrap in their own block, so
+                // locals declared in one clause stay scoped to it.
+                default = Some(vec![SpannedStmt {
+                    line,
+                    col,
+                    stmt: Stmt::Block(body),
+                }]);
+            } else if self.eat(&Tok::Case) {
+                let label = self.expr()?;
+                self.expect(&Tok::Colon, "':'")?;
+                let body = self.block()?;
+                cases.push((label, line, col, body));
+            } else {
+                return self.err("expected 'case' or 'default' inside a switch");
+            }
+        }
+        self.expect(&Tok::RBrace, "'}'")?;
+        // Decide the comparison subject before folding: a plain
+        // identifier re-reads the variable per case; anything else (a
+        // call, an expression) is captured in a hidden temp first so it
+        // evaluates exactly once.
+        let (capture, compare) = match &subject {
+            Expr::Ident(_) => (None, subject.clone()),
+            _ => {
+                let temp = format!("__switch{}", self.switch_temps);
+                self.switch_temps += 1;
+                let capture = SpannedStmt {
+                    line: head_line,
+                    col: head_col,
+                    stmt: Stmt::Let(temp.clone(), subject),
+                };
+                (Some(capture), Expr::Ident(temp))
+            }
+        };
+        // The chain folds from the last case backwards: each case becomes
+        // `if (subject == label) { body } else <rest>`.
+        let mut rest = default;
+        for (label, line, col, body) in cases.into_iter().rev() {
+            let cond = Expr::Binary(
+                BinOp::Eq,
+                Box::new(compare.clone()),
+                Box::new(label),
+            );
+            let stmt = Stmt::If {
+                cond,
+                then: vec![SpannedStmt {
+                    line,
+                    col,
+                    stmt: Stmt::Block(body),
+                }],
+                els: rest,
+            };
+            rest = Some(vec![SpannedStmt { line, col, stmt }]);
+        }
+        let mut chain_stmts = rest.unwrap_or_default();
+        if let Some(capture) = capture {
+            chain_stmts.insert(0, capture);
+        }
+        Ok(Stmt::Block(chain_stmts))
     }
 
     fn if_stmt(&mut self) -> Result<SpannedStmt, ScriptError> {
@@ -532,14 +730,9 @@ impl P {
             return Ok(Stmt::Let(name, self.expr()?));
         }
         if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(
-                self.toks.get(self.pos + 1).map(|t| &t.tok),
-                Some(Tok::Assign)
-            )
+            && self.assign_ahead().is_some()
         {
-            let name = self.ident("variable name")?;
-            self.expect(&Tok::Assign, "'='")?;
-            return Ok(Stmt::Assign(name, self.expr()?));
+            return self.assign_stmt();
         }
         Ok(Stmt::Expr(self.expr()?))
     }
@@ -558,10 +751,39 @@ impl P {
     }
 
     fn and_expr(&mut self) -> Result<Expr, ScriptError> {
-        let mut lhs = self.eq_expr()?;
+        let mut lhs = self.bitor_expr()?;
         while self.eat(&Tok::And) {
-            let rhs = self.eq_expr()?;
+            let rhs = self.bitor_expr()?;
             lhs = Expr::Binary(BinOp::And, Box::new(lhs), Box::new(rhs));
+        }
+        Ok(lhs)
+    }
+
+    /// Bitwise `|` -- looser than `^` (the C ladder), and both are pure
+    /// integer arithmetic with no short circuit.
+    fn bitor_expr(&mut self) -> Result<Expr, ScriptError> {
+        let mut lhs = self.bitxor_expr()?;
+        while self.eat(&Tok::BitOr) {
+            let rhs = self.bitxor_expr()?;
+            lhs = Expr::Binary(BinOp::BitOr, Box::new(lhs), Box::new(rhs));
+        }
+        Ok(lhs)
+    }
+
+    fn bitxor_expr(&mut self) -> Result<Expr, ScriptError> {
+        let mut lhs = self.bitand_expr()?;
+        while self.eat(&Tok::BitXor) {
+            let rhs = self.bitand_expr()?;
+            lhs = Expr::Binary(BinOp::BitXor, Box::new(lhs), Box::new(rhs));
+        }
+        Ok(lhs)
+    }
+
+    fn bitand_expr(&mut self) -> Result<Expr, ScriptError> {
+        let mut lhs = self.eq_expr()?;
+        while self.eat(&Tok::BitAnd) {
+            let rhs = self.eq_expr()?;
+            lhs = Expr::Binary(BinOp::BitAnd, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
     }
@@ -583,7 +805,7 @@ impl P {
     }
 
     fn cmp_expr(&mut self) -> Result<Expr, ScriptError> {
-        let mut lhs = self.term()?;
+        let mut lhs = self.shift_expr()?;
         loop {
             let op = if self.eat(&Tok::Lt) {
                 BinOp::Lt
@@ -593,6 +815,24 @@ impl P {
                 BinOp::Gt
             } else if self.eat(&Tok::Ge) {
                 BinOp::Ge
+            } else {
+                break;
+            };
+            let rhs = self.shift_expr()?;
+            lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs));
+        }
+        Ok(lhs)
+    }
+
+    /// `<<` / `>>` bind tighter than comparisons, looser than `+` (the
+    /// C ladder), so `1 << i + 1` reads as `1 << (i + 1)`.
+    fn shift_expr(&mut self) -> Result<Expr, ScriptError> {
+        let mut lhs = self.term()?;
+        loop {
+            let op = if self.eat(&Tok::Shl) {
+                BinOp::Shl
+            } else if self.eat(&Tok::Shr) {
+                BinOp::Shr
             } else {
                 break;
             };
@@ -727,6 +967,7 @@ mod tests {
             toks,
             pos: 0,
             fn_depth: 0,
+            switch_temps: 0,
         };
         p.expr().unwrap()
     }
@@ -769,6 +1010,7 @@ mod tests {
             toks,
             pos: 0,
             fn_depth: 0,
+            switch_temps: 0,
         };
         match p.stmt().unwrap().stmt {
             Stmt::For {
@@ -784,6 +1026,7 @@ mod tests {
             toks,
             pos: 0,
             fn_depth: 0,
+            switch_temps: 0,
         };
         match p.stmt().unwrap().stmt {
             Stmt::For {
@@ -803,7 +1046,131 @@ mod tests {
             toks,
             pos: 0,
             fn_depth: 0,
+            switch_temps: 0,
         };
         assert!(p.stmt().is_err());
+    }
+
+    /// The C ladder: shift binds tighter than comparison, bitwise or/and
+    /// sit between logical and and equality.
+    #[test]
+    fn bitwise_precedence_follows_the_c_ladder() {
+        let e = expr_of("1 & 2 == 2");
+        match e {
+            // `1 & (2 == 2)` -- comparison binds tighter than `&`, and
+            // the parser does not fold constants.
+            Expr::Binary(BinOp::BitAnd, _, r) => {
+                assert!(matches!(*r, Expr::Binary(BinOp::Eq, _, _)));
+            }
+            other => panic!("{other:?}"),
+        }
+        let e = expr_of("1 + 1 << 2");
+        match e {
+            // `(1 + 1) << 2` -- shift binds looser than addition.
+            Expr::Binary(BinOp::Shl, l, _) => {
+                assert!(matches!(*l, Expr::Binary(BinOp::Add, _, _)));
+            }
+            other => panic!("{other:?}"),
+        }
+        let e = expr_of("a | b ^ c & d");
+        match e {
+            // `a | (b ^ (c & d))`.
+            Expr::Binary(BinOp::BitOr, _, r) => match *r {
+                Expr::Binary(BinOp::BitXor, _, r) => {
+                    assert!(matches!(*r, Expr::Binary(BinOp::BitAnd, _, _)));
+                }
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Compound stores desugar to plain assignment with the operator on
+    /// the left, including the buffer-index form.
+    #[test]
+    fn compound_assignment_desugars() {
+        let toks = super::super::lexer::lex("x += 1;").unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        match p.stmt().unwrap().stmt {
+            Stmt::Assign(name, Expr::Binary(BinOp::Add, l, r)) => {
+                assert_eq!(name, "x");
+                assert!(matches!(*l, Expr::Ident(ref n) if n == "x"));
+                assert!(matches!(*r, Expr::Int(1)));
+            }
+            other => panic!("{other:?}"),
+        }
+        let toks = super::super::lexer::lex("buf[0] |= 0x80;").unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        match p.stmt().unwrap().stmt {
+            Stmt::AssignIndex(name, _, Expr::Binary(BinOp::BitOr, l, _)) => {
+                assert_eq!(name, "buf");
+                assert!(matches!(*l, Expr::Index(_, _)));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// `switch` desugars to an if-chain: a plain identifier subject is
+    /// compared directly, anything else is captured in a hidden temp
+    /// declared before the chain.
+    #[test]
+    fn switch_desugars_to_a_conditional_chain() {
+        let toks = super::super::lexer::lex(
+            "switch (state) { case 1: { print(1); } case 2: { print(2); } default: { print(0); } }",
+        )
+        .unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        let stmt = p.stmt().unwrap().stmt;
+        let Stmt::Block(stmts) = stmt else {
+            panic!("a block wrapping the chain")
+        };
+        assert_eq!(stmts.len(), 1, "identifier subject needs no temp");
+        let Stmt::If { cond, then, els } = &stmts[0].stmt else {
+            panic!("the chain head is an if")
+        };
+        assert!(matches!(cond, Expr::Binary(BinOp::Eq, _, _)));
+        assert_eq!(then.len(), 1);
+        assert!(els.is_some(), "the second case nests under else");
+        let els = els.as_ref().unwrap();
+        let Stmt::If { els, .. } = &els[0].stmt else {
+            panic!("the chain continues")
+        };
+        let els = els.as_ref().unwrap();
+        assert!(matches!(els[0].stmt, Stmt::Block(_)), "default lands last");
+
+        // A call subject gets exactly one hidden capture.
+        let toks = super::super::lexer::lex(
+            "switch (frame_byte(0)) { case 1: { } case 2: { } }",
+        )
+        .unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        let Stmt::Block(stmts) = p.stmt().unwrap().stmt else {
+            panic!("a block")
+        };
+        assert!(
+            matches!(stmts[0].stmt, Stmt::Let(ref n, _) if n.starts_with("__switch")),
+            "the hidden temp declares the subject"
+        );
+        assert_eq!(stmts.len(), 2, "capture plus the chain head");
     }
 }

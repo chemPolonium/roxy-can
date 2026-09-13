@@ -20,6 +20,9 @@ pub enum Tok {
     Return,
     Break,
     Continue,
+    Switch,
+    Case,
+    Default,
     True,
     False,
     /// Event handler introducer (`on start` / `on message 0x100` /
@@ -35,7 +38,19 @@ pub enum Tok {
     RBracket,
     Comma,
     Semi,
+    Colon,
     Assign,
+    /// `+=` and friends: compound stores desugar to plain assignment.
+    AssignAdd,
+    AssignSub,
+    AssignMul,
+    AssignDiv,
+    AssignMod,
+    AssignBitAnd,
+    AssignBitOr,
+    AssignBitXor,
+    AssignShl,
+    AssignShr,
     Plus,
     Minus,
     Star,
@@ -50,6 +65,11 @@ pub enum Tok {
     And,
     Or,
     Not,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eof,
 }
 
@@ -72,6 +92,9 @@ fn keyword(word: &str) -> Option<Tok> {
         "return" => Tok::Return,
         "break" => Tok::Break,
         "continue" => Tok::Continue,
+        "switch" => Tok::Switch,
+        "case" => Tok::Case,
+        "default" => Tok::Default,
         "true" => Tok::True,
         "false" => Tok::False,
         "on" => Tok::On,
@@ -276,6 +299,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ScriptError> {
                     ']' => (Tok::RBracket, 1),
                     ',' => (Tok::Comma, 1),
                     ';' => (Tok::Semi, 1),
+                    ':' => (Tok::Colon, 1),
                     '=' => {
                         if chars.get(i + 1) == Some(&'=') {
                             (Tok::Eq, 2)
@@ -291,26 +315,86 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ScriptError> {
                         }
                     }
                     '<' => {
+                        // Longest match first: `<=`, `<<=`, `<<`, `<`.
                         if chars.get(i + 1) == Some(&'=') {
                             (Tok::Le, 2)
+                        } else if chars.get(i + 1) == Some(&'<') {
+                            if chars.get(i + 2) == Some(&'=') {
+                                (Tok::AssignShl, 3)
+                            } else {
+                                (Tok::Shl, 2)
+                            }
                         } else {
                             (Tok::Lt, 1)
                         }
                     }
                     '>' => {
+                        // `>=`, `>>=`, `>>`, `>` -- longest first.
                         if chars.get(i + 1) == Some(&'=') {
                             (Tok::Ge, 2)
+                        } else if chars.get(i + 1) == Some(&'>') {
+                            if chars.get(i + 2) == Some(&'=') {
+                                (Tok::AssignShr, 3)
+                            } else {
+                                (Tok::Shr, 2)
+                            }
                         } else {
                             (Tok::Gt, 1)
                         }
                     }
-                    '&' if chars.get(i + 1) == Some(&'&') => (Tok::And, 2),
-                    '|' if chars.get(i + 1) == Some(&'|') => (Tok::Or, 2),
-                    '+' => (Tok::Plus, 1),
-                    '-' => (Tok::Minus, 1),
-                    '*' => (Tok::Star, 1),
-                    '/' => (Tok::Slash, 1),
-                    '%' => (Tok::Percent, 1),
+                    // `&&`, `&=`, `&` -- the lone `&` is bitwise and.
+                    '&' => match chars.get(i + 1) {
+                        Some('&') => (Tok::And, 2),
+                        Some('=') => (Tok::AssignBitAnd, 2),
+                        _ => (Tok::BitAnd, 1),
+                    },
+                    '|' => match chars.get(i + 1) {
+                        Some('|') => (Tok::Or, 2),
+                        Some('=') => (Tok::AssignBitOr, 2),
+                        _ => (Tok::BitOr, 1),
+                    },
+                    '^' => {
+                        if chars.get(i + 1) == Some(&'=') {
+                            (Tok::AssignBitXor, 2)
+                        } else {
+                            (Tok::BitXor, 1)
+                        }
+                    }
+                    '+' => {
+                        if chars.get(i + 1) == Some(&'=') {
+                            (Tok::AssignAdd, 2)
+                        } else {
+                            (Tok::Plus, 1)
+                        }
+                    }
+                    '-' => {
+                        if chars.get(i + 1) == Some(&'=') {
+                            (Tok::AssignSub, 2)
+                        } else {
+                            (Tok::Minus, 1)
+                        }
+                    }
+                    '*' => {
+                        if chars.get(i + 1) == Some(&'=') {
+                            (Tok::AssignMul, 2)
+                        } else {
+                            (Tok::Star, 1)
+                        }
+                    }
+                    '/' => {
+                        if chars.get(i + 1) == Some(&'=') {
+                            (Tok::AssignDiv, 2)
+                        } else {
+                            (Tok::Slash, 1)
+                        }
+                    }
+                    '%' => {
+                        if chars.get(i + 1) == Some(&'=') {
+                            (Tok::AssignMod, 2)
+                        } else {
+                            (Tok::Percent, 1)
+                        }
+                    }
                     other => {
                         return Err(err(line, col, &format!("unexpected character '{other}'")));
                     }
@@ -390,5 +474,102 @@ mod tests {
         assert_eq!((toks[5].line, toks[5].col), (2, 10), "hex literal");
         let e = lex("let s = \"oops").unwrap_err();
         assert_eq!(e.col, Some(9), "the offending string literal's column");
+    }
+
+    /// Longest match wins: the logical and compound forms shadow the
+    /// single-character bitwise operators.
+    #[test]
+    fn bitwise_and_compound_operators_lex() {
+        assert_eq!(
+            kinds("a & b | c ^ d << e >> f"),
+            vec![
+                Tok::Ident("a".into()),
+                Tok::BitAnd,
+                Tok::Ident("b".into()),
+                Tok::BitOr,
+                Tok::Ident("c".into()),
+                Tok::BitXor,
+                Tok::Ident("d".into()),
+                Tok::Shl,
+                Tok::Ident("e".into()),
+                Tok::Shr,
+                Tok::Ident("f".into()),
+                Tok::Eof,
+            ]
+        );
+        assert_eq!(
+            kinds("x += 1; x -= 2; x *= 3; x /= 4; x %= 5;"),
+            vec![
+                Tok::Ident("x".into()),
+                Tok::AssignAdd,
+                Tok::Int(1),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignSub,
+                Tok::Int(2),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignMul,
+                Tok::Int(3),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignDiv,
+                Tok::Int(4),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignMod,
+                Tok::Int(5),
+                Tok::Semi,
+                Tok::Eof,
+            ]
+        );
+        assert_eq!(
+            kinds("x &= a; x |= b; x ^= c; x <<= d; x >>= e;"),
+            vec![
+                Tok::Ident("x".into()),
+                Tok::AssignBitAnd,
+                Tok::Ident("a".into()),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignBitOr,
+                Tok::Ident("b".into()),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignBitXor,
+                Tok::Ident("c".into()),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignShl,
+                Tok::Ident("d".into()),
+                Tok::Semi,
+                Tok::Ident("x".into()),
+                Tok::AssignShr,
+                Tok::Ident("e".into()),
+                Tok::Semi,
+                Tok::Eof,
+            ]
+        );
+        // The two-character logical forms still beat the single ones.
+        assert_eq!(kinds("a && b || c"), vec![Tok::Ident("a".into()), Tok::And, Tok::Ident("b".into()), Tok::Or, Tok::Ident("c".into()), Tok::Eof]);
+        // The switch punctuation.
+        assert_eq!(
+            kinds("switch (x) { case 1: break; default: }"),
+            vec![
+                Tok::Switch,
+                Tok::LParen,
+                Tok::Ident("x".into()),
+                Tok::RParen,
+                Tok::LBrace,
+                Tok::Case,
+                Tok::Int(1),
+                Tok::Colon,
+                Tok::Break,
+                Tok::Semi,
+                Tok::Default,
+                Tok::Colon,
+                Tok::RBrace,
+                Tok::Eof,
+            ]
+        );
     }
 }
