@@ -137,6 +137,7 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
         let view = &app.snap.channels[*ch as usize];
         app.set_hardware_channel(
             *ch,
+            crate::hw::HwDriver::Kvaser,
             *channel,
             view.bitrate_kbps,
             Some(view.fd_data_kbps),

@@ -270,12 +270,14 @@ impl App {
     pub fn set_hardware_channel(
         &mut self,
         bus: u8,
+        driver: crate::hw::HwDriver,
         adapter: i32,
         kbps: u32,
         fd_data_kbps: Option<u32>,
     ) {
         self.send(crate::bus::BusCommand::SetHardwareChannel {
             bus,
+            driver,
             adapter,
             kbps,
             fd_data_kbps,

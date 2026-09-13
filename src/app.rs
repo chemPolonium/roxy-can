@@ -226,9 +226,10 @@ pub struct App {
     /// Write window's per-kind visibility, ordered
     /// `[Script, Info, Warning, Error]`. Session state.
     pub write_filter: [bool; 4],
-    /// Kvaser channels discovered on this machine, enumerated once on
-    /// first need. `Err` = the driver is unavailable.
-    pub kvaser_channels: Option<Result<Vec<crate::hw::kvaser::ChannelInfo>, String>>,
+    /// Hardware channels discovered on this machine across every
+    /// supported driver, enumerated once on first need. `Err` = no
+    /// driver is available at all.
+    pub hw_channels: Option<Result<Vec<crate::hw::AnyChannelInfo>, String>>,
     /// Profile names from the project's `profiles/` directory, listed
     /// once on first need (`Err` = driver/unavailable? no — parse or IO
     /// failure of the directory scan). Session cache; refresh via
@@ -450,7 +451,7 @@ impl App {
             open_editors: Vec::new(),
         editor_facts: HashMap::new(),
             write_filter: [true; 4],
-            kvaser_channels: None,
+            hw_channels: None,
             profile_names: None,
             profile_pick: 0,
             net_selected: 0,

@@ -77,8 +77,10 @@ pub struct ReplayBlockView {
 #[derive(Clone, Debug)]
 pub struct HwBusView {
     pub bus: u8,
-    /// The adapter identity (Kvaser channel index).
+    /// The adapter identity (driver-specific channel index).
     pub adapter: i32,
+    /// Which vendor driver this attachment talks through.
+    pub driver: crate::hw::HwDriver,
     pub kbps: u32,
     /// Whether the attachment can transmit (holds init access).
     pub can_tx: bool,
@@ -270,6 +272,7 @@ pub enum BusCommand {
     /// channel into CAN FD when a data-phase preset exists for it.
     SetHardwareChannel {
         bus: u8,
+        driver: crate::hw::HwDriver,
         adapter: i32,
         kbps: u32,
         fd_data_kbps: Option<u32>,
@@ -1364,47 +1367,84 @@ impl BusCore {
             }
             BusCommand::SetHardwareChannel {
                 bus,
+                driver,
                 adapter,
                 kbps,
                 fd_data_kbps,
             } => {
                 // Prefer init access (the wire-egress switches can then
                 // direct traffic onto the wire). When another program
-                // holds the channel, fall back to receive-only.
-                match crate::hw::kvaser::KvaserChannel::open(adapter, kbps, fd_data_kbps, true) {
-                    Ok(port) => {
-                        let fd = port.fd;
+                // holds the channel, fall back to receive-only. Vector
+                // first cut is classic CAN (fd_data_kbps is accepted but
+                // not applied; the attach status reports fd=false).
+                let opened = match driver {
+                    crate::hw::HwDriver::Kvaser => {
+                        crate::hw::kvaser::KvaserChannel::open(adapter, kbps, fd_data_kbps, true)
+                            .map(|p| {
+                                let fd = p.fd;
+                                (crate::hw::HwPort::Kvaser(p), fd)
+                            })
+                            .map_err(|e| (e, {
+                                crate::hw::kvaser::KvaserChannel::open(
+                                    adapter,
+                                    kbps,
+                                    fd_data_kbps,
+                                    false,
+                                )
+                                .map(|p| {
+                                    let fd = p.fd;
+                                    (crate::hw::HwPort::Kvaser(p), fd)
+                                })
+                            }))
+                    }
+                    crate::hw::HwDriver::Vector => {
+                        // Vector classic CAN first cut: init access only
+                        // (rx-only open is provided the same way).
+                        crate::hw::vector::VectorChannel::open(adapter, kbps, fd_data_kbps, true)
+                            .map(|p| {
+                                let fd = p.fd;
+                                (crate::hw::HwPort::Vector(p), fd)
+                            })
+                            .map_err(|e| (e, {
+                                crate::hw::vector::VectorChannel::open(
+                                    adapter,
+                                    kbps,
+                                    fd_data_kbps,
+                                    false,
+                                )
+                                .map(|p| {
+                                    let fd = p.fd;
+                                    (crate::hw::HwPort::Vector(p), fd)
+                                })
+                            }))
+                    }
+                };
+                match opened {
+                    Ok((port, fd)) => {
+                        let driver_name = match driver {
+                            crate::hw::HwDriver::Kvaser => "Kvaser",
+                            crate::hw::HwDriver::Vector => "Vector",
+                        };
                         self.hw
-                            .attach(bus, adapter, kbps, true, crate::hw::HwPort::Kvaser(port));
+                            .attach(bus, driver, adapter, kbps, true, port);
                         *status = format!(
-                            "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s (收发){}",
+                            "hardware attached to {bus}: {driver_name} ch{adapter} @ {kbps} kbit/s (收发){}",
                             hw_fd_note(fd_data_kbps, fd)
                         );
                     }
-                    Err(init_err) => {
-                        match crate::hw::kvaser::KvaserChannel::open(
-                            adapter,
-                            kbps,
-                            fd_data_kbps,
-                            false,
-                        ) {
-                            Ok(port) => {
-                                let fd = port.fd;
-                                self.hw.attach(
-                                    bus,
-                                    adapter,
-                                    kbps,
-                                    false,
-                                    crate::hw::HwPort::Kvaser(port),
-                                );
-                                *status = format!(
-                                    "hardware attached to {bus}: Kvaser ch{adapter} @ {kbps} kbit/s（只收——通道被其他程序占用）{}",
-                                    hw_fd_note(fd_data_kbps, fd)
-                                );
-                            }
-                            Err(e) => *status = format!("hardware attach failed: {init_err} / {e}"),
+                    Err((init_err, retry)) => match retry {
+                        Ok((port, fd)) => {
+                            self.hw
+                                .attach(bus, driver, adapter, kbps, false, port);
+                            *status = format!(
+                                "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s（只收——通道被其他程序占用）{}",
+                                hw_fd_note(fd_data_kbps, fd)
+                            );
                         }
-                    }
+                        Err(e) => {
+                            *status = format!("hardware attach failed: {init_err} / {e}")
+                        }
+                    },
                 }
             }
             BusCommand::DetachHardware { bus } => {
@@ -1945,6 +1985,7 @@ impl BusCore {
                 .map(|(&bus, bh)| HwBusView {
                     bus,
                     adapter: bh.adapter,
+                    driver: bh.driver,
                     kbps: bh.kbps,
                     can_tx: bh.can_tx,
                     fd: self.hw.fd(bus),

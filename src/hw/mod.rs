@@ -15,15 +15,80 @@
 //! carry it into projects.
 
 pub mod kvaser;
+pub mod vector;
 
 use crate::can::frame::CanFrame;
 use std::collections::{BTreeSet, HashMap};
 
+/// Which vendor driver an attachment talks through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HwDriver {
+    Kvaser,
+    Vector,
+}
+
+impl HwDriver {
+    /// Short tag for combo labels: `[K] ch0` vs `[V] ch0`.
+    pub fn tag(self) -> &'static str {
+        match self {
+            HwDriver::Kvaser => "K",
+            HwDriver::Vector => "V",
+        }
+    }
+}
+
+/// One discoverable channel from any supported driver, flattened for
+/// the Buses window's attachment combo.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnyChannelInfo {
+    pub driver: HwDriver,
+    pub index: i32,
+    pub name: String,
+}
+
+/// Enumerates channels across every supported driver. A driver whose
+/// runtime is missing simply contributes no entries; `Err` only when
+/// no driver is available at all.
+pub fn enumerate_all() -> Result<Vec<AnyChannelInfo>, String> {
+    let mut out = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    match kvaser::enumerate() {
+        Ok(list) => {
+            for c in list {
+                out.push(AnyChannelInfo {
+                    driver: HwDriver::Kvaser,
+                    index: c.index,
+                    name: c.name,
+                });
+            }
+        }
+        Err(e) => errors.push(format!("Kvaser: {e}")),
+    }
+    match vector::enumerate() {
+        Ok(list) => {
+            for c in list {
+                out.push(AnyChannelInfo {
+                    driver: HwDriver::Vector,
+                    index: c.index,
+                    name: c.name,
+                });
+            }
+        }
+        Err(e) => errors.push(format!("Vector: {e}")),
+    }
+    if out.is_empty() && !errors.is_empty() {
+        Err(errors.join("；"))
+    } else {
+        Ok(out)
+    }
+}
+
 /// One bus's attachment: which adapter port it talks through.
 #[derive(Debug)]
 pub struct BusHardware {
-    /// Human-facing adapter identity (Kvaser channel index for now).
+    /// Human-facing adapter identity (driver-specific channel index).
     pub adapter: i32,
+    pub driver: HwDriver,
     pub kbps: u32,
     /// Whether the port holds init access (can transmit). A receive-only
     /// attachment (another program holds the channel) still feeds RX into
@@ -32,11 +97,12 @@ pub struct BusHardware {
     port: HwPort,
 }
 
-/// The two port kinds. The mock exists for headless tests -- the gating
+/// The port kinds. The mock exists for headless tests -- the gating
 /// logic around the hardware must be provable without an adapter.
 #[derive(Debug)]
 pub enum HwPort {
     Kvaser(kvaser::KvaserChannel),
+    Vector(vector::VectorChannel),
     #[cfg(test)]
     Mock(MockPort),
 }
@@ -45,6 +111,7 @@ impl HwPort {
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
         match self {
             HwPort::Kvaser(ch) => ch.write_frame(f),
+            HwPort::Vector(ch) => ch.write_frame(f),
             #[cfg(test)]
             HwPort::Mock(m) => m.write(f),
         }
@@ -53,6 +120,7 @@ impl HwPort {
     pub fn try_read(&mut self) -> Option<CanFrame> {
         match self {
             HwPort::Kvaser(ch) => ch.try_read(),
+            HwPort::Vector(ch) => ch.try_read(),
             #[cfg(test)]
             HwPort::Mock(m) => m.try_read(),
         }
@@ -62,6 +130,7 @@ impl HwPort {
     pub fn fd(&self) -> bool {
         match self {
             HwPort::Kvaser(ch) => ch.fd,
+            HwPort::Vector(ch) => ch.fd,
             #[cfg(test)]
             HwPort::Mock(_) => false,
         }
@@ -147,11 +216,12 @@ impl Hardware {
     }
 
     /// Attaches a port to a bus, replacing any previous attachment.
-    pub fn attach(&mut self, bus: u8, adapter: i32, kbps: u32, can_tx: bool, port: HwPort) {
+    pub fn attach(&mut self, bus: u8, driver: HwDriver, adapter: i32, kbps: u32, can_tx: bool, port: HwPort) {
         self.buses.insert(
             bus,
             BusHardware {
                 adapter,
+                driver,
                 kbps,
                 can_tx,
                 port,
@@ -245,6 +315,7 @@ impl Hardware {
         ));
         self.attach(
             bus,
+            HwDriver::Kvaser,
             -1,
             500,
             true,

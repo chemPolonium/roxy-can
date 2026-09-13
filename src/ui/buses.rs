@@ -29,15 +29,14 @@ fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
-/// Enumerates the installed Kvaser channels once per session; later calls
-/// reuse the cached answer (including "driver unavailable").
-fn ensure_kvaser_list(
-    app: &mut App,
-) -> Result<Vec<crate::hw::kvaser::ChannelInfo>, String> {
-    let cached = app.kvaser_channels.clone();
+/// Enumerates the hardware channels of every supported driver once per
+/// session; later calls reuse the cached answer (including "driver
+/// unavailable").
+fn ensure_hw_list(app: &mut App) -> Result<Vec<crate::hw::AnyChannelInfo>, String> {
+    let cached = app.hw_channels.clone();
     cached.unwrap_or_else(|| {
-        let fresh = crate::hw::kvaser::enumerate();
-        app.kvaser_channels = Some(fresh.clone());
+        let fresh = crate::hw::enumerate_all();
+        app.hw_channels = Some(fresh.clone());
         fresh
     })
 }
@@ -52,10 +51,10 @@ fn content(app: &mut App, ui: &Ui) {
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
     if ui.button("刷新通道##hwref") {
-        app.kvaser_channels = None;
+        app.hw_channels = None;
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("重新枚举本机 Kvaser 通道");
+        ui.tooltip_text("重新枚举本机硬件通道（Kvaser / Vector）");
     }
     ui.separator();
 
@@ -218,21 +217,23 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             // Hardware attachment: one adapter per bus, enumerated from
             // the installed driver on first need.
+            // Hardware attachment: one adapter per bus, enumerated from
+            // the installed driver on first need.
             let attached = app
                 .snap
                 .hw
                 .iter()
                 .find(|h| h.bus as usize == i)
-                .map(|h| (h.adapter, h.kbps, h.can_tx, h.fd));
+                .map(|h| (h.driver, h.adapter, h.kbps, h.can_tx, h.fd));
             match attached {
-                Some((adapter, kbps, can_tx, fd)) => {
+                Some((driver, adapter, kbps, can_tx, fd)) => {
                     // 两行布局：上行状态、下行解挂按钮——任何列宽下都完整
                     // 可见可点（单行塞不下时按钮会被单元格裁掉）。
-                    ui.text(if can_tx {
-                        format!("ch{adapter} {kbps}k{}", if fd { " FD" } else { "" })
-                    } else {
-                        format!("ch{adapter} {kbps}k 只收{}", if fd { " FD" } else { "" })
-                    });
+                    ui.text(format!(
+                        "[{}] ch{adapter} {kbps}k{}",
+                        driver.tag(),
+                        if fd { " FD" } else { "" }
+                    ));
                     // Simulated 模式下硬件挂着但不上线——列内写明，免得
                     // 用户以为帧上不了线是适配器坏了。
                     if !app.snap.real_bus {
@@ -264,22 +265,37 @@ fn content(app: &mut App, ui: &Ui) {
                     }
                 }
                 None => {
-                    let channels = ensure_kvaser_list(app).clone();
+                    let channels = ensure_hw_list(app).clone();
                     match channels {
                         Ok(channels) if !channels.is_empty() => {
                             let labels: Vec<String> = channels
                                 .iter()
-                                .map(|c| format!("ch{}: {}", c.index, c.name))
+                                .map(|c| {
+                                    format!(
+                                        "[{}] ch{}: {}",
+                                        c.driver.tag(),
+                                        c.index,
+                                        c.name
+                                    )
+                                })
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-                            ui.set_next_item_width(120.0);
+                            ui.set_next_item_width(150.0);
                             let mut pick = 0usize;
                             if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
                                 let info = &channels[pick];
-                                app.set_hardware_channel(i as u8, info.index, arb_kbps, Some(data_kbps));
+                                app.set_hardware_channel(
+                                    i as u8,
+                                    info.driver,
+                                    info.index,
+                                    arb_kbps,
+                                    Some(data_kbps),
+                                );
                             }
                             if ui.is_item_hovered() {
-                                ui.tooltip_text("挂接 Kvaser 适配器：收到的帧进总线，节点可经它发车");
+                                ui.tooltip_text(
+                                    "挂接适配器：收到的帧进总线，节点可经它发车（[K] Kvaser / [V] Vector）",
+                                );
                             }
                         }
                         Ok(_) => ui.text_disabled("无通道"),
