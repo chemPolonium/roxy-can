@@ -442,11 +442,16 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 .map(|c| (c.scroll, c.hscroll))
                 .unwrap_or((0.0, 0.0));
             let frame_pad_x = unsafe { ui.style() }.frame_padding[0];
-            let widget_min = [gutter_max[0], gutter_min[1]];
+            // The widget's own rect (it is the last item): deriving the
+            // overlay origin from the gutter instead would miss the item
+            // spacing after `same_line`, shifting every repaint by half
+            // a character.
+            let wrect_min = ui.item_rect_min();
+            let widget_min = wrect_min;
             // The vertical scrollbar overlaps the widget's right edge.
             let widget_max = [
-                widget_min[0] + ui.calc_item_width(),
-                widget_min[1] + SOURCE_HEIGHT,
+                wrect_min[0] + ui.calc_item_width(),
+                wrect_min[1] + SOURCE_HEIGHT,
             ];
             let mut adv = |c: char| -> f32 {
                 let w = app
