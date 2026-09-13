@@ -433,6 +433,16 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
                 .callback(InputTextMultilineCallback::ALWAYS, sync)
                 .build();
+            // The callback only fires while the widget is active, so a
+            // recorded selection outlives its on-screen life: click away
+            // after selecting a word and the stale selection would keep
+            // the highlight paused forever. A selection only exists
+            // while the widget is active -- clear it otherwise.
+            if !ui.is_item_active()
+                && let Some(c) = app.editor_cursors.get_mut(&id)
+            {
+                c.sel = None;
+            }
 
             // The callback has run by now when the widget is active, so
             // the stored viewport reflects the current frame.
