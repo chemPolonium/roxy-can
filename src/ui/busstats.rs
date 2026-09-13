@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::load::{BusLoad, FrameClass};
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableSizingPolicy, TableOptions, Ui};
 
 /// The CAN statistics window, laid out like the reference: one row per
 /// statistic, columns Current/Last, Min, Max, Avg, one section per bus.
@@ -19,7 +19,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Bus Statistics###busstats")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.55, io.display_size[1] * 0.12],
+            [
+                io.display_size()[0] * 0.55,
+                io.display_size()[1] * 0.12,
+            ],
             Condition::FirstUseEver,
         )
         .size([520.0, 420.0], Condition::FirstUseEver)
@@ -36,36 +39,20 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y
-        | TableFlags::SIZING_STRETCH_PROP;
-    let Some(_table) = ui.begin_table_with_flags("bus_stats_table", 5, flags) else {
+        | TableFlags::SCROLL_Y;
+    let opts = TableOptions::from(flags).sizing_policy(TableSizingPolicy::StretchProp);
+    let Some(_table) = ui.begin_table_with_flags("bus_stats_table", 5, opts) else {
         return;
     };
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.0,
-        ..TableColumnSetup::new("Statistic")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 90.0,
-        ..TableColumnSetup::new("Current / Last")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 70.0,
-        ..TableColumnSetup::new("Min")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 70.0,
-        ..TableColumnSetup::new("Max")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 70.0,
-        ..TableColumnSetup::new("Avg")
-    });
+    ui.table_setup_column_stretch_weight("Statistic", TableColumnFlags::NONE, 1.0);
+    for (label, w) in [
+        ("Current / Last", 90.0),
+        ("Min", 70.0),
+        ("Max", 70.0),
+        ("Avg", 70.0),
+    ] {
+        ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, w);
+    }
     ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 

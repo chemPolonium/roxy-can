@@ -1,5 +1,5 @@
 use crate::app::App;
-use imgui::{Condition, TreeNodeFlags, Ui};
+use dear_imgui_rs::{Condition, Ui};
 
 struct NodeInfo {
     name: String,
@@ -49,7 +49,7 @@ fn collect(app: &App) -> Vec<Vec<NodeInfo>> {
 fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base: usize) {
     let token = ui
         .tree_node_config(app.channel_name(ch as u8))
-        .flags(TreeNodeFlags::DEFAULT_OPEN)
+        .default_open(true)
         .push();
     if let Some(_t) = token {
         if infos.is_empty() {
@@ -204,7 +204,10 @@ pub fn render(app: &mut App, ui: &Ui) {
         ui.window("Network")
             .opened(&mut open)
             .position(
-                [io.display_size[0] * 0.3, io.display_size[1] * 0.55],
+                [
+                    io.display_size()[0] * 0.3,
+                    io.display_size()[1] * 0.55,
+                ],
                 Condition::FirstUseEver,
             )
             .size([860.0, 540.0], Condition::FirstUseEver)
@@ -260,7 +263,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.child_window("net_tree")
                     .size([TREE_W, 0.0])
                     .border(true)
-                    .build(|| {
+                    .build(ui, || {
                         let mut flat_base = 0usize;
                         for (ch, infos) in dbc_nodes.iter().enumerate() {
                             draw_tree_section(app, ui, ch, infos, flat_base);
@@ -272,7 +275,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // Details scroll inside their own panel (which always fills the
                 // remaining space), so long content never adds a scrollbar to the
                 // outer window and shifts the topology sections.
-                ui.child_window("node_details").size([0.0, 0.0]).build(|| {
+                ui.child_window("node_details").size([0.0, 0.0]).build(ui, || {
                     if total_dbc == 0 {
                         ui.text("no DBC nodes to display");
                         return;

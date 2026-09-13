@@ -1,7 +1,9 @@
 use crate::app::App;
 use crate::bus::SysVarDef;
 use crate::ui::help::popup_is_open;
-use imgui::{Condition, Key, StyleVar, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{
+    Condition, Key, NumericFormat, StyleVar, TableColumnFlags, TableFlags, Ui,
+};
 
 /// Draft state of the variable editor popup: which definition it edits
 /// (None = a new one) plus the not-yet-applied shape as text buffers.
@@ -115,7 +117,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("System Variables")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.25, io.display_size[1] * 0.25],
+            [
+                io.display_size()[0] * 0.25,
+                io.display_size()[1] * 0.25,
+            ],
             Condition::FirstUseEver,
         )
         .size([680.0, 360.0], Condition::FirstUseEver)
@@ -136,55 +141,20 @@ fn content(app: &mut App, ui: &Ui) {
     let Some(_tbl) = ui.begin_table_with_flags(
         "##sysvartable",
         8,
-        TableFlags::RESIZABLE
-            | TableFlags::BORDERS
-            | TableFlags::ROW_BG
-            | TableFlags::SCROLL_Y,
+        TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::ROW_BG | TableFlags::SCROLL_Y,
     ) else {
         return;
     };
     // Freeze the header row so it stays put while the list scrolls.
     ui.table_setup_scroll_freeze(0, 1);
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.4,
-        ..TableColumnSetup::new("Namespace")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.4,
-        ..TableColumnSetup::new("Name")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 92.0,
-        ..TableColumnSetup::new("Value")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 72.0,
-        ..TableColumnSetup::new("Init")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 64.0,
-        ..TableColumnSetup::new("Min")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 64.0,
-        ..TableColumnSetup::new("Max")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 0.9,
-        ..TableColumnSetup::new("Unit / Comment")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 84.0,
-        ..TableColumnSetup::new("")
-    });
+    ui.table_setup_column_stretch_weight("Namespace", TableColumnFlags::NONE, 1.4);
+    ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.4);
+    ui.table_setup_column_fixed_width("Value", TableColumnFlags::NONE, 92.0);
+    ui.table_setup_column_fixed_width("Init", TableColumnFlags::NONE, 72.0);
+    ui.table_setup_column_fixed_width("Min", TableColumnFlags::NONE, 64.0);
+    ui.table_setup_column_fixed_width("Max", TableColumnFlags::NONE, 64.0);
+    ui.table_setup_column_stretch_weight("Unit / Comment", TableColumnFlags::NONE, 0.9);
+    ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 84.0);
     ui.table_headers_row();
 
     for i in 0..n {
@@ -225,10 +195,11 @@ fn content(app: &mut App, ui: &Ui) {
         // SetSysVar command a script write takes.
         let mut val = v.value as f32;
         ui.set_next_item_width(-1.0);
+        let val_fmt = NumericFormat::new("%g").expect("static format");
         if ui
-            .input_float(format!("##svval{i}"), &mut val)
-            .display_format("%g")
-            .build()
+            .input_float_config(format!("##svval{i}"))
+            .display_format(val_fmt)
+            .build(&mut val)
         {
             app.send(crate::bus::BusCommand::SetSysVar {
                 namespace: ns.clone(),
@@ -288,7 +259,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
     let mut open = true;
     let mut dismissed = false;
     let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
-    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+    ui.modal_popup_with_opened(ID, &mut open, || {
         ui.text(match &draft.editing {
             Some((ns, name)) => format!("编辑 {ns}::{name}"),
             None => "新建 system variable".to_string(),
@@ -300,20 +271,12 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         let Some(_grid) = ui.begin_table_with_flags(
             "##svedit",
             2,
-            TableFlags::BORDERS_INNER_V | TableFlags::SIZING_STRETCH_PROP,
+            TableFlags::BORDERS_INNER_V,
         ) else {
             return;
         };
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 84.0,
-            ..TableColumnSetup::new("")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.0,
-            ..TableColumnSetup::new("")
-        });
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 84.0);
+        ui.table_setup_column_stretch_weight("", TableColumnFlags::NONE, 1.0);
 
         row(ui, "Namespace", |ui| {
             ui.set_next_item_width(-1.0);

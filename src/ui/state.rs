@@ -9,7 +9,7 @@
 
 use crate::app::{App, PALETTE, PickTarget, StateRule};
 use crate::observe::{SigKey, StateWin};
-use imgui::Ui;
+use dear_imgui_rs::{Condition, DrawListMut, Ui};
 use std::collections::HashMap;
 
 const PANEL_W: f32 = 190.0;
@@ -71,7 +71,7 @@ fn band_auto_color(slots: &mut HashMap<u64, usize>, band: usize) -> [f32; 3] {
 
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.state_trackers.len();
-    let disp_h = ui.io().display_size[1];
+    let disp_h = ui.io().display_size()[1];
     for i in 0..n {
         let mut open = app.state_trackers[i].opened;
         if !open {
@@ -83,20 +83,24 @@ pub fn render(app: &mut App, ui: &Ui) {
         } else {
             raw
         };
-        if app.focus_title.as_deref() == Some(name.as_str()) {
-            unsafe { imgui::sys::igSetNextWindowFocus() };
+        let focus = app.focus_title.as_deref() == Some(name.as_str());
+        if focus {
             app.focus_title = None;
         }
-        ui.window(format!("{name}###st{i}"))
+        let mut window = ui
+            .window(format!("{name}###st{i}"))
             .opened(&mut open)
             .position(
                 [16.0 + i as f32 * 30.0, disp_h * 0.08],
-                imgui::Condition::FirstUseEver,
+                Condition::FirstUseEver,
             )
-            .size([720.0, 340.0], imgui::Condition::FirstUseEver)
-            .build(|| {
-                window_content(app, ui, i);
-            });
+            .size([720.0, 340.0], Condition::FirstUseEver);
+        if focus {
+            window = window.focused(true);
+        }
+        window.build(|| {
+            window_content(app, ui, i);
+        });
         app.state_trackers[i].opened = open;
     }
     rule_editor(app, ui);
@@ -118,7 +122,7 @@ fn rule_editor(app: &mut App, ui: &Ui) {
     let mut open = true;
     ui.window(title)
         .opened(&mut open)
-        .size([410.0, 0.0], imgui::Condition::Appearing)
+        .size([410.0, 0.0], Condition::Appearing)
         .build(|| {
             let Some(w) = app.state_trackers.get_mut(wi) else {
                 return;
@@ -128,9 +132,9 @@ fn rule_editor(app: &mut App, ui: &Ui) {
             // observed values, custom bands from explicit cuts.
             let mut mode = if w.rules.contains_key(&key) { 1 } else { 0 };
             let mut chosen = mode;
-            ui.radio_button("默认", &mut chosen, 0);
+            ui.radio_button_int("默认", &mut chosen, 0);
             ui.same_line();
-            ui.radio_button("自定义", &mut chosen, 1);
+            ui.radio_button_int("自定义", &mut chosen, 1);
             if chosen != mode {
                 if chosen == 1 {
                     w.rules.entry(key.clone()).or_insert_with(|| StateRule {
@@ -181,10 +185,11 @@ fn custom_panel(
     let mut rm_cut = None;
     for (ci, cut) in rule.cuts.iter_mut().enumerate() {
         let mut c = *cut as f32;
+        let cut_fmt = dear_imgui_rs::NumericFormat::new("%g").expect("static format");
         if ui
-            .input_float(format!("cut##srcut{ci}"), &mut c)
-            .display_format("%g")
-            .build()
+            .input_float_config(format!("cut##srcut{ci}"))
+            .display_format(cut_fmt)
+            .build(&mut c)
         {
             *cut = c as f64;
         }
@@ -441,8 +446,8 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let mut min_ms = app.state_trackers[i].min_shown_ms as i32;
     ui.set_next_item_width(70.0);
     if ui
-        .input_int(format!("Min ms##stmin{i}"), &mut min_ms)
-        .build()
+        .input_int_config(format!("Min ms##stmin{i}"))
+        .build(&mut min_ms)
     {
         app.state_trackers[i].min_shown_ms = min_ms.max(0) as u64;
     }
@@ -460,14 +465,14 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let avail = ui.content_region_avail();
     ui.child_window(format!("st_panel{i}"))
         .size([PANEL_W, avail[1]])
-        .build(|| {
+        .build(ui, || {
             ui.text("Tracked signals");
             crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::State(i));
         });
     ui.same_line();
     ui.child_window(format!("st_bands{i}"))
         .size([0.0, avail[1]])
-        .build(|| bands_area(app, ui, i));
+        .build(ui, || bands_area(app, ui, i));
 }
 
 /// Right area: the time ruler and one state band per tracked row. Names
@@ -697,7 +702,7 @@ pub(crate) fn is_binary(states: &[f64]) -> bool {
 /// screenshot.
 fn draw_wave(
     ui: &Ui,
-    dl: &mut imgui::DrawListMut,
+    dl: &mut DrawListMut,
     segs: &[StateSeg],
     geo: &BandGeo,
     color: [f32; 4],

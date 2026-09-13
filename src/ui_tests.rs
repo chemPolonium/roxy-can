@@ -11,7 +11,7 @@
 //! directly, the way a user's first frame would see it.
 
 use crate::app::App;
-use imgui::Context;
+use dear_imgui_rs::{ConfigFlags, Context, FontConfig, FontSource};
 use std::sync::Mutex;
 
 /// imgui's current context is process-global, so tests that each build
@@ -24,33 +24,48 @@ const FONT: &[u8] = include_bytes!("../fonts/Inconsolata-Regular.ttf");
 /// with no platform and no renderer behind it.
 fn harness() -> Context {
     let mut context = Context::create();
-    context.set_ini_filename(None);
-    context.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
-    context.io_mut().display_size = [1280.0, 800.0];
-    context.io_mut().delta_time = 1.0 / 60.0;
-    context.fonts().add_font(&[imgui::FontSource::TtfData {
-        data: FONT,
-        size_pixels: 13.0,
-        config: Some(imgui::FontConfig {
-            oversample_h: 1,
-            pixel_snap_h: true,
-            size_pixels: 13.0,
-            ..Default::default()
-        }),
+    context.set_ini_filename(None::<String>).unwrap();
+    let mut flags = context.io().config_flags();
+    flags.insert(ConfigFlags::DOCKING_ENABLE);
+    context.io_mut().set_config_flags(flags);
+    context.io_mut().set_display_size([1280.0, 800.0]);
+    context.io_mut().set_delta_time(1.0 / 60.0);
+    // # Safety: embedded font bytes are a complete TTF.
+    context.font_atlas().add_font(&[unsafe {
+        FontSource::ttf_data_with_size(FONT, 13.0)
+            .with_config(FontConfig::new().pixel_snap_h(true).oversample_h(1))
     }]);
     // The renderer normally triggers the atlas build in its NewFrame;
-    // with no renderer, build it here or imgui asserts on frame().
-    let _atlas = context.fonts().build_rgba32_texture();
+    // with no renderer, claim the legacy atlas and build it here or
+    // frame() asserts on a missing texture. The claim lives to the end
+    // of the harness scope.
+    context
+        .font_atlas()
+        .try_claim_legacy_renderer()
+        .expect("legacy font atlas")
+        .build();
     context
 }
 
-/// Runs `n` full frames of the real UI render path. `ctx.render()`
+/// Runs `n` full frames of the real UI render path. `ctx.render_legacy()`
 /// ends the frame (the renderer normally does this in the app).
 fn frames(app: &mut App, ctx: &mut Context, n: usize) {
     for _ in 0..n {
+        // Script editors bind to the context and are created by main
+        // outside the frame; the harness does that queue's work here.
+        if !app.pending_editors.is_empty() {
+            let wanted: Vec<u64> = app.pending_editors.drain(..).collect();
+            for id in wanted {
+                let mut editor = dear_imgui_cte::TextEditor::create(ctx);
+                let _ = editor.set_language(Some(dear_imgui_cte::Language::Lua));
+                editor.set_show_line_numbers(true);
+                editor.set_show_whitespaces(true);
+                app.editors.entry(id).or_insert(editor);
+            }
+        }
         let ui = ctx.frame();
         crate::ui::render(app, &ui);
-        ctx.render();
+        let _ = ctx.render_legacy();
     }
 }
 
@@ -91,10 +106,9 @@ fn every_window_draws_without_panicking() {
     frames(&mut app, &mut ctx, 5);
 }
 
-/// The script editor is the most custom drawing in the app (gutter,
-/// space dots, glyph repaint, cursor-tracked overlay): run it with
-/// source that exercises every highlight class, over several frames so
-/// the class cache and the widget callbacks are both on.
+/// The script editor hosts the CTE text widget plus the fact sidebar:
+/// run it with source that compiles and with source that fails, over
+/// several frames so the fact cache and the marker refresh both run.
 #[test]
 fn script_editor_draws_with_highlighting() {
     let _ui_lock = UI_LOCK.lock().unwrap();
@@ -114,18 +128,23 @@ fn script_editor_draws_with_highlighting() {
         "    set_sig(b, 0x100, \"RPM\", 3000);\n",
         "    emit_value(\"X\", 1.5 + 2);\n",
         "}\n",
-        "/* block\n",
-        "   comment */\n",
     );
     app.send(crate::bus::BusCommand::SetNodeSource {
         id,
         source: source.to_string(),
     });
-    // The editor shows the draft, not the applied source: seed both.
-    app.node_src_draft.insert(id, source.to_string());
     app.open_script_editor(id);
     app.settle();
     frames(&mut app, &mut ctx, 5);
+
+    // The broken draft: the editor re-seeds from the model and the
+    // error marker lands on the offending line.
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on start {\n    send();\n}".to_string(),
+    });
+    app.settle();
+    frames(&mut app, &mut ctx, 3);
 }
 
 /// The two armed editor popups render from their draft state across

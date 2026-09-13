@@ -1,5 +1,5 @@
 use crate::app::App;
-use imgui::Ui;
+use dear_imgui_rs::{StyleVar, TableColumnSetup, Ui};
 
 const SHORTCUTS: [(&str, &str); 11] = [
     ("F9", "启动 / 停止测量"),
@@ -15,9 +15,8 @@ const SHORTCUTS: [(&str, &str); 11] = [
     ("Ctrl+Shift+S", "工程另存为"),
 ];
 
-pub(crate) fn popup_is_open(_ui: &Ui, id: &str) -> bool {
-    let cstr = std::ffi::CString::new(id).unwrap();
-    unsafe { imgui::sys::igIsPopupOpen_Str(cstr.as_ptr(), imgui::sys::ImGuiPopupFlags_None as i32) }
+pub(crate) fn popup_is_open(ui: &Ui, id: &str) -> bool {
+    ui.is_popup_open(id)
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
@@ -27,16 +26,20 @@ pub fn render(app: &mut App, ui: &Ui) {
             ui.open_popup(ID);
         }
         let mut open = true;
-        let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([380.0, 0.0]));
-        ui.modal_popup_config(ID).opened(&mut open).build(|| {
-            ui.columns(2, "##shortcut_cols", false);
-            for (key, desc) in SHORTCUTS {
-                ui.text(key);
-                ui.next_column();
-                ui.text(desc);
-                ui.next_column();
-            }
-            ui.columns(1, "##shortcut_cols_end", false);
+        let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
+        ui.modal_popup_with_opened(ID, &mut open, || {
+            ui.table("##shortcut_cols")
+                .add_column(TableColumnSetup::new("键"))
+                .add_column(TableColumnSetup::new("功能"))
+                .build(|ui| {
+                    for (key, desc) in SHORTCUTS {
+                        ui.table_next_row();
+                        ui.table_next_column();
+                        ui.text(key);
+                        ui.table_next_column();
+                        ui.text(desc);
+                    }
+                });
         });
         min.pop();
         app.show_shortcuts = open;
@@ -48,7 +51,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         }
         let mut open = true;
         let mut close = false;
-        ui.modal_popup_config(ID).opened(&mut open).build(|| {
+        ui.modal_popup_with_opened(ID, &mut open, || {
             ui.text(format!("roxy-can {}", env!("CARGO_PKG_VERSION")));
             ui.text("CAN 总线仿真与分析工具");
             ui.text("虚拟仿真与 ASC/BLF 回放 · DBC 解码 · 多窗口观测 · 多桌面");

@@ -1,5 +1,5 @@
 use crate::app::{App, PopupTarget, SigScope};
-use imgui::{Condition, TreeNodeFlags, Ui};
+use dear_imgui_rs::{Condition, Ui};
 use std::collections::HashSet;
 
 struct MsgEntry {
@@ -83,7 +83,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window(title)
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.35, io.display_size[1] * 0.18],
+            [
+                io.display_size()[0] * 0.35,
+                io.display_size()[1] * 0.18,
+            ],
             Condition::FirstUseEver,
         )
         .size([460.0, 480.0], Condition::FirstUseEver)
@@ -367,11 +370,6 @@ fn signal_content(app: &mut App, ui: &Ui) {
         .collect();
 
     let filtering = !q.is_empty();
-    let open_flags = if filtering {
-        TreeNodeFlags::DEFAULT_OPEN
-    } else {
-        TreeNodeFlags::empty()
-    };
     let mut actions: Vec<(crate::observe::SigKey, bool)> = Vec::new();
 
     for (ch, msgs) in layout.iter().enumerate() {
@@ -419,7 +417,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
                     m.id,
                     if m.ext { "x" } else { "" }
                 ))
-                .flags(open_flags)
+                .default_open(filtering)
                 .push();
             if mtoken.is_some() {
                 for s in &m.signals {

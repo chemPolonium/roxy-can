@@ -454,12 +454,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
-name = "chlorine"
-version = "1.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c00d31b1d19317b4777ec879192d3745bd97d05262b4b19cb1dda284b9d22f19"
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -568,6 +562,87 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "dear-imgui-build-support"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cd245371992038514a99b7ae4976d016df2165e72f34bf3a439e7cdcba995db"
+dependencies = [
+ "cc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dear-imgui-cte"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac594ac642db8dfb817207492b6103eba8b35762c5b570562f1c1edaa5619475"
+dependencies = [
+ "dear-imgui-cte-sys",
+ "dear-imgui-rs",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "dear-imgui-cte-sys"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bacec5dc53403d5a25c1501c778ce91c6f89323fd22e0d413860df50df8dfa62"
+dependencies = [
+ "cc",
+ "dear-imgui-build-support",
+ "dear-imgui-sys",
+]
+
+[[package]]
+name = "dear-imgui-rs"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7700700b69c2fc1400287c8ad7c8f5322cb97276f9fabce7fa4bcd73befd3d6"
+dependencies = [
+ "bitflags 2.13.1",
+ "dear-imgui-sys",
+ "parking_lot",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "dear-imgui-sys"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d9eb3614fa7b561f91a700bf8ed0780d8686cbf311475db190d45962fe6e008"
+dependencies = [
+ "cc",
+ "dear-imgui-build-support",
+ "mint",
+]
+
+[[package]]
+name = "dear-imgui-wgpu"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6743724247a70e3032385b0fda1f6205682b86f8b565a496b8aaba018e8ac7d"
+dependencies = [
+ "bytemuck",
+ "dear-imgui-rs",
+ "thiserror 2.0.20",
+ "wgpu",
+]
+
+[[package]]
+name = "dear-imgui-winit"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba01aa3fcd47adad86c7a333700ae69e72070d42b9945d7d4ba096b5f30d4e46"
+dependencies = [
+ "dear-imgui-rs",
+ "thiserror 2.0.20",
+ "web-sys",
+ "web-time",
+ "winit",
+]
 
 [[package]]
 name = "dispatch"
@@ -1117,54 +1192,6 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
-]
-
-[[package]]
-name = "imgui"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8addafa5cecf0515812226e806913814e02ce38d10215778082af5174abe5669"
-dependencies = [
- "bitflags 1.3.2",
- "cfg-if",
- "imgui-sys",
- "mint",
- "parking_lot",
-]
-
-[[package]]
-name = "imgui-sys"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ead193f9f4b60398e8b8f4ab1483e2321640d87aeebdaa3e5f44c55633ccd804"
-dependencies = [
- "cc",
- "cfg-if",
- "chlorine",
- "mint",
-]
-
-[[package]]
-name = "imgui-wgpu"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff3c0b94f4662fe4aeb3751ccc703189352c8ee9d61bb796fd812faa0e074408"
-dependencies = [
- "bytemuck",
- "imgui",
- "log",
- "smallvec",
- "wgpu",
-]
-
-[[package]]
-name = "imgui-winit-support"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff7fcccfa9efab56c94274c0fec9939bb14149342b49e6a425883a5b7dda6a3f"
-dependencies = [
- "imgui",
- "winit",
 ]
 
 [[package]]
@@ -2146,14 +2173,15 @@ dependencies = [
 
 [[package]]
 name = "roxy-can"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "can-dbc",
  "chrono",
+ "dear-imgui-cte",
+ "dear-imgui-rs",
+ "dear-imgui-wgpu",
+ "dear-imgui-winit",
  "flate2",
- "imgui",
- "imgui-wgpu",
- "imgui-winit-support",
  "memmap2",
  "pollster",
  "rfd",
@@ -2161,6 +2189,7 @@ dependencies = [
  "serde_json",
  "toml_edit",
  "wgpu",
+ "windows-sys 0.52.0",
  "winit",
 ]
 

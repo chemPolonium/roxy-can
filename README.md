@@ -95,7 +95,7 @@ on timer "resp" {
 
 ## 主要依赖
 
-- [imgui-rs](https://github.com/imgui-rs/imgui-rs) + imgui-wgpu：界面与渲染
+- [dear-imgui-rs](https://github.com/Latias94/dear-imgui-rs) + [dear-imgui-cte](https://crates.io/crates/dear-imgui-cte)：界面与渲染（ImGui 1.92 docking，源码编辑器为 ImGuiColorTextEdit）
 - [winit](https://github.com/rust-windowing/winit)：窗口与输入
 - [can-dbc](https://github.com/marcelbuesing/can-dbc)：DBC 解析
 - [rfd](https://github.com/PolyMeilex/rfd)：原生文件对话框

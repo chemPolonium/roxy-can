@@ -1,5 +1,5 @@
 use crate::app::{App, Mode, REPLAY_SPEEDS, TOOLBAR_H};
-use imgui::{Condition, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, NumericFormat, Ui, WindowFlags};
 
 fn vsep(ui: &Ui) {
     ui.same_line();
@@ -37,7 +37,7 @@ fn shortcuts(app: &mut App, ui: &Ui) {
     if cmd == 0 {
         return;
     }
-    if cmd != 1 && ui.io().want_text_input {
+    if cmd != 1 && ui.io().want_text_input() {
         return;
     }
     match cmd {
@@ -87,22 +87,14 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Toolbar")
         .flags(flags)
         .position([0.0, 0.0], Condition::Always)
-        .size([io.display_size[0], TOOLBAR_H], Condition::Always)
+        .size([io.display_size()[0], TOOLBAR_H], Condition::Always)
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu("File", || {
-                    if ui
-                        .menu_item_config("New Project")
-                        .shortcut("Ctrl+N")
-                        .build()
-                    {
+                    if ui.menu_item_with_shortcut("New Project", "Ctrl+N") {
                         app.guarded_action(crate::app::PendingAction::NewProject);
                     }
-                    if ui
-                        .menu_item_config("Open Project...")
-                        .shortcut("Ctrl+Shift+O")
-                        .build()
-                    {
+                    if ui.menu_item_with_shortcut("Open Project...", "Ctrl+Shift+O") {
                         app.guarded_action(crate::app::PendingAction::OpenProject);
                     }
                     if !app.recent_projects.is_empty() {
@@ -124,11 +116,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         });
                     }
-                    if ui
-                        .menu_item_config("Save Project")
-                        .shortcut("Ctrl+S")
-                        .build()
-                    {
+                    if ui.menu_item_with_shortcut("Save Project", "Ctrl+S") {
                         match app.project_path.clone() {
                             Some(p) => {
                                 app.save_project(Some(p));
@@ -138,25 +126,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                             }
                         }
                     }
-                    if ui
-                        .menu_item_config("Save Project As...")
-                        .shortcut("Ctrl+Shift+S")
-                        .build()
-                    {
+                    if ui.menu_item_with_shortcut("Save Project As...", "Ctrl+Shift+S") {
                         app.save_project(None);
                     }
                     ui.separator();
-                    if ui
-                        .menu_item_config("Open DBC...")
-                        .shortcut("Ctrl+O")
-                        .build()
-                    {
+                    if ui.menu_item_with_shortcut("Open DBC...", "Ctrl+O") {
                         app.pick_dbc();
                     }
-                    if ui
-                        .menu_item_config("Open Log...")
-                        .enabled(!log_switch_blocked(app))
-                        .build()
+                    if ui.menu_item_enabled_selected("Open Log...", None::<&str>, false, !log_switch_blocked(app))
                     {
                         app.pick_log();
                     }
@@ -173,7 +150,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if !app.recent_log.is_empty() {
                         ui.menu("Recent Logs", || {
                             let blocked = log_switch_blocked(app);
-                            let guard = ui.begin_disabled(blocked);
+                            let guard = ui.begin_disabled_with_cond(blocked);
                             let paths = app.recent_log.clone();
                             for p in paths {
                                 if ui.menu_item(file_name(&p)) {
@@ -184,11 +161,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         });
                     }
                     ui.separator();
-                    if ui
-                        .menu_item_config("Export Trace ASC...")
-                        .shortcut("Ctrl+E")
-                        .build()
-                    {
+                    if ui.menu_item_with_shortcut("Export Trace ASC...", "Ctrl+E") {
                         app.export_trace_dialog(0);
                     }
                     ui.separator();
@@ -197,94 +170,59 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                 });
                 ui.menu("Measurement", || {
-                    if ui
-                        .menu_item_config("Start")
-                        .shortcut("F9")
-                        .enabled(!app.snap.measuring)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected_with_shortcut(
+                        "Start",
+                        "F9",
+                        false,
+                        !app.snap.measuring,
+                    ) {
                         app.start_selected();
                     }
-                    if ui
-                        .menu_item_config("Stop")
-                        .shortcut("F9")
-                        .enabled(app.snap.measuring)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected_with_shortcut(
+                        "Stop",
+                        "F9",
+                        false,
+                        app.snap.measuring,
+                    ) {
                         app.stop();
                     }
-                    if ui
-                        .menu_item_config("Pause Trace")
-                        .selected(app.snap.trace_paused)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected_with_shortcut(
+                        "Pause Trace",
+                        "F9",
+                        app.snap.trace_paused,
+                        true,
+                    ) {
                         app.send(crate::bus::BusCommand::SetTracePaused(
                             !app.snap.trace_paused,
                         ));
                     }
                 });
                 ui.menu("View", || {
-                    if ui
-                        .menu_item_config("Buses")
-                        .selected(app.show_buses)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Buses", None::<&str>, app.show_buses, true) {
                         app.show_buses = !app.show_buses;
                     }
-                    if ui
-                        .menu_item_config("Triggers")
-                        .selected(app.show_triggers)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Triggers", None::<&str>, app.show_triggers, true) {
                         app.show_triggers = !app.show_triggers;
                     }
-                    if ui
-                        .menu_item_config("Bus Statistics")
-                        .selected(app.show_bus_stats)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Bus Statistics", None::<&str>, app.show_bus_stats, true) {
                         app.show_bus_stats = !app.show_bus_stats;
                     }
-                    if ui
-                        .menu_item_config("Interactive Generator")
-                        .selected(app.show_tx)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Interactive Generator", None::<&str>, app.show_tx, true) {
                         app.show_tx = !app.show_tx;
                     }
-                    if ui
-                        .menu_item_config("Network")
-                        .selected(app.show_network)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Network", None::<&str>, app.show_network, true) {
                         app.show_network = !app.show_network;
                     }
-                    if ui
-                        .menu_item_config("Specification")
-                        .selected(app.show_spec)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Specification", None::<&str>, app.show_spec, true) {
                         app.show_spec = !app.show_spec;
                     }
-                    if ui
-                        .menu_item_config("Measurement Setup")
-                        .selected(app.show_measurement)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Measurement Setup", None::<&str>, app.show_measurement, true) {
                         app.show_measurement = !app.show_measurement;
                     }
-                    if ui
-                        .menu_item_config("System Variables")
-                        .selected(app.show_sysvars)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("System Variables", None::<&str>, app.show_sysvars, true) {
                         app.show_sysvars = !app.show_sysvars;
                     }
-                    if ui
-                        .menu_item_config("Write")
-                        .selected(app.show_write)
-                        .build()
-                    {
+                    if ui.menu_item_enabled_selected("Write", None::<&str>, app.show_write, true) {
                         app.show_write = !app.show_write;
                     }
                 });
@@ -311,7 +249,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             vsep(ui);
             // Player-style transport: slower | play/pause | faster | stop.
-            let slower = ui.begin_disabled(!matches!(app.snap.mode, Mode::Replay));
+            let slower = ui.begin_disabled_with_cond(!matches!(app.snap.mode, Mode::Replay));
             if ui.button("<<") {
                 app.step_replay_speed(-1);
             }
@@ -329,13 +267,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                 app.toggle_play();
             }
             ui.same_line();
-            let faster = ui.begin_disabled(!matches!(app.snap.mode, Mode::Replay));
+            let faster = ui.begin_disabled_with_cond(!matches!(app.snap.mode, Mode::Replay));
             if ui.button(">>") {
                 app.step_replay_speed(1);
             }
             faster.end();
             ui.same_line();
-            let stop = ui.begin_disabled(!app.snap.measuring);
+            let stop = ui.begin_disabled_with_cond(!app.snap.measuring);
             if ui.button("Stop") {
                 app.stop();
             }
@@ -381,22 +319,24 @@ pub fn render(app: &mut App, ui: &Ui) {
             if matches!(app.snap.mode, Mode::Replay) {
                 vsep(ui);
                 let timeline = app.replay_position();
-                let scrub = ui.begin_disabled(timeline.is_none());
+                let scrub = ui.begin_disabled_with_cond(timeline.is_none());
                 if let Some((pos_s, dur_s)) = timeline {
-                    let mut t_s = pos_s.min(dur_s);
+                    let mut t_s = pos_s.min(dur_s) as f32;
                     ui.set_next_item_width(240.0);
+                    let seconds = NumericFormat::new("%.2f").expect("static format");
                     if ui
-                        .slider_config("##scrub", 0.0, dur_s)
-                        .display_format("%.2f")
+                        .slider_config("##scrub", 0.0f32, dur_s as f32)
+                        .display_format(seconds)
                         .build(&mut t_s)
                     {
-                        app.seek_replay_seconds(t_s);
+                        app.seek_replay_seconds(t_s as f64);
                     }
                 } else {
                     ui.set_next_item_width(240.0);
-                    let mut unused = 0.0;
-                    ui.slider_config("##scrub", 0.0, 1.0)
-                        .display_format("log length unknown")
+                    let mut unused = 0.0f32;
+                    let paused = NumericFormat::new("log length unknown").expect("static format");
+                    ui.slider_config("##scrub", 0.0f32, 1.0f32)
+                        .display_format(paused)
                         .build(&mut unused);
                 }
                 scrub.end();
@@ -445,7 +385,7 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             if matches!(app.snap.run_mode, Mode::Replay) {
                 vsep(ui);
-                let open = ui.begin_disabled(log_switch_blocked(app));
+                let open = ui.begin_disabled_with_cond(log_switch_blocked(app));
                 if ui.button("Open Log...") {
                     app.pick_log();
                 }

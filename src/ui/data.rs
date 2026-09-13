@@ -1,5 +1,5 @@
 use crate::app::{App, TOOLBAR_H};
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, Ui};
 
 const PANEL_W: f32 = 190.0;
 
@@ -17,20 +17,24 @@ pub fn render(app: &mut App, ui: &Ui) {
         } else {
             raw
         };
-        if app.focus_title.as_deref() == Some(name.as_str()) {
-            unsafe { imgui::sys::igSetNextWindowFocus() };
+        let focus = app.focus_title.as_deref() == Some(name.as_str());
+        if focus {
             app.focus_title = None;
         }
-        ui.window(format!("{name}###data{i}"))
+        let mut window = ui
+            .window(format!("{name}###data{i}"))
             .opened(&mut open)
             .position(
-                [io.display_size[0] - 480.0, TOOLBAR_H + i as f32 * 28.0],
+                [io.display_size()[0] - 480.0, TOOLBAR_H + i as f32 * 28.0],
                 Condition::FirstUseEver,
             )
-            .size([480.0, 360.0], Condition::FirstUseEver)
-            .build(|| {
-                window_content(app, ui, i);
-            });
+            .size([480.0, 360.0], Condition::FirstUseEver);
+        if focus {
+            window = window.focused(true);
+        }
+        window.build(|| {
+            window_content(app, ui, i);
+        });
         app.data_windows[i].opened = open;
     }
 }
@@ -40,13 +44,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
 
     ui.child_window("sig_panel")
         .size([PANEL_W, avail[1]])
-        .build(|| left_panel(app, ui, i));
+        .build(ui, || left_panel(app, ui, i));
 
     ui.same_line();
 
     ui.child_window("values_area")
         .size([0.0, avail[1]])
-        .build(|| values_area(app, ui, i));
+        .build(ui, || values_area(app, ui, i));
 }
 
 /// Left panel: the window's selected signal list; each signal can be
@@ -80,48 +84,16 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
     if let Some(_table) = ui.begin_table_with_flags("data_table", 8, tbl_flags) {
         // Fixed widths for the text columns; the Bar column stretches and
         // takes whatever is left.
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 130.0,
-            ..TableColumnSetup::new("Name")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 70.0,
-            ..TableColumnSetup::new("Value")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 56.0,
-            ..TableColumnSetup::new("Unit")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 76.0,
-            ..TableColumnSetup::new("Raw")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 70.0,
-            ..TableColumnSetup::new("Min")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 70.0,
-            ..TableColumnSetup::new("Avg")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 70.0,
-            ..TableColumnSetup::new("Max")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.0,
-        ..TableColumnSetup::new("Bar")
-    });
-    ui.table_setup_scroll_freeze(0, 1);
-    ui.table_headers_row();
+        ui.table_setup_column_fixed_width("Name", TableColumnFlags::NONE, 130.0);
+        ui.table_setup_column_fixed_width("Value", TableColumnFlags::NONE, 70.0);
+        ui.table_setup_column_fixed_width("Unit", TableColumnFlags::NONE, 56.0);
+        ui.table_setup_column_fixed_width("Raw", TableColumnFlags::NONE, 76.0);
+        ui.table_setup_column_fixed_width("Min", TableColumnFlags::NONE, 70.0);
+        ui.table_setup_column_fixed_width("Avg", TableColumnFlags::NONE, 70.0);
+        ui.table_setup_column_fixed_width("Max", TableColumnFlags::NONE, 70.0);
+        ui.table_setup_column_stretch_weight("Bar", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_scroll_freeze(0, 1);
+        ui.table_headers_row();
         for (key, text) in keys.iter().zip(cache.iter()) {
             let Some(sub) = app.sub_view(key) else {
                 continue;
@@ -156,10 +128,10 @@ fn values_area(app: &mut App, ui: &Ui, i: usize) {
             // The overlay percentage is silenced -- the value column next
             // to it is throttled, so a live number on the bar would read
             // as truth while the text column lags behind.
-            imgui::ProgressBar::new(frac as f32)
+            ui.progress_bar(frac as f32)
                 .size([-1.0, 13.0])
                 .overlay_text("")
-                .build(ui);
+                .build();
         }
     }
 }

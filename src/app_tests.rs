@@ -6059,8 +6059,8 @@ fn a_script_node_round_trips_through_a_project() {
         id,
         source: source.to_string(),
     });
-    // An unapplied draft is session state and must not leak into the file.
-    app.node_src_draft.insert(id, "garbage".to_string());
+    // An unapplied editor is session state and must not leak into the file.
+    app.editor_synced.insert(id, "garbage".to_string());
     let path = std::env::temp_dir().join("roxy_can_node.rxproj");
     assert!(app.save_project(Some(path.clone())));
 
@@ -6080,8 +6080,8 @@ fn a_script_node_round_trips_through_a_project() {
         "the node binding rides the round trip"
     );
     assert!(
-        restored.node_src_draft.is_empty(),
-        "drafts are keyed by id and ids are minted fresh"
+        restored.editor_synced.is_empty(),
+        "editor sync state is keyed by id and ids are minted fresh"
     );
     std::fs::remove_file(&path).ok();
 }

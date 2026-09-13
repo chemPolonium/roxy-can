@@ -7,6 +7,7 @@ mod bus;
 mod can;
 mod channel;
 mod cli;
+mod clipboard;
 mod config;
 mod core_loop;
 mod dbc;
@@ -42,17 +43,15 @@ mod ui_tests;
 use std::sync::Arc;
 use std::time::Instant;
 
-use imgui_wgpu::{Renderer, RendererConfig};
-use imgui_winit_support::{HiDpiMode, WinitPlatform};
+use dear_imgui_rs::{ConfigFlags, Context};
+use dear_imgui_wgpu::{FramebufferExtent, WgpuInitInfo, WgpuRenderer};
+use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{ElementState, Event, Ime, WindowEvent};
+use winit::dpi::LogicalSize;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
-
-static IME_REQ: std::sync::Mutex<(bool, f32, f32, f32)> =
-    std::sync::Mutex::new((false, 0.0, 0.0, 0.0));
 
 /// Redraw cadence. The event loop sleeps between frames instead of spinning
 /// a render at the display's refresh rate; 60 keeps motion smooth, while
@@ -64,31 +63,23 @@ const FRAME_DT: std::time::Duration = std::time::Duration::from_nanos(1_000_000_
 /// 5=play/pause, 6=slower, 7=faster, 8=jump to the live edge.
 pub static CMD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-unsafe extern "C" fn ime_data_callback(
-    _viewport: *mut imgui::sys::ImGuiViewport,
-    data: *mut imgui::sys::ImGuiPlatformImeData,
-) {
-    let d = unsafe { &*data };
-    *IME_REQ.lock().unwrap() = (d.WantVisible, d.InputPos.x, d.InputPos.y, d.InputLineHeight);
-}
-
 struct State {
-    context: imgui::Context,
+    // Field order is drop order: the app (and its CTE text editors) must
+    // die before the ImGui context they are bound to.
+    app: app::App,
     platform: WinitPlatform,
-    renderer: Renderer,
+    renderer: WgpuRenderer,
+    context: Context,
     device: wgpu::Device,
     queue: wgpu::Queue,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     surface_desc: wgpu::SurfaceConfiguration,
-    app: app::App,
     last_frame: Instant,
-    last_cursor: Option<imgui::MouseCursor>,
-    ime_pos: Option<(bool, f32, f32, f32)>,
-    ctrl: bool,
-    shift: bool,
     last_title: String,
     last_autosave: Instant,
+    ctrl: bool,
+    shift: bool,
     /// When the next redraw is due; the event loop sleeps until then.
     next_frame: Instant,
 }
@@ -123,7 +114,6 @@ impl State {
             ));
         }
         let size = window.inner_size();
-        let dpi = window.scale_factor();
         let surface = instance.create_surface(window.clone()).unwrap();
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -147,31 +137,33 @@ impl State {
         };
         surface.configure(&device, &surface_desc);
 
-        let mut context = imgui::Context::create();
-        let mut platform = WinitPlatform::new(&mut context);
-        platform.attach_window(context.io_mut(), &window, HiDpiMode::Default);
+        let mut context = Context::create();
+        // Copy/paste everywhere (input text, trace Copy row) routes through
+        // the context's clipboard backend; the OS one is on us.
+        context.set_clipboard_backend(clipboard::Clipboard);
         // Layouts live inside .rxproj files; no standalone ini file.
-        context.set_ini_filename(None);
-        context.io_mut().config_flags |= imgui::ConfigFlags::DOCKING_ENABLE;
-        context.io_mut().config_windows_move_from_title_bar_only = true;
-        context.io_mut().set_platform_ime_data_fn = Some(ime_data_callback);
-        context.style_mut().frame_padding = [4.0, 1.0];
-        let font_size = 13.0 * dpi as f32;
-        let font_config = imgui::FontConfig {
-            oversample_h: 1,
-            pixel_snap_h: true,
-            size_pixels: font_size,
-            ..Default::default()
-        };
+        context.set_ini_filename(None::<String>).unwrap();
+        let mut config_flags = context.io().config_flags();
+        config_flags.insert(ConfigFlags::DOCKING_ENABLE);
+        context.io_mut().set_config_flags(config_flags);
+        context.style_mut().set_frame_padding([4.0, 1.0]);
+        // ImGui 1.92 rasterizes glyphs on demand at the platform-reported
+        // DPI, so fonts load at their logical reference size -- no baked
+        // glyph ranges, no global scale hack. The CJK fallback merges into
+        // the same font (base glyphs come from Inconsolata); a .ttc loads
+        // as its first face.
         const INCONSOLATA_FONT: &[u8] = include_bytes!("../fonts/Inconsolata-Regular.ttf");
-        let mut sources = vec![imgui::FontSource::TtfData {
-            data: INCONSOLATA_FONT,
-            size_pixels: font_size,
-            config: Some(font_config.clone()),
-        }];
-        // Merge Chinese glyphs into the same font (base glyphs come from
-        // Inconsolata). GlyphOffset nudges CJK glyphs down: their fonts have
-        // tall ascents and otherwise render too high inside widgets.
+        let mut sources = vec![
+            // # Safety: embedded font bytes are a complete TTF.
+            unsafe {
+                dear_imgui_rs::FontSource::ttf_data_with_size(INCONSOLATA_FONT, 13.0)
+                    .with_config(
+                        dear_imgui_rs::FontConfig::new()
+                            .pixel_snap_h(true)
+                            .oversample_h(1),
+                    )
+            },
+        ];
         for path in [
             "C:\\Windows\\Fonts\\msyh.ttc",
             "C:\\Windows\\Fonts\\msyh.ttf",
@@ -180,29 +172,22 @@ impl State {
         ] {
             if let Ok(bytes) = std::fs::read(path) {
                 let data: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-                sources.push(imgui::FontSource::TtfData {
-                    data,
-                    size_pixels: font_size,
-                    config: Some(imgui::FontConfig {
-                        glyph_ranges: imgui::FontGlyphRanges::chinese_full(),
-                        ..font_config.clone()
-                    }),
+                // # Safety: font data outlives the atlas and is a complete font.
+                sources.push(unsafe {
+                    dear_imgui_rs::FontSource::ttf_data_with_size(data, 13.0)
                 });
                 break;
             }
         }
-        context.fonts().add_font(&sources);
-        context.io_mut().font_global_scale = (1.0 / dpi) as f32;
+        context.font_atlas().add_font(&sources);
 
-        let renderer = Renderer::new(
-            &mut context,
-            &device,
-            &queue,
-            RendererConfig {
-                texture_format: surface_desc.format,
-                ..Default::default()
-            },
-        );
+        let init_info = WgpuInitInfo::new(device.clone(), queue.clone(), surface_desc.format);
+        let mut renderer = WgpuRenderer::new(init_info, &mut context).unwrap();
+        renderer.set_gamma_mode(dear_imgui_wgpu::GammaMode::Auto);
+        let mut platform = WinitPlatform::new(&mut context).unwrap();
+        platform
+            .attach_window(window.clone(), HiDpiMode::Default, &mut context)
+            .unwrap();
 
         let mut app = app::App::new();
         app.startup_workspace();
@@ -212,22 +197,20 @@ impl State {
             std::fs::read_to_string(config::state_path("roxy-can.ini")).unwrap_or_default();
 
         State {
-            context,
+            app,
             platform,
             renderer,
+            context,
             device,
             queue,
             window,
             surface,
             surface_desc,
-            app,
             last_frame: Instant::now(),
-            last_cursor: None,
-            ime_pos: None,
-            ctrl: false,
-            shift: false,
             last_title: String::new(),
             last_autosave: Instant::now(),
+            ctrl: false,
+            shift: false,
             next_frame: Instant::now(),
         }
     }
@@ -236,7 +219,7 @@ impl State {
         let now = Instant::now();
         self.context
             .io_mut()
-            .update_delta_time(now - self.last_frame);
+            .set_delta_time((now - self.last_frame).as_secs_f32());
         self.last_frame = now;
 
         let frame = match self.surface.get_current_texture() {
@@ -251,8 +234,8 @@ impl State {
         };
 
         self.platform
-            .prepare_frame(self.context.io_mut(), &self.window)
-            .expect("prepare_frame failed");
+            .prepare_frame(&mut self.context, &self.window)
+            .unwrap();
 
         // Project layouts are applied between imgui frames; the captured
         // text is embedded when the project is saved.
@@ -272,26 +255,25 @@ impl State {
             self.last_title = title.clone();
         }
 
+        // CTE text editors bind to the context, which the frame's `Ui`
+        // borrows exclusively; create the ones the UI requested last frame
+        // out here, before the borrow starts.
+        if !self.app.pending_editors.is_empty() {
+            let wanted: Vec<u64> = self.app.pending_editors.drain(..).collect();
+            for id in wanted {
+                self.app
+                    .editors
+                    .entry(id)
+                    .or_insert_with(|| dear_imgui_cte::TextEditor::create(&self.context));
+            }
+        }
+
         let ui = self.context.frame();
 
         self.app.update();
         ui::render(&mut self.app, ui);
 
-        let req = *IME_REQ.lock().unwrap();
-        if self.ime_pos != Some(req) {
-            self.ime_pos = Some(req);
-            if req.0 {
-                self.window.set_ime_cursor_area(
-                    LogicalPosition::new(req.1 as f64, req.2 as f64),
-                    LogicalSize::new(20.0, req.3.max(16.0) as f64),
-                );
-            }
-        }
-
-        if self.last_cursor != ui.mouse_cursor() {
-            self.last_cursor = ui.mouse_cursor();
-            self.platform.prepare_render(ui, &self.window);
-        }
+        self.platform.prepare_render(&ui, &self.window).unwrap();
 
         let view = frame
             .texture
@@ -299,31 +281,40 @@ impl State {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.06,
-                        g: 0.06,
-                        b: 0.08,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        self.renderer
-            .render(self.context.render(), &self.queue, &self.device, &mut rpass)
-            .expect("imgui render failed");
-        drop(rpass);
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.06,
+                            g: 0.06,
+                            b: 0.08,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let pending = self
+                .context
+                .try_render(self.renderer.renderer_consumer().unwrap())
+                .unwrap();
+            self.renderer
+                .render(
+                    pending,
+                    &mut rpass,
+                    FramebufferExtent::from_texture(&frame.texture),
+                )
+                .unwrap();
+        }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
 
@@ -331,6 +322,14 @@ impl State {
         // overran the budget already, draw again immediately rather than
         // adding delay on top.
         self.next_frame = (self.last_frame + FRAME_DT).max(Instant::now());
+    }
+
+    /// Releases render-loop resources that must die before the context.
+    /// Safe to call twice.
+    fn shutdown(&mut self) {
+        self.app.editors.clear();
+        let _ = self.renderer.shutdown(&mut self.context);
+        let _ = self.platform.shutdown(&mut self.context);
     }
 }
 
@@ -344,8 +343,12 @@ impl ApplicationHandler for Program {
         self.state = Some(State::new(event_loop));
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, el: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         let st = self.state.as_mut().unwrap();
+        // Platform first: it consumes keyboard/mouse/IME into ImGui input.
+        st.platform
+            .handle_window_event(&mut st.context, &st.window, &event)
+            .unwrap();
         match &event {
             WindowEvent::CloseRequested => {
                 st.app.request_quit();
@@ -363,11 +366,6 @@ impl ApplicationHandler for Program {
                 st.frame();
                 if st.app.quit {
                     el.exit();
-                }
-            }
-            WindowEvent::Ime(Ime::Commit(text)) => {
-                for ch in text.chars() {
-                    st.context.io_mut().add_input_character(ch);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -406,11 +404,6 @@ impl ApplicationHandler for Program {
             }
             _ => {}
         }
-        st.platform.handle_event::<()>(
-            st.context.io_mut(),
-            &st.window,
-            &Event::WindowEvent { window_id, event },
-        );
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
@@ -422,8 +415,6 @@ impl ApplicationHandler for Program {
                 st.window.request_redraw();
             }
             el.set_control_flow(ControlFlow::WaitUntil(st.next_frame));
-            st.platform
-                .handle_event::<()>(st.context.io_mut(), &st.window, &Event::AboutToWait);
         }
     }
 
@@ -435,6 +426,7 @@ impl ApplicationHandler for Program {
             st.app.write_meta();
             // Clean exit: the crash cache is no longer needed.
             let _ = std::fs::remove_file(config::state_path(config::AUTOSAVE_PATH));
+            st.shutdown();
         }
     }
 }
@@ -480,7 +472,7 @@ fn main() {
                 Ok(report) => println!("{report}"),
                 Err(report) => {
                     eprintln!("{report}");
-                    std::process::exit(1);
+                    std::process::exit(2);
                 }
             }
             return;

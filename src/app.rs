@@ -201,10 +201,17 @@ pub struct App {
     /// signal key, and the target -- a custom band, or a default-mode
     /// state value (normalized bits). Session state only.
     pub state_rule_pick: Option<(usize, crate::observe::SigKey, PickTarget)>,
-    /// Source text a Nodes-window editor is typing but has not applied
-    /// yet, keyed by the node's stable id. Applied by the Apply button
-    /// (per-keystroke command traffic and recompiles would be churn).
-    pub node_src_draft: HashMap<u64, String>,
+    /// CTE text editors, keyed by the node's stable id. They bind to the
+    /// ImGui context, which `App::new` does not have: rendering a script
+    /// editor queues the id in `pending_editors`, and main creates the
+    /// editor before the next frame's `Ui` borrow starts. Session state.
+    pub editors: HashMap<u64, dear_imgui_cte::TextEditor>,
+    /// Node ids whose editor the UI asked for; main drains this queue.
+    pub pending_editors: Vec<u64>,
+    /// The `node.source` each editor was last seeded with. An external
+    /// change (project load, Apply) re-seeds the editor; without this
+    /// bookkeeping the editor and the model would fight over the text.
+    pub(crate) editor_synced: HashMap<u64, String>,
     /// Text a Replay Blocks editor is typing but has not applied yet,
     /// keyed by the block's stable id: name, log path, id filter text.
     /// Session state only, like the node source drafts.
@@ -213,16 +220,9 @@ pub struct App {
     /// Session state; an id whose node is gone closes its editor.
     pub open_editors: Vec<u64>,
     /// Per-editor static facts (outline, send/receive/sysvar sets),
-    /// keyed by node id and re-derived from the draft text when its hash
+    /// keyed by node id and re-derived from the editor text when its hash
     /// changes. Session state.
     pub(crate) editor_facts: HashMap<u64, crate::ui::script_editor::EditorFacts>,
-    /// Per-editor cursor position of the source text (byte offset plus
-    /// the active selection), tracked from the edit widget itself. The
-    /// sidebar inserts its templates here instead of at the file end.
-    pub(crate) editor_cursors: HashMap<u64, crate::ui::script_editor::EditorCursor>,
-    /// Glyph advance cache for the space-dot overlay, keyed by char.
-    /// The font is global, so advances are too.
-    pub(crate) char_advance: HashMap<char, f32>,
     /// Write window's per-kind visibility, ordered
     /// `[Script, Info, Warning, Error]`. Session state.
     pub write_filter: [bool; 4],
@@ -443,12 +443,12 @@ impl App {
             focus_title: None,
             state_rule_edit: None,
             state_rule_pick: None,
-            node_src_draft: HashMap::new(),
+            editors: HashMap::new(),
+        pending_editors: Vec::new(),
+        editor_synced: HashMap::new(),
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
-            editor_facts: HashMap::new(),
-            editor_cursors: HashMap::new(),
-            char_advance: HashMap::new(),
+        editor_facts: HashMap::new(),
             write_filter: [true; 4],
             kvaser_channels: None,
             profile_names: None,
@@ -1179,9 +1179,13 @@ impl App {
         }
     }
 
-    /// Closes the node's script editor.
+    /// Closes the node's script editor and drops its CTE editor with all
+    /// cached state; the next open starts from the node's saved source.
     pub fn close_script_editor(&mut self, id: u64) {
         self.open_editors.retain(|&x| x != id);
+        self.editors.remove(&id);
+        self.editor_synced.remove(&id);
+        self.editor_facts.remove(&id);
     }
 }
 

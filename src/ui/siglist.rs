@@ -1,6 +1,6 @@
 use crate::app::{App, GfxSignal, PALETTE};
 use crate::observe::YMode;
-use imgui::{MouseButton, Ui};
+use dear_imgui_rs::{MouseButton, Ui};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ListKind {
@@ -35,8 +35,8 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
 
     let n = signals_mut(app, kind).len();
     let dl = ui.get_window_draw_list();
-    let mouse = ui.io().mouse_pos;
-    let mouse_down = ui.io().mouse_down[0];
+    let mouse = ui.io().mouse_pos();
+    let mouse_down = ui.is_mouse_down(MouseButton::Left);
     let mut tops = Vec::with_capacity(n);
     let mut list_x = 0.0;
 

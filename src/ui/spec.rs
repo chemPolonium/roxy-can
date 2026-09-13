@@ -1,6 +1,9 @@
 use crate::app::App;
 use crate::spec::{Kind, Latch};
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{
+    Condition, Drag, NumericFormat, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy,
+    Ui,
+};
 
 /// What arrived that the databases said must not, or did not arrive at all.
 /// A report rather than a status light: rows latch and stay until cleared, or
@@ -14,7 +17,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Specification")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.30, io.display_size[1] * 0.55],
+            [
+                io.display_size()[0] * 0.30,
+                io.display_size()[1] * 0.55,
+            ],
             Condition::FirstUseEver,
         )
         .size([620.0, 260.0], Condition::FirstUseEver)
@@ -89,16 +95,12 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y
-        | TableFlags::SIZING_STRETCH_PROP;
-    let Some(_table) = ui.begin_table_with_flags("spec_table", 8, flags) else {
+        | TableFlags::SCROLL_Y;
+    let opts = TableOptions::from(flags).sizing_policy(TableSizingPolicy::StretchProp);
+    let Some(_table) = ui.begin_table_with_flags("spec_table", 8, opts) else {
         return;
     };
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 2.0,
-        ..TableColumnSetup::new("Message")
-    });
+    ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NONE, 1.0);
     for (label, width) in [
         ("Bus", 56.0),
         ("Rule", 82.0),
@@ -108,11 +110,7 @@ fn content(app: &mut App, ui: &Ui) {
         ("First", 76.0),
         ("Last", 76.0),
     ] {
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: width,
-            ..TableColumnSetup::new(label)
-        });
+        ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, width);
     }
     ui.table_headers_row();
 
@@ -150,10 +148,11 @@ fn content(app: &mut App, ui: &Ui) {
 fn threshold(app: &mut App, ui: &Ui, key: &str, model: u64, lo: f32, hi: f32, fmt: &str) -> u64 {
     let label = format!("##{key}");
     let mut v = app.num_draft.shown(key, model as f64) as f32;
-    let moved = imgui::Drag::new(&label)
+    let format = NumericFormat::new(fmt).expect("static format string");
+    let moved = Drag::new(&label)
         .speed((hi - lo) / 100.0)
         .range(lo, hi)
-        .display_format(fmt)
+        .display_format(format)
         .build(ui, &mut v);
     let ended = ui.is_item_deactivated();
     let committed = app.num_draft.step(

@@ -5,9 +5,9 @@ use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
-use imgui::{
-    Condition, TableBgTarget, TableColumnFlags, TableColumnSetup, TableFlags, TableSortDirection,
-    Ui,
+use dear_imgui_rs::{
+    Condition, ListClipper, SortDirection, TableColumnFlags, TableFlags, TableOptions,
+    TableSizingPolicy, Ui,
 };
 
 /// Window index and frame targeted by the row context menu; must survive
@@ -29,21 +29,25 @@ pub fn render(app: &mut App, ui: &Ui) {
             raw
         };
         let off = i as f32 * 30.0;
-        if app.focus_title.as_deref() == Some(title.as_str()) {
-            unsafe { imgui::sys::igSetNextWindowFocus() };
+        let focus = app.focus_title.as_deref() == Some(title.as_str());
+        if focus {
             app.focus_title = None;
         }
-        ui.window(format!("{title}###trace{i}"))
+        let mut window = ui
+            .window(format!("{title}###trace{i}"))
             .opened(&mut open)
             .position([off, TOOLBAR_H + off], Condition::FirstUseEver)
             .size(
                 [
-                    io.display_size[0] * 0.55,
-                    io.display_size[1] * 0.5 - TOOLBAR_H,
+                    io.display_size()[0] * 0.55,
+                    io.display_size()[1] * 0.5 - TOOLBAR_H,
                 ],
                 Condition::FirstUseEver,
-            )
-            .build(|| window_content(app, ui, i));
+            );
+        if focus {
+            window = window.focused(true);
+        }
+        window.build(|| window_content(app, ui, i));
         app.trace_windows[i].opened = open;
     }
 }
@@ -171,54 +175,50 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y
         | TableFlags::SORTABLE
-        | TableFlags::SORT_TRISTATE
-        | TableFlags::SIZING_STRETCH_PROP;
-    let Some(_table) = ui.begin_table_with_flags(format!("trace_table{i}"), 8, tbl_flags) else {
+        | TableFlags::SORT_TRISTATE;
+    let opts = TableOptions::from(tbl_flags).sizing_policy(TableSizingPolicy::StretchProp);
+    let Some(_table) = ui.begin_table_with_flags(format!("trace_table{i}"), 8, opts) else {
         return;
     };
     // "{:.6}" timestamp: up to ~10 chars
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 76.0,
-        ..TableColumnSetup::new("Time")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 60.0,
-        ..TableColumnSetup::new("Bus")
-    });
+    ui.table_setup_column(
+        "Time",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(76.0)),
+    );
+    ui.table_setup_column(
+        "Bus",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(60.0)),
+    );
     // extended IDs render as "1FFFFFFFx" (9 chars)
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 68.0,
-        ..TableColumnSetup::new("ID")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.0,
-        ..TableColumnSetup::new("Name")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 36.0,
-        ..TableColumnSetup::new("Len")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 44.0,
-        ..TableColumnSetup::new("Flags")
-    });
+    ui.table_setup_column(
+        "ID",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(68.0)),
+    );
+    ui.table_setup_column("Name", TableColumnFlags::NONE, None);
+    ui.table_setup_column(
+        "Len",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(36.0)),
+    );
+    ui.table_setup_column(
+        "Flags",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(44.0)),
+    );
     // A full 64-byte FD payload needs room; let it stretch with the window.
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 1.4,
-        ..TableColumnSetup::new("Data")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 34.0,
-        ..TableColumnSetup::new("Dir")
-    });
+    ui.table_setup_column(
+        "Data",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::stretch(1.4)),
+    );
+    ui.table_setup_column(
+        "Dir",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(34.0)),
+    );
     // Freeze the header row so it stays visible while scrolling.
     ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
@@ -231,31 +231,26 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     // Newest first (the default order); sorted when a column header is
     // clicked, back to default on the third click (tri-state). The row
     // cache is the app's; a sort re-orders it in place.
-    let specs_active = unsafe {
-        let raw = imgui::sys::igTableGetSortSpecs();
-        !raw.is_null() && (*raw).SpecsCount > 0
-    };
-    if specs_active && let Some(mut specs) = ui.table_sort_specs_mut() {
-        let spec = specs.specs().iter().next();
-        if let Some(s) = spec {
-            let col = s.column_idx();
-            let asc = s.sort_direction() == Some(TableSortDirection::Ascending);
-            rows.sort_by(|a, b| sort_frame(app, col, a, b, asc));
-        }
-        specs.set_sorted();
+    if let Some(mut specs) = ui.table_get_sort_specs()
+        && let Some(s) = specs.iter().next()
+    {
+        let col = s.column_index.get();
+        let asc = s.sort_direction == SortDirection::Ascending;
+        rows.sort_by(|a, b| sort_frame(app, col, a, b, asc));
+        specs.clear_dirty(ui);
     }
 
     // Virtual scrolling: the clipper submits only the visible slice of
     // the (possibly very long) filtered row list.
-    let clip = imgui::ListClipper::new(rows.len() as i32).begin(ui);
+    let clip = ListClipper::new(rows.len()).begin(ui);
     for r in clip.iter() {
-        let f = &rows[r as usize];
+        let f = &rows[r];
         let mut hovered = false;
         ui.table_next_row();
         if f.is_error() {
-            ui.table_set_bg_color(TableBgTarget::ROW_BG1, [0.55, 0.12, 0.12, 0.35]);
+            ui.table_set_row_bg1_color([0.55, 0.12, 0.12, 0.35]);
         } else if f.is_remote() {
-            ui.table_set_bg_color(TableBgTarget::ROW_BG1, [0.35, 0.22, 0.55, 0.25]);
+            ui.table_set_row_bg1_color([0.35, 0.22, 0.55, 0.25]);
         }
         if !ui.table_next_column() {
             continue;
@@ -289,7 +284,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             Direction::Tx => ui.text_colored([1.0, 0.65, 0.2, 1.0], "Tx"),
         }
         hovered |= ui.is_item_hovered();
-        if hovered && ui.is_mouse_released(imgui::MouseButton::Right) {
+        if hovered && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right) {
             *CTX.lock().unwrap() = Some((i, *f));
             ui.open_popup(format!("trace_row_ctx{i}"));
         }
@@ -320,10 +315,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             w.scope = SigScope::All;
         }
         let addable = !f.is_error() && !f.is_remote();
-        if ui
-            .menu_item_config("Add to Interactive Generator")
-            .enabled(addable)
-            .build()
+        if ui.menu_item_enabled_selected("Add to Interactive Generator", None::<&str>, false, addable)
         {
             // Add, then re-shape the fresh row via command: keep the flags
             // it was seen with, and for an id no database declares, keep
@@ -369,10 +361,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             app.seek_replay_seconds(f.t_us as f64 / 1e6);
         }
         if ui.menu_item("Copy row") {
-            ui.set_clipboard_text(fmt_row(app, &f));
+            crate::clipboard::Clipboard.set(&fmt_row(app, &f));
         }
         if ui.menu_item("Copy ID") {
-            ui.set_clipboard_text(fmt_id(&f));
+            crate::clipboard::Clipboard.set(&fmt_id(&f));
         }
     }
 }

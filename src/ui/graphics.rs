@@ -1,6 +1,6 @@
 use crate::app::{App, PALETTE};
 use crate::observe::YMode;
-use imgui::{Condition, Ui};
+use dear_imgui_rs::{Condition, DrawListMut, MouseButton, StyleColor, Ui};
 
 /// Zoom ladder: round, analysis-friendly window lengths from a close-up up
 /// to one hour; wheel zoom and the preset button row share this ladder.
@@ -232,7 +232,7 @@ pub(crate) fn zoom_offset(
 
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.graphics.len();
-    let disp_h = ui.io().display_size[1];
+    let disp_h = ui.io().display_size()[1];
     for i in 0..n {
         let mut open = app.graphics[i].opened;
         if !open {
@@ -244,20 +244,24 @@ pub fn render(app: &mut App, ui: &Ui) {
         } else {
             raw
         };
-        if app.focus_title.as_deref() == Some(name.as_str()) {
-            unsafe { imgui::sys::igSetNextWindowFocus() };
+        let focus = app.focus_title.as_deref() == Some(name.as_str());
+        if focus {
             app.focus_title = None;
         }
-        ui.window(format!("{name}###gfx{i}"))
+        let mut window = ui
+            .window(format!("{name}###gfx{i}"))
             .opened(&mut open)
             .position(
                 [16.0 + i as f32 * 36.0, disp_h * 0.55 + i as f32 * 28.0],
                 Condition::FirstUseEver,
             )
-            .size([760.0, (disp_h * 0.40).max(240.0)], Condition::FirstUseEver)
-            .build(|| {
-                window_content(app, ui, i);
-            });
+            .size([760.0, (disp_h * 0.40).max(240.0)], Condition::FirstUseEver);
+        if focus {
+            window = window.focused(true);
+        }
+        window.build(|| {
+            window_content(app, ui, i);
+        });
         app.graphics[i].opened = open;
     }
 }
@@ -265,12 +269,14 @@ pub fn render(app: &mut App, ui: &Ui) {
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
     for (k, (val, label)) in TW_PRESETS.iter().enumerate() {
         let selected = (app.graphics[i].time_window_s - val).abs() < 1e-9;
+        // Tokens must drop innermost-first: the tuple stores them in
+        // reverse push order.
         let colors = selected.then(|| {
-            (
-                ui.push_style_color(imgui::StyleColor::Button, [0.2, 0.45, 0.75, 1.0]),
-                ui.push_style_color(imgui::StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]),
-                ui.push_style_color(imgui::StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]),
-            )
+            let button = ui.push_style_color(StyleColor::Button, [0.2, 0.45, 0.75, 1.0]);
+            let hovered =
+                ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]);
+            let active = ui.push_style_color(StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]);
+            (active, hovered, button)
         });
         let text = if selected {
             format!("[{label}]##tw{i}")
@@ -292,9 +298,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         );
     }
     let mut stacked = app.graphics[i].stacked;
-    ui.radio_button("Overlay", &mut stacked, false);
+    if ui.radio_button_bool("Overlay", !stacked) {
+        stacked = false;
+    }
     ui.same_line();
-    ui.radio_button("One plot per signal", &mut stacked, true);
+    if ui.radio_button_bool("One plot per signal", stacked) {
+        stacked = true;
+    }
     app.graphics[i].stacked = stacked;
     ui.same_line();
     ui.checkbox("Cursor", &mut app.graphics[i].show_cursor);
@@ -312,13 +322,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
 
     ui.child_window("sig_panel")
         .size([PANEL_W, avail[1]])
-        .build(|| left_panel(app, ui, i));
+        .build(ui, || left_panel(app, ui, i));
 
     ui.same_line();
 
     ui.child_window("plot_area")
         .size([0.0, avail[1]])
-        .build(|| plot_area(app, ui, i));
+        .build(ui, || plot_area(app, ui, i));
 }
 
 /// Left panel: the window's selected signal list; each signal can be
@@ -396,20 +406,20 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     }
 
     let io = ui.io();
-    let mx = io.mouse_pos[0];
-    let my = io.mouse_pos[1];
+    let mx = io.mouse_pos()[0];
+    let my = io.mouse_pos()[1];
     // Curves are inset so the axis labels sit outside them; the pointer maths
     // has to use the same rect draw_plot works in.
     let (ix0, iy0, iw, _ih) = axis_inset(x0, y0, w, h);
     let hover = mx >= ix0 && mx <= ix0 + iw && my >= iy0 && my <= iy0 + h;
     if hover && app.graphics[i].zoom_enabled {
-        if io.mouse_down[0] && io.mouse_delta[0] != 0.0 {
-            let dt = tw as f32 * io.mouse_delta[0] / iw;
+        if io.mouse_down(MouseButton::Left) && io.mouse_delta()[0] != 0.0 {
+            let dt = tw as f32 * io.mouse_delta()[0] / iw;
             let off = &mut app.graphics[i].t_offset_s;
             *off = (*off + dt as f64).clamp(0.0, max_off);
         }
-        if io.mouse_wheel != 0.0 {
-            let new_tw = zoom_step(tw, io.mouse_wheel);
+        if io.mouse_wheel() != 0.0 {
+            let new_tw = zoom_step(tw, io.mouse_wheel());
             if (new_tw - tw).abs() > 1e-9 {
                 let frac = ((mx - ix0) / iw) as f64;
                 app.graphics[i].time_window_s = new_tw;
@@ -501,7 +511,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     ui.dummy([w, h]);
 }
 
-pub(crate) fn draw_plot_frame(dl: &imgui::DrawListMut<'_>, x0: f32, y0: f32, w: f32, h: f32) {
+pub(crate) fn draw_plot_frame(dl: &DrawListMut<'_>, x0: f32, y0: f32, w: f32, h: f32) {
     dl.add_rect([x0, y0], [x0 + w, y0 + h], [0.08, 0.08, 0.10, 1.0])
         .filled(true)
         .build();
@@ -681,7 +691,7 @@ fn resolve_signal_range(
     }
 }
 
-fn draw_plot(dl: &imgui::DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
+fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
     let PlotPane {
         x0,
         y0,

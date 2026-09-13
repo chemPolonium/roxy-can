@@ -5,7 +5,7 @@
 
 use crate::app::App;
 use crate::bus::WriteKind;
-use imgui::{Condition, StyleVar, Ui};
+use dear_imgui_rs::{Condition, StyleVar, Ui};
 
 pub fn render(app: &mut App, ui: &Ui) {
     if !app.show_write {
@@ -17,7 +17,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Write")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.55, io.display_size[1] * 0.35],
+            [
+                io.display_size()[0] * 0.55,
+                io.display_size()[1] * 0.35,
+            ],
             Condition::FirstUseEver,
         )
         .size([640.0, 280.0], Condition::FirstUseEver)
@@ -70,6 +73,6 @@ fn content(app: &mut App, ui: &Ui) {
         ui.text_colored(color, &line.text);
     }
     if at_bottom && ui.scroll_max_y() > 0.0 {
-        ui.set_scroll_here_y_with_ratio(1.0);
+        ui.set_scroll_here_y(1.0);
     }
 }

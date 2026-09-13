@@ -2,70 +2,31 @@
 //! demand from the Entities table or the Network view. There is no
 //! aggregate "all scripts" window -- a node's script belongs to the node,
 //! and the directory (Entities) is where you decide which one to open.
+//!
+//! The source editor is the dear-imgui-cte widget (ImGuiColorTextEdit):
+//! real syntax highlighting, line numbers, find/replace and error markers
+//! are the widget's own, replacing the covered-and-repainted multiline
+//! the tool shipped with before the dear-imgui-rs migration.
 
 use crate::app::App;
-use imgui::{
-    Condition, InputTextCallbackHandler, InputTextMultilineCallback, StyleColor, TextCallbackData,
-    Ui,
-};
-use std::collections::HashMap;
+use dear_imgui_cte::{CteUiExt, Position, Selection};
+use dear_imgui_rs::{Condition, Ui};
 use std::hash::{Hash, Hasher};
 
-const SOURCE_HEIGHT: f32 = 220.0;
+const SOURCE_HEIGHT: f32 = 260.0;
 const LOG_LINES: usize = 10;
 
-/// The source editor's cursor state: byte offset into the draft plus the
-/// active selection, in bytes, and the inner scroll of the multiline's
-/// text viewport. Recorded every frame the edit widget is active; the
-/// sidebar inserts land here, the gutter scrolls with the offset, and
-/// the space-dot overlay lines up with it.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct EditorCursor {
-    pub pos: usize,
-    pub sel: Option<(usize, usize)>,
-    pub scroll: f32,
-    pub hscroll: f32,
-}
+/// Marker color for the compile-error line: packed ABGR red, the native
+/// ImColor32 layout.
+const MARKER_COLOR: u32 = 0xFF_58_45_FF;
 
-/// Records the cursor while the source widget runs (`CALLBACK_ALWAYS`
-/// only fires while the widget is active, which is exactly the span the
-/// position is meaningful and changing). During the callback the
-/// multiline's inner child window is ImGui's current window, so the
-/// scroll read there is the text viewport's own.
-struct CursorSync<'a> {
-    cursors: &'a mut HashMap<u64, EditorCursor>,
-    id: u64,
-}
-
-impl InputTextCallbackHandler for CursorSync<'_> {
-    fn on_always(&mut self, data: TextCallbackData) {
-        let sel = data.selection();
-        let sel = if sel.start < sel.end {
-            Some((sel.start, sel.end))
-        } else {
-            None
-        };
-        let scroll = unsafe { imgui::sys::igGetScrollY() };
-        let hscroll = unsafe { imgui::sys::igGetScrollX() };
-        self.cursors.insert(
-            self.id,
-            EditorCursor {
-                pos: data.cursor_pos(),
-                sel,
-                scroll,
-                hscroll,
-            },
-        );
-    }
-}
-
-/// Static facts of one editor's draft text: the handler outline and the
+/// Static facts of one editor's text: the handler outline and the
 /// compile-derived send/receive/system-variable sets. Recomputed only
-/// when the draft's hash changes, not per frame.
+/// when the text's hash changes, not per frame.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct EditorFacts {
     pub hash: u64,
-    /// `(line, label)` in draft order.
+    /// `(line, label)` in source order.
     pub outline: Vec<(u32, String)>,
     /// `(id, extended, arming handler)` from the compiler's send set.
     pub sends: Vec<(u32, bool, String)>,
@@ -76,12 +37,9 @@ pub(crate) struct EditorFacts {
     pub sysvars: Vec<String>,
     /// Response mapping: one row per armed one-shot timer.
     pub responses: Vec<ResponseRowLite>,
-    /// Per-character highlight classes, aligned with the draft's
-    /// `split('\n')` segments.
-    pub classes: Vec<Vec<u8>>,
-    /// Source line (1-based) of the compile error, for the gutter mark.
+    /// Source line (1-based) of the compile error, for the editor mark.
     pub error_line: Option<u32>,
-    /// Compile error, when the draft no longer compiles.
+    /// Compile error, when the text no longer compiles.
     pub error: Option<String>,
 }
 
@@ -94,107 +52,12 @@ pub(crate) struct ResponseRowLite {
     pub sends: Vec<(u32, bool)>,
 }
 
-/// Per-character highlight classes (the tint overlay's input): 0 plain,
-/// 1 keyword, 2 number, 3 string, 4 comment.
-pub(crate) const PLAIN: u8 = 0;
-pub(crate) const KEYWORD: u8 = 1;
-pub(crate) const NUMBER: u8 = 2;
-pub(crate) const STRING: u8 = 3;
-pub(crate) const COMMENT: u8 = 4;
-
-/// Classifies the draft character by character. A tiny lexer mirroring
-/// `script/lexer`'s token shapes (`//` and `/* */` comments, `"strings"`
-/// with backslash escapes, hex-friendly numbers, the keyword set); it
-/// feeds the tint overlay only, never the compiler.
-pub(crate) fn classify_lines(src: &str) -> Vec<Vec<u8>> {
-    const KEYWORDS: [&str; 12] = [
-        "on", "fn", "if", "else", "while", "for", "return", "break", "continue", "true", "false",
-        "let",
-    ];
-    let mut out = Vec::new();
-    let mut in_block = false;
-    for line in src.split('\n') {
-        let chars: Vec<char> = line.chars().collect();
-        let mut classes = vec![PLAIN; chars.len()];
-        let mut i = 0usize;
-        while i < chars.len() {
-            if in_block {
-                classes[i] = COMMENT;
-                if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
-                    if i + 1 < classes.len() {
-                        classes[i + 1] = COMMENT;
-                    }
-                    in_block = false;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-            match chars[i] {
-                '/' if chars.get(i + 1) == Some(&'/') => {
-                    while i < classes.len() {
-                        classes[i] = COMMENT;
-                        i += 1;
-                    }
-                }
-                '/' if chars.get(i + 1) == Some(&'*') => {
-                    in_block = true;
-                    classes[i] = COMMENT;
-                    if i + 1 < classes.len() {
-                        classes[i + 1] = COMMENT;
-                    }
-                    i += 2;
-                }
-                '"' => {
-                    classes[i] = STRING;
-                    i += 1;
-                    while i < chars.len() {
-                        classes[i] = STRING;
-                        if chars[i] == '\\' && i + 1 < chars.len() {
-                            i += 1;
-                            classes[i] = STRING;
-                        } else if chars[i] == '"' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                c if c.is_ascii_digit() => {
-                    while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_')
-                    {
-                        classes[i] = NUMBER;
-                        i += 1;
-                    }
-                }
-                c if c.is_alphabetic() || c == '_' => {
-                    let start = i;
-                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                        i += 1;
-                    }
-                    let word: String = chars[start..i].iter().collect();
-                    if KEYWORDS.contains(&word.as_str()) {
-                        for cl in &mut classes[start..i] {
-                            *cl = KEYWORD;
-                        }
-                    }
-                }
-                _ => i += 1,
-            }
-        }
-        out.push(classes);
-    }
-    out
-}
-
-/// Derives the static facts of a draft. The outline comes from a line
-/// scan (it must work on broken, half-typed source); the sets come from
-/// the compiler and are absent when it fails.
+/// Derives the static facts of a source text. The outline comes from a
+/// line scan (it must work on broken, half-typed source); the sets come
+/// from the compiler and are absent when it fails.
 fn compute_facts(src: &str, hash: u64) -> EditorFacts {
     let mut facts = EditorFacts {
         hash,
-        classes: classify_lines(src),
         ..Default::default()
     };
     for (i, raw) in src.lines().enumerate() {
@@ -262,19 +125,20 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
     facts
 }
 
-/// Cached facts for a draft, recomputed when its hash changed.
-fn facts_for(app: &mut App, id: u64) -> EditorFacts {
-    let src = app.node_src_draft.get(&id).cloned().unwrap_or_default();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    let hash = h.finish();
-    let cached = app.editor_facts.get(&id);
-    if cached.is_some_and(|f| f.hash == hash) {
-        return cached.unwrap().clone();
+/// Cached facts for an editor's text, recomputed when the text changed
+/// (the widget reports `changed`) or never derived before.
+fn facts_for(app: &mut App, id: u64, changed: bool) -> EditorFacts {
+    let missing = !app.editor_facts.contains_key(&id);
+    if (changed || missing)
+        && let Some(editor) = app.editors.get(&id)
+    {
+        let src = editor.text().unwrap_or_default();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        src.hash(&mut h);
+        let facts = compute_facts(&src, h.finish());
+        app.editor_facts.insert(id, facts.clone());
     }
-    let facts = compute_facts(&src, hash);
-    app.editor_facts.insert(id, facts.clone());
-    facts
+    app.editor_facts.get(&id).cloned().unwrap_or_default()
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
@@ -284,7 +148,6 @@ pub fn render(app: &mut App, ui: &Ui) {
             // The node went away (deleted, project replaced): its editor
             // has nothing left to edit.
             app.close_script_editor(id);
-            app.editor_facts.remove(&id);
             continue;
         };
         editor_window(app, ui, &node);
@@ -302,15 +165,37 @@ fn editor_window(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             [340.0 + (id as f32 % 6.0) * 28.0, 80.0 + (id as f32 % 6.0) * 24.0],
             Condition::FirstUseEver,
         )
-        .size([520.0, 460.0], Condition::FirstUseEver)
+        .size([640.0, 500.0], Condition::FirstUseEver)
         .build(|| content(app, ui, node));
     if !open {
         app.close_script_editor(id);
     }
 }
 
+/// Seeds the editor from the node's source when the model moved under it
+/// (project load, Apply, a fresh Load). The editor owns the text while
+/// being edited; this only reconciles external changes.
+fn sync_from_model(app: &mut App, id: u64, source: &str) {
+    let stale = app.editor_synced.get(&id).is_none_or(|s| s != source);
+    if !stale {
+        return;
+    }
+    if let Some(editor) = app.editors.get_mut(&id) {
+        let _ = editor.set_text(source);
+        app.editor_synced.insert(id, source.to_string());
+        app.editor_facts.remove(&id);
+    }
+}
+
 fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     let id = node.id;
+
+    // The editor is created by main, outside the frame's Ui borrow; the
+    // first frame(s) show the sidebar alone until it exists.
+    if !app.editors.contains_key(&id) && !app.pending_editors.contains(&id) {
+        app.pending_editors.push(id);
+    }
+    sync_from_model(app, id, &node.source);
 
     // Header: node name, channel binding, run switch, delete. The name
     // commits per keystroke -- it is a cheap string write and the
@@ -364,7 +249,6 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.same_line();
     if ui.button(format!("删除##erm{id}")) {
         app.send(crate::bus::BusCommand::RemoveNode { id });
-        app.node_src_draft.remove(&id);
         app.close_script_editor(id);
         return;
     }
@@ -389,221 +273,75 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.child_window(format!("##esidebar{id}"))
         .size([SIDEBAR_W, avail[1]])
         .border(true)
-        .build(|| sidebar(app, ui, id, node));
+        .build(ui, || sidebar(app, ui, id, node));
 
     ui.same_line();
 
     // Right main area: source + Apply/Save/Load + log.
     ui.child_window(format!("##emain{id}"))
         .size([0.0, avail[1]])
-        .build(|| {
-            // Cached per-draft facts (highlight classes, error line, ...)
-            // before the draft borrow starts.
-            let facts = facts_for(app, id);
-            let draft = app
-                .node_src_draft
-                .entry(id)
-                .or_insert_with(|| node.source.clone());
-
-            // Line-number gutter: the multiline never soft-wraps (ImGui
-            // 1.89), so row k of the text viewport is exactly draft line k
-            // at pitch `font_size`, offset by the widget's own scroll.
-            let lh = ui.current_font_size();
-            let frame_pad_y = unsafe { ui.style() }.frame_padding[1];
-            let mut rows = draft.lines().count().max(1);
-            if draft.ends_with('\n') {
-                rows += 1;
-            }
-            let digits = (rows as f32).log10().floor() as usize + 1;
-            let digit_w = ui.calc_text_size("0")[0];
-            const GUTTER_PAD: f32 = 6.0;
-            let gutter_w = GUTTER_PAD + digits as f32 * digit_w + GUTTER_PAD;
-
-            let gutter_min = ui.cursor_screen_pos();
-            let gutter_max = [gutter_min[0] + gutter_w, gutter_min[1] + SOURCE_HEIGHT];
-            ui.dummy([gutter_w, SOURCE_HEIGHT]);
-            ui.same_line();
-            // Field-level split borrow: the cursor tracker takes the
-            // cursors map while `draft` holds the source draft.
-            let sync = CursorSync {
-                cursors: &mut app.editor_cursors,
-                id,
+        .build(ui, || {
+            // The widget reports whether its text changed this frame;
+            // only then do the facts need re-deriving.
+            let changed = match app.editors.get_mut(&id) {
+                Some(editor) => {
+                    let w = ui.content_region_avail()[0].max(1.0);
+                    ui.text_editor(editor, format!("##esrc{id}"))
+                        .size([w, SOURCE_HEIGHT])
+                        .build()
+                        .unwrap_or(false)
+                }
+                None => false,
             };
-            ui.set_next_item_width(-1.0);
-            ui.input_text_multiline(format!("##esrc{id}"), draft, [0.0, SOURCE_HEIGHT])
-                .callback(InputTextMultilineCallback::ALWAYS, sync)
-                .build();
-            // The callback only fires while the widget is active, so a
-            // recorded selection outlives its on-screen life: click away
-            // after selecting a word and the stale selection would keep
-            // the highlight paused forever. A selection only exists
-            // while the widget is active -- clear it otherwise.
-            if !ui.is_item_active()
-                && let Some(c) = app.editor_cursors.get_mut(&id)
-            {
-                c.sel = None;
+            let facts = facts_for(app, id, changed);
+
+            // The compile-error line gets the editor's own marker (a red
+            // line highlight plus a gutter mark, both with the tooltip).
+            // Refreshed every frame: markers are frame state, not layout.
+            if let (Some(editor), Some(line)) = (app.editors.get_mut(&id), facts.error_line) {
+                let _ = editor.clear_markers();
+                let tip = facts.error.clone().unwrap_or_default();
+                let _ = editor.add_marker(
+                    (line - 1) as usize,
+                    MARKER_COLOR,
+                    MARKER_COLOR,
+                    "编译错误",
+                    &tip,
+                );
             }
 
-            // The callback has run by now when the widget is active, so
-            // the stored viewport reflects the current frame.
-            let (scroll, hscroll) = app
-                .editor_cursors
-                .get(&id)
-                .map(|c| (c.scroll, c.hscroll))
-                .unwrap_or((0.0, 0.0));
-            let frame_pad_x = unsafe { ui.style() }.frame_padding[0];
-            // The widget's own rect (it is the last item): deriving the
-            // overlay origin from the gutter instead would miss the item
-            // spacing after `same_line`, shifting every repaint by half
-            // a character.
-            let wrect_min = ui.item_rect_min();
-            let widget_min = wrect_min;
-            // The vertical scrollbar overlaps the widget's right edge.
-            let widget_max = [
-                wrect_min[0] + ui.calc_item_width(),
-                wrect_min[1] + SOURCE_HEIGHT,
-            ];
-            let mut adv = |c: char| -> f32 {
-                let w = app
-                    .char_advance
-                    .entry(c)
-                    .or_insert_with(|| ui.calc_text_size(c.to_string())[0]);
-                *w
-            };
-            let dot_r = (lh * 0.12).max(1.2);
-            let dot_color = [0.62, 0.64, 0.68, 0.55];
-            let draw_list = ui.get_window_draw_list();
-            // Text coloring: the multiline paints every glyph in one
-            // color, but the glyphs sit at exactly computable positions
-            // (no soft wrap), so a non-plain run is covered with the
-            // widget's own background and its text redrawn in the class
-            // color at the same position -- real per-glyph highlighting
-            // without reimplementing the edit widget. While a selection
-            // is active the repaint is skipped: covering the selection
-            // highlight would read as broken.
-            let sel_active = app
-                .editor_cursors
-                .get(&id)
-                .and_then(|c| c.sel)
-                .is_some();
-            let frame_bg = ui.style_color(StyleColor::FrameBg);
-            let class_color = |class: u8| match class {
-                KEYWORD => [0.55, 0.75, 1.0, 1.0],
-                NUMBER => [1.0, 0.7, 0.45, 1.0],
-                STRING => [0.65, 0.9, 0.55, 1.0],
-                COMMENT => [0.56, 0.58, 0.62, 1.0],
-                _ => [0.0, 0.0, 0.0, 0.0],
-            };
-            draw_list.with_clip_rect(widget_min, widget_max, || {
-                for (li, line) in draft.split('\n').enumerate() {
-                    let y = widget_min[1] + frame_pad_y + li as f32 * lh - scroll;
-                    if y + lh < widget_min[1] || y > widget_max[1] {
-                        continue;
-                    }
-                    let line_cls = facts.classes.get(li);
-                    let chars: Vec<char> = line.chars().collect();
-                    let mut x = widget_min[0] + frame_pad_x - hscroll;
-                    let (mut run_class, mut run_w, mut run_x, mut run_start) =
-                        (PLAIN, 0.0f32, x, 0usize);
-                    let flush = |class: u8, w: f32, sx: f32, s: usize, e: usize| {
-                        if class == PLAIN || w <= 0.0 || sel_active {
-                            return;
-                        }
-                        // Cover the plain-painted glyphs with the
-                        // widget's background, then draw the span in
-                        // color. The ±1 px skirt hides the antialiasing
-                        // halo of the covered glyphs.
-                        draw_list
-                            .add_rect([sx - 1.0, y], [sx + w + 1.0, y + lh + 0.5], frame_bg)
-                            .filled(true)
-                            .build();
-                        let text: String = chars[s..e].iter().collect();
-                        draw_list.add_text([sx, y], class_color(class), text);
-                    };
-                    for (ci, c) in chars.iter().enumerate() {
-                        let w = adv(*c);
-                        let cl = line_cls
-                            .and_then(|v| v.get(ci))
-                            .copied()
-                            .unwrap_or(PLAIN);
-                        if cl != run_class {
-                            flush(run_class, run_w, run_x, run_start, ci);
-                            run_class = cl;
-                            run_x = x;
-                            run_w = 0.0;
-                            run_start = ci;
-                        }
-                        run_w += w;
-                        if *c == ' ' && cl == PLAIN && x + w > widget_min[0] && x < widget_max[0] {
-                            let cy = y + lh * 0.55;
-                            draw_list
-                                .add_circle([x + w * 0.5, cy], dot_r, dot_color)
-                                .filled(true)
-                                .build();
-                        }
-                        x += w;
-                    }
-                    flush(run_class, run_w, run_x, run_start, chars.len());
-                }
-            });
-
-            let first_row = ((scroll / lh).floor() as i32).max(0) as usize;
-            let visible = (SOURCE_HEIGHT / lh).ceil() as usize + 1;
-            let last_row = (first_row + visible).min(rows);
-            draw_list.with_clip_rect(gutter_min, gutter_max, || {
-                for i in first_row..last_row {
-                    let y = gutter_min[1] + frame_pad_y + i as f32 * lh - scroll;
-                    if y + lh < gutter_min[1] || y > gutter_max[1] {
-                        continue;
-                    }
-                    // The compile-error line gets a red bar and a red
-                    // number instead of the plain gray one.
-                    let is_err = facts.error_line == Some(i as u32 + 1);
-                    let num_color = if is_err {
-                        [1.0, 0.45, 0.35, 1.0]
-                    } else {
-                        [0.5, 0.5, 0.5, 1.0]
-                    };
-                    if is_err {
-                        draw_list
-                            .add_rect(
-                                [gutter_min[0] + 1.0, y],
-                                [gutter_min[0] + 3.5, y + lh],
-                                num_color,
-                            )
-                            .filled(true)
-                            .build();
-                    }
-                    draw_list.add_text(
-                        [gutter_min[0] + GUTTER_PAD, y],
-                        num_color,
-                        format!("{:>width$}", i + 1, width = digits),
-                    );
-                }
-            });
+            // Apply, then Save/Load. The 未应用 tag reads the facts hash
+            // against the model's source hash: the facts cache is fresh
+            // whenever the text changed, so the tag tracks live state.
+            let mut src_hash = std::collections::hash_map::DefaultHasher::new();
+            node.source.hash(&mut src_hash);
+            let unsaved = facts.hash != src_hash.finish();
             if ui.button(format!("Apply##eapply{id}")) {
-                let source =
-                    app.node_src_draft.get(&id).cloned().unwrap_or_default();
-                app.send(crate::bus::BusCommand::SetNodeSource { id, source });
+                if let Some(editor) = app.editors.get(&id) {
+                    let source = editor.text().unwrap_or_default();
+                    app.editor_synced.insert(id, source.clone());
+                    app.send(crate::bus::BusCommand::SetNodeSource { id, source });
+                }
             }
-            if *app.node_src_draft.get(&id).unwrap() != node.source {
+            if unsaved {
                 ui.same_line();
                 ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
             }
             ui.same_line();
             if ui.button(format!("保存##esave{id}")) {
-                let source =
-                    app.node_src_draft.get(&id).cloned().unwrap_or_default();
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_title("保存节点脚本")
-                    .add_filter("节点脚本", &["rxcan"])
-                    .save_file()
-                {
-                    let path = path.to_string_lossy().into_owned();
-                    if let Err(e) = std::fs::write(&path, &source) {
-                        app.status = format!("保存失败: {e}");
-                    } else {
-                        app.status = format!("已保存 {path}");
+                if let Some(editor) = app.editors.get(&id) {
+                    let source = editor.text().unwrap_or_default();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("保存节点脚本")
+                        .add_filter("节点脚本", &["rxcan"])
+                        .save_file()
+                    {
+                        let path = path.to_string_lossy().into_owned();
+                        if let Err(e) = std::fs::write(&path, &source) {
+                            app.status = format!("保存失败: {e}");
+                        } else {
+                            app.status = format!("已保存 {path}");
+                        }
                     }
                 }
             }
@@ -617,7 +355,11 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                     let path = p.to_string_lossy().into_owned();
                     match std::fs::read_to_string(&path) {
                         Ok(src) => {
-                            app.node_src_draft.insert(id, src);
+                            if let Some(editor) = app.editors.get_mut(&id) {
+                                let _ = editor.set_text(&src);
+                            }
+                            app.editor_synced.insert(id, src);
+                            app.editor_facts.remove(&id);
                         }
                         Err(e) => {
                             app.status = format!("加载失败: {e}");
@@ -629,7 +371,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             if !node.log.is_empty() {
                 ui.child_window(format!("##elog{id}"))
                     .size([0.0, 110.0])
-                    .build(|| {
+                    .build(ui, || {
                         let show = node.log.len().saturating_sub(LOG_LINES);
                         for line in &node.log[show..] {
                             ui.text(line);
@@ -689,7 +431,7 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
 ];
 
 /// The sidebar: four tabs. 函数 lists the insertable templates; 大纲 is
-/// the draft's handler outline; 收发 is the static send/receive/sysvar
+/// the source's handler outline; 收发 is the static send/receive/sysvar
 /// fact table; SysVar lists the defined variables for one-click access.
 fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
@@ -709,61 +451,43 @@ fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     }
 }
 
-/// Inserts a template at the editor's tracked cursor (replacing the
-/// selection, if any), falling back to the end of the draft when the
-/// editor was never touched. The snippet always lands on its own line.
+/// Inserts a template at the editor's own cursor (CTE tracks it, so a
+/// click in the sidebar never throws the text at the file end), replacing
+/// the selection when one is active. The snippet always lands on its own
+/// line, and the cursor parks after it so the next insert chains on.
 fn insert(app: &mut App, id: u64, text: &str) {
-    let cur = app.editor_cursors.get(&id).copied();
-    let draft = app.node_src_draft.entry(id).or_default();
-
-    // Clamp onto char boundaries; imgui reports byte offsets, but a
-    // stale record could point into the middle of a multi-byte char.
-    let at_boundary = |s: &str, mut i: usize| {
-        while i > 0 && !s.is_char_boundary(i) {
-            i -= 1;
-        }
-        i
+    let Some(editor) = app.editors.get_mut(&id) else {
+        return;
     };
-    let (start, end) = match cur {
-        Some(c) => {
-            let a = at_boundary(draft, c.pos.min(draft.len()));
-            let (s, e) = match c.sel {
-                Some((sel_a, sel_z)) => (
-                    at_boundary(draft, sel_a.min(draft.len())),
-                    at_boundary(draft, sel_z.min(draft.len())),
-                ),
-                None => (a, a),
-            };
-            (s.min(e), e.max(s))
-        }
-        None => (draft.len(), draft.len()),
-    };
-
-    // Own-line guarantee: break before unless we are at a line start
-    // (or at the very end of a line-terminated draft), break after
-    // unless the snippet already ends with one.
+    let at = editor.main_cursor_position();
+    // Own-line guarantee: break before unless the cursor opens a line
+    // (the line's text before the cursor is empty), break after unless
+    // the snippet already ends with one.
+    let before = editor
+        .line_text(at.line)
+        .map(|line| {
+            let cut = line.chars().count().min(at.column);
+            line.chars().take(cut).collect::<String>()
+        })
+        .unwrap_or_default();
     let mut snippet = String::new();
-    let before = &draft[..start];
-    if !before.is_empty() && !before.ends_with('\n') {
+    if !before.is_empty() {
         snippet.push('\n');
     }
     snippet.push_str(text);
     if !snippet.ends_with('\n') {
         snippet.push('\n');
     }
-    draft.replace_range(start..end, &snippet);
-    // The next insert chains right after this one; the scroll is
-    // untouched (nothing scrolled).
-    let (scroll, hscroll) = cur.map(|c| (c.scroll, c.hscroll)).unwrap_or((0.0, 0.0));
-    app.editor_cursors.insert(
-        id,
-        EditorCursor {
-            pos: start + snippet.len(),
-            sel: None,
-            scroll,
-            hscroll,
-        },
-    );
+    if editor
+        .replace_section(Selection::new(at, at), &snippet)
+        .is_err()
+    {
+        return;
+    }
+    // Park the cursor at the start of the line after the snippet, where
+    // the text after it now begins.
+    let new_line = at.line + snippet.matches('\n').count();
+    let _ = editor.set_cursor(Position::new(new_line, 0));
 }
 
 /// The insertable templates: categories with clickable items.
@@ -837,11 +561,11 @@ fn owned_dbc_items(app: &App, id: u64) -> Vec<DbcItem> {
         .collect()
 }
 
-/// The draft's handler outline: every event handler and function with
+/// The source's handler outline: every event handler and function with
 /// its line number. Works on half-typed source; a compile error shows
 /// alongside so the outline degrades gracefully.
 fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
-    let facts = facts_for(app, id);
+    let facts = facts_for(app, id, false);
     if let Some(e) = &facts.error {
         ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
         if ui.is_item_hovered() {
@@ -865,7 +589,7 @@ fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
 /// DBC's transmitter declaration when the script is bound: `*` own,
 /// `!` foreign, `-` unknown.
 fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
-    let facts = facts_for(app, id);
+    let facts = facts_for(app, id, false);
     if let Some(e) = &facts.error {
         ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
         if ui.is_item_hovered() {
@@ -1025,55 +749,12 @@ mod facts_tests {
         assert_eq!(row.sends, &[(0x200, false)]);
     }
 
-    /// The compile error's line rides the facts for the gutter mark.
+    /// The compile error's line rides the facts for the editor mark.
     #[test]
     fn facts_carry_the_error_line() {
         let ok = compute_facts("on start { }", 1);
         assert_eq!(ok.error_line, None);
         let bad = compute_facts("on start {\n    send();\n}", 2);
         assert_eq!(bad.error_line, Some(2), "the send line is the offender");
-    }
-
-    /// Classification mirrors the lexer's shapes: keywords, numbers
-    /// (including hex), strings with escapes, // and /* */ comments --
-    /// and multi-byte characters stay plain without breaking alignment.
-    #[test]
-    fn classification_covers_keywords_numbers_strings_comments() {
-        let src = concat!(
-            "on start {\n",                        // 1: keyword
-            "    // line note\n",                  // 2: comment
-            "    let id = 0x1F4 + 7;\n",           // 3: keyword + numbers
-            "    /* block\n",                      // 4: comment start
-            "    still */ print(\"a\\\"b\");\n",   // 5: comment tail + string
-            "    sig(0x100, \"转速\");\n",         // 6: number + string with CJK
-            "}\n",                                 // 7: keyword? no: plain brace
-        );
-        let classes = classify_lines(src);
-        assert_eq!(classes.len(), 8, "trailing newline makes an empty last line");
-
-        let kw = |row: &[u8], i: usize| row[i] == KEYWORD;
-        assert!(kw(&classes[0], 0) && kw(&classes[0], 1) && !kw(&classes[0], 3));
-
-        assert!(
-            classes[1].iter().skip(4).all(|&c| c == COMMENT),
-            "// to EOL (leading spaces stay plain)"
-        );
-
-        assert!(kw(&classes[2], 4), "let");
-        assert_eq!(classes[2][13], NUMBER, "0x1F4 all classified");
-        assert_eq!(classes[2][21], NUMBER, "the 7 too");
-
-        assert!(
-            classes[3].iter().skip(4).all(|&c| c == COMMENT),
-            "block opener from the slash on"
-        );
-        assert!(classes[4].iter().take(9).all(|&c| c == COMMENT), "block tail");
-        assert!(
-            classes[4].iter().skip(19).take(6).all(|&c| c == STRING),
-            "escaped string incl. quotes"
-        );
-
-        assert!(classes[5].iter().any(|&c| c == NUMBER), "hex id");
-        assert!(classes[5].iter().filter(|&&c| c == STRING).count() >= 4, "CJK string");
     }
 }

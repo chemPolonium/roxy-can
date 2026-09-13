@@ -1,13 +1,22 @@
 [package]
 name = "roxy-can"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 
 [dependencies]
-imgui = { version = "0.12", features = ["tables-api", "docking"] }
-imgui-winit-support = "0.13"
-imgui-wgpu = "0.28"
+# dear-imgui-rs binds Dear ImGui 1.92.9b (docking branch, docking always on).
+# The wgpu backend's default feature targets wgpu 30; pin it to our wgpu 29.
+dear-imgui-rs = "0.17"
+dear-imgui-cte = "0.17"
+dear-imgui-wgpu = { version = "0.17", default-features = false, features = ["wgpu-29"] }
+dear-imgui-winit = "0.17"
 wgpu = "29"
+# The OS clipboard backend dear-imgui-rs expects the app to provide.
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+] }
 winit = "0.30"
 pollster = "0.4"
 can-dbc = "10.0"

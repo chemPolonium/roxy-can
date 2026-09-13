@@ -1,5 +1,5 @@
 use crate::app::{App, Mode, STATUSBAR_H};
-use imgui::{Condition, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, StyleVar, Ui, WindowFlags};
 
 /// Fixed bottom bar showing measurement state; independent of any window.
 pub fn render(app: &App, ui: &Ui) {
@@ -15,16 +15,16 @@ pub fn render(app: &App, ui: &Ui) {
         | WindowFlags::NO_DOCKING;
     // ImGui's default window_min_size (32) would inflate this 26px bar past
     // the bottom of the screen.
-    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([0.0, 0.0]));
-    let pad = ui.push_style_var(imgui::StyleVar::WindowPadding([8.0, 6.5]));
+    let min = ui.push_style_var(StyleVar::WindowMinSize([0.0, 0.0]));
+    let pad = ui.push_style_var(StyleVar::WindowPadding([8.0, 6.5]));
     ui.window("##statusbar")
         .flags(flags)
-        .position([0.0, io.display_size[1] - STATUSBAR_H], Condition::Always)
-        .size([io.display_size[0], STATUSBAR_H], Condition::Always)
+        .position([0.0, io.display_size()[1] - STATUSBAR_H], Condition::Always)
+        .size([io.display_size()[0], STATUSBAR_H], Condition::Always)
         .build(|| {
             // Never wrap: on narrow windows the left-hand chain would wrap to
             // a second line that falls outside the bar.
-            let wrap = ui.push_text_wrap_pos_with_pos(-1.0);
+            let wrap = ui.push_text_wrap_pos(-1.0);
             ui.text_colored([0.8, 0.85, 1.0, 1.0], app.display_name());
             ui.same_line();
             let (state, color): (&str, [f32; 4]) = if app.snap.measuring {
@@ -62,11 +62,11 @@ pub fn render(app: &App, ui: &Ui) {
             wrap.end();
             let msg = &app.status;
             let w = ui.calc_text_size(msg)[0];
-            let pad_y = unsafe { ui.style() }.window_padding[1];
+            let pad_y = unsafe { ui.style() }.window_padding()[1];
             ui.get_window_draw_list().add_text(
                 [
-                    io.display_size[0] - w - 12.0,
-                    io.display_size[1] - STATUSBAR_H + pad_y,
+                    io.display_size()[0] - w - 12.0,
+                    io.display_size()[1] - STATUSBAR_H + pad_y,
                 ],
                 [0.7, 0.75, 0.85, 1.0],
                 msg.clone(),

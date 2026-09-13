@@ -1,5 +1,5 @@
 use crate::app::App;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, Ui};
 
 /// Bus management: rename buses, load a DBC per bus, add/remove buses.
 pub fn render(app: &mut App, ui: &Ui) {
@@ -11,7 +11,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Buses")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.38, io.display_size[1] * 0.25],
+            [
+                io.display_size()[0] * 0.38,
+                io.display_size()[1] * 0.25,
+            ],
             Condition::FirstUseEver,
         )
         .size([480.0, 240.0], Condition::FirstUseEver)
@@ -61,38 +64,19 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y
-        | TableFlags::SIZING_STRETCH_PROP;
+        | TableFlags::SCROLL_Y;
+    let opts =
+        dear_imgui_rs::TableOptions::from(flags).sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
     let mut remove: Option<usize> = None;
     {
-        let Some(_table) = ui.begin_table_with_flags("bus_table", 5, flags) else {
+        let Some(_table) = ui.begin_table_with_flags("bus_table", 5, opts) else {
             return;
         };
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.0,
-            ..TableColumnSetup::new("Name")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.6,
-            ..TableColumnSetup::new("DBC")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 150.0,
-            ..TableColumnSetup::new("kbit/s (arb / FD data)")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 140.0,
-            ..TableColumnSetup::new("硬件")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 26.0,
-            ..TableColumnSetup::new("")
-        });
+        ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_column_stretch_weight("DBC", TableColumnFlags::NONE, 1.6);
+        ui.table_setup_column_fixed_width("kbit/s (arb / FD data)", TableColumnFlags::NONE, 150.0);
+        ui.table_setup_column_fixed_width("硬件", TableColumnFlags::NONE, 140.0);
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
 
         // The rows render from the snapshot; edits are frontend drafts
@@ -278,7 +262,7 @@ fn content(app: &mut App, ui: &Ui) {
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                             ui.set_next_item_width(120.0);
-                            let mut pick = 0;
+                            let mut pick = 0usize;
                             if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
                                 let info = &channels[pick];
                                 app.set_hardware_channel(i as u8, info.index, arb_kbps, Some(data_kbps));

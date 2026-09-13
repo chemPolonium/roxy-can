@@ -1,7 +1,9 @@
 use crate::app::{App, PopupTarget};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TreeNodeFlags, Ui};
+use dear_imgui_rs::{
+    Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui,
+};
 
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
@@ -18,21 +20,25 @@ pub fn render(app: &mut App, ui: &Ui) {
             raw
         };
         let off = i as f32 * 30.0;
-        if app.focus_title.as_deref() == Some(title.as_str()) {
-            unsafe { imgui::sys::igSetNextWindowFocus() };
+        let focus = app.focus_title.as_deref() == Some(title.as_str());
+        if focus {
             app.focus_title = None;
         }
-        ui.window(format!("{title}###msgs{i}"))
+        let mut window = ui
+            .window(format!("{title}###msgs{i}"))
             .opened(&mut open)
             .position(
                 [
-                    io.display_size[0] * 0.25 + off,
-                    io.display_size[1] * 0.45 + off,
+                    io.display_size()[0] * 0.25 + off,
+                    io.display_size()[1] * 0.45 + off,
                 ],
                 Condition::FirstUseEver,
             )
-            .size([700.0, io.display_size[1] * 0.42], Condition::FirstUseEver)
-            .build(|| window_content(app, ui, i));
+            .size([700.0, io.display_size()[1] * 0.42], Condition::FirstUseEver);
+        if focus {
+            window = window.focused(true);
+        }
+        window.build(|| window_content(app, ui, i));
         app.msg_windows[i].opened = open;
     }
 }
@@ -80,46 +86,22 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y
-        | TableFlags::SIZING_STRETCH_PROP
         | TableFlags::NO_CLIP;
-    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, tbl_flags) else {
+    let opts = TableOptions::from(tbl_flags).sizing_policy(TableSizingPolicy::StretchProp);
+    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, opts) else {
         return;
     };
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 2.0,
-        ..TableColumnSetup::new("Message")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 60.0,
-        ..TableColumnSetup::new("Bus")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 34.0,
-        ..TableColumnSetup::new("Dir")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 55.0,
-        ..TableColumnSetup::new("Count")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 72.0,
-        ..TableColumnSetup::new("Cycle (ms)")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_FIXED,
-        init_width_or_weight: 44.0,
-        ..TableColumnSetup::new("Flags")
-    });
-    ui.table_setup_column_with(TableColumnSetup {
-        flags: TableColumnFlags::WIDTH_STRETCH,
-        init_width_or_weight: 2.0,
-        ..TableColumnSetup::new("Data")
-    });
+    ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NONE, 1.0);
+    for (label, w) in [
+        ("Bus", 60.0),
+        ("Dir", 34.0),
+        ("Count", 55.0),
+        ("Cycle (ms)", 72.0),
+        ("Flags", 44.0),
+    ] {
+        ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, w);
+    }
+    ui.table_setup_column_stretch_weight("Data", TableColumnFlags::NONE, 1.0);
     ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 
@@ -130,7 +112,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         }
         let token = ui
             .tree_node_config(row.label.clone())
-            .flags(TreeNodeFlags::SPAN_FULL_WIDTH)
+            .span_full_width(true)
             .push();
 
         ui.table_next_column();

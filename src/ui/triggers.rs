@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::trigger::{TriggerAction, TriggerCond};
 use crate::ui::help::popup_is_open;
-use imgui::{Condition, Key, StyleVar, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{Condition, Key, NumericFormat, StyleVar, TableColumnFlags, TableFlags, Ui};
 
 /// Draft state of the trigger editor popup: which row it edits plus the
 /// not-yet-applied shape of the condition and action. Nothing reaches the
@@ -52,7 +52,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Triggers")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.3, io.display_size[1] * 0.3],
+            [io.display_size()[0] * 0.3, io.display_size()[1] * 0.3],
             Condition::FirstUseEver,
         )
         .size([560.0, 320.0], Condition::FirstUseEver)
@@ -98,11 +98,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     ui.set_next_item_width(64.0);
     let mut pre = app.limits.pre_frames as i32;
-    if ui
-        .input_int("##prelim", &mut pre)
-        .step(64)
-        .build()
-    {
+    if ui.input_int_config("##prelim").step(64).build(&mut pre) {
         app.limits.pre_frames = pre.max(0) as usize;
         app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
     }
@@ -115,11 +111,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     ui.set_next_item_width(64.0);
     let mut post = app.limits.post_frames as i32;
-    if ui
-        .input_int("##postlim", &mut post)
-        .step(8)
-        .build()
-    {
+    if ui.input_int_config("##postlim").step(8).build(&mut post) {
         app.limits.post_frames = post.max(0) as u32;
         app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
     }
@@ -132,11 +124,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     ui.set_next_item_width(64.0);
     let mut cap = app.limits.marker_cap as i32;
-    if ui
-        .input_int("##marklim", &mut cap)
-        .step(16)
-        .build()
-    {
+    if ui.input_int_config("##marklim").step(16).build(&mut cap) {
         app.limits.marker_cap = cap.max(8) as usize;
         app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
     }
@@ -148,44 +136,19 @@ fn content(app: &mut App, ui: &Ui) {
     let flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
-        | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SIZING_STRETCH_PROP;
+        | TableFlags::NO_BORDERS_IN_BODY;
+    let table_opts = dear_imgui_rs::TableOptions::from(flags)
+        .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
     let mut remove: Option<usize> = None;
     let n = app.snap.triggers.len();
     {
-        let Some(_table) = ui.begin_table_with_flags("trig_table", 6, flags) else {
+        let Some(_table) = ui.begin_table_with_flags("trig_table", 6, table_opts) else {
             return;
         };
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.0,
-            ..TableColumnSetup::new("Condition")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 26.0,
-            ..TableColumnSetup::new("On")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 90.0,
-            ..TableColumnSetup::new("Action")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 44.0,
-            ..TableColumnSetup::new("Fired")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 42.0,
-            ..TableColumnSetup::new("Edit")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 18.0,
-            ..TableColumnSetup::new("")
-        });
+        ui.table_setup_column_stretch_weight("Condition", TableColumnFlags::NONE, 1.0);
+        for (label, w) in [("On", 26.0), ("Action", 90.0), ("Fired", 44.0), ("Edit", 42.0), ("", 18.0)] {
+            ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, w);
+        }
         ui.table_headers_row();
 
         for i in 0..n {
@@ -250,7 +213,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
     let mut dismissed = false;
     let mut confirmed = false;
     let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
-    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+    ui.modal_popup_with_opened(ID, &mut open, || {
         let kind = match draft.cond {
             TriggerCond::SignalCross { .. } => "signal cross",
             TriggerCond::IdPresent { .. } => "id present",
@@ -269,20 +232,12 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         let Some(_grid) = ui.begin_table_with_flags(
             "##trigedit",
             2,
-            TableFlags::BORDERS_INNER_V | TableFlags::SIZING_STRETCH_PROP,
+            TableFlags::BORDERS_INNER_V,
         ) else {
             return;
         };
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 84.0,
-            ..TableColumnSetup::new("")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.0,
-            ..TableColumnSetup::new("")
-        });
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 84.0);
+        ui.table_setup_column_stretch_weight("", TableColumnFlags::NONE, 1.0);
 
         row(ui, "Bus", |ui| {
             let names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
@@ -326,10 +281,11 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                 });
                 row(ui, "Threshold", |ui| {
                     let mut th = *threshold as f32;
+                    let th_fmt = NumericFormat::new("%g").expect("static format");
                     if ui
-                        .input_float("##trigth", &mut th)
-                        .display_format("%g")
-                        .build()
+                        .input_float_config("##trigth")
+                        .display_format(th_fmt)
+                        .build(&mut th)
                     {
                         *threshold = th as f64;
                     }

@@ -1,5 +1,5 @@
 use crate::app::{App, STATUSBAR_H, TABSTRIP_H};
-use imgui::{Condition, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, MouseButton, StyleColor, StyleVar, Ui, WindowFlags};
 
 /// Desktop tab strip above the status bar: each tab is a named
 /// workspace arrangement (open windows/panels + layout); clicking switches.
@@ -15,28 +15,28 @@ pub fn render(app: &mut App, ui: &Ui) {
         | WindowFlags::NO_NAV
         | WindowFlags::NO_DOCKING;
     // ImGui's default window_min_size (32) would inflate this 22px strip.
-    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([0.0, 0.0]));
-    let pad = ui.push_style_var(imgui::StyleVar::WindowPadding([4.0, 4.5]));
+    let min = ui.push_style_var(StyleVar::WindowMinSize([0.0, 0.0]));
+    let pad = ui.push_style_var(StyleVar::WindowPadding([4.0, 4.5]));
     ui.window("##desktops")
         .flags(flags)
         .position(
-            [0.0, io.display_size[1] - STATUSBAR_H - TABSTRIP_H],
+            [0.0, io.display_size()[1] - STATUSBAR_H - TABSTRIP_H],
             Condition::Always,
         )
-        .size([io.display_size[0], TABSTRIP_H], Condition::Always)
+        .size([io.display_size()[0], TABSTRIP_H], Condition::Always)
         .build(|| {
             let names: Vec<String> = app.desktops.iter().map(|d| d.name.clone()).collect();
             for (k, name) in names.iter().enumerate() {
                 let selected = k == app.active_desktop;
+                // Tokens must drop innermost-first: the tuple stores them
+                // in reverse push order.
                 let _colors = selected.then(|| {
-                    (
-                        ui.push_style_color(imgui::StyleColor::Button, [0.2, 0.45, 0.75, 1.0]),
-                        ui.push_style_color(
-                            imgui::StyleColor::ButtonHovered,
-                            [0.25, 0.55, 0.85, 1.0],
-                        ),
-                        ui.push_style_color(imgui::StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]),
-                    )
+                    let button = ui.push_style_color(StyleColor::Button, [0.2, 0.45, 0.75, 1.0]);
+                    let hovered =
+                        ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]);
+                    let active =
+                        ui.push_style_color(StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]);
+                    (active, hovered, button)
                 });
                 let label = if selected {
                     format!("[{name}]##desk{k}")
@@ -46,7 +46,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 if ui.button(label) {
                     app.switch_desktop(k);
                 }
-                if ui.is_item_hovered() && ui.is_mouse_released(imgui::MouseButton::Right) {
+                if ui.is_item_hovered() && ui.is_mouse_released(MouseButton::Right) {
                     ui.open_popup(format!("##deskctx{k}"));
                 }
                 ui.popup(format!("##deskctx{k}"), || {
@@ -63,12 +63,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             for i in 0..app.desktops.len() {
                                 let is_current = i == k;
                                 let label = format!("{}", i + 1);
-                                if ui
-                                    .menu_item_config(&label)
-                                    .enabled(!is_current)
-                                    .selected(is_current)
-                                    .build()
-                                {
+                                if ui.menu_item_enabled_selected(&label, None::<&str>, is_current, !is_current) {
                                     app.move_desktop(k, i);
                                 }
                             }
@@ -91,17 +86,13 @@ fn rename_modal(app: &mut App, ui: &Ui) {
         return;
     };
     const ID: &str = "Rename Desktop##deskrename";
-    let popup_open = unsafe {
-        let id = std::ffi::CString::new(ID).unwrap();
-        imgui::sys::igIsPopupOpen_Str(id.as_ptr(), imgui::sys::ImGuiPopupFlags_None as i32)
-    };
-    if !popup_open {
+    if !ui.is_popup_open(ID) {
         ui.open_popup(ID);
     }
     let mut open = true;
     let mut done: Option<Option<String>> = None;
-    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([340.0, 0.0]));
-    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+    let min = ui.push_style_var(StyleVar::WindowMinSize([340.0, 0.0]));
+    ui.modal_popup_with_opened(ID, &mut open, || {
         ui.set_next_item_width(-1.0);
         ui.input_text("Name", &mut app.desktop_rename_buf).build();
         if ui.button("OK") {

@@ -2,7 +2,7 @@ use crate::app::{App, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::dbc::SignalInfo;
 use crate::sim::{KINDS, SrcKind, ValueSrc};
 use crate::ui::help::popup_is_open;
-use imgui::{Condition, InputTextFlags, Key, Ui};
+use dear_imgui_rs::{Condition, Drag, InputTextFlags, Key, NumericFormat, StyleVar, TreeNodeFlags, Ui};
 
 /// Combo entries for a signal's source: "Constant" first so picking index 0
 /// means "hold the base value", the rest in [`KINDS`] order.
@@ -78,7 +78,10 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
     ui.window("Interactive Generator")
         .opened(&mut open)
         .position(
-            [io.display_size[0] * 0.62, TOOLBAR_H + 10.0],
+            [
+                io.display_size()[0] * 0.62,
+                TOOLBAR_H + 10.0,
+            ],
             Condition::FirstUseEver,
         )
         .size([560.0, 340.0], Condition::FirstUseEver)
@@ -333,7 +336,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
         ui.same_line();
         let header_open = ui.collapsing_header(
             row_header(ch, &app.channel_name(ch), &name, id, driven),
-            imgui::TreeNodeFlags::empty(),
+            TreeNodeFlags::empty(),
         );
         if !header_open {
             continue;
@@ -467,9 +470,10 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
             let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
             ui.set_next_item_width(180.0);
             let mut v = shown;
-            let _read_only = held.is_some().then(|| ui.begin_disabled(true));
-            let moved = imgui::Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
-                .display_format("%g")
+            let _read_only = held.is_some().then(|| ui.begin_disabled_with_cond(true));
+            let sig_fmt = NumericFormat::new("%g").expect("static format");
+            let moved = Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
+                .display_format(sig_fmt)
                 .speed(((hi - lo) / 200.0).max(0.01))
                 .range(lo, hi)
                 .build(ui, &mut v);
@@ -590,8 +594,8 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
     // inside record a dismissal here instead.
     let mut dismissed = false;
     let mut confirmed: Option<u64> = None;
-    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([420.0, 0.0]));
-    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+    let min = ui.push_style_var(StyleVar::WindowMinSize([420.0, 0.0]));
+    ui.modal_popup_with_opened(ID, &mut open, || {
         ui.text(format!("{}  {:X}  on {}", name, id, app.channel_name(ch)));
         ui.separator();
         // Focus and select on open, so click the row, type, Enter is the whole
@@ -645,7 +649,7 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         if ui.is_key_pressed(Key::Escape) {
             dismissed = true;
         }
-        let dis = ui.begin_disabled(draft.is_none());
+        let dis = ui.begin_disabled_with_cond(draft.is_none());
         if ui.button_with_size("Apply", [90.0, 0.0]) || (entered && draft.is_some()) {
             confirmed = draft;
             ui.close_current_popup();
@@ -709,8 +713,8 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     let mut dismissed = false;
     let mut confirmed = false;
     let mut applied = false;
-    let min = ui.push_style_var(imgui::StyleVar::WindowMinSize([520.0, 240.0]));
-    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+    let min = ui.push_style_var(StyleVar::WindowMinSize([520.0, 240.0]));
+    ui.modal_popup_with_opened(ID, &mut open, || {
         applied = true;
         ui.text(format!("{msg_name}  {msg_id:X}  /  {sig} {unit}"));
         ui.separator();
@@ -724,8 +728,9 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         let speed = ((src.hi - src.lo).abs() / 100.0).max(0.01);
         ui.set_next_item_width(220.0);
         let mut lo = src.lo;
-        if imgui::Drag::new("lo")
-            .display_format("%g")
+        let lo_fmt = NumericFormat::new("%g").expect("static format");
+        if Drag::new("lo")
+            .display_format(lo_fmt)
             .speed(speed as f32)
             .build(ui, &mut lo)
         {
@@ -734,8 +739,9 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         ui.same_line();
         ui.set_next_item_width(220.0);
         let mut hi = src.hi;
-        if imgui::Drag::new("hi")
-            .display_format("%g")
+        let hi_fmt = NumericFormat::new("%g").expect("static format");
+        if Drag::new("hi")
+            .display_format(hi_fmt)
             .speed(speed as f32)
             .build(ui, &mut hi)
         {
@@ -744,8 +750,9 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         if src.kind == SrcKind::Random {
             ui.set_next_item_width(340.0);
             let mut ms = src.redraw_us as f64 / 1000.0;
-            if imgui::Drag::new("redraw ms")
-                .display_format("%g")
+            let redraw_fmt = NumericFormat::new("%g").expect("static format");
+            if Drag::new("redraw ms")
+                .display_format(redraw_fmt)
                 .speed(1.0)
                 .range(0.0f64, 600_000.0)
                 .build(ui, &mut ms)
@@ -756,8 +763,9 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             let mut seed = src.seed as f64;
             // An integer identifier: a %g would render big seeds in exponent
             // notation, so this one gets whole numbers instead.
-            if imgui::Drag::new("seed")
-                .display_format("%.0f")
+            let seed_fmt = NumericFormat::new("%.0f").expect("static format");
+            if Drag::new("seed")
+                .display_format(seed_fmt)
                 .speed(1.0)
                 .build(ui, &mut seed)
             {
@@ -766,8 +774,9 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
         } else {
             ui.set_next_item_width(340.0);
             let mut ms = src.period_us as f64 / 1000.0;
-            if imgui::Drag::new("period ms")
-                .display_format("%g")
+            let period_fmt = NumericFormat::new("%g").expect("static format");
+            if Drag::new("period ms")
+                .display_format(period_fmt)
                 .speed(10.0)
                 .range(1.0f64, 600_000.0)
                 .build(ui, &mut ms)
@@ -776,8 +785,9 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             }
             ui.set_next_item_width(340.0);
             let mut ms = src.phase_us as f64 / 1000.0;
-            if imgui::Drag::new("phase ms")
-                .display_format("%g")
+            let phase_fmt = NumericFormat::new("%g").expect("static format");
+            if Drag::new("phase ms")
+                .display_format(phase_fmt)
                 .speed(10.0)
                 .range(0.0f64, src.period_us as f64 / 1000.0)
                 .build(ui, &mut ms)

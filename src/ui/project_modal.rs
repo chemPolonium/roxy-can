@@ -1,5 +1,5 @@
 use crate::app::App;
-use imgui::Ui;
+use dear_imgui_rs::Ui;
 
 enum Choice {
     Save,
@@ -13,16 +13,12 @@ pub fn render(app: &mut App, ui: &Ui) {
         return;
     }
     const ID: &str = "Unsaved Project##projmodal";
-    let popup_open = unsafe {
-        let id = std::ffi::CString::new(ID).unwrap();
-        imgui::sys::igIsPopupOpen_Str(id.as_ptr(), imgui::sys::ImGuiPopupFlags_None as i32)
-    };
-    if !popup_open {
+    if !ui.is_popup_open(ID) {
         ui.open_popup(ID);
     }
     let mut open = true;
     let mut choice: Option<Choice> = None;
-    ui.modal_popup_config(ID).opened(&mut open).build(|| {
+    ui.modal_popup_with_opened(ID, &mut open, || {
         ui.text("The current workspace is not saved as a project.");
         ui.text("Save it before continuing?");
         ui.separator();

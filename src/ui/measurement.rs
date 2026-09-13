@@ -1,7 +1,7 @@
 use crate::app::{App, PopupTarget};
 use crate::ui::idfilter::{scope_combo, target_name};
 use crate::ui::siglist::ListKind;
-use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, Ui};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui};
 
 /// "Go to" button: opens the window if hidden and always brings it to the
 /// front. There is no close action — windows close via their own title
@@ -21,7 +21,10 @@ pub fn render(app: &mut App, ui: &Ui) {
         ui.window("Measurement Setup")
             .opened(&mut open)
             .position(
-                [io.display_size[0] * 0.04, io.display_size[1] * 0.30],
+                [
+                    io.display_size()[0] * 0.04,
+                    io.display_size()[1] * 0.30,
+                ],
                 Condition::FirstUseEver,
             )
             .size([620.0, 320.0], Condition::FirstUseEver)
@@ -79,8 +82,8 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y
-        | TableFlags::SIZING_STRETCH_PROP;
+        | TableFlags::SCROLL_Y;
+    let opts = TableOptions::from(flags).sizing_policy(TableSizingPolicy::StretchProp);
     let mut rm_trace: Option<usize> = None;
     let mut rm_msgs: Option<usize> = None;
     let mut rm_stats: Option<usize> = None;
@@ -88,41 +91,17 @@ fn content(app: &mut App, ui: &Ui) {
     let mut rm_data: Option<usize> = None;
     let mut rm_state: Option<usize> = None;
     {
-        let Some(_table) = ui.begin_table_with_flags("meas_table", 6, flags) else {
+        let Some(_table) = ui.begin_table_with_flags("meas_table", 6, opts) else {
             return;
         };
         // default-size "->" button
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 32.0,
-            ..TableColumnSetup::new("Open")
-        });
+        ui.table_setup_column_fixed_width("Open", TableColumnFlags::NONE, 32.0);
         // longest type label is "State Tracker"
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 96.0,
-            ..TableColumnSetup::new("Type")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_STRETCH,
-            init_width_or_weight: 1.0,
-            ..TableColumnSetup::new("Name")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 160.0,
-            ..TableColumnSetup::new("Filter")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 44.0,
-            ..TableColumnSetup::new("Save")
-        });
-        ui.table_setup_column_with(TableColumnSetup {
-            flags: TableColumnFlags::WIDTH_FIXED,
-            init_width_or_weight: 26.0,
-            ..TableColumnSetup::new("")
-        });
+        ui.table_setup_column_fixed_width("Type", TableColumnFlags::NONE, 96.0);
+        ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_column_fixed_width("Filter", TableColumnFlags::NONE, 160.0);
+        ui.table_setup_column_fixed_width("Save", TableColumnFlags::NONE, 44.0);
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
 
         let n = app.trace_windows.len();

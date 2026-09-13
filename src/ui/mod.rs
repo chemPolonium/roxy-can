@@ -25,7 +25,7 @@ pub mod write;
 
 use crate::app::App;
 use crate::can::frame::FrameFlags;
-use imgui::Ui;
+use dear_imgui_rs::Ui;
 
 /// Consistent RGBA tint for the frame-type tag rendered in Trace / Messages /
 /// Statistics. Error frames are red, remote requests violet, FD cyan (orange
