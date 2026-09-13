@@ -312,7 +312,7 @@ impl State {
         self.app.update();
         ui::render(&mut self.app, ui);
 
-        self.platform.prepare_render(&ui, &self.window).unwrap();
+        self.platform.prepare_render(ui, &self.window).unwrap();
 
         let view = frame
             .texture

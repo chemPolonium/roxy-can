@@ -33,7 +33,7 @@ pub fn render(ui: &Ui) {
             dear_imgui_rs::sys::igDockSpace(
                 id,
                 dear_imgui_rs::sys::ImVec2 { x: 0.0, y: 0.0 },
-                dear_imgui_rs::sys::ImGuiDockNodeFlags_None as i32,
+                dear_imgui_rs::sys::ImGuiDockNodeFlags_None,
                 std::ptr::null(),
             );
         });

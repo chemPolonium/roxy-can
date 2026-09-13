@@ -67,7 +67,7 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
             }
         }
         let ui = ctx.frame();
-        crate::ui::render(app, &ui);
+        crate::ui::render(app, ui);
         let _ = ctx.render_legacy();
     }
 }
@@ -110,7 +110,7 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
             let _ = ctx.render_legacy();
         }
         ctx.io_mut().add_mouse_pos_event([99.0, probe_y]);
@@ -121,7 +121,7 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
             let _ = ctx.render_legacy();
         }
         ctx.io_mut().add_mouse_pos_event([99.0, probe_y + 40.0]);
@@ -130,7 +130,7 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
             let _ = ctx.render_legacy();
         }
         ctx.io_mut()
@@ -140,7 +140,7 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
             let _ = ctx.render_legacy();
         }
         if order(&app) != before {

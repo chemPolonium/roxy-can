@@ -371,7 +371,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             // line highlight plus a gutter mark, both with the tooltip).
             // Refreshed every frame: markers are frame state, not layout.
             if let (Some(editor), Some(line)) = (app.editors.get_mut(&id), facts.error_line) {
-                let _ = editor.clear_markers();
+                editor.clear_markers();
                 let tip = facts.error.clone().unwrap_or_default();
                 let _ = editor.add_marker(
                     (line - 1) as usize,
@@ -388,32 +388,32 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             let mut src_hash = std::collections::hash_map::DefaultHasher::new();
             node.source.hash(&mut src_hash);
             let unsaved = facts.hash != src_hash.finish();
-            if ui.button(format!("Apply##eapply{id}")) {
-                if let Some(editor) = app.editors.get(&id) {
-                    let source = editor.text().unwrap_or_default();
-                    app.editor_synced.insert(id, source.clone());
-                    app.send(crate::bus::BusCommand::SetNodeSource { id, source });
-                }
+            if ui.button(format!("Apply##eapply{id}"))
+                && let Some(editor) = app.editors.get(&id)
+            {
+                let source = editor.text().unwrap_or_default();
+                app.editor_synced.insert(id, source.clone());
+                app.send(crate::bus::BusCommand::SetNodeSource { id, source });
             }
             if unsaved {
                 ui.same_line();
                 ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
             }
             ui.same_line();
-            if ui.button(format!("保存##esave{id}")) {
-                if let Some(editor) = app.editors.get(&id) {
-                    let source = editor.text().unwrap_or_default();
-                    if let Some(path) = rfd::FileDialog::new()
-                        .set_title("保存节点脚本")
-                        .add_filter("节点脚本", &["rxcan"])
-                        .save_file()
-                    {
-                        let path = path.to_string_lossy().into_owned();
-                        if let Err(e) = std::fs::write(&path, &source) {
-                            app.status = format!("保存失败: {e}");
-                        } else {
-                            app.status = format!("已保存 {path}");
-                        }
+            if ui.button(format!("保存##esave{id}"))
+                && let Some(editor) = app.editors.get(&id)
+            {
+                let source = editor.text().unwrap_or_default();
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("保存节点脚本")
+                    .add_filter("节点脚本", &["rxcan"])
+                    .save_file()
+                {
+                    let path = path.to_string_lossy().into_owned();
+                    if let Err(e) = std::fs::write(&path, &source) {
+                        app.status = format!("保存失败: {e}");
+                    } else {
+                        app.status = format!("已保存 {path}");
                     }
                 }
             }
