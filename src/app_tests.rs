@@ -5457,6 +5457,75 @@ fn the_write_ring_collects_node_and_command_lines() {
     app.stop();
 }
 
+/// The Write export writes the ring as plain text in display order and
+/// shape, honouring the window's per-kind filter -- "what I see is what
+/// I save". An empty (or fully filtered) ring refuses rather than
+/// writing an empty file.
+#[test]
+fn the_write_export_honours_the_kind_filter() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "talker".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 10 { print(\"beat\"); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    for t in 1..=20 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    assert!(app.snap.write.len() >= 2, "info and script lines exist");
+
+    // All kinds on: every line lands in the file.
+    let path = std::env::temp_dir().join("roxy_can_write_export_test.txt");
+    app.export_write_txt(&path.to_string_lossy());
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        content.lines().count(),
+        app.snap.write.len(),
+        "one line per ring entry"
+    );
+    assert!(
+        content.lines().all(|l| l.starts_with('[') && l.contains("] ")),
+        "lines carry the wall stamp: {content:?}"
+    );
+
+    // Script prints off: they leave the file too.
+    app.write_filter[0] = false;
+    app.export_write_txt(&path.to_string_lossy());
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !content.contains("beat"),
+        "the filtered kind is not exported: {content:?}"
+    );
+    assert!(
+        !content.is_empty(),
+        "the unfiltered kinds still land"
+    );
+
+    // Everything filtered off: refuse, keep the old file.
+    let stale = std::fs::read_to_string(&path).unwrap();
+    for slot in app.write_filter.iter_mut() {
+        *slot = false;
+    }
+    app.export_write_txt(&path.to_string_lossy());
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        stale,
+        "an empty export writes nothing"
+    );
+    std::fs::remove_file(&path).ok();
+    app.stop();
+}
+
 /// A script writing an undefined variable gets a warning in its log and
 /// the write is dropped; the node keeps running.
 #[test]

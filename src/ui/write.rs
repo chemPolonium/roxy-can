@@ -8,7 +8,9 @@ use crate::bus::WriteKind;
 use dear_imgui_rs::{Condition, StyleVar, Ui};
 
 /// `wall_us` (local microseconds since midnight) as `HH:MM:SS.mmm`.
-fn wall_stamp(us: u64) -> String {
+/// Shared with the Write log's text export so the file lines match the
+/// window's.
+pub(crate) fn wall_stamp(us: u64) -> String {
     let s = us / 1_000_000;
     let ms = (us % 1_000_000) / 1_000;
     format!(
@@ -45,6 +47,13 @@ pub fn render(app: &mut App, ui: &Ui) {
 fn content(app: &mut App, ui: &Ui) {
     if ui.button("清空") {
         app.send(crate::bus::BusCommand::ClearWrite);
+    }
+    ui.same_line();
+    if ui.button("导出") {
+        app.export_write_dialog();
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("把当前过滤视图导出为文本文件");
     }
     ui.same_line();
     ui.align_text_to_frame_padding();

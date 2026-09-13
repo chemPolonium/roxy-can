@@ -261,6 +261,49 @@ impl App {
         }
     }
 
+    /// The Write window's export: the whole system log as plain text,
+    /// same lines the window shows (the current per-kind filter applies,
+    /// so "what I see is what I save").
+    pub fn export_write_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title("Export Write log as text")
+            .set_file_name("write_log.txt")
+            .add_filter("Text files", &["txt", "log"])
+            .save_file()
+        {
+            self.export_write_txt(&p.to_string_lossy());
+        }
+    }
+
+    pub fn export_write_txt(&mut self, path: &str) {
+        let want = |k: &crate::bus::WriteKind, filter: &[bool; 4]| -> bool {
+            let i = match k {
+                crate::bus::WriteKind::Script => 0,
+                crate::bus::WriteKind::Info => 1,
+                crate::bus::WriteKind::Warning => 2,
+                crate::bus::WriteKind::Error => 3,
+            };
+            filter[i]
+        };
+        let filter = self.write_filter;
+        let lines: Vec<String> = self
+            .snap
+            .write
+            .iter()
+            .filter(|l| want(&l.kind, &filter))
+            .map(|l| {
+                format!("[{}] {}", crate::ui::write::wall_stamp(l.wall_us), l.text)
+            })
+            .collect();
+        if lines.is_empty() {
+            self.status = "export: the Write log is empty".to_string();
+            return;
+        }
+        let mut s = lines.join("\n");
+        s.push('\n');
+        self.write_export(path, s);
+    }
+
     /// The State Tracker's band table: one row per state segment per
     /// visible signal over the window's live span -- what the bands draw,
     /// as spreadsheet rows.
