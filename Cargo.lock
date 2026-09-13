@@ -588,6 +588,7 @@ dependencies = [
 [[package]]
 name = "dear-imgui-cte-sys"
 version = "0.17.0"
+source = "git+https://github.com/chemPolonium/dear-imgui-cte-sys?branch=main#738f6f55628c1a4ae6758b105f7ee7422bb5358e"
 dependencies = [
  "cc",
  "dear-imgui-build-support",
