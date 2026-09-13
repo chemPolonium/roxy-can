@@ -263,7 +263,7 @@ impl VectorChannel {
             let mut port: XlPortHandle = 0;
             let status = (lib.open_port)(
                 &mut port,
-                b"roxy-can\0".as_ptr(),
+                c"roxy-can".as_ptr() as *const u8,
                 mask,
                 &mut permission,
                 65_536,
