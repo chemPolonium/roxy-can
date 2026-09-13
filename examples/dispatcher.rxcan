@@ -1,0 +1,36 @@
+// 分发器节点：按帧首字节的类型字段分发处理，演示 switch/case、
+// 位运算与复合赋值（2026-09 语言增量）。
+//
+// 示例协议约定：
+//   byte0 高半字节 = 消息类型（1=遥测 2=命令 3=心跳，其余忽略）
+//   byte0 低半字节 = 源地址
+//
+// 行为：
+//   - 遥测帧转发为 0x300，命令帧取反后转发为 0x301，心跳只计数
+//   - 每 5 秒报一次统计
+//
+// 注意：节点也会收到自己 send 出去的帧——转发前先排除 0x300/0x301，
+// 避免自激成环（与 sniffer 示例同一守门思路）。
+
+let heartbeats = 0;
+let total = 0;
+
+on message * {
+    if (frame_dlc() > 0 && frame_id() != 0x300 && frame_id() != 0x301) {
+        let kind = frame_byte(0) >> 4;       // 高半字节：类型
+        let source = frame_byte(0) & 0x0F;   // 低半字节：源地址
+        total += 1;
+        switch (kind) {
+            case 1: { send(0x300, frame_byte(1), source); }
+            case 2: { send(0x301, frame_byte(1) ^ 0xFF, source); }
+            case 3: {
+                heartbeats += 1;
+            }
+            default: { }
+        }
+    }
+}
+
+on timer 5000 {
+    print("dispatched", total, "frames,", heartbeats, "heartbeats");
+}
