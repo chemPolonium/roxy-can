@@ -43,7 +43,7 @@ mod ui_tests;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dear_imgui_rs::{ConfigFlags, Context};
+use dear_imgui_rs::{ConfigFlags, Context, StyleColor};
 use dear_imgui_wgpu::{FramebufferExtent, WgpuInitInfo, WgpuRenderer};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use winit::application::ApplicationHandler;
@@ -147,6 +147,19 @@ impl State {
         config_flags.insert(ConfigFlags::DOCKING_ENABLE);
         context.io_mut().set_config_flags(config_flags);
         context.style_mut().set_frame_padding([4.0, 1.0]);
+        // Opaque windows. The stock 94% window/popup alpha ghosts the
+        // content behind them through the editor's backgroundless child
+        // windows; the tool reads as a docked instrument panel, not an
+        // overlay.
+        {
+            let style = context.style_mut();
+            let mut window_bg = style.color(StyleColor::WindowBg);
+            window_bg[3] = 1.0;
+            style.set_color(StyleColor::WindowBg, window_bg);
+            let mut popup_bg = style.color(StyleColor::PopupBg);
+            popup_bg[3] = 1.0;
+            style.set_color(StyleColor::PopupBg, popup_bg);
+        }
         // ImGui 1.92 rasterizes glyphs on demand at the platform-reported
         // DPI, so fonts load at their logical reference size -- no baked
         // glyph ranges, no global scale hack. The CJK fallback merges into
