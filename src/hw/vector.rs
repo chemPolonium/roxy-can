@@ -106,10 +106,12 @@ impl Vxlapi {
     /// also resolves to a 64-bit copy on x64 via the System32 search).
     unsafe fn load() -> Option<Self> {
         const NAMES: [&[u16]; 2] = [
+            // vxlapi64.dll — the x64 driver DLL.
             &[
-                b'v' as u16, b'l' as u16, b'a' as u16, b'p' as u16, b'i' as u16, b'6' as u16,
-                b'4' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+                b'v' as u16, b'x' as u16, b'l' as u16, b'a' as u16, b'p' as u16, b'i' as u16,
+                b'6' as u16, b'4' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
             ],
+            // vxlapi.dll fallback.
             &[
                 b'v' as u16, b'x' as u16, b'l' as u16, b'a' as u16, b'p' as u16, b'i' as u16,
                 b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,

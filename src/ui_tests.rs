@@ -181,6 +181,23 @@ fn vector_enumerate_hits_the_real_driver() {
     }
 }
 
+/// Isolates the LoadLibrary step of the Vector binding.
+#[test]
+fn load_library_probe() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LoadLibraryW(name: *const u16) -> *mut core::ffi::c_void;
+        fn GetLastError() -> u32;
+    }
+    let name: Vec<u16> = "vxlapi64.dll\0".encode_utf16().collect();
+    let module = unsafe { LoadLibraryW(name.as_ptr()) };
+    println!(
+        "LoadLibraryW(vxlapi64.dll) = {:?}  err={}",
+        module,
+        unsafe { GetLastError() }
+    );
+}
+
 /// Every panel and one of every observer window draw together -- the
 /// "open everything" layout a curious user ends up with.
 #[test]
