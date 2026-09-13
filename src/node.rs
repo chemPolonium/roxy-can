@@ -665,6 +665,24 @@ pub fn dbc_checks(
             ));
         }
     }
+    // 通配转发归类（R2）：`on message *` 把脚本声明成「转发者/记录者」
+    // ——发送集 = 接收集 ∩ 库声明，逐 id 的收发核对都不适用（上面反向
+    // 检查已跳过）。转发器把发出的帧再收回是自激成环的唯一来源，检测
+    // 到通配 handler 内有发送就如实提示（防护是否在，静态不可判定，
+    // 所以是 info 不是 check——sniffer 示例的 frame_id 自排除即答案）。
+    if let Some(attached_node) = attached
+        && script.recv_wildcard
+    {
+        lines.push(format!(
+            "[info] on message *：本脚本按「转发者/记录者」归类，发送集 = 接收集 ∩ 库声明（{attached_node}）"
+        ));
+        if script.wildcard_sends() {
+            lines.push(
+                "[info] 通配 handler 内有发送：发出的帧会再次进入本 handler（自激成环风险）——转发前用 frame_id() 排除自己的报文（参考 examples/sniffer.rxcan）"
+                    .to_string(),
+            );
+        }
+    }
     // 静态写入集：set_sig 的字面量值对照 DBC 信号物理界限。字面量才能
     // 静态判定；表达式的越界交给运行时（编码函数自然截断）。min==max
     // 的区间在 DBC 里表示"未声明界限"，不检查。
@@ -839,6 +857,62 @@ BO_ 512 GearInfo: 8 GearBox
         assert!(
             !n.log_snapshot().iter().any(|l| l.contains("脚本未发送")),
             "a wildcard forwarder is exempt"
+        );
+    }
+
+    /// R2 wildcard classification: a `on message *` script is named a
+    /// forwarder with the send-set rule, and a wildcard handler that
+    /// transmits gets the self-excitation hint -- guarded (the static
+    /// analysis cannot see the guard) at info level, not check.
+    #[test]
+    fn wildcard_scripts_are_classified_and_warned_about_self_excitation() {
+        let mut n = node(
+            r#"
+                on message * {
+                    if (frame_id() != 0x700 && frame_dlc() > 0) {
+                        send(0x700);
+                    }
+                }
+            "#,
+        );
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        let logs = n.log_snapshot();
+        assert!(
+            logs.iter().any(|l| l.contains("转发者") && l.contains("接收集")),
+            "the forwarder classification line is there: {logs:?}"
+        );
+        assert!(
+            logs.iter()
+                .any(|l| l.contains("自激成环") && l.starts_with("[info]")),
+            "the self-excitation hint is info-level: {logs:?}"
+        );
+
+        // A wildcard recorder that never sends skips the hint.
+        let mut n = node("on message * { }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        assert!(
+            !n.log_snapshot()
+                .iter()
+                .any(|l| l.contains("自激成环")),
+            "no send, no loop hint"
+        );
+    }
+
+    /// The frame_id pure forward is caught too -- the send is opaque but
+    /// still attributed to the wildcard handler.
+    #[test]
+    fn wildcard_frame_id_forward_triggers_the_hint() {
+        let mut n = node("on message * { send(frame_id()); }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        assert!(
+            n.log_snapshot()
+                .iter()
+                .any(|l| l.contains("自激成环")),
+            "an unguarded pure forward is the textbook loop: {logs:?}",
+            logs = n.log_snapshot()
         );
     }
 

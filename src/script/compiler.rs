@@ -3,7 +3,7 @@
 //! become globals; function bodies use stack locals with block scopes.
 
 use super::parser::{BinOp, Expr, FnDecl, Item, OnDecl, OnKind, Program, SpannedStmt, Stmt, UnOp};
-use super::{Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value};
+use super::{Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value, WILDCARD_LABEL};
 use std::collections::{HashMap, HashSet};
 
 const MAX_LOCALS: usize = u8::MAX as usize;
@@ -673,7 +673,7 @@ impl Comp {
                             HandlerKind::ExtendedMessage { id } => {
                                 format!("<on extended message {id:#x}>")
                             }
-                            HandlerKind::AnyMessage => "<on message *>".to_string(),
+                            HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
                             HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
                             HandlerKind::Timer { period_ms } => {
                                 format!("<on timer {period_ms}>")
@@ -828,7 +828,7 @@ impl Comp {
             HandlerKind::Start => "<on start>".to_string(),
             HandlerKind::Message { id } => format!("<on message {id:#x}>"),
             HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
-            HandlerKind::AnyMessage => "<on message *>".to_string(),
+            HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
             HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
             HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
             HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),

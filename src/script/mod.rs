@@ -226,6 +226,10 @@ pub enum HandlerKind {
     },
 }
 
+/// The static label every `on message *` handler carries in the send
+/// facts, shared by the compiler's attribution and the host's checks.
+pub const WILDCARD_LABEL: &str = "<on message *>";
+
 /// A compiled script, ready for the VM. Immutable after compilation --
 /// VM state (globals, stacks) lives in [`Vm`].
 #[derive(Debug)]
@@ -269,6 +273,20 @@ pub struct Script {
 }
 
 impl Script {
+    /// Does the wildcard handler itself transmit? A static send and a
+    /// `frame_id()` forward both count: `on message *` receives the
+    /// script's own frames too, so any send from that handler re-enters
+    /// it -- the self-excitation loop the start check warns about.
+    pub fn wildcard_sends(&self) -> bool {
+        self.send_refs
+            .iter()
+            .any(|(from, _, _)| from == WILDCARD_LABEL)
+            || self
+                .opaque_sends
+                .iter()
+                .any(|s| s.starts_with(WILDCARD_LABEL))
+    }
+
     /// The static response mapping: one row per one-shot timer handler --
     /// the events that arm it (handlers calling `set_timer` with its
     /// name) and the frames it sends. Periodic handlers are not

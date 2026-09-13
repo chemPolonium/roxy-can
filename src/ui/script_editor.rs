@@ -98,6 +98,9 @@ pub(crate) struct EditorFacts {
     /// `(id, extended)` the handlers listen for.
     pub recvs: Vec<(u32, bool)>,
     pub recv_wildcard: bool,
+    /// The wildcard handler itself transmits: the self-excitation hint
+    /// rides on this.
+    pub wildcard_sends: bool,
     /// `ns::name` keys this script accesses.
     pub sysvars: Vec<String>,
     /// Response mapping: one row per armed one-shot timer.
@@ -165,6 +168,7 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
                 }
             }
             facts.recv_wildcard = script.recv_wildcard;
+            facts.wildcard_sends = script.wildcard_sends();
             for key in &script.sysvar_refs {
                 if !facts.sysvars.contains(key) {
                     facts.sysvars.push(key.clone());
@@ -807,7 +811,21 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     ui.separator();
     ui.text_disabled(format!("接收（{}）", facts.recvs.len() + usize::from(facts.recv_wildcard)));
     if facts.recv_wildcard {
-        ui.text("  *  所有帧");
+        ui.text("  *  所有帧（转发者/记录者）");
+        if ui.is_item_hovered() {
+            ui.tooltip_text("发送集 = 接收集 ∩ DBC 声明；启动日志有同款 [info]");
+        }
+        if facts.wildcard_sends {
+            ui.text_colored(
+                [1.0, 0.75, 0.3, 1.0],
+                "    通配 handler 内有发送：发出的帧会再次进入本 handler（自激成环风险）",
+            );
+            if ui.is_item_hovered() {
+                ui.tooltip_text(
+                    "转发前用 frame_id() 排除自己的报文（参考 examples/sniffer.rxcan）",
+                );
+            }
+        }
     }
     if facts.recvs.is_empty() && !facts.recv_wildcard {
         ui.text_disabled("  （无）");
