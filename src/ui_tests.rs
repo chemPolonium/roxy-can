@@ -166,6 +166,21 @@ fn siglist_drag_reorders_a_row() {
     );
 }
 
+/// Live probe against the machine's real vxlapi driver: enumeration must
+/// succeed (or report no hardware) without panicking on layout mismatch.
+#[test]
+fn vector_enumerate_hits_the_real_driver() {
+    match crate::hw::vector::enumerate() {
+        Ok(channels) => {
+            println!("vector channels: {}", channels.len());
+            for c in &channels {
+                println!("  ch{}: {}", c.index, c.name);
+            }
+        }
+        Err(e) => println!("vector enumerate: {e}"),
+    }
+}
+
 /// Every panel and one of every observer window draw together -- the
 /// "open everything" layout a curious user ends up with.
 #[test]
