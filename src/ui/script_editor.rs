@@ -351,10 +351,17 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             let changed = match app.editors.get_mut(&id) {
                 Some(editor) => {
                     let w = ui.content_region_avail()[0].max(1.0);
-                    ui.text_editor(editor, format!("##esrc{id}"))
+                    match ui
+                        .text_editor(editor, format!("##esrc{id}"))
                         .size([w, SOURCE_HEIGHT])
                         .build()
-                        .unwrap_or(false)
+                    {
+                        Ok(changed) => changed,
+                        Err(e) => {
+                            eprintln!("text_editor build error: {e}");
+                            false
+                        }
+                    }
                 }
                 None => false,
             };
