@@ -9,5 +9,8 @@ record_*.asc
 
 /target
 
+# 助手的临时构建日志
+clippy.log
+
 # 助手会话的本地计划文件
 /.zcode/
