@@ -588,8 +588,6 @@ dependencies = [
 [[package]]
 name = "dear-imgui-cte-sys"
 version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bacec5dc53403d5a25c1501c778ce91c6f89323fd22e0d413860df50df8dfa62"
 dependencies = [
  "cc",
  "dear-imgui-build-support",
