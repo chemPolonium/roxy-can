@@ -5974,6 +5974,100 @@ fn removing_a_bus_detaches_its_hardware_and_shifts_the_rest() {
     );
 }
 
+/// The CANoe-style bus mode switch: Simulated parks every attachment
+/// (received frames are dropped, directed wire writes are suppressed)
+/// while keeping the configuration; flipping back to Real bus reconnects
+/// them without reattaching.
+#[test]
+fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    let (written, incoming) = app.hw.attach_mock(0);
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.hw.set_node_tx(0, "EngineECU", true);
+    app.start_virtual();
+    app.settle();
+
+    // Baseline: Real bus, the node's frames reach the wire.
+    let wire_ids = || -> Vec<u32> {
+        written.lock().expect("mock lock").iter().map(|f| f.id).collect()
+    };
+    for t in 1..=500u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    assert!(
+        wire_ids().contains(&0x100),
+        "real bus: the generator's frames reach the wire"
+    );
+
+    // Park it (Simulated): the injected wire frame is dropped and wire
+    // writes stop, but the attachment and the switch survive.
+    app.send(crate::bus::BusCommand::SetBusMode { real: false });
+    app.settle();
+    assert!(!app.snap.real_bus, "the snapshot reports the parked mode");
+    let tx_parked = written.lock().expect("mock lock").len();
+    incoming.lock().expect("mock lock").push_back(CanFrame {
+        t_us: 0,
+        channel: 0,
+        id: 0x555,
+        extended: false,
+        len: 1,
+        data: [0; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    });
+    for t in 900_000..940_000u64 {
+        app.advance_clock(t);
+        app.tick(t);
+    }
+    assert_eq!(
+        written.lock().expect("mock lock").len(),
+        tx_parked,
+        "Simulated: no wire writes while parked"
+    );
+    assert!(
+        !app.snap.aggs.iter().any(|a| a.channel == 0 && a.id == 0x555),
+        "Simulated: wire frames never reach the internal bus"
+    );
+
+    // Back to Real bus: the same attachment reconnects -- the queued wire
+    // frame from before the flip was drained while parked, but a fresh
+    // one lands, and the node's writes resume.
+    app.send(crate::bus::BusCommand::SetBusMode { real: true });
+    app.settle();
+    assert!(app.snap.real_bus);
+    incoming.lock().expect("mock lock").push_back(CanFrame {
+        t_us: 0,
+        channel: 0,
+        id: 0x556,
+        extended: false,
+        len: 1,
+        data: [0; MAX_CAN_FD_LEN],
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    });
+    let wire_before = written.lock().expect("mock lock").len();
+    for t in 940_000..1_240_000u64 {
+        app.advance_clock(t);
+        app.tick(t);
+    }
+    assert!(
+        app.snap.aggs.iter().any(|a| a.channel == 0 && a.id == 0x556),
+        "Real bus: fresh wire frames are ingested again"
+    );
+    assert!(
+        written.lock().expect("mock lock").len() > wire_before,
+        "Real bus: the node's wire writes resume"
+    );
+    app.stop();
+}
+
 /// State Trackers ride the same remap: their rows (and the per-key color
 /// memory) follow the bus removal just like Graphics and Data rows.
 #[test]

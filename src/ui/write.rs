@@ -7,6 +7,19 @@ use crate::app::App;
 use crate::bus::WriteKind;
 use dear_imgui_rs::{Condition, StyleVar, Ui};
 
+/// `wall_us` (local microseconds since midnight) as `HH:MM:SS.mmm`.
+fn wall_stamp(us: u64) -> String {
+    let s = us / 1_000_000;
+    let ms = (us % 1_000_000) / 1_000;
+    format!(
+        "[{:02}:{:02}:{:02}.{:03}]",
+        s / 3_600,
+        (s % 3_600) / 60,
+        s % 60,
+        ms
+    )
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     if !app.show_write {
         return;
@@ -61,14 +74,13 @@ fn content(app: &mut App, ui: &Ui) {
     let lines: Vec<&crate::bus::WriteLine> =
         app.snap.write.iter().filter(|l| want(&l.kind)).collect();
     for line in lines {
-        let t = line.t_us as f64 / 1e6;
         let color = match line.kind {
             WriteKind::Error => [1.0, 0.55, 0.3, 1.0],
             WriteKind::Warning => [1.0, 0.8, 0.4, 1.0],
             WriteKind::Info => [0.55, 0.75, 1.0, 1.0],
             WriteKind::Script => [1.0, 1.0, 1.0, 1.0],
         };
-        ui.text_colored([0.45, 0.45, 0.45, 1.0], format!("[{t:10.3}]"));
+        ui.text_colored([0.45, 0.45, 0.45, 1.0], wall_stamp(line.wall_us));
         ui.same_line();
         ui.text_colored(color, &line.text);
     }

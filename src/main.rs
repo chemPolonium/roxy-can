@@ -146,6 +146,11 @@ impl State {
         let mut config_flags = context.io().config_flags();
         config_flags.insert(ConfigFlags::DOCKING_ENABLE);
         context.io_mut().set_config_flags(config_flags);
+        // Windows only move from their title bar: dragging anywhere else
+        // (panels, lists, the signal checkboxes) must never carry a window.
+        context
+            .io_mut()
+            .set_config_windows_move_from_title_bar_only(true);
         context.style_mut().set_frame_padding([4.0, 1.0]);
         // Opaque windows. The stock 94% window/popup alpha ghosts the
         // content behind them through the editor's backgroundless child
@@ -273,11 +278,32 @@ impl State {
         // out here, before the borrow starts.
         if !self.app.pending_editors.is_empty() {
             let wanted: Vec<u64> = self.app.pending_editors.drain(..).collect();
+            // Autocomplete vocabulary is snapshotted per editor before the
+            // entry borrow starts.
+            let vocab: std::collections::HashMap<u64, Vec<String>> = wanted
+                .iter()
+                .map(|&id| {
+                    let ch = self
+                        .app
+                        .snap
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == id)
+                        .map(|n| n.channel)
+                        .unwrap_or(0);
+                    (id, ui::script_editor::autocomplete_vocabulary(&self.app, ch))
+                })
+                .collect();
             for id in wanted {
-                self.app
-                    .editors
-                    .entry(id)
-                    .or_insert_with(|| dear_imgui_cte::TextEditor::create(&self.context));
+                self.app.editors.entry(id).or_insert_with(|| {
+                    let mut editor = dear_imgui_cte::TextEditor::create(&self.context);
+                    ui::script_editor::configure_new_editor(&mut editor);
+                    ui::script_editor::install_autocomplete(
+                        &mut editor,
+                        vocab.get(&id).cloned().unwrap_or_default(),
+                    );
+                    editor
+                });
             }
         }
 

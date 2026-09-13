@@ -164,3 +164,34 @@
 - `docs/usage.md`：操作语义。离线模式落地后，其"录制与回放"一节需要同步口径。
 
 **2026-09-11**：§3 / §4 已拆为 `TODO.md` 的 **R1（离线分析优先）** 与 **R2（脚本静态分析）** 候选立项小节；§5 的否决清单并入 `TODO.md` "明确暂缓 / 边界外"；待决策项（§6）分散到对应条目的"先想清楚 / 先做 spike"注记。本文保留定位、对照与判定依据。
+
+## 8. Vector 硬件与 FlexRay 的设计思考（2026-09-14，用户触发定位重估）
+
+用户提出评估 Vector 硬件支持，并思考 FlexRay 的落地路径。§5 把"多协议"列为否决项的前提是"竞争对手是开源工具"；如果业务转向台架 / HIL / 真实整车通信（Real bus 模式的延伸），这个前提就变了——本节按"明确的重启决策"处理，不是慢慢渗进来。
+
+### 8.1 Vector 硬件支持（vxlapi）
+
+**架构位置零改动**：`src/hw/mod.rs` 的 `HwPort` 枚举就是驱动可插拔缝（Kvaser + Mock 测试替身），Vector 是第三个变体。收发路径（`poll_rx` / `write_if_directed`）与总线模式闸（`live`）对任何 `HwPort` 实现自动生效。
+
+- **驱动**：vxlapi.dll 动态加载（`LoadLibrary` + 函数指针，与 kvaser.rs 的 canlib32 同款做法），运行时缺 DLL 只报"驱动不可用"，不崩、不参与编译期链接。
+- **最小可用面**（CAN 部分）：`xlOpenDriver` / `xlOpenPort`（含应用通道名与 `XL_BUS_TYPE_CAN`）/ `xlGetChannelIndex` / `xlCanSetChannelBitrate` / `xlCanTransmit` / `xlReceive` + `xlSetNotification`（事件句柄替代轮询）+ `xlGetErrorString`。枚举走 `xlGetDriverConfig`（`xlDriverConfig` 里 `channelList`）。
+- **vxlapi 特有的坑**：端口掩码（`xlGetApplConfig` 的应用名/通道名注册，需要 `xlSetApplConfig` 迁移旧配置）；接收需 `XLaccept` 事件 + `xlFlushReceiveQueue`；基础版授权即可收发 CAN/FD，无需 license 检查代码。
+- **工作量预估**：FFI 声明 + 安全包装 ≈ kvaser.rs 的体量（约 700 行）；枚举 UI（Buses 窗口硬件下拉列出 Vector 通道）与总线模式/Profile 的对接零改动。
+- **测试**：`HwPort` 的 Mock 替身模式照搬——写入记录、按需回灌，不需要真实硬件即可把闸门/重连/模式切换的既有测试矩阵全部复用。
+
+### 8.2 FlexRay：协议模型差异是主要成本
+
+FlexRay 不是"第二种 CAN"——帧模型、调度模型、解码模型都要加维度，这是 §5 否决它的真正原因：
+
+1. **帧标识模型不同**。FlexRay 帧的坐标是 `(通道 A/B, 周期 id, 时隙 slot, 周期号)`，slot 在静态段固定、动态段按优先级竞争。CAN 的 `(channel, id, ext)` 键模型（`src/bus.rs` 帧键、聚合键、DBC `BO_` 键）全部要扩展成协议感知的联合键。
+2. **调度即语义**。CAN 的周期是 DBC `GenMsgCycleTime` 的软声明；FlexRay 的静态段调度是硬约束（集群配置里 `(slot, cycle)` 唯一确定一个帧）。"规格监控"（`src/spec.rs`）在 FlexRay 下的判据从"对照 DBC 声明"变成"对照集群配置"——需要一个 FlexRay 集群配置的解析器（类比现在的 DBC 解析器，工作量约等于重新做一个 `dbc.rs`）。
+3. **硬件门槛**。vxlapi 支持 FlexRay（`XL_BUS_TYPE_FLEXRAY`），但通道配置（startup/sync/macro ticks、静态/动态段参数）必须与目标集群一致，配置错误的报错排查成本高。Kvaser 只有部分型号支持 FlexRay 且生态弱。
+4. **脚本语言面**。`on message` 的 id 模型、`send` 的静态发送集判定（§4 的"可推导性"）都要为 `(slot, cycle)` 重新定义——这是语言内核级的改动，不是包一层。
+
+**建议的落地区分**：
+
+- **一步到位不做**"完整 FlexRay 分析"（周期/抖动统计、静态段占用率图表那套是 CANoe 十年积累）。
+- **最小可行切片**（若确有业务）：RX-only 的"总线监听"——Vector 硬件 + FlexRay 通道只收不发，帧进 Trace/日志（按 `(channel, slot, cycle)` 展示原始帧 + 十六进制载荷），不做信号解码、不做脚本发车。这一片复用现有 hw 缝 + Trace 全链路，工作量 ≈ Vector CAN 支持的 1.5 倍（多一套 FlexRay 通道配置 FFI）。
+- **解码/脚本/规格再议**：需要先立 FlexRay 集群配置解析器（`.arxml` 或 DB-FR），量级 ≈ 再做一个 `dbc.rs`，必须单独立项。
+
+**定位提醒**：走这一步等于把竞争对手从开源工具换成 CANoe 的一个协议维度，§1 的四个竞争维度（打开即分析 / 检索 / 渲染 / 零配置）不再自动成立。建议只在拿到"必须有 FlexRay 监听"的真实业务信号后再立项 8.2 的最小切片；Vector 的 CAN 支持（8.1）则与定位无冲突，随时可做。

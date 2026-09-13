@@ -28,6 +28,11 @@ fn harness() -> Context {
     let mut flags = context.io().config_flags();
     flags.insert(ConfigFlags::DOCKING_ENABLE);
     context.io_mut().set_config_flags(flags);
+    // Windows never move from their content area -- the observer signal
+    // lists drag-reorder from inside their windows.
+    context
+        .io_mut()
+        .set_config_windows_move_from_title_bar_only(true);
     context.io_mut().set_display_size([1280.0, 800.0]);
     context.io_mut().set_delta_time(1.0 / 60.0);
     // # Safety: embedded font bytes are a complete TTF.
@@ -57,9 +62,7 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
             let wanted: Vec<u64> = app.pending_editors.drain(..).collect();
             for id in wanted {
                 let mut editor = dear_imgui_cte::TextEditor::create(ctx);
-                let _ = editor.set_language(Some(dear_imgui_cte::Language::Lua));
-                editor.set_show_line_numbers(true);
-                editor.set_show_whitespaces(true);
+                crate::ui::script_editor::configure_new_editor(&mut editor);
                 app.editors.entry(id).or_insert(editor);
             }
         }
@@ -67,6 +70,100 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
         crate::ui::render(app, &ui);
         let _ = ctx.render_legacy();
     }
+}
+
+/// Regression driver for the observer signal drag-reorder: a fixed
+/// window draws the shared siglist, then synthesized mouse events
+/// (hover candidates down the list, press, drag, release) look for the
+/// checkbox that starts the reorder. Panics with the working offset so
+/// failures name the exact geometry.
+#[test]
+fn siglist_drag_reorders_a_row() {
+    use crate::app::PopupTarget;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_graphics_window();
+    let keys = [
+        (0u8, 0x100u32, false, "Alpha".to_string()),
+        (0, 0x101, false, "Beta".to_string()),
+    ];
+    for key in keys {
+        app.set_win_signal(PopupTarget::Graphics(0), key.clone(), true);
+    }
+    assert_eq!(app.graphics[0].signals.len(), 2);
+
+    let order = |app: &App| -> Vec<String> {
+        app.graphics[0].signals.iter().map(|s| s.key.3.clone()).collect()
+    };
+    let before = order(&app);
+
+    // One long frame pass per candidate hover position: press, drag
+    // 40 px down, release. Any candidate that lands on a row's checkbox
+    // must flip the two rows.
+    let mut working: Option<f32> = None;
+    let mut last_lines: Vec<String> = Vec::new();
+    'probe: for probe_y in (112..130).step_by(2) {
+        let probe_y = probe_y as f32;
+        for _ in 0..2 {
+            let ui = ctx.frame();
+            ui.set_window_pos([10.0, 10.0]);
+            ui.window("siglist probe")
+                .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
+                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+            let _ = ctx.render_legacy();
+        }
+        ctx.io_mut().add_mouse_pos_event([99.0, probe_y]);
+        ctx.io_mut()
+            .add_mouse_button_event(dear_imgui_rs::MouseButton::Left, true);
+        for _ in 0..2 {
+            let ui = ctx.frame();
+            ui.set_window_pos([10.0, 10.0]);
+            ui.window("siglist probe")
+                .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
+                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+            let _ = ctx.render_legacy();
+        }
+        ctx.io_mut().add_mouse_pos_event([99.0, probe_y + 40.0]);
+        {
+            let ui = ctx.frame();
+            ui.set_window_pos([10.0, 10.0]);
+            ui.window("siglist probe")
+                .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
+                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+            let _ = ctx.render_legacy();
+        }
+        ctx.io_mut()
+            .add_mouse_button_event(dear_imgui_rs::MouseButton::Left, false);
+        {
+            let ui = ctx.frame();
+            ui.set_window_pos([10.0, 10.0]);
+            ui.window("siglist probe")
+                .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
+                .build(|| crate::ui::siglist::draw(&mut app, &ui, crate::ui::siglist::ListKind::Graphics(0)));
+            let _ = ctx.render_legacy();
+        }
+        if order(&app) != before {
+            working = Some(probe_y);
+            break 'probe;
+        }
+        last_lines = app
+            .graphics[0]
+            .signals
+            .iter()
+            .map(|s| s.key.3.clone())
+            .collect();
+    }
+    assert!(
+        working.is_some(),
+        "no hover offset started a reorder; signals still {last_lines:?}"
+    );
+    println!(
+        "siglist drag works from hover y={} (order {:?} -> {:?})",
+        working.unwrap(),
+        before,
+        order(&app)
+    );
 }
 
 /// Every panel and one of every observer window draw together -- the

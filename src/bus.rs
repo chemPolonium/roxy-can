@@ -459,6 +459,10 @@ pub enum BusCommand {
     },
     /// Empties the Write window's ring.
     ClearWrite,
+    /// CANoe-style bus mode: `real` connects every attachment to its
+    /// adapter (RX feeds the bus, directed TX goes to the wire);
+    /// `!real` (Simulated) parks them while keeping the configuration.
+    SetBusMode { real: bool },
 }
 
 /// The synthetic stream id system variables publish under: an id no node
@@ -485,9 +489,19 @@ pub enum WriteKind {
 
 #[derive(Clone, Debug)]
 pub struct WriteLine {
-    pub t_us: u64,
+    /// Local wall-clock time of the line, as microseconds since local
+    /// midnight -- the Write window displays this as `HH:MM:SS.mmm`.
+    pub wall_us: u64,
     pub kind: WriteKind,
     pub text: String,
+}
+
+/// Local wall-clock microseconds since midnight, for absolute timestamps.
+pub fn wall_us_now() -> u64 {
+    use chrono::{Local, Timelike};
+    let now = Local::now();
+    let t = now.time();
+    (t.num_seconds_from_midnight() as u64) * 1_000_000 + (t.nanosecond() / 1_000) as u64
 }
 
 /// One system variable definition: CANoe-style namespaced value with
@@ -605,6 +619,9 @@ pub struct Snapshot {
     pub write: Arc<Vec<WriteLine>>,
     /// Hardware attachments: one per wired-up bus.
     pub hw: Vec<HwBusView>,
+    /// Whether the attachments are wire-connected (Real bus) or parked
+    /// (Simulated): the toolbar bus-mode switch reads this.
+    pub real_bus: bool,
     /// Node names whose generator frames currently go out the wire.
     pub hw_tx_nodes: Vec<(u8, String)>,
     /// The user's trigger rules, judged on the bus; the frontend saves
@@ -989,7 +1006,7 @@ impl BusCore {
             write_log: VecDeque::new(),
             published_write: Arc::new(Vec::new()),
             write_dirty: false,
-            hw: Default::default(),
+            hw: crate::hw::Hardware::new(),
             trace_limit: TRACE_LIMIT,
             pre_frames: PRE_BUFFER_FRAMES,
             post_frames: POST_ROLL_FRAMES,
@@ -1189,6 +1206,14 @@ impl BusCore {
             BusCommand::ClearWrite => {
                 self.write_log.clear();
                 self.write_dirty = true;
+            }
+            BusCommand::SetBusMode { real } => {
+                self.hw.live = real;
+                *status = if real {
+                    "总线模式：Real bus——挂接的硬件已上线（RX 进总线，定向 TX 出线）".into()
+                } else {
+                    "总线模式：Simulated——硬件挂接保留但已下线（纯仿真）".into()
+                };
             }
             BusCommand::AddReplayBlock {
                 name,
@@ -1542,10 +1567,11 @@ impl BusCore {
         self.nodes_dirty = false;
     }
 
-    /// Appends one line to the Write ring, stamped with the bus clock.
+    /// Appends one line to the Write ring, stamped with the bus clock and
+    /// the local wall clock (the Write window displays the wall time).
     pub(crate) fn write_push(&mut self, kind: WriteKind, text: String) {
-        let t_us = self.sim_t_us;
-        self.write_log.push_back(WriteLine { t_us, kind, text });
+        let wall_us = wall_us_now();
+        self.write_log.push_back(WriteLine { wall_us, kind, text });
         if self.write_log.len() > WRITE_LOG_CAP {
             self.write_log.pop_front();
         }
@@ -1924,6 +1950,7 @@ impl BusCore {
                     fd: self.hw.fd(bus),
                 })
                 .collect(),
+            real_bus: self.hw.live,
             hw_tx_nodes: self.hw.node_tx.iter().cloned().collect(),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),

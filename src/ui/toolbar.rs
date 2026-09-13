@@ -293,6 +293,29 @@ pub fn render(app: &mut App, ui: &Ui) {
                     app.set_replay_speed(REPLAY_SPEEDS[pick]);
                 }
             }
+            vsep(ui);
+            // CANoe-style bus mode: Simulated keeps the tool virtual even
+            // when adapters are attached; Real bus connects them to the
+            // wire. The attachments and switches survive the flip.
+            let real_bus = app.snap.real_bus;
+            let mut mode_pick = real_bus as usize;
+            ui.set_next_item_width(110.0);
+            if ui.combo_simple_string(
+                "##busmode",
+                &mut mode_pick,
+                &["Simulated", "Real bus"],
+            ) {
+                app.send(crate::bus::BusCommand::SetBusMode { real: mode_pick == 1 });
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text(
+                    if real_bus {
+                        "Real bus：挂接的硬件已上线——RX 进总线，定向 TX 出线"
+                    } else {
+                        "Simulated：纯仿真——硬件挂接保留但不收不发"
+                    },
+                );
+            }
             ui.same_line();
             // How often number readouts (Data values, Statistics, Messages)
             // re-render; "full" follows the frame rate. Curves and bars

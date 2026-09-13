@@ -233,6 +233,17 @@ fn content(app: &mut App, ui: &Ui) {
                     } else {
                         format!("ch{adapter} {kbps}k 只收{}", if fd { " FD" } else { "" })
                     });
+                    // Simulated 模式下硬件挂着但不上线——列内写明，免得
+                    // 用户以为帧上不了线是适配器坏了。
+                    if !app.snap.real_bus {
+                        ui.same_line();
+                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(
+                                "总线模式为 Simulated：硬件保留配置但不收不发；顶部切到 Real bus 上线",
+                            );
+                        }
+                    }
                     if ui.button(format!("解挂##hwdet{i}")) {
                         app.detach_hardware(i as u8);
                     }

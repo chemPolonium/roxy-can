@@ -99,13 +99,33 @@ impl MockPort {
 }
 
 /// All hardware attachments plus the per-node wire-egress switches.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Hardware {
     /// Bus index → attachment. One adapter per bus.
     pub buses: HashMap<u8, BusHardware>,
     /// (bus, DBC node name) pairs whose generator frames also go on the
     /// wire. `BTreeSet` keeps the snapshot listing stable.
     pub node_tx: BTreeSet<(u8, String)>,
+    /// CANoe-style bus mode. `false` (Simulated) parks every attachment:
+    /// received frames are discarded and wire writes are suppressed, while
+    /// the attachments and per-node switches stay configured for the
+    /// moment the mode flips back. `true` (Real bus) connects the
+    /// attachments to their adapters. Attaching is an explicit act, so the
+    /// default keeps the attachment the user just made connected.
+    pub live: bool,
+}
+
+impl Hardware {
+    /// A fresh hardware map starts wire-connected: attaching is an
+    /// explicit user act and they expect the adapter they just attached
+    /// to be on the wire.
+    pub fn new() -> Self {
+        Self {
+            buses: Default::default(),
+            node_tx: Default::default(),
+            live: true,
+        }
+    }
 }
 
 impl Hardware {
@@ -185,8 +205,9 @@ impl Hardware {
     /// Writes one frame out the bus's wire, if a node switch directs it
     /// there. Kvaser 虚拟通道的只收句柄同样能发车；物理适配器的只收
     /// 句柄写入失败时静默降级——帧已留在内部总线，视图不丢。
+    /// Simulated 模式（`!live`）不写线。
     pub fn write_if_directed(&mut self, bus: u8, node: &str, f: &CanFrame) {
-        if node.is_empty() || !self.node_sends_via_hw(bus, node) {
+        if !self.live || node.is_empty() || !self.node_sends_via_hw(bus, node) {
             return;
         }
         if let Some(bh) = self.buses.get_mut(&bus) {
@@ -196,9 +217,14 @@ impl Hardware {
 
     /// Drains every attached adapter's receive queue into `out`, stamped
     /// against the sim clock and tagged with the bus they are mapped to.
+    /// Simulated 模式（`!live`）照常抽干队列（防驱动缓冲塞满旧帧）但
+    /// 把帧丢弃——不上内部总线。
     pub fn poll_rx(&mut self, sim_t_us: u64, out: &mut Vec<CanFrame>) {
         for (&bus, bh) in self.buses.iter_mut() {
             while let Some(mut f) = bh.port.try_read() {
+                if !self.live {
+                    continue;
+                }
                 f.t_us = sim_t_us;
                 f.channel = bus;
                 out.push(f);

@@ -9,8 +9,8 @@
 //! the tool shipped with before the dear-imgui-rs migration.
 
 use crate::app::App;
-use dear_imgui_cte::{CteUiExt, Position, Selection};
-use dear_imgui_rs::{Condition, Ui};
+use dear_imgui_cte::{CteUiExt, Position, ScrollAlignment, Selection};
+use dear_imgui_rs::{Condition, TreeNodeFlags, Ui};
 use std::hash::{Hash, Hasher};
 
 const SOURCE_HEIGHT: f32 = 260.0;
@@ -19,6 +19,71 @@ const LOG_LINES: usize = 10;
 /// Marker color for the compile-error line: packed ABGR red, the native
 /// ImColor32 layout.
 const MARKER_COLOR: u32 = 0xFF_58_45_FF;
+
+/// Applies the editor defaults to a freshly created CTE editor: Lua
+/// shaping (closest match to the script language), line numbers,
+/// whitespace dots, four-space tabs. Lives here because the editor must
+/// be created outside the frame's `Ui` borrow -- main (and the headless
+/// harness) call it right after construction.
+pub fn configure_new_editor(editor: &mut dear_imgui_cte::TextEditor) {
+    editor.set_language(Some(dear_imgui_cte::Language::Lua));
+    editor.set_show_line_numbers(true);
+    editor.set_show_whitespaces(true);
+    editor.set_auto_indent_enabled(true);
+    let _ = editor.set_tab_size(4);
+}
+
+/// The script language keywords, for the autocomplete vocabulary.
+const KEYWORDS: [&str; 12] = [
+    "on", "fn", "if", "else", "while", "for", "return", "break", "continue", "true", "false",
+    "let",
+];
+
+/// The autocomplete vocabulary for one node's editor: language keywords,
+/// every builtin function name, and the message/signal names declared on
+/// the node's bus. Snapshotted once when the editor is created -- the
+/// completion callback is `'static` and cannot reach back into the app.
+pub fn autocomplete_vocabulary(app: &App, channel: u8) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    words.extend(KEYWORDS.iter().map(|w| (*w).to_string()));
+    for (_, label, _) in SIDEBAR_ITEMS {
+        words.push((*label).to_string());
+    }
+    if let Some(db) = app.channel_dbc(channel) {
+        for &(id, ext) in &db.order {
+            if let Some(m) = db.messages.get(&(id, ext)) {
+                words.push(m.name.clone());
+                for s in &m.signals {
+                    words.push(s.name.clone());
+                }
+            }
+        }
+    }
+    words.sort();
+    words.dedup();
+    words
+}
+
+/// Installs typing autocomplete fed from `words` (matched
+/// case-insensitively on the identifier prefix, top 12 suggestions).
+pub fn install_autocomplete(editor: &mut dear_imgui_cte::TextEditor, words: Vec<String>) {
+    use dear_imgui_cte::AutocompleteConfig;
+    let config = AutocompleteConfig::new();
+    let _ = editor.set_autocomplete(&config, move |request| {
+        let term = request.search_term().unwrap_or_default();
+        if term.len() < 2 {
+            return;
+        }
+        let needle = term.to_ascii_lowercase();
+        let matches: Vec<String> = words
+            .iter()
+            .filter(|w| w.len() != term.len() && w.to_ascii_lowercase().starts_with(&needle))
+            .take(12)
+            .cloned()
+            .collect();
+        let _ = request.set_suggestions(matches);
+    });
+}
 
 /// Static facts of one editor's text: the handler outline and the
 /// compile-derived send/receive/system-variable sets. Recomputed only
@@ -396,6 +461,8 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("总线控制", "sig", "sig(0x000, \"Signal\")"),
     ("总线控制", "set_sig", "set_sig(buf, 0x000, \"Signal\", 0)"),
     ("总线控制", "emit_value", "emit_value(\"Name\", 0)"),
+    ("系统变量", "sys_get", "sys_get(\"ns::name\")"),
+    ("系统变量", "sys_set", "sys_set(\"ns::name\", 0)"),
     ("帧数据", "frame_byte", "frame_byte(0)"),
     ("帧数据", "frame_dlc", "frame_dlc()"),
     ("帧数据", "frame_id", "frame_id()"),
@@ -433,21 +500,31 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
 /// The sidebar: four tabs. 函数 lists the insertable templates; 大纲 is
 /// the source's handler outline; 收发 is the static send/receive/sysvar
 /// fact table; SysVar lists the defined variables for one-click access.
+/// Each tab's content scrolls in a child of its own so the tab bar stays
+/// pinned at the top no matter how long the content grows.
 fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
         return;
     };
     if let Some(_t) = ui.tab_item("函数") {
-        fns_tab(app, ui, id);
+        ui.child_window(format!("##esbscroll{id}f"))
+            .size([0.0, 0.0])
+            .build(ui, || fns_tab(app, ui, id, node));
     }
     if let Some(_t) = ui.tab_item("大纲") {
-        outline_tab(app, ui, id);
+        ui.child_window(format!("##esbscroll{id}o"))
+            .size([0.0, 0.0])
+            .build(ui, || outline_tab(app, ui, id));
     }
     if let Some(_t) = ui.tab_item("收发") {
-        io_tab(app, ui, id, node);
+        ui.child_window(format!("##esbscroll{id}i"))
+            .size([0.0, 0.0])
+            .build(ui, || io_tab(app, ui, id, node));
     }
     if let Some(_t) = ui.tab_item("SysVar") {
-        sysvar_tab(app, ui, id);
+        ui.child_window(format!("##esbscroll{id}s"))
+            .size([0.0, 0.0])
+            .build(ui, || sysvar_tab(app, ui, id));
     }
 }
 
@@ -491,7 +568,7 @@ fn insert(app: &mut App, id: u64, text: &str) {
 }
 
 /// The insertable templates: categories with clickable items.
-fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
+fn fns_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let mut last_cat = "";
     for (cat, label, insert_text) in SIDEBAR_ITEMS {
         if *cat != last_cat {
@@ -506,11 +583,11 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
         }
     }
 
-    // DBC-aware section: the bound node's messages and signals.
+    // DBC-aware section: the bound node's own messages and signals.
     let dbc_items = owned_dbc_items(app, id);
     if !dbc_items.is_empty() {
         ui.separator();
-        ui.text_disabled("DBC 报文/信号");
+        ui.text_disabled("本节点报文/信号");
         for (msg_id, ext, msg_name, sigs) in &dbc_items {
             let id_str = format!("{msg_id:03X}{}", if *ext { "x" } else { "" });
             if ui
@@ -525,6 +602,50 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
                     .build()
                 {
                     insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                }
+            }
+        }
+    }
+
+    // The whole bus: every message/signal the bus's databases declare --
+    // a script may read (`sig`) or send (`send`) anything on its wire.
+    // Collapsed by default: a bus can declare hundreds of rows.
+    let bus_items = bus_dbc_items(app, node.channel);
+    if !bus_items.is_empty() {
+        ui.separator();
+        let open = ui.collapsing_header(
+            format!(
+                "总线全部报文（{}）##busall{id}",
+                bus_items.len()
+            ),
+            TreeNodeFlags::empty(),
+        );
+        if open {
+            for (msg_id, ext, msg_name, sigs) in &bus_items {
+                let id_str = format!("{msg_id:03X}{}", if *ext { "x" } else { "" });
+                if ui
+                    .selectable_config(format!(
+                        "{} {}##busmsg{id}_{msg_id}_{}",
+                        msg_name,
+                        id_str,
+                        *ext as u8
+                    ))
+                    .build()
+                {
+                    insert(app, id, &format!("send({:#x});", msg_id));
+                }
+                for (sig_name, _) in sigs {
+                    if ui
+                        .selectable_config(format!(
+                            "  {}##bussig{id}_{msg_id}_{}_{}",
+                            sig_name,
+                            *ext as u8,
+                            sig_name
+                        ))
+                        .build()
+                    {
+                        insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                    }
                 }
             }
         }
@@ -561,6 +682,23 @@ fn owned_dbc_items(app: &App, id: u64) -> Vec<DbcItem> {
         .collect()
 }
 
+/// Every message the node's bus's databases declare (any transmitter):
+/// `(id, ext, name, signals)` in DBC order.
+fn bus_dbc_items(app: &App, ch: u8) -> Vec<DbcItem> {
+    let Some(db) = app.channel_dbc(ch) else {
+        return Vec::new();
+    };
+    db.order
+        .iter()
+        .filter_map(|&(id, ext)| {
+            let m = db.messages.get(&(id, ext))?;
+            let sigs: Vec<(String, u64)> =
+                m.signals.iter().map(|s| (s.name.clone(), s.start_bit)).collect();
+            Some((id, ext, m.name.clone(), sigs))
+        })
+        .collect()
+}
+
 /// The source's handler outline: every event handler and function with
 /// its line number. Works on half-typed source; a compile error shows
 /// alongside so the outline degrades gracefully.
@@ -577,9 +715,16 @@ fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
         return;
     }
     for (line, label) in &facts.outline {
-        ui.selectable_config(format!("{label}##ol{line}")).build();
+        if ui.selectable_config(format!("{label}##ol{line}")).build()
+            && let Some(editor) = app.editors.get_mut(&id)
+        {
+            // Jump to the handler's line, centered in the viewport.
+            let target = *line as usize - 1;
+            let _ = editor.set_cursor(Position::new(target, 0));
+            let _ = editor.scroll_to_line(target, ScrollAlignment::Middle);
+        }
         if ui.is_item_hovered() {
-            ui.tooltip_text(format!("第 {line} 行"));
+            ui.tooltip_text(format!("第 {line} 行，点击跳转"));
         }
     }
 }
