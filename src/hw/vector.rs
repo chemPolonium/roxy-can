@@ -87,6 +87,8 @@ type XlClosePort = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlGetErrorString = unsafe extern "system" fn(XlStatus) -> *const u8;
 type XlFrSetConfiguration =
     unsafe extern "system" fn(XlPortHandle, XlAccess, *const flexray::XLfrClusterConfig) -> XlStatus;
+type XlFrGetChannelConfiguration =
+    unsafe extern "system" fn(XlPortHandle, XlAccess, *mut flexray::XLfrChannelConfig) -> XlStatus;
 type XlFrReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
 type XlGetApplConfig = unsafe extern "system" fn(
     *const u8,
@@ -134,6 +136,7 @@ struct Vxlapi {
     get_channel_index: XlGetChannelIndex,
     /// FlexRay RX-only binding (FR-2).
     fr_set_configuration: XlFrSetConfiguration,
+    fr_get_channel_configuration: XlFrGetChannelConfiguration,
     fr_receive: XlFrReceive,
 }
 
@@ -204,6 +207,7 @@ impl Vxlapi {
             set_appl_config: need!(b"xlSetApplConfig", XlSetApplConfig),
             get_channel_index: need!(b"xlGetChannelIndex", XlGetChannelIndex),
             fr_set_configuration: need!(b"xlFrSetConfiguration", XlFrSetConfiguration),
+            fr_get_channel_configuration: need!(b"xlFrGetChannelConfiguration", XlFrGetChannelConfiguration),
             fr_receive: need!(b"xlFrReceive", XlFrReceive),
         })
     }
@@ -661,6 +665,22 @@ pub mod flexray {
 
 const _: () = assert!(std::mem::size_of::<XLfrClusterConfig>() == 316);
 
+/// `xlFrGetChannelConfiguration`'s answer: the channel status bits plus
+/// the cluster configuration the driver currently holds. When `status`
+/// carries `VALID_CLUSTER_CFG` (0x04), the `cluster` copy is the real
+/// network's parameters -- read them instead of asking the user.
+pub struct XLfrChannelConfig {
+    pub status: u32,
+    pub cfg_mode: u32,
+    pub reserved: [u32; 6],
+    pub cluster: XLfrClusterConfig,
+}
+
+const _: () = assert!(std::mem::size_of::<XLfrChannelConfig>() == 348);
+
+/// `XLfrChannelConfig::status` bits (vxlapi.h 2269-2272).
+pub const FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG: u32 = 0x04;
+
 /// One received FlexRay frame: the static-slot/dynamic-slot address and
 /// the cycle it arrived in, plus the raw payload (RX-only slice -- no
 /// signal decoding).
@@ -746,6 +766,30 @@ impl FlexRayChannel {
             (lib.flush_receive_queue)(port);
             Ok(FlexRayChannel { port, mask })
         }
+    }
+
+    /// Reads the channel's current configuration. When the status carries
+    /// `VALID_CLUSTER_CFG`, `cluster` holds the parameters the channel
+    /// actually runs -- the driver's answer to "what are this network's
+    /// timings", removing the need for the user to transcribe them.
+    pub fn channel_config(&self) -> Result<XLfrChannelConfig, String> {
+        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用")?;
+        let mut cfg = flexray::XLfrChannelConfig {
+            status: 0,
+            cfg_mode: 0,
+            reserved: [0; 6],
+            cluster: XLfrClusterConfig::default(),
+        };
+        let status = unsafe {
+            (lib.fr_get_channel_configuration)(self.port, self.mask, &mut cfg)
+        };
+        if status != 0 {
+            return Err(format!(
+                "xlFrGetChannelConfiguration 失败（{}）",
+                lib.error(status)
+            ));
+        }
+        Ok(cfg)
     }
 
     /// Takes one FlexRay frame off the queue. Start-cycle and other
@@ -840,6 +884,16 @@ mod tests {
                 match FlexRayChannel::open_rx(channels[0].index, &XLfrClusterConfig::default()) {
                     Ok(mut ch) => {
                         println!("opened ch{} rx-only, draining 2 s", channels[0].index);
+                        if let Ok(cfg) = ch.channel_config() {
+                            println!(
+                                "channel cfg: status=0x{:08X} baudrate={} gMacroPerCycle={} gdMacrotick={} staticSlots={}",
+                                cfg.status,
+                                cfg.cluster.baudrate,
+                                cfg.cluster.g_macro_per_cycle,
+                                cfg.cluster.gd_macrotick,
+                                cfg.cluster.g_number_of_static_slots,
+                            );
+                        }
                         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                         let mut frames = 0usize;
                         while std::time::Instant::now() < deadline {

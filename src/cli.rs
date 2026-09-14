@@ -434,6 +434,24 @@ pub fn vector_probe() -> Result<String, String> {
         ) {
             Ok(mut ch) => {
                 s.push_str("  opened; draining 2 s with the zeroed cluster config\n");
+                match ch.channel_config() {
+                    Ok(cfg) => {
+                        s.push_str(&format!(
+                            "  channel cfg: status=0x{:08X} cfgMode={} baudrate={} gMacroPerCycle={} gdMacrotick={} staticSlots={} payloadStatic={}\n",
+                            cfg.status,
+                            cfg.cfg_mode,
+                            cfg.cluster.baudrate,
+                            cfg.cluster.g_macro_per_cycle,
+                            cfg.cluster.gd_macrotick,
+                            cfg.cluster.g_number_of_static_slots,
+                            cfg.cluster.g_payload_length_static,
+                        ));
+                        if cfg.status & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG == 0 {
+                            s.push_str("  note: no VALID_CLUSTER_CFG bit -- the driver holds no usable cluster config, frames will not arrive\n");
+                        }
+                    }
+                    Err(e) => s.push_str(&format!("  channel config read failed: {e}\n")),
+                }
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 let mut frames = 0usize;
                 while std::time::Instant::now() < deadline {
