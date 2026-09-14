@@ -11,6 +11,7 @@ roxy-can --project <p.rxproj> [...]       无头仿真整个工程
 roxy-can --check-script <f.rxcan> [...]    校验节点脚本（flag 可重复）
 roxy-can --convert <in.log> <out.asc>     BLF/ASC 转存为 ASC
 roxy-can --kvaser-probe                   列出 canlib 可见的 Kvaser 通道
+roxy-can --vector-probe                   列出 vxlapi 可见的 Vector 通道与总线类型；有 FlexRay 口时 RX 试开 2 秒
 roxy-can -h                               完整帮助
 ```
 

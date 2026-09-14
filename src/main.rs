@@ -538,6 +538,17 @@ fn main() {
             }
             return;
         }
+        Ok(cli::Cli::VectorProbe) => {
+            cli::attach_parent_console();
+            match cli::vector_probe() {
+                Ok(report) => println!("{report}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Err(msg) => {
             cli::attach_parent_console();
             eprintln!("{msg}\n\n{}", cli::usage());

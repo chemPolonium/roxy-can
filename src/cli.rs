@@ -22,6 +22,10 @@ pub enum Cli {
     /// List the Kvaser channels canlib sees: a quick way to check the
     /// driver and adapters before using the hardware link.
     KvaserProbe,
+    /// List the Vector channels vxlapi sees with their bus types, and --
+    /// when a FlexRay-capable channel is present -- open it RX-only and
+    /// drain it briefly: the FR-2 field diagnostic.
+    VectorProbe,
 }
 
 #[derive(Debug)]
@@ -68,6 +72,8 @@ pub fn usage() -> &'static str {
                                  set_sig ranges) run here too
   roxy-can --convert <in> <out>  transcode a log (.asc/.blf) to ASC
   roxy-can --kvaser-probe        list the Kvaser channels canlib sees
+  roxy-can --vector-probe        list Vector channels with bus types; opens
+                                 a FlexRay channel rx-only when present
 
 run options
   --replay <path>    log to replay (.asc or .blf)
@@ -100,6 +106,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut profile = None;
     let mut convert: Option<(String, String)> = None;
     let mut kvaser_probe = false;
+    let mut vector_probe = false;
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -125,6 +132,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
                 convert = Some((input, output));
             }
             "--kvaser-probe" => kvaser_probe = true,
+            "--vector-probe" => vector_probe = true,
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--dbc" => script_check.dbcs.push(value(args, &mut i, "--dbc")?),
             "--node" => script_check.node = Some(value(args, &mut i, "--node")?),
@@ -179,6 +187,12 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             return Err("`--kvaser-probe` runs on its own; drop the other run flags".to_string());
         }
         return Ok(Cli::KvaserProbe);
+    }
+    if vector_probe {
+        if replay.is_some() || project.is_some() || profile.is_some() {
+            return Err("`--vector-probe` runs on its own; drop the other run flags".to_string());
+        }
+        return Ok(Cli::VectorProbe);
     }
     if replay.is_some() && project.is_some() {
         return Err("`--replay` and `--project` are mutually exclusive".to_string());
@@ -390,6 +404,58 @@ pub fn kvaser_probe() -> Result<String, String> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Lists the Vector channels vxlapi discovers with their bus types. When
+/// a FlexRay-capable channel is present (a VN7640 port), opens it
+/// RX-only with a zeroed cluster configuration and drains it for two
+/// seconds, printing every frame -- the FR-2 field diagnostic. The zero
+/// configuration is a probe, not a working setup: real reception needs
+/// the target network's cluster parameters.
+pub fn vector_probe() -> Result<String, String> {
+    let channels = crate::hw::vector::enumerate()?;
+    let mut s = format!("{} Vector channel(s):\n", channels.len());
+    for c in &channels {
+        s.push_str(&format!(
+            "  ch{}: {} [can:{} flexray:{}]\n",
+            c.index, c.name, c.can, c.flexray
+        ));
+    }
+    let fr = crate::hw::vector::enumerate_flexray()?;
+    if fr.is_empty() {
+        s.push_str("no FlexRay-capable channel present\n");
+        return Ok(s);
+    }
+    for c in &fr {
+        s.push_str(&format!("opening ch{} rx-only...\n", c.index));
+            match crate::hw::vector::flexray::FlexRayChannel::open_rx(
+            c.index,
+            &crate::hw::vector::flexray::XLfrClusterConfig::default(),
+        ) {
+            Ok(mut ch) => {
+                s.push_str("  opened; draining 2 s with the zeroed cluster config\n");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                let mut frames = 0usize;
+                while std::time::Instant::now() < deadline {
+                    if let Some(f) = ch.try_read() {
+                        frames += 1;
+                        s.push_str(&format!(
+                            "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
+                            f.slot,
+                            f.cycle,
+                            f.payload.len(),
+                            f.header_crc
+                        ));
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+                s.push_str(&format!("  drained {frames} frame(s)\n"));
+            }
+            Err(e) => s.push_str(&format!("  {e}\n")),
+        }
+    }
+    Ok(s)
 }
 
 /// Compiles each node script and reports the outcome per file. A file that
