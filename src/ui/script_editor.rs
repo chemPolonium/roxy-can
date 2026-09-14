@@ -16,9 +16,13 @@ use std::hash::{Hash, Hasher};
 const SOURCE_HEIGHT: f32 = 260.0;
 const LOG_LINES: usize = 10;
 
-/// Marker color for the compile-error line: packed ABGR red, the native
-/// ImColor32 layout.
-const MARKER_COLOR: u32 = 0xFF_58_45_FF;
+/// Compile-error marker colors, packed ABGR (the native ImColor32
+/// layout). The second color fills the whole line opaquely and doubles
+/// as the hover-tooltip background, so it stays a dark, desaturated red
+/// that ordinary syntax colors read on; the line number itself carries
+/// the loud red.
+const MARKER_LINE_NUMBER: u32 = 0xFF_58_50_E8;
+const MARKER_LINE_FILL: u32 = 0xFF_20_1A_60;
 
 /// Applies the editor defaults to a freshly created CTE editor: C
 /// shaping (our language is C-flavoured -- `//` and `/* */` comments,
@@ -377,17 +381,21 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
 
             // The compile-error line gets the editor's own marker (a red
             // line highlight plus a gutter mark, both with the tooltip).
-            // Refreshed every frame: markers are frame state, not layout.
-            if let (Some(editor), Some(line)) = (app.editors.get_mut(&id), facts.error_line) {
+            // Refreshed every frame: markers are frame state, not layout
+            // -- and the clear runs unconditionally, so the band lifts
+            // the moment the draft compiles again.
+            if let Some(editor) = app.editors.get_mut(&id) {
                 editor.clear_markers();
-                let tip = facts.error.clone().unwrap_or_default();
-                let _ = editor.add_marker(
-                    (line - 1) as usize,
-                    MARKER_COLOR,
-                    MARKER_COLOR,
-                    "编译错误",
-                    &tip,
-                );
+                if let Some(line) = facts.error_line {
+                    let tip = facts.error.clone().unwrap_or_default();
+                    let _ = editor.add_marker(
+                        (line - 1) as usize,
+                        MARKER_LINE_NUMBER,
+                        MARKER_LINE_FILL,
+                        "编译错误",
+                        &tip,
+                    );
+                }
             }
 
             // Apply, then Save/Load. The 未应用 tag reads the facts hash
