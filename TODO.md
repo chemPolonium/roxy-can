@@ -174,7 +174,7 @@
 定位提醒：只做**总线监听**（RX-only），不做解码/脚本发车——那是"重做 dbc.rs"量级的另立项（依据见 `docs/roadmap.md` §8.2）。验证路径：用户的 VN7640（FlexRay 口）+ 集群参数。
 
 - ~~**FR-1 枚举分类**~~ ✅（2026-09-15）：`vector::enumerate()` 读取 `channelBusCapabilities`，`ChannelInfo` 带 `can` / `flexray` 标记；`enumerate_flexray()` 列出 FlexRay 口；CAN 挂接下拉**排除显式 FlexRay 通道**。实测坑：虚拟通道的能力位报 0——过滤采用保守策略（能力位为 0 视为 CAN，保持旧行为；只有显式 FR 位才排除）。`+58` 偏移与 FR 位的真机校准列入 FR-2。
-- **FR-2 RX-only 接收**（下一切片，需 VN7640 插上 + 集群参数）：`XL_FLEXRAY_CLUSTER_CONFIG` FFI 先用 MSVC offsetof 探针校验 packed 布局（同 CAN 结构体先例——没有校验不上产品）；打开流程 xlOpenPort(FLEXRAY) → xlFlexRaySetConfiguration → xlActivateChannel → xlReceive 事件流；帧进 Trace/日志，按 `(通道, slot, cycle)` 显示原始帧 + hex 载荷，不做信号解码。**需要用户提供**：集群参数（.arxml 或参数表），或确认用 VN7640 demo 默认集群。
+- ~~**FR-2 RX-only 接收绑定**~~ ✅（2026-09-15，绑定落地、真机收帧待 VN7640）：`XLfrClusterConfig`（79 个 u32，316 字节，全同宽字段布局可静态证明，无需探针）+ `xlFrSetConfiguration` / `xlFrReceive` FFI + `FlexRayChannel::open_rx` / `try_read`（事件偏移有合成缓冲单元测试锁定）；`flexray_rx_probe` 探针在 FR 通道存在时打开并抽干 2 秒打印帧，不存在时跳过。**剩余**：VN7640 插上后跑探针拿真实诊断（打开/配置接受度/收帧）；集群参数（.arxml 或参数表，或确认 demo 默认集群）。
 - **FR-3 Trace 展示**：帧键模型从 `(channel, id, ext)` 扩展为协议感知联合键的前置调研 + Trace 行的 slot/cycle 列。
 - **FR-4（另立项）**：FlexRay 数据库/集群解析器（.arxml ≈ 重做 dbc.rs）、信号解码、周期/抖动统计、脚本发车——与 R2 静态分析的关系一并重新评估。
 
