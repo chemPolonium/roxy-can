@@ -57,17 +57,36 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         if j == 0 {
             list_x = p[0];
         }
-        if chip {
-            ui.dummy([14.0, 0.0]);
-            ui.same_line();
+        // The drag grip leads the row: two columns of dots on an invisible
+        // button, the classic `::` handle. Dragging is the grip's job now
+        // -- the checkbox only toggles visibility.
+        ui.invisible_button(format!("##grip{j}"), [14.0, ROW_H]);
+        if ui.is_item_active() && ui.is_mouse_dragging(MouseButton::Left) {
+            *DRAG.lock().unwrap() = Some((kind, j));
         }
+        let dot = [0.42, 0.42, 0.48, 1.0];
+        for gx in [4.0, 9.0] {
+            for gy in [6.0, 10.0, 14.0] {
+                dl.add_circle([p[0] + gx, p[1] + gy], 1.0, dot)
+                    .filled(true)
+                    .build();
+            }
+        }
+        ui.same_line();
         let mut vis = signals_mut(app, kind)[j].visible;
         if ui.checkbox(format!("##sigvis{j}"), &mut vis) {
             signals_mut(app, kind)[j].visible = vis;
         }
-        if ui.is_item_active() && ui.is_mouse_dragging(MouseButton::Left) {
-            *DRAG.lock().unwrap() = Some((kind, j));
-        }
+        ui.same_line();
+        // The color chip follows the checkbox: a spacer reserves its cell
+        // and the rect lands inside it, so name and badge positions stay.
+        let chip_x = if chip {
+            let cx = ui.cursor_screen_pos()[0];
+            ui.dummy([18.0, 0.0]);
+            Some(cx)
+        } else {
+            None
+        };
         ui.same_line();
         ui.text(&key.3);
         // Right-click a Graphics/Data row routes the signal into a State
@@ -156,8 +175,8 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                 }
             });
         }
-        if chip {
-            dl.add_rect([p[0], p[1] + 4.0], [p[0] + 10.0, p[1] + 14.0], color)
+        if let Some(cx) = chip_x {
+            dl.add_rect([cx + 3.0, p[1] + 4.0], [cx + 13.0, p[1] + 14.0], color)
                 .filled(true)
                 .build();
         }
