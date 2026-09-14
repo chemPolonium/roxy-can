@@ -20,13 +20,17 @@ const LOG_LINES: usize = 10;
 /// ImColor32 layout.
 const MARKER_COLOR: u32 = 0xFF_58_45_FF;
 
-/// Applies the editor defaults to a freshly created CTE editor: Lua
-/// shaping (closest match to the script language), line numbers,
+/// Applies the editor defaults to a freshly created CTE editor: C
+/// shaping (our language is C-flavoured -- `//` and `/* */` comments,
+/// hex literals, and every control-flow keyword match), line numbers,
 /// whitespace dots, four-space tabs. Lives here because the editor must
 /// be created outside the frame's `Ui` borrow -- main (and the headless
-/// harness) call it right after construction.
+/// harness) call it right after construction. Lua was tried first and
+/// mangled comments: its single-line token is `--`, so `//` text was
+/// plain punctuation and quotes inside comments flipped string state
+/// across whole lines.
 pub fn configure_new_editor(editor: &mut dear_imgui_cte::TextEditor) {
-    editor.set_language(Some(dear_imgui_cte::Language::Lua));
+    editor.set_language(Some(dear_imgui_cte::Language::C));
     editor.set_show_line_numbers(true);
     editor.set_show_whitespaces(true);
     editor.set_auto_indent_enabled(true);
