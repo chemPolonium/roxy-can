@@ -36,8 +36,14 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # overprinted their neighbours. The fork at
 # https://github.com/chemPolonium/dear-imgui-cte-sys reserves two grid cells
 # for East Asian wide/fullwidth codepoints (see the glyphColumns() helper in
-# its TextEditor.cpp). Intended to be upstreamed to
-# goossens/ImGuiColorTextEdit and Latias94/dear-imgui-rs; drop the patch once
-# a release carries it.
+# its TextEditor.cpp).
+#
+# The same fix merged upstream as goossens/ImGuiColorTextEdit #88
+# (4bbc074 + f281364, 2026-09-13, with the maintainer's own follow-ups) --
+# but that repo is C++ only; what we consume is the crates.io packaging,
+# which still ships the pre-fix source: dear-imgui-rs@main last committed
+# 2026-09-09 and crates.io only has dear-imgui-cte-sys 0.17.0 (2026-08-17).
+# Dropping this patch before a sys release re-vendors the fixed cimCTE
+# brings the CJK overprint back.
 [patch.crates-io]
 dear-imgui-cte-sys = { git = "https://github.com/chemPolonium/dear-imgui-cte-sys", branch = "main" }
