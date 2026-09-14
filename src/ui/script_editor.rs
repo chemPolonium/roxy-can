@@ -106,6 +106,8 @@ pub(crate) struct EditorFacts {
     /// `(id, extended)` the handlers listen for.
     pub recvs: Vec<(u32, bool)>,
     pub recv_wildcard: bool,
+    /// `$Message::Signal` reads, as `(message, signal)` name pairs.
+    pub named_refs: Vec<(String, String)>,
     /// The wildcard handler itself transmits: the self-excitation hint
     /// rides on this.
     pub wildcard_sends: bool,
@@ -177,6 +179,11 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
             }
             facts.recv_wildcard = script.recv_wildcard;
             facts.wildcard_sends = script.wildcard_sends();
+            for (msg, sig) in &script.named_signal_refs {
+                if !facts.named_refs.contains(&(msg.clone(), sig.clone())) {
+                    facts.named_refs.push((msg.clone(), sig.clone()));
+                }
+            }
             for key in &script.sysvar_refs {
                 if !facts.sysvars.contains(key) {
                     facts.sysvars.push(key.clone());
@@ -840,6 +847,24 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     }
     for key in &facts.sysvars {
         ui.text(format!("  {key}"));
+    }
+
+    // `$Message::Signal` reads, marked against the DBC like the send set:
+    // `*` the pair resolves to a real message+signal, `-` it does not.
+    if !facts.named_refs.is_empty() {
+        ui.separator();
+        ui.text_disabled(format!("$速记（{}）", facts.named_refs.len()));
+        for (msg, sig) in &facts.named_refs {
+            let known = dbc.as_ref().is_some_and(|db| {
+                db.message_id_by_name(msg)
+                    .is_some_and(|id| db.message_of(id).is_some_and(|m| m.signals.iter().any(|s| &s.name == sig)))
+            });
+            let mark = if known { "*" } else { "-" };
+            ui.text(format!("  {mark} ${msg}::{sig}"));
+            if ui.is_item_hovered() && !known {
+                ui.tooltip_text("报文名或信号名不在 DBC 中——启动检查会报 [check]");
+            }
+        }
     }
 
     ui.separator();
