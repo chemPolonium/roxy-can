@@ -673,9 +673,11 @@ pub struct FrFrame {
     pub flags: u16,
 }
 
-/// The FlexRay event buffer size: 32-byte header + the union whose
-/// RX-frame member is 6 bytes of scalars + 254 payload bytes = 294.
-pub(super) const FR_EVENT_SIZE: usize = 296; // rounded up for comfortable alignment
+/// The FlexRay event buffer: MSVC probe on the shipped vxlapi.h gives
+/// sizeof(XLfrEvent) == 512 (32-byte header + a union whose raw member
+/// spans XL_FR_MAX_EVENT_SIZE - 32). The buffer MUST hold the full event
+/// -- the driver writes the whole struct, not just the received frame.
+pub(super) const FR_EVENT_SIZE: usize = 512;
 pub(super) const FR_EVENT_TAG: usize = 4;
 pub(super) const FR_EVENT_SLOT: usize = 36;
 pub(super) const FR_EVENT_CYCLE: usize = 38;
@@ -684,6 +686,9 @@ pub(super) const FR_EVENT_DATA: usize = 40;
 pub(super) const FR_EVENT_HEADER_CRC: usize = 34;
 pub(super) const FR_EVENT_FLAGS: usize = 32;
 pub(super) const XL_FR_EV_TAG_RX_FRAME: u16 = 0x0081;
+/// `vxlapi.h`: `#define XL_FR_MAX_DATA_LENGTH 254` -- also the payload
+/// ceiling inside the RX-frame event.
+pub(super) const FR_MAX_DATA_LENGTH: usize = 254;
 
 /// An open, configured FlexRay port (RX-only). Frames leave nothing to
 /// the tool yet -- this slice only watches.
@@ -768,11 +773,11 @@ pub(super) fn parse_fr_event(ev: &[u8; FR_EVENT_SIZE]) -> Option<FrFrame> {
     if tag != XL_FR_EV_TAG_RX_FRAME {
         return None;
     }
-    let slot = u16::from_le_bytes([ev[FR_EVENT_SLOT], ev[FR_EVENT_SLOT + 1]]);
-    let cycle = ev[FR_EVENT_CYCLE];
-    let len = ev[FR_EVENT_PAYLOAD_LEN] as usize;
-    let len = len.min(FR_EVENT_SIZE - FR_EVENT_DATA);
-    let payload = ev[FR_EVENT_DATA..FR_EVENT_DATA + len].to_vec();
+            let slot = u16::from_le_bytes([ev[FR_EVENT_SLOT], ev[FR_EVENT_SLOT + 1]]);
+            let cycle = ev[FR_EVENT_CYCLE];
+            let len = ev[FR_EVENT_PAYLOAD_LEN] as usize;
+            let len = len.min(FR_MAX_DATA_LENGTH);
+            let payload = ev[FR_EVENT_DATA..FR_EVENT_DATA + len].to_vec();
     let flags = u16::from_le_bytes([ev[FR_EVENT_FLAGS], ev[FR_EVENT_FLAGS + 1]]);
     let header_crc =
         u16::from_le_bytes([ev[FR_EVENT_HEADER_CRC], ev[FR_EVENT_HEADER_CRC + 1]]);
