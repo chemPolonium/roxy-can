@@ -30,9 +30,8 @@ type XlPortHandle = i32;
 type XlAccess = u64;
 
 const XL_BUS_TYPE_CAN: u32 = 1;
-/// A FlexRay-capable channel carries this bit in `channelBusCapabilities`;
-/// such channels must never surface in the CAN attach dropdown.
-const XL_BUS_TYPE_FLEXRAY: u32 = 8;
+/// `vxlapi.h` line 73: `#define XL_BUS_TYPE_FLEXRAY 0x00000004u`.
+const XL_BUS_TYPE_FLEXRAY: u32 = 4;
 const XL_INTERFACE_VERSION_V4: u32 = 4;
 /// xlReceive/xlCanReceive report this when the queue is drained.
 const XL_ERR_QUEUE_IS_EMPTY: XlStatus = 10;
@@ -86,6 +85,9 @@ type XlCanTransmitEx =
 type XlFlushReceiveQueue = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlClosePort = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlGetErrorString = unsafe extern "system" fn(XlStatus) -> *const u8;
+type XlFrSetConfiguration =
+    unsafe extern "system" fn(XlPortHandle, XlAccess, *const flexray::XLfrClusterConfig) -> XlStatus;
+type XlFrReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
 type XlGetApplConfig = unsafe extern "system" fn(
     *const u8,
     u32,
@@ -130,6 +132,9 @@ struct Vxlapi {
     set_appl_config: XlSetApplConfig,
     #[allow(dead_code)]
     get_channel_index: XlGetChannelIndex,
+    /// FlexRay RX-only binding (FR-2).
+    fr_set_configuration: XlFrSetConfiguration,
+    fr_receive: XlFrReceive,
 }
 
 impl Vxlapi {
@@ -198,6 +203,8 @@ impl Vxlapi {
             get_appl_config: need!(b"xlGetApplConfig", XlGetApplConfig),
             set_appl_config: need!(b"xlSetApplConfig", XlSetApplConfig),
             get_channel_index: need!(b"xlGetChannelIndex", XlGetChannelIndex),
+            fr_set_configuration: need!(b"xlFrSetConfiguration", XlFrSetConfiguration),
+            fr_receive: need!(b"xlFrReceive", XlFrReceive),
         })
     }
 
@@ -562,11 +569,242 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
     }
 }
 
+// ---- FlexRay RX-only 绑定（FR-2）--------------------------------------
+//
+// Transcribed from vxlapi.h (the copy this machine's driver ships):
+// every field of `XLfrClusterConfig` is an `unsigned int`, in this exact
+// order -- 64 named + 15 reserved = 316 bytes, layout provable without a
+// probe because uniform-width fields cannot pad. `XLfrEvent` is 32 bytes
+// of header + a union; with the header's pshpack8 active, the RX-frame
+// member sits at tagData+0 and its payload at tagData+8.
+//
+// The module is deliberately ahead of the product: FR-3 wires these
+// channels into the bus pipeline, until then the binding is reachable
+// from tests and the CLI probes only -- hence the dead-code allowance.
+pub mod flexray {
+    #![allow(dead_code)]
+    use super::*;
+
+    /// The cluster parameters `xlFrSetConfiguration` takes. Zeroed means
+    /// "driver defaults"; real deployments carry the target network's
+    /// values (gMacroPerCycle, gdSampleRate, ...). Field order mirrors the
+    /// header one-to-one -- do not reorder.
+    #[repr(C)]
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct XLfrClusterConfig {
+    pub bus_guardian_enable: u32,
+    pub baudrate: u32,
+    pub bus_guardian_tick: u32,
+    pub external_clock_correction_mode: u32,
+    pub g_cold_start_attempts: u32,
+    pub g_listen_noise: u32,
+    pub g_macro_per_cycle: u32,
+    pub g_max_without_clock_correction_fatal: u32,
+    pub g_max_without_clock_correction_passive: u32,
+    pub g_network_management_vector_length: u32,
+    pub g_number_of_minislots: u32,
+    pub g_number_of_static_slots: u32,
+    pub g_offset_correction_start: u32,
+    pub g_payload_length_static: u32,
+    pub g_sync_node_max: u32,
+    pub gd_action_point_offset: u32,
+    pub gd_dynamic_slot_idle_phase: u32,
+    pub gd_macrotick: u32,
+    pub gd_minislot: u32,
+    pub gd_mini_slot_action_point_offset: u32,
+    pub gd_nit: u32,
+    pub gd_static_slot: u32,
+    pub gd_symbol_window: u32,
+    pub gd_tss_transmitter: u32,
+    pub gd_wakeup_symbol_rx_idle: u32,
+    pub gd_wakeup_symbol_rx_low: u32,
+    pub gd_wakeup_symbol_rx_window: u32,
+    pub gd_wakeup_symbol_tx_idle: u32,
+    pub gd_wakeup_symbol_tx_low: u32,
+    pub p_allow_halt_due_to_clock: u32,
+    pub p_allow_passive_to_active: u32,
+    pub p_channels: u32,
+    pub p_cluster_drift_damping: u32,
+    pub p_decoding_correction: u32,
+    pub p_delay_compensation_a: u32,
+    pub p_delay_compensation_b: u32,
+    pub p_extern_offset_correction: u32,
+    pub p_extern_rate_correction: u32,
+    pub p_key_slot_used_for_startup: u32,
+    pub p_key_slot_used_for_sync: u32,
+    pub p_latest_tx: u32,
+    pub p_macro_initial_offset_a: u32,
+    pub p_macro_initial_offset_b: u32,
+    pub p_max_payload_length_dynamic: u32,
+    pub p_micro_initial_offset_a: u32,
+    pub p_micro_initial_offset_b: u32,
+    pub p_micro_per_cycle: u32,
+    pub p_micro_per_macro_nom: u32,
+    pub p_offset_correction_out: u32,
+    pub p_rate_correction_out: u32,
+    pub p_samples_per_microtick: u32,
+    pub p_single_slot_enabled: u32,
+    pub p_wakeup_channel: u32,
+    pub p_wakeup_pattern: u32,
+    pub pd_accepted_startup_range: u32,
+    pub pd_listen_timeout: u32,
+    pub pd_max_drift: u32,
+    pub pd_microtick: u32,
+    pub gd_cas_rx_low_max: u32,
+    pub g_channels: u32,
+    pub v_extern_offset_control: u32,
+    pub v_extern_rate_control: u32,
+    pub p_channels_mts: u32,
+    pub frame_preset_data: u32,
+    pub reserved: [u32; 15],
+}
+
+const _: () = assert!(std::mem::size_of::<XLfrClusterConfig>() == 316);
+
+/// One received FlexRay frame: the static-slot/dynamic-slot address and
+/// the cycle it arrived in, plus the raw payload (RX-only slice -- no
+/// signal decoding).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrFrame {
+    pub slot: u16,
+    pub cycle: u8,
+    pub payload: Vec<u8>,
+    pub header_crc: u16,
+    pub flags: u16,
+}
+
+/// The FlexRay event buffer size: 32-byte header + the union whose
+/// RX-frame member is 6 bytes of scalars + 254 payload bytes = 294.
+pub(super) const FR_EVENT_SIZE: usize = 296; // rounded up for comfortable alignment
+pub(super) const FR_EVENT_TAG: usize = 4;
+pub(super) const FR_EVENT_SLOT: usize = 36;
+pub(super) const FR_EVENT_CYCLE: usize = 38;
+pub(super) const FR_EVENT_PAYLOAD_LEN: usize = 39;
+pub(super) const FR_EVENT_DATA: usize = 40;
+pub(super) const FR_EVENT_HEADER_CRC: usize = 34;
+pub(super) const FR_EVENT_FLAGS: usize = 32;
+pub(super) const XL_FR_EV_TAG_RX_FRAME: u16 = 0x0081;
+
+/// An open, configured FlexRay port (RX-only). Frames leave nothing to
+/// the tool yet -- this slice only watches.
+#[derive(Debug)]
+pub struct FlexRayChannel {
+    port: XlPortHandle,
+    mask: XlAccess,
+}
+
+impl FlexRayChannel {
+    /// Opens the channel and applies the cluster configuration. RX-only:
+    /// the port never requests init access, so it succeeds even on a
+    /// bus another tool cold-starts.
+    pub fn open_rx(index: i32, config: &XLfrClusterConfig) -> Result<FlexRayChannel, String> {
+        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
+        unsafe {
+            let status = (lib.open_driver)();
+            if status != 0 {
+                return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
+            }
+            let mask = 1u64 << index;
+            let mut permission: XlAccess = 0;
+            let mut port: XlPortHandle = 0;
+            let status = (lib.open_port)(
+                &mut port,
+                c"roxy-can".as_ptr() as *const u8,
+                mask,
+                &mut permission,
+                65_536,
+                XL_INTERFACE_VERSION_V4,
+                XL_BUS_TYPE_FLEXRAY,
+            );
+            if status != 0 || port == XL_INVALID_PORT {
+                (lib.close_driver)();
+                return Err(format!(
+                    "打开 FlexRay 通道 {index} 失败（{}）",
+                    lib.error(status)
+                ));
+            }
+            let status = (lib.fr_set_configuration)(port, mask, config);
+            if status != 0 {
+                (lib.close_port)(port);
+                (lib.close_driver)();
+                return Err(format!(
+                    "FlexRay 集群配置被拒绝（{}）——检查集群参数与目标网络一致",
+                    lib.error(status)
+                ));
+            }
+            let status = (lib.activate_channel)(port, mask, XL_BUS_TYPE_FLEXRAY, 0);
+            if status != 0 {
+                (lib.close_port)(port);
+                (lib.close_driver)();
+                return Err(format!("激活通道失败（{}）", lib.error(status)));
+            }
+            (lib.flush_receive_queue)(port);
+            Ok(FlexRayChannel { port, mask })
+        }
+    }
+
+    /// Takes one FlexRay frame off the queue. Start-cycle and other
+    /// non-frame events are skipped; `None` when the queue is drained.
+    pub fn try_read(&mut self) -> Option<FrFrame> {
+        let lib = Vxlapi::lib()?;
+        loop {
+            let mut ev = [0u8; FR_EVENT_SIZE];
+            let status = unsafe { (lib.fr_receive)(self.port, ev.as_mut_ptr()) };
+            if status == XL_ERR_QUEUE_IS_EMPTY || status != 0 {
+                return None;
+            }
+            if let Some(frame) = parse_fr_event(&ev) {
+                return Some(frame);
+            }
+        }
+    }
+}
+
+/// Parses one raw `XLfrEvent` buffer into a frame, skipping other event
+/// kinds (start-cycle markers, status). The offsets are the pshpack8
+/// layout: 32-byte header, then flags/headerCRC/slotID/cycle/len/data.
+pub(super) fn parse_fr_event(ev: &[u8; FR_EVENT_SIZE]) -> Option<FrFrame> {
+    let tag = u16::from_le_bytes([ev[FR_EVENT_TAG], ev[FR_EVENT_TAG + 1]]);
+    if tag != XL_FR_EV_TAG_RX_FRAME {
+        return None;
+    }
+    let slot = u16::from_le_bytes([ev[FR_EVENT_SLOT], ev[FR_EVENT_SLOT + 1]]);
+    let cycle = ev[FR_EVENT_CYCLE];
+    let len = ev[FR_EVENT_PAYLOAD_LEN] as usize;
+    let len = len.min(FR_EVENT_SIZE - FR_EVENT_DATA);
+    let payload = ev[FR_EVENT_DATA..FR_EVENT_DATA + len].to_vec();
+    let flags = u16::from_le_bytes([ev[FR_EVENT_FLAGS], ev[FR_EVENT_FLAGS + 1]]);
+    let header_crc =
+        u16::from_le_bytes([ev[FR_EVENT_HEADER_CRC], ev[FR_EVENT_HEADER_CRC + 1]]);
+    Some(FrFrame {
+        slot,
+        cycle,
+        payload,
+        header_crc,
+        flags,
+    })
+}
+
+impl Drop for FlexRayChannel {
+    fn drop(&mut self) {
+        if let Some(lib) = Vxlapi::lib() {
+            unsafe {
+                (lib.deactivate_channel)(self.port, self.mask);
+                (lib.close_port)(self.port);
+                (lib.close_driver)();
+            }
+        }
+    }
+}
+}
+
 /// Lists the FlexRay-capable channels (a VN7640 port reports the
 /// FlexRay capability bit; virtual CAN channels never do). The first
 /// FlexRay slice is RX-only listening: these are the channels it will
 /// address, and the CAN attach dropdown excludes them for the same
-/// reason.
+/// reason. FR-3 will surface this in the Buses dropdown; today only the
+/// probes and tests reach it.
+#[allow(dead_code)]
 pub fn enumerate_flexray() -> Result<Vec<ChannelInfo>, String> {
     Ok(enumerate()?
         .into_iter()
@@ -577,6 +815,84 @@ pub fn enumerate_flexray() -> Result<Vec<ChannelInfo>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flexray::*;
+
+    /// FR-2 live probe: on a machine whose Vector driver lists a
+    /// FlexRay-capable channel (the VN7640), opens it RX-only with the
+    /// zeroed cluster config and reports what happens -- open errors,
+    /// config rejections, and any received frames all print. With no FR
+    /// channel present the probe skips; it never asserts on hardware
+    /// state, only on the seam not panicking.
+    #[test]
+    fn flexray_rx_probe_reports_open_and_frames() {
+        match enumerate_flexray() {
+            Err(e) => println!("vector enumerate: {e}"),
+            Ok(channels) if channels.is_empty() => {
+                println!("no FlexRay-capable channel present -- probe skipped")
+            }
+            Ok(channels) => {
+                println!("flexray channels: {channels:?}");
+                match FlexRayChannel::open_rx(channels[0].index, &XLfrClusterConfig::default()) {
+                    Ok(mut ch) => {
+                        println!("opened ch{} rx-only, draining 2 s", channels[0].index);
+                        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                        let mut frames = 0usize;
+                        while std::time::Instant::now() < deadline {
+                            if let Some(f) = ch.try_read() {
+                                frames += 1;
+                                println!(
+                                    "  frame slot={} cycle={} len={} crc=0x{:04X}",
+                                    f.slot,
+                                    f.cycle,
+                                    f.payload.len(),
+                                    f.header_crc
+                                );
+                            } else {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                        }
+                        println!("drained {frames} frame(s)");
+                    }
+                    Err(e) => println!("open failed: {e}"),
+                }
+            }
+        }
+    }
+
+    /// The event-buffer offsets, locked with a synthetic buffer: an
+    /// RX-frame event at the documented positions parses field for
+    /// field, and other tags (start cycle) are skipped.
+    #[test]
+    fn fr_event_offsets_parse_a_synthetic_event() {
+        let mut ev = [0u8; FR_EVENT_SIZE];
+        ev[FR_EVENT_TAG..FR_EVENT_TAG + 2].copy_from_slice(&XL_FR_EV_TAG_RX_FRAME.to_le_bytes());
+        ev[FR_EVENT_SLOT..FR_EVENT_SLOT + 2].copy_from_slice(&77u16.to_le_bytes());
+        ev[FR_EVENT_CYCLE] = 9;
+        ev[FR_EVENT_PAYLOAD_LEN] = 3;
+        ev[FR_EVENT_DATA..FR_EVENT_DATA + 3].copy_from_slice(&[0xDE, 0xAD, 0x01]);
+        ev[FR_EVENT_FLAGS..FR_EVENT_FLAGS + 2].copy_from_slice(&0x0002u16.to_le_bytes());
+        ev[FR_EVENT_HEADER_CRC..FR_EVENT_HEADER_CRC + 2].copy_from_slice(&0xBEEFu16.to_le_bytes());
+        let f = parse_fr_event(&ev).expect("an rx frame parses");
+        assert_eq!(f.slot, 77);
+        assert_eq!(f.cycle, 9);
+        assert_eq!(f.payload, vec![0xDE, 0xAD, 0x01]);
+        assert_eq!(f.header_crc, 0xBEEF);
+        assert_eq!(f.flags, 0x0002);
+
+        // A start-cycle event is not a frame.
+        let mut ev = [0u8; FR_EVENT_SIZE];
+        ev[FR_EVENT_TAG..FR_EVENT_TAG + 2].copy_from_slice(&0x0080u16.to_le_bytes());
+        assert!(parse_fr_event(&ev).is_none());
+    }
+
+    /// The cluster config struct is 79 uniform u32s (316 bytes) -- the
+    /// size assertion in the type body proves the layout cannot drift.
+    #[test]
+    fn fr_cluster_config_layout_is_transcribed_completely() {
+        assert_eq!(std::mem::size_of::<XLfrClusterConfig>(), 316);
+        let cfg = XLfrClusterConfig::default();
+        assert_eq!(cfg.baudrate, 0);
+    }
 
     /// Live probe against the machine's real vxlapi driver: dump every
     /// channel's config fields, then run the fixed open path end to end
