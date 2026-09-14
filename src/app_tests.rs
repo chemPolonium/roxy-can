@@ -990,11 +990,11 @@ fn node_gate_does_not_touch_entry_switches() {
     }
     app.settle();
 
-    // 切到监听：闸门关闭（条目开/关保留），再切回模拟：原样恢复发车。
-    app.set_node_role(1, "ABS", NodeRole::Monitor);
+    // 切到离线：闸门关闭（条目开/关保留），再切回模拟：原样恢复发车。
+    app.set_node_role(1, "ABS", NodeRole::Absent);
     app.settle();
     for t in app.snap.tx.iter().filter(|t| t.channel == 1) {
-        assert!(!t.gate_open, "monitor closes the gate: {}", t.id);
+        assert!(!t.gate_open, "offline closes the gate: {}", t.id);
         assert!(t.active, "switches stay as customized: {}", t.id);
     }
 
@@ -1086,8 +1086,8 @@ fn a_monitoring_node_declares_presence_without_traffic() {
     app.settle();
     assert_eq!(active_ids(&app, 1).len(), 3);
 
-    app.set_node_role(1, "ABS", NodeRole::Monitor);
-    assert_eq!(app.node_role(1, "ABS"), NodeRole::Monitor);
+    app.set_node_role(1, "ABS", NodeRole::Absent);
+    assert_eq!(app.node_role(1, "ABS"), NodeRole::Absent);
     assert!(
         [199, 200, 201].iter().all(|id| app
             .tx_list
@@ -5011,12 +5011,12 @@ fn node_roles_follow_commands_and_land_in_the_snapshot() {
     app.send(crate::bus::BusCommand::SetNodeRole {
         ch: 0,
         node: "EngineECU".to_string(),
-        role: NodeRole::Monitor,
+        role: NodeRole::Absent,
     });
     app.settle();
     assert_eq!(
         app.snap.channels[0].role_of("EngineECU"),
-        NodeRole::Monitor,
+        NodeRole::Absent,
         "the snapshot reads the new role"
     );
 }
@@ -5876,60 +5876,6 @@ fn removing_a_bus_drops_its_triggers_and_shifts_the_rest() {
     );
 }
 
-/// The per-node wire-egress switch end to end (mock adapter): with it
-/// on, the simulated node's frames are written to the wire alongside the
-/// internal bus; switching it off stops the wire, not the views.
-#[test]
-fn hardware_tx_follows_the_per_node_switch() {
-    let mut app = App::headless();
-    app.tx_list.retain(|t| t.channel != 0);
-    let (written, _incoming) = app.hw.attach_mock(0);
-    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
-    app.send(crate::bus::BusCommand::SetEntryActive {
-        ch: 0,
-        id: 0x100,
-        on: true,
-    });
-    app.hw.set_node_tx(0, "EngineECU", true);
-    app.start_virtual();
-    app.settle();
-    for t in 1..=500u64 {
-        app.advance_clock(t * 1_000);
-        app.tick(t * 1_000);
-    }
-    let wire_count = || {
-        written
-            .lock()
-            .expect("mock lock")
-            .iter()
-            .filter(|f| f.id == 0x100)
-            .count()
-    };
-    assert!(
-        wire_count() >= 2,
-        "hw egress on: the node's frames reach the wire"
-    );
-
-    // Switching the node's wire egress off stops the writes.
-    app.hw.set_node_tx(0, "EngineECU", false);
-    app.settle();
-    for t in 501..=800u64 {
-        app.advance_clock(t * 1_000);
-        app.tick(t * 1_000);
-    }
-    let after = wire_count();
-    assert!(
-        !written
-            .lock()
-            .expect("mock lock")
-            .iter()
-            .any(|f| f.t_us >= 800_000),
-        "no wire writes after the switch goes off"
-    );
-    assert_eq!(wire_count(), after);
-    app.stop();
-}
-
 /// Hardware RX: frames received on an attached adapter ingest like any
 /// bus traffic -- a real node's frames arrive this way.
 #[test]
@@ -5963,26 +5909,11 @@ fn hardware_rx_frames_ingest_like_bus_traffic() {
     app.stop();
 }
 
-/// Detaching a bus's adapter clears that bus's node switches: a wire
-/// that is gone cannot be sent on.
+/// Script frames ride the Real bus egress: a running script's `send()`
+/// frames go to the wire alongside the internal bus -- no per-node dial,
+/// the bus mode is the switch.
 #[test]
-fn detaching_hardware_clears_the_node_switches() {
-    let mut app = App::headless();
-    app.hw.attach_mock(0);
-    app.hw.set_node_tx(0, "EngineECU", true);
-    assert!(app.hw.node_sends_via_hw(0, "EngineECU"));
-    app.hw.detach(0);
-    assert!(
-        !app.hw.node_sends_via_hw(0, "EngineECU"),
-        "detach clears the bus's switches"
-    );
-}
-
-/// Script frames ride the same wire-egress switch: a node whose switch
-/// is on sends its `send()` frames to the wire alongside the internal
-/// bus.
-#[test]
-fn script_frames_follow_the_wire_egress_switch() {
+fn script_frames_reach_the_wire_in_real_bus_mode() {
     let mut app = App::headless();
     let (written, _incoming) = app.hw.attach_mock(0);
     app.send(crate::bus::BusCommand::AddNode {
@@ -5997,7 +5928,6 @@ fn script_frames_follow_the_wire_egress_switch() {
         source: "on timer 50 { send(0x777, 1); }".to_string(),
     });
     app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
-    app.hw.set_node_tx(0, "beacon", true);
     app.start_virtual();
     app.settle();
     for t in 1..=300u64 {
@@ -6021,13 +5951,12 @@ fn script_frames_follow_the_wire_egress_switch() {
 }
 
 /// Removing a bus detaches its hardware and shifts the other buses'
-/// attachments and node switches down with the bus.
+/// attachments down with the bus.
 #[test]
 fn removing_a_bus_detaches_its_hardware_and_shifts_the_rest() {
     let mut app = App::headless();
     app.hw.attach_mock(0);
     let (_w, _i) = app.hw.attach_mock(1);
-    app.hw.set_node_tx(1, "EngineECU", true);
     assert!(app.hw.is_attached(1));
 
     app.remove_channel(0);
@@ -6036,10 +5965,6 @@ fn removing_a_bus_detaches_its_hardware_and_shifts_the_rest() {
     assert!(
         app.hw.is_attached(0) && !app.hw.is_attached(1),
         "the removed bus's hardware went with it, the survivor shifted down"
-    );
-    assert!(
-        !app.hw.node_sends_via_hw(1, "EngineECU"),
-        "the removed bus's switches are gone"
     );
 }
 
@@ -6058,7 +5983,6 @@ fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
         id: 0x100,
         on: true,
     });
-    app.hw.set_node_tx(0, "EngineECU", true);
     app.start_virtual();
     app.settle();
 

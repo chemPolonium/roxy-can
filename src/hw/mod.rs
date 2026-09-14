@@ -18,7 +18,7 @@ pub mod kvaser;
 pub mod vector;
 
 use crate::can::frame::CanFrame;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 /// Which vendor driver an attachment talks through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,20 +167,19 @@ impl MockPort {
     }
 }
 
-/// All hardware attachments plus the per-node wire-egress switches.
+/// All hardware attachments plus the CANoe-style bus mode.
 #[derive(Debug)]
 pub struct Hardware {
     /// Bus index → attachment. One adapter per bus.
     pub buses: HashMap<u8, BusHardware>,
-    /// (bus, DBC node name) pairs whose generator frames also go on the
-    /// wire. `BTreeSet` keeps the snapshot listing stable.
-    pub node_tx: BTreeSet<(u8, String)>,
     /// CANoe-style bus mode. `false` (Simulated) parks every attachment:
     /// received frames are discarded and wire writes are suppressed, while
-    /// the attachments and per-node switches stay configured for the
-    /// moment the mode flips back. `true` (Real bus) connects the
-    /// attachments to their adapters. Attaching is an explicit act, so the
-    /// default keeps the attachment the user just made connected.
+    /// the attachments stay configured for the moment the mode flips
+    /// back. `true` (Real bus) connects the attachments to their
+    /// adapters -- simulated traffic for nodes in the Simulated role
+    /// goes onto the wire, and real traffic arrives through the same
+    /// attachment. Attaching is an explicit act, so the default keeps
+    /// the attachment the user just made connected.
     pub live: bool,
 }
 
@@ -191,7 +190,6 @@ impl Hardware {
     pub fn new() -> Self {
         Self {
             buses: Default::default(),
-            node_tx: Default::default(),
             live: true,
         }
     }
@@ -202,10 +200,6 @@ impl Hardware {
     #[cfg(test)]
     pub fn is_attached(&self, bus: u8) -> bool {
         self.buses.contains_key(&bus)
-    }
-
-    pub fn node_sends_via_hw(&self, bus: u8, node: &str) -> bool {
-        self.node_tx.contains(&(bus, node.to_string()))
     }
 
     /// Whether the bus's attachment has FD data-phase params applied.
@@ -231,14 +225,11 @@ impl Hardware {
 
     pub fn detach(&mut self, bus: u8) {
         self.buses.remove(&bus);
-        // A bus without hardware has no wire to send on: the per-node
-        // switches become meaningless and are cleared with it.
-        self.node_tx.retain(|(b, _)| *b != bus);
     }
 
-    /// Drops the attachment (and switches) of a bus being removed and
-    /// shifts the survivors down -- same policy as the tx entries. The
-    /// ports close with their bus.
+    /// Drops the attachment of a bus being removed and shifts the
+    /// survivors down -- same policy as the tx entries. The ports close
+    /// with their bus.
     pub fn remove_bus(&mut self, ch: usize) {
         self.buses.retain(|&b, _| b as usize != ch);
         self.buses = self
@@ -251,33 +242,15 @@ impl Hardware {
                 (b, bh)
             })
             .collect();
-        self.node_tx.retain(|(b, _)| *b as usize != ch);
-        self.node_tx = self
-            .node_tx
-            .iter()
-            .map(|&(b, ref n)| {
-                let nb = if b as usize > ch { b - 1 } else { b };
-                (nb, n.clone())
-            })
-            .collect();
     }
 
-    pub fn set_node_tx(&mut self, bus: u8, node: &str, on: bool) {
-        if on {
-            if self.buses.contains_key(&bus) {
-                self.node_tx.insert((bus, node.to_string()));
-            }
-        } else {
-            self.node_tx.remove(&(bus, node.to_string()));
-        }
-    }
-
-    /// Writes one frame out the bus's wire, if a node switch directs it
-    /// there. Kvaser 虚拟通道的只收句柄同样能发车；物理适配器的只收
-    /// 句柄写入失败时静默降级——帧已留在内部总线，视图不丢。
+    /// Writes one frame out the bus's wire in Real bus mode. Everything
+    /// the tool transmits for a Simulated node rides the same switch --
+    /// CANoe's simulated/real bus distinction, not a per-node dial.
+    /// 只收句柄写入失败时静默降级——帧已留在内部总线，视图不丢。
     /// Simulated 模式（`!live`）不写线。
-    pub fn write_if_directed(&mut self, bus: u8, node: &str, f: &CanFrame) {
-        if !self.live || node.is_empty() || !self.node_sends_via_hw(bus, node) {
+    pub fn write_if_live(&mut self, bus: u8, f: &CanFrame) {
+        if !self.live {
             return;
         }
         if let Some(bh) = self.buses.get_mut(&bus) {

@@ -57,7 +57,7 @@ role = "Simulated"
 [[node]]
 bus = "CAN2"
 node = "ABS"
-role = "Monitor"
+role = "Absent"
 "#,
     );
     let summary = apply_profile(&mut app, &dir, "bench").expect("profile applies");
@@ -73,7 +73,7 @@ role = "Monitor"
             .all(|t| !t.active),
         "the muted project stays muted until the user enables entries"
     );
-    assert_eq!(app.node_role(1, "ABS"), NodeRole::Monitor);
+    assert_eq!(app.node_role(1, "ABS"), NodeRole::Absent);
     assert!(summary.contains("2 role override(s)"), "{summary}");
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -153,10 +153,17 @@ fn parse_errors_name_the_offending_entry() {
         parse("[[node]]\nbus = \"A\"\nnode = \"B\"\nrole = \"Sim\"\n").is_err(),
         "an unknown role word is a parse error, not a default"
     );
-    let doc = "[[node]]\nbus = \"A\"\nnode = \"B\"\nrole = \"Monitor\"\n";
+    let doc = "[[node]]\nbus = \"A\"\nnode = \"B\"\nrole = \"Absent\"\n";
     let (roles, hw) = parse(doc).unwrap();
     assert_eq!(roles.len(), 1);
     assert!(hw.is_empty());
+    // The retired three-state vocabulary stays rejected: Monitor folded
+    // into Absent, and old profiles saying so are refused wholesale (the
+    // user re-saves them with the current words).
+    assert!(
+        parse("[[node]]\nbus = \"A\"\nnode = \"B\"\nrole = \"Monitor\"\n").is_err(),
+        "Monitor is retired vocabulary now"
+    );
 }
 
 /// The `[[hw]]` layer: integer channel required, negatives refused, and

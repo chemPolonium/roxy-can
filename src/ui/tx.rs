@@ -183,17 +183,6 @@ pub fn render_node_generator(app: &mut App, ui: &Ui, nch: u8, nname: &str) {
     if ui.is_item_hovered() {
         ui.tooltip_text(role.hint());
     }
-    let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == nch);
-    if role == crate::app::NodeRole::Simulated && bus_has_hw {
-        ui.same_line();
-        let mut via_hw = app.snap.hw_tx_nodes.contains(&(nch, nname.to_string()));
-        if ui.checkbox("经硬件##netnodehw", &mut via_hw) {
-            app.set_node_hardware_tx(nch, nname, via_hw);
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("该节点的发车同时上真实总线（Kvaser）");
-        }
-    }
 
     // Add: this node's own messages from its bus's databases.
     let mut ids: Vec<u32> = Vec::new();

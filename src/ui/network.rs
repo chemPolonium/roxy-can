@@ -60,7 +60,6 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
             let role = app.node_role(ch as u8, &ni.name);
             let (tag, tag_color) = match role {
                 crate::app::NodeRole::Simulated => ("[S]", [0.95, 0.70, 0.20, 1.0]),
-                crate::app::NodeRole::Monitor => ("[M]", [0.45, 0.62, 0.80, 1.0]),
                 crate::app::NodeRole::Absent => ("[-]", [0.45, 0.45, 0.55, 1.0]),
             };
             ui.text_colored(tag_color, tag);

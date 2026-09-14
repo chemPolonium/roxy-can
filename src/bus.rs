@@ -280,15 +280,6 @@ pub enum BusCommand {
     DetachHardware {
         bus: u8,
     },
-    /// The per-node wire-egress switch: with it on, the node's generator
-    /// frames go out the attached hardware *and* stay on the internal
-    /// bus. Never set automatically -- doubling a real node is the
-    /// user's explicit choice.
-    SetNodeHardwareTx {
-        ch: u8,
-        node: String,
-        on: bool,
-    },
     /// Trigger-recording context, clamped core-side: pre-trigger frames,
     /// post-roll frames, and the marker list cap. Any subset may be set.
     SetRunLimits {
@@ -625,8 +616,6 @@ pub struct Snapshot {
     /// Whether the attachments are wire-connected (Real bus) or parked
     /// (Simulated): the toolbar bus-mode switch reads this.
     pub real_bus: bool,
-    /// Node names whose generator frames currently go out the wire.
-    pub hw_tx_nodes: Vec<(u8, String)>,
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
@@ -1077,7 +1066,6 @@ impl BusCore {
             }
             BusCommand::SetNodeName { id, name } => {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
-                    let old = n.name.clone();
                     n.name = name.clone();
                     // The selection tree lists streams under the owner's
                     // name: a rename rewrites the owner, not the key.
@@ -1085,11 +1073,6 @@ impl BusCore {
                         if k.1 & !crate::app::EMITTED_ID_BASE == id as u32 {
                             *owner = name.clone();
                         }
-                    }
-                    // The wire-egress switch follows the node across the
-                    // rename instead of being lost.
-                    if old != name && self.hw.node_tx.remove(&(n.channel, old)) {
-                        self.hw.node_tx.insert((n.channel, name.clone()));
                     }
                     self.nodes_dirty = true;
                 }
@@ -1451,14 +1434,6 @@ impl BusCore {
                 self.hw.detach(bus);
                 *status = format!("hardware detached from bus {}", bus + 1);
             }
-            BusCommand::SetNodeHardwareTx { ch, node, on } => {
-                self.hw.set_node_tx(ch, &node, on);
-                *status = if on {
-                    format!("{node} 发车上真实总线（经硬件）")
-                } else {
-                    format!("{node} 回到纯虚拟发车")
-                };
-            }
             BusCommand::SetRunLimits {
                 pre_frames,
                 post_frames,
@@ -1684,8 +1659,8 @@ impl BusCore {
         let mut node_lines: Vec<(String, String)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
-            // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线/监听时
-            // 脚本同样不发车（模拟 = 闸门放行）。
+            // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线时脚本同样
+            // 不发车（模拟 = 闸门放行）。
             let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
                 self.channels
                     .get(*ach as usize)
@@ -1693,10 +1668,9 @@ impl BusCore {
             });
             for (id, ext, data) in node.run_timers(now_us, &input) {
                 let frame = Self::node_frame(node.channel, id, ext, &data, self.sim_t_us);
-                // Script frames follow the same wire-egress switch as the
-                // generator: the node's name is the switch key.
+                // Real bus 模式下脚本帧与生成器帧一样上挂接通道。
                 if script_allowed {
-                    self.hw.write_if_directed(node.channel, &node.name, &frame);
+                    self.hw.write_if_live(node.channel, &frame);
                     self.buf.push(frame);
                 }
             }
@@ -1746,12 +1720,12 @@ impl BusCore {
             });
             let node_out =
                 node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input);
-            // The node's own wire egress: reactions go out the attached
-            // hardware under the same per-node switch as everything else.
-            if script_allowed && self.hw.node_sends_via_hw(node.channel, &node.name) {
+            // The node's own wire egress: Real bus 模式下反应帧与生成器帧
+            // 一样上挂接通道。
+            if script_allowed {
                 for (id, ext, data) in &node_out {
                     let frame = Self::node_frame(node.channel, *id, *ext, data, f.t_us);
-                    self.hw.write_if_directed(node.channel, &node.name, &frame);
+                    self.hw.write_if_live(node.channel, &frame);
                 }
             }
             out.extend(node_out);
@@ -1992,7 +1966,6 @@ impl BusCore {
                 })
                 .collect(),
             real_bus: self.hw.live,
-            hw_tx_nodes: self.hw.node_tx.iter().cloned().collect(),
             triggers: self.triggers.clone(),
             last_record: self.recorder.last_record.clone(),
             channels: self
@@ -2677,8 +2650,7 @@ impl BusCore {
                 "simulating {node} on {bus} ({} message(s), 条目按各自开关发车)",
                 ids.len()
             ),
-            NodeRole::Monitor => format!("{node} monitors {bus} (receiving only)"),
-            NodeRole::Absent => format!("{node} absent from {bus}"),
+            NodeRole::Absent => format!("{node} offline from {bus}"),
         };
         // The role cards read the role map: republish.
         self.nodes_dirty = true;
@@ -3323,12 +3295,10 @@ impl BusCore {
                     dir: Direction::Tx,
                     flags,
                 };
-                // The per-node wire egress: a node switched to hardware
-                // sends its frames onto the real wire *and* keeps them on
-                // the internal bus so every view sees them. Off by
-                // default -- doubling a real node is the user's explicit
-                // choice, never an automatic one.
-                self.hw.write_if_directed(tx.channel, &tx.node, &frame);
+                // The wire egress in Real bus mode: simulated frames go
+                // onto the attached channel *and* stay on the internal
+                // bus so every view sees them.
+                self.hw.write_if_live(tx.channel, &frame);
                 emitted.push(frame);
             }
         }

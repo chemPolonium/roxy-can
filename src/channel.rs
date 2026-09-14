@@ -6,35 +6,32 @@ use std::sync::Arc;
 
 use crate::dbc::SymbolTable;
 
-/// Who plays a DBC node on this bus. The role answers "who is this node
-/// right now", never "how it runs" -- the driver (generator entries, a
-/// script, replay) is a separate choice. The declaration can only name
-/// nodes the DBC already declares; anything else is a mismatch the UI
-/// never offers.
+/// Who plays a DBC node on this bus -- and there are exactly two
+/// answers, like CANoe's simulated bus: the tool transmits as the node
+/// (its generator entries and bound scripts drive), or the node is off
+/// the simulated bus entirely (nothing is transmitted for it; its real
+/// traffic arrives through attached hardware in Real bus mode, or from
+/// replay blocks). The declaration can only name nodes the DBC already
+/// declares; anything else is a mismatch the UI never offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeRole {
     /// This tool transmits as the node: its DBC-scheduled TX frames come
-    /// from the generator. Later phases may bind a script as the driver.
+    /// from the generator, and bound scripts may drive.
     Simulated,
-    /// The node is present and listens but transmits nothing here --
-    /// a zero-cost role. With no hardware attached, its frames can only
-    /// come from a replay.
-    Monitor,
-    /// The node is not on the simulated bus at all: nothing is transmitted
-    /// for it. This is also the default for every node without an entry,
-    /// so restbus needs no configuration -- absent is what you get.
+    /// The node is not simulated: nothing is transmitted for it. This is
+    /// also the default for every node without an entry, so restbus needs
+    /// no configuration -- off is what you get.
     Absent,
 }
 
 impl NodeRole {
-    /// The three roles in display order (increasing presence).
-    pub const ALL: [NodeRole; 3] = [NodeRole::Absent, NodeRole::Monitor, NodeRole::Simulated];
+    /// The two roles in display order (increasing presence).
+    pub const ALL: [NodeRole; 2] = [NodeRole::Absent, NodeRole::Simulated];
 
     /// The UI label.
     pub fn label(self) -> &'static str {
         match self {
             NodeRole::Absent => "离线",
-            NodeRole::Monitor => "监听",
             NodeRole::Simulated => "模拟",
         }
     }
@@ -44,20 +41,15 @@ impl NodeRole {
     pub fn tag(self) -> &'static str {
         match self {
             NodeRole::Absent => "Absent",
-            NodeRole::Monitor => "Monitor",
             NodeRole::Simulated => "Simulated",
         }
     }
 
-    /// One-line explanation shown under every role selector. The three
-    /// roles differ in what they *declare*; two of them agree in what
-    /// they *do* today -- the copy has to say so, or the difference is
-    /// invisible.
+    /// One-line explanation shown under every role selector.
     pub fn hint(self) -> &'static str {
         match self {
-            NodeRole::Simulated => "本工具以它名义发车：名下报文按库声明周期发送",
-            NodeRole::Monitor => "在总线上只收不发；接真实硬件后，它的流量来自真实节点",
-            NodeRole::Absent => "不在仿真总线上：报文需来自回放块或硬件（默认态）",
+            NodeRole::Simulated => "本工具以它名义发车：名下报文按库声明周期发送，绑定脚本受同一闸门",
+            NodeRole::Absent => "不模拟：报文需来自回放块或真实总线（Real bus 模式下的挂接通道），默认态",
         }
     }
 
@@ -112,7 +104,9 @@ impl Channel {
 
     /// Records a role. `Absent` removes the entry: the map holds only
     /// deviations from the default, and a node's role outliving its
-    /// database is meaningless anyway.
+    /// database is meaningless anyway. Old projects' `Monitor` entries
+    /// go the same way: the loader drops unknown role words, and the
+    /// two-state model has no monitor state to remember.
     pub fn set_node_role(&mut self, node: &str, role: NodeRole) {
         match role {
             NodeRole::Absent => {

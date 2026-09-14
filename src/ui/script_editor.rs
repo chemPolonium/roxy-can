@@ -303,22 +303,6 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         }
     }
     ui.same_line();
-    // The wire-egress switch: shown whenever the node's bus has hardware
-    // attached. 只收挂接在虚拟通道上同样能发车（驱动行为）。
-    let bus_has_hw = app.snap.hw.iter().any(|h| h.bus == node.channel);
-    if bus_has_hw {
-        let mut via_hw = app
-            .snap
-            .hw_tx_nodes
-            .contains(&(node.channel, node.name.clone()));
-        if ui.checkbox(format!("经硬件##ehw{id}"), &mut via_hw) {
-            app.set_node_hardware_tx(node.channel, &node.name, via_hw);
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("该节点的发车同时上真实总线（Kvaser）");
-        }
-    }
-    ui.same_line();
     let mut enabled = node.enabled;
     if ui.checkbox(format!("运行##een{id}"), &mut enabled) {
         app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: enabled });

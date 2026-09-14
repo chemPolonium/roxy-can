@@ -312,16 +312,6 @@ impl App {
         });
     }
 
-    /// The per-node wire-egress switch: on = the node's generator frames
-    /// also go out the attached hardware.
-    pub fn set_node_hardware_tx(&mut self, ch: u8, node: &str, on: bool) {
-        self.send(crate::bus::BusCommand::SetNodeHardwareTx {
-            ch,
-            node: node.to_string(),
-            on,
-        });
-    }
-
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

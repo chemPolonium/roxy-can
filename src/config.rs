@@ -1491,7 +1491,7 @@ mod tests {
     #[test]
     fn node_roles_round_trip_without_starting_traffic() {
         let mut app = App::headless();
-        app.channels[1].set_node_role("ABS", NodeRole::Monitor);
+        app.channels[1].set_node_role("ABS", NodeRole::Absent);
         app.channels[1].set_node_role("GearBox", NodeRole::Simulated);
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
@@ -1501,8 +1501,8 @@ mod tests {
             .apply(&mut restored);
         assert_eq!(
             restored.channels[1].role_of("ABS"),
-            NodeRole::Monitor,
-            "a monitor stays a monitor"
+            NodeRole::Absent,
+            "an offline node stays offline"
         );
         assert_eq!(
             restored.channels[1].role_of("GearBox"),
@@ -1526,7 +1526,9 @@ mod tests {
 
     /// Old projects carry the simulated names as a plain list; they load
     /// as `Simulated` role declarations. Role names the program does not
-    /// know are dropped, per the unknown-code convention.
+    /// know are dropped, per the unknown-code convention -- including the
+    /// retired `Monitor` word, which the two-state model folds into
+    /// `Absent`.
     #[test]
     fn legacy_sim_nodes_become_roles_and_unknown_roles_are_dropped() {
         let cfg: Config = serde_json::from_str(
@@ -1551,7 +1553,11 @@ mod tests {
             NodeRole::Simulated,
             "the legacy simulated list migrated"
         );
-        assert_eq!(app.channels[0].role_of("GearBox"), NodeRole::Monitor);
+        assert_eq!(
+            app.channels[0].role_of("GearBox"),
+            NodeRole::Absent,
+            "the retired Monitor word lands as Absent, the same behaviour"
+        );
         assert_eq!(
             app.channels[0].role_of("DashBoard"),
             NodeRole::Absent,
