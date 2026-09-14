@@ -33,6 +33,9 @@ const XL_BUS_TYPE_CAN: u32 = 1;
 const XL_INTERFACE_VERSION_V4: u32 = 4;
 /// xlReceive/xlCanReceive report this when the queue is drained.
 const XL_ERR_QUEUE_IS_EMPTY: XlStatus = 10;
+/// A failed xlOpenPort leaves this in the port handle (verified live:
+/// a successful open returned 0 and 1 -- 0 is a valid handle).
+const XL_INVALID_PORT: XlPortHandle = -1;
 /// The driver config buffer: 48-byte header + 64 packed channel records.
 const DRIVER_CONFIG_SIZE: usize = 14_576;
 const DRIVER_CONFIG_CHANNEL_STRIDE: usize = 227;
@@ -80,6 +83,24 @@ type XlCanTransmitEx =
 type XlFlushReceiveQueue = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlClosePort = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlGetErrorString = unsafe extern "system" fn(XlStatus) -> *const u8;
+type XlGetApplConfig = unsafe extern "system" fn(
+    *const u8,
+    u32,
+    *mut u32,
+    *mut u32,
+    *mut u32,
+    u32,
+) -> XlStatus;
+type XlSetApplConfig = unsafe extern "system" fn(
+    *const u8,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+) -> XlStatus;
+/// Returns the channel mask directly (0 = not found), not a status.
+type XlGetChannelIndex = unsafe extern "system" fn(u32, u32, u32) -> XlAccess;
 
 /// Every vxlapi entry the tool needs. `None` members mean the export was
 /// missing -- the wrapper reports "driver not available".
@@ -97,8 +118,15 @@ struct Vxlapi {
     flush_receive_queue: XlFlushReceiveQueue,
     close_port: XlClosePort,
     /// Serves driver-error text in attach failures.
-    #[allow(dead_code)]
     get_error_string: XlGetErrorString,
+    /// The application's registered channel mapping; registration via
+    /// `set_appl_config` on first use.
+    #[allow(dead_code)]
+    get_appl_config: XlGetApplConfig,
+    #[allow(dead_code)]
+    set_appl_config: XlSetApplConfig,
+    #[allow(dead_code)]
+    get_channel_index: XlGetChannelIndex,
 }
 
 impl Vxlapi {
@@ -164,7 +192,35 @@ impl Vxlapi {
             flush_receive_queue: need!(b"xlFlushReceiveQueue", XlFlushReceiveQueue),
             close_port: need!(b"xlClosePort", XlClosePort),
             get_error_string: need!(b"xlGetErrorString", XlGetErrorString),
+            get_appl_config: need!(b"xlGetApplConfig", XlGetApplConfig),
+            set_appl_config: need!(b"xlSetApplConfig", XlSetApplConfig),
+            get_channel_index: need!(b"xlGetChannelIndex", XlGetChannelIndex),
         })
+    }
+
+    /// The driver's own error text for a status code (static buffer).
+    /// Every failure that reaches the user carries this, not just the
+    /// number -- "status 101" alone has cost an entire debugging round.
+    fn error_text(&self, status: XlStatus) -> String {
+        // SAFETY: the export returns a pointer to a driver-owned static
+        // string valid for the process lifetime.
+        let raw = unsafe { (self.get_error_string)(status) };
+        if raw.is_null() {
+            return String::new();
+        }
+        // SAFETY: NUL-terminated ANSI text from the driver.
+        let bytes = unsafe { std::ffi::CStr::from_ptr(raw as *const std::ffi::c_char) };
+        bytes.to_string_lossy().into_owned()
+    }
+
+    /// `status {code} ({text})` for failure messages.
+    fn error(&self, status: XlStatus) -> String {
+        let text = self.error_text(status);
+        if text.is_empty() {
+            format!("status {status}")
+        } else {
+            format!("status {status}: {text}")
+        }
     }
 
     fn lib() -> Option<&'static Vxlapi> {
@@ -245,6 +301,12 @@ impl VectorChannel {
     /// path. `fd_data_kbps` is accepted for interface parity with the
     /// Kvaser path but not yet applied (Vector FD config goes through
     /// `XLcanFdConf`, deferred); `fd` therefore stays false.
+    ///
+    /// The permission request names the channels in the mask, not the
+    /// whole 64-bit space (`u64::MAX` reads as an out-of-range channel
+    /// and fails with `XL_ERR_WRONG_PARAMETER`); the driver downgrades
+    /// to basic access when another program holds the channel, which
+    /// the init path reports so the attach logic can retry rx-only.
     pub fn open(
         index: i32,
         kbps: u32,
@@ -256,10 +318,10 @@ impl VectorChannel {
         unsafe {
             let status = (lib.open_driver)();
             if status != 0 {
-                return Err(format!("xlOpenDriver 失败（status {status}）"));
+                return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
             }
             let mask = 1u64 << index;
-            let mut permission: XlAccess = if init_access { u64::MAX } else { 0 };
+            let mut permission: XlAccess = if init_access { mask } else { 0 };
             let mut port: XlPortHandle = 0;
             let status = (lib.open_port)(
                 &mut port,
@@ -270,26 +332,40 @@ impl VectorChannel {
                 XL_INTERFACE_VERSION_V4,
                 XL_BUS_TYPE_CAN,
             );
-            if status != 0 || port == 0 {
+            if status != 0 || port == XL_INVALID_PORT {
                 (lib.close_driver)();
                 return Err(format!(
-                    "打开 Vector 通道 {index} 失败（status {status}）"
+                    "打开 Vector 通道 {index} 失败（{}）",
+                    lib.error(status)
                 ));
             }
-            let bitrate = kbps.saturating_mul(1_000);
-            let status = (lib.can_set_channel_bitrate)(port, mask, bitrate);
-            if status != 0 {
+            let granted = permission & mask != 0;
+            if init_access && !granted {
+                // Downgraded to basic access: another program owns the
+                // channel. Close and let the attach logic retry rx-only.
                 (lib.close_port)(port);
                 (lib.close_driver)();
-                return Err(format!(
-                    "设置波特率 {kbps} kbit/s 失败（status {status}）"
-                ));
+                return Err("通道被其他程序占用（只得到只收权限）".to_string());
+            }
+            // Bitrate needs init access; a monitoring port attaches at
+            // whatever the bus already runs.
+            if init_access {
+                let bitrate = kbps.saturating_mul(1_000);
+                let status = (lib.can_set_channel_bitrate)(port, mask, bitrate);
+                if status != 0 {
+                    (lib.close_port)(port);
+                    (lib.close_driver)();
+                    return Err(format!(
+                        "设置波特率 {kbps} kbit/s 失败（{}）",
+                        lib.error(status)
+                    ));
+                }
             }
             let status = (lib.activate_channel)(port, mask, XL_BUS_TYPE_CAN, 0);
             if status != 0 {
                 (lib.close_port)(port);
                 (lib.close_driver)();
-                return Err(format!("激活通道失败（status {status}）"));
+                return Err(format!("激活通道失败（{}）", lib.error(status)));
             }
             // Frames queued while parked (or from a previous owner of the
             // channel) must not leak into this run's views.
@@ -348,7 +424,7 @@ impl VectorChannel {
         } else if status == 0 {
             Err("帧未进入发送队列".to_string())
         } else {
-            Err(format!("xlCanTransmitEx 失败（status {status}）"))
+            Err(format!("xlCanTransmitEx 失败（{}）", lib.error(status)))
         }
     }
 
@@ -434,13 +510,13 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
     unsafe {
         let status = (lib.open_driver)();
         if status != 0 {
-            return Err(format!("xlOpenDriver 失败（status {status}）"));
+            return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
         }
         let mut config = [0u8; DRIVER_CONFIG_SIZE];
         let status = (lib.get_driver_config)(config.as_mut_ptr());
         if status != 0 {
             (lib.close_driver)();
-            return Err(format!("xlGetDriverConfig 失败（status {status}）"));
+            return Err(format!("xlGetDriverConfig 失败（{}）", lib.error(status)));
         }
         let count = u32::from_le_bytes(
             config[DRIVER_CONFIG_CHANNEL_COUNT..DRIVER_CONFIG_CHANNEL_COUNT + 4]
@@ -466,5 +542,83 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
         }
         (lib.close_driver)();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Live probe against the machine's real vxlapi driver: dump every
+    /// channel's config fields, then run the fixed open path end to end
+    /// -- init open, bitrate, activate -- on the first virtual channel,
+    /// plus an rx-only open of the next, and prove the pair passes a
+    /// frame (the virtual bus loops transmit back as receive). Leaves
+    /// the driver's app-config registration for "roxy-can" pointing at
+    /// the first virtual channel (it started life as junk from an early
+    /// probe).
+    #[test]
+    fn vector_open_probe_loops_a_frame_over_the_virtual_bus() {
+        let Some(lib) = Vxlapi::lib() else {
+            println!("no vxlapi -- probe skipped");
+            return;
+        };
+        let channels = enumerate().expect("enumerate");
+        println!("driver channels: {channels:?}");
+        if channels.len() < 2 {
+            println!("need two virtual channels for the loop -- probe skipped");
+            return;
+        }
+        unsafe {
+            let status = (lib.open_driver)();
+            assert_eq!(status, 0, "xlOpenDriver: {}", lib.error(status));
+            // Registration housekeeping: point app channel 0 at the first
+            // virtual channel (hwType 1 = XL_HWTYPE_VIRTUAL).
+            let (vch0, vch1) = (channels[0].index, channels[1].index);
+            let status = (lib.set_appl_config)(
+                c"roxy-can".as_ptr() as *const u8,
+                0,
+                1,
+                0x160_000,
+                0,
+                XL_BUS_TYPE_CAN,
+            );
+            println!("SetApplConfig housekeeping: {status}");
+
+            // The production init path on channel A.
+            let a = VectorChannel::open(vch0, 500, None, true).expect("init open");
+            assert!(!a.fd);
+            // The production monitoring path on channel B.
+            let mut b = VectorChannel::open(vch1, 500, None, false).expect("rx open");
+
+            // Transmit a frame on A; the virtual bus delivers it to B.
+            let frame = CanFrame {
+                t_us: 0,
+                channel: 0,
+                id: 0x123,
+                extended: false,
+                len: 2,
+                data: {
+                    let mut d = [0u8; MAX_CAN_FD_LEN];
+                    d[..2].copy_from_slice(&[0xAB, 0xCD]);
+                    d
+                },
+                dir: Direction::Tx,
+                flags: FrameFlags::NONE,
+            };
+            a.write_frame(&frame).expect("tx");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let got = loop {
+                if std::time::Instant::now() > deadline {
+                    panic!("the looped frame never arrived on the second channel");
+                }
+                if let Some(f) = b.try_read() {
+                    break f;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            assert_eq!((got.id, got.len, got.data[0]), (0x123, 2, 0xAB));
+            println!("loopback ok: id=0x{:X} len={} data[0]=0x{:02X}", got.id, got.len, got.data[0]);
+        }
     }
 }
