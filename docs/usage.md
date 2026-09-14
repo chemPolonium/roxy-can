@@ -112,7 +112,7 @@ roxy-can -h                               完整帮助
 ## 系统变量（System Variables 窗口）
 
 - **View > System Variables**：CANoe 式的命名空间变量管理。表格列出 namespace、name、实时 Value（**行内可改**）、Init、Min、Max、Unit/Comment；"+ Variable" 或行内 edit 打开编辑对话框（非法输入在对话框内直接报错，不落总线），x 删除。定义随工程保存。
-- **脚本访问**：`sys_get("ns::name")` 读、`sys_set("ns::name", v)` 写（语言参考有详述）。写入被夹到定义的界限内；引用未定义的变量在节点启动时报出来。
+- **脚本访问**：`sys_get("ns::name")` 读、`sys_set("ns::name", v)` 写，或用 CANoe 风格速记 `@sysvar::ns::name`（读）/ `@sysvar::ns::name = v;`（写，仍受界限钳位）。信号速记 `$报文名::信号名` 同样可用（等价 `sig(id, "名字")`，id 由库名字解析，名字拼错在启动检查报出）。写入被夹到定义的界限内；引用未定义的变量在节点启动时报出来。
 - **可观测**：每个变量发布为一条合成订阅流，信号选择树里**按 namespace 分组**——Data / Graphics / State Tracker 像选数据库信号一样选用。
 - **测量开始复位**：每次 Start（虚拟或回放）所有变量回到声明的初值并重发布，观察曲线不会拖到上一次运行的尾巴。
 - 值为数值型（浮点/整数通用）；改名 = 删除旧名 + 定义新名（脚本引用不会自动跟随，启动检查会报出来）。

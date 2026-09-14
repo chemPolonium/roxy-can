@@ -99,6 +99,10 @@ pub struct Vm {
     pub frame_id: u32,
     /// xorshift64 state for `random()`; re-seedable via `srand`.
     pub rng: u64,
+    /// Message name → id, injected by the host from its database for
+    /// `$Message::Signal` reads (`sig_named`). Pure data: the kernel
+    /// stays bus-free -- the host decides what the names mean.
+    pub named_messages: std::collections::HashMap<String, u32>,
 }
 
 impl Vm {
@@ -121,6 +125,7 @@ impl Vm {
             frame_bytes: Vec::new(),
             frame_id: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
+            named_messages: std::collections::HashMap::new(),
         }
     }
 
@@ -536,6 +541,29 @@ impl Vm {
                     None => {
                         return Err(VmError(format!(
                             "sig: no value for {id:#x} {sig:?} (not seen yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
+            "sig_named" => {
+                // sig_named("Message", "Signal") -- the `$Message::Signal`
+                // sugar. The host injected the message-name → id map from
+                // its database at start; the read then behaves exactly
+                // like `sig`.
+                let (Value::Str(msg), Value::Str(sig)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "sig_named(\"Message\", \"Signal\") needs two strings".into(),
+                    ));
+                };
+                let Some(&id) = self.named_messages.get(msg) else {
+                    return Err(VmError(format!("sig_named: unknown message {msg:?}")));
+                };
+                match self.host_input.signals.get(&(id, sig.clone())) {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "sig_named: no value for {msg}::{sig} (not seen yet)"
                         )));
                     }
                 }

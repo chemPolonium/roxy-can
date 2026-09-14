@@ -419,6 +419,54 @@ impl P {
     }
 
     fn stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
+        // `$Message::Signal = v;` has no meaning here -- signal writes go
+        // through `set_sig`'s buffer semantics. Fail with the pointer to
+        // the real form instead of a confusing "expected ';'". (`::` lexes
+        // as two Colons, so the write shape is $ id : : id = .)
+        if self.at(&Tok::Dollar)
+            && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::Colon))
+            && matches!(self.toks.get(self.pos + 3).map(|t| &t.tok), Some(Tok::Colon))
+            && matches!(self.toks.get(self.pos + 4).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(self.toks.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Assign))
+        {
+            return self.err(
+                "signal writes go through set_sig(buffer, id, \"Name\", value); \
+                 $Message::Signal is read-only",
+            );
+        }
+        // `@sysvar::ns::name = v;` -- the write form, desugared into
+        // `sys_set("ns::name", v)`. Reads fall through to the expression
+        // parser below.
+        if self.at(&Tok::At)
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Ident(f)) if f == "sysvar"
+            )
+            && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::Colon))
+            && matches!(self.toks.get(self.pos + 3).map(|t| &t.tok), Some(Tok::Colon))
+            && matches!(self.toks.get(self.pos + 4).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(self.toks.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Colon))
+            && matches!(self.toks.get(self.pos + 6).map(|t| &t.tok), Some(Tok::Colon))
+            && matches!(self.toks.get(self.pos + 7).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(self.toks.get(self.pos + 8).map(|t| &t.tok), Some(Tok::Assign))
+        {
+            self.advance(); // @
+            self.advance(); // sysvar
+            self.expect(&Tok::Colon, "'::'")?;
+            self.expect(&Tok::Colon, "'::'")?;
+            let ns = self.ident("a namespace name")?;
+            self.expect(&Tok::Colon, "'::'")?;
+            self.expect(&Tok::Colon, "'::'")?;
+            let name = self.ident("a variable name after '::'")?;
+            self.advance(); // =
+            let expr = self.expr()?;
+            self.expect(&Tok::Semi, "';'")?;
+            return Ok(Stmt::Expr(Expr::Call(
+                "sys_set".to_string(),
+                vec![Expr::Str(format!("{ns}::{name}")), expr],
+            )));
+        }
         if self.eat(&Tok::Let) {
             let name = self.ident("variable name")?;
             self.expect(&Tok::Assign, "'=' in a let")?;
@@ -952,6 +1000,43 @@ impl P {
                 self.expect(&Tok::RParen, "')'")?;
                 Ok(e)
             }
+            // `$Message::Signal` -- the CANoe-style read, desugared into a
+            // `sig_named("Message", "Signal")` host call. The name stays a
+            // literal, so the static effect set remains derivable.
+            Some(Tok::Dollar) => {
+                self.advance();
+                let msg = self.ident("a message name after '$'")?;
+                self.expect(&Tok::Colon, "'::' between message and signal")?;
+                self.expect(&Tok::Colon, "'::' between message and signal")?;
+                let sig = self.ident("a signal name after '::'")?;
+                Ok(Expr::Call(
+                    "sig_named".to_string(),
+                    vec![Expr::Str(msg), Expr::Str(sig)],
+                ))
+            }
+            // `@sysvar::ns::name` reads one system variable, desugared
+            // into `sys_get("ns::name")`. Only the `sysvar` family exists
+            // here (CANoe's `@env::` has no counterpart).
+            Some(Tok::At) => {
+                self.advance();
+                let family = self.ident("'sysvar' after '@'")?;
+                if family != "sysvar" {
+                    return self.err(&format!(
+                        "unknown '@{}' family (only '@sysvar::ns::name' exists)",
+                        family
+                    ));
+                }
+                self.expect(&Tok::Colon, "'::' after 'sysvar'")?;
+                self.expect(&Tok::Colon, "'::' after 'sysvar'")?;
+                let ns = self.ident("a namespace name")?;
+                self.expect(&Tok::Colon, "'::' between namespace and name")?;
+                self.expect(&Tok::Colon, "'::' between namespace and name")?;
+                let name = self.ident("a variable name after '::'")?;
+                Ok(Expr::Call(
+                    "sys_get".to_string(),
+                    vec![Expr::Str(format!("{ns}::{name}"))],
+                ))
+            }
             _ => self.err("expected an expression"),
         }
     }
@@ -1172,5 +1257,69 @@ mod tests {
             "the hidden temp declares the subject"
         );
         assert_eq!(stmts.len(), 2, "capture plus the chain head");
+    }
+
+    /// `$Message::Signal` and `@sysvar::ns::name` desugar into the
+    /// matching host calls with literal strings; the sysvar write form
+    /// desugars into a sys_set expression statement.
+    #[test]
+    fn canoe_style_accessors_desugar() {
+        let e = expr_of("$EngineStatus::RPM");
+        match e {
+            Expr::Call(name, args) => {
+                assert_eq!(name, "sig_named");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(&args[0], Expr::Str(m) if m == "EngineStatus"));
+                assert!(matches!(&args[1], Expr::Str(s) if s == "RPM"));
+            }
+            other => panic!("{other:?}"),
+        }
+        let e = expr_of("@sysvar::Demo::Setpoint");
+        match e {
+            Expr::Call(name, args) => {
+                assert_eq!(name, "sys_get");
+                assert!(matches!(&args[0], Expr::Str(k) if k == "Demo::Setpoint"));
+            }
+            other => panic!("{other:?}"),
+        }
+        let toks = super::super::lexer::lex("@sysvar::Demo::Setpoint = 5;").unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        match p.stmt().unwrap().stmt {
+            Stmt::Expr(Expr::Call(name, args)) => {
+                assert_eq!(name, "sys_set");
+                assert!(matches!(&args[0], Expr::Str(k) if k == "Demo::Setpoint"));
+                assert!(matches!(&args[1], Expr::Int(5)));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A signal write through the sugar has no meaning (writes go through
+    /// `set_sig`'s buffer), and only the `sysvar` family exists for `@`.
+    #[test]
+    fn canoe_style_accessors_reject_the_write_form_and_unknown_families() {
+        let toks = super::super::lexer::lex("$EngineStatus::RPM = 5;").unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        let err = p.stmt().unwrap_err().to_string();
+        assert!(err.contains("set_sig"), "{err}");
+        let toks = super::super::lexer::lex("print(@env::FOO);").unwrap();
+        let mut p = P {
+            toks,
+            pos: 0,
+            fn_depth: 0,
+            switch_temps: 0,
+        };
+        let err = p.stmt().unwrap_err().to_string();
+        assert!(err.contains("sysvar"), "{err}");
     }
 }

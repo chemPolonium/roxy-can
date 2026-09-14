@@ -351,6 +351,27 @@ on timer 50 {
 | `bit_not(a)` | 按位取反 |
 | `bit_shl(a, n)` / `bit_shr(a, n)` | 左移/右移 |
 
+## 信号与系统变量的速记（CANoe 风格）
+
+读信号、读系统变量除了函数形式，还有两种**等价的速记**——名字都是
+字面量，编译期进静态事实表，装配时对照 DBC / 系统变量表校验（拼错
+是显式失败）：
+
+```c
+// 读信号：$报文名::信号名 —— 等价 sig(id, "信号名")，id 由库名字解析
+let rpm = $EngineStatus::RPM;
+
+// 读系统变量：@sysvar::命名空间::变量名 —— 等价 sys_get("ns::name")
+let target = @sysvar::Demo::Setpoint;
+
+// 写系统变量：赋值形式 —— 等价 sys_set("ns::name", v)（写入仍受界限钳位）
+@sysvar::Demo::Setpoint = target * 0.9;
+```
+
+信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)`
+的缓冲语义，`$...` 只读。启动检查（编辑器收发 tab / 节点日志 /
+`--check-script --dbc`）会对两种速记的名字做 DBC 核对。
+
 ## 波形内建
 
 周期波形与 TX 发生器共用同一套求值器，同参数下逐采样一致。

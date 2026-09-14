@@ -393,6 +393,15 @@ impl SymbolTable {
         self.message_of(id).map(|m| m.name.as_str())
     }
 
+    /// Message name → id, declaration order. `$Message::Signal` reads
+    /// and their start checks resolve through this.
+    pub fn message_id_by_name(&self, name: &str) -> Option<u32> {
+        self.order
+            .iter()
+            .find(|&&key| self.message_name_of(key) == Some(name))
+            .map(|&(id, _)| id)
+    }
+
     /// Packs a physical signal value into the frame data bytes.
     /// Returns false if the message or signal is unknown. The id picks the
     /// frame class like `send` does: up to 0x7FF standard (with the extended

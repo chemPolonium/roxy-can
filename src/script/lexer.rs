@@ -39,6 +39,10 @@ pub enum Tok {
     Comma,
     Semi,
     Colon,
+    /// `$Message::Signal` -- the CANoe-style signal read.
+    Dollar,
+    /// `@sysvar::ns::name` -- the CANoe-style system variable access.
+    At,
     Assign,
     /// `+=` and friends: compound stores desugar to plain assignment.
     AssignAdd,
@@ -300,6 +304,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ScriptError> {
                     ',' => (Tok::Comma, 1),
                     ';' => (Tok::Semi, 1),
                     ':' => (Tok::Colon, 1),
+                    '$' => (Tok::Dollar, 1),
+                    '@' => (Tok::At, 1),
                     '=' => {
                         if chars.get(i + 1) == Some(&'=') {
                             (Tok::Eq, 2)

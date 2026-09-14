@@ -189,8 +189,20 @@ impl ScriptNode {
                 );
             }
         }
+        // `$Message::Signal` 解析：数据库把报文名变成 id，只在这里做
+        // 一次。VM 拿到的是纯 string → id 映射，语言内核保持零总线
+        // 假设；解析不了的引用由 dbc_checks 在上面报 [check]。
+        let mut named_messages = std::collections::HashMap::new();
+        if let Some(db) = &dbc {
+            for (msg, _sig) in &script.named_signal_refs {
+                if let Some(id) = db.message_id_by_name(msg) {
+                    named_messages.insert(msg.clone(), id);
+                }
+            }
+        }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
+        vm.named_messages = named_messages;
         vm.host_extern = Some(Box::new(move |name, args| {
             node_extern(dbc.as_deref(), name, args)
         }));
@@ -614,6 +626,20 @@ pub fn dbc_checks(
             .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
         if !known {
             lines.push(format!("[check] 信号未在 DBC 中找到: 0x{id:X} \"{sig}\""));
+        }
+    }
+    // `$Message::Signal` 的名字对同样要能落到库上：报文名查不到、或查
+    // 到了但信号名不在该报文里，都在装配时报出——拼错名字是显式失败。
+    for (msg, sig) in &script.named_signal_refs {
+        let Some(id) = db.message_id_by_name(msg) else {
+            lines.push(format!("[check] 报文名未在 DBC 中找到: \"{msg}\""));
+            continue;
+        };
+        let known = db
+            .message_of(id)
+            .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
+        if !known {
+            lines.push(format!("[check] 信号未在 DBC 中找到: \"{msg}\" \"{sig}\""));
         }
     }
     // 发送集对照 DBC 发送者声明：发送了不属于绑定节点的报文 →
@@ -1474,6 +1500,67 @@ BO_ 256 Real: 2 ECU
         n2.start(None);
         n2.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert!(n2.errored(), "a missing signal must not read as zero");
+    }
+
+    /// `$Message::Signal` reads the same published value `sig` would,
+    /// with the id resolved from the message name at start.
+    #[test]
+    fn the_dollar_read_resolves_the_message_name() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    print($EngineStatus::RPM);
+                }
+            "#,
+        );
+        n.start(Some(engine_dbc()));
+        let input = HostInput {
+            now_s: 0.0,
+            signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
+            sysvars: HashMap::new(),
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot(), ["1234.0"]);
+    }
+
+    /// Wrong message / signal names in `$` reads are assembly errors:
+    /// named at start as `[check]`, shared with `--check-script --dbc`.
+    #[test]
+    fn dollar_reads_are_checked_against_the_dbc() {
+        let mut n = node("on start { print($EngineStatus::Nope); }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        assert!(
+            n.log_snapshot().iter().any(|l| l.contains("Nope")),
+            "the unknown signal is named: {:?}",
+            n.log_snapshot()
+        );
+
+        let mut n = node("on start { print($Ghost::RPM); }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        assert!(
+            n.log_snapshot().iter().any(|l| l.contains("Ghost")),
+            "the unknown message is named: {:?}",
+            n.log_snapshot()
+        );
+    }
+
+    /// The sysvar sugar compiles down to sys_get / sys_set: the write
+    /// form queues exactly the key and value the plain form would.
+    #[test]
+    fn the_at_sysvar_write_lands_in_sys_sets() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    @sysvar::Demo::Setpoint = 42;
+                }
+            "#,
+        );
+        n.start(None);
+        n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        let sets = n.take_sys_sets();
+        assert_eq!(sets, vec![("Demo::Setpoint".to_string(), 42.0)]);
     }
 
     #[test]

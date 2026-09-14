@@ -33,6 +33,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         continue_jumps: Vec::new(),
         signal_refs: Vec::new(),
         set_sig_values: Vec::new(),
+        named_signal_refs: Vec::new(),
         sysvar_refs: Vec::new(),
         recv_wildcard: false,
         cur_handler: None,
@@ -145,6 +146,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         host_fns: HOST_FNS.iter().map(|(n, _, _)| n.to_string()).collect(),
         signal_refs: c.signal_refs,
         set_sig_values: c.set_sig_values,
+        named_signal_refs: c.named_signal_refs,
         send_refs: c.send_refs,
         recv_refs: c.recv_refs,
         recv_wildcard: c.recv_wildcard,
@@ -186,6 +188,9 @@ struct Comp {
     /// Literal `set_sig` values: `(id, signal, value)` where the value
     /// constant-folded, for the host's range check at node start.
     set_sig_values: Vec<(u32, String, f64)>,
+    /// `$Message::Signal` reads as `(message, signal)` name pairs,
+    /// deduped, for the host's start check against the database.
+    named_signal_refs: Vec<(String, String)>,
     /// System variable keys (`"ns::name"`) named by literal-argument
     /// `sys_get` / `sys_set` calls, deduped, for the host's start check.
     sysvar_refs: Vec<String>,
@@ -611,6 +616,17 @@ impl Comp {
                         && !self.sysvar_refs.contains(key)
                     {
                         self.sysvar_refs.push(key.clone());
+                    }
+                    // `$Message::Signal` desugars into sig_named with two
+                    // string literals: record the pair so the host can
+                    // resolve both names against the database at start.
+                    if *name == "sig_named"
+                        && let (Expr::Str(msg), Expr::Str(sig)) = (&args[0], &args[1])
+                    {
+                        let r = (msg.clone(), sig.clone());
+                        if !self.named_signal_refs.contains(&r) {
+                            self.named_signal_refs.push(r);
+                        }
                     }
                     // R2 fail-closed rule: every `send` / `send_ext` id
                     // must be statically derivable -- a literal, constant
