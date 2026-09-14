@@ -84,7 +84,7 @@ on timer "resp" {
 - 内建覆盖：收发帧、DBC 信号读写（`sig` / `set_sig` / `get_sig`）、周期与一次性定时器、帧数据访问、随机数、五类波形（与 TX 发生器共用求值器）、数学与位运算
 - 节点日志走 `print`，编辑器里直接看；编译/运行错误带行号列号，出错节点熔断待恢复
 - 节点源码、绑定与启用状态随工程（`.rxproj`）保存
-- 命令行可脱离界面运行与校验（CI 友好）：`--check-script` 编译节点脚本并打印静态响应映射与发送 / 接收集；`--project <p.rxproj> --duration <s> [--stats <csv>]` 无头仿真整个工程（生成器 + 脚本节点按保存的激活状态上线）；`--profile <名>` 叠加 `profiles/<名>.toml` 角色覆盖，同一工程在 simulation / bench / CI 间零修改切换，错配整份拒绝；`--convert <in> <out.asc>` 把 BLF/ASC 转存为 ASC，非零退出报告失败；`--kvaser-probe` 列出 canlib 可见的 Kvaser 通道
+- 命令行可脱离界面运行与校验（CI 友好）：`--check-script` 编译节点脚本并打印静态响应映射与发送 / 接收集；`--project <p.rxproj> --duration <s> [--stats <csv>]` 无头仿真整个工程（生成器 + 脚本节点按保存的激活状态上线）；`--profile <名>` 叠加 `profiles/<名>.toml` 角色覆盖，同一工程在 simulation / bench / CI 间零修改切换，错配整份拒绝；`--convert <in> <out.asc>` 把 BLF/ASC 转存为 ASC，非零退出报告失败；`--kvaser-probe` / `--vector-probe` 列出各自驱动可见的通道（Vector 含总线类型与 FlexRay 口 RX 试开）
 
 ## 文档
 

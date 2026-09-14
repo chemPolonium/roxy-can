@@ -63,9 +63,19 @@ pub fn autocomplete_vocabulary(app: &App, channel: u8) -> Vec<String> {
                 words.push(m.name.clone());
                 for s in &m.signals {
                     words.push(s.name.clone());
+                    // The CANoe-style read sugar completes as a whole:
+                    // typing `$` or `$Engine` suggests the full path.
+                    words.push(format!("${}::{}", m.name, s.name));
                 }
             }
         }
+    }
+    // Defined system variables, both the plain key (for sys_get/sys_set)
+    // and the `@sysvar::` sugar form.
+    for v in &app.snap.sysvars {
+        let key = format!("{}::{}", v.def.namespace, v.def.name);
+        words.push(key.clone());
+        words.push(format!("@sysvar::{key}"));
     }
     words.sort();
     words.dedup();
