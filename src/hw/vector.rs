@@ -30,6 +30,9 @@ type XlPortHandle = i32;
 type XlAccess = u64;
 
 const XL_BUS_TYPE_CAN: u32 = 1;
+/// A FlexRay-capable channel carries this bit in `channelBusCapabilities`;
+/// such channels must never surface in the CAN attach dropdown.
+const XL_BUS_TYPE_FLEXRAY: u32 = 8;
 const XL_INTERFACE_VERSION_V4: u32 = 4;
 /// xlReceive/xlCanReceive report this when the queue is drained.
 const XL_ERR_QUEUE_IS_EMPTY: XlStatus = 10;
@@ -231,11 +234,15 @@ impl Vxlapi {
 }
 
 /// One discoverable Vector channel: the driver's global channel index
-/// plus the hardware name from the driver config.
+/// plus the hardware name from the driver config, tagged with the bus
+/// types the channel can run (a VN7640 port reports FlexRay here; a
+/// virtual channel is CAN-only).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
     pub index: i32,
     pub name: String,
+    pub can: bool,
+    pub flexray: bool,
 }
 
 /// An open, activated Vector port for one CAN channel. Frames written
@@ -531,6 +538,14 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
             let name = String::from_utf8_lossy(&name_bytes[..end]).into_owned();
             let channel_index = config[rec + 41];
+            // `channelBusCapabilities` (u32 at the layout's +58) carries
+            // the XL_BUS_TYPE_* bits. Verified live: virtual channels
+            // report 0 here, so a zero reads as "assume CAN" -- only an
+            // explicit FlexRay bit excludes a channel from the CAN path.
+            // (Offset + FR bit get an MSVC offsetof probe in the FR-2
+            // phase, before anything trusts them for real hardware.)
+            let bus_caps = u32::from_le_bytes(config[rec + 58..rec + 62].try_into().unwrap());
+            let is_fr = bus_caps & XL_BUS_TYPE_FLEXRAY != 0;
             out.push(ChannelInfo {
                 index: channel_index as i32,
                 name: if name.is_empty() {
@@ -538,11 +553,25 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
                 } else {
                     name
                 },
+                can: bus_caps == 0 || bus_caps & XL_BUS_TYPE_CAN != 0,
+                flexray: is_fr,
             });
         }
         (lib.close_driver)();
         Ok(out)
     }
+}
+
+/// Lists the FlexRay-capable channels (a VN7640 port reports the
+/// FlexRay capability bit; virtual CAN channels never do). The first
+/// FlexRay slice is RX-only listening: these are the channels it will
+/// address, and the CAN attach dropdown excludes them for the same
+/// reason.
+pub fn enumerate_flexray() -> Result<Vec<ChannelInfo>, String> {
+    Ok(enumerate()?
+        .into_iter()
+        .filter(|c| c.flexray)
+        .collect())
 }
 
 #[cfg(test)]

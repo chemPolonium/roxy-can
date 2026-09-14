@@ -169,6 +169,15 @@
 4. ~~**$信号 / @sysvar 速记**~~ ✅：CANoe 风格访问语法糖——读信号 `$报文名::信号名`（等价 `sig(id, "名字")`，id 由库按报文名解析，启动检查对名字做 DBC 核对，拼错显式报出）；读/写系统变量 `@sysvar::ns::name` / `@sysvar::ns::name = v;`（等价 `sys_get` / `sys_set`）。名字全是字面量——R2 可静态推导红线不破；语言内核零总线假设不破（报文名→id 的映射由节点启动时注入，VM 只见纯数据）。信号无写速记（写走 `set_sig` 缓冲语义）。
 5. ~~**Profile GUI**~~ ✅：Network 窗口 Profile 行从"只能选"扩为全管理——**存当前**（输入名字把现在的角色 + 硬件挂接快照写成新 profile；名字拒绝路径分隔符与点号，写不出 profiles 目录）、**编辑**（系统默认编辑器打开选中 .toml）、**删除**（两次点击确认）。`[[hw]]` 格式补 `driver` 可选字（`Kvaser`/`Vector`，缺省 Kvaser 兼容旧档案）——应用档案不再把 Vector 通道错挂成 Kvaser。
 
+## FlexRay 立项（2026-09-15，用户有 VN7640 可验证；RX-only 先行）
+
+定位提醒：只做**总线监听**（RX-only），不做解码/脚本发车——那是"重做 dbc.rs"量级的另立项（依据见 `docs/roadmap.md` §8.2）。验证路径：用户的 VN7640（FlexRay 口）+ 集群参数。
+
+- ~~**FR-1 枚举分类**~~ ✅（2026-09-15）：`vector::enumerate()` 读取 `channelBusCapabilities`，`ChannelInfo` 带 `can` / `flexray` 标记；`enumerate_flexray()` 列出 FlexRay 口；CAN 挂接下拉**排除显式 FlexRay 通道**。实测坑：虚拟通道的能力位报 0——过滤采用保守策略（能力位为 0 视为 CAN，保持旧行为；只有显式 FR 位才排除）。`+58` 偏移与 FR 位的真机校准列入 FR-2。
+- **FR-2 RX-only 接收**（下一切片，需 VN7640 插上 + 集群参数）：`XL_FLEXRAY_CLUSTER_CONFIG` FFI 先用 MSVC offsetof 探针校验 packed 布局（同 CAN 结构体先例——没有校验不上产品）；打开流程 xlOpenPort(FLEXRAY) → xlFlexRaySetConfiguration → xlActivateChannel → xlReceive 事件流；帧进 Trace/日志，按 `(通道, slot, cycle)` 显示原始帧 + hex 载荷，不做信号解码。**需要用户提供**：集群参数（.arxml 或参数表），或确认用 VN7640 demo 默认集群。
+- **FR-3 Trace 展示**：帧键模型从 `(channel, id, ext)` 扩展为协议感知联合键的前置调研 + Trace 行的 slot/cycle 列。
+- **FR-4（另立项）**：FlexRay 数据库/集群解析器（.arxml ≈ 重做 dbc.rs）、信号解码、周期/抖动统计、脚本发车——与 R2 静态分析的关系一并重新评估。
+
 ## 2026-09-13 夜间批次：System Variables + 脚本编辑器升级 + Write 窗口 + 定时精度（主体落地 ✅）
 
 1. ~~**System Variables 管理器 v1**~~ ✅：命名空间变量（namespace/name/init/可选钳位界限/unit/comment），View > System Variables 管理窗口（表格 + CANoe 式新建/编辑对话框，行内改值），定义随工程保存；脚本 `sys_get("ns::name")` / `sys_set("ns::name", v)`（宿主输入注入 + 写入经总线钳位生效）；每个变量发布为 namespace 分组的可观测流（Data/Graphics 直接选用）；每次测量开始复位为 init 并重发布。**待议**：字符串型变量（现仅数值）、枚举型、`@sysvar::` 表达式语法。

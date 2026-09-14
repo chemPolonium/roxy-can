@@ -84,6 +84,13 @@ pub fn enumerate_all() -> Result<Vec<AnyChannelInfo>, String> {
     match vector::enumerate() {
         Ok(list) => {
             for c in list {
+                // A FlexRay port of a VN7640 must not surface as a CAN
+                // attachment. Channels that report no capability bits at
+                // all (every virtual channel so far) keep the legacy
+                // behaviour and stay in the list.
+                if c.flexray && !c.can {
+                    continue;
+                }
                 out.push(AnyChannelInfo {
                     driver: HwDriver::Vector,
                     index: c.index,

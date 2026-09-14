@@ -244,10 +244,56 @@ fn vector_enumerate_hits_the_real_driver() {
         Ok(channels) => {
             println!("vector channels: {}", channels.len());
             for c in &channels {
-                println!("  ch{}: {}", c.index, c.name);
+                println!(
+                    "  ch{}: {} [can:{} fr:{}]",
+                    c.index, c.name, c.can, c.flexray
+                );
             }
         }
         Err(e) => println!("vector enumerate: {e}"),
+    }
+}
+
+/// The FlexRay slice's first deliverable: a FlexRay-capable channel
+/// (VN7640 port) is listed by `enumerate_flexray` and excluded from the
+/// CAN attach dropdown. On a CAN-only machine both halves are trivially
+/// consistent -- the interesting run happens with the VN7640 attached.
+#[test]
+fn flexray_channels_are_separate_from_can_channels() {
+    let all = crate::hw::vector::enumerate();
+    let fr = crate::hw::vector::enumerate_flexray();
+    match (all, fr) {
+        (Ok(all), Ok(fr)) => {
+            let fr_indexes: Vec<i32> = fr.iter().map(|c| c.index).collect();
+            for c in &all {
+                assert!(
+                    !fr_indexes.contains(&c.index) || c.flexray,
+                    "channel {} is listed as FlexRay but not CAN-attachable",
+                    c.index
+                );
+            }
+            let attachable: Vec<i32> = crate::hw::enumerate_all()
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| a.driver == crate::hw::HwDriver::Vector)
+                .map(|a| a.index)
+                .collect();
+            for c in &all {
+                if c.flexray && !c.can {
+                    assert!(
+                        !attachable.contains(&c.index),
+                        "FlexRay channel {} leaked into the CAN attach list",
+                        c.index
+                    );
+                }
+            }
+            println!(
+                "vector: {} channel(s), {} flexray-capable",
+                all.len(),
+                fr.len()
+            );
+        }
+        (Err(e), _) | (_, Err(e)) => println!("vector enumerate: {e}"),
     }
 }
 
