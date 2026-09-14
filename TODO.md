@@ -167,6 +167,7 @@
 2. ~~**删逐节点"经硬件"开关**~~ ✅：CANoe 只有一个 simulated bus / real bus 总开关，逐模块开关是复杂度不是能力。删除三处 UI（生成器组头/节点详情/脚本编辑器）与 `SetNodeHardwareTx` 命令、快照 `hw_tx_nodes`；`Hardware::write_if_directed(bus, node, ..)` 改为 `write_if_live(bus, ..)`——Real bus 下"模拟"节点的**一切**发车（生成器条目、脚本 `send`、触发反应帧）直接上挂接通道；Simulated 模式照旧停发不丢配置。挂接本身（Buses 窗口）与 Profile `[[hw]]` 不变。
 3. ~~**信号行拖柄**~~ ✅（同批 ①）：Data/Graphics/State Tracker 信号行重排为 `[::拖柄] [对号] [色块] 名字`——对号贴近色块、色号顺序符合直觉，拖拽改由行首 `::` 拖柄承担（拖柄是 2×3 圆点的隐形按钮），对号只管显隐。回归测试双向锁定：拖柄必须能换序，对号列必须不能换序（原地点击必须能切换）。
 4. ~~**$信号 / @sysvar 速记**~~ ✅：CANoe 风格访问语法糖——读信号 `$报文名::信号名`（等价 `sig(id, "名字")`，id 由库按报文名解析，启动检查对名字做 DBC 核对，拼错显式报出）；读/写系统变量 `@sysvar::ns::name` / `@sysvar::ns::name = v;`（等价 `sys_get` / `sys_set`）。名字全是字面量——R2 可静态推导红线不破；语言内核零总线假设不破（报文名→id 的映射由节点启动时注入，VM 只见纯数据）。信号无写速记（写走 `set_sig` 缓冲语义）。
+5. ~~**Profile GUI**~~ ✅：Network 窗口 Profile 行从"只能选"扩为全管理——**存当前**（输入名字把现在的角色 + 硬件挂接快照写成新 profile；名字拒绝路径分隔符与点号，写不出 profiles 目录）、**编辑**（系统默认编辑器打开选中 .toml）、**删除**（两次点击确认）。`[[hw]]` 格式补 `driver` 可选字（`Kvaser`/`Vector`，缺省 Kvaser 兼容旧档案）——应用档案不再把 Vector 通道错挂成 Kvaser。
 
 ## 2026-09-13 夜间批次：System Variables + 脚本编辑器升级 + Write 窗口 + 定时精度（主体落地 ✅）
 

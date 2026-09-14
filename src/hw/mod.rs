@@ -35,6 +35,23 @@ impl HwDriver {
             HwDriver::Vector => "V",
         }
     }
+
+    /// The persisted word (profile `[[hw]]` driver field). Both the long
+    /// name and the tag parse, so a hand-written profile accepts either.
+    pub fn word(self) -> &'static str {
+        match self {
+            HwDriver::Kvaser => "Kvaser",
+            HwDriver::Vector => "Vector",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "Kvaser" | "K" => Some(HwDriver::Kvaser),
+            "Vector" | "V" => Some(HwDriver::Vector),
+            _ => None,
+        }
+    }
 }
 
 /// One discoverable channel from any supported driver, flattened for

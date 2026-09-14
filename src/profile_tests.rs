@@ -139,6 +139,39 @@ fn a_missing_profile_file_names_the_path() {
     assert!(err.contains("ghost.toml"), "{err}");
 }
 
+/// The GUI's "存当前": the snapshot writes `[[node]]` entries for
+/// Simulated nodes and `[[hw]]` entries with the driver word, and the
+/// file it writes applies back onto a mutated app.
+#[test]
+fn a_saved_profile_round_trips_the_snapshot() {
+    let dir = std::env::temp_dir().join("roxy_can_profile_save");
+    std::fs::remove_dir_all(&dir).ok();
+    let mut app = App::headless();
+    app.project_path = Some(dir.join("proj.rxproj"));
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+
+    let summary = crate::profile::save_profile(&app, &dir, "snap").expect("save works");
+    assert!(summary.contains("1 role override(s)"), "{summary}");
+    let text = std::fs::read_to_string(dir.join("profiles").join("snap.toml")).unwrap();
+    assert!(text.contains("node = \"EngineECU\""), "{text}");
+    assert!(text.contains("role = \"Simulated\""), "{text}");
+
+    // Mutate, then apply the saved snapshot: the role comes back.
+    app.set_node_role(0, "EngineECU", NodeRole::Absent);
+    apply_profile(&mut app, &dir, "snap").expect("the saved profile applies");
+    assert_eq!(app.node_role(0, "EngineECU"), NodeRole::Simulated);
+
+    // Unsafe names cannot escape the profiles directory.
+    assert!(crate::profile::save_profile(&app, &dir, "../evil").is_err());
+    assert!(crate::profile::save_profile(&app, &dir, "").is_err());
+    assert!(!dir.join("evil.toml").exists());
+
+    // Delete closes the loop.
+    crate::profile::delete_profile(&dir, "snap").expect("delete works");
+    assert!(!dir.join("profiles").join("snap.toml").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The parse layer: shape and vocabulary errors point at the entry.
 #[test]
 fn parse_errors_name_the_offending_entry() {

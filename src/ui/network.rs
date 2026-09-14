@@ -212,36 +212,34 @@ pub fn render(app: &mut App, ui: &Ui) {
             .size([860.0, 540.0], Condition::FirstUseEver)
             .build(|| {
                 // Profile row: enumerate the project's profiles/*.toml and
-                // apply the selected one (all-or-nothing role overrides).
+                // apply the selected one (all-or-nothing role overrides),
+                // plus create-from-snapshot, open-in-editor and delete.
+                let profile_dir = app
+                    .project_path
+                    .as_ref()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                    .unwrap_or_default();
                 if app.profile_names.is_none() {
-                    let dir = app
-                        .project_path
-                        .as_ref()
-                        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-                        .unwrap_or_default();
-                    app.profile_names = Some(Ok(crate::profile::list_profiles(&dir)));
+                    app.profile_names = Some(Ok(crate::profile::list_profiles(&profile_dir)));
                 }
-                let Some(Ok(profile_list)) = app.profile_names.as_ref() else {
+                let Some(profile_list) =
+                    app.profile_names.as_ref().and_then(|r| r.as_ref().ok()).cloned()
+                else {
                     return;
                 };
+                ui.text_disabled("Profile");
                 if !profile_list.is_empty() {
-                    ui.text_disabled("Profile");
                     ui.same_line();
                     let mut pick = app.profile_pick.min(profile_list.len() - 1);
                     ui.set_next_item_width(140.0);
-                    if ui.combo_simple_string("##prof", &mut pick, profile_list) {
+                    if ui.combo_simple_string("##prof", &mut pick, &profile_list) {
                         app.profile_pick = pick;
                     }
                     ui.same_line();
                     if ui.button("应用##profapply") {
-                        let dir = app
-                            .project_path
-                            .as_ref()
-                            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-                            .unwrap_or_default();
                         let name =
                             profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
-                        match crate::profile::apply_profile(app, &dir, &name) {
+                        match crate::profile::apply_profile(app, &profile_dir, &name) {
                             Ok(s) => app.status = s,
                             Err(e) => app.status = e,
                         }
@@ -249,6 +247,70 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.is_item_hovered() {
                         ui.tooltip_text("按 profiles/*.toml 覆盖角色（all-or-nothing）");
                     }
+                    ui.same_line();
+                    if ui.button("编辑##profedit") {
+                        let name =
+                            profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
+                        let path = profile_dir.join("profiles").join(format!("{name}.toml"));
+                        let opened = std::process::Command::new("cmd")
+                            .args(["/C", "start", ""])
+                            .arg(&path)
+                            .spawn();
+                        app.status = match opened {
+                            Ok(_) => format!("已在系统编辑器打开 {name}.toml"),
+                            Err(e) => format!("打开编辑器失败: {e}"),
+                        };
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("用系统默认编辑器打开这个 .toml");
+                    }
+                    ui.same_line();
+                    let name =
+                        profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
+                    if ui.button(if app.profile_delete_arm {
+                        "确认删除##profdel"
+                    } else {
+                        "删除##profdel"
+                    }) {
+                        if app.profile_delete_arm {
+                            match crate::profile::delete_profile(&profile_dir, &name) {
+                                Ok(()) => {
+                                    app.status = format!("profile `{name}` 已删除");
+                                    app.profile_names =
+                                        Some(Ok(crate::profile::list_profiles(&profile_dir)));
+                                }
+                                Err(e) => app.status = e,
+                            }
+                            app.profile_delete_arm = false;
+                        } else {
+                            app.profile_delete_arm = true;
+                            app.status = format!("再点一次「删除」确认删掉 `{name}.toml`");
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("删除选中的 profile 文件（点两次确认）");
+                    }
+                }
+                ui.same_line();
+                ui.set_next_item_width(120.0);
+                ui.input_text("##profnew", &mut app.profile_draft_name)
+                    .hint("新名字")
+                    .build();
+                ui.same_line();
+                if ui.button("存当前##profsave") {
+                    match crate::profile::save_profile(app, &profile_dir, &app.profile_draft_name)
+                    {
+                        Ok(s) => {
+                            app.status = s;
+                            app.profile_draft_name.clear();
+                            app.profile_names =
+                                Some(Ok(crate::profile::list_profiles(&profile_dir)));
+                        }
+                        Err(e) => app.status = e,
+                    }
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("把当前角色与硬件挂接快照存为新 profile");
                 }
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();

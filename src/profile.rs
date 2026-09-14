@@ -5,10 +5,10 @@
 //!
 //! 错配是显式失败：档案写了工程里没有的总线、DBC 里没有的节点、
 //! 拼错的角色词，整份档案被拒绝而非部分生效——半套覆盖比没有覆盖
-//! 更难排查。角色词汇与工程 JSON 相同（`Simulated` / `Monitor` /
-//! `Absent`）；缺省节点不写即离线，Profile 无需抄写工程。硬件映射是
-//! **全量声明**：`[[hw]]` 列出每条要挂适配器的总线，未列出的总线应用
-//! 档案时解挂——档案即完整硬件快照，可复现。
+//! 更难排查。角色词汇与工程 JSON 相同（`Simulated` / `Absent`，旧的
+//! `Monitor` 词已随两态化退役）；缺省节点不写即离线，Profile 无需抄
+//! 写工程。硬件映射是**全量声明**：`[[hw]]` 列出每条要挂适配器的总
+//! 线，未列出的总线应用档案时解挂——档案即完整硬件快照，可复现。
 //!
 //! 波特率（仲裁与 FD 数据段）不进档案：挂接取总线自己的设置，与 GUI
 //! 挂接同一语义，档案只回答"哪条总线接哪个通道"。
@@ -16,6 +16,7 @@
 use std::path::Path;
 
 use crate::app::{App, NodeRole};
+use crate::hw::HwDriver;
 
 /// One `[[node]]` entry: which node on which bus takes which role.
 struct RoleOverride {
@@ -24,9 +25,13 @@ struct RoleOverride {
     role: NodeRole,
 }
 
-/// One `[[hw]]` entry: which Kvaser channel a bus attaches to.
+/// One `[[hw]]` entry: which channel (of which driver) a bus attaches
+/// to. `driver` is optional in the file for pre-Vector profiles and
+/// defaults to Kvaser, the only driver that existed when the format
+/// was born.
 struct HwOverride {
     bus: String,
+    driver: HwDriver,
     channel: i32,
 }
 
@@ -55,7 +60,7 @@ fn parse(text: &str) -> Result<(Vec<RoleOverride>, Vec<HwOverride>), String> {
             let node = field("node")?;
             let role_word = field("role")?;
             let role = NodeRole::parse(&role_word).ok_or_else(|| {
-                format!("[[node]] #{i}: unknown role `{role_word}` (want Simulated / Monitor / Absent)")
+                format!("[[node]] #{i}: unknown role `{role_word}` (want Simulated / Absent)")
             })?;
             roles.push(RoleOverride { bus, node, role });
         }
@@ -81,7 +86,20 @@ fn parse(text: &str) -> Result<(Vec<RoleOverride>, Vec<HwOverride>), String> {
             if channel < 0 {
                 return Err(format!("[[hw]] #{i}: channel must be >= 0"));
             }
-            hw.push(HwOverride { bus, channel });
+            // The driver word is optional: profiles from before the
+            // Vector binding only ever meant Kvaser.
+            let driver = match t.get("driver").and_then(|v| v.as_str()) {
+                None => HwDriver::Kvaser,
+                Some(w) => match HwDriver::parse(w) {
+                    Some(d) => d,
+                    None => {
+                        return Err(format!(
+                            "[[hw]] #{i}: unknown driver `{w}` (want Kvaser / Vector)"
+                        ))
+                    }
+                },
+            };
+            hw.push(HwOverride { bus, driver, channel });
         }
     }
     Ok((roles, hw))
@@ -120,7 +138,7 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
         }
         plan.push((ch as u8, ov.node.clone(), ov.role));
     }
-    let mut hw_plan: Vec<(u8, i32)> = Vec::new();
+    let mut hw_plan: Vec<(u8, HwDriver, i32)> = Vec::new();
     for ov in &hw_overrides {
         let Some(ch) = app.snap.channels.iter().position(|c| c.name == ov.bus) else {
             return Err(format!(
@@ -128,16 +146,16 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
                 ov.bus
             ));
         };
-        hw_plan.push((ch as u8, ov.channel));
+        hw_plan.push((ch as u8, ov.driver, ov.channel));
     }
     for (ch, node, role) in plan {
         app.set_node_role(ch, &node, role);
     }
-    for (ch, channel) in &hw_plan {
+    for (ch, driver, channel) in &hw_plan {
         let view = &app.snap.channels[*ch as usize];
         app.set_hardware_channel(
             *ch,
-            crate::hw::HwDriver::Kvaser,
+            *driver,
             *channel,
             view.bitrate_kbps,
             Some(view.fd_data_kbps),
@@ -145,7 +163,7 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
     }
     // Unlisted buses lose their attachment: the profile is the whole map.
     let attached: Vec<u8> = app.snap.hw.iter().map(|v| v.bus).collect();
-    let mapped: Vec<u8> = hw_plan.iter().map(|(ch, _)| *ch).collect();
+    let mapped: Vec<u8> = hw_plan.iter().map(|(ch, ..)| *ch).collect();
     for bus in attached {
         if !mapped.contains(&bus) {
             app.detach_hardware(bus);
@@ -178,6 +196,70 @@ pub fn list_profiles(project_dir: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// Saves the current roles and hardware attachments as
+/// `profiles/<name>.toml` -- the GUI's "存当前" button. Simulated nodes
+/// become `[[node]]` entries (离线 is the default and is not written);
+/// attached buses become `[[hw]]` entries with their driver. The name
+/// must be a plain file stem: path separators and dots are refused, so
+/// the write cannot escape the profiles directory.
+pub fn save_profile(app: &App, project_dir: &Path, name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("profile 名不能为空".to_string());
+    }
+    if trimmed
+        .chars()
+        .any(|c| matches!(c, '/' | '\\' | '.' | ':' | '"' | '<' | '>' | '|' | '?' | '*'))
+    {
+        return Err(format!("profile 名含非法字符: `{trimmed}`"));
+    }
+    let mut text = String::from("# saved from the current state\n\n");
+    let mut role_count = 0usize;
+    let mut hw_count = 0usize;
+    for (ch, view) in app.snap.channels.iter().enumerate() {
+        let Some(db) = view.dbc.as_deref() else {
+            continue;
+        };
+        for node in &db.nodes {
+            if view.role_of(node) == NodeRole::Simulated {
+                text.push_str(&format!(
+                    "[[node]]\nbus = \"{}\"\nnode = \"{node}\"\nrole = \"Simulated\"\n\n",
+                    view.name
+                ));
+                role_count += 1;
+            }
+        }
+        let _ = ch;
+    }
+    for h in &app.snap.hw {
+        let bus_name = app
+            .snap
+            .channels
+            .get(h.bus as usize)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", h.bus + 1));
+        text.push_str(&format!(
+            "[[hw]]\nbus = \"{bus_name}\"\ndriver = \"{}\"\nchannel = {}\n\n",
+            h.driver.word(),
+            h.adapter
+        ));
+        hw_count += 1;
+    }
+    let dir = project_dir.join("profiles");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("profiles 目录创建失败: {e}"))?;
+    let path = dir.join(format!("{trimmed}.toml"));
+    std::fs::write(&path, &text).map_err(|e| format!("profile 写入失败: {e}"))?;
+    Ok(format!(
+        "profile `{trimmed}` 已保存: {role_count} role override(s), {hw_count} hardware mapping(s)"
+    ))
+}
+
+/// Deletes `profiles/<name>.toml`. The GUI confirms before calling.
+pub fn delete_profile(project_dir: &Path, name: &str) -> Result<(), String> {
+    let path = project_dir.join("profiles").join(format!("{name}.toml"));
+    std::fs::remove_file(&path).map_err(|e| format!("profile 删除失败: {e}"))
 }
 
 #[cfg(test)]

@@ -237,6 +237,12 @@ pub struct App {
     pub profile_names: Option<Result<Vec<String>, String>>,
     /// The selected index in the Network-window profile dropdown.
     pub profile_pick: usize,
+    /// The new-profile name being typed in the Network Profile row;
+    /// committed by "存当前" into `profiles/<名>.toml`.
+    pub profile_draft_name: String,
+    /// Delete confirmation for the Profile row: the first click arms it,
+    /// the second click within the session deletes the file.
+    pub profile_delete_arm: bool,
     pub net_selected: usize,
     pub tx_pick: usize,
     /// The generator overview's add-by-id draft: the bus row being typed
@@ -454,6 +460,8 @@ impl App {
             hw_channels: None,
             profile_names: None,
             profile_pick: 0,
+            profile_draft_name: String::new(),
+            profile_delete_arm: false,
             net_selected: 0,
             tx_pick: 0,
             gen_add_buf: None,
