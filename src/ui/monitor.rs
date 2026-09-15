@@ -86,45 +86,44 @@ fn content(app: &mut App, ui: &Ui) {
 }
 
 /// The per-row right-aligned controls: rule on/off, threshold, direction,
-/// color cycle, remove.
+/// color cycle, digits, remove.
 fn rule_controls(app: &mut App, ui: &Ui, i: usize) {
     let width = ui.content_region_avail()[0];
-    ui.same_line_with_pos(width - 240.0);
-    let row = &mut app.monitor_rows[i];
-    if ui.button(if row.rule_on { "on" } else { "off" }) {
-        row.rule_on = !row.rule_on;
+    ui.same_line_with_pos(width - 268.0);
+    if ui.button(if app.monitor_rows[i].rule_on { "on" } else { "off" }) {
+        app.monitor_rows[i].rule_on = !app.monitor_rows[i].rule_on;
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("开关着色规则");
     }
     ui.same_line();
     ui.set_next_item_width(66.0);
-    let mut th = row.threshold as f32;
+    let mut th = app.monitor_rows[i].threshold as f32;
     if ui
         .input_float_config(format!("##mthr{i}"))
         .display_format(dear_imgui_rs::NumericFormat::new("%g").expect("static format"))
         .build(&mut th)
     {
-        row.threshold = th as f64;
+        app.monitor_rows[i].threshold = th as f64;
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("着色阈值");
     }
     ui.same_line();
-    let dir = if row.rising { ">=" } else { "<=" };
+    let dir = if app.monitor_rows[i].rising { ">=" } else { "<=" };
     if ui.button(format!("{dir}##mdir{i}")) {
-        row.rising = !row.rising;
+        app.monitor_rows[i].rising = !app.monitor_rows[i].rising;
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("切换方向");
     }
     ui.same_line();
-    let slot = row.color % PALETTE.len();
-    if ui.button(format!("{slot}##mcol{i}")) {
-        row.color = (row.color + 1) % PALETTE.len();
+    let digits = app.monitor_rows[i].digits;
+    if ui.button(format!("{digits}##mdig{i}")) {
+        app.monitor_rows[i].digits = (digits + 1) % 4;
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("换颜色");
+        ui.tooltip_text("小数位数");
     }
     ui.same_line();
     if ui.button(format!("x##mrm{i}")) {
