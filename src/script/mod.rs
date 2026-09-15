@@ -364,6 +364,7 @@ pub struct ResponseRow {
 pub const HOST_FNS: &[(&str, usize, usize)] = &[
     // (name, min_args, max_args)
     ("print", 1, 16),
+    ("format", 1, 16),
     ("send", 1, 9),
     ("send_ext", 1, 9),
     ("emit_value", 2, 2),

@@ -521,6 +521,7 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("位运算", "bit_shl", "bit_shl(a, b)"),
     ("位运算", "bit_shr", "bit_shr(a, b)"),
     ("其他", "now", "now()"),
+    ("其他", "format", "format(\"%.0f\", v)"),
     ("其他", "srand", "srand(seed)"),
 ];
 

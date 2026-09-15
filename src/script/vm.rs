@@ -522,6 +522,17 @@ impl Vm {
                     .join(" ");
                 self.output.write_line(line);
             }
+            "format" => {
+                // format(fmt, v0, v1, ...): printf-style rendering into a
+                // string -- the composed form feeds print / send logs /
+                // emit_value labels without growing print's own signature.
+                let Value::Str(fmt) = &args[0] else {
+                    return Err(VmError("format(fmt, ...) needs a string fmt".into()));
+                };
+                let line = render_format(fmt, &args[1..]).map_err(VmError)?;
+                self.stack.push(Value::Str(line));
+                return Ok(());
+            }
             "now" => {
                 // Producing calls must return before the tail push below:
                 // the pushed value IS the call's result.
@@ -1038,6 +1049,164 @@ fn is_num(v: &Value) -> bool {
     matches!(v, Value::Int(_) | Value::Float(_))
 }
 
+/// One parsed `%...` conversion: `[flags][width][.prec]conv`.
+#[derive(Debug, Default, Clone, Copy)]
+struct FmtSpec {
+    minus: bool,
+    zero: bool,
+    width: usize,
+    prec: Option<usize>,
+    conv: char,
+}
+
+/// Pads `body` per the width/flag half of the spec. Zero-padding applies
+/// to numeric conversions only (after a minus sign, `printf`-style).
+fn pad(spec: FmtSpec, body: String, numeric: bool) -> String {
+    if body.chars().count() >= spec.width {
+        return body;
+    }
+    let fill = spec.width - body.chars().count();
+    if spec.minus {
+        let mut s = body;
+        s.push_str(&" ".repeat(fill));
+        s
+    } else if spec.zero && numeric {
+        let (sign, digits) = body.split_at(body.chars().position(|c| c == '-' || c == '+').unwrap_or(0));
+        let mut s = String::from(sign);
+        s.push_str(&"0".repeat(fill));
+        s.push_str(digits);
+        s
+    } else {
+        let mut s = " ".repeat(fill);
+        s.push_str(&body);
+        s
+    }
+}
+
+/// Renders one value under one conversion. `prec` defaults are the
+/// `printf` ones (6 for floats); `g` maps to Rust's shortest round-trip
+/// float display, which is what a CAN tool actually wants.
+fn convert(spec: FmtSpec, v: &Value) -> Result<String, String> {
+    let int_of = |v: &Value| -> Result<i64, String> {
+        match v {
+            Value::Int(n) => Ok(*n),
+            Value::Float(f) if f.is_finite() => Ok(f.trunc() as i64),
+            other => Err(format!(
+                "format: %{} needs a number, got {}",
+                spec.conv,
+                kind(other)
+            )),
+        }
+    };
+    let float_of = |v: &Value| -> Result<f64, String> {
+        match v {
+            Value::Int(n) => Ok(*n as f64),
+            Value::Float(f) if f.is_finite() => Ok(*f),
+            other => Err(format!(
+                "format: %{} needs a number, got {}",
+                spec.conv,
+                kind(other)
+            )),
+        }
+    };
+    let prec = spec.prec.unwrap_or(6);
+    Ok(match spec.conv {
+        'd' | 'i' | 'u' => pad(spec, int_of(v)?.to_string(), true),
+        'x' => pad(spec, format!("{:x}", int_of(v)?), true),
+        'X' => pad(spec, format!("{:X}", int_of(v)?), true),
+        'f' | 'F' => pad(
+            spec,
+            format!("{:.*}", prec, float_of(v)?),
+            true,
+        ),
+        'e' => pad(spec, format!("{:.*e}", prec, float_of(v)?), true),
+        'E' => pad(spec, format!("{:.*e}", prec, float_of(v)?).to_uppercase(), true),
+        'g' | 'G' => {
+            let body = float_of(v)?.to_string();
+            let body = if spec.conv == 'G' { body.to_uppercase() } else { body };
+            pad(spec, body, true)
+        }
+        's' => {
+            let mut body = v.to_string();
+            if let Some(p) = spec.prec {
+                body = body.chars().take(p).collect();
+            }
+            pad(spec, body, false)
+        }
+        other => return Err(format!("format: unknown conversion `%{other}'")),
+    })
+}
+
+/// printf-style rendering: `%[flags][width][.prec][diufFeEgGsxX%%]`.
+/// Literal text passes through; `%` consumes the next value in order.
+fn render_format(fmt: &str, args: &[Value]) -> Result<String, String> {
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut out = String::new();
+    let mut next = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] != '%' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i >= chars.len() {
+            return Err("format: trailing '%' with no conversion".into());
+        }
+        if chars[i] == '%' {
+            out.push('%');
+            i += 1;
+            continue;
+        }
+        let mut spec = FmtSpec { conv: chars[i], ..Default::default() };
+        // Flags.
+        while i < chars.len() && (chars[i] == '-' || chars[i] == '0') {
+            if chars[i] == '-' {
+                spec.minus = true;
+            } else {
+                spec.zero = true;
+            }
+            i += 1;
+        }
+        // Width.
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            spec.width = spec.width * 10 + (chars[i] as usize - '0' as usize);
+            i += 1;
+        }
+        // Precision.
+        if i < chars.len() && chars[i] == '.' {
+            i += 1;
+            let mut p = 0usize;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                p = p * 10 + (chars[i] as usize - '0' as usize);
+                i += 1;
+            }
+            spec.prec = Some(p);
+        }
+        // Conversion.
+        if i >= chars.len() {
+            return Err("format: trailing '%' with no conversion".into());
+        }
+        spec.conv = chars[i];
+        i += 1;
+        if spec.conv == '%' {
+            out.push('%');
+            continue;
+        }
+        let Some(v) = args.get(next) else {
+            return Err(format!(
+                "format: no value for conversion #{} (`%{}')",
+                next + 1,
+                spec.conv
+            ));
+        };
+        next += 1;
+        out.push_str(&convert(spec, v)?);
+    }
+    Ok(out)
+}
+
 fn arith(a: Value, b: Value, op: Arith) -> Result<Value, String> {
     use Value::{Float, Int};
     let sign = match op {
@@ -1156,6 +1325,44 @@ mod tests {
         vm.run()
             .unwrap_or_else(|e| panic!("script '{src}' failed: {e}"));
         vm.output
+    }
+
+    /// printf-style rendering: conversions, precision, width/zero/minus
+    /// flags, and the literal `%%`.
+    #[test]
+    fn format_renders_printf_style() {
+        let src = r#"
+            print(format("%d %s %x %X", 42, "hi", 255, 255));
+            print(format("%.2f km/h", 3.14159));
+            print(format("[%05d] [%5d] [%-5d|]", 42, 7, 7));
+            print(format("[%5s] [%.2s]", "abcdef", "abcdef"));
+            print(format("100%% sure: %g", 2.5));
+        "#;
+        assert_eq!(
+            out(src),
+            vec![
+                "42 hi ff FF",
+                "3.14 km/h",
+                "[00042] [    7] [7    |]",
+                "[abcdef] [ab]",
+                "100% sure: 2.5",
+            ]
+        );
+    }
+
+    /// A conversion without a value is a runtime error, not a silent
+    /// empty field; unknown conversions are named.
+    #[test]
+    fn format_errors_name_the_problem() {
+        let script = compile("print(format(\"%d %d\", 1));").unwrap();
+        let mut vm = Vm::new(script);
+        let err = vm.run().unwrap_err().to_string();
+        assert!(err.contains("no value for conversion #2"), "{err}");
+
+        let script = compile("print(format(\"%q\", 1));").unwrap();
+        let mut vm = Vm::new(script);
+        let err = vm.run().unwrap_err().to_string();
+        assert!(err.contains("%q"), "{err}");
     }
 
     #[test]
