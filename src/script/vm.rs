@@ -137,6 +137,12 @@ impl Vm {
     /// Re-arms the instruction budget for one callback: every handler run
     /// gets the full allowance, so a chatty node cannot starve its own
     /// later events.
+    /// The `$Message::Signal` name pairs the host needs when re-resolving
+    /// its name→id map against a reloaded database.
+    pub fn named_signal_refs(&self) -> &[(String, String)] {
+        &self.script.named_signal_refs
+    }
+
     pub fn reset_budget(&mut self, budget: u64) {
         self.budget = budget;
         self.steps = 0;

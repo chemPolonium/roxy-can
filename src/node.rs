@@ -315,6 +315,45 @@ impl ScriptNode {
         }
     }
 
+    /// Recomputes the `$Message::Signal` name→id map against `db` — a
+    /// DBC reload may have moved a name onto a different id or dropped
+    /// it. The map refreshes in place and every change lands in the node
+    /// log as a `[reload]` line, so a stale read is explainable.
+    pub fn refresh_named_signals(&mut self, db: &crate::dbc::SymbolTable) {
+        let Some(rt) = self.runtime.as_mut() else {
+            return;
+        };
+        for (msg, sig) in rt.vm.named_signal_refs().to_vec() {
+            let new_id = db.message_id_by_name(&msg);
+            let old = rt.vm.named_messages.get(&msg).copied();
+            match (old, new_id) {
+                (Some(o), Some(n)) if o == n => {}
+                (None, None) => {}
+                (old, new) => {
+                    if let Some(n) = new {
+                        rt.vm.named_messages.insert(msg.clone(), n);
+                    } else {
+                        rt.vm.named_messages.remove(&msg);
+                    }
+                    let what = match (old, new) {
+                        (Some(o), Some(n)) => {
+                            format!("$\"{msg}\"::{sig} id 0x{o:X} -> 0x{n:X}")
+                        }
+                        (Some(o), None) => format!("$\"{msg}\" (0x{o:X}) 已从库中移除"),
+                        (None, Some(n)) => format!("$\"{msg}\" 新增 (0x{n:X})"),
+                        (None, None) => continue,
+                    };
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!("[reload] {what}"),
+                    );
+                }
+            }
+        }
+    }
+
     /// Delivers one bus frame: handlers for this id on this channel run,
     /// in declaration order. `input` is what `now()`/`sig()` read.
     /// `data` is the triggering frame's payload, exposed to `on message`

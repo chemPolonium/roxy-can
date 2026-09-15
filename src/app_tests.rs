@@ -3802,6 +3802,75 @@ BO_ 300 RenamedMsg: 1 ECU
     std::fs::remove_file(&a).ok();
 }
 
+/// A DBC reload that moves a message id refreshes the bound nodes'
+/// `$` name→id maps in place (with a `[reload]` line in the node log):
+/// a wildcard node keeps reading the renamed message off its new id.
+#[test]
+fn a_dollar_read_follows_a_reload_that_moves_the_message_id() {
+    let a = std::env::temp_dir().join("roxy_can_reload_named.dbc");
+    let dbc = |id: u32| {
+        format!(
+            "VERSION \"named\"\n\nNS_ :\n\nBS_:\n\nBU_: EngineECU\n\nBO_ {id} EngineStatus: 8 EngineECU\n SG_ RPM : 0|16@1+ (1,0) [0|8000] \"rpm\" EngineECU\n"
+        )
+    };
+    std::fs::write(&a, dbc(0x100)).unwrap();
+    let mut app = App::headless();
+    app.open_dbc_for(0, a.to_string_lossy().into_owned());
+    app.settle();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "watcher".to_string(),
+        channel: 0,
+        attached: Some((0, "EngineECU".to_string())),
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on message * { print($EngineStatus::RPM); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    app.settle();
+
+    let frame = |t: u64, fid: u32, rpm: u16| CanFrame {
+        t_us: t,
+        channel: 0,
+        id: fid,
+        extended: false,
+        len: 2,
+        data: {
+            let mut d = [0; MAX_CAN_FD_LEN];
+            d[..2].copy_from_slice(&rpm.to_le_bytes());
+            d
+        },
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    };
+    receive(&mut app, 1_000, vec![frame(1_000, 0x100, 1234)]);
+    assert!(
+        app.snap.nodes[0].log.iter().any(|l| l.starts_with("1234")),
+        "the pre-reload read works: {:?}",
+        app.snap.nodes[0].log
+    );
+
+    std::fs::write(&a, dbc(0x103)).unwrap();
+    assert!(app.maybe_reload_changed_dbcs().is_some());
+    app.settle();
+    receive(&mut app, 2_000, vec![frame(2_000, 0x103, 4321)]);
+    let log = &app.snap.nodes[0].log;
+    assert!(
+        log.iter().any(|l| l.starts_with("4321")),
+        "the refreshed map reads the new id: {log:?}"
+    );
+    assert!(
+        log.iter()
+            .any(|l| l.contains("[reload]") && l.contains("0x100") && l.contains("0x103")),
+        "the reload is explained in the node log: {log:?}"
+    );
+    std::fs::remove_file(&a).ok();
+    app.stop();
+}
+
 /// A simulated node whose database gains a message gets the new entry at
 /// reload time -- but **inactive**: an external DBC edit must not begin
 /// transmitting on its own.

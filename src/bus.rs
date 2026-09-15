@@ -2202,9 +2202,17 @@ impl BusCore {
         for extra in tables {
             crate::dbc::absorb(&mut merged, extra);
         }
+        let merged = std::sync::Arc::new(merged);
         // Transmitter lists feed the role cards.
         self.nodes_dirty = true;
-        channel.dbc = Some(std::sync::Arc::new(merged));
+        channel.dbc = Some(merged.clone());
+        // `$报文::信号` 的名字→id 映射随库刷新：报文换了 id 或名字没了，
+        // 节点的映射原地更新，变化进节点日志（静默错位由此可解释）。
+        for node in &mut self.nodes {
+            if node.channel as usize == ch {
+                node.refresh_named_signals(&merged);
+            }
+        }
         // The role declarations are already in place on a reload, so the
         // fresh table has to meet them: Simulated nodes get entries for
         // messages the database newly declares.
