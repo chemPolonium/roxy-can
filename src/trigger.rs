@@ -43,6 +43,16 @@ pub enum TriggerCond {
     /// per frame; the level clears when traffic resumes, so every new
     /// dropout is a fresh edge.
     CycleTimeout { ch: u8, id: u32 },
+    /// A system variable at or past a threshold (`rising`), or at/below
+    /// it with `rising == false`. Swept once per step against the live
+    /// registry -- sysvars are the user-input channel, so "the operator
+    /// raised Setpoint" can arm a recording. The level follows the value
+    /// and the edge is the crossing.
+    SysVar {
+        key: String,
+        threshold: f64,
+        rising: bool,
+    },
 }
 
 /// What a fired trigger does.
@@ -115,6 +125,8 @@ impl TriggerCond {
             | TriggerCond::IdPresent { ch, .. }
             | TriggerCond::ErrorFrame { ch }
             | TriggerCond::CycleTimeout { ch, .. } => *ch,
+            // System variables are global: no bus to watch.
+            TriggerCond::SysVar { .. } => 0,
         }
     }
 
@@ -148,6 +160,14 @@ impl TriggerCond {
             TriggerCond::IdPresent { id, .. } => format!("0x{id:X} present"),
             TriggerCond::ErrorFrame { .. } => "error frames".to_string(),
             TriggerCond::CycleTimeout { id, .. } => format!("0x{id:X} timeout"),
+            TriggerCond::SysVar {
+                key,
+                threshold,
+                rising,
+            } => format!(
+                "@{key} {} {threshold}",
+                if *rising { ">=" } else { "<=" }
+            ),
         }
     }
 }
@@ -205,6 +225,22 @@ impl App {
 
     pub fn add_timeout_trigger(&mut self) {
         self.push_trigger(TriggerCond::CycleTimeout { ch: 0, id: 0x100 });
+    }
+
+    pub fn add_sysvar_trigger(&mut self) {
+        // Default to the first defined variable so the row starts
+        // watching something real instead of a blank key.
+        let key = self
+            .snap
+            .sysvars
+            .first()
+            .map(|v| format!("{}::{}", v.def.namespace, v.def.name))
+            .unwrap_or_default();
+        self.push_trigger(TriggerCond::SysVar {
+            key,
+            threshold: 0.0,
+            rising: true,
+        });
     }
 
     fn push_trigger(&mut self, cond: TriggerCond) {

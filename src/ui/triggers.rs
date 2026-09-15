@@ -21,7 +21,7 @@ impl TrigDraft {
             TriggerCond::SignalCross { id, .. }
             | TriggerCond::IdPresent { id, .. }
             | TriggerCond::CycleTimeout { id, .. } => format!("{id:X}"),
-            TriggerCond::ErrorFrame { .. } => String::new(),
+            TriggerCond::ErrorFrame { .. } | TriggerCond::SysVar { .. } => String::new(),
         };
         TrigDraft {
             index,
@@ -81,6 +81,10 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     if ui.button("+ Timeout") {
         app.add_timeout_trigger();
+    }
+    ui.same_line();
+    if ui.button("+ SysVar") {
+        app.add_sysvar_trigger();
     }
     ui.same_line();
     if ui.button("Re-arm latched") {
@@ -219,6 +223,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             TriggerCond::IdPresent { .. } => "id present",
             TriggerCond::CycleTimeout { .. } => "cycle timeout",
             TriggerCond::ErrorFrame { .. } => "error frames",
+            TriggerCond::SysVar { .. } => "system variable",
         };
         ui.text(format!(
             "trigger {} of {} -- {kind}",
@@ -239,15 +244,18 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 84.0);
         ui.table_setup_column_stretch_weight("", TableColumnFlags::NONE, 1.0);
 
-        row(ui, "Bus", |ui| {
-            let names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
-            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-            let mut bus = (draft.cond.bus() as usize).min(refs.len().saturating_sub(1));
-            ui.set_next_item_width(-1.0);
-            if ui.combo_simple_string("##trigbus", &mut bus, &refs) {
-                set_bus(&mut draft.cond, bus as u8);
-            }
-        });
+        // System variables are global: the bus picker would lie.
+        if !matches!(draft.cond, TriggerCond::SysVar { .. }) {
+            row(ui, "Bus", |ui| {
+                let names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
+                let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                let mut bus = (draft.cond.bus() as usize).min(refs.len().saturating_sub(1));
+                ui.set_next_item_width(-1.0);
+                if ui.combo_simple_string("##trigbus", &mut bus, &refs) {
+                    set_bus(&mut draft.cond, bus as u8);
+                }
+            });
+        }
         let cond_bus = draft.cond.bus();
         match &mut draft.cond {
             TriggerCond::SignalCross {
@@ -300,6 +308,50 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             TriggerCond::IdPresent { id, .. } => {
                 row(ui, "Message", |ui| {
                     id_field(ui, &mut draft.id_buf, id);
+                });
+            }
+            TriggerCond::SysVar {
+                key,
+                threshold,
+                rising,
+            } => {
+                row(ui, "Variable", |ui| {
+                    let keys: Vec<String> = app
+                        .snap
+                        .sysvars
+                        .iter()
+                        .map(|v| format!("{}::{}", v.def.namespace, v.def.name))
+                        .collect();
+                    ui.set_next_item_width(-1.0);
+                    if keys.is_empty() {
+                        let mut k = key.clone();
+                        if ui.input_text("##trigsyskey", &mut k).build() {
+                            *key = k;
+                        }
+                    } else {
+                        let refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+                        let mut pick = refs.iter().position(|n| *n == key.as_str()).unwrap_or(0);
+                        if ui.combo_simple_string("##trigsyskey", &mut pick, &refs) {
+                            *key = keys[pick].clone();
+                        }
+                    }
+                });
+                row(ui, "Threshold", |ui| {
+                    let mut th = *threshold as f32;
+                    let th_fmt = NumericFormat::new("%g").expect("static format");
+                    if ui
+                        .input_float_config("##trigsysval")
+                        .display_format(th_fmt)
+                        .build(&mut th)
+                    {
+                        *threshold = th as f64;
+                    }
+                });
+                row(ui, "Direction", |ui| {
+                    let mut dir = *rising as usize;
+                    if ui.combo_simple_string("##trigsysdir", &mut dir, &["rising", "falling"]) {
+                        *rising = dir == 0;
+                    }
                 });
             }
             TriggerCond::CycleTimeout { id, .. } => {
@@ -433,6 +485,8 @@ fn set_bus(cond: &mut TriggerCond, ch: u8) {
         | TriggerCond::IdPresent { ch: c, .. }
         | TriggerCond::CycleTimeout { ch: c, .. }
         | TriggerCond::ErrorFrame { ch: c } => *c = ch,
+        // System variables are global: no bus to point anywhere.
+        TriggerCond::SysVar { .. } => {}
     }
 }
 

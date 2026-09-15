@@ -5367,6 +5367,71 @@ fn emit_value_publishes_a_derived_signal_stream() {
 
 /// The manager's lifecycle via commands: define with bounds, manual set
 /// clamps, and every run start resets the value to the declared init.
+/// A sysvar condition sweeps the live registry: the operator raising
+/// `@Demo::Setpoint` past the threshold fires the trigger once per
+/// crossing -- holding high never refires, dropping low re-arms.
+#[test]
+fn a_sysvar_condition_fires_when_the_operator_raises_it() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
+        namespace: "Demo".to_string(),
+        name: "Setpoint".to_string(),
+        init: 0.0,
+        min: Some(0.0),
+        max: Some(100.0),
+        unit: String::new(),
+        comment: String::new(),
+    }));
+    app.settle();
+    app.send(crate::bus::BusCommand::AddTrigger {
+        cond: crate::trigger::TriggerCond::SysVar {
+            key: "Demo::Setpoint".to_string(),
+            threshold: 50.0,
+            rising: true,
+        },
+        action: crate::trigger::TriggerAction::ClearTrace,
+    });
+    app.settle();
+
+    app.start_virtual();
+    app.settle();
+
+    fn set(app: &mut App, v: f64) {
+        app.send(crate::bus::BusCommand::SetSysVar {
+            namespace: "Demo".to_string(),
+            name: "Setpoint".to_string(),
+            value: v,
+        });
+        app.settle();
+    }
+    // The sweep lives inside the measuring step: every read of the
+    // trigger needs an explicit clock advance to evaluate.
+    let run_to = |app: &mut App, t: u64| {
+        app.advance_clock(t);
+        app.tick(t);
+    };
+
+    set(&mut app, 80.0);
+    let t = app.now_us() + 1_000;
+    run_to(&mut app, t);
+    assert_eq!(app.snap.triggers[0].fired, 1, "the crossing fires once");
+
+    // Holding above the threshold is a level, not repeated edges.
+    let next = t + 100_000;
+    run_to(&mut app, next);
+    assert_eq!(app.snap.triggers[0].fired, 1, "holding high does not refire");
+
+    // Drop below and raise again: a fresh edge.
+    set(&mut app, 10.0);
+    let t = app.now_us() + 1_000;
+    run_to(&mut app, t);
+    set(&mut app, 80.0);
+    let t = app.now_us() + 1_000;
+    run_to(&mut app, t);
+    assert_eq!(app.snap.triggers[0].fired, 2, "a second crossing fires again");
+    app.stop();
+}
+
 #[test]
 fn sysvars_define_clamp_and_reset_on_run_start() {
     let mut app = App::headless();

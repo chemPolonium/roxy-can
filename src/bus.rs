@@ -2573,6 +2573,8 @@ impl BusCore {
                 | TriggerCond::IdPresent { ch, .. }
                 | TriggerCond::ErrorFrame { ch }
                 | TriggerCond::CycleTimeout { ch, .. } => ch,
+                // System variables are global: no bus to shift.
+                TriggerCond::SysVar { .. } => continue,
             };
             if *cond_ch > removed {
                 *cond_ch -= 1;
@@ -3693,7 +3695,9 @@ impl BusCore {
                     }
                     // Not a frame condition: swept once per step against
                     // the aggregates in `eval_timeout_triggers`.
-                    TriggerCond::CycleTimeout { .. } => continue,
+                    // Not frame conditions: swept once per step in
+                    // `eval_timeout_triggers` (cycle silence, system vars).
+                    TriggerCond::CycleTimeout { .. } | TriggerCond::SysVar { .. } => continue,
                 }
             };
             let t = &mut self.triggers[i];
@@ -3733,18 +3737,56 @@ impl BusCore {
         }
         let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
         for i in 0..self.triggers.len() {
-            let (ch, id) = match &self.triggers[i].cond {
-                TriggerCond::CycleTimeout { ch, id } => (*ch, *id),
+            // Level conditions swept once per step: cycle silence against
+            // the aggregates, system variables against the live registry.
+            let level = match &self.triggers[i].cond {
+                TriggerCond::CycleTimeout { ch, id } => {
+                    if !self.triggers[i].enabled {
+                        continue;
+                    }
+                    Some(self.timeout_silent(*ch, *id, now_us, grace))
+                }
+                TriggerCond::SysVar {
+                    key,
+                    threshold,
+                    rising,
+                } => {
+                    if !self.triggers[i].enabled {
+                        continue;
+                    }
+                    let v = self
+                        .sysvars
+                        .iter()
+                        .find(|(d, _)| d.key() == *key)
+                        .map(|(_, v)| *v);
+                    Some(match v {
+                        Some(v) => {
+                            if *rising {
+                                v >= *threshold
+                            } else {
+                                v <= *threshold
+                            }
+                        }
+                        // An undefined key reads 0.0 at runtime (see
+                        // sys_get): the sweep stays consistent with that.
+                        None => {
+                            if *rising {
+                                0.0 >= *threshold
+                            } else {
+                                0.0 <= *threshold
+                            }
+                        }
+                    })
+                }
                 _ => continue,
             };
-            if !self.triggers[i].enabled {
+            let Some(level) = level else {
                 continue;
-            }
-            let silent = self.timeout_silent(ch, id, now_us, grace);
+            };
             let t = &mut self.triggers[i];
             let was = t.level;
-            t.level = silent;
-            if silent && !was {
+            t.level = level;
+            if level && !was {
                 t.fired += 1;
                 t.last_fire_t_us = now_us;
                 fired.push((t.action, now_us));

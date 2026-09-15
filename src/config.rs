@@ -896,6 +896,13 @@ impl Config {
                         TriggerCond::CycleTimeout { ch, id } => {
                             (3, *ch, *id, false, String::new(), 0.0, false)
                         }
+                        // The sysvar key rides the `signal` string field;
+                        // ch/id carry nothing for it.
+                        TriggerCond::SysVar {
+                            key,
+                            threshold,
+                            rising,
+                        } => (4, 0, 0, false, key.clone(), *threshold, *rising),
                     };
                     TriggerCfg {
                         kind,
@@ -1228,6 +1235,12 @@ impl Config {
                     1 => TriggerCond::IdPresent { ch: c.ch, id: c.id },
                     2 => TriggerCond::ErrorFrame { ch: c.ch },
                     3 => TriggerCond::CycleTimeout { ch: c.ch, id: c.id },
+                    // The sysvar key rides the `signal` string field.
+                    4 => TriggerCond::SysVar {
+                        key: c.signal.clone(),
+                        threshold: c.threshold,
+                        rising: c.rising,
+                    },
                     _ => return None,
                 };
                 let action = match c.action {
