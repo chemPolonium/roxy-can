@@ -5432,6 +5432,33 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
     app.stop();
 }
 
+/// A Monitor row holds the signal's subscription on its own: removing
+/// the same signal from a Data window must not cut the Monitor's feed
+/// (and with every watcher gone, the feed is pruned).
+#[test]
+fn monitor_rows_hold_the_subscription_against_data_removal() {
+    let mut app = App::headless();
+    app.new_data_window();
+    let key = (0u8, 0x100u32, false, "EngineStatus".to_string());
+    app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
+    app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
+    assert_eq!(app.monitor_rows.len(), 1, "the Monitor row was added");
+
+    app.set_win_signal(PopupTarget::Data(0), key.clone(), false);
+    app.settle();
+    assert!(
+        app.sub_view(&key).is_some(),
+        "the Monitor row keeps the feed alive"
+    );
+
+    app.set_win_signal(PopupTarget::Monitor, key.clone(), false);
+    app.settle();
+    assert!(
+        app.sub_view(&key).is_none(),
+        "with every watcher gone the feed is pruned"
+    );
+}
+
 #[test]
 fn sysvars_define_clamp_and_reset_on_run_start() {
     let mut app = App::headless();

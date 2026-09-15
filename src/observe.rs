@@ -793,7 +793,8 @@ impl App {
             || self
                 .state_trackers
                 .iter()
-                .any(|w| w.signals.iter().any(|s| &s.key == key));
+                .any(|w| w.signals.iter().any(|s| &s.key == key))
+            || self.monitor_rows.iter().any(|r| &r.key == key);
         if !in_use {
             self.send(crate::bus::BusCommand::Unsubscribe { key: key.clone() });
         }
