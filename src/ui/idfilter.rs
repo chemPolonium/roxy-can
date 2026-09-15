@@ -66,7 +66,10 @@ pub fn render(app: &mut App, ui: &Ui) {
     let mut open = app.show_id_filter;
     let signal_level = matches!(
         app.popup_target,
-        Some(PopupTarget::Graphics(_)) | Some(PopupTarget::Data(_)) | Some(PopupTarget::State(_))
+        Some(PopupTarget::Graphics(_))
+            | Some(PopupTarget::Data(_))
+            | Some(PopupTarget::State(_))
+            | Some(PopupTarget::Monitor)
     );
     let title = match app.popup_target {
         Some(t) => format!(
@@ -132,6 +135,7 @@ pub fn target_name(app: &App, t: PopupTarget) -> String {
             app.state_trackers.get(i).map(|w| w.name.as_str()),
             format!("State Tracker {}", i + 1),
         ),
+        PopupTarget::Monitor => "Monitor".to_string(),
     }
 }
 
@@ -303,6 +307,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
             };
             w.signals.iter().map(|s| s.key.clone()).collect()
         }
+        PopupTarget::Monitor => app.monitor_rows.iter().map(|r| r.key.clone()).collect(),
         _ => return,
     };
 

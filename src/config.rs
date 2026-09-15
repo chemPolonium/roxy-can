@@ -258,6 +258,32 @@ pub struct DataCfg {
     pub signals: Vec<SignalCfg>,
 }
 
+/// One Monitor window row: the watched signal plus its display settings.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MonitorRowCfg {
+    pub ch: u8,
+    pub id: u32,
+    #[serde(default)]
+    pub ext: bool,
+    pub signal: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "digits_default")]
+    pub digits: usize,
+    #[serde(default)]
+    pub rule_on: bool,
+    #[serde(default)]
+    pub rising: bool,
+    #[serde(default)]
+    pub threshold: f64,
+    #[serde(default)]
+    pub color: usize,
+}
+
+fn digits_default() -> usize {
+    1
+}
+
 /// One simulation node: identity-free (ids are minted fresh on restore),
 /// bound to a channel by index.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -558,6 +584,10 @@ pub struct Config {
     pub graphics: Vec<GfxCfg>,
     #[serde(default)]
     pub data_windows: Vec<DataCfg>,
+    /// The Monitor window's rows (single global panel; the window's
+    /// open/close stays session state).
+    #[serde(default)]
+    pub monitor_rows: Vec<MonitorRowCfg>,
     #[serde(default)]
     pub state_trackers: Vec<StateCfg>,
     #[serde(default)]
@@ -773,6 +803,22 @@ impl Config {
                     name: d.name.clone(),
                     opened: d.opened,
                     signals: sig_cfgs(&d.signals),
+                })
+                .collect(),
+            monitor_rows: app
+                .monitor_rows
+                .iter()
+                .map(|r| MonitorRowCfg {
+                    ch: r.key.0,
+                    id: r.key.1,
+                    ext: r.key.2,
+                    signal: r.key.3.clone(),
+                    label: r.label.clone(),
+                    digits: r.digits,
+                    rule_on: r.rule_on,
+                    rising: r.rising,
+                    threshold: r.threshold,
+                    color: r.color,
                 })
                 .collect(),
             state_trackers: app
@@ -1133,6 +1179,21 @@ impl Config {
                 })
                 .collect();
         }
+        if !self.monitor_rows.is_empty() {
+            app.monitor_rows = self
+                .monitor_rows
+                .into_iter()
+                .map(|m| crate::app::MonitorRow {
+                    key: (m.ch, m.id, m.ext, m.signal),
+                    label: m.label,
+                    digits: m.digits,
+                    rule_on: m.rule_on,
+                    rising: m.rising,
+                    threshold: m.threshold,
+                    color: m.color,
+                })
+                .collect();
+        }
         if !self.state_trackers.is_empty() {
             app.state_trackers = self
                 .state_trackers
@@ -1283,6 +1344,7 @@ impl Config {
                     .iter()
                     .flat_map(|w| w.signals.iter().map(|s| s.key.clone())),
             )
+            .chain(app.monitor_rows.iter().map(|r| r.key.clone()))
             .collect();
         for key in keys {
             app.subscribe(key);
@@ -1496,6 +1558,36 @@ mod tests {
             Some(1_000),
             "the anti-typo floor still applies"
         );
+    }
+
+    /// The Monitor window's rows persist with the project: the watched
+    /// keys, labels, digits, and coloring rules all round-trip.
+    #[test]
+    fn monitor_rows_round_trip_with_the_project() {
+        let mut app = App::headless();
+        app.set_win_signal(
+            crate::workspace::PopupTarget::Monitor,
+            (0, 0x100, false, "EngineStatus".to_string()),
+            true,
+        );
+        assert_eq!(app.monitor_rows.len(), 1, "the row was added");
+        app.monitor_rows[0].digits = 2;
+        app.monitor_rows[0].rule_on = true;
+        app.monitor_rows[0].rising = false;
+        app.monitor_rows[0].threshold = 87.5;
+        app.monitor_rows[0].color = 3;
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.monitor_rows.len(), 1);
+        let r = &restored.monitor_rows[0];
+        assert_eq!((r.key.0, r.key.1, r.key.2), (0, 0x100, false));
+        assert_eq!(r.key.3, "EngineStatus");
+        assert_eq!((r.digits, r.rule_on, r.rising, r.threshold, r.color),
+            (2, true, false, 87.5, 3));
     }
 
     /// Which roles a bus declares has to outlive the session, or the bus

@@ -107,6 +107,35 @@ pub enum Mode {
     Replay,
 }
 
+/// One row of the Monitor window: a watched signal, its display name,
+/// the decimals shown, and an optional coloring rule (`rising` compares
+/// `value >= threshold`, otherwise `<=`; the palette `color` slots the
+/// row's text when the rule holds). The lightweight big-screen panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MonitorRow {
+    pub key: crate::observe::SigKey,
+    pub label: String,
+    pub digits: usize,
+    pub rule_on: bool,
+    pub rising: bool,
+    pub threshold: f64,
+    pub color: usize,
+}
+
+impl Default for MonitorRow {
+    fn default() -> Self {
+        Self {
+            key: (0, 0, false, String::new()),
+            label: String::new(),
+            digits: 1,
+            rule_on: false,
+            rising: true,
+            threshold: 0.0,
+            color: 0,
+        }
+    }
+}
+
 pub struct App {
     /// Where the bus actually lives. `Threaded` -- the production drive:
     /// the core runs on its own thread and only commands and snapshots
@@ -188,8 +217,12 @@ pub struct App {
     pub show_id_filter: bool,
     pub show_sysvars: bool,
     pub show_write: bool,
+    pub show_monitor: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
+    /// The Monitor window's rows: label + value + optional coloring rule
+    /// per selected signal. The lightweight big-screen panel (v1).
+    pub monitor_rows: Vec<MonitorRow>,
     pub id_filter_search: String,
     pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
@@ -442,8 +475,10 @@ impl App {
             show_id_filter: false,
             show_sysvars: false,
             show_write: true,
+            show_monitor: false,
             show_shortcuts: false,
             show_about: false,
+            monitor_rows: Vec::new(),
             id_filter_search: String::new(),
             gen_search: String::new(),
             popup_target: None,

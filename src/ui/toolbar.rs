@@ -225,6 +225,9 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item_enabled_selected("Write", None::<&str>, app.show_write, true) {
                         app.show_write = !app.show_write;
                     }
+                    if ui.menu_item_enabled_selected("Monitor", None::<&str>, app.show_monitor, true) {
+                        app.show_monitor = !app.show_monitor;
+                    }
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {

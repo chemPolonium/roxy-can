@@ -20,6 +20,8 @@ pub enum PopupTarget {
     Graphics(usize),
     Data(usize),
     State(usize),
+    /// The Monitor window: one global panel, hence no index.
+    Monitor,
 }
 
 /// A trace window's filter lens, cloned out of the window so the per-gate
@@ -419,6 +421,25 @@ impl App {
     /// Adds or removes a signal in a Graphics/Data window's signal list
     /// (used by the Signal Selection popup).
     pub fn set_win_signal(&mut self, target: PopupTarget, key: crate::observe::SigKey, on: bool) {
+        // The Monitor panel keeps its own row type (label + coloring rule),
+        // so its bookkeeping runs before the shared GfxSignal lists.
+        if let PopupTarget::Monitor = target {
+            if on {
+                if self.monitor_rows.iter().any(|r| r.key == key) {
+                    return;
+                }
+                self.monitor_rows.push(crate::app::MonitorRow {
+                    key: key.clone(),
+                    label: key.3.clone(),
+                    ..Default::default()
+                });
+                self.subscribe(key);
+            } else {
+                self.monitor_rows.retain(|r| r.key != key);
+                self.prune_signal(&key);
+            }
+            return;
+        }
         let signals: Option<&mut Vec<GfxSignal>> = match target {
             PopupTarget::Graphics(i) => self.graphics.get_mut(i).map(|w| &mut w.signals),
             PopupTarget::Data(i) => self.data_windows.get_mut(i).map(|w| &mut w.signals),

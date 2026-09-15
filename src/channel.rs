@@ -234,6 +234,13 @@ impl App {
             w.rules = remap_key_map(w.rules.drain().collect(), &remap);
             w.overrides = remap_key_map(w.overrides.drain().collect(), &remap);
         }
+        // Monitor rows carry signal keys too.
+        self.monitor_rows.retain(|r| remap(r.key.0).is_some());
+        for r in &mut self.monitor_rows {
+            if let Some(nc) = remap(r.key.0) {
+                r.key.0 = nc;
+            }
+        }
         let fix_scope = |s: &mut SigScope| {
             if let SigScope::Bus(b) = *s {
                 *s = match (b as usize).cmp(&ch) {
