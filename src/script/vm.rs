@@ -1177,7 +1177,9 @@ fn render_format(fmt: &str, args: &[Value]) -> Result<String, String> {
         }
         // Width.
         while i < chars.len() && chars[i].is_ascii_digit() {
-            spec.width = spec.width * 10 + (chars[i] as usize - '0' as usize);
+            if spec.width < 4096 {
+                spec.width = spec.width * 10 + (chars[i] as usize - '0' as usize);
+            }
             i += 1;
         }
         // Precision.
@@ -1185,7 +1187,9 @@ fn render_format(fmt: &str, args: &[Value]) -> Result<String, String> {
             i += 1;
             let mut p = 0usize;
             while i < chars.len() && chars[i].is_ascii_digit() {
-                p = p * 10 + (chars[i] as usize - '0' as usize);
+                if p < 130 {
+                    p = p * 10 + (chars[i] as usize - '0' as usize);
+                }
                 i += 1;
             }
             spec.prec = Some(p);
