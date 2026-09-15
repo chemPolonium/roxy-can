@@ -188,10 +188,20 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                 match lane.inbox.recv_timeout(Duration::from_micros(wait_us)) {
                     Ok(cmd) => {
                         any = true;
-                        clock_reset = lane.apply(cmd);
-                        let (more, more_reset) = lane.drain();
-                        clock_reset |= more_reset;
-                        any |= more;
+                        let (reset, panicked) = catch_core_panic("命令处理", || lane.apply(cmd));
+                        if panicked {
+                            lane.halt_after_internal_error("命令处理");
+                        } else if let Some(reset) = reset {
+                            clock_reset = reset;
+                        }
+                        let (drained, panicked) =
+                            catch_core_panic("命令队列排空", || lane.drain());
+                        if panicked {
+                            lane.halt_after_internal_error("命令队列排空");
+                        } else if let Some((more, more_reset)) = drained {
+                            clock_reset |= more_reset;
+                            any |= more;
+                        }
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -217,13 +227,18 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                         lane.core.paused_at_us = Some(at);
                     }
                     let mut status = String::new();
-                    lane.core.step_to(
-                        now,
-                        knobs.stride_us(),
-                        knobs.tol_pct(),
-                        knobs.grace(),
-                        &mut status,
-                    );
+                    let (_, panicked) = catch_core_panic("测量步进", || {
+                        lane.core.step_to(
+                            now,
+                            knobs.stride_us(),
+                            knobs.tol_pct(),
+                            knobs.grace(),
+                            &mut status,
+                        );
+                    });
+                    if panicked {
+                        lane.halt_after_internal_error("测量步进");
+                    }
                     if !status.is_empty() {
                         lane.pending_status = Some(status);
                     }
@@ -246,4 +261,69 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
 
 fn elapsed_us(since: Instant) -> u64 {
     since.elapsed().as_micros() as u64
+}
+
+/// Runs `f` behind `catch_unwind`: a bug in the core (never scripts --
+/// those carry their own budget and fuse) is caught here instead of
+/// silently killing the "bus-core" thread. The caller turns the second
+/// element into a halt via [`CoreLoop::halt_after_internal_error`].
+fn catch_core_panic<T>(what: &'static str, f: impl FnOnce() -> T) -> (Option<T>, bool) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => (Some(v), false),
+        Err(_) => {
+            eprintln!("roxy-can core: panicked during {what}");
+            (None, true)
+        }
+    }
+}
+
+impl CoreLoop {
+    /// The panic path: a loud error on the Write/status surfaces, the
+    /// measurement stops, and the recording is closed -- the loop keeps
+    /// servicing commands and idles rather than hot-looping on the
+    /// state that tripped it.
+    fn halt_after_internal_error(&mut self, what: &str) {
+        self.pending_status = Some(format!(
+            "[core] 内部错误（panic）：{what}——测量已停止；请保存现场并反馈复现步骤"
+        ));
+        self.core.measuring = false;
+        self.core.recorder.close();
+        self.core.recorder.recording = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panicking lap halts the core loudly: measuring stops, the status
+    /// names the panic, and the halt is reachable from the loop's own
+    /// catch site.
+    #[test]
+    fn a_panicking_lap_halts_instead_of_killing_the_thread() {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let core = crate::bus::BusCore::new(vec![]);
+        let mut lane = CoreLoop::new(core, rx, crate::bus::new_mailbox());
+        lane.core.measuring = true;
+
+        let (_, panicked) = catch_core_panic("测试", || panic!("injected"));
+        assert!(panicked);
+        lane.halt_after_internal_error("测试");
+
+        assert!(!lane.core.measuring, "the measurement stops");
+        let status = lane.pending_status.clone().expect("a status line");
+        assert!(
+            status.contains("panic") && status.contains("测试"),
+            "the status names the fault site: {status}"
+        );
+    }
+
+    /// The normal path is transparent: no panic, the result passes
+    /// through untouched.
+    #[test]
+    fn catch_core_panic_passes_results_through() {
+        let (v, panicked) = catch_core_panic("测试", || 42);
+        assert!(!panicked);
+        assert_eq!(v, Some(42));
+    }
 }
