@@ -748,6 +748,18 @@ fn fd64_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
     obj_header_v1_bytes(OBJ_CAN_FD_MESSAGE_64, ts_raw, 0, &b)
 }
 
+/// `CAN_ERROR_EXT_STRUCT = <HHLBBBxLLH2x8s` — channel one-based at 0, DLC
+/// byte at 10, arbitration id at 16, up to eight data bytes at 24.
+fn error_ext_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
+    let mut b = vec![0u8; 32];
+    b[0..2].copy_from_slice(&(u16::from(f.channel) + 1).to_le_bytes());
+    b[10] = f.len;
+    b[16..20].copy_from_slice(&f.id.to_le_bytes());
+    let n = (f.len as usize).min(8);
+    b[24..24 + n].copy_from_slice(&f.data[..n]);
+    obj_header_v1_bytes(OBJ_CAN_ERROR_EXT, ts_raw, 0, &b)
+}
+
 fn zlib_bytes(data: &[u8]) -> Vec<u8> {
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -787,11 +799,10 @@ impl BlfWriter {
     }
 
     pub fn write(&mut self, f: &CanFrame) {
-        if f.flags.contains(FrameFlags::ERROR) {
-            return;
-        }
         let ts_raw = f.t_us.saturating_mul(1_000); // nanoseconds
-        let ev = if f.flags.contains(FrameFlags::FD) {
+        let ev = if f.flags.contains(FrameFlags::ERROR) {
+            error_ext_event(f, ts_raw)
+        } else if f.flags.contains(FrameFlags::FD) {
             fd64_event(f, ts_raw)
         } else {
             classic_event(f, ts_raw)
