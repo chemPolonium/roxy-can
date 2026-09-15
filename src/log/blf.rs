@@ -893,6 +893,7 @@ pub(crate) mod tests {
             mk(3_000, 0x200, false, FrameFlags::RTR, 1),
             mk(4_000, 0x300, true, FrameFlags::FD.union(FrameFlags::BRS), 24),
             mk(5_000, 0x300, false, FrameFlags::FD, 64),
+            mk(6_000, 0xABC, false, FrameFlags::ERROR, 2),
         ];
         {
             let path_s = path.to_string_lossy().into_owned();
@@ -909,10 +910,25 @@ pub(crate) mod tests {
         }
         assert_eq!(got.len(), frames.len(), "{:?}", got);
         for (g, want) in got.iter().zip(frames.iter()) {
+            if want.flags.contains(FrameFlags::ERROR) {
+                // The reader normalises error frames: id and payload are
+                // zeroed, only the flag survives.
+                assert_eq!(g.id, 0, "error id normalised to zero");
+                assert_eq!(g.len, 0, "error payload dropped");
+                assert!(g.flags.contains(FrameFlags::ERROR), "stays an error");
+                continue;
+            }
             assert_eq!((g.id, g.extended, g.len), (want.id, want.extended, want.len));
             assert_eq!(g.flags, want.flags, "flags for 0x{:X}", g.id);
             assert_eq!(&g.data[..g.len as usize], &want.data[..want.len as usize]);
         }
+        // The error frame survives as an error frame: the reader
+        // normalises its id to zero and keeps the ERROR flag.
+        let last = got.last().expect("at least one frame");
+        assert!(
+            last.flags.contains(FrameFlags::ERROR),
+            "the error frame stays flagged"
+        );
         std::fs::remove_file(&path).ok();
     }
 
