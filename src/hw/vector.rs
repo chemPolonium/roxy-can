@@ -1011,16 +1011,28 @@ mod tests {
                 flags: FrameFlags::NONE,
             };
             a.write_frame(&frame).expect("tx");
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            let got = loop {
-                if std::time::Instant::now() > deadline {
-                    panic!("the looped frame never arrived on the second channel");
+            // Force-killed processes can leave stale virtual-channel state
+            // that swallows the first loop attempt; one retry after a
+            // short settle has been enough every time it happened.
+            let mut got = None;
+            for attempt in 0..2 {
+                if attempt == 1 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    a.write_frame(&frame).expect("tx retry");
                 }
-                if let Some(f) = b.try_read() {
-                    break f;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while std::time::Instant::now() < deadline {
+                    if let Some(f) = b.try_read() {
+                        got = Some(f);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            };
+                if got.is_some() {
+                    break;
+                }
+            }
+            let got = got.expect("the looped frame never arrived on the second channel");
             assert_eq!((got.id, got.len, got.data[0]), (0x123, 2, 0xAB));
             println!("loopback ok: id=0x{:X} len={} data[0]=0x{:02X}", got.id, got.len, got.data[0]);
         }

@@ -4,12 +4,12 @@ version = "0.16.0"
 edition = "2024"
 
 [dependencies]
-# dear-imgui-rs binds Dear ImGui 1.92.9b (docking branch, docking always on).
+# dear-imgui-rs binds Dear ImGui 1.92.x (docking branch, docking always on).
 # The wgpu backend's default feature targets wgpu 30; pin it to our wgpu 29.
-dear-imgui-rs = "0.17"
-dear-imgui-cte = "0.17"
-dear-imgui-wgpu = { version = "0.17", default-features = false, features = ["wgpu-29"] }
-dear-imgui-winit = "0.17"
+dear-imgui-rs = "0.18"
+dear-imgui-cte = "0.18"
+dear-imgui-wgpu = { version = "0.18", default-features = false, features = ["wgpu-29"] }
+dear-imgui-winit = "0.18"
 wgpu = "29"
 # The OS clipboard backend dear-imgui-rs expects the app to provide.
 windows-sys = { version = "0.52", features = [
@@ -30,20 +30,3 @@ serde_json = "1.0"
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 memmap2 = "0.9"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-
-# Local patch: the vendored cimCTE lays every glyph out on a monospace grid
-# measured from '#' and has no wide-glyph handling, so CJK comments
-# overprinted their neighbours. The fork at
-# https://github.com/chemPolonium/dear-imgui-cte-sys reserves two grid cells
-# for East Asian wide/fullwidth codepoints (see the glyphColumns() helper in
-# its TextEditor.cpp).
-#
-# The same fix merged upstream as goossens/ImGuiColorTextEdit #88
-# (4bbc074 + f281364, 2026-09-13, with the maintainer's own follow-ups) --
-# but that repo is C++ only; what we consume is the crates.io packaging,
-# which still ships the pre-fix source: dear-imgui-rs@main last committed
-# 2026-09-09 and crates.io only has dear-imgui-cte-sys 0.17.0 (2026-08-17).
-# Dropping this patch before a sys release re-vendors the fixed cimCTE
-# brings the CJK overprint back.
-[patch.crates-io]
-dear-imgui-cte-sys = { git = "https://github.com/chemPolonium/dear-imgui-cte-sys", branch = "main" }

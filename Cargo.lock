@@ -565,9 +565,9 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "dear-imgui-build-support"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd245371992038514a99b7ae4976d016df2165e72f34bf3a439e7cdcba995db"
+checksum = "02da0cb00f1035b67f4caf8c91dd926da86b591350d19b330e2de2f1431e51df"
 dependencies = [
  "cc",
  "serde",
@@ -576,9 +576,9 @@ dependencies = [
 
 [[package]]
 name = "dear-imgui-cte"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac594ac642db8dfb817207492b6103eba8b35762c5b570562f1c1edaa5619475"
+checksum = "b80574d74709ebfbc9eccbc4a7e2e7ac0b0112e7e4e00fc69e74cc72a40c35bd"
 dependencies = [
  "dear-imgui-cte-sys",
  "dear-imgui-rs",
@@ -587,8 +587,9 @@ dependencies = [
 
 [[package]]
 name = "dear-imgui-cte-sys"
-version = "0.17.0"
-source = "git+https://github.com/chemPolonium/dear-imgui-cte-sys?branch=main#738f6f55628c1a4ae6758b105f7ee7422bb5358e"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e43f7ca4feb6b54529661db1245419e2379fe76d13073d0d42b54d0a4787eab"
 dependencies = [
  "cc",
  "dear-imgui-build-support",
@@ -597,9 +598,9 @@ dependencies = [
 
 [[package]]
 name = "dear-imgui-rs"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7700700b69c2fc1400287c8ad7c8f5322cb97276f9fabce7fa4bcd73befd3d6"
+checksum = "c0c64d4b6afbba994f9d52d531ed82e760d185d4ab39a77cbdfe021f096d4501"
 dependencies = [
  "bitflags 2.13.1",
  "dear-imgui-sys",
@@ -609,9 +610,9 @@ dependencies = [
 
 [[package]]
 name = "dear-imgui-sys"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d9eb3614fa7b561f91a700bf8ed0780d8686cbf311475db190d45962fe6e008"
+checksum = "18dff8796ca8ea21fae88ea91b6111898ba86ef14cac20d1f149138f5fbb2ff0"
 dependencies = [
  "cc",
  "dear-imgui-build-support",
@@ -620,9 +621,9 @@ dependencies = [
 
 [[package]]
 name = "dear-imgui-wgpu"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6743724247a70e3032385b0fda1f6205682b86f8b565a496b8aaba018e8ac7d"
+checksum = "97e81b92ff7802ca905cf96f83a3fcb5587f017ebab1ed3ceb32a642c60c44a0"
 dependencies = [
  "bytemuck",
  "dear-imgui-rs",
@@ -632,9 +633,9 @@ dependencies = [
 
 [[package]]
 name = "dear-imgui-winit"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba01aa3fcd47adad86c7a333700ae69e72070d42b9945d7d4ba096b5f30d4e46"
+checksum = "a716c59b46da79ebef7a1d6971060230ce9784db9c3f3ef5e7a1694af90517ff"
 dependencies = [
  "dear-imgui-rs",
  "thiserror 2.0.20",
