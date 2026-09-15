@@ -156,6 +156,25 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         format!("DBC only##tdbc{i}"),
         &mut app.trace_windows[i].dbc_only,
     );
+    // Time window: two small numeric boxes in seconds -- empty means
+    // unbounded on that side. Same parse semantics as the filter's
+    // time-range check (blank/invalid = no bound).
+    ui.same_line();
+    ui.set_next_item_width(56.0);
+    ui.input_text(format!("##tfrom{i}"), &mut app.trace_windows[i].time_from)
+        .hint("从 s")
+        .build();
+    if ui.is_item_hovered() {
+        ui.tooltip_text("时间范围下界（秒）：早于此的帧不显示；留空 = 不限");
+    }
+    ui.same_line();
+    ui.set_next_item_width(56.0);
+    ui.input_text(format!("##tto{i}"), &mut app.trace_windows[i].time_to)
+        .hint("到 s")
+        .build();
+    if ui.is_item_hovered() {
+        ui.tooltip_text("时间范围上界（秒）：晚于此的帧不显示；留空 = 不限");
+    }
     ui.same_line();
     // Clear empties the display (ring + archive); the filter controls
     // keep their settings -- they are the viewer's lens, not its content.
