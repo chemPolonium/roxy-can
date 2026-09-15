@@ -10,8 +10,10 @@
 
 use std::collections::VecDeque;
 use std::io::Read;
+use std::io::Write as _;
 use std::path::Path;
 
+use chrono::Datelike as _;
 use flate2::read::ZlibDecoder;
 
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN, dlc2len};
@@ -657,6 +659,188 @@ fn system_time_us(b: &[u8], at: usize) -> Option<u64> {
     )
 }
 
+// ---- BLF 写入器（录制后端，按扩展名 .blf 启用）--------------------------
+//
+// 结构与读侧逐字段镜像（同样的 LOGG/LOBJ 头、同样的 zlib 容器、同样的
+// CAN_MESSAGE / CAN_FD_MESSAGE_64 事件）。错误帧 v1 不写——读侧把错误帧
+// 归一为 id 0 的特殊帧，写回会放大歧义。
+
+/// 每个压缩容器攒多少未压缩事件字节后落盘。Vector 自家工具用 ~128 KiB。
+const CONTAINER_FLUSH_BYTES: usize = 128 * 1024;
+
+fn system_time_fields() -> [u16; 8] {
+    use chrono::{Local, Timelike};
+    let n = Local::now();
+    [
+        n.year() as u16,
+        n.month() as u16,
+        n.weekday().num_days_from_sunday() as u16,
+        n.day() as u16,
+        n.hour() as u16,
+        n.minute() as u16,
+        n.second() as u16,
+        (n.nanosecond() / 1_000_000) as u16,
+    ]
+}
+
+/// `OBJ_HEADER_V1` + body: signature, header size 32, version pair, object
+/// size, type, flags (0 = nanosecond stamps), client index, object version,
+/// nanosecond timestamp, body.
+fn obj_header_v1_bytes(object_type: u32, ts_raw: u64, flags: u32, body: &[u8]) -> Vec<u8> {
+    let header_size: u16 = 32;
+    let total = (header_size as usize + body.len()) as u32;
+    let mut v = Vec::with_capacity(total as usize);
+    v.extend_from_slice(b"LOBJ");
+    v.extend_from_slice(&header_size.to_le_bytes());
+    v.push(1);
+    v.push(0);
+    v.extend_from_slice(&total.to_le_bytes());
+    v.extend_from_slice(&object_type.to_le_bytes());
+    v.extend_from_slice(&flags.to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes());
+    v.extend_from_slice(&ts_raw.to_le_bytes());
+    v.extend_from_slice(body);
+    v
+}
+
+fn classic_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
+    let mut flags = 0u8;
+    if matches!(f.dir, Direction::Tx) {
+        flags |= CAN_DIR_TX;
+    }
+    if f.flags.contains(FrameFlags::RTR) {
+        flags |= CAN_FLAG_REMOTE;
+    }
+    let mut b = vec![0u8; 16];
+    b[0..2].copy_from_slice(&(u16::from(f.channel) + 1).to_le_bytes());
+    b[2] = flags;
+    b[3] = f.len;
+    b[4..8].copy_from_slice(
+        &(f.id | if f.extended { CAN_ID_EXT } else { 0 }).to_le_bytes(),
+    );
+    let n = f.len.min(8) as usize;
+    b[8..8 + n].copy_from_slice(&f.data[..n]);
+    obj_header_v1_bytes(OBJ_CAN_MESSAGE, ts_raw, 0, &b)
+}
+
+fn fd64_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
+    let payload = f.payload();
+    let mut fd_flags = FD64_EDL;
+    if f.flags.contains(FrameFlags::BRS) {
+        fd_flags |= FD64_BRS;
+    }
+    if f.flags.contains(FrameFlags::ESI) {
+        fd_flags |= FD64_ESI;
+    }
+    if f.flags.contains(FrameFlags::RTR) {
+        fd_flags |= FD64_RTR;
+    }
+    let mut b = vec![0u8; FD64_STRUCT_SIZE + payload.len()];
+    b[0] = f.channel + 1;
+    b[2] = payload.len() as u8;
+    b[4..8].copy_from_slice(
+        &(f.id | if f.extended { CAN_ID_EXT } else { 0 }).to_le_bytes(),
+    );
+    b[12..16].copy_from_slice(&fd_flags.to_le_bytes());
+    b[34] = u8::from(matches!(f.dir, Direction::Tx));
+    b[FD64_STRUCT_SIZE..].copy_from_slice(payload);
+    obj_header_v1_bytes(OBJ_CAN_FD_MESSAGE_64, ts_raw, 0, &b)
+}
+
+fn zlib_bytes(data: &[u8]) -> Vec<u8> {
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+    let _ = e.write_all(data);
+    e.finish().unwrap_or_default()
+}
+
+/// Streaming BLF writer for the recorder: LOGG header, then CAN events
+/// batched into zlib-compressed LOG_CONTAINERs. `finish` patches the
+/// container count and the stop SYSTEMTIME. Error frames are not written
+/// (the reader normalises them to id 0, which would lose information).
+pub struct BlfWriter {
+    file: std::fs::File,
+    pending: Vec<u8>,
+    containers: u32,
+}
+
+impl BlfWriter {
+    pub fn create(path: &str) -> std::io::Result<Self> {
+        let mut file = std::fs::File::create(path)?;
+        let mut hdr = vec![0u8; FILE_HEADER_SIZE];
+        hdr[0..4].copy_from_slice(FILE_SIGNATURE);
+        hdr[4..8].copy_from_slice(&(FILE_HEADER_SIZE as u32).to_le_bytes());
+        let st = system_time_fields();
+        for (i, f) in st.iter().enumerate() {
+            hdr[HDR_START_TIME + i * 2..HDR_START_TIME + i * 2 + 2]
+                .copy_from_slice(&f.to_le_bytes());
+        }
+        file.write_all(&hdr)?;
+        Ok(BlfWriter {
+            file,
+            pending: Vec::new(),
+            containers: 0,
+        })
+    }
+
+    pub fn write(&mut self, f: &CanFrame) {
+        if f.flags.contains(FrameFlags::ERROR) {
+            return;
+        }
+        let ts_raw = f.t_us.saturating_mul(1_000); // nanoseconds
+        let ev = if f.flags.contains(FrameFlags::FD) {
+            fd64_event(f, ts_raw)
+        } else {
+            classic_event(f, ts_raw)
+        };
+        self.pending.extend_from_slice(&ev);
+        if self.pending.len() >= CONTAINER_FLUSH_BYTES {
+            self.flush_container();
+        }
+    }
+
+    fn flush_container(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let payload = zlib_bytes(&self.pending);
+        let total = (16 + 16 + payload.len()) as u32;
+        let mut c = Vec::with_capacity(total as usize);
+        c.extend_from_slice(OBJECT_SIGNATURE);
+        c.extend_from_slice(&16u16.to_le_bytes());
+        c.push(1);
+        c.push(0);
+        c.extend_from_slice(&total.to_le_bytes());
+        c.extend_from_slice(&OBJ_LOG_CONTAINER.to_le_bytes());
+        c.extend_from_slice(&METHOD_ZLIB.to_le_bytes());
+        c.extend_from_slice(&[0u8; 6]);
+        c.extend_from_slice(&(self.pending.len() as u32).to_le_bytes());
+        c.extend_from_slice(&[0u8; 4]);
+        c.extend_from_slice(&payload);
+        if self.file.write_all(&c).is_ok() {
+            self.containers += 1;
+        }
+        self.pending.clear();
+    }
+
+    /// Flushes the last container, then patches the container count and
+    /// the stop SYSTEMTIME into the file header.
+    pub fn finish(mut self) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        self.flush_container();
+        self.file.seek(SeekFrom::Start(HDR_OBJECT_COUNT as u64))?;
+        self.file.write_all(&self.containers.to_le_bytes())?;
+        self.file.seek(SeekFrom::Start(HDR_STOP_TIME as u64))?;
+        for f in system_time_fields() {
+            self.file.write_all(&f.to_le_bytes())?;
+        }
+        self.file.flush()
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -668,6 +852,57 @@ pub(crate) mod tests {
     pub(crate) fn minimal_file() -> Vec<u8> {
         let body = can_body(0, 1, 0, 0x100, &[0xAB]);
         assemble(&obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &body))
+    }
+
+    /// The production recorder writer: classic (standard/extended/RTR)
+    /// and FD frames survive a write → read round trip with ids, flags,
+    /// and payloads intact.
+    #[test]
+    fn recorder_writer_round_trips_frames() {
+        let path = std::env::temp_dir().join("roxy_can_writer_roundtrip.blf");
+        let mk = |t_us: u64, id: u32, ext: bool, fd_flags: FrameFlags, len: usize| CanFrame {
+            t_us,
+            channel: 0,
+            id,
+            extended: ext,
+            len: len as u8,
+            data: {
+                let mut d = [0u8; MAX_CAN_FD_LEN];
+                for (i, b) in d.iter_mut().enumerate().take(len) {
+                    *b = (i * 7 + id as usize) as u8;
+                }
+                d
+            },
+            dir: Direction::Rx,
+            flags: fd_flags,
+        };
+        let frames = vec![
+            mk(1_000, 0x100, false, FrameFlags::NONE, 8),
+            mk(2_000, 0x1F3D1E5, true, FrameFlags::NONE, 8),
+            mk(3_000, 0x200, false, FrameFlags::RTR, 1),
+            mk(4_000, 0x300, true, FrameFlags::FD.union(FrameFlags::BRS), 24),
+            mk(5_000, 0x300, false, FrameFlags::FD, 64),
+        ];
+        {
+            let path_s = path.to_string_lossy().into_owned();
+            let mut w = BlfWriter::create(&path_s).expect("create");
+            for f in &frames {
+                w.write(f);
+            }
+            w.finish().expect("finish");
+        }
+        let mut stream = super::super::blf::BlfStream::open(&path).expect("the writer's file parses");
+        let mut got = Vec::new();
+        while let Some(f) = stream.next_frame() {
+            got.push(f);
+        }
+        assert_eq!(got.len(), frames.len(), "{:?}", got);
+        for (g, want) in got.iter().zip(frames.iter()) {
+            assert_eq!((g.id, g.extended, g.len), (want.id, want.extended, want.len));
+            assert_eq!(g.flags, want.flags, "flags for 0x{:X}", g.id);
+            assert_eq!(&g.data[..g.len as usize], &want.data[..want.len as usize]);
+        }
+        std::fs::remove_file(&path).ok();
     }
 
     /// Vector's `TIME_ONE_NANS`. The reader never names it -- nanoseconds are

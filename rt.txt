@@ -1,0 +1,3 @@
+   Compiling roxy-can v0.16.0 (C:\Users\chemp\source\rust\roxy-can)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.60s
+     Running unittests src\main.rs (target\debug\deps\roxy_can-81d74bb8009f1516.exe)

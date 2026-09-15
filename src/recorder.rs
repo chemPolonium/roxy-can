@@ -1,16 +1,23 @@
-//! The ASC recorder: the open file's lifetime plus the Record checkbox's
-//! intent state.
+//! The recorder: the open file's lifetime plus the Record checkbox's
+//! intent state. The backend follows the path's extension — `.blf`
+//! writes Vector's binary container format, anything else writes ASC.
 
 use crate::can::frame::CanFrame;
+use crate::log::blf::BlfWriter;
 use crate::log::AscWriter;
 
-/// Owns the open ASC file while recording. The checkbox intent
+enum Backend {
+    Asc(AscWriter),
+    Blf(BlfWriter),
+}
+
+/// Owns the open file while recording. The checkbox intent
 /// (`recording`) is deliberately separate from the open file (`writer`):
 /// ticking Record while stopped only arms the intent -- the file itself is
 /// created by the next measurement start, so an armed checkbox never leaves
 /// an empty record behind.
 pub struct Recorder {
-    writer: Option<AscWriter>,
+    writer: Option<Backend>,
     pub recording: bool,
     /// Base path as typed; the actual file gets a date-time suffix.
     pub record_path: String,
@@ -45,41 +52,63 @@ impl Recorder {
         if !self.admits(f) {
             return;
         }
-        if let Some(w) = &mut self.writer {
-            w.write(f).ok();
-        }
+        match &mut self.writer {
+            Some(Backend::Asc(w)) => w.write(f).ok(),
+            Some(Backend::Blf(w)) => {
+                w.write(f);
+                None
+            }
+            None => None,
+        };
     }
 
     /// Closes the file, if any. Recorded data stays; only the handle goes.
     pub fn close(&mut self) {
         if let Some(w) = self.writer.take() {
-            w.finish().ok();
+            match w {
+                Backend::Asc(w) => w.finish().ok(),
+                Backend::Blf(w) => w.finish().ok(),
+            };
         }
     }
 
-    /// Opens the dated ASC file derived from `record_path`. Returns the
-    /// opened path, or the error text for the status line.
+    /// Opens the dated file derived from `record_path`. The extension
+    /// picks the backend: `.blf` writes the binary container format,
+    /// anything else records ASC as before. Returns the opened path, or
+    /// the error text for the status line.
     pub fn open(&mut self) -> Result<String, String> {
         let b = self.record_path.trim();
-        let b = b
-            .strip_suffix(".asc")
-            .or_else(|| b.strip_suffix(".ASC"))
-            .unwrap_or(b);
-        let base = if b.is_empty() { "record" } else { b };
-        let path = format!(
-            "{}_{}.asc",
-            base,
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        match AscWriter::new(&path) {
-            Ok(w) => {
-                self.writer = Some(w);
-                let opened = path.clone();
-                self.last_record = opened.clone();
-                Ok(opened)
-            }
-            Err(e) => Err(format!("{e}")),
-        }
+        let lower = b.to_ascii_lowercase();
+        let (blf, cut) = if lower.ends_with(".blf") {
+            (true, 4)
+        } else if lower.ends_with(".asc") {
+            (false, 4)
+        } else {
+            (false, 0)
+        };
+        let base_raw = &b[..b.len() - cut];
+        let base = if base_raw.is_empty() { "record" } else { base_raw };
+        let path = if blf {
+            format!(
+                "{}_{}.blf",
+                base,
+                chrono::Local::now().format("%Y%m%d_%H%M%S")
+            )
+        } else {
+            format!(
+                "{}_{}.asc",
+                base,
+                chrono::Local::now().format("%Y%m%d_%H%M%S")
+            )
+        };
+        self.writer = Some(if blf {
+            Backend::Blf(BlfWriter::create(&path).map_err(|e| e.to_string())?)
+        } else {
+            Backend::Asc(AscWriter::new(&path).map_err(|e| e.to_string())?)
+        });
+        let opened = path.clone();
+        self.last_record = opened.clone();
+        Ok(opened)
     }
 }
 
