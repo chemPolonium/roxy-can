@@ -1,6 +1,10 @@
 pub mod asc;
 pub mod blf;
 pub mod error;
+/// FlexRay cluster description parser. Not yet wired into the product
+/// path — the FR-3 integration will use this when the VN7640 is online.
+#[allow(dead_code)]
+pub mod fr_cluster;
 pub mod vec_stream;
 
 mod backing;

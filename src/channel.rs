@@ -230,9 +230,9 @@ impl App {
         }
         for w in &mut self.state_trackers {
             remap_keys(&mut w.signals);
-            w.color_slots = remap_key_map(w.color_slots.drain().collect(), &remap);
-            w.rules = remap_key_map(w.rules.drain().collect(), &remap);
-            w.overrides = remap_key_map(w.overrides.drain().collect(), &remap);
+            w.color_slots = remap_key_map(std::mem::take(&mut w.color_slots), &remap);
+            w.rules = remap_key_map(std::mem::take(&mut w.rules), &remap);
+            w.overrides = remap_key_map(std::mem::take(&mut w.overrides), &remap);
         }
         // Monitor rows carry signal keys too.
         self.monitor_rows.retain(|r| remap(r.key.0).is_some());

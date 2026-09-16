@@ -266,7 +266,7 @@ impl SpillFile {
     pub fn read_all(path: &std::path::Path) -> std::io::Result<Vec<CanFrame>> {
         let raw = std::fs::read(path)?;
         let mut out = Vec::with_capacity(raw.len() / RECORD_LEN);
-        for record in raw.chunks_exact(RECORD_LEN) {
+        for record in raw.as_chunks::<RECORD_LEN>().0 {
             let u32le = |off: usize| {
                 u32::from_le_bytes([record[off], record[off + 1], record[off + 2], record[off + 3]])
             };

@@ -277,7 +277,7 @@ impl State {
         // borrows exclusively; create the ones the UI requested last frame
         // out here, before the borrow starts.
         if !self.app.pending_editors.is_empty() {
-            let wanted: Vec<u64> = self.app.pending_editors.drain(..).collect();
+            let wanted: Vec<u64> = std::mem::take(&mut self.app.pending_editors);
             // Autocomplete vocabulary is snapshotted per editor before the
             // entry borrow starts.
             let vocab: std::collections::HashMap<u64, Vec<String>> = wanted

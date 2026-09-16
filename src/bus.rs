@@ -3224,7 +3224,7 @@ impl BusCore {
         // Send-now requests are intents recorded by commands; building the
         // frames here stamps them with this step's clock, so a request that
         // waited out a pause never sends a pre-pause timestamp.
-        let injected: Vec<(u8, u32)> = self.injected.drain(..).collect();
+        let injected: Vec<(u8, u32)> = std::mem::take(&mut self.injected);
         for (ch, id) in injected {
             self.send_one_shot(ch, id, now_us, &HashMap::new());
         }

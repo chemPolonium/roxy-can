@@ -59,7 +59,7 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
         // Script editors bind to the context and are created by main
         // outside the frame; the harness does that queue's work here.
         if !app.pending_editors.is_empty() {
-            let wanted: Vec<u64> = app.pending_editors.drain(..).collect();
+            let wanted: Vec<u64> = std::mem::take(&mut app.pending_editors);
             for id in wanted {
                 let mut editor = dear_imgui_cte::TextEditor::create(ctx);
                 crate::ui::script_editor::configure_new_editor(&mut editor);

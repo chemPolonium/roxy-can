@@ -382,7 +382,7 @@ impl ScriptNode {
         rt.vm.frame_id = id;
         // Leftover ops from `on start` arm here if no tick ran first.
         let now_us = (input.now_s.max(0.0) * 1e6) as u64;
-        let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+        let pending: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
         for op in pending {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
                 Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
@@ -423,7 +423,7 @@ impl ScriptNode {
             // Named one-shot ops stay meaningful from any handler. The
             // running-timer ops (`set_period`/`stop_timer`) name no slot
             // here and are dropped.
-            let ops: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+            let ops: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
             for op in ops {
                 if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
                     Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
@@ -449,7 +449,7 @@ impl ScriptNode {
         rt.vm.host_input = input.clone();
         // Ops queued before this tick (e.g. `set_timer` from `on start`)
         // arm against the first tick's clock.
-        let pending: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+        let pending: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
         for op in pending {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
                 Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
@@ -504,7 +504,7 @@ impl ScriptNode {
             }
             // Apply timer control the handler queued: a new period takes
             // effect from now, and a stopped timer never fires again.
-            let ops: Vec<crate::script::TimerOp> = rt.vm.timer_ops.drain(..).collect();
+            let ops: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
             for op in ops {
                 if let Some(warn) = Self::apply_timer_op(rt, op, now_us, Some(slot_index)) {
                     Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
