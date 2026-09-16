@@ -71,6 +71,18 @@ fn ms_text(v: f64) -> String {
     format!("{:.2}", v / 1000.0)
 }
 
+/// The record draft minus a trailing `.asc`/`.blf` (any case), so the
+/// format combo can stamp its own extension on arm. A draft that names
+/// some other extension keeps it — the stem is the user's text.
+fn strip_record_ext(path: &str) -> &str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".asc") || lower.ends_with(".blf") {
+        &path[..path.len() - 4]
+    } else {
+        path
+    }
+}
+
 /// One Message Statistics row as throttled text, refreshed on the text gate
 /// (see [`App::sync_stats_text`]): built strings, ready to draw.
 #[derive(Clone)]
@@ -218,6 +230,9 @@ pub struct App {
     pub show_sysvars: bool,
     pub show_write: bool,
     pub show_monitor: bool,
+    /// The recording file format: 0 = ASC, 1 = BLF. The toolbar combo
+    /// selects this; the recorder picks the backend by extension.
+    pub record_format: usize,
     pub show_shortcuts: bool,
     pub show_about: bool,
     /// The Monitor window's rows: label + value + optional coloring rule
@@ -515,6 +530,9 @@ impl App {
             // The record file's stem, as the input box shows it. The
             // recorder gets a copy when recording arms.
             record_path_buf: String::new(),
+            // Toolbar combo: 0 = ASC, 1 = BLF. Decides the extension
+            // `toggle_record` stamps onto the draft stem.
+            record_format: 0,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -719,11 +737,15 @@ impl App {
     }
 
     pub fn toggle_record(&mut self) {
-        // The path the recorder derives its file from is whatever the
-        // input box shows right now, committed or not.
-        self.send(crate::bus::BusCommand::SetRecordPath(
-            self.record_path_buf.clone(),
-        ));
+        // The path the recorder derives its file from is the input box's
+        // current draft stamped with the combo-selected extension — the
+        // combo is the single source of truth for ASC vs BLF; the
+        // recorder just follows the extension it receives.
+        let stem = strip_record_ext(&self.record_path_buf);
+        let ext = if self.record_format == 1 { "blf" } else { "asc" };
+        self.send(crate::bus::BusCommand::SetRecordPath(format!(
+            "{stem}.{ext}"
+        )));
         self.send(crate::bus::BusCommand::ToggleRecord);
     }
 

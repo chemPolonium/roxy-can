@@ -187,6 +187,39 @@ fn replay_after_recorded_simulation_creates_no_second_file() {
     std::fs::remove_file(&first).ok();
 }
 
+/// The toolbar combo, not the draft's typed extension, picks the record
+/// backend: `toggle_record` stamps the selected extension onto the stem
+/// it forwards to the recorder.
+#[test]
+fn the_format_combo_picks_the_record_extension() {
+    let mut app = App::headless();
+    let base = std::env::temp_dir()
+        .join("roxy_can_combo_fmt")
+        .to_string_lossy()
+        .to_string();
+    // A draft typed as .asc forwards .blf when the combo says BLF.
+    app.record_path_buf = format!("{base}.asc");
+    app.record_format = 1;
+    app.toggle_record();
+    assert!(app.recorder.recording);
+    assert_eq!(
+        app.recorder.record_path,
+        format!("{base}.blf"),
+        "combo BLF must win over the typed .asc"
+    );
+    app.toggle_record();
+    // A bare stem forwards .asc with the combo back at its default.
+    app.record_path_buf = base.clone();
+    app.record_format = 0;
+    app.toggle_record();
+    assert_eq!(
+        app.recorder.record_path,
+        format!("{base}.asc"),
+        "combo ASC must stamp .asc"
+    );
+    app.toggle_record();
+}
+
 #[test]
 fn loading_log_does_not_start_replay() {
     let mut app = App::headless();

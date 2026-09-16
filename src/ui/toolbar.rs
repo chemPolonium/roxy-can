@@ -390,8 +390,19 @@ pub fn render(app: &mut App, ui: &Ui) {
                     .hint("record")
                     .build();
                 ui.same_line();
-                ui.align_text_to_frame_padding();
-                ui.text("_<date>.asc");
+                // The format combo decides ASC vs BLF; the extension is
+                // stamped onto the draft when Record arms (see
+                // `App::toggle_record`), so the file always matches this
+                // pick even if the text names the other extension.
+                ui.set_next_item_width(110.0);
+                ui.combo_simple_string(
+                    "##recfmt",
+                    &mut app.record_format,
+                    &["_<date>.asc", "_<date>.blf"],
+                );
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("录制格式：文件名自动加日期后缀");
+                }
                 // The id filter commits on edit end: only matching frames
                 // land in the file; trace and statistics stay whole-bus.
                 ui.same_line();
