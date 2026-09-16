@@ -96,7 +96,7 @@ pub struct FrFrameInfo {
 
 /// Parses FIBEX XML (Vector CANoe export format) into cluster parameters.
 /// Returns `None` if the file is not a FIBEX FlexRay description.
-pub fn parse_fibex(text: &str) -> Option<FrClusterParams> {
+pub fn parse_fibex(text: &str) -> Option<(FrClusterParams, Vec<FrFrameInfo>)> {
     // Guard: the text must mention FlexRay AND have at least one FIBEX
     // FlexRay parameter tag — otherwise it's not a FIBEX FlexRay file.
     let has_fr_tag = text.contains("<flexray:") || text.contains("<fx:SPEED>");
@@ -223,10 +223,46 @@ pub fn parse_fibex(text: &str) -> Option<FrClusterParams> {
     };    if has_true("ALLOW-HALT-DUE-TO-CLOCK") {
         p.p_allow_halt_due_to_clock = 1;
     }
+    // Extract frame triggerings: slot/cycle assignments for frame IDs.
+    let mut frames = Vec::new();
+    let mut search = 0usize;
+    while let Some(ft_start) = text[search..].find("<FLEXRAY-FRAME-TRIGGERING>") {
+        let ft_off = search + ft_start;
+        let ft_end = match text[ft_off..].find("</FLEXRAY-FRAME-TRIGGERING>") {
+            Some(e) => ft_off + e,
+            None => break,
+        };
+        let body = &text[ft_off..ft_end];
+        let slot = body
+            .find("<SLOT-ID>")
+            .and_then(|s| {
+                let vs = s + "<SLOT-ID>".len();
+                let ve = body[vs..].find("</SLOT-ID>")? + vs;
+                body[vs..ve].trim().parse().ok()
+            })
+            .unwrap_or(0);
+        let cycle = body
+            .find("<BASE-CYCLE>")
+            .and_then(|s| {
+                let vs = s + "<BASE-CYCLE>".len();
+                let ve = body[vs..].find("</BASE-CYCLE>")? + vs;
+                body[vs..ve].trim().parse().ok()
+            })
+            .unwrap_or(0);
+        if slot > 0 {
+            frames.push(FrFrameInfo {
+                slot_id: slot,
+                base_cycle: cycle,
+                cycle_repetition: 1,
+                channel: 0,
+            });
+        }
+        search = ft_end;
+    }
     p.p_channels = 3; // Channel A + B (the standard dual-channel setup)
     p.g_channels = 3;
 
-    Some(p)
+    Some((p, frames))
 }
 
 #[cfg(test)]
@@ -262,7 +298,7 @@ mod tests {
 
     #[test]
     fn fibex_parses_cluster_parameters() {
-        let p = parse_fibex(SAMPLE_FIBEX).expect("FIBEX parses");
+        let (p, _) = parse_fibex(SAMPLE_FIBEX).expect("FIBEX parses");
         assert_eq!(p.g_cold_start_attempts, 8);
         assert_eq!(p.g_macro_per_cycle, 3636);
         assert_eq!(p.g_number_of_static_slots, 60);
@@ -288,7 +324,7 @@ mod tests {
             println!("assets/DemoFile_v3_FIBEX_3_0.xml not present -- skipped");
             return;
         };
-        let p = parse_fibex(&text).expect("the real FIBEX file parses");
+        let (p, _) = parse_fibex(&text).expect("the real FIBEX file parses");
         assert_eq!(p.baudrate, 10_000_000, "10 Mbit/s");
         assert_eq!(p.g_macro_per_cycle, 3636);
         assert_eq!(p.g_number_of_static_slots, 60);
@@ -300,5 +336,6 @@ mod tests {
         assert_eq!(p.gd_action_point_offset, 2);
         assert_eq!(p.g_cold_start_attempts, 8);
         assert!(p.p_micro_per_macro_nom > 0, "micro/macro ratio computed");
+        assert_eq!(p.pd_microtick_ns, 25, "0.0125 μs × 2 samples = 25 ns");
     }
 }
