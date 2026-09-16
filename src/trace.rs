@@ -13,6 +13,65 @@
 use crate::can::frame::CanFrame;
 use std::sync::Arc;
 
+/// One FlexRay frame as the Trace window shows it: the static/dynamic
+/// slot address, the cycle it arrived in and the raw payload. FR rows
+/// live in their own ring and never enter the CAN aggregates, load
+/// rollups or signal subscriptions -- a watch-only diagnostic.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrRow {
+    pub t_us: u64,
+    /// The reception channel: 0 = A, 1 = B. 2 = unknown -- the event
+    /// buffer's channel-mask offset is not probe-verified yet.
+    pub ab: u8,
+    pub slot: u16,
+    pub cycle: u8,
+    pub payload: Vec<u8>,
+    pub header_crc: u16,
+    pub flags: u16,
+}
+
+/// The FlexRay trace ring: the run's last rows, oldest first. A plain
+/// `VecDeque` on purpose -- the CAN ring's chunked Arc sharing exists
+/// for 50k-frame pipelines; FR rows are a bounded diagnostic feed whose
+/// publish copies one bounded Vec.
+#[derive(Debug, Default)]
+pub struct FrRing {
+    rows: std::collections::VecDeque<FrRow>,
+    /// Rows trimmed from the head since the last `clear`.
+    dropped: u64,
+}
+
+impl FrRing {
+    /// Appends a row and trims the head past `limit`.
+    pub fn push(&mut self, row: FrRow, limit: usize) {
+        self.rows.push_back(row);
+        let overflow = self.rows.len().saturating_sub(limit.max(1));
+        self.rows.drain(..overflow);
+        self.dropped += overflow as u64;
+    }
+
+    /// Rows trimmed from the head since the last clear.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    pub fn clear(&mut self) {
+        self.rows.clear();
+        self.dropped = 0;
+    }
+
+    /// The snapshot's view: one bounded clone of the whole ring.
+    pub fn publish(&self) -> Arc<Vec<FrRow>> {
+        Arc::new(self.rows.iter().cloned().collect())
+    }
+
+    /// Core-side iteration, for test assertions on the working ring.
+    #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = &FrRow> {
+        self.rows.iter()
+    }
+}
+
 /// Frames accumulate in the live tail and are sealed into an immutable
 /// shared chunk at this size, bounding a publish's copy to one tail.
 const SEAL_FRAMES: usize = 512;
@@ -533,5 +592,40 @@ mod tests {
             assert!(path.exists(), "the archive exists while the ring does");
         }
         assert!(!path.exists(), "dropping the ring removes the archive");
+    }
+
+    fn fr_row(slot: u16, cycle: u8) -> FrRow {
+        FrRow {
+            t_us: 0,
+            ab: 2,
+            slot,
+            cycle,
+            payload: vec![slot as u8; 8],
+            header_crc: 0xABCD,
+            flags: 0,
+        }
+    }
+
+    /// The FR ring trims its head past the limit and accounts the loss;
+    /// a clear forgets everything. Published views are frozen copies.
+    #[test]
+    fn the_fr_ring_trims_and_accounts() {
+        let mut ring = FrRing::default();
+        for slot in 1..=5u16 {
+            ring.push(fr_row(slot, slot as u8), 3);
+        }
+        assert_eq!(ring.iter().count(), 3, "only the last three remain");
+        assert_eq!(ring.dropped(), 2);
+        let kept: Vec<u16> = ring.iter().map(|r| r.slot).collect();
+        assert_eq!(kept, vec![3, 4, 5]);
+
+        let view = ring.publish();
+        assert_eq!(view.len(), 3);
+        assert_eq!(view[0].slot, 3);
+        assert_eq!(view[2].header_crc, 0xABCD);
+
+        ring.clear();
+        assert_eq!(ring.iter().count(), 0);
+        assert_eq!(ring.dropped(), 0, "a fresh run forgets the loss");
     }
 }

@@ -287,6 +287,18 @@ impl App {
         }
     }
 
+    /// Opens a FIBEX/ARXML cluster-description picker; a pick attaches
+    /// the FlexRay RX-only watch to the given Vector channel.
+    pub fn pick_fibex_for(&mut self, channel_index: i32) {
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title("Open FlexRay cluster description")
+            .add_filter("Cluster descriptions", &["xml", "arxml", "fibex"])
+            .pick_file()
+        {
+            self.set_fr_watch(Some(channel_index), &p.to_string_lossy());
+        }
+    }
+
     /// Attaches one more DBC file to the bus as an extra database (the
     /// primary stays); re-attaching the same path is a no-op.
     pub fn attach_dbc_to(&mut self, ch: usize, path: String) {

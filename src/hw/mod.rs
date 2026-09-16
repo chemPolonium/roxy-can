@@ -196,6 +196,10 @@ impl MockPort {
 pub struct Hardware {
     /// Bus index → attachment. One adapter per bus.
     pub buses: HashMap<u8, BusHardware>,
+    /// The FlexRay RX-only watch, when attached. Bind to no CAN bus --
+    /// drained alongside the CAN adapters, its rows land in the Trace
+    /// window's FR section and nowhere else.
+    pub fr_watch: Option<FrWatch>,
     /// CANoe-style bus mode. `false` (Simulated) parks every attachment:
     /// received frames are discarded and wire writes are suppressed, while
     /// the attachments stay configured for the moment the mode flips
@@ -207,6 +211,16 @@ pub struct Hardware {
     pub live: bool,
 }
 
+/// The FlexRay RX-only watch: a Vector channel opened with a
+/// FIBEX-parsed cluster configuration, identified by the Vector channel
+/// index and the description file it was configured from.
+#[derive(Debug)]
+pub struct FrWatch {
+    pub channel_index: i32,
+    pub fibex_path: String,
+    pub port: crate::hw::vector::flexray::FlexRayChannel,
+}
+
 impl Hardware {
     /// A fresh hardware map starts wire-connected: attaching is an
     /// explicit user act and they expect the adapter they just attached
@@ -214,6 +228,7 @@ impl Hardware {
     pub fn new() -> Self {
         Self {
             buses: Default::default(),
+            fr_watch: None,
             live: true,
         }
     }
@@ -249,6 +264,27 @@ impl Hardware {
 
     pub fn detach(&mut self, bus: u8) {
         self.buses.remove(&bus);
+    }
+
+    /// Attaches the FlexRay RX-only watch: reads the FIBEX description,
+    /// parses the cluster parameters from it and opens the Vector
+    /// channel. A failure leaves any previous watch untouched.
+    pub fn attach_fr(&mut self, channel_index: i32, fibex_path: &str) -> Result<(), String> {
+        let text = std::fs::read_to_string(fibex_path)
+            .map_err(|e| format!("FIBEX 读取失败: {e}"))?;
+        let port =
+            crate::hw::vector::flexray::FlexRayChannel::open_rx_with_fibex(channel_index, &text)?;
+        self.fr_watch = Some(FrWatch {
+            channel_index,
+            fibex_path: fibex_path.to_string(),
+            port,
+        });
+        Ok(())
+    }
+
+    /// Drops the FlexRay watch; the port closes with it.
+    pub fn detach_fr(&mut self) {
+        self.fr_watch = None;
     }
 
     /// Drops the attachment of a bus being removed and shifts the
@@ -296,6 +332,31 @@ impl Hardware {
                 f.channel = bus;
                 out.push(f);
             }
+        }
+    }
+
+    /// Drains the FlexRay watch's receive queue into `out`, discarding
+    /// when parked (`!live`) exactly like `poll_rx` -- the queue must
+    /// not back up with stale frames, but parked traffic stays off the
+    /// tool's timeline. The reception channel (A/B) reads as unknown
+    /// until the event offset is probe-verified.
+    pub fn poll_fr(&mut self, out: &mut Vec<crate::trace::FrRow>) {
+        let Some(w) = &mut self.fr_watch else {
+            return;
+        };
+        while let Some(f) = w.port.try_read() {
+            if !self.live {
+                continue;
+            }
+            out.push(crate::trace::FrRow {
+                t_us: 0, // stamped against the sim clock by the core
+                ab: 2,
+                slot: f.slot,
+                cycle: f.cycle,
+                payload: f.payload,
+                header_crc: f.header_crc,
+                flags: f.flags,
+            });
         }
     }
 

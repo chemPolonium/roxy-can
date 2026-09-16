@@ -88,6 +88,14 @@ pub struct HwBusView {
     pub fd: bool,
 }
 
+/// The FlexRay RX-only watch as the frontend sees it: identity only --
+/// the port itself stays core-side.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrWatchView {
+    pub channel_index: i32,
+    pub fibex_path: String,
+}
+
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
@@ -279,6 +287,14 @@ pub enum BusCommand {
     },
     DetachHardware {
         bus: u8,
+    },
+    /// Attach (or move) the FlexRay RX-only watch to a Vector channel,
+    /// configured from the FIBEX description at `fibex_path`; `None`
+    /// detaches. RX-only and read-only: it never transmits, and its
+    /// frames feed the Trace window's FR section alone.
+    SetFrWatch {
+        channel_index: Option<i32>,
+        fibex_path: String,
     },
     /// Trigger-recording context, clamped core-side: pre-trigger frames,
     /// post-roll frames, and the marker list cap. Any subset may be set.
@@ -613,6 +629,8 @@ pub struct Snapshot {
     pub write: Arc<Vec<WriteLine>>,
     /// Hardware attachments: one per wired-up bus.
     pub hw: Vec<HwBusView>,
+    /// The FlexRay RX-only watch, when attached.
+    pub fr_watch: Option<FrWatchView>,
     /// Whether the attachments are wire-connected (Real bus) or parked
     /// (Simulated): the toolbar bus-mode switch reads this.
     pub real_bus: bool,
@@ -642,6 +660,11 @@ pub struct Snapshot {
     /// shared by Arc: cloning the snapshot copies a pointer, not 50k
     /// frames. Read-only for the frontend.
     pub trace: std::sync::Arc<crate::trace::TraceView>,
+    /// FlexRay frames as of the last publish, oldest first -- the Trace
+    /// window's FR section. Shared like `trace`.
+    pub fr_trace: std::sync::Arc<Vec<crate::trace::FrRow>>,
+    /// FR rows the ring trimmed from its head since the run began.
+    pub fr_dropped: u64,
     /// Which timeline the bus runs on this frame.
     pub mode: Mode,
     /// The bus kind selected for the next start (Simulation / Replay).
@@ -834,6 +857,12 @@ pub struct BusCore {
     /// only on steps that ingested frames -- an idle bus copies nothing,
     /// and even then only refcounts plus one sealed tail.
     pub(crate) published_trace: Arc<crate::trace::TraceView>,
+    /// FlexRay frames received this run, in their own ring: they never
+    /// enter the CAN aggregates or subscriptions, the Trace window is
+    /// their only consumer.
+    pub(crate) fr_trace: crate::trace::FrRing,
+    /// The FR ring as of the last publish, shared with snapshots.
+    pub(crate) published_fr: Arc<Vec<crate::trace::FrRow>>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -965,6 +994,8 @@ impl BusCore {
             color_counter: 0,
             trace: crate::trace::TraceRing::default(),
             published_trace: Arc::new(crate::trace::TraceView::default()),
+            fr_trace: crate::trace::FrRing::default(),
+            published_fr: Arc::new(Vec::new()),
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -1434,6 +1465,23 @@ impl BusCore {
                 self.hw.detach(bus);
                 *status = format!("hardware detached from bus {}", bus + 1);
             }
+            BusCommand::SetFrWatch {
+                channel_index,
+                fibex_path,
+            } => match channel_index {
+                Some(idx) => match self.hw.attach_fr(idx, &fibex_path) {
+                    Ok(()) => {
+                        *status = format!("FlexRay 监听已挂接: Vector ch{idx}（只收）");
+                    }
+                    Err(e) => {
+                        *status = format!("FlexRay 监听挂接失败: {e}");
+                    }
+                },
+                None => {
+                    self.hw.detach_fr();
+                    *status = "FlexRay 监听已断开".to_string();
+                }
+            },
             BusCommand::SetRunLimits {
                 pre_frames,
                 post_frames,
@@ -1524,6 +1572,18 @@ impl BusCore {
     /// refcounts -- the ring itself is shared, never deep-copied.
     fn publish_trace(&mut self) {
         self.published_trace = self.trace.publish();
+        self.published_fr = self.fr_trace.publish();
+    }
+
+    /// One FlexRay frame lands: stamped against the sim clock when the
+    /// source had no time of its own, then into the FR ring. Kept apart
+    /// from [`BusCore::ingest`] -- FR rows deliberately skip the CAN
+    /// aggregates, load rollups and subscriptions.
+    pub(crate) fn ingest_fr_row(&mut self, mut row: crate::trace::FrRow) {
+        if row.t_us == 0 {
+            row.t_us = self.sim_t_us;
+        }
+        self.fr_trace.push(row, self.trace_limit);
     }
 
     /// Republishes the load rollups after a step (or a channel add/remove)
@@ -1931,6 +1991,12 @@ impl BusCore {
             frame_counter: self.frame_counter,
             trace_len: self.trace.len(),
             trace: Arc::clone(&self.published_trace),
+            fr_trace: Arc::clone(&self.published_fr),
+            fr_dropped: self.fr_trace.dropped(),
+            fr_watch: self.hw.fr_watch.as_ref().map(|w| FrWatchView {
+                channel_index: w.channel_index,
+                fibex_path: w.fibex_path.clone(),
+            }),
             sub_count: self.subs.len(),
             replay,
             channel_count: self.channels.len(),
@@ -2956,6 +3022,7 @@ impl BusCore {
         self.paused_at_us = None;
         self.scan_done = false;
         self.trace.clear();
+        self.fr_trace.clear();
         self.publish_trace();
         self.frame_counter = 0;
         self.aggs.clear();
@@ -3104,6 +3171,7 @@ impl BusCore {
     /// after the clear show up as usual.
     fn clear_trace_view(&mut self, status: &mut String) {
         self.trace.clear();
+        self.fr_trace.clear();
         self.publish_trace();
         *status = "trace cleared".to_string();
     }
@@ -3314,6 +3382,10 @@ impl BusCore {
         }
         self.buf.extend(emitted);
 
+        // Steps that only received FlexRay frames publish too, or the FR
+        // section would freeze until the next CAN arrival.
+        let mut fr_landed = false;
+
         // Replay blocks stream their recorded traffic onto the same sim
         // clock the generator uses. Replay mode is excluded: the whole log
         // already IS the source there, and doubling its frames up would
@@ -3331,6 +3403,18 @@ impl BusCore {
             let mut hw_rx: Vec<CanFrame> = Vec::new();
             self.hw.poll_rx(sim, &mut hw_rx);
             self.buf.extend(hw_rx);
+
+            // The FlexRay watch drains on the same cadence as the CAN
+            // adapters. Its rows skip the CAN pipeline: the ingest goes
+            // straight to the FR ring.
+            let mut fr_rx: Vec<crate::trace::FrRow> = Vec::new();
+            self.hw.poll_fr(&mut fr_rx);
+            if !fr_rx.is_empty() {
+                fr_landed = true;
+                for row in fr_rx {
+                    self.ingest_fr_row(row);
+                }
+            }
         }
 
         // Node timers fire before the ingest walk so the frames they
@@ -3393,7 +3477,7 @@ impl BusCore {
                     .push(Self::node_frame(f.channel, id, ext, &data, f.t_us));
             }
         }
-        if i > 0 {
+        if i > 0 || fr_landed {
             self.publish_trace();
         }
         self.refresh_sub_histories();
@@ -3859,6 +3943,7 @@ impl BusCore {
                 }
                 TriggerAction::ClearTrace => {
                     self.trace.clear();
+                    self.fr_trace.clear();
                     self.publish_trace();
                     // Clearing the view is also the re-arm: appearance
                     // watches fire again on their next occurrence.
@@ -3920,5 +4005,110 @@ impl BusCore {
             dir: crate::can::frame::Direction::Tx,
             flags,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fr_row(t_us: u64, slot: u16) -> crate::trace::FrRow {
+        crate::trace::FrRow {
+            t_us,
+            ab: 2,
+            slot,
+            cycle: 3,
+            payload: vec![0x11; 8],
+            header_crc: 0xBEEF,
+            flags: 0,
+        }
+    }
+
+    /// The FR ring publishes through the same lifecycle as the CAN ring:
+    /// rows stamp against the sim clock when the source had no time of
+    /// its own, and the snapshot carries the published view.
+    #[test]
+    fn fr_rows_ingest_publish_and_stamp() {
+        let mut core = BusCore::new(Vec::new());
+        core.sim_t_us = 1_500;
+        core.ingest_fr_row(fr_row(0, 10));
+        core.ingest_fr_row(fr_row(2_000, 11));
+        core.publish_trace();
+
+        let snap = core.snapshot();
+        assert_eq!(snap.fr_trace.len(), 2);
+        assert_eq!(
+            snap.fr_trace[0].t_us, 1_500,
+            "a zero time stamps against the sim clock"
+        );
+        assert_eq!(snap.fr_trace[1].t_us, 2_000, "a real time survives");
+        assert_eq!(snap.fr_trace[1].slot, 11);
+        assert_eq!(snap.fr_dropped, 0);
+
+        // A clear resets both ring and view.
+        core.fr_trace.clear();
+        core.publish_trace();
+        assert!(core.snapshot().fr_trace.is_empty());
+    }
+
+    /// The FR ring shares the trace limit: rows past it trim head-first
+    /// and the loss is counted for the window's note.
+    #[test]
+    fn fr_rows_honor_the_trace_limit() {
+        let mut core = BusCore::new(Vec::new());
+        core.trace_limit = 3;
+        for slot in 1..=6u16 {
+            core.ingest_fr_row(fr_row(0, slot));
+        }
+        core.publish_trace();
+        let snap = core.snapshot();
+        assert_eq!(snap.fr_trace.len(), 3);
+        assert_eq!(snap.fr_trace[0].slot, 4, "the newest survive");
+        assert_eq!(snap.fr_dropped, 3);
+    }
+
+    /// A watch attach with a missing description file fails cleanly and
+    /// leaves nothing attached; detaching without a watch is a no-op.
+    #[test]
+    fn fr_watch_attach_failures_leave_no_partial_state() {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.handle(
+            BusCommand::SetFrWatch {
+                channel_index: Some(0),
+                fibex_path: "target/definitely-missing.fibex".into(),
+            },
+            &mut status,
+        );
+        assert!(status.contains("失败"), "attach failure reports: {status}");
+        assert!(core.hw.fr_watch.is_none());
+
+        core.handle(
+            BusCommand::SetFrWatch {
+                channel_index: None,
+                fibex_path: String::new(),
+            },
+            &mut status,
+        );
+        assert!(status.contains("断开"));
+        assert!(core.hw.fr_watch.is_none());
+    }
+
+    /// A description without FlexRay cluster parameters is refused
+    /// before any driver call: a DBC parses fine as text but is no
+    /// cluster spec.
+    #[test]
+    fn fr_watch_refuses_a_non_fibex_description() {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.handle(
+            BusCommand::SetFrWatch {
+                channel_index: Some(0),
+                fibex_path: "assets/sample.dbc".into(),
+            },
+            &mut status,
+        );
+        assert!(status.contains("失败"), "refusal reports: {status}");
+        assert!(core.hw.fr_watch.is_none());
     }
 }

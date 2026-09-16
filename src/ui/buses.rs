@@ -41,6 +41,17 @@ fn ensure_hw_list(app: &mut App) -> Result<Vec<crate::hw::AnyChannelInfo>, Strin
     })
 }
 
+/// Enumerates the FlexRay-capable Vector channels once per session, on
+/// the same cache-or-probe pattern as the CAN list.
+fn ensure_fr_list(app: &mut App) -> Result<Vec<crate::hw::vector::ChannelInfo>, String> {
+    let cached = app.fr_channels.clone();
+    cached.unwrap_or_else(|| {
+        let fresh = crate::hw::vector::enumerate_flexray();
+        app.fr_channels = Some(fresh.clone());
+        fresh
+    })
+}
+
 fn content(app: &mut App, ui: &Ui) {
     if ui.button("+ Add bus") {
         app.add_channel();
@@ -311,5 +322,58 @@ fn content(app: &mut App, ui: &Ui) {
     }
     if let Some(i) = remove {
         app.remove_channel(i);
+    }
+
+    // FlexRay RX-only watch: a Vector channel carrying the FR capability,
+    // configured from a FIBEX/ARXML cluster description. Watch-only --
+    // received frames land in the Trace window's FlexRay section; nothing
+    // ever transmits and no CAN bus is touched.
+    ui.separator();
+    ui.text_colored([0.55, 0.8, 1.0, 1.0], "FlexRay");
+    ui.same_line();
+    match app.snap.fr_watch.clone() {
+        Some(w) => {
+            ui.text(format!(
+                "[V] ch{} · {} （只收）",
+                w.channel_index,
+                file_name(&w.fibex_path)
+            ));
+            if !app.snap.real_bus {
+                ui.same_line();
+                ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(
+                        "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
+                    );
+                }
+            }
+            ui.same_line();
+            if ui.button("断开##frdet") {
+                app.set_fr_watch(None, "");
+            }
+        }
+        None => match ensure_fr_list(app) {
+            Ok(list) if !list.is_empty() => {
+                let labels: Vec<String> = list
+                    .iter()
+                    .map(|c| format!("[V] ch{}: {}", c.index, c.name))
+                    .collect();
+                let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                ui.set_next_item_width(170.0);
+                ui.combo_simple_string("##frch", &mut app.fr_pick, &refs);
+                ui.same_line();
+                if ui.button("挂接监听...##frfib") {
+                    let idx = list[app.fr_pick.min(list.len() - 1)].index;
+                    app.pick_fibex_for(idx);
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(
+                        "挂接 FlexRay 只收监听：选通道后挑选 FIBEX/ARXML 集群描述文件，收到的帧显示在 Trace 窗口的 FlexRay 区",
+                    );
+                }
+            }
+            Ok(_) => ui.text_disabled("无 FlexRay 通道"),
+            Err(e) => ui.text_disabled(&e),
+        },
     }
 }

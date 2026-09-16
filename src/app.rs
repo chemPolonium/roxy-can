@@ -278,6 +278,11 @@ pub struct App {
     /// supported driver, enumerated once on first need. `Err` = no
     /// driver is available at all.
     pub hw_channels: Option<Result<Vec<crate::hw::AnyChannelInfo>, String>>,
+    /// FlexRay-capable Vector channels, enumerated once on first need
+    /// (a real vxlapi call). `Err` = the Vector driver is unavailable.
+    pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
+    /// The picked row in the FR channel combo.
+    pub fr_pick: usize,
     /// Profile names from the project's `profiles/` directory, listed
     /// once on first need (`Err` = driver/unavailable? no — parse or IO
     /// failure of the directory scan). Session cache; refresh via
@@ -533,6 +538,10 @@ impl App {
             // Toolbar combo: 0 = ASC, 1 = BLF. Decides the extension
             // `toggle_record` stamps onto the draft stem.
             record_format: 0,
+            // FlexRay watch drafts: cached FR channel enumeration (the
+            // Vector probe is a real driver call) and the combo pick.
+            fr_channels: None,
+            fr_pick: 0,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),

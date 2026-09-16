@@ -289,6 +289,15 @@ impl App {
         self.send(crate::bus::BusCommand::DetachHardware { bus });
     }
 
+    /// Attaches the FlexRay RX-only watch to a Vector channel, configured
+    /// from the FIBEX description file. `None` detaches.
+    pub fn set_fr_watch(&mut self, channel_index: Option<i32>, fibex_path: &str) {
+        self.send(crate::bus::BusCommand::SetFrWatch {
+            channel_index,
+            fibex_path: fibex_path.to_string(),
+        });
+    }
+
     /// Offline analysis (R1): ingests the whole loaded log once so every
     /// observer holds the full file -- no playback, no trigger actions,
     /// no node dispatch, no recording.

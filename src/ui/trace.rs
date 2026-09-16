@@ -85,6 +85,97 @@ fn fmt_row(app: &App, f: &CanFrame) -> String {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
+    can_table(app, ui, i);
+    fr_section(app, ui, i);
+}
+
+/// The FlexRay watch section, under the CAN table: the FR ring's rows
+/// with the slot/cycle address spelled out. FR frames are a separate
+/// row kind -- no id, no name, no filters -- so they get their own
+/// collapsed-by-default table instead of overloading the CAN columns.
+fn fr_section(app: &mut App, ui: &Ui, i: usize) {
+    let rows = app.snap.fr_trace.clone();
+    let label = if app.snap.fr_dropped > 0 {
+        format!(
+            "FlexRay ({} 帧，早期裁掉 {} 帧)##fr{i}",
+            rows.len(),
+            app.snap.fr_dropped
+        )
+    } else if rows.is_empty() {
+        format!("FlexRay##fr{i}")
+    } else {
+        format!("FlexRay ({} 帧)##fr{i}", rows.len())
+    };
+    if !ui.collapsing_header(label, dear_imgui_rs::TreeNodeFlags::empty()) {
+        return;
+    }
+    let tbl_flags = TableFlags::BORDERS_INNER
+        | TableFlags::ROW_BG
+        | TableFlags::RESIZABLE
+        | TableFlags::NO_BORDERS_IN_BODY
+        | TableFlags::SCROLL_Y;
+    let opts = TableOptions::from(tbl_flags).sizing_policy(TableSizingPolicy::StretchProp);
+    let Some(_table) = ui.begin_table_with_flags(format!("fr_table{i}"), 6, opts) else {
+        return;
+    };
+    ui.table_setup_column(
+        "Time",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(76.0)),
+    );
+    ui.table_setup_column(
+        "FR",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(42.0)),
+    );
+    // slot.cycle: up to 2047.63
+    ui.table_setup_column(
+        "Slot.Cyc",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(76.0)),
+    );
+    ui.table_setup_column(
+        "Len",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(36.0)),
+    );
+    ui.table_setup_column(
+        "Data",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::stretch(1.4)),
+    );
+    ui.table_setup_column(
+        "HCRC",
+        TableColumnFlags::NONE,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(64.0)),
+    );
+    ui.table_setup_scroll_freeze(0, 1);
+    ui.table_headers_row();
+
+    // Newest first, matching the CAN table's default order.
+    let clip = ListClipper::new(rows.len()).begin(ui);
+    for r in clip.iter() {
+        let row = &rows[rows.len() - 1 - r];
+        ui.table_next_row();
+        if !ui.table_next_column() {
+            continue;
+        }
+        ui.text(format!("{:.6}", row.t_us as f64 / 1e6));
+        ui.table_next_column();
+        ui.text_colored([0.55, 0.8, 1.0, 1.0], "[FR]");
+        ui.table_next_column();
+        ui.text(format!("{}.{}", row.slot, row.cycle));
+        ui.table_next_column();
+        ui.text(format!("{}", row.payload.len()));
+        ui.table_next_column();
+        let hex: String = row.payload.iter().map(|b| format!("{b:02X} ")).collect();
+        ui.text(hex.trim_end());
+        ui.table_next_column();
+        ui.text(format!("{:04X}", row.header_crc));
+    }
+}
+
+fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // The filtered row cache rebuilds on the text gate, like every number
     // readout; the clipper then submits only the visible slice per frame.
     app.sync_trace_rows(i);
