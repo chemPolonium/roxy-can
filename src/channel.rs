@@ -299,10 +299,11 @@ impl App {
             return;
         };
         let path = p.to_string_lossy().into_owned();
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(bytes) = std::fs::read(&path) else {
             self.status = format!("FIBEX 读取失败: {path}");
             return;
         };
+        let text = crate::dbc::text_from_bytes(bytes);
         match crate::fr_db::FrDb::parse(&text) {
             Ok(db) => {
                 self.fr_db = Some(std::sync::Arc::new(db));

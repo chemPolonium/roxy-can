@@ -1100,7 +1100,12 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
         let mut mappings = Vec::new();
         let mut mapping_nodes = Vec::new();
-        collect(pdu, "I-SIGNAL-TO-PDU-MAPPING", &mut mapping_nodes);
+        for tag in [
+            "I-SIGNAL-TO-PDU-MAPPING",
+            "I-SIGNAL-TO-I-PDU-MAPPING",
+        ] {
+            collect(pdu, tag, &mut mapping_nodes);
+        }
         for m in &mapping_nodes {
             let signal_name = text_of(m, &["I-SIGNAL-REF", "SYSTEM-SIGNAL-REF"])
                 .map(|r| ref_short_name(&r).to_string());
@@ -1374,6 +1379,8 @@ mod tests {
     const SAMPLE_FIBEX: &str = include_str!("../assets/powertrain.fibex");
     const SAMPLE_ARXML: &str = include_str!("../assets/chassis.arxml");
     const CANOE_DEMO: &str = include_str!("../assets/DemoFile_v3_FIBEX_3_0.xml");
+    /// The user's real AUTOSAR cluster export (GBK-encoded, no BOM).
+    const POWERTRAIN_ARXML: &[u8] = include_bytes!("../assets/PowerTrain.arxml");
 
     #[test]
     fn parses_the_asam_style_fibex_sample() {
@@ -1499,6 +1506,30 @@ mod tests {
         assert!(db.frame_at(3, 1, 1).is_none(), "cycle 1 silent");
         assert!(db.frame_at(3, 0, 0).is_none(), "channel A does not carry it");
         assert!(db.frame_at(3, 0, 2).is_some(), "unknown channel still finds it");
+    }
+
+    /// The real AUTOSAR cluster export (GBK, no BOM): after the UTF-8 →
+    /// GBK text fallback it parses completely -- 10 Mbit/s, 5 ms cycle,
+    /// 10 static slots, 48 scheduled frames with names.
+    #[test]
+    fn parses_the_real_gbk_powertrain_arxml() {
+        let text = crate::dbc::text_from_bytes(POWERTRAIN_ARXML.to_vec());
+        let db = FrDb::parse(&text).expect("PowerTrain.arxml parses");
+        assert_eq!(db.params.speed_kbps, 10000);
+        assert_eq!(db.params.cycle_time_ms, 5.0);
+        assert_eq!(db.params.macrotick_duration_us, 5.0);
+        assert_eq!(db.params.number_of_static_slots, 10);
+        assert_eq!(db.params.payload_length_static, 13);
+        assert_eq!(db.params.number_of_minislots, 292);
+        assert_eq!(db.frames.len(), 48, "every triggering becomes a frame");
+        assert!(
+            db.frames.iter().all(|f| !f.name.is_empty()),
+            "frames carry their SHORT-NAMEs"
+        );
+        assert!(
+            db.pdus.iter().any(|p| !p.signals.is_empty()),
+            "signal layouts came along"
+        );
     }
 
     /// Signal decode: raw bits -> physical value -> enumeration label.

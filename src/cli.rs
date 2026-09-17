@@ -461,8 +461,10 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     // no FR hardware attached at all.
     let fibex_cfg = match fibex {
         Some(path) => {
-            let text =
-                std::fs::read_to_string(path).map_err(|e| format!("FIBEX 读取失败: {e}"))?;
+            // AUTOSAR/FIBEX exports from Chinese-locale tooling are often
+            // ANSI (GBK) rather than UTF-8; same tolerant read as DBCs.
+            let bytes = std::fs::read(path).map_err(|e| format!("FIBEX 读取失败: {e}"))?;
+            let text = crate::dbc::text_from_bytes(bytes);
             let db = crate::fr_db::FrDb::parse(&text)?;
             let p = &db.params;
             let slots: Vec<u32> = db.frames.iter().map(|f| f.triggering.slot_id).collect();
