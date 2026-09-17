@@ -418,7 +418,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_column();
                 ui.text("-");
                 ui.table_next_column();
-                ui.text("  ↳");
+                ui.text("  └");
                 ui.same_line();
                 ui.text_colored([0.55, 0.8, 1.0, 1.0], signal);
                 ui.table_next_column();
