@@ -1132,11 +1132,20 @@ impl App {
                     .as_ref()
                     .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
                 let name = frame.map(|f| f.name.as_str()).unwrap_or("");
-                let label = match agg.ab {
-                    0 => format!("FR slot {}  A  {name}", agg.slot),
-                    1 => format!("FR slot {}  B  {name}", agg.slot),
-                    _ => format!("FR slot {}  {name}", agg.slot),
-                };
+                let label = [
+                    "FR".to_string(),
+                    format!("slot {}", agg.slot),
+                    match agg.ab {
+                        0 => "A".to_string(),
+                        1 => "B".to_string(),
+                        _ => String::new(),
+                    },
+                    name.to_string(),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("  ");
                 let signals = match (self.fr_db.as_ref(), frame) {
                     (Some(db), Some(frame)) => db.decode(frame, &agg.payload),
                     _ => Vec::new(),
