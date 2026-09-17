@@ -10,7 +10,7 @@
 
 use crate::app::App;
 use dear_imgui_cte::{CteUiExt, Position, ScrollAlignment, Selection};
-use dear_imgui_rs::{Condition, TreeNodeFlags, Ui};
+use dear_imgui_rs::{Condition, Ui};
 use std::hash::{Hash, Hasher};
 
 const SOURCE_HEIGHT: f32 = 260.0;
@@ -340,18 +340,20 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         ui.text_disabled("已停止");
     }
 
-    // Source editor + sidebar: a two-column layout where the sidebar
-    // lists available functions/constructs and the right side holds the
-    // source editor, Apply/Save/Load, and the log. Both columns fill the
-    // remaining height.
+    // Three columns, the CAPL Browser shape: left = the source's outline
+    // and its send/receive facts; center = the editor, Apply/Save/Load
+    // and the log; right = the insertable palette (functions, SysVars,
+    // every message the bus declares). All three fill the remaining
+    // height.
     let avail = ui.content_region_avail();
-    const SIDEBAR_W: f32 = 180.0;
+    const LEFT_W: f32 = 160.0;
+    const PALETTE_W: f32 = 190.0;
 
-    // Left sidebar (full remaining height).
-    ui.child_window(format!("##esidebar{id}"))
-        .size([SIDEBAR_W, avail[1]])
+    // Left: outline + facts.
+    ui.child_window(format!("##eleft{id}"))
+        .size([LEFT_W, avail[1]])
         .border(true)
-        .build(ui, || sidebar(app, ui, id, node));
+        .build(ui, || left_tabs(app, ui, id, node));
 
     ui.same_line();
 
@@ -468,6 +470,13 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                     });
             }
         });
+
+    // Right: the insertable palette.
+    ui.same_line();
+    ui.child_window(format!("##epalette{id}"))
+        .size([PALETTE_W, avail[1]])
+        .border(true)
+        .build(ui, || palette_tabs(app, ui, id, node));
 }
 
 /// One insertable sidebar entry: display label and the text that goes
@@ -525,20 +534,13 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("其他", "srand", "srand(seed)"),
 ];
 
-/// The sidebar: four tabs. 函数 lists the insertable templates; 大纲 is
-/// the source's handler outline; 收发 is the static send/receive/sysvar
-/// fact table; SysVar lists the defined variables for one-click access.
-/// Each tab's content scrolls in a child of its own so the tab bar stays
-/// pinned at the top no matter how long the content grows.
-fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
-    let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
+/// The left column: the source's handler outline and the static
+/// send/receive/sysvar fact table. Each tab's content scrolls in a child
+/// of its own so the tab bar stays pinned at the top.
+fn left_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+    let Some(_bar) = ui.tab_bar(format!("##elefttab{id}")) else {
         return;
     };
-    if let Some(_t) = ui.tab_item("函数") {
-        ui.child_window(format!("##esbscroll{id}f"))
-            .size([0.0, 0.0])
-            .build(ui, || fns_tab(app, ui, id, node));
-    }
     if let Some(_t) = ui.tab_item("大纲") {
         ui.child_window(format!("##esbscroll{id}o"))
             .size([0.0, 0.0])
@@ -549,10 +551,29 @@ fn sidebar(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
             .size([0.0, 0.0])
             .build(ui, || io_tab(app, ui, id, node));
     }
+}
+
+/// The right column: insertable functions, system variables and every
+/// message the bus's databases declare -- click one to push it into the
+/// source at the editor cursor.
+fn palette_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+    let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
+        return;
+    };
+    if let Some(_t) = ui.tab_item("函数") {
+        ui.child_window(format!("##esbscroll{id}f"))
+            .size([0.0, 0.0])
+            .build(ui, || fns_tab(app, ui, id));
+    }
     if let Some(_t) = ui.tab_item("SysVar") {
         ui.child_window(format!("##esbscroll{id}s"))
             .size([0.0, 0.0])
             .build(ui, || sysvar_tab(app, ui, id));
+    }
+    if let Some(_t) = ui.tab_item("报文") {
+        ui.child_window(format!("##esbscroll{id}b"))
+            .size([0.0, 0.0])
+            .build(ui, || bus_tab(app, ui, id, node));
     }
 }
 
@@ -596,7 +617,7 @@ fn insert(app: &mut App, id: u64, text: &str) {
 }
 
 /// The insertable templates: categories with clickable items.
-fn fns_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
     let mut last_cat = "";
     for (cat, label, insert_text) in SIDEBAR_ITEMS {
         if *cat != last_cat {
@@ -634,47 +655,40 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
             }
         }
     }
+}
 
-    // The whole bus: every message/signal the bus's databases declare --
-    // a script may read (`sig`) or send (`send`) anything on its wire.
-    // Collapsed by default: a bus can declare hundreds of rows.
+/// The whole bus: every message/signal the bus's databases declare -- a
+/// script may read (`sig`) or send (`send`) anything on its wire.
+fn bus_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let bus_items = bus_dbc_items(app, node.channel);
-    if !bus_items.is_empty() {
-        ui.separator();
-        let open = ui.collapsing_header(
-            format!(
-                "总线全部报文（{}）##busall{id}",
-                bus_items.len()
-            ),
-            TreeNodeFlags::empty(),
-        );
-        if open {
-            for (msg_id, ext, msg_name, sigs) in &bus_items {
-                let id_str = format!("{msg_id:03X}{}", if *ext { "x" } else { "" });
-                if ui
-                    .selectable_config(format!(
-                        "{} {}##busmsg{id}_{msg_id}_{}",
-                        msg_name,
-                        id_str,
-                        *ext as u8
-                    ))
-                    .build()
-                {
-                    insert(app, id, &format!("send({:#x});", msg_id));
-                }
-                for (sig_name, _) in sigs {
-                    if ui
-                        .selectable_config(format!(
-                            "  {}##bussig{id}_{msg_id}_{}_{}",
-                            sig_name,
-                            *ext as u8,
-                            sig_name
-                        ))
-                        .build()
-                    {
-                        insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
-                    }
-                }
+    if bus_items.is_empty() {
+        ui.text_disabled("（本总线无 DBC 报文）");
+        return;
+    }
+    for (msg_id, ext, msg_name, sigs) in &bus_items {
+        let id_str = format!("{msg_id:03X}{}", if *ext { "x" } else { "" });
+        if ui
+            .selectable_config(format!(
+                "{} {}##busmsg{id}_{msg_id}_{}",
+                msg_name,
+                id_str,
+                *ext as u8
+            ))
+            .build()
+        {
+            insert(app, id, &format!("send({:#x});", msg_id));
+        }
+        for (sig_name, _) in sigs {
+            if ui
+                .selectable_config(format!(
+                    "  {}##bussig{id}_{msg_id}_{}_{}",
+                    sig_name,
+                    *ext as u8,
+                    sig_name
+                ))
+                .build()
+            {
+                insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
             }
         }
     }
