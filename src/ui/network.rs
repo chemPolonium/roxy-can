@@ -380,25 +380,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                         let role = crate::app::NodeRole::ALL[role_idx];
                         app.set_node_role(ch as u8, &ni.name, role);
                     }
-                    // The selector alone never explains the roles; the
-                    // selected one's declaration sits right below it.
-                    ui.text_disabled(crate::app::NodeRole::ALL[role_idx].hint());
-                    ui.same_line();
-                    ui.text_disabled("节点角色");
-                    ui.same_line();
-                    if ui.button(format!("Simulate all##netsimall{ch}")) {
-                        app.simulate_all_nodes(ch as u8);
-                    }
-                    ui.same_line();
-                    if ui.button(format!("Stop all##netstop{ch}")) {
-                        app.stop_all_nodes(ch as u8);
-                    }
-                    if ni.tx.is_empty() {
-                        ui.text_colored(
-                            [0.5, 0.5, 0.6, 1.0],
-                            "  (sends nothing -- the role is still recorded)",
-                        );
-                    }
                     ui.separator();
 
                     // 节点生成器：这个节点的条目、添加与响应规则，

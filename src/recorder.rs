@@ -101,6 +101,12 @@ impl Recorder {
                 chrono::Local::now().format("%Y%m%d_%H%M%S")
             )
         };
+        // The default home is the project's Record/ folder; make sure it
+        // exists instead of failing the whole recording on a missing dir.
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("record folder unavailable: {e}"))?;
+        }
         self.writer = Some(if blf {
             Backend::Blf(BlfWriter::create(&path).map_err(|e| e.to_string())?)
         } else {

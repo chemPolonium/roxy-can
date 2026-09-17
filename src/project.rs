@@ -20,6 +20,18 @@ fn push_recent(list: &mut Vec<String>, path: String) {
     list.truncate(8);
 }
 
+/// Whether a record draft is still one of the tool's own defaults (empty,
+/// or already pointing at some project's `Record/record`): only those may
+/// be silently retargeted on project open/save.
+fn app_record_draft_is_default(draft: &str) -> bool {
+    let draft = draft.trim();
+    if draft.is_empty() {
+        return true;
+    }
+    let norm = draft.replace('\\', "/").to_ascii_lowercase();
+    norm.ends_with("/record/record")
+}
+
 impl App {
     pub fn push_recent_dbc(&mut self, path: String) {
         push_recent(&mut self.recent_dbc, path);
@@ -144,6 +156,7 @@ impl App {
             Ok(()) => {
                 self.push_recent_project(path.to_string_lossy().to_string());
                 self.project_path = Some(path.clone());
+                self.retarget_record_draft();
                 // A Save As into another folder points the profile row at a
                 // different profiles/ directory; force a re-enumeration.
                 self.profile_names = None;
@@ -174,6 +187,7 @@ impl App {
                 cfg.resolve_paths(path.parent());
                 cfg.apply(self);
                 self.project_path = Some(path.to_path_buf());
+                self.retarget_record_draft();
                 if !proj.layout.is_empty() {
                     self.pending_layout = Some(proj.layout);
                 }
@@ -183,6 +197,24 @@ impl App {
             }
             Err(e) => self.status = format!("project ignored: {e}"),
         }
+    }
+
+    /// Points the record draft at the project's `Record/` folder. The
+    /// recording's default home is next to the .rxproj, not the exe's
+    /// startup folder; a draft the user typed themselves is left alone.
+    pub fn retarget_record_draft(&mut self) {
+        let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) else {
+            return;
+        };
+        let custom = !app_record_draft_is_default(&self.record_path_buf);
+        if custom {
+            return;
+        }
+        self.record_path_buf = dir
+            .join("Record")
+            .join("record")
+            .to_string_lossy()
+            .into_owned();
     }
 
     pub fn open_project_dialog(&mut self) {

@@ -11,10 +11,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window("Buses")
         .opened(&mut open)
         .position(
-            [
-                io.display_size()[0] * 0.38,
-                io.display_size()[1] * 0.25,
-            ],
+            [io.display_size()[0] * 0.38, io.display_size()[1] * 0.25],
             Condition::FirstUseEver,
         )
         .size([480.0, 240.0], Condition::FirstUseEver)
@@ -70,13 +67,9 @@ fn content(app: &mut App, ui: &Ui) {
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
-    let flags = TableFlags::BORDERS_INNER
-        | TableFlags::ROW_BG
-        | TableFlags::RESIZABLE
-        | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y;
-    let opts =
-        dear_imgui_rs::TableOptions::from(flags).sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
+    let flags = TableFlags::RESIZABLE;
+    let opts = dear_imgui_rs::TableOptions::from(flags)
+        .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
     let mut remove: Option<usize> = None;
     {
         let Some(_table) = ui.begin_table_with_flags("bus_table", 5, opts) else {
@@ -177,9 +170,7 @@ fn content(app: &mut App, ui: &Ui) {
                 _ => arb_kbps.to_string(),
             };
             ui.set_next_item_width(70.0);
-            if ui.input_text(format!("##busarb{i}"), &mut arb).build()
-                || ui.is_item_active()
-            {
+            if ui.input_text(format!("##busarb{i}"), &mut arb).build() || ui.is_item_active() {
                 app.bus_arb_edit = Some((i, arb.clone()));
             }
             if ui.is_item_deactivated_after_edit() {
@@ -204,9 +195,7 @@ fn content(app: &mut App, ui: &Ui) {
                 _ => data_kbps.to_string(),
             };
             ui.set_next_item_width(70.0);
-            if ui.input_text(format!("##busdata{i}"), &mut data).build()
-                || ui.is_item_active()
-            {
+            if ui.input_text(format!("##busdata{i}"), &mut data).build() || ui.is_item_active() {
                 app.bus_data_edit = Some((i, data.clone()));
             }
             if ui.is_item_deactivated_after_edit() {
@@ -281,14 +270,7 @@ fn content(app: &mut App, ui: &Ui) {
                         Ok(channels) if !channels.is_empty() => {
                             let labels: Vec<String> = channels
                                 .iter()
-                                .map(|c| {
-                                    format!(
-                                        "[{}] ch{}: {}",
-                                        c.driver.tag(),
-                                        c.index,
-                                        c.name
-                                    )
-                                })
+                                .map(|c| format!("[{}] ch{}: {}", c.driver.tag(), c.index, c.name))
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                             ui.set_next_item_width(150.0);

@@ -220,6 +220,43 @@ fn the_format_combo_picks_the_record_extension() {
     app.toggle_record();
 }
 
+/// The recording's default home follows the project: saving (or loading)
+/// a .rxproj points the draft at the project's Record/ folder; a draft
+/// the user typed themselves is left alone.
+#[test]
+fn loading_a_project_points_the_record_draft_at_its_record_folder() {
+    let dir = std::env::temp_dir().join("roxy_can_record_home");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("net.rxproj");
+    let mut app = App::headless();
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+    let draft = app.record_path_buf.clone();
+    assert!(
+        draft.replace('\\', "/").ends_with("/Record/record"),
+        "draft retargeted on save: {draft}"
+    );
+
+    // A fresh load from disk retargets the (reset) draft too.
+    let mut app = App::headless();
+    app.open_project_path(&path);
+    assert!(
+        app.record_path_buf
+            .replace('\\', "/")
+            .ends_with("/Record/record"),
+        "draft retargeted on load: {}",
+        app.record_path_buf
+    );
+
+    // A draft the user typed survives a Save As of the same workspace.
+    app.record_path_buf = "D:/mylogs/custom".to_string();
+    assert!(app.save_project(Some(path.clone())));
+    assert_eq!(
+        app.record_path_buf, "D:/mylogs/custom",
+        "Save As must not clobber a custom draft"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
 #[test]
 fn loading_log_does_not_start_replay() {
     let mut app = App::headless();

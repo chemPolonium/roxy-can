@@ -177,6 +177,7 @@ impl App {
 
     /// Simulates every DBC node on the bus (CANoe's "Switch All Blocks to
     /// Simulation").
+    #[cfg(test)]
     pub fn simulate_all_nodes(&mut self, ch: u8) {
         let Some(db) = self.channel_dbc(ch) else {
             return;
@@ -188,6 +189,7 @@ impl App {
     }
 
     /// Takes every DBC node on the bus out of the simulation.
+    #[cfg(test)]
     pub fn stop_all_nodes(&mut self, ch: u8) {
         let Some(db) = self.channel_dbc(ch) else {
             return;

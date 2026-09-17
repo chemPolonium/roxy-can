@@ -48,8 +48,8 @@ impl NodeRole {
     /// One-line explanation shown under every role selector.
     pub fn hint(self) -> &'static str {
         match self {
-            NodeRole::Simulated => "本工具以它名义发车：名下报文按库声明周期发送，绑定脚本受同一闸门",
-            NodeRole::Absent => "不模拟：报文需来自回放块或真实总线（Real bus 模式下的挂接通道），默认态",
+            NodeRole::Simulated => "正常发送报文",
+            NodeRole::Absent => "报文需来自回放块或真实总线",
         }
     }
 
