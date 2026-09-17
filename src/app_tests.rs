@@ -6628,6 +6628,48 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     app.stop();
 }
 
+/// The trace text filter matches FlexRay frame names from the watch's
+/// description database (and slot numbers), instead of hiding FR rows
+/// wholesale. Value conditions still exclude them.
+#[test]
+fn the_trace_text_filter_matches_fr_frame_names() {
+    let mut app = quiet_app();
+    app.fr_db = Some(std::sync::Arc::new(
+        crate::fr_db::FrDb::parse(include_str!("../assets/powertrain.fibex"))
+            .expect("fixture parses"),
+    ));
+    let row = crate::trace::FrRow {
+        t_us: 1_000,
+        ab: 0,
+        slot: 1,
+        cycle: 0,
+        payload: vec![1, 2, 3],
+        header_crc: 0,
+        flags: 0,
+    };
+
+    let mk_flt = |app: &App, filter: &str| {
+        let mut w = app.trace_windows[0].clone();
+        w.filter = filter.to_string();
+        w.filter_lens()
+    };
+    // EngineData lives in slot 1 on A+B (the fixture's first frame).
+    let flt = mk_flt(&app, "EngineData");
+    assert!(app.trace_fr_match(&flt, &row), "name match, case-insensitive");
+    let flt = mk_flt(&app, "enginedata");
+    assert!(app.trace_fr_match(&flt, &row), "lowercase matches");
+    let flt = mk_flt(&app, "slot 1");
+    assert!(app.trace_fr_match(&flt, &row), "slot text matches");
+    let flt = mk_flt(&app, "TransmissionData");
+    assert!(!app.trace_fr_match(&flt, &row), "another name filters it out");
+    let flt = mk_flt(&app, "EngineSpeed>=200");
+    assert!(
+        !app.trace_fr_match(&flt, &row),
+        "a signal-value condition is CAN-only"
+    );
+    app.stop();
+}
+
 /// R2 装配层校验：脚本发送了不属于自己节点的报文 → 节点日志出 warning。
 /// 脚本绑定 EngineECU，但 send 的是 0x200（ChassisECU 的 VehicleState）。
 #[test]

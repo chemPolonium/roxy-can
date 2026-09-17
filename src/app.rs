@@ -1117,12 +1117,6 @@ impl App {
         // text also matches a slot number.
         if matches!(scope, SigScope::All) && !dbc_only {
             for agg in &self.snap.fr_aggs {
-                if !filter.is_empty()
-                    && !format!("slot {}", agg.slot).contains(&filter)
-                    && !agg.slot.to_string().contains(&filter)
-                {
-                    continue;
-                }
                 // The display database, when the watch came with one,
                 // names the slot's frame and decodes its signals. The
                 // cycle the last frame arrived in picks the right frame
@@ -1132,6 +1126,13 @@ impl App {
                     .as_ref()
                     .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
                 let name = frame.map(|f| f.name.as_str()).unwrap_or("");
+                if !filter.is_empty()
+                    && !format!("slot {}", agg.slot).contains(&filter)
+                    && !agg.slot.to_string().contains(&filter)
+                    && !name.to_lowercase().contains(&filter)
+                {
+                    continue;
+                }
                 let label = [
                     "FR".to_string(),
                     format!("slot {}", agg.slot),

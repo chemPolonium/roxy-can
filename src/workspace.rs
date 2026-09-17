@@ -751,12 +751,11 @@ impl App {
     }
 
     /// The FlexRay side of the same filter lens. FR rows carry no id,
-    /// name, direction or frame kind, so the CAN-shaped filters hide
-    /// them rather than half-match: a specific bus scope, `Tx`, DBC
-    /// only, any text filter (plain or signal-value) and a frame-kind
-    /// pick all restrict the table to CAN. Payload search and the time
-    /// range do apply -- the bytes and the timestamp mean the same
-    /// thing on both buses.
+    /// direction or frame kind, so those filters hide them rather than
+    /// half-match: a specific bus scope, `Tx`, DBC only and a frame-kind
+    /// pick all restrict the table to CAN. The text filter matches FR
+    /// frame names from the watch's description database (or the slot
+    /// number), payload search and the time range apply as on CAN.
     pub fn trace_fr_match(&self, flt: &TraceFilter, r: &crate::trace::FrRow) -> bool {
         if !matches!(flt.scope, SigScope::All) {
             return false;
@@ -764,7 +763,24 @@ impl App {
         if flt.dir == 2 || flt.dbc_only || flt.flags_kind != 0 {
             return false;
         }
-        if !flt.filter.trim().is_empty() || !flt.value_conds.is_empty() {
+        let q = flt.filter.trim();
+        // With value conditions present the filter text IS the condition,
+        // which is CAN-only -- FR rows leave.
+        let name = if flt.value_conds.is_empty() && !q.is_empty() {
+            let qup = q.to_ascii_uppercase();
+            self.fr_db
+                .as_ref()
+                .and_then(|db| db.frame_at(r.slot, r.cycle, r.ab))
+                .map(|f| {
+                    f.name.to_ascii_uppercase().contains(&qup)
+                        || format!("slot {}", f.triggering.slot_id).contains(q)
+                        || f.triggering.slot_id.to_string().contains(q)
+                })
+                .unwrap_or(false)
+        } else {
+            true
+        };
+        if !name {
             return false;
         }
         let pat = flt.payload.replace(' ', "");
