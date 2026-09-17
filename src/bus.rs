@@ -1608,6 +1608,7 @@ impl BusCore {
                 agg.jitter_us * 0.9 + dev * 0.1
             };
         }
+        agg.slot = row.slot;
         agg.count += 1;
         agg.last_t_us = row.t_us;
         agg.ab = row.ab;
@@ -4059,6 +4060,29 @@ mod tests {
             header_crc: 0xBEEF,
             flags: 0,
         }
+    }
+
+    /// Per-slot tallies behind the Messages FR rows: count, the EMA
+    /// cycle from real arrivals, and the last frame's cycle number (so
+    /// slots shared across repetitions resolve their frame name).
+    #[test]
+    fn fr_slot_aggregates_track_arrivals() {
+        let mut core = BusCore::new(Vec::new());
+        let mut a = fr_row(1_000_000, 10);
+        a.cycle = 0;
+        let mut b = fr_row(1_005_000, 10);
+        b.cycle = 4; // rep-4 frame's next occurrence
+        core.ingest_fr_row(a);
+        core.ingest_fr_row(b);
+
+        core.publish_trace();
+        let snap = core.snapshot();
+        assert_eq!(snap.fr_aggs.len(), 1);
+        let agg = &snap.fr_aggs[0];
+        assert_eq!(agg.slot, 10);
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.last_cycle, 4, "the name lookup cycle follows arrivals");
+        assert_eq!(agg.cycle_us, 5000.0, "first interval seeds the EMA");
     }
 
     /// The FR ring publishes through the same lifecycle as the CAN ring:
