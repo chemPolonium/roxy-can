@@ -362,4 +362,71 @@ fn content(app: &mut App, ui: &Ui) {
             Err(e) => ui.text_disabled(&e),
         },
     }
+
+    // The schedule table: the loaded database's slot/cycle layout, the
+    // ground truth the watch receives against.
+    let Some(db) = app.fr_db.clone() else {
+        return;
+    };
+    let open = ui.collapsing_header(
+        format!(
+            "调度表（{} 帧）##frsched",
+            db.frames.len()
+        ),
+        dear_imgui_rs::TreeNodeFlags::empty(),
+    );
+    if !open {
+        return;
+    }
+    let tbl_flags = TableFlags::BORDERS_INNER
+        | TableFlags::ROW_BG
+        | TableFlags::RESIZABLE
+        | TableFlags::NO_BORDERS_IN_BODY
+        | TableFlags::SCROLL_Y;
+    let opts = dear_imgui_rs::TableOptions::from(tbl_flags)
+        .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
+    let Some(_table) = ui.begin_table_with_flags("fr_schedule", 5, opts) else {
+        return;
+    };
+    for (label, w) in [
+        ("Slot", 46.0),
+        ("周期", 46.0),
+        ("重复", 40.0),
+        ("通道", 46.0),
+    ] {
+        ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, w);
+    }
+    ui.table_setup_column_stretch_weight("帧", TableColumnFlags::NONE, 1.0);
+    ui.table_setup_scroll_freeze(0, 1);
+    ui.table_headers_row();
+
+    let mut frames: Vec<&crate::fr_db::FrFrameDb> = db.frames.iter().collect();
+    frames.sort_by_key(|f| (f.triggering.slot_id, f.triggering.base_cycle));
+    for f in frames {
+        ui.table_next_row();
+        if !ui.table_next_column() {
+            continue;
+        }
+        ui.text(format!("{}", f.triggering.slot_id));
+        ui.table_next_column();
+        ui.text(format!("{}", f.triggering.base_cycle));
+        ui.table_next_column();
+        ui.text(format!("x{}", f.triggering.cycle_repetition));
+        ui.table_next_column();
+        ui.text(f.triggering.channel.label());
+        ui.table_next_column();
+        if f.triggering.startup {
+            // Startup frames participate in cluster cold-start: worth
+            // noticing on a real bus.
+            ui.text_colored([0.55, 0.8, 1.0, 1.0], &f.name);
+            if ui.is_item_hovered() {
+                ui.tooltip_text("启动帧（startup frame）");
+            }
+        } else {
+            ui.text(&f.name);
+        }
+        if ui.is_item_hovered() && !f.comment.is_empty() {
+            ui.tooltip_text(&f.comment);
+        }
+    }
 }
