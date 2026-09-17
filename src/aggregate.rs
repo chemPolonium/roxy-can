@@ -48,6 +48,10 @@ pub struct FrSlotAgg {
     pub slot: u16,
     /// Reception channel: 0 = A, 1 = B, 2 = unknown.
     pub ab: u8,
+    /// The communication cycle the last frame arrived in: slots shared
+    /// by several frames (cycle repetition) resolve their frame name
+    /// against this, not against cycle 0.
+    pub last_cycle: u8,
     pub count: u64,
     pub last_t_us: u64,
     pub cycle_us: f64,

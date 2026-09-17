@@ -1124,11 +1124,13 @@ impl App {
                     continue;
                 }
                 // The display database, when the watch came with one,
-                // names the slot's frame and decodes its signals.
+                // names the slot's frame and decodes its signals. The
+                // cycle the last frame arrived in picks the right frame
+                // when several share a slot across repetitions.
                 let frame = self
                     .fr_db
                     .as_ref()
-                    .and_then(|db| db.frame_at(agg.slot, 0, agg.ab));
+                    .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
                 let name = frame.map(|f| f.name.as_str()).unwrap_or("");
                 let label = match agg.ab {
                     0 => format!("FR slot {}  A  {name}", agg.slot),

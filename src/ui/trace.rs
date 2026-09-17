@@ -13,6 +13,8 @@ use dear_imgui_rs::{
 /// Window index and frame targeted by the row context menu; must survive
 /// across frames while the popup is open.
 static CTX: Mutex<Option<(usize, CanFrame)>> = Mutex::new(None);
+/// Same, for FlexRay rows (their menu only copies address and payload).
+static CTX_FR: Mutex<Option<(usize, crate::trace::FrRow)>> = Mutex::new(None);
 
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
@@ -354,6 +356,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                     continue;
                 }
                 ui.text(format!("{:.6}", fr.t_us as f64 / 1e6));
+                hovered |= ui.is_item_hovered();
                 ui.table_next_column();
                 ui.text_colored(
                     [0.55, 0.8, 1.0, 1.0],
@@ -363,8 +366,10 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                         _ => "FR",
                     },
                 );
+                hovered |= ui.is_item_hovered();
                 ui.table_next_column();
                 ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("{}.{}", fr.slot, fr.cycle));
+                hovered |= ui.is_item_hovered();
                 ui.table_next_column();
                 match app
                     .fr_db
@@ -374,6 +379,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                     Some(frame) => ui.text(&frame.name),
                     None => ui.text("-"),
                 }
+                hovered |= ui.is_item_hovered();
                 ui.table_next_column();
                 ui.text(format!("{}", fr.payload.len()));
                 ui.table_next_column();
@@ -384,6 +390,10 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.text(hex.trim_end());
                 ui.table_next_column();
                 ui.text_colored([0.6, 0.65, 0.7, 1.0], "Rx");
+                if hovered && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right) {
+                    *CTX_FR.lock().unwrap() = Some((i, (*fr).clone()));
+                    ui.open_popup(format!("trace_fr_ctx{i}"));
+                }
                 can_ctx = None;
             }
         }
@@ -395,6 +405,22 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // The rows go back before the popup: its menu mutates the window's
     // filter state.
     app.trace_windows[i].rows = rows;
+
+    // The FlexRay row menu: the slot address and the payload, copied.
+    if let Some(_p) = ui.begin_popup(format!("trace_fr_ctx{i}"))
+        && let Some((pi, r)) = CTX_FR.lock().unwrap().clone()
+        && pi == i
+    {
+        ui.text(format!("FR slot {}.{}", r.slot, r.cycle));
+        ui.separator();
+        let hex: String = r.payload.iter().map(|b| format!("{b:02X} ")).collect();
+        if ui.menu_item("Copy payload") {
+            crate::clipboard::Clipboard.set(hex.trim_end());
+        }
+        if ui.menu_item("Copy slot.cycle") {
+            crate::clipboard::Clipboard.set(&format!("{}.{}", r.slot, r.cycle));
+        }
+    }
 
     if let Some(_p) = ui.begin_popup(format!("trace_row_ctx{i}"))
         && let Some((pi, f)) = *CTX.lock().unwrap()

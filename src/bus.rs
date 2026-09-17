@@ -1611,6 +1611,7 @@ impl BusCore {
         agg.count += 1;
         agg.last_t_us = row.t_us;
         agg.ab = row.ab;
+        agg.last_cycle = row.cycle;
         agg.payload = row.payload.clone();
         self.fr_trace.push(row, self.trace_limit);
     }
