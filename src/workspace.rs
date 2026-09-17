@@ -114,6 +114,10 @@ pub struct TraceWin {
     /// at match time; invalid text is ignored.
     pub time_from: String,
     pub time_to: String,
+    /// Whether the extra filter row (payload / kind / DBC only / time
+    /// range) is expanded. Session state; starts collapsed so the main
+    /// toolbar stays short.
+    pub filters_open: bool,
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only.
@@ -493,6 +497,7 @@ impl App {
             flags_kind: 0,
             time_from: String::new(),
             time_to: String::new(),
+            filters_open: false,
             rows: Vec::new(),
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
             shown_count: self.snap.trace.len(),

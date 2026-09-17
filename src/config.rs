@@ -1108,6 +1108,7 @@ impl Config {
                     flags_kind: w.flags_kind,
                     time_from: String::new(),
                     time_to: String::new(),
+                    filters_open: false,
                     rows: Vec::new(),
                     shown_t_us: u64::MAX,
                     shown_count: 0,

@@ -221,50 +221,59 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     ui.input_text(format!("##tfilter{i}"), &mut app.trace_windows[i].filter)
         .build();
     ui.same_line();
-    ui.set_next_item_width(60.0);
+    ui.set_next_item_width(52.0);
     ui.combo_simple_string(
         format!("##tdir{i}"),
         &mut app.trace_windows[i].dir,
         &["All", "Rx", "Tx"],
     );
+    // The payload / kind / DBC-only / time-range filters collapse behind
+    // this toggle: the main row stays short enough for a half-width
+    // window, and the extras only take space when actually wanted.
     ui.same_line();
-    ui.set_next_item_width(96.0);
-    ui.input_text(format!("##tpayload{i}"), &mut app.trace_windows[i].payload)
-        .hint("payload 如 11 22")
-        .build();
-    if ui.is_item_hovered() {
-        ui.tooltip_text("payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤");
+    if ui.button(format!("筛选##tf{i}")) {
+        app.trace_windows[i].filters_open = !app.trace_windows[i].filters_open;
     }
-    ui.same_line();
-    ui.set_next_item_width(64.0);
-    ui.combo_simple_string(
-        format!("##tflags{i}"),
-        &mut app.trace_windows[i].flags_kind,
-        &["Any", "Data", "FD", "RTR", "Error"],
-    );
-    ui.same_line();
-    ui.checkbox(
-        format!("DBC only##tdbc{i}"),
-        &mut app.trace_windows[i].dbc_only,
-    );
-    // Time window: two small numeric boxes in seconds -- empty means
-    // unbounded on that side. Same parse semantics as the filter's
-    // time-range check (blank/invalid = no bound).
-    ui.same_line();
-    ui.set_next_item_width(56.0);
-    ui.input_text(format!("##tfrom{i}"), &mut app.trace_windows[i].time_from)
-        .hint("从 s")
-        .build();
-    if ui.is_item_hovered() {
-        ui.tooltip_text("时间范围下界（秒）：早于此的帧不显示；留空 = 不限");
-    }
-    ui.same_line();
-    ui.set_next_item_width(56.0);
-    ui.input_text(format!("##tto{i}"), &mut app.trace_windows[i].time_to)
-        .hint("到 s")
-        .build();
-    if ui.is_item_hovered() {
-        ui.tooltip_text("时间范围上界（秒）：晚于此的帧不显示；留空 = 不限");
+    if app.trace_windows[i].filters_open {
+        ui.same_line();
+        ui.set_next_item_width(84.0);
+        ui.input_text(format!("##tpayload{i}"), &mut app.trace_windows[i].payload)
+            .hint("payload 11 22")
+            .build();
+        if ui.is_item_hovered() {
+            ui.tooltip_text("payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤");
+        }
+        ui.same_line();
+        ui.set_next_item_width(58.0);
+        ui.combo_simple_string(
+            format!("##tflags{i}"),
+            &mut app.trace_windows[i].flags_kind,
+            &["Any", "Data", "FD", "RTR", "Error"],
+        );
+        ui.same_line();
+        ui.checkbox(
+            format!("DBC##tdbc{i}"),
+            &mut app.trace_windows[i].dbc_only,
+        );
+        // Time window: two small numeric boxes in seconds -- empty means
+        // unbounded on that side. Same parse semantics as the filter's
+        // time-range check (blank/invalid = no bound).
+        ui.same_line();
+        ui.set_next_item_width(52.0);
+        ui.input_text(format!("##tfrom{i}"), &mut app.trace_windows[i].time_from)
+            .hint("从 s")
+            .build();
+        if ui.is_item_hovered() {
+            ui.tooltip_text("时间范围下界（秒）：早于此的帧不显示；留空 = 不限");
+        }
+        ui.same_line();
+        ui.set_next_item_width(52.0);
+        ui.input_text(format!("##tto{i}"), &mut app.trace_windows[i].time_to)
+            .hint("到 s")
+            .build();
+        if ui.is_item_hovered() {
+            ui.tooltip_text("时间范围上界（秒）：晚于此的帧不显示；留空 = 不限");
+        }
     }
     ui.same_line();
     // Clear empties the display (ring + archive); the filter controls
