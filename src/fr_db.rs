@@ -170,6 +170,11 @@ pub struct FrClusterParams {
     pub pd_listen_timeout: u32,
     pub pd_max_drift: u32,
     pub pd_microtick: u32,
+    pub gd_wakeup_symbol_rx_idle: u32,
+    pub gd_wakeup_symbol_rx_low: u32,
+    pub gd_wakeup_symbol_rx_window: u32,
+    pub gd_wakeup_symbol_tx_idle: u32,
+    pub gd_wakeup_symbol_tx_low: u32,
     pub g_channels: u32,
     pub p_channels: u32,
 }
@@ -1006,6 +1011,16 @@ fn fill_extra_params(
         get_u32(&["ACCEPTED-STARTUP-RANGE", "PD-ACCEPTED-STARTUP-RANGE"]).unwrap_or(0);
     p.pd_listen_timeout = get_u32(&["LISTEN-TIMEOUT", "PD-LISTEN-TIMEOUT"]).unwrap_or(0);
     p.pd_max_drift = get_u32(&["MAX-DRIFT", "PD-MAX-DRIFT"]).unwrap_or(0);
+    p.gd_wakeup_symbol_rx_idle =
+        get_u32(&["WAKE-UP-SYMBOL-RX-IDLE", "GD-WAKE-UP-SYMBOL-RX-IDLE"]).unwrap_or(0);
+    p.gd_wakeup_symbol_rx_low =
+        get_u32(&["WAKE-UP-SYMBOL-RX-LOW", "GD-WAKE-UP-SYMBOL-RX-LOW"]).unwrap_or(0);
+    p.gd_wakeup_symbol_rx_window =
+        get_u32(&["WAKE-UP-SYMBOL-RX-WINDOW", "GD-WAKE-UP-SYMBOL-RX-WINDOW"]).unwrap_or(0);
+    p.gd_wakeup_symbol_tx_idle =
+        get_u32(&["WAKE-UP-SYMBOL-TX-IDLE", "GD-WAKE-UP-SYMBOL-TX-IDLE"]).unwrap_or(0);
+    p.gd_wakeup_symbol_tx_low =
+        get_u32(&["WAKE-UP-SYMBOL-TX-LOW", "GD-WAKE-UP-SYMBOL-TX-LOW"]).unwrap_or(0);
 }
 
 fn default_cluster_params() -> FrClusterParams {
