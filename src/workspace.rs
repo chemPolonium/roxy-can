@@ -763,6 +763,10 @@ impl App {
         if flt.dir == 2 || flt.dbc_only || flt.flags_kind != 0 {
             return false;
         }
+        // Value conditions (`Signal>10`) are CAN-only: FR rows leave.
+        if !flt.value_conds.is_empty() {
+            return false;
+        }
         let q = flt.filter.trim();
         // With value conditions present the filter text IS the condition,
         // which is CAN-only -- FR rows leave.
