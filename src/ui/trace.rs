@@ -297,6 +297,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         let row = &rows[r];
         let mut hovered = false;
         ui.table_next_row();
+        #[expect(clippy::needless_late_init)]
         let can_ctx: Option<CanFrame>;
         match row {
             TraceRow::Can(f) => {
@@ -365,7 +366,14 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_column();
                 ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("{}.{}", fr.slot, fr.cycle));
                 ui.table_next_column();
-                ui.text("-");
+                match app
+                    .fr_db
+                    .as_ref()
+                    .and_then(|db| db.frame_at(fr.slot, fr.cycle, fr.ab))
+                {
+                    Some(frame) => ui.text(&frame.name),
+                    None => ui.text("-"),
+                }
                 ui.table_next_column();
                 ui.text(format!("{}", fr.payload.len()));
                 ui.table_next_column();

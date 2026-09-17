@@ -335,7 +335,7 @@ fn content(app: &mut App, ui: &Ui) {
             }
             ui.same_line();
             if ui.button("断开##frdet") {
-                app.set_fr_watch(None, "");
+                app.detach_fr_watch();
             }
         }
         None => match ensure_fr_list(app) {

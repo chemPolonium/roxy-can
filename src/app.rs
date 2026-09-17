@@ -281,6 +281,10 @@ pub struct App {
     /// FlexRay-capable Vector channels, enumerated once on first need
     /// (a real vxlapi call). `Err` = the Vector driver is unavailable.
     pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
+    /// The FlexRay database behind the FR watch, parsed when the user
+    /// picked the description file: the frontend's display copy -- the
+    /// core re-parses the same file for the driver configuration.
+    pub fr_db: Option<std::sync::Arc<crate::fr_db::FrDb>>,
     /// The picked row in the FR channel combo.
     pub fr_pick: usize,
     /// Profile names from the project's `profiles/` directory, listed
@@ -542,6 +546,7 @@ impl App {
             // Vector probe is a real driver call) and the combo pick.
             fr_channels: None,
             fr_pick: 0,
+            fr_db: None,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -1118,10 +1123,21 @@ impl App {
                 {
                     continue;
                 }
+                // The display database, when the watch came with one,
+                // names the slot's frame and decodes its signals.
+                let frame = self
+                    .fr_db
+                    .as_ref()
+                    .and_then(|db| db.frame_at(agg.slot, 0, agg.ab));
+                let name = frame.map(|f| f.name.as_str()).unwrap_or("");
                 let label = match agg.ab {
-                    0 => format!("FR slot {}  A", agg.slot),
-                    1 => format!("FR slot {}  B", agg.slot),
-                    _ => format!("FR slot {}", agg.slot),
+                    0 => format!("FR slot {}  A  {name}", agg.slot),
+                    1 => format!("FR slot {}  B  {name}", agg.slot),
+                    _ => format!("FR slot {}  {name}", agg.slot),
+                };
+                let signals = match (self.fr_db.as_ref(), frame) {
+                    (Some(db), Some(frame)) => db.decode(frame, &agg.payload),
+                    _ => Vec::new(),
                 };
                 rows.push(MsgRowText {
                     label,
@@ -1139,7 +1155,7 @@ impl App {
                     },
                     flags: crate::can::frame::FrameFlags::NONE,
                     data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
-                    signals: Vec::new(),
+                    signals,
                 });
             }
         }

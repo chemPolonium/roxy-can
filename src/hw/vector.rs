@@ -725,45 +725,59 @@ pub struct FlexRayChannel {
 
 /// FlexRay frame as received from the wire: slot/cycle address plus the
 /// raw payload, before any signal decoding.
-/// Converts FIBEX-parsed cluster parameters into the driver's config
-/// struct: field-for-field, unmapped fields zeroed (zero means "driver
-/// default" to `xlFrSetConfiguration`).
-pub fn config_from_fibex(
-    params: &crate::log::fr_cluster::FrClusterParams,
-) -> XLfrClusterConfig {
+/// Converts a parsed FlexRay database's cluster parameters into the
+/// driver's config struct. Derived values follow the CANoe demo math:
+/// gdMacroPerCycle = cycle / macrotick, pdMicrotick = sample clock ×
+/// samples (in ns), pMicroPerMacroNom = their ratio; absent fields
+/// stay zero (zero means "driver default" to `xlFrSetConfiguration`),
+/// and the channel pair defaults to A+B like every FIBEX export does.
+pub fn config_from_db(params: &crate::fr_db::FrClusterParams) -> XLfrClusterConfig {
+    let gd_macrotick = (params.macrotick_duration_us * 1000.0) as u32;
+    let g_macro_per_cycle = params.g_macro_per_cycle.unwrap_or_else(|| {
+        ((params.cycle_time_ms * 1000.0) / params.macrotick_duration_us.max(0.001)).round() as u32
+    });
+    let pd_microtick =
+        (params.sample_clock_period_us * params.p_samples_per_microtick as f64 * 1000.0) as u32;
+    let p_micro_per_macro_nom = if params.p_micro_per_macro_nom > 0 {
+        params.p_micro_per_macro_nom
+    } else {
+        gd_macrotick.checked_div(pd_microtick).unwrap_or(0)
+    };
+    let channels = if params.p_channels == 0 { 3 } else { params.p_channels };
+    let g_channels = if params.g_channels == 0 { 3 } else { params.g_channels };
     XLfrClusterConfig {
         bus_guardian_enable: 0,
-        baudrate: params.baudrate,
+        baudrate: params.speed_kbps * 1000,
         bus_guardian_tick: 0,
         external_clock_correction_mode: 0,
-        g_cold_start_attempts: params.g_cold_start_attempts,
+        g_cold_start_attempts: params.coldstart_attempts,
         g_listen_noise: params.g_listen_noise,
-        g_macro_per_cycle: params.g_macro_per_cycle,
+        g_macro_per_cycle,
         g_max_without_clock_correction_fatal: params.g_max_without_clock_correction_fatal,
         g_max_without_clock_correction_passive: params.g_max_without_clock_correction_passive,
         g_network_management_vector_length: params.g_network_management_vector_length,
-        g_number_of_minislots: params.g_number_of_minislots,
-        g_number_of_static_slots: params.g_number_of_static_slots,
-        g_offset_correction_start: params.g_offset_correction_start,
-        g_payload_length_static: params.g_payload_length_static,
+        g_number_of_minislots: params.number_of_minislots,
+        g_number_of_static_slots: params.number_of_static_slots,
+        g_offset_correction_start: params.offset_correction_start,
+        g_payload_length_static: params.payload_length_static,
         g_sync_node_max: params.g_sync_node_max,
-        gd_action_point_offset: params.gd_action_point_offset,
-        gd_dynamic_slot_idle_phase: params.gd_dynamic_slot_idle_phase,
-        gd_macrotick: params.gd_macrotick_ns,
-        gd_minislot: params.gd_minislot,
-        gd_mini_slot_action_point_offset: params.gd_mini_slot_action_point_offset,
-        gd_nit: params.gd_nit,
-        gd_static_slot: params.gd_static_slot,
-        gd_symbol_window: params.gd_symbol_window,
+        gd_action_point_offset: params.action_point_offset,
+        gd_dynamic_slot_idle_phase: params.dynamic_slot_idle_phase,
+        gd_macrotick,
+        gd_minislot: params.minislot_duration,
+        gd_mini_slot_action_point_offset: params.minislot_action_point_offset,
+        gd_nit: params.network_idle_time,
+        gd_static_slot: params.static_slot_duration,
+        gd_symbol_window: params.symbol_window,
         gd_tss_transmitter: params.gd_tss_transmitter,
-        gd_wakeup_symbol_rx_idle: params.gd_wakeup_symbol_rx_idle,
-        gd_wakeup_symbol_rx_low: params.gd_wakeup_symbol_rx_low,
-        gd_wakeup_symbol_rx_window: params.gd_wakeup_symbol_rx_window,
-        gd_wakeup_symbol_tx_idle: params.gd_wakeup_symbol_tx_idle,
-        gd_wakeup_symbol_tx_low: params.gd_wakeup_symbol_tx_low,
-        p_allow_halt_due_to_clock: params.p_allow_halt_due_to_clock,
+        gd_wakeup_symbol_rx_idle: 0,
+        gd_wakeup_symbol_rx_low: 0,
+        gd_wakeup_symbol_rx_window: 0,
+        gd_wakeup_symbol_tx_idle: 0,
+        gd_wakeup_symbol_tx_low: 0,
+        p_allow_halt_due_to_clock: params.p_allow_halt_due_to_clock as u32,
         p_allow_passive_to_active: params.p_allow_passive_to_active,
-        p_channels: params.p_channels,
+        p_channels: channels,
         p_cluster_drift_damping: params.p_cluster_drift_damping,
         p_decoding_correction: params.p_decoding_correction,
         p_delay_compensation_a: params.p_delay_compensation_a,
@@ -775,11 +789,11 @@ pub fn config_from_fibex(
         p_latest_tx: params.p_latest_tx,
         p_macro_initial_offset_a: params.p_macro_initial_offset_a,
         p_macro_initial_offset_b: params.p_macro_initial_offset_b,
-        p_max_payload_length_dynamic: params.p_max_payload_length_dynamic,
+        p_max_payload_length_dynamic: 0,
         p_micro_initial_offset_a: params.p_micro_initial_offset_a,
         p_micro_initial_offset_b: params.p_micro_initial_offset_b,
-        p_micro_per_cycle: params.p_micro_per_cycle,
-        p_micro_per_macro_nom: params.p_micro_per_macro_nom,
+        p_micro_per_cycle: params.g_micro_per_cycle,
+        p_micro_per_macro_nom,
         p_offset_correction_out: params.p_offset_correction_out,
         p_rate_correction_out: params.p_rate_correction_out,
         p_samples_per_microtick: params.p_samples_per_microtick,
@@ -789,29 +803,32 @@ pub fn config_from_fibex(
         pd_accepted_startup_range: params.pd_accepted_startup_range,
         pd_listen_timeout: params.pd_listen_timeout,
         pd_max_drift: params.pd_max_drift,
-        pd_microtick: params.pd_microtick_ns,
+        pd_microtick,
         gd_cas_rx_low_max: params.gd_cas_rx_low_max,
-        g_channels: params.g_channels,
-        v_extern_offset_control: params.v_extern_offset_control,
-        v_extern_rate_control: params.v_extern_rate_control,
-        p_channels_mts: params.p_channels_mts,
-        frame_preset_data: params.frame_preset_data,
+        g_channels,
+        v_extern_offset_control: 0,
+        v_extern_rate_control: 0,
+        p_channels_mts: 0,
+        frame_preset_data: 0,
         reserved: [0; 15],
     }
 }
 
 impl FlexRayChannel {
-    /// Opens the channel with a FIBEX-parsed cluster configuration.
-    /// Convenience wrapper that parses the FIBEX/ARXML text and converts
-    /// to the driver's config format.
+    /// Opens the channel with the cluster configuration of a parsed
+    /// FlexRay database.
+    pub fn open_rx_with_db(index: i32, db: &crate::fr_db::FrDb) -> Result<FlexRayChannel, String> {
+        Self::open_rx(index, &config_from_db(&db.params))
+    }
+
+    /// Opens the channel with a FIBEX/ARXML-parsed cluster configuration:
+    /// parses `fibex_text` and applies it.
     pub fn open_rx_with_fibex(
         index: i32,
         fibex_text: &str,
     ) -> Result<FlexRayChannel, String> {
-        let (params, _frames) = crate::log::fr_cluster::parse_fibex(fibex_text)
-            .ok_or("FIBEX 文件不包含 FlexRay 集群参数")?;
-        let config = config_from_fibex(&params);
-        Self::open_rx(index, &config)
+        let db = crate::fr_db::FrDb::parse(fibex_text)?;
+        Self::open_rx_with_db(index, &db)
     }
 
     /// Opens the channel and applies the cluster configuration. RX-only:

@@ -13,6 +13,7 @@ mod core_loop;
 mod dbc;
 mod decode;
 mod export;
+mod fr_db;
 mod generator;
 mod hw;
 mod load;

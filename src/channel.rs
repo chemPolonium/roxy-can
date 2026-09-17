@@ -287,16 +287,35 @@ impl App {
         }
     }
 
-    /// Opens a FIBEX/ARXML cluster-description picker; a pick attaches
-    /// the FlexRay RX-only watch to the given Vector channel.
+    /// Opens a FIBEX/ARXML cluster-description picker; a pick parses the
+    /// database (refusing broken files outright), keeps the display copy
+    /// and attaches the FlexRay RX-only watch to the Vector channel.
     pub fn pick_fibex_for(&mut self, channel_index: i32) {
-        if let Some(p) = rfd::FileDialog::new()
+        let Some(p) = rfd::FileDialog::new()
             .set_title("Open FlexRay cluster description")
             .add_filter("Cluster descriptions", &["xml", "arxml", "fibex"])
             .pick_file()
-        {
-            self.set_fr_watch(Some(channel_index), &p.to_string_lossy());
+        else {
+            return;
+        };
+        let path = p.to_string_lossy().into_owned();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            self.status = format!("FIBEX 读取失败: {path}");
+            return;
+        };
+        match crate::fr_db::FrDb::parse(&text) {
+            Ok(db) => {
+                self.fr_db = Some(std::sync::Arc::new(db));
+                self.set_fr_watch(Some(channel_index), &path);
+            }
+            Err(e) => self.status = format!("FlexRay 描述解析失败: {e}"),
         }
+    }
+
+    /// Detaches the FlexRay watch and forgets its display database.
+    pub fn detach_fr_watch(&mut self) {
+        self.fr_db = None;
+        self.set_fr_watch(None, "");
     }
 
     /// Attaches one more DBC file to the bus as an extra database (the

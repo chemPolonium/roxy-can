@@ -30,3 +30,6 @@ serde_json = "1.0"
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 memmap2 = "0.9"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# FlexRay database parsing (FIBEX / AUTOSAR ARXML), namespaced XML without
+# a schema step -- the same parser roxy-fibex uses.
+roxmltree = "0.21"

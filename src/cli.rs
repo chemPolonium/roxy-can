@@ -463,27 +463,26 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
         Some(path) => {
             let text =
                 std::fs::read_to_string(path).map_err(|e| format!("FIBEX 读取失败: {e}"))?;
-            let (params, frames) = crate::log::fr_cluster::parse_fibex(&text)
-                .ok_or("该文件不包含 FlexRay 集群参数（无 <flexray:*> 参数标签）")?;
+            let db = crate::fr_db::FrDb::parse(&text)?;
+            let p = &db.params;
+            let slots: Vec<u32> = db.frames.iter().map(|f| f.triggering.slot_id).collect();
             s.push_str(&format!(
-                "cluster description {path}:\n  baudrate={} bit/s gMacroPerCycle={} gdMacrotick={} ns staticSlots={} payloadStatic={} minislots={}\n  frame triggerings: {} (first slots: {})\n",
-                params.baudrate,
-                params.g_macro_per_cycle,
-                params.gd_macrotick_ns,
-                params.g_number_of_static_slots,
-                params.g_payload_length_static,
-                params.g_number_of_minislots,
-                frames.len(),
-                frames
+                "cluster description {path}:\n  baudrate={} kbit/s cycle={} ms macrotick={} µs staticSlots={} payloadStatic={} minislots={}\n  frames: {} (slots: {})\n",
+                p.speed_kbps,
+                p.cycle_time_ms,
+                p.macrotick_duration_us,
+                p.number_of_static_slots,
+                p.payload_length_static,
+                p.number_of_minislots,
+                db.frames.len(),
+                slots
                     .iter()
                     .take(8)
-                    .map(|f| f.slot_id.to_string())
+                    .map(|s| s.to_string())
                     .collect::<Vec<_>>()
                     .join(", "),
             ));
-            Some(crate::hw::vector::flexray::config_from_fibex(
-                &params,
-            ))
+            Some(crate::hw::vector::flexray::config_from_db(p))
         }
         None => None,
     };
