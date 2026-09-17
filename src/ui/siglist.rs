@@ -77,9 +77,51 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         if ui.checkbox(format!("##sigvis{j}"), &mut vis) {
             signals_mut(app, kind)[j].visible = vis;
         }
+        // The Y-axis policy sits right after the checkbox, before the
+        // color chip: it is always at the same offset regardless of how
+        // long the signal name below grows, so nothing can cover it.
+        if let ListKind::Graphics(gi) = kind {
+            ui.same_line();
+            let mode = signals_mut(app, kind)[j].y_mode;
+            let menu_id = format!("Y scale##{gi}-{j}");
+            if ui.button(format!("{}##ym{j}", mode.short())) {
+                ui.open_popup(&menu_id);
+            }
+            let badge_hovered = ui.is_item_hovered();
+            // The initials alone leave too much to guess: hovering explains
+            // the current policy, and each menu entry explains itself.
+            // Gated on the badge itself -- `popup` submits no item when it
+            // is closed, and an ungated tooltip would latch onto whatever
+            // the previous row left hovered.
+            if badge_hovered {
+                ui.tooltip(|| {
+                    ui.text(format!("Y axis: {}", mode.label()));
+                    ui.text_disabled(mode.hint());
+                });
+            }
+            ui.popup(&menu_id, || {
+                for m in YMode::ALL {
+                    if ui.selectable_config(m.label()).selected(m == mode).build() {
+                        // Re-entering Lock re-captures whatever the axis
+                        // shows then, so any change drops the frozen range.
+                        let changed_key = {
+                            let sigs = signals_mut(app, kind);
+                            sigs[j].y_mode = m;
+                            format!("{:?}", sigs[j].key)
+                        };
+                        app.graphics[gi].y_locks.remove(&changed_key);
+                    }
+                    // imgui-rs tooltips draw unconditionally; without this
+                    // gate every entry's hint piles up at the mouse.
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(m.hint());
+                    }
+                }
+            });
+        }
         ui.same_line();
-        // The color chip follows the checkbox: a spacer reserves its cell
-        // and the rect lands inside it, so name and badge positions stay.
+        // The color chip follows: a spacer reserves its cell and the rect
+        // lands inside it, so name positions stay.
         let chip_x = if chip {
             let cx = ui.cursor_screen_pos()[0];
             ui.dummy([18.0, 0.0]);
@@ -123,57 +165,17 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
             });
         }
         // A State Tracker row's badge opens its custom state-band editor
-        // (CANoe's Value Definition); Graphics rows keep the Y-axis badge.
+        // (CANoe's Value Definition). It rides inline after the name: the
+        // list scrolls horizontally now, so nothing anchors to the panel
+        // edge any more.
         if let ListKind::State(wi) = kind {
-            ui.same_line_with_pos(super::graphics::PANEL_W - 30.0);
+            ui.same_line();
             if ui.button(format!("S##srule{j}")) {
                 app.state_rule_edit = Some((wi, key.clone()));
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text("Custom state bands: cuts, names, colors");
             }
-        }
-        // Each Graphics signal scales its own value axis; the badge shows
-        // the policy's initial and opens the mode menu. A Data table has no
-        // axis, so its rows stay bare.
-        if let ListKind::Graphics(gi) = kind {
-            let mode = signals_mut(app, kind)[j].y_mode;
-            let menu_id = format!("Y scale##{gi}-{j}");
-            ui.same_line_with_pos(super::graphics::PANEL_W - 44.0);
-            if ui.button(format!("{}##ym{j}", mode.short())) {
-                ui.open_popup(&menu_id);
-            }
-            let badge_hovered = ui.is_item_hovered();
-            // The initials alone leave too much to guess: hovering explains
-            // the current policy, and each menu entry explains itself.
-            // Gated on the badge itself -- `popup` submits no item when it
-            // is closed, and an ungated tooltip would latch onto whatever
-            // the previous row left hovered.
-            if badge_hovered {
-                ui.tooltip(|| {
-                    ui.text(format!("Y axis: {}", mode.label()));
-                    ui.text_disabled(mode.hint());
-                });
-            }
-            ui.popup(&menu_id, || {
-                for m in YMode::ALL {
-                    if ui.selectable_config(m.label()).selected(m == mode).build() {
-                        // Re-entering Lock re-captures whatever the axis
-                        // shows then, so any change drops the frozen range.
-                        let changed_key = {
-                            let sigs = signals_mut(app, kind);
-                            sigs[j].y_mode = m;
-                            format!("{:?}", sigs[j].key)
-                        };
-                        app.graphics[gi].y_locks.remove(&changed_key);
-                    }
-                    // imgui-rs tooltips draw unconditionally; without this
-                    // gate every entry's hint piles up at the mouse.
-                    if ui.is_item_hovered() {
-                        ui.tooltip_text(m.hint());
-                    }
-                }
-            });
         }
         if let Some(cx) = chip_x {
             dl.add_rect([cx + 3.0, p[1] + 4.0], [cx + 13.0, p[1] + 14.0], color)

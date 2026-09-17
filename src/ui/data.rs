@@ -44,6 +44,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
 
     ui.child_window("sig_panel")
         .size([PANEL_W, avail[1]])
+        .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
         .build(ui, || left_panel(app, ui, i));
 
     ui.same_line();

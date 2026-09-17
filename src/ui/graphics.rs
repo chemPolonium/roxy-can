@@ -320,8 +320,11 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.separator();
     let avail = ui.content_region_avail();
 
+    // Horizontal scrollbar: a long signal name extends the rows past the
+    // panel instead of running under the right-side widgets.
     ui.child_window("sig_panel")
         .size([PANEL_W, avail[1]])
+        .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
         .build(ui, || left_panel(app, ui, i));
 
     ui.same_line();
