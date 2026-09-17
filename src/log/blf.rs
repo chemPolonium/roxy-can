@@ -53,6 +53,10 @@ const OBJ_CAN_MESSAGE2: u32 = 86;
 const OBJ_CAN_FD_MESSAGE: u32 = 100;
 const OBJ_CAN_FD_MESSAGE_64: u32 = 101;
 const OBJ_CAN_ERROR_EXT: u32 = 73;
+/// FlexRay receive objects (the vector-blf ObjectType enum): CANoe 12
+/// writes the Ex form.
+const OBJ_FR_RCVMESSAGE: u32 = 50;
+const OBJ_FR_RCVMESSAGE_EX: u32 = 66;
 
 /// Object-header flag values steering the timestamp interpretation. Vector's
 /// reference reader treats `flags == 1` as 10 µs ticks and *anything else* as
@@ -91,6 +95,11 @@ pub struct BlfStream {
     duration: Option<u64>,
     describe: String,
     pending: VecDeque<CanFrame>,
+    /// FlexRay receive objects encountered while reading containers for
+    /// CAN frames. Delivered via `poll_fr_rows`; dropped on seek, where
+    /// rows before the new position are gone and rows after re-appear as
+    /// the stream re-reads.
+    fr_pending: VecDeque<crate::trace::FrRow>,
     /// Ascending `(rebased t_us, container byte offset)` index, grown as
     /// containers are read. See [`Self::note_checkpoint`].
     checkpoints: Vec<(u64, usize)>,
@@ -140,6 +149,7 @@ impl BlfStream {
             duration,
             describe,
             pending: VecDeque::new(),
+            fr_pending: VecDeque::new(),
             checkpoints: Vec::new(),
             t_base: None,
             t_last: 0,
@@ -202,7 +212,7 @@ impl BlfStream {
                 return true;
             }
         };
-        parse_container_objects(&decoded, &mut self.pending);
+        parse_container_objects(&decoded, &mut self.pending, &mut self.fr_pending);
         if let Some(first) = self.pending.front() {
             let raw = first.t_us;
             self.note_checkpoint(raw, container_start);
@@ -269,6 +279,7 @@ impl FrameStream for BlfStream {
         // Queue state is pure; `t_base` deliberately survives so a scrub does
         // not move the log's zero point under the playhead.
         self.pending.clear();
+        self.fr_pending.clear();
         loop {
             match self.peek_t() {
                 Some(t) if t >= target => return Some(t),
@@ -293,6 +304,13 @@ impl FrameStream for BlfStream {
 
     fn describe(&self) -> String {
         self.describe.clone()
+    }
+
+    fn poll_fr_rows(&mut self, out: &mut Vec<crate::trace::FrRow>) {
+        while let Some(mut r) = self.fr_pending.pop_front() {
+            r.t_us = self.rebase(r.t_us);
+            out.push(r);
+        }
     }
 }
 
@@ -355,7 +373,13 @@ fn next_object(bytes: &[u8], from: usize) -> Option<usize> {
 /// Decode every recognised object inside one container. Objects with
 /// unknown types are stepped over using `object_size`, so CANoe files
 /// that mix CAN with LIN/Ethernet still yield their CAN traffic.
-fn parse_container_objects(bytes: &[u8], out: &mut VecDeque<CanFrame>) {
+/// FlexRay receive objects land in `fr_out` — they are display-only and
+/// never enter the CAN pipeline.
+fn parse_container_objects(
+    bytes: &[u8],
+    out: &mut VecDeque<CanFrame>,
+    fr_out: &mut VecDeque<crate::trace::FrRow>,
+) {
     let mut pos = match next_object(bytes, 0) {
         Some(at) => at,
         None => return,
@@ -373,14 +397,23 @@ fn parse_container_objects(bytes: &[u8], out: &mut VecDeque<CanFrame>) {
             let body = &bytes[pos + header_len..next];
             let t_us = object_time(h.timestamp, h.flags);
             let decoded = match h.object_type {
-                OBJ_CAN_MESSAGE | OBJ_CAN_MESSAGE2 => decode_can_msg(body, t_us),
-                OBJ_CAN_FD_MESSAGE => decode_fd_message(body, t_us),
-                OBJ_CAN_FD_MESSAGE_64 => decode_fd_message_64(body, t_us, header_len, size),
-                OBJ_CAN_ERROR_EXT => Some(decode_error_ext(body, t_us)),
+                OBJ_CAN_MESSAGE | OBJ_CAN_MESSAGE2 => {
+                    decode_can_msg(body, t_us).map(FrOrCan::Can)
+                }
+                OBJ_CAN_FD_MESSAGE => decode_fd_message(body, t_us).map(FrOrCan::Can),
+                OBJ_CAN_FD_MESSAGE_64 => {
+                    decode_fd_message_64(body, t_us, header_len, size).map(FrOrCan::Can)
+                }
+                OBJ_CAN_ERROR_EXT => Some(FrOrCan::Can(decode_error_ext(body, t_us))),
+                OBJ_FR_RCVMESSAGE | OBJ_FR_RCVMESSAGE_EX => {
+                    decode_fr_rcv(h.object_type == OBJ_FR_RCVMESSAGE_EX, body, t_us)
+                }
                 _ => None,
             };
-            if let Some(f) = decoded {
-                out.push_back(f);
+            match decoded {
+                Some(FrOrCan::Can(f)) => out.push_back(f),
+                Some(FrOrCan::Fr(r)) => fr_out.push_back(r),
+                None => {}
             }
         }
         pos = match next_object(bytes, next) {
@@ -388,6 +421,55 @@ fn parse_container_objects(bytes: &[u8], out: &mut VecDeque<CanFrame>) {
             None => break,
         };
     }
+}
+
+/// One decoded object: a CAN frame or a FlexRay row. Keeps the shared
+/// object-walk a single match.
+enum FrOrCan {
+    Can(CanFrame),
+    Fr(crate::trace::FrRow),
+}
+
+/// `FlexRayVFrReceiveMsg` (50) and `FlexRayVFrReceiveMsgEx` (66): the
+/// slot/cycle address, the reception channel mask and the raw payload.
+/// Layouts per the vector-blf reference reader; both variants share the
+/// first fields and differ in where `dataBytes` starts (fixed 254 bytes
+/// in the plain form, `dataCount` bytes past a longer header in Ex).
+fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
+    if body.len() < 42 {
+        return None;
+    }
+    // channelMask: 0 invalid, 1 = A, 2 = B, 3 = both. FrRow's `ab` runs
+    // 0 = A / 1 = B / 2 = unknown.
+    let channel_mask = u16_at(body, 4);
+    let ab = match channel_mask {
+        1 => 0,
+        2 => 1,
+        _ => 2,
+    };
+    let frame_id = u16_at(body, 16);
+    let byte_count = u16_at(body, 22) as usize;
+    let data_count = u16_at(body, 24) as usize;
+    let (cycle, data_at) = if ex {
+        // Ex: cycle is u16 at 26, and the payload starts after the
+        // 26-byte reserved block (header ends at 84).
+        let cycle = u16_at(body, 26).min(63) as u8;
+        (cycle, 84)
+    } else {
+        (body[26], 44)
+    };
+    let avail = body.len().saturating_sub(data_at);
+    let len = byte_count.min(data_count).min(avail).min(254);
+    let payload = body[data_at..data_at + len].to_vec();
+    Some(FrOrCan::Fr(crate::trace::FrRow {
+        t_us,
+        ab,
+        slot: frame_id,
+        cycle,
+        payload,
+        header_crc: 0,
+        flags: 0,
+    }))
 }
 
 #[inline]
@@ -983,6 +1065,60 @@ pub(crate) mod tests {
 
     fn obj_header_v2(object_type: u32, ts_raw: u64, flags: u32, body: &[u8]) -> Vec<u8> {
         obj_header(2, object_type, ts_raw, flags, body)
+    }
+
+    /// A FlexRay receive object body laid out per the vector-blf
+    /// reference: channelMask at 4, frameId at 16, byteCount at 22,
+    /// dataCount at 24, cycle at 26 (u8 plain / u16 Ex), payload at 44
+    /// (plain) or 84 (Ex).
+    fn fr_rcv_body(ex: bool, mask: u16, slot: u16, cycle: u8, payload: &[u8]) -> Vec<u8> {
+        let data_at = if ex { 84 } else { 44 };
+        let mut b = vec![0u8; data_at + payload.len()];
+        b[4..6].copy_from_slice(&mask.to_le_bytes());
+        b[16..18].copy_from_slice(&slot.to_le_bytes());
+        b[22..24].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        b[24..26].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        if ex {
+            b[26..28].copy_from_slice(&(cycle as u16).to_le_bytes());
+        } else {
+            b[26] = cycle;
+        }
+        b[data_at..data_at + payload.len()].copy_from_slice(payload);
+        b
+    }
+
+    /// CANoe records FlexRay traffic as FR_RCVMESSAGE (50) /
+    /// FR_RCVMESSAGE_EX (66) objects beside the CAN frames; the reader
+    /// turns both variants into FR rows with the reception channel from
+    /// the channel mask, and honors a truncated dataCount.
+    #[test]
+    fn flexray_receive_objects_decode_into_rows() {
+        for (ex, mask, want_ab) in [
+            (false, 1u16, 0u8),
+            (false, 2, 1),
+            (false, 3, 2),
+            (true, 1, 0),
+            (true, 2, 1),
+        ] {
+            let body = fr_rcv_body(ex, mask, 33, 7, &[0xDE, 0xAD, 0xBE, 0xEF]);
+            let Some(FrOrCan::Fr(r)) = decode_fr_rcv(ex, &body, 5_000) else {
+                panic!("variant ex={ex} should decode");
+            };
+            assert_eq!(r.ab, want_ab, "channel mask {mask}");
+            assert_eq!(r.slot, 33);
+            assert_eq!(r.cycle, 7);
+            assert_eq!(r.payload, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+            assert_eq!(r.t_us, 5_000);
+        }
+
+        // A truncated payload (dataCount below byteCount) yields the
+        // bytes actually stored, per the format's contract.
+        let mut body = fr_rcv_body(false, 3, 33, 7, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        body[24..26].copy_from_slice(&2u16.to_le_bytes());
+        let Some(FrOrCan::Fr(r)) = decode_fr_rcv(false, &body, 0) else {
+            panic!("plain variant decodes");
+        };
+        assert_eq!(r.payload.len(), 2, "dataCount caps the payload");
     }
 
     /// A `LOG_CONTAINER` object: the 16 B base header is followed straight by

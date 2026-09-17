@@ -149,6 +149,10 @@ impl FrameSource for ReplaySource {
         self.stream.duration_us()
     }
 
+    fn poll_fr(&mut self, _now_us: u64, out: &mut Vec<crate::trace::FrRow>) {
+        self.stream.poll_fr_rows(out);
+    }
+
     fn next_deadline(&self, now_us: u64) -> Option<u64> {
         if self.done {
             return None;

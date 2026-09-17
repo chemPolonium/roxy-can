@@ -3327,6 +3327,11 @@ impl BusCore {
         self.loads_dirty = true;
         self.buf.clear();
         self.source.poll(now_us, &mut self.buf);
+        // FlexRay rows a BLF replay carries come through the same source;
+        // they skip the CAN pipeline and land in the FR ring directly.
+        let mut fr_replay: Vec<crate::trace::FrRow> = Vec::new();
+        self.source.poll_fr(now_us, &mut fr_replay);
+        let fr_replayed = !fr_replay.is_empty();
         // Send-now requests are intents recorded by commands; building the
         // frames here stamps them with this step's clock, so a request that
         // waited out a pause never sends a pre-pause timestamp.
@@ -3422,7 +3427,10 @@ impl BusCore {
 
         // Steps that only received FlexRay frames publish too, or the FR
         // section would freeze until the next CAN arrival.
-        let mut fr_landed = false;
+        let mut fr_landed = fr_replayed;
+        for row in fr_replay {
+            self.ingest_fr_row(row);
+        }
 
         // Replay blocks stream their recorded traffic onto the same sim
         // clock the generator uses. Replay mode is excluded: the whole log

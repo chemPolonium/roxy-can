@@ -40,6 +40,11 @@ pub trait FrameStream: Send {
     fn describe(&self) -> String {
         String::new()
     }
+
+    /// Drains FlexRay rows the underlying container carried alongside its
+    /// CAN traffic (BLF FR_RCVMESSAGE objects). Containers without FR
+    /// events deliver nothing.
+    fn poll_fr_rows(&mut self, _out: &mut Vec<crate::trace::FrRow>) {}
 }
 
 /// One bus input. `Send` because stage 3 moves the whole core -- sources
@@ -98,4 +103,9 @@ pub trait FrameSource: Send {
     fn next_deadline(&self, _now_us: u64) -> Option<u64> {
         None
     }
+
+    /// FlexRay rows from a source that carries them (a BLF replay with
+    /// FR_RCVMESSAGE objects); delivered already paced like the CAN side.
+    /// The default source has none.
+    fn poll_fr(&mut self, _now_us: u64, _out: &mut Vec<crate::trace::FrRow>) {}
 }
