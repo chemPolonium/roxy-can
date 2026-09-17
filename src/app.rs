@@ -536,8 +536,10 @@ impl App {
             // Buses-window rename draft: (row, text) while the field is
             // being typed in, committed as a command on focus loss.
             bus_name_edit: None,
-            // The record file's stem, as the input box shows it. The
-            // recorder gets a copy when recording arms.
+            // The record draft: a file name, shown as-is in the toolbar
+            // input. The directory is implicit (the open project's
+            // Record/ folder, resolved when recording arms); the
+            // recorder receives the full path via `SetRecordPath`.
             record_path_buf: String::new(),
             // Toolbar combo: 0 = ASC, 1 = BLF. Decides the extension
             // `toggle_record` stamps onto the draft stem.
@@ -751,16 +753,39 @@ impl App {
     }
 
     pub fn toggle_record(&mut self) {
-        // The path the recorder derives its file from is the input box's
-        // current draft stamped with the combo-selected extension — the
-        // combo is the single source of truth for ASC vs BLF; the
-        // recorder just follows the extension it receives.
-        let stem = strip_record_ext(&self.record_path_buf);
+        // The input holds a file name (or an explicit path the user
+        // typed); the directory is implicit -- the open project's
+        // Record/ folder. The combo is the single source of truth for
+        // ASC vs BLF: its extension is stamped onto the stem, and the
+        // recorder follows whatever extension it receives.
+        let stem = strip_record_ext(self.record_path_buf.trim());
         let ext = if self.record_format == 1 { "blf" } else { "asc" };
-        self.send(crate::bus::BusCommand::SetRecordPath(format!(
-            "{stem}.{ext}"
-        )));
+        let path = self.record_full_path(&format!("{stem}.{ext}"));
+        self.send(crate::bus::BusCommand::SetRecordPath(path));
         self.send(crate::bus::BusCommand::ToggleRecord);
+    }
+
+    /// Resolves a record draft to the path the recorder derives its
+    /// file from. Relative names land in the open project's Record/
+    /// folder; absolute paths are honored exactly as typed; with no
+    /// project the name goes to the recorder unchanged (its own
+    /// "record" default sits beside the executable, as before).
+    fn record_full_path(&self, name: &str) -> String {
+        if std::path::Path::new(name).is_absolute() {
+            return name.to_string();
+        }
+        match self
+            .project_path
+            .as_ref()
+            .and_then(|p| p.parent())
+        {
+            Some(dir) => dir
+                .join("Record")
+                .join(if name.is_empty() { "record" } else { name })
+                .to_string_lossy()
+                .into_owned(),
+            None => name.to_string(),
+        }
     }
 
     pub fn pick_log(&mut self) {

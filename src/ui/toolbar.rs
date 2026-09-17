@@ -389,6 +389,9 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ui.input_text("##record", &mut app.record_path_buf)
                     .hint("record")
                     .build();
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("录制文件名（自动加日期后缀）：保存在工程目录 Record/ 下；填绝对路径则按它保存");
+                }
                 ui.same_line();
                 // The format combo decides ASC vs BLF; the extension is
                 // stamped onto the draft when Record arms (see

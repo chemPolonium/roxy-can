@@ -220,9 +220,10 @@ fn the_format_combo_picks_the_record_extension() {
     app.toggle_record();
 }
 
-/// The recording's default home follows the project: saving (or loading)
-/// a .rxproj points the draft at the project's Record/ folder; a draft
-/// the user typed themselves is left alone.
+/// The recording's default home follows the project: the toolbar input
+/// holds only the file name ("record"), and arming resolves it into the
+/// project's Record/ folder. A draft the user typed themselves is left
+/// alone, and an absolute path is honored exactly as typed.
 #[test]
 fn loading_a_project_points_the_record_draft_at_its_record_folder() {
     let dir = std::env::temp_dir().join("roxy_can_record_home");
@@ -230,19 +231,28 @@ fn loading_a_project_points_the_record_draft_at_its_record_folder() {
     let path = dir.join("net.rxproj");
     let mut app = App::headless();
     assert!(app.save_project(Some(path.clone())), "save writes the file");
-    let draft = app.record_path_buf.clone();
-    assert!(
-        draft.replace('\\', "/").ends_with("/Record/record"),
-        "draft retargeted on save: {draft}"
+    assert_eq!(
+        app.record_path_buf, "record",
+        "the draft shows the bare default name"
     );
 
-    // A fresh load from disk retargets the (reset) draft too.
+    // Arming resolves the name into the project's Record/ folder.
+    app.toggle_record();
+    assert!(app.recorder.recording);
+    let expected = std::path::Path::new(&dir)
+        .join("Record")
+        .join("record.asc")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let sent = app.recorder.record_path.replace('\\', "/");
+    assert_eq!(sent, expected, "relative name lands in Record/");
+    app.toggle_record();
+
+    // A fresh load from disk resets the draft to the default name too.
     let mut app = App::headless();
     app.open_project_path(&path);
-    assert!(
-        app.record_path_buf
-            .replace('\\', "/")
-            .ends_with("/Record/record"),
+    assert_eq!(
+        app.record_path_buf, "record",
         "draft retargeted on load: {}",
         app.record_path_buf
     );
@@ -254,6 +264,12 @@ fn loading_a_project_points_the_record_draft_at_its_record_folder() {
         app.record_path_buf, "D:/mylogs/custom",
         "Save As must not clobber a custom draft"
     );
+    app.toggle_record();
+    assert_eq!(
+        app.recorder.record_path, "D:/mylogs/custom.asc",
+        "absolute paths are honored as typed"
+    );
+    app.toggle_record();
     std::fs::remove_file(&path).ok();
 }
 

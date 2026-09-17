@@ -20,12 +20,16 @@ fn push_recent(list: &mut Vec<String>, path: String) {
     list.truncate(8);
 }
 
-/// Whether a record draft is still one of the tool's own defaults (empty,
-/// or already pointing at some project's `Record/record`): only those may
-/// be silently retargeted on project open/save.
+/// Whether a record draft is still one of the tool's own defaults
+/// (empty, the bare "record" name, or a legacy full path ending in a
+/// Record/record folder): only those may be silently retargeted on
+/// project open/save.
 fn app_record_draft_is_default(draft: &str) -> bool {
     let draft = draft.trim();
     if draft.is_empty() {
+        return true;
+    }
+    if draft.eq_ignore_ascii_case("record") {
         return true;
     }
     let norm = draft.replace('\\', "/").to_ascii_lowercase();
@@ -199,22 +203,14 @@ impl App {
         }
     }
 
-    /// Points the record draft at the project's `Record/` folder. The
-    /// recording's default home is next to the .rxproj, not the exe's
-    /// startup folder; a draft the user typed themselves is left alone.
+    /// Resets the record draft to its default file name. The recording
+    /// lands in the project's Record/ folder (resolved at arm time);
+    /// only the name shows in the toolbar input, and a draft the user
+    /// typed themselves is left alone.
     pub fn retarget_record_draft(&mut self) {
-        let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) else {
-            return;
-        };
-        let custom = !app_record_draft_is_default(&self.record_path_buf);
-        if custom {
-            return;
+        if app_record_draft_is_default(&self.record_path_buf) {
+            self.record_path_buf = "record".to_string();
         }
-        self.record_path_buf = dir
-            .join("Record")
-            .join("record")
-            .to_string_lossy()
-            .into_owned();
     }
 
     pub fn open_project_dialog(&mut self) {
