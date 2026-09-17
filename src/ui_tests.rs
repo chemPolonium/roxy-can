@@ -10,7 +10,8 @@
 //! (dialogs' Apply buttons) are driven by arming their draft state
 //! directly, the way a user's first frame would see it.
 
-use crate::app::App;
+use crate::app::{App, TraceRow};
+use crate::can::frame::CanFrame;
 use dear_imgui_rs::{ConfigFlags, Context, FontConfig, FontSource};
 use std::sync::Mutex;
 
@@ -390,6 +391,51 @@ fn script_editor_draws_with_highlighting() {
     });
     app.settle();
     frames(&mut app, &mut ctx, 3);
+}
+
+/// The Trace table draws the merged CAN + FlexRay row kinds -- FR rows
+/// carry the frame name from the display database and the right-click
+/// copy popup compiles. The producer (the FR watch drain) is
+/// hardware-bound, so the merged cache is injected directly; with the
+/// text gate frozen the cache survives the frames.
+#[test]
+fn trace_draws_merged_flexray_rows_without_panicking() {
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_trace_window();
+    app.fr_db = Some(std::sync::Arc::new(
+        crate::fr_db::FrDb::parse(include_str!("../assets/powertrain.fibex"))
+            .expect("fixture parses"),
+    ));
+    app.settle();
+    app.text_fresh = false;
+    app.trace_windows[0].rows = vec![
+        TraceRow::Can(CanFrame {
+            t_us: 4_000,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 2,
+            data: {
+                let mut d = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+                d[..2].copy_from_slice(&[0xAB, 0xCD]);
+                d
+            },
+            dir: crate::can::frame::Direction::Rx,
+            flags: crate::can::frame::FrameFlags::NONE,
+        }),
+        TraceRow::Fr(crate::trace::FrRow {
+            t_us: 5_000,
+            ab: 1,
+            slot: 3,
+            cycle: 4,
+            payload: vec![1, 2, 3],
+            header_crc: 0xBEEF,
+            flags: 0,
+        }),
+    ];
+    frames(&mut app, &mut ctx, 5);
 }
 
 /// The two armed editor popups render from their draft state across
