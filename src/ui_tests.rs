@@ -434,6 +434,12 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             header_crc: 0xBEEF,
             flags: 0,
         }),
+        TraceRow::FrSig {
+            t_us: 5_000,
+            slot: 3,
+            signal: "WheelSpeedFL".to_string(),
+            value: "3.5 km/h  (7h)".to_string(),
+        },
     ];
     frames(&mut app, &mut ctx, 5);
 }

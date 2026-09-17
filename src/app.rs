@@ -1184,6 +1184,7 @@ impl App {
         self.trace_windows[i].shown_t_us = newest;
         self.trace_windows[i].shown_count = self.snap.trace.len();
         let flt = self.trace_windows[i].filter_lens();
+        let fr_expand = self.trace_windows[i].fr_expand;
         // CAN and FlexRay rows interleave in one table, CANoe's Trace
         // shape: walk both newest-first lists taking whichever frame is
         // the more recent, so the merge is linear in the kept rows.
@@ -1219,6 +1220,23 @@ impl App {
                         rows.push(TraceRow::Fr((*r).clone()));
                         fi += 1;
                     }
+                }
+            }
+            // A FlexRay frame row expands into its decoded signal child
+            // rows, the CANoe trace shape, when the window asks and the
+            // watch's description database is loaded.
+            if fr_expand
+                && let Some(TraceRow::Fr(row)) = rows.last().cloned()
+                && let Some(db) = self.fr_db.as_ref()
+                && let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab)
+            {
+                for (name, value) in db.decode(frame, &row.payload) {
+                    rows.push(TraceRow::FrSig {
+                        t_us: row.t_us,
+                        slot: row.slot,
+                        signal: name,
+                        value,
+                    });
                 }
             }
         }

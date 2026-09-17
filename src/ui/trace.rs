@@ -188,6 +188,16 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             format!("DBC##tdbc{i}"),
             &mut app.trace_windows[i].dbc_only,
         );
+        ui.same_line();
+        // Expand FlexRay rows into their decoded signal children (needs
+        // the watch's description database).
+        ui.checkbox(
+            format!("FR 信号##tfrx{i}"),
+            &mut app.trace_windows[i].fr_expand,
+        );
+        if ui.is_item_hovered() {
+            ui.tooltip_text("FlexRay 帧下方展开解码后的信号值（需挂接带数据库的 FR 监听）");
+        }
         // Time window: two small numeric boxes in seconds -- empty means
         // unbounded on that side. Same parse semantics as the filter's
         // time-range check (blank/invalid = no bound).
@@ -396,6 +406,33 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 }
                 can_ctx = None;
             }
+            TraceRow::FrSig {
+                signal, value, ..
+            } => {
+                // A decoded signal child under its FR frame row.
+                ui.table_next_row();
+                if !ui.table_next_column() {
+                    continue;
+                }
+                ui.text("-");
+                ui.table_next_column();
+                ui.text("-");
+                ui.table_next_column();
+                ui.text("  ↳");
+                ui.same_line();
+                ui.text_colored([0.55, 0.8, 1.0, 1.0], signal);
+                ui.table_next_column();
+                ui.text("-");
+                ui.table_next_column();
+                ui.text("-");
+                ui.table_next_column();
+                ui.text("-");
+                ui.table_next_column();
+                ui.text_colored([0.75, 0.92, 1.0, 1.0], value);
+                ui.table_next_column();
+                ui.text("-");
+                can_ctx = None;
+            }
         }
         if let Some(f) = can_ctx {
             *CTX.lock().unwrap() = Some((i, f));
@@ -504,10 +541,12 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
     let bus = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.channel as u32,
         TraceRow::Fr(r) => 0x1000 + r.ab as u32,
+        TraceRow::FrSig { .. } => 0x1000 + 3,
     };
     let addr = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.id,
         TraceRow::Fr(r) => r.slot as u32,
+        TraceRow::FrSig { slot, .. } => *slot as u32,
     };
     let name = |r: &TraceRow| match r {
         TraceRow::Can(f) => app
@@ -515,22 +554,26 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
             .unwrap_or_default()
             .to_string(),
         TraceRow::Fr(_) => String::new(),
+        TraceRow::FrSig { signal, .. } => signal.clone(),
     };
     let len = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.len as usize,
         TraceRow::Fr(r) => r.payload.len(),
+        TraceRow::FrSig { .. } => 0,
     };
     let flags_rank = |r: &TraceRow| match r {
         TraceRow::Can(f) => (f.is_fd(), f.esi(), f.brs()),
-        TraceRow::Fr(_) => (false, false, false),
+        TraceRow::Fr(_) | TraceRow::FrSig { .. } => (false, false, false),
     };
     let payload = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.payload().to_vec(),
         TraceRow::Fr(r) => r.payload.clone(),
+        TraceRow::FrSig { .. } => Vec::new(),
     };
     let dir = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.dir as u8,
         TraceRow::Fr(_) => 0,
+        TraceRow::FrSig { .. } => 3,
     };
     let ord = match col {
         0 => a.t_us().cmp(&b.t_us()),

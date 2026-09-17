@@ -14,10 +14,20 @@ pub enum SigScope {
 /// One Trace row: a CAN frame or a FlexRay frame. The two share the
 /// Trace window's table, interleaved by time -- CANoe's Trace shape --
 /// while their storage and the rest of the CAN pipeline stay apart.
+/// `FrSig` is a decoded signal child row rendered indented under its FR
+/// frame row (only while the window's FR expansion is on).
 #[derive(Clone, Debug)]
 pub enum TraceRow {
     Can(crate::can::frame::CanFrame),
     Fr(crate::trace::FrRow),
+    FrSig {
+        /// The frame row's timestamp, so time sorting keeps children
+        /// adjacent to their parent.
+        t_us: u64,
+        slot: u16,
+        signal: String,
+        value: String,
+    },
 }
 
 impl TraceRow {
@@ -25,6 +35,7 @@ impl TraceRow {
         match self {
             TraceRow::Can(f) => f.t_us,
             TraceRow::Fr(r) => r.t_us,
+            TraceRow::FrSig { t_us, .. } => *t_us,
         }
     }
 }
@@ -136,6 +147,9 @@ pub struct TraceWin {
     /// range) is expanded. Session state; starts collapsed so the main
     /// toolbar stays short.
     pub filters_open: bool,
+    /// Whether FlexRay rows expand into decoded signal child rows
+    /// (needs the watch's description database). Session state.
+    pub fr_expand: bool,
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only.
@@ -516,6 +530,7 @@ impl App {
             time_from: String::new(),
             time_to: String::new(),
             filters_open: false,
+            fr_expand: false,
             rows: Vec::new(),
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
             shown_count: self.snap.trace.len(),
