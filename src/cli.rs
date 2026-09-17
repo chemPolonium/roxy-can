@@ -574,7 +574,8 @@ pub fn check_scripts(check: &ScriptCheck) -> Result<String, String> {
     } else {
         let mut table: Option<crate::dbc::SymbolTable> = None;
         for path in &check.dbcs {
-            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            let text = crate::dbc::read_file(std::path::Path::new(path))
+                .map_err(|e| format!("{path}: {e}"))?;
             let parsed =
                 crate::dbc::load_dbc_str(&text).map_err(|e| format!("{path}: {e}"))?;
             match &mut table {

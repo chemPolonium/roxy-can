@@ -2238,7 +2238,7 @@ impl BusCore {
             if path.is_empty() {
                 continue;
             }
-            match std::fs::read_to_string(path) {
+            match crate::dbc::read_file(std::path::Path::new(path)) {
                 Ok(content) => match crate::dbc::load_dbc_str(&content) {
                     Ok(table) => {
                         sums.push(content_sum(content.as_bytes()));
@@ -2364,7 +2364,7 @@ impl BusCore {
                 if path.is_empty() {
                     continue;
                 }
-                let Ok(content) = std::fs::read_to_string(path) else {
+                let Ok(content) = crate::dbc::read_file(std::path::Path::new(path)) else {
                     continue;
                 };
                 if content_sum(content.as_bytes()) != channel.dbc_sums[i] {

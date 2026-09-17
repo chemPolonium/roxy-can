@@ -8,6 +8,68 @@ use can_dbc::{
 use crate::can::frame::CanFrame;
 use crate::decode;
 
+/// Reads a DBC file's text. Vector-era tooling exports DBCs in the
+/// machine's ANSI codepage (GBK on Chinese systems) as often as UTF-8:
+/// try UTF-8 first, then transcode as GBK, and only lose bytes when the
+/// file is neither.
+pub fn read_file(path: &std::path::Path) -> std::io::Result<String> {
+    Ok(text_from_bytes(std::fs::read(path)?))
+}
+
+/// The text side of [`Self::read_file`], split out for tests.
+pub fn text_from_bytes(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes.clone()) {
+        Ok(s) => s,
+        Err(_) => gbk_to_utf8(&bytes)
+            .unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned()),
+    }
+}
+
+/// Transcodes GBK (Windows codepage 936) bytes to UTF-8, refusing rather
+/// than silently substituting when the bytes are not valid GBK.
+#[cfg(windows)]
+fn gbk_to_utf8(bytes: &[u8]) -> Option<String> {
+    const CP_GBK: u32 = 936;
+    const MB_ERR_INVALID_CHARS: u32 = 0x0008;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MultiByteToWideChar(
+            codepage: u32,
+            flags: u32,
+            src: *const u8,
+            src_len: i32,
+            dst: *mut u16,
+            dst_len: i32,
+        ) -> i32;
+    }
+    let len = i32::try_from(bytes.len()).ok()?;
+    unsafe {
+        let n = MultiByteToWideChar(
+            CP_GBK,
+            MB_ERR_INVALID_CHARS,
+            bytes.as_ptr(),
+            len,
+            std::ptr::null_mut(),
+            0,
+        );
+        if n <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; n as usize];
+        let written =
+            MultiByteToWideChar(CP_GBK, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, buf.as_mut_ptr(), n);
+        if written != n {
+            return None;
+        }
+        String::from_utf16(&buf).ok()
+    }
+}
+
+#[cfg(not(windows))]
+fn gbk_to_utf8(_bytes: &[u8]) -> Option<String> {
+    None
+}
+
 fn numeric(v: &NumericValue) -> f64 {
     match v {
         NumericValue::Uint(u) => *u as f64,
@@ -605,6 +667,30 @@ mod tests {
             dir: Direction::Rx,
             flags: FrameFlags::NONE,
         }
+    }
+
+    /// GBK-encoded DBCs (the ANSI export of Chinese-locale Vector tooling)
+    /// decode with their text intact: "温度;车速" in GBK bytes rides the
+    /// signal unit. A UTF-8 file passes through untouched.
+    #[test]
+    fn gbk_dbc_files_decode_with_chinese_names_intact() {
+        let mut gbk = b"VERSION \"\"\nBO_ 100 Engine: 8 ECU\n SG_ S : 0|8@1+ (1,0) [0|255] \"".to_vec();
+        gbk.extend_from_slice(&[0xCE, 0xC2, 0xB6, 0xC8, 0x3B, 0xB3, 0xB5, 0xCB, 0xD9]); // 温度;车速
+        gbk.extend_from_slice(b"\" ECU\n");
+        let text = text_from_bytes(gbk);
+        let db = load_dbc_str(&text).expect("the transcoded DBC parses");
+        assert_eq!(
+            db.messages[&(0x64, false)].signals[0].unit,
+            "温度;车速",
+            "GBK unit decoded"
+        );
+
+        // Valid UTF-8 Chinese text is never transcoded.
+        let utf8 =
+            "VERSION \"\"\nBO_ 100 Engine: 8 ECU\n SG_ S : 0|8@1+ (1,0) [0|255] \"温度\" ECU\n";
+        let text = text_from_bytes(utf8.as_bytes().to_vec());
+        let db = load_dbc_str(&text).expect("the utf-8 DBC parses");
+        assert_eq!(db.messages[&(0x64, false)].signals[0].unit, "温度");
     }
 
     /// Four messages exercising every branch of the cycle lookup: both
