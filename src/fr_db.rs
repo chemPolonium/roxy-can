@@ -841,6 +841,14 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         }
         fill_extra_params(&mut params, &get_u32, &get_f64);
     }
+    // SAMPLES-PER-MICROTICK lives per controller, outside the CLUSTER
+    // element, in Vector exports: fall back to the first occurrence in
+    // the whole document.
+    if params.p_samples_per_microtick == 0
+        && let Some(v) = text_of(&root, &["SAMPLES-PER-MICROTICK"]).and_then(|t| parse_u32(&t))
+    {
+        params.p_samples_per_microtick = v;
+    }
 
     // 7. Assemble PDUs and frames, resolving references. The
     // signal-directly-on-frame dialect (no PDU layer) synthesises a
@@ -1317,6 +1325,12 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
             params.offset_correction_start = v;
         }
         fill_extra_params(&mut params, &get_u32, &get_f64);
+    }
+    // Same document-level fallback as the FIBEX path.
+    if params.p_samples_per_microtick == 0
+        && let Some(v) = text_of(&root, &["SAMPLES-PER-MICROTICK"]).and_then(|t| parse_u32(&t))
+    {
+        params.p_samples_per_microtick = v;
     }
 
     // 6. ECUs.

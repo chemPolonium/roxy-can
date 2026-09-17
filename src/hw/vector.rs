@@ -1076,6 +1076,25 @@ mod tests {
         assert_eq!(cfg.baudrate, 0);
     }
 
+    /// The database → driver-config derivation: the CANoe demo cluster
+    /// (3636 macroticks × 1.375 µs = 5 ms cycle, 10 Mbit/s, sample
+    /// clock 0.0125 µs × 2 samples) must produce the exact numbers the
+    /// file declares, and the derived microtick ratio must be exact.
+    #[test]
+    fn config_from_db_derives_the_demo_cluster() {
+        let db = crate::fr_db::FrDb::parse(include_str!("../../assets/DemoFile_v3_FIBEX_3_0.xml"))
+            .expect("demo parses");
+        let cfg = config_from_db(&db.params);
+        assert_eq!(cfg.baudrate, 10_000_000);
+        assert_eq!(cfg.gd_macrotick, 1375, "1.375 µs in ns");
+        assert_eq!(cfg.g_macro_per_cycle, 3636, "from MACRO-PER-CYCLE");
+        assert_eq!(cfg.p_micro_per_macro_nom, 55, "1375 ns / 25 ns pdMicrotick");
+        assert_eq!(cfg.pd_microtick, 25, "0.0125 µs × 2 samples = 25 ns");
+        assert_eq!(cfg.g_number_of_static_slots, 60);
+        assert_eq!(cfg.g_payload_length_static, 21);
+        assert_eq!(cfg.p_channels, 3, "A+B both enabled");
+    }
+
     /// Live probe against the machine's real vxlapi driver: dump every
     /// channel's config fields, then run the fixed open path end to end
     /// -- init open, bitrate, activate -- on the first virtual channel,
