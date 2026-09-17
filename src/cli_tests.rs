@@ -195,11 +195,37 @@ fn usage_errors_name_their_flag() {
             &["--replay", "a.asc", "--profile", "ci"],
             "--profile` overlays a `--project`",
         ),
+        (&["--fibex"], "--fibex needs a value"),
+        (
+            &["--fibex", "cluster.arxml"],
+            "--fibex` belongs to `--vector-probe`",
+        ),
+        (
+            &["--replay", "a.asc", "--fibex", "cluster.arxml"],
+            "--fibex` belongs to `--vector-probe`",
+        ),
     ];
     for (args, needle) in cases {
         let err = parse_args(&flag_set(args)).unwrap_err();
         assert!(err.contains(needle), "`{err}` should mention `{needle}`");
     }
+}
+
+/// `--fibex` rides on `--vector-probe`: accepted there, carried into the
+/// probe for validation and the configured open.
+#[test]
+fn the_fibex_flag_travels_with_the_vector_probe() {
+    let cli = parse_args(&flag_set(&["--vector-probe", "--fibex", "cluster.arxml"])).unwrap();
+    let Cli::VectorProbe { fibex } = cli else {
+        panic!("expected a vector probe");
+    };
+    assert_eq!(fibex.as_deref(), Some("cluster.arxml"));
+
+    let cli = parse_args(&flag_set(&["--vector-probe"])).unwrap();
+    let Cli::VectorProbe { fibex } = cli else {
+        panic!("expected a vector probe");
+    };
+    assert!(fibex.is_none(), "no description given, none carried");
 }
 
 /// The profile rides on a project: accepted with one, stored for run().

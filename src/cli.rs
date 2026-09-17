@@ -24,8 +24,12 @@ pub enum Cli {
     KvaserProbe,
     /// List the Vector channels vxlapi sees with their bus types, and --
     /// when a FlexRay-capable channel is present -- open it RX-only and
-    /// drain it briefly: the FR-2 field diagnostic.
-    VectorProbe,
+    /// drain it briefly: the FR-2 field diagnostic. `fibex` names a
+    /// cluster description to validate and configure the channel from
+    /// instead of the zeroed probe config.
+    VectorProbe {
+        fibex: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -73,7 +77,10 @@ pub fn usage() -> &'static str {
   roxy-can --convert <in> <out>  transcode a log (.asc/.blf) to ASC
   roxy-can --kvaser-probe        list the Kvaser channels canlib sees
   roxy-can --vector-probe        list Vector channels with bus types; opens
-                                 a FlexRay channel rx-only when present
+                                 a FlexRay channel rx-only when present.
+                                 With --fibex, validates the cluster
+                                 description, configures the channel from
+                                 it and dumps the first event's raw bytes
 
 run options
   --replay <path>    log to replay (.asc or .blf)
@@ -91,6 +98,8 @@ run options
                      merged in order, first library wins on clashes)
   --node <name>      the DBC node name the checked scripts act as; turns
                      on the send-set and reverse implementation checks
+  --fibex <path>     FIBEX/ARXML cluster description for --vector-probe:
+                     parsed, reported, then applied to the RX-only open
   -h, --help         this text"
 }
 
@@ -107,6 +116,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut convert: Option<(String, String)> = None;
     let mut kvaser_probe = false;
     let mut vector_probe = false;
+    let mut fibex = None;
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -133,6 +143,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             }
             "--kvaser-probe" => kvaser_probe = true,
             "--vector-probe" => vector_probe = true,
+            "--fibex" => fibex = Some(value(args, &mut i, "--fibex")?),
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--dbc" => script_check.dbcs.push(value(args, &mut i, "--dbc")?),
             "--node" => script_check.node = Some(value(args, &mut i, "--node")?),
@@ -192,7 +203,12 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         if replay.is_some() || project.is_some() || profile.is_some() {
             return Err("`--vector-probe` runs on its own; drop the other run flags".to_string());
         }
-        return Ok(Cli::VectorProbe);
+        return Ok(Cli::VectorProbe { fibex });
+    }
+    if let Some(path) = &fibex {
+        return Err(format!(
+            "`--fibex` belongs to `--vector-probe`; got `{path}` alone"
+        ));
     }
     if replay.is_some() && project.is_some() {
         return Err("`--replay` and `--project` are mutually exclusive".to_string());
@@ -406,13 +422,28 @@ pub fn kvaser_probe() -> Result<String, String> {
     }
 }
 
+/// Opens a FlexRay channel for the probe: the FIBEX config when one was
+/// parsed, the zeroed probe config otherwise.
+fn open_probe_channel(
+    index: i32,
+    cfg: Option<&crate::hw::vector::flexray::XLfrClusterConfig>,
+) -> Result<crate::hw::vector::flexray::FlexRayChannel, String> {
+    match cfg {
+        Some(cfg) => crate::hw::vector::flexray::FlexRayChannel::open_rx(index, cfg),
+        None => crate::hw::vector::flexray::FlexRayChannel::open_rx(
+            index,
+            &crate::hw::vector::flexray::XLfrClusterConfig::default(),
+        ),
+    }
+}
+
 /// Lists the Vector channels vxlapi discovers with their bus types. When
 /// a FlexRay-capable channel is present (a VN7640 port), opens it
-/// RX-only with a zeroed cluster configuration and drains it for two
-/// seconds, printing every frame -- the FR-2 field diagnostic. The zero
-/// configuration is a probe, not a working setup: real reception needs
-/// the target network's cluster parameters.
-pub fn vector_probe() -> Result<String, String> {
+/// RX-only and drains it for two seconds, printing every frame -- the
+/// FR-2 field diagnostic. Without `fibex` the zeroed configuration is a
+/// probe, not a working setup; with `fibex` the description is parsed,
+/// reported and applied first, so real reception can work.
+pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     let channels = crate::hw::vector::enumerate()?;
     let mut s = format!("{} Vector channel(s):\n", channels.len());
     for c in &channels {
@@ -422,18 +453,52 @@ pub fn vector_probe() -> Result<String, String> {
         ));
     }
     let fr = crate::hw::vector::enumerate_flexray()?;
+    // One description file configures every probed channel; parse it
+    // once, up front, so a broken file refuses the whole probe before
+    // any driver call -- and so a user can validate a description with
+    // no FR hardware attached at all.
+    let fibex_cfg = match fibex {
+        Some(path) => {
+            let text =
+                std::fs::read_to_string(path).map_err(|e| format!("FIBEX 读取失败: {e}"))?;
+            let (params, frames) = crate::log::fr_cluster::parse_fibex(&text)
+                .ok_or("该文件不包含 FlexRay 集群参数（无 <flexray:*> 参数标签）")?;
+            s.push_str(&format!(
+                "cluster description {path}:\n  baudrate={} bit/s gMacroPerCycle={} gdMacrotick={} ns staticSlots={} payloadStatic={} minislots={}\n  frame triggerings: {} (first slots: {})\n",
+                params.baudrate,
+                params.g_macro_per_cycle,
+                params.gd_macrotick_ns,
+                params.g_number_of_static_slots,
+                params.g_payload_length_static,
+                params.g_number_of_minislots,
+                frames.len(),
+                frames
+                    .iter()
+                    .take(8)
+                    .map(|f| f.slot_id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+            Some(crate::hw::vector::flexray::config_from_fibex(
+                &params,
+            ))
+        }
+        None => None,
+    };
     if fr.is_empty() {
         s.push_str("no FlexRay-capable channel present\n");
         return Ok(s);
     }
     for c in &fr {
         s.push_str(&format!("opening ch{} rx-only...\n", c.index));
-            match crate::hw::vector::flexray::FlexRayChannel::open_rx(
-            c.index,
-            &crate::hw::vector::flexray::XLfrClusterConfig::default(),
-        ) {
+        match open_probe_channel(c.index, fibex_cfg.as_ref()) {
             Ok(mut ch) => {
-                s.push_str("  opened; draining 2 s with the zeroed cluster config\n");
+                let cfg_note = if fibex_cfg.is_some() {
+                    "with the FIBEX cluster config"
+                } else {
+                    "with the zeroed cluster config (probe only -- no VALID_CLUSTER_CFG means no frames)"
+                };
+                s.push_str(&format!("  opened; draining 2 s {cfg_note}\n"));
                 match ch.channel_config() {
                     Ok(cfg) => {
                         s.push_str(&format!(
@@ -446,7 +511,10 @@ pub fn vector_probe() -> Result<String, String> {
                             cfg.cluster.g_number_of_static_slots,
                             cfg.cluster.g_payload_length_static,
                         ));
-                        if cfg.status & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG == 0 {
+                        if cfg.status
+                            & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG
+                            == 0
+                        {
                             s.push_str("  note: no VALID_CLUSTER_CFG bit -- the driver holds no usable cluster config, frames will not arrive\n");
                         }
                     }
@@ -454,18 +522,33 @@ pub fn vector_probe() -> Result<String, String> {
                 }
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 let mut frames = 0usize;
+                let mut raw_dumped = false;
                 while std::time::Instant::now() < deadline {
-                    if let Some(f) = ch.try_read() {
-                        frames += 1;
-                        s.push_str(&format!(
-                            "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
-                            f.slot,
-                            f.cycle,
-                            f.payload.len(),
-                            f.header_crc
-                        ));
-                    } else {
-                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    match ch.try_read_with_raw() {
+                        Some((f, raw)) => {
+                            frames += 1;
+                            s.push_str(&format!(
+                                "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
+                                f.slot,
+                                f.cycle,
+                                f.payload.len(),
+                                f.header_crc
+                            ));
+                            // The first frame's raw header, so a real
+                            // session can pin down the unverified
+                            // offsets (reception channel A/B notably).
+                            if !raw_dumped {
+                                raw_dumped = true;
+                                s.push_str(&format!(
+                                    "  first event, raw bytes 0..64 (known: size@0 tag@4 flags@32 headerCRC@34 slot@36 cycle@38 len@39 data@40):\n    {:02x?}\n    {:02x?}\n",
+                                    &raw[..32],
+                                    &raw[32..],
+                                ));
+                            }
+                        }
+                        None => {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
                     }
                 }
                 s.push_str(&format!("  drained {frames} frame(s)\n"));

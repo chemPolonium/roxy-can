@@ -538,9 +538,9 @@ fn main() {
             }
             return;
         }
-        Ok(cli::Cli::VectorProbe) => {
+        Ok(cli::Cli::VectorProbe { fibex }) => {
             cli::attach_parent_console();
-            match cli::vector_probe() {
+            match cli::vector_probe(fibex.as_deref()) {
                 Ok(report) => println!("{report}"),
                 Err(e) => {
                     eprintln!("error: {e}");

@@ -720,9 +720,81 @@ pub struct FlexRayChannel {
 
 /// FlexRay frame as received from the wire: slot/cycle address plus the
 /// raw payload, before any signal decoding.
-///
-/// (This is the second definition — the first is at the module top.
-/// Only one should exist in the final code.)
+/// Converts FIBEX-parsed cluster parameters into the driver's config
+/// struct: field-for-field, unmapped fields zeroed (zero means "driver
+/// default" to `xlFrSetConfiguration`).
+pub fn config_from_fibex(
+    params: &crate::log::fr_cluster::FrClusterParams,
+) -> XLfrClusterConfig {
+    XLfrClusterConfig {
+        bus_guardian_enable: 0,
+        baudrate: params.baudrate,
+        bus_guardian_tick: 0,
+        external_clock_correction_mode: 0,
+        g_cold_start_attempts: params.g_cold_start_attempts,
+        g_listen_noise: params.g_listen_noise,
+        g_macro_per_cycle: params.g_macro_per_cycle,
+        g_max_without_clock_correction_fatal: params.g_max_without_clock_correction_fatal,
+        g_max_without_clock_correction_passive: params.g_max_without_clock_correction_passive,
+        g_network_management_vector_length: params.g_network_management_vector_length,
+        g_number_of_minislots: params.g_number_of_minislots,
+        g_number_of_static_slots: params.g_number_of_static_slots,
+        g_offset_correction_start: params.g_offset_correction_start,
+        g_payload_length_static: params.g_payload_length_static,
+        g_sync_node_max: params.g_sync_node_max,
+        gd_action_point_offset: params.gd_action_point_offset,
+        gd_dynamic_slot_idle_phase: params.gd_dynamic_slot_idle_phase,
+        gd_macrotick: params.gd_macrotick_ns,
+        gd_minislot: params.gd_minislot,
+        gd_mini_slot_action_point_offset: params.gd_mini_slot_action_point_offset,
+        gd_nit: params.gd_nit,
+        gd_static_slot: params.gd_static_slot,
+        gd_symbol_window: params.gd_symbol_window,
+        gd_tss_transmitter: params.gd_tss_transmitter,
+        gd_wakeup_symbol_rx_idle: params.gd_wakeup_symbol_rx_idle,
+        gd_wakeup_symbol_rx_low: params.gd_wakeup_symbol_rx_low,
+        gd_wakeup_symbol_rx_window: params.gd_wakeup_symbol_rx_window,
+        gd_wakeup_symbol_tx_idle: params.gd_wakeup_symbol_tx_idle,
+        gd_wakeup_symbol_tx_low: params.gd_wakeup_symbol_tx_low,
+        p_allow_halt_due_to_clock: params.p_allow_halt_due_to_clock,
+        p_allow_passive_to_active: params.p_allow_passive_to_active,
+        p_channels: params.p_channels,
+        p_cluster_drift_damping: params.p_cluster_drift_damping,
+        p_decoding_correction: params.p_decoding_correction,
+        p_delay_compensation_a: params.p_delay_compensation_a,
+        p_delay_compensation_b: params.p_delay_compensation_b,
+        p_extern_offset_correction: params.p_extern_offset_correction,
+        p_extern_rate_correction: params.p_extern_rate_correction,
+        p_key_slot_used_for_startup: params.p_key_slot_used_for_startup,
+        p_key_slot_used_for_sync: params.p_key_slot_used_for_sync,
+        p_latest_tx: params.p_latest_tx,
+        p_macro_initial_offset_a: params.p_macro_initial_offset_a,
+        p_macro_initial_offset_b: params.p_macro_initial_offset_b,
+        p_max_payload_length_dynamic: params.p_max_payload_length_dynamic,
+        p_micro_initial_offset_a: params.p_micro_initial_offset_a,
+        p_micro_initial_offset_b: params.p_micro_initial_offset_b,
+        p_micro_per_cycle: params.p_micro_per_cycle,
+        p_micro_per_macro_nom: params.p_micro_per_macro_nom,
+        p_offset_correction_out: params.p_offset_correction_out,
+        p_rate_correction_out: params.p_rate_correction_out,
+        p_samples_per_microtick: params.p_samples_per_microtick,
+        p_single_slot_enabled: params.p_single_slot_enabled,
+        p_wakeup_channel: params.p_wakeup_channel,
+        p_wakeup_pattern: params.p_wakeup_pattern,
+        pd_accepted_startup_range: params.pd_accepted_startup_range,
+        pd_listen_timeout: params.pd_listen_timeout,
+        pd_max_drift: params.pd_max_drift,
+        pd_microtick: params.pd_microtick_ns,
+        gd_cas_rx_low_max: params.gd_cas_rx_low_max,
+        g_channels: params.g_channels,
+        v_extern_offset_control: params.v_extern_offset_control,
+        v_extern_rate_control: params.v_extern_rate_control,
+        p_channels_mts: params.p_channels_mts,
+        frame_preset_data: params.frame_preset_data,
+        reserved: [0; 15],
+    }
+}
+
 impl FlexRayChannel {
     /// Opens the channel with a FIBEX-parsed cluster configuration.
     /// Convenience wrapper that parses the FIBEX/ARXML text and converts
@@ -733,73 +805,7 @@ impl FlexRayChannel {
     ) -> Result<FlexRayChannel, String> {
         let (params, _frames) = crate::log::fr_cluster::parse_fibex(fibex_text)
             .ok_or("FIBEX 文件不包含 FlexRay 集群参数")?;
-        let config = XLfrClusterConfig {
-            bus_guardian_enable: 0,
-            baudrate: params.baudrate,
-            bus_guardian_tick: 0,
-            external_clock_correction_mode: 0,
-            g_cold_start_attempts: params.g_cold_start_attempts,
-            g_listen_noise: params.g_listen_noise,
-            g_macro_per_cycle: params.g_macro_per_cycle,
-            g_max_without_clock_correction_fatal: params.g_max_without_clock_correction_fatal,
-            g_max_without_clock_correction_passive: params.g_max_without_clock_correction_passive,
-            g_network_management_vector_length: params.g_network_management_vector_length,
-            g_number_of_minislots: params.g_number_of_minislots,
-            g_number_of_static_slots: params.g_number_of_static_slots,
-            g_offset_correction_start: params.g_offset_correction_start,
-            g_payload_length_static: params.g_payload_length_static,
-            g_sync_node_max: params.g_sync_node_max,
-            gd_action_point_offset: params.gd_action_point_offset,
-            gd_dynamic_slot_idle_phase: params.gd_dynamic_slot_idle_phase,
-            gd_macrotick: params.gd_macrotick_ns,
-            gd_minislot: params.gd_minislot,
-            gd_mini_slot_action_point_offset: params.gd_mini_slot_action_point_offset,
-            gd_nit: params.gd_nit,
-            gd_static_slot: params.gd_static_slot,
-            gd_symbol_window: params.gd_symbol_window,
-            gd_tss_transmitter: params.gd_tss_transmitter,
-            gd_wakeup_symbol_rx_idle: params.gd_wakeup_symbol_rx_idle,
-            gd_wakeup_symbol_rx_low: params.gd_wakeup_symbol_rx_low,
-            gd_wakeup_symbol_rx_window: params.gd_wakeup_symbol_rx_window,
-            gd_wakeup_symbol_tx_idle: params.gd_wakeup_symbol_tx_idle,
-            gd_wakeup_symbol_tx_low: params.gd_wakeup_symbol_tx_low,
-            p_allow_halt_due_to_clock: params.p_allow_halt_due_to_clock,
-            p_allow_passive_to_active: params.p_allow_passive_to_active,
-            p_channels: params.p_channels,
-            p_cluster_drift_damping: params.p_cluster_drift_damping,
-            p_decoding_correction: params.p_decoding_correction,
-            p_delay_compensation_a: params.p_delay_compensation_a,
-            p_delay_compensation_b: params.p_delay_compensation_b,
-            p_extern_offset_correction: params.p_extern_offset_correction,
-            p_extern_rate_correction: params.p_extern_rate_correction,
-            p_key_slot_used_for_startup: params.p_key_slot_used_for_startup,
-            p_key_slot_used_for_sync: params.p_key_slot_used_for_sync,
-            p_latest_tx: params.p_latest_tx,
-            p_macro_initial_offset_a: params.p_macro_initial_offset_a,
-            p_macro_initial_offset_b: params.p_macro_initial_offset_b,
-            p_max_payload_length_dynamic: params.p_max_payload_length_dynamic,
-            p_micro_initial_offset_a: params.p_micro_initial_offset_a,
-            p_micro_initial_offset_b: params.p_micro_initial_offset_b,
-            p_micro_per_cycle: params.p_micro_per_cycle,
-            p_micro_per_macro_nom: params.p_micro_per_macro_nom,
-            p_offset_correction_out: params.p_offset_correction_out,
-            p_rate_correction_out: params.p_rate_correction_out,
-            p_samples_per_microtick: params.p_samples_per_microtick,
-            p_single_slot_enabled: params.p_single_slot_enabled,
-            p_wakeup_channel: params.p_wakeup_channel,
-            p_wakeup_pattern: params.p_wakeup_pattern,
-            pd_accepted_startup_range: params.pd_accepted_startup_range,
-            pd_listen_timeout: params.pd_listen_timeout,
-            pd_max_drift: params.pd_max_drift,
-            pd_microtick: params.pd_microtick_ns,
-            gd_cas_rx_low_max: params.gd_cas_rx_low_max,
-            g_channels: params.g_channels,
-            v_extern_offset_control: params.v_extern_offset_control,
-            v_extern_rate_control: params.v_extern_rate_control,
-            p_channels_mts: params.p_channels_mts,
-            frame_preset_data: params.frame_preset_data,
-            reserved: [0; 15],
-        };
+        let config = config_from_fibex(&params);
         Self::open_rx(index, &config)
     }
 
@@ -879,6 +885,15 @@ impl FlexRayChannel {
     /// Takes one FlexRay frame off the queue. Start-cycle and other
     /// non-frame events are skipped; `None` when the queue is drained.
     pub fn try_read(&mut self) -> Option<FrFrame> {
+        self.try_read_with_raw().map(|(f, _)| f)
+    }
+
+    /// Like `try_read`, but also hands back the event's first 64 raw
+    /// bytes -- the diagnostic dump `--vector-probe` prints for the
+    /// first received frame, so a real session pins down the fields the
+    /// header layout left unverified (the reception channel A/B lives
+    /// somewhere in there).
+    pub fn try_read_with_raw(&mut self) -> Option<(FrFrame, [u8; 64])> {
         let lib = Vxlapi::lib()?;
         loop {
             let mut ev = [0u8; FR_EVENT_SIZE];
@@ -887,7 +902,9 @@ impl FlexRayChannel {
                 return None;
             }
             if let Some(frame) = parse_fr_event(&ev) {
-                return Some(frame);
+                let mut head = [0u8; 64];
+                head.copy_from_slice(&ev[..64]);
+                return Some((frame, head));
             }
         }
     }
