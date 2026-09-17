@@ -444,7 +444,12 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                     .pick_file();
                 if let Some(p) = picked {
                     let path = p.to_string_lossy().into_owned();
-                    match std::fs::read_to_string(&path) {
+                    // GBK-encoded scripts (ANSI tooling with Chinese
+                    // comments) decode through the same fallback as DBCs.
+                    match std::fs::read(&path)
+                        .map_err(|e| e.to_string())
+                        .map(crate::dbc::text_from_bytes)
+                    {
                         Ok(src) => {
                             if let Some(editor) = app.editors.get_mut(&id) {
                                 let _ = editor.set_text(&src);
