@@ -344,10 +344,12 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     // and its send/receive facts; center = the editor, Apply/Save/Load
     // and the log; right = the insertable palette (functions, SysVars,
     // every message the bus declares). All three fill the remaining
-    // height.
+    // height. The center width is explicit: a fill-everything middle
+    // child would push the palette past the window edge.
     let avail = ui.content_region_avail();
     const LEFT_W: f32 = 160.0;
     const PALETTE_W: f32 = 190.0;
+    let main_w = (avail[0] - LEFT_W - PALETTE_W - 16.0).max(240.0);
 
     // Left: outline + facts.
     ui.child_window(format!("##eleft{id}"))
@@ -357,9 +359,9 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
 
     ui.same_line();
 
-    // Right main area: source + Apply/Save/Load + log.
+    // Center main area: source + Apply/Save/Load + log.
     ui.child_window(format!("##emain{id}"))
-        .size([0.0, avail[1]])
+        .size([main_w, avail[1]])
         .build(ui, || {
             // The widget reports whether its text changed this frame;
             // only then do the facts need re-deriving.
