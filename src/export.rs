@@ -1,6 +1,7 @@
 use crate::app::{App, MessageAgg};
 use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
+use crate::workspace::SigScope;
 impl App {
     /// Exports the frames that pass the given Trace window's filter as
     /// ASC. Frames the ring archived to disk (the ones the live view
@@ -190,6 +191,46 @@ impl App {
                 a.flags.tag(),
                 data
             ));
+        }
+        // FlexRay slots ride the same CSV, after the CAN rows, matching
+        // the on-screen table (window text filter matches names/slots).
+        if matches!(scope, SigScope::All) && !dbc_only {
+            for agg in &self.snap.fr_aggs {
+                let name = self
+                    .fr_db
+                    .as_ref()
+                    .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab))
+                    .map(|f| f.name.clone())
+                    .unwrap_or_default();
+                if !filter.is_empty()
+                    && !format!("slot {}", agg.slot).contains(&filter)
+                    && !agg.slot.to_string().contains(&filter)
+                    && !name.to_lowercase().contains(&filter)
+                {
+                    continue;
+                }
+                let cycle = if agg.count > 1 {
+                    agg.cycle_us / 1000.0
+                } else {
+                    0.0
+                };
+                let data: String = agg
+                    .payload
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                s.push_str(&format!(
+                    "FR,{},{},{},{},{cycle:.3},{},{},{}\n",
+                    agg.slot,
+                    name,
+                    "Rx",
+                    agg.count,
+                    agg.payload.len(),
+                    "-",
+                    data
+                ));
+            }
         }
         self.write_export(path, s);
     }
