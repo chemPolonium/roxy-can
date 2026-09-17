@@ -132,7 +132,14 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             if row.signals.is_empty() {
                 ui.table_next_row();
                 ui.table_next_column();
-                ui.text("   (not in DBC)");
+                // FlexRay rows are not DBC-declared by definition; the
+                // empty case there means the watch has no description
+                // database to decode with.
+                if row.label.starts_with("FR slot") {
+                    ui.text("   （无描述文件，无法解码信号）");
+                } else {
+                    ui.text("   (not in DBC)");
+                }
             } else {
                 for (name, value) in &row.signals {
                     ui.table_next_row();
