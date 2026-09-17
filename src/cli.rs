@@ -437,22 +437,24 @@ fn open_probe_channel(
     }
 }
 
-/// Lists the Vector channels vxlapi discovers with their bus types. When
-/// a FlexRay-capable channel is present (a VN7640 port), opens it
-/// RX-only and drains it for two seconds, printing every frame -- the
-/// FR-2 field diagnostic. Without `fibex` the zeroed configuration is a
-/// probe, not a working setup; with `fibex` the description is parsed,
-/// reported and applied first, so real reception can work.
+/// Lists the Vector channels vxlapi discovers with their raw capability
+/// bits, then honestly tests FlexRay support: portal devices (VN7640...)
+/// mux protocols per connector and `xlGetDriverConfig`'s bits do not
+/// always tell the truth, so every channel gets an RX-only open attempt.
+/// Channels that open get their cluster config read and -- when they
+/// look usable (FR bit reported or a valid cluster config) -- a
+/// two-second drain with the first event's raw bytes dumped. `fibex`
+/// parses and applies a cluster description first, so a real reception
+/// setup can be pre-flighted.
 pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     let channels = crate::hw::vector::enumerate()?;
     let mut s = format!("{} Vector channel(s):\n", channels.len());
     for c in &channels {
         s.push_str(&format!(
-            "  ch{}: {} [can:{} flexray:{}]\n",
-            c.index, c.name, c.can, c.flexray
+            "  ch{}: {} [caps=0x{:08X} can:{} flexray:{}]\n",
+            c.index, c.name, c.bus_caps, c.can, c.flexray
         ));
     }
-    let fr = crate::hw::vector::enumerate_flexray()?;
     // One description file configures every probed channel; parse it
     // once, up front, so a broken file refuses the whole probe before
     // any driver call -- and so a user can validate a description with
@@ -485,76 +487,82 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
         }
         None => None,
     };
-    if fr.is_empty() {
-        s.push_str("no FlexRay-capable channel present\n");
+
+    // The open scan: every channel, RX-only, with the FIBEX config when
+    // one was parsed (zeroed otherwise). A CAN-only channel fails its
+    // open here; nothing is drained yet.
+    s.push_str("FlexRay open scan (rx-only):\n");
+    let mut usable: Vec<i32> = Vec::new();
+    for c in &channels {
+        match open_probe_channel(c.index, fibex_cfg.as_ref()) {
+            Ok(ch) => {
+                let cfg = ch.channel_config().ok();
+                let valid = cfg.as_ref().is_some_and(|cfg| {
+                    cfg.status
+                        & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG
+                        != 0
+                });
+                let status_word = match &cfg {
+                    Some(cfg) => format!("status=0x{:08X}{}", cfg.status, if valid { " VALID_CLUSTER_CFG" } else { "" }),
+                    None => "config read failed".to_string(),
+                };
+                s.push_str(&format!("  ch{}: open OK, {status_word}\n", c.index));
+                if valid || c.flexray {
+                    usable.push(c.index);
+                }
+            }
+            Err(e) => s.push_str(&format!("  ch{}: {e}\n", c.index)),
+        }
+    }
+    if usable.is_empty() {
+        s.push_str("no channel usable for FlexRay reception (open failed everywhere, or no valid cluster config)\n");
+        if fibex_cfg.is_none() {
+            s.push_str("hint: pass --fibex <cluster description> so the channels can be configured for reception\n");
+        }
         return Ok(s);
     }
-    for c in &fr {
-        s.push_str(&format!("opening ch{} rx-only...\n", c.index));
-        match open_probe_channel(c.index, fibex_cfg.as_ref()) {
-            Ok(mut ch) => {
-                let cfg_note = if fibex_cfg.is_some() {
-                    "with the FIBEX cluster config"
-                } else {
-                    "with the zeroed cluster config (probe only -- no VALID_CLUSTER_CFG means no frames)"
-                };
-                s.push_str(&format!("  opened; draining 2 s {cfg_note}\n"));
-                match ch.channel_config() {
-                    Ok(cfg) => {
+
+    // Drain the usable channels, at most four: a machine whose every
+    // channel opens must not stall the probe for a minute.
+    s.push_str("draining usable channel(s), 2 s each:\n");
+    for index in usable.iter().take(4) {
+        s.push_str(&format!("ch{index}:\n"));
+        let Ok(mut ch) = open_probe_channel(*index, fibex_cfg.as_ref()) else {
+            s.push_str("  reopened failed (it opened during the scan) -- skipped\n");
+            continue;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut frames = 0usize;
+        let mut raw_dumped = false;
+        while std::time::Instant::now() < deadline {
+            match ch.try_read_with_raw() {
+                Some((f, raw)) => {
+                    frames += 1;
+                    s.push_str(&format!(
+                        "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
+                        f.slot,
+                        f.cycle,
+                        f.payload.len(),
+                        f.header_crc
+                    ));
+                    // The first frame's raw header, so a real session can
+                    // pin down the unverified offsets (reception channel
+                    // A/B notably).
+                    if !raw_dumped {
+                        raw_dumped = true;
                         s.push_str(&format!(
-                            "  channel cfg: status=0x{:08X} cfgMode={} baudrate={} gMacroPerCycle={} gdMacrotick={} staticSlots={} payloadStatic={}\n",
-                            cfg.status,
-                            cfg.cfg_mode,
-                            cfg.cluster.baudrate,
-                            cfg.cluster.g_macro_per_cycle,
-                            cfg.cluster.gd_macrotick,
-                            cfg.cluster.g_number_of_static_slots,
-                            cfg.cluster.g_payload_length_static,
+                            "  first event, raw bytes 0..64 (known: size@0 tag@4 flags@32 headerCRC@34 slot@36 cycle@38 len@39 data@40):\n    {:02x?}\n    {:02x?}\n",
+                            &raw[..32],
+                            &raw[32..],
                         ));
-                        if cfg.status
-                            & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG
-                            == 0
-                        {
-                            s.push_str("  note: no VALID_CLUSTER_CFG bit -- the driver holds no usable cluster config, frames will not arrive\n");
-                        }
-                    }
-                    Err(e) => s.push_str(&format!("  channel config read failed: {e}\n")),
-                }
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                let mut frames = 0usize;
-                let mut raw_dumped = false;
-                while std::time::Instant::now() < deadline {
-                    match ch.try_read_with_raw() {
-                        Some((f, raw)) => {
-                            frames += 1;
-                            s.push_str(&format!(
-                                "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
-                                f.slot,
-                                f.cycle,
-                                f.payload.len(),
-                                f.header_crc
-                            ));
-                            // The first frame's raw header, so a real
-                            // session can pin down the unverified
-                            // offsets (reception channel A/B notably).
-                            if !raw_dumped {
-                                raw_dumped = true;
-                                s.push_str(&format!(
-                                    "  first event, raw bytes 0..64 (known: size@0 tag@4 flags@32 headerCRC@34 slot@36 cycle@38 len@39 data@40):\n    {:02x?}\n    {:02x?}\n",
-                                    &raw[..32],
-                                    &raw[32..],
-                                ));
-                            }
-                        }
-                        None => {
-                            std::thread::sleep(std::time::Duration::from_millis(5));
-                        }
                     }
                 }
-                s.push_str(&format!("  drained {frames} frame(s)\n"));
+                None => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
             }
-            Err(e) => s.push_str(&format!("  {e}\n")),
         }
+        s.push_str(&format!("  drained {frames} frame(s)\n"));
     }
     Ok(s)
 }

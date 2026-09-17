@@ -38,12 +38,15 @@ fn ensure_hw_list(app: &mut App) -> Result<Vec<crate::hw::AnyChannelInfo>, Strin
     })
 }
 
-/// Enumerates the FlexRay-capable Vector channels once per session, on
-/// the same cache-or-probe pattern as the CAN list.
+/// Enumerates the Vector channels once per session, on the same
+/// cache-or-probe pattern as the CAN list. Portal devices (VN7640...)
+/// often do not report the FlexRay capability bit at all, so the FR
+/// section offers every channel -- the attach attempt is the real test,
+/// and its failure lands in the status line.
 fn ensure_fr_list(app: &mut App) -> Result<Vec<crate::hw::vector::ChannelInfo>, String> {
     let cached = app.fr_channels.clone();
     cached.unwrap_or_else(|| {
-        let fresh = crate::hw::vector::enumerate_flexray();
+        let fresh = crate::hw::vector::enumerate();
         app.fr_channels = Some(fresh.clone());
         fresh
     })
@@ -60,6 +63,7 @@ fn content(app: &mut App, ui: &Ui) {
     // machine-wide, not per bus.
     if ui.button("刷新通道##hwref") {
         app.hw_channels = None;
+        app.fr_channels = None;
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("重新枚举本机硬件通道（Kvaser / Vector）");

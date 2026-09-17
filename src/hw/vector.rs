@@ -254,6 +254,10 @@ pub struct ChannelInfo {
     pub name: String,
     pub can: bool,
     pub flexray: bool,
+    /// The raw `channelBusCapabilities` dword, kept for diagnostics:
+    /// muxed portal devices (VN7640...) report their protocol support in
+    /// ways a plain bit test misreads.
+    pub bus_caps: u32,
 }
 
 /// An open, activated Vector port for one CAN channel. Frames written
@@ -566,6 +570,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
                 },
                 can: bus_caps == 0 || bus_caps & XL_BUS_TYPE_CAN != 0,
                 flexray: is_fr,
+                bus_caps,
             });
         }
         (lib.close_driver)();
