@@ -11,6 +11,24 @@ pub enum SigScope {
     Manual,
 }
 
+/// One Trace row: a CAN frame or a FlexRay frame. The two share the
+/// Trace window's table, interleaved by time -- CANoe's Trace shape --
+/// while their storage and the rest of the CAN pipeline stay apart.
+#[derive(Clone, Debug)]
+pub enum TraceRow {
+    Can(crate::can::frame::CanFrame),
+    Fr(crate::trace::FrRow),
+}
+
+impl TraceRow {
+    pub fn t_us(&self) -> u64 {
+        match self {
+            TraceRow::Can(f) => f.t_us,
+            TraceRow::Fr(r) => r.t_us,
+        }
+    }
+}
+
 /// Which analysis window the Filter Selection popup edits.
 #[derive(Clone, Copy, PartialEq)]
 pub enum PopupTarget {
@@ -121,7 +139,7 @@ pub struct TraceWin {
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only.
-    pub(crate) rows: Vec<CanFrame>,
+    pub(crate) rows: Vec<TraceRow>,
     /// The newest frame timestamp this window has revealed. Rows stream in
     /// batches on the text gate (see [`crate::app::App::sync_trace_rows`])
     /// instead of churning every frame; `u64::MAX` means everything so far.
@@ -713,6 +731,47 @@ impl App {
             if !ok {
                 return false;
             }
+        }
+        true
+    }
+
+    /// The FlexRay side of the same filter lens. FR rows carry no id,
+    /// name, direction or frame kind, so the CAN-shaped filters hide
+    /// them rather than half-match: a specific bus scope, `Tx`, DBC
+    /// only, any text filter (plain or signal-value) and a frame-kind
+    /// pick all restrict the table to CAN. Payload search and the time
+    /// range do apply -- the bytes and the timestamp mean the same
+    /// thing on both buses.
+    pub fn trace_fr_match(&self, flt: &TraceFilter, r: &crate::trace::FrRow) -> bool {
+        if !matches!(flt.scope, SigScope::All) {
+            return false;
+        }
+        if flt.dir == 2 || flt.dbc_only || flt.flags_kind != 0 {
+            return false;
+        }
+        if !flt.filter.trim().is_empty() || !flt.value_conds.is_empty() {
+            return false;
+        }
+        let pat = flt.payload.replace(' ', "");
+        if !pat.is_empty()
+            && pat.len().is_multiple_of(2)
+            && let Ok(needle) = (0..pat.len() / 2)
+                .map(|i| u8::from_str_radix(&pat[i * 2..i * 2 + 2], 16))
+                .collect::<Result<Vec<u8>, _>>()
+            && !r.payload.windows(needle.len().max(1)).any(|w| w == needle)
+        {
+            return false;
+        }
+        let t_s = r.t_us as f64 / 1e6;
+        if let Ok(from) = flt.time_from.trim().parse::<f64>()
+            && t_s < from
+        {
+            return false;
+        }
+        if let Ok(to) = flt.time_to.trim().parse::<f64>()
+            && t_s > to
+        {
+            return false;
         }
         true
     }

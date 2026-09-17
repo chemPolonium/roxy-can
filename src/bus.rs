@@ -646,6 +646,9 @@ pub struct Snapshot {
     /// One record per (bus, id) seen this run, behind the Messages /
     /// Statistics views and their exports.
     pub aggs: Vec<MessageAgg>,
+    /// One record per FlexRay slot seen this run, slot-sorted -- the
+    /// Messages window's FR rows.
+    pub fr_aggs: Vec<crate::aggregate::FrSlotAgg>,
     /// One entry per live subscription: the scalar stats the Data window
     /// draws and the sampled history the curves read.
     pub subs: Vec<SubView>,
@@ -863,6 +866,8 @@ pub struct BusCore {
     pub(crate) fr_trace: crate::trace::FrRing,
     /// The FR ring as of the last publish, shared with snapshots.
     pub(crate) published_fr: Arc<Vec<crate::trace::FrRow>>,
+    /// Per-slot FlexRay tallies behind the Messages window's FR rows.
+    pub(crate) fr_aggs: HashMap<u16, crate::aggregate::FrSlotAgg>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -996,6 +1001,7 @@ impl BusCore {
             published_trace: Arc::new(crate::trace::TraceView::default()),
             fr_trace: crate::trace::FrRing::default(),
             published_fr: Arc::new(Vec::new()),
+            fr_aggs: HashMap::new(),
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -1576,13 +1582,36 @@ impl BusCore {
     }
 
     /// One FlexRay frame lands: stamped against the sim clock when the
-    /// source had no time of its own, then into the FR ring. Kept apart
-    /// from [`BusCore::ingest`] -- FR rows deliberately skip the CAN
-    /// aggregates, load rollups and subscriptions.
+    /// source had no time of its own, then into the FR ring and the
+    /// per-slot aggregates. Kept apart from [`BusCore::ingest`] -- FR
+    /// rows deliberately skip the CAN aggregates, load rollups and
+    /// subscriptions.
     pub(crate) fn ingest_fr_row(&mut self, mut row: crate::trace::FrRow) {
         if row.t_us == 0 {
             row.t_us = self.sim_t_us;
         }
+        let agg = self.fr_aggs.entry(row.slot).or_default();
+        // Only a strictly later timestamp marks a real cycle (seek /
+        // out-of-order rows), and the smoothing mirrors the CAN path.
+        if agg.count > 0 && row.t_us > agg.last_t_us {
+            let dt = (row.t_us - agg.last_t_us) as f64;
+            let prev = agg.cycle_us;
+            agg.cycle_us = if agg.count == 1 {
+                dt
+            } else {
+                agg.cycle_us * 0.9 + dt * 0.1
+            };
+            let dev = (dt - prev).abs();
+            agg.jitter_us = if agg.count == 1 {
+                dev
+            } else {
+                agg.jitter_us * 0.9 + dev * 0.1
+            };
+        }
+        agg.count += 1;
+        agg.last_t_us = row.t_us;
+        agg.ab = row.ab;
+        agg.payload = row.payload.clone();
         self.fr_trace.push(row, self.trace_limit);
     }
 
@@ -2053,6 +2082,12 @@ impl BusCore {
             recording: self.recorder.recording,
             status: None,
             aggs: self.aggs.values().copied().collect(),
+            fr_aggs: {
+                let mut rows: Vec<crate::aggregate::FrSlotAgg> =
+                    self.fr_aggs.values().cloned().collect();
+                rows.sort_by_key(|a| a.slot);
+                rows
+            },
             subs: self
                 .subs
                 .iter()
@@ -3026,6 +3061,7 @@ impl BusCore {
         self.publish_trace();
         self.frame_counter = 0;
         self.aggs.clear();
+        self.fr_aggs.clear();
         for load in &mut self.bus_loads {
             load.clear();
         }

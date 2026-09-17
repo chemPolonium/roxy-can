@@ -62,7 +62,7 @@ pub use crate::observe::{
 };
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
-    Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceWin, WindowKind,
+    Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceRow, TraceWin, WindowKind,
 };
 
 /// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot
@@ -1105,6 +1105,44 @@ impl App {
                 signals,
             });
         }
+        // FlexRay rows ride the same table, after the CAN rows: one row
+        // per slot the watch has seen. The same scope/DBC/text rules
+        // apply as in the Trace window -- a specific bus, DBC-only or a
+        // text filter restricts the table to CAN; the decimal filter
+        // text also matches a slot number.
+        if matches!(scope, SigScope::All) && !dbc_only {
+            for agg in &self.snap.fr_aggs {
+                if !filter.is_empty()
+                    && !format!("slot {}", agg.slot).contains(&filter)
+                    && !agg.slot.to_string().contains(&filter)
+                {
+                    continue;
+                }
+                let label = match agg.ab {
+                    0 => format!("FR slot {}  A", agg.slot),
+                    1 => format!("FR slot {}  B", agg.slot),
+                    _ => format!("FR slot {}", agg.slot),
+                };
+                rows.push(MsgRowText {
+                    label,
+                    bus: "FR".to_string(),
+                    dir: "Rx",
+                    count: agg.count.to_string(),
+                    cycle: if agg.count > 1 {
+                        format!(
+                            "{:.1} ±{:.1}",
+                            agg.cycle_us / 1000.0,
+                            agg.jitter_us / 1000.0
+                        )
+                    } else {
+                        "-".to_string()
+                    },
+                    flags: crate::can::frame::FrameFlags::NONE,
+                    data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
+                    signals: Vec::new(),
+                });
+            }
+        }
         let win = &mut self.msg_windows[i];
         win.text_keys = keys;
         win.text_rows = rows;
@@ -1128,12 +1166,41 @@ impl App {
         self.trace_windows[i].shown_t_us = newest;
         self.trace_windows[i].shown_count = self.snap.trace.len();
         let flt = self.trace_windows[i].filter_lens();
-        let mut rows: Vec<CanFrame> = Vec::with_capacity(1_024);
-        for f in self.trace_revealed(&self.trace_windows[i]) {
-            if self.trace_match_lens(&flt, f) {
-                rows.push(*f);
-                if rows.len() >= MAX_CACHED_ROWS {
-                    break;
+        // CAN and FlexRay rows interleave in one table, CANoe's Trace
+        // shape: walk both newest-first lists taking whichever frame is
+        // the more recent, so the merge is linear in the kept rows.
+        let can: Vec<_> = self
+            .trace_revealed(&self.trace_windows[i])
+            .filter(|f| self.trace_match_lens(&flt, f))
+            .collect();
+        let fr: Vec<_> = self
+            .snap
+            .fr_trace
+            .iter()
+            .rev()
+            .filter(|r| self.trace_fr_match(&flt, r))
+            .collect();
+        let mut rows: Vec<TraceRow> = Vec::with_capacity(1_024);
+        let (mut ci, mut fi) = (0usize, 0usize);
+        while rows.len() < MAX_CACHED_ROWS {
+            match (can.get(ci), fr.get(fi)) {
+                (None, None) => break,
+                (Some(_), None) => {
+                    rows.push(TraceRow::Can(*can[ci]));
+                    ci += 1;
+                }
+                (None, Some(_)) => {
+                    rows.push(TraceRow::Fr((*fr[fi]).clone()));
+                    fi += 1;
+                }
+                (Some(c), Some(r)) => {
+                    if c.t_us >= r.t_us {
+                        rows.push(TraceRow::Can(**c));
+                        ci += 1;
+                    } else {
+                        rows.push(TraceRow::Fr((*r).clone()));
+                        fi += 1;
+                    }
                 }
             }
         }
@@ -1141,6 +1208,7 @@ impl App {
         w.shown_count = rows.len();
         w.rows = rows;
     }
+
     /// Trace window `w`'s revealed frames, newest first: the whole buffer
     /// minus the not-yet-revealed tail beyond the watermark.
     pub(crate) fn trace_revealed<'a>(

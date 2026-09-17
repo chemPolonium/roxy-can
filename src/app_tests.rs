@@ -6587,7 +6587,7 @@ fn a_signal_value_condition_filters_the_trace() {
     app.text_fresh = true;
     app.sync_trace_rows(0);
     assert_eq!(app.trace_windows[0].rows.len(), 1, "only the >=200 frame");
-    assert_eq!(app.trace_windows[0].rows[0].t_us, 30_000);
+    assert_eq!(app.trace_windows[0].rows[0].t_us(), 30_000);
     app.stop();
 }
 

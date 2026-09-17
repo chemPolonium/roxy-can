@@ -39,3 +39,18 @@ impl MessageAgg {
         &self.data[..self.len as usize]
     }
 }
+
+/// Per-slot FlexRay aggregate behind the Messages window's FR rows.
+/// Cycle and jitter use the same EMA smoothing as [`MessageAgg`]; the
+/// payload is the last frame the slot carried.
+#[derive(Clone, Debug, Default)]
+pub struct FrSlotAgg {
+    pub slot: u16,
+    /// Reception channel: 0 = A, 1 = B, 2 = unknown.
+    pub ab: u8,
+    pub count: u64,
+    pub last_t_us: u64,
+    pub cycle_us: f64,
+    pub jitter_us: f64,
+    pub payload: Vec<u8>,
+}

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Mutex;
 
-use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H};
+use crate::app::{App, PopupTarget, SigScope, TraceRow, TOOLBAR_H};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
@@ -85,94 +85,10 @@ fn fmt_row(app: &App, f: &CanFrame) -> String {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
+    // CAN and FlexRay rows share the one table, interleaved by time --
+    // the row cache is a merged, filtered TraceRow list (see
+    // `App::sync_trace_rows`), so no separate FR section exists here.
     can_table(app, ui, i);
-    fr_section(app, ui, i);
-}
-
-/// The FlexRay watch section, under the CAN table: the FR ring's rows
-/// with the slot/cycle address spelled out. FR frames are a separate
-/// row kind -- no id, no name, no filters -- so they get their own
-/// collapsed-by-default table instead of overloading the CAN columns.
-fn fr_section(app: &mut App, ui: &Ui, i: usize) {
-    let rows = app.snap.fr_trace.clone();
-    let label = if app.snap.fr_dropped > 0 {
-        format!(
-            "FlexRay ({} 帧，早期裁掉 {} 帧)##fr{i}",
-            rows.len(),
-            app.snap.fr_dropped
-        )
-    } else if rows.is_empty() {
-        format!("FlexRay##fr{i}")
-    } else {
-        format!("FlexRay ({} 帧)##fr{i}", rows.len())
-    };
-    if !ui.collapsing_header(label, dear_imgui_rs::TreeNodeFlags::empty()) {
-        return;
-    }
-    let tbl_flags = TableFlags::BORDERS_INNER
-        | TableFlags::ROW_BG
-        | TableFlags::RESIZABLE
-        | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y;
-    let opts = TableOptions::from(tbl_flags).sizing_policy(TableSizingPolicy::StretchProp);
-    let Some(_table) = ui.begin_table_with_flags(format!("fr_table{i}"), 6, opts) else {
-        return;
-    };
-    ui.table_setup_column(
-        "Time",
-        TableColumnFlags::NONE,
-        Some(dear_imgui_rs::TableColumnWidth::fixed(76.0)),
-    );
-    ui.table_setup_column(
-        "FR",
-        TableColumnFlags::NONE,
-        Some(dear_imgui_rs::TableColumnWidth::fixed(42.0)),
-    );
-    // slot.cycle: up to 2047.63
-    ui.table_setup_column(
-        "Slot.Cyc",
-        TableColumnFlags::NONE,
-        Some(dear_imgui_rs::TableColumnWidth::fixed(76.0)),
-    );
-    ui.table_setup_column(
-        "Len",
-        TableColumnFlags::NONE,
-        Some(dear_imgui_rs::TableColumnWidth::fixed(36.0)),
-    );
-    ui.table_setup_column(
-        "Data",
-        TableColumnFlags::NONE,
-        Some(dear_imgui_rs::TableColumnWidth::stretch(1.4)),
-    );
-    ui.table_setup_column(
-        "HCRC",
-        TableColumnFlags::NONE,
-        Some(dear_imgui_rs::TableColumnWidth::fixed(64.0)),
-    );
-    ui.table_setup_scroll_freeze(0, 1);
-    ui.table_headers_row();
-
-    // Newest first, matching the CAN table's default order.
-    let clip = ListClipper::new(rows.len()).begin(ui);
-    for r in clip.iter() {
-        let row = &rows[rows.len() - 1 - r];
-        ui.table_next_row();
-        if !ui.table_next_column() {
-            continue;
-        }
-        ui.text(format!("{:.6}", row.t_us as f64 / 1e6));
-        ui.table_next_column();
-        ui.text_colored([0.55, 0.8, 1.0, 1.0], "[FR]");
-        ui.table_next_column();
-        ui.text(format!("{}.{}", row.slot, row.cycle));
-        ui.table_next_column();
-        ui.text(format!("{}", row.payload.len()));
-        ui.table_next_column();
-        let hex: String = row.payload.iter().map(|b| format!("{b:02X} ")).collect();
-        ui.text(hex.trim_end());
-        ui.table_next_column();
-        ui.text(format!("{:04X}", row.header_crc));
-    }
 }
 
 fn can_table(app: &mut App, ui: &Ui, i: usize) {
@@ -184,6 +100,21 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         "{matching} matching frames · ring holds {}",
         app.snap.trace_len
     ));
+    // The FlexRay watch's share of the table, when any FR frames exist:
+    // ring depth plus the head-trim count the FR ring dropped.
+    if !app.snap.fr_trace.is_empty() {
+        ui.same_line();
+        let fr_note = if app.snap.fr_dropped > 0 {
+            format!(
+                "· FlexRay {} 帧（早期裁掉 {}）",
+                app.snap.fr_trace.len(),
+                app.snap.fr_dropped
+            )
+        } else {
+            format!("· FlexRay {} 帧", app.snap.fr_trace.len())
+        };
+        ui.text_colored([0.55, 0.8, 1.0, 1.0], fr_note);
+    }
     // Head trims are accounted either way: with the archive they are
     // merely moved to disk (the export still covers them), without it
     // they are real loss.
@@ -363,48 +294,93 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // the (possibly very long) filtered row list.
     let clip = ListClipper::new(rows.len()).begin(ui);
     for r in clip.iter() {
-        let f = &rows[r];
+        let row = &rows[r];
         let mut hovered = false;
         ui.table_next_row();
-        if f.is_error() {
-            ui.table_set_row_bg1_color([0.55, 0.12, 0.12, 0.35]);
-        } else if f.is_remote() {
-            ui.table_set_row_bg1_color([0.35, 0.22, 0.55, 0.25]);
+        let can_ctx: Option<CanFrame>;
+        match row {
+            TraceRow::Can(f) => {
+                if f.is_error() {
+                    ui.table_set_row_bg1_color([0.55, 0.12, 0.12, 0.35]);
+                } else if f.is_remote() {
+                    ui.table_set_row_bg1_color([0.35, 0.22, 0.55, 0.25]);
+                }
+                if !ui.table_next_column() {
+                    continue;
+                }
+                ui.text(format!("{:.6}", f.t_us as f64 / 1e6));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(app.channel_name(f.channel));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(fmt_id(f));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                match app.message_name(f.channel, f.id) {
+                    Some(name) => ui.text(name),
+                    None => ui.text("-"),
+                }
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(format!("{}", f.len));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text_colored(flags_color(f.flags), f.flags.tag());
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(fmt_data(f));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                match f.dir {
+                    Direction::Rx => ui.text_colored([0.6, 0.65, 0.7, 1.0], "Rx"),
+                    Direction::Tx => ui.text_colored([1.0, 0.65, 0.2, 1.0], "Tx"),
+                }
+                hovered |= ui.is_item_hovered();
+                can_ctx = if hovered
+                    && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right)
+                {
+                    Some(*f)
+                } else {
+                    None
+                };
+            }
+            TraceRow::Fr(fr) => {
+                // A distinct cool tint keeps the FR stream readable inside
+                // the CAN rows; the reception channel rides the Bus cell.
+                ui.table_set_row_bg1_color([0.15, 0.35, 0.55, 0.20]);
+                if !ui.table_next_column() {
+                    continue;
+                }
+                ui.text(format!("{:.6}", fr.t_us as f64 / 1e6));
+                ui.table_next_column();
+                ui.text_colored(
+                    [0.55, 0.8, 1.0, 1.0],
+                    match fr.ab {
+                        0 => "FR A",
+                        1 => "FR B",
+                        _ => "FR",
+                    },
+                );
+                ui.table_next_column();
+                ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("{}.{}", fr.slot, fr.cycle));
+                ui.table_next_column();
+                ui.text("-");
+                ui.table_next_column();
+                ui.text(format!("{}", fr.payload.len()));
+                ui.table_next_column();
+                ui.text("-");
+                ui.table_next_column();
+                let hex: String =
+                    fr.payload.iter().map(|b| format!("{b:02X} ")).collect();
+                ui.text(hex.trim_end());
+                ui.table_next_column();
+                ui.text_colored([0.6, 0.65, 0.7, 1.0], "Rx");
+                can_ctx = None;
+            }
         }
-        if !ui.table_next_column() {
-            continue;
-        }
-        ui.text(format!("{:.6}", f.t_us as f64 / 1e6));
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        ui.text(app.channel_name(f.channel));
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        ui.text(fmt_id(f));
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        match app.message_name(f.channel, f.id) {
-            Some(name) => ui.text(name),
-            None => ui.text("-"),
-        }
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        ui.text(format!("{}", f.len));
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        ui.text_colored(flags_color(f.flags), f.flags.tag());
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        ui.text(fmt_data(f));
-        hovered |= ui.is_item_hovered();
-        ui.table_next_column();
-        match f.dir {
-            Direction::Rx => ui.text_colored([0.6, 0.65, 0.7, 1.0], "Rx"),
-            Direction::Tx => ui.text_colored([1.0, 0.65, 0.2, 1.0], "Tx"),
-        }
-        hovered |= ui.is_item_hovered();
-        if hovered && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right) {
-            *CTX.lock().unwrap() = Some((i, *f));
+        if let Some(f) = can_ctx {
+            *CTX.lock().unwrap() = Some((i, f));
             ui.open_popup(format!("trace_row_ctx{i}"));
         }
     }
@@ -488,20 +464,49 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     }
 }
 
-fn sort_frame(app: &App, col: usize, a: &CanFrame, b: &CanFrame, asc: bool) -> Ordering {
+fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> Ordering {
+    // Bus sort keeps FR rows together after every CAN bus; the address
+    // column is a CAN id or an FR slot, both u32s.
+    let bus = |r: &TraceRow| match r {
+        TraceRow::Can(f) => f.channel as u32,
+        TraceRow::Fr(r) => 0x1000 + r.ab as u32,
+    };
+    let addr = |r: &TraceRow| match r {
+        TraceRow::Can(f) => f.id,
+        TraceRow::Fr(r) => r.slot as u32,
+    };
+    let name = |r: &TraceRow| match r {
+        TraceRow::Can(f) => app
+            .message_name(f.channel, f.id)
+            .unwrap_or_default()
+            .to_string(),
+        TraceRow::Fr(_) => String::new(),
+    };
+    let len = |r: &TraceRow| match r {
+        TraceRow::Can(f) => f.len as usize,
+        TraceRow::Fr(r) => r.payload.len(),
+    };
+    let flags_rank = |r: &TraceRow| match r {
+        TraceRow::Can(f) => (f.is_fd(), f.esi(), f.brs()),
+        TraceRow::Fr(_) => (false, false, false),
+    };
+    let payload = |r: &TraceRow| match r {
+        TraceRow::Can(f) => f.payload().to_vec(),
+        TraceRow::Fr(r) => r.payload.clone(),
+    };
+    let dir = |r: &TraceRow| match r {
+        TraceRow::Can(f) => f.dir as u8,
+        TraceRow::Fr(_) => 0,
+    };
     let ord = match col {
-        0 => a.t_us.cmp(&b.t_us),
-        1 => a.channel.cmp(&b.channel),
-        2 => a.id.cmp(&b.id),
-        3 => {
-            let na = app.message_name(a.channel, a.id).unwrap_or("");
-            let nb = app.message_name(b.channel, b.id).unwrap_or("");
-            na.cmp(nb)
-        }
-        4 => a.len.cmp(&b.len),
-        5 => (a.is_fd(), a.esi(), a.brs()).cmp(&(b.is_fd(), b.esi(), b.brs())),
-        6 => a.payload().cmp(b.payload()),
-        _ => a.dir.cmp(&b.dir),
+        0 => a.t_us().cmp(&b.t_us()),
+        1 => bus(a).cmp(&bus(b)),
+        2 => addr(a).cmp(&addr(b)),
+        3 => name(a).cmp(&name(b)),
+        4 => len(a).cmp(&len(b)),
+        5 => flags_rank(a).cmp(&flags_rank(b)),
+        6 => payload(a).cmp(&payload(b)),
+        _ => dir(a).cmp(&dir(b)),
     };
     if asc { ord } else { ord.reverse() }
 }
