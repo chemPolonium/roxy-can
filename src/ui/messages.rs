@@ -81,12 +81,15 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
+    // No NO_CLIP here: this table freezes its header row, and a frozen-row
+    // table needs its per-cell clip rects -- with clipping switched off the
+    // body rows keep the first cell's rect, so every column after "Message"
+    // vanishes from the rows while the header still shows them.
     let tbl_flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
         | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y
-        | TableFlags::NO_CLIP;
+        | TableFlags::SCROLL_Y;
     let opts = TableOptions::from(tbl_flags).sizing_policy(TableSizingPolicy::StretchProp);
     let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, opts) else {
         return;
