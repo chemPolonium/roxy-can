@@ -299,9 +299,9 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
 
 /// Runs a replay or a project simulation on the manual drive against the
 /// real wall clock: the same `advance_clock` + `tick` lap the GUI's frame
-/// loop performs, at a 1 ms cadence. A late lap only batches frames
-/// (backfill covers the samples), so sleep granularity costs smoothness,
-/// never data.
+/// loop performs, at a 1 ms cadence. A late lap only batches frames (the
+/// stream drains everything due before the new playhead), so sleep
+/// granularity costs smoothness, never data.
 pub fn run(opts: &CliOpts) -> Result<String, String> {
     let mut app = App::headless();
     let replaying = opts.project.is_none();
@@ -441,7 +441,8 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
 /// Transcodes any readable log (ASC or BLF) into ASC: a pure stream
 /// transform with no bus, clock, or recorder involvement -- which is why
 /// the old "replay drops recording state" blocker does not apply. Frames
-/// cross with their own timestamps, classes, and payloads.
+/// cross with their own timestamps, classes, and payloads, and the file's
+/// FlexRay rows cross with them, so a mixed log stays mixed.
 pub fn convert_log(input: &str, output: &str) -> Result<String, String> {
     // Same-file conversion truncates the input while the stream may be
     // mmap-reading it -- refuse rather than corrupt.
@@ -454,18 +455,38 @@ pub fn convert_log(input: &str, output: &str) -> Result<String, String> {
         .map_err(|e| format!("log load failed: {e}"))?;
     let mut w =
         crate::log::AscWriter::new(output).map_err(|e| format!("open output failed: {e}"))?;
-    let mut n: u64 = 0;
-    while let Some(t) = stream.peek_t() {
-        let Some(f) = stream.next_frame() else {
-            break;
-        };
-        let _ = t;
-        w.write(&f).map_err(|e| format!("write failed: {e}"))?;
-        n += 1;
+    let (mut n, mut fr_n): (u64, u64) = (0, 0);
+    // Both sides are read in log order, so the earlier timestamp wins; that
+    // is what keeps a CAN and a FlexRay write interleaved as the input had them.
+    let mut buf = Vec::new();
+    loop {
+        let can_t = stream.peek_t();
+        let fr_t = stream.peek_fr_t();
+        match (can_t, fr_t) {
+            (None, None) => break,
+            (Some(t), fr) if fr.is_none_or(|f| t <= f) => {
+                let Some(f) = stream.next_frame() else { break };
+                w.write(&f).map_err(|e| format!("write failed: {e}"))?;
+                n += 1;
+            }
+            (Some(t), _) | (None, Some(t)) => {
+                buf.clear();
+                // `t` is the row `peek_fr_t` promised, so this always drains
+                // at least that one; equal timestamps go together.
+                stream.poll_fr_rows(t, &mut buf);
+                if buf.is_empty() {
+                    break;
+                }
+                for r in &buf {
+                    w.write_fr(r).map_err(|e| format!("write failed: {e}"))?;
+                }
+                fr_n += buf.len() as u64;
+            }
+        }
     }
     w.finish().map_err(|e| format!("close failed: {e}"))?;
     Ok(format!(
-        "converted {n} frame(s)\n  input : {input}\n  output: {output}"
+        "converted {n} frame(s) and {fr_n} FlexRay row(s)\n  input : {input}\n  output: {output}"
     ))
 }
 

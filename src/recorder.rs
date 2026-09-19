@@ -64,13 +64,16 @@ impl Recorder {
 
     /// FlexRay rows for the open recording. The record-id whitelist is a list
     /// of CAN `(id, extended)` pairs, so it cannot express a FlexRay slot and
-    /// deliberately does not gate these. Only the BLF backend has a FlexRay
-    /// object to write; an ASC recording skips them, because writing a line the
-    /// reader could not tell from a named one would corrupt the file.
+    /// deliberately does not gate these. A row that has no frame name loses it
+    /// in ASC, and every row comes back on bus 0 -- the log has no place for
+    /// either, exactly as in BLF.
     pub fn write_fr(&mut self, r: &crate::trace::FrRow) {
         match &mut self.writer {
+            Some(Backend::Asc(w)) => {
+                w.write_fr(r).ok();
+            }
             Some(Backend::Blf(w)) => w.write_fr(r),
-            Some(Backend::Asc(_)) | None => {}
+            None => {}
         }
     }
 

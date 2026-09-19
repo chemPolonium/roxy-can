@@ -102,6 +102,46 @@ impl AscWriter {
         }
     }
 
+    /// CANoe's FlexRay receive line: `<t> Fr RMSG <chIdx><?> <chA> <chB>
+    /// <slot> <cycle> <dir> [name] <byteCount> <dataCount> <data...>`.
+    /// Everything this tool stores is written. The version-specific register
+    /// dump CANoe puts between the direction token and the frame name is left
+    /// out -- the reader anchors on the two byte counts, so nothing depends on
+    /// it -- and the two tokens CANoe puts between `RMSG` and the channel flags
+    /// (a channel index and one value whose meaning the samples do not reveal)
+    /// are written as zeros. Counts and data bytes follow the header's
+    /// `base hex`.
+    pub fn write_fr(&mut self, r: &crate::trace::FrRow) -> std::io::Result<()> {
+        let t = r.t_us as f64 / 1e6;
+        let (ch_a, ch_b) = match r.ab {
+            2 => (1, 1),
+            1 => (0, 1),
+            _ => (1, 0),
+        };
+        // A frame name is one token in ASC; a name with spaces cannot be
+        // written without inventing a quoting scheme CANoe would not read.
+        let name = r
+            .name
+            .as_deref()
+            .filter(|n| !n.chars().any(char::is_whitespace))
+            .map(|n| format!("{n} "))
+            .unwrap_or_default();
+        let data: String = r
+            .payload
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let len = r.payload.len();
+        writeln!(
+            self.w,
+            "{t:.6} Fr RMSG  0 0 {ch_a} {ch_b} {:>3} {:>3} Rx {name}{len_hex} {len_hex} {data}",
+            r.slot,
+            r.cycle,
+            len_hex = format!("{len:X}"),
+        )
+    }
+
     pub fn finish(mut self) -> std::io::Result<()> {
         writeln!(self.w, "End TriggerBlock")?;
         self.w.flush()
@@ -188,52 +228,60 @@ fn parse_asc_row(raw: &str, base: &mut u32) -> Option<AscRow> {
 
 /// CANoe's FlexRay receive line:
 /// `<t> Fr RMSG <..> <chA> <chB> <slot> <cycle> <dir> <nums..> [name]
-///  <byteCount> <dataCount> <data bytes...>`
-/// The channel flags are separate 0/1 tokens for channel A and B; the
-/// frame name (when the logging config knows one) sits between the
-/// numeric register dump and the two byte counts. Data bytes use the
-/// file's declared base.
+///  <byteCount> <dataCount> <data bytes...> <trailing fields>`
+/// The channel flags are separate 0/1 tokens for channel A and B. The payload
+/// is found by its two byte counts -- the first pair of numbers in the file's
+/// base that is followed by that many decodable tokens -- rather than by "the
+/// first non-numeric token must be the name", so a line without a frame name
+/// parses as correctly as one with it. That is also what lets this tool write
+/// these lines itself. Data bytes use the file's declared base.
 fn parse_fr_rmsg(t_us: u64, toks: &[&str], base: u32) -> Option<crate::trace::FrRow> {
     let ch_a = toks.get(5)?.parse::<u8>().ok()?;
     let ch_b = toks.get(6)?.parse::<u8>().ok()?;
     let slot = toks.get(7)?.parse::<u16>().ok()?;
     let cycle = toks.get(8)?.parse::<u8>().ok()?;
-    // The direction token ends the fixed header; everything between it
-    // and the first non-numeric token is a register dump whose layout
-    // varies by CANoe version, so it is skipped wholesale.
+    // The direction token ends the fixed header; the register dump between it
+    // and the payload has a layout that varies by CANoe version.
     let dir_pos = (9..toks.len()).find(|&i| {
         matches!(
             toks[i].to_ascii_lowercase().as_str(),
             "tx" | "rx" | "txrq" | "tx req"
         )
     })?;
-    let mut i = dir_pos + 1;
-    let mut name = None;
-    while i < toks.len() {
-        match toks[i].parse::<u32>() {
-            Ok(_) => i += 1,
-            Err(_) => {
-                name = Some(toks[i].to_string());
-                i += 1;
-                break;
-            }
+    let mut counts = None;
+    for j in dir_pos + 1..toks.len().saturating_sub(1) {
+        // The counts are ordinary numbers of the file, so a `base hex` log
+        // states them in hex -- which is also what this tool writes.
+        let (Ok(byte_count), Ok(data_count)) = (
+            usize::from_str_radix(toks[j], base),
+            usize::from_str_radix(toks[j + 1], base),
+        ) else {
+            continue
+        };
+        if data_count > 254 || byte_count > 254 || toks.len() < j + 2 + data_count {
+            continue;
         }
-    }
-    let byte_count: usize = toks.get(i)?.parse().ok()?;
-    let data_count: usize = toks.get(i + 1)?.parse().ok()?;
-    // dataCount is what actually landed in the file; a truncated capture
-    // stores fewer bytes than the frame carried.
-    let len = byte_count.min(data_count).min(254);
-    let mut payload = Vec::with_capacity(len);
-    for tok in toks.iter().skip(i + 2) {
-        if payload.len() >= len {
+        // An empty payload is stated as `0 0`; a lone zero is some other field.
+        if data_count == 0 && byte_count != 0 {
+            continue;
+        }
+        if toks[j + 2..j + 2 + data_count]
+            .iter()
+            .all(|t| u8::from_str_radix(t, base).is_ok())
+        {
+            counts = Some((j, byte_count.min(data_count)));
             break;
         }
-        match u8::from_str_radix(tok, base) {
-            Ok(v) => payload.push(v),
-            Err(_) => break,
-        }
     }
+    let (count_pos, len) = counts?;
+    let name = toks[dir_pos + 1..count_pos]
+        .iter()
+        .find(|t| t.parse::<u32>().is_err())
+        .map(|t| t.to_string());
+    let payload: Vec<u8> = toks[count_pos + 2..count_pos + 2 + len]
+        .iter()
+        .filter_map(|t| u8::from_str_radix(t, base).ok())
+        .collect();
     let ab = match (ch_a > 0, ch_b > 0) {
         (true, true) => 2u8, // both channels
         (false, true) => 1,  // B
@@ -522,6 +570,7 @@ pub fn asc_tail_duration_us(bytes: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trace::FrRow;
 
     /// The user's real CANoe recording of the FlexRay demo cluster: a
     /// pure-FlexRay log (no CAN frames at all) whose `Fr RMSG` lines
@@ -558,6 +607,90 @@ mod tests {
             fr.windows(2).all(|w| w[1].t_us >= w[0].t_us),
             "log order is time order"
         );
+    }
+
+    fn fr_slot(
+        t_us: u64,
+        slot: u16,
+        cycle: u8,
+        ab: u8,
+        payload: &[u8],
+        name: Option<&str>,
+    ) -> FrRow {
+        FrRow {
+            bus: 0,
+            t_us,
+            ab,
+            slot,
+            cycle,
+            payload: payload.to_vec(),
+            header_crc: 0,
+            flags: 0,
+            name: name.map(|s| s.to_string()),
+        }
+    }
+
+    /// What the recorder writes, the reader must give back: a named line and a
+    /// nameless one (the pair CANoe's own logs cannot be told apart from by
+    /// "the token before the byte counts"), a payload whose byte count means
+    /// something else in decimal than in the hex this writer declares, and an
+    /// empty payload.
+    #[test]
+    fn flexray_rows_survive_an_asc_round_trip() {
+        let rows = [
+            fr_slot(549, 13, 0, 2, &[0xAA; 26], Some("Frame_13_0_2")),
+            fr_slot(1_000_000, 16, 7, 0, &[1, 2, 3, 0xF4], None),
+            fr_slot(2_000_000, 24, 63, 1, &[], None),
+        ];
+        let path = std::env::temp_dir().join("roxy_can_fr_roundtrip.asc");
+        let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+        for r in &rows {
+            w.write_fr(r).unwrap();
+        }
+        w.finish().unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let (can, fr) = parse_asc_full(&content);
+        assert!(can.is_empty(), "no CAN frame was written");
+        assert_eq!(fr.len(), 3, "every Fr RMSG line comes back: {content}");
+        for (got, want) in fr.iter().zip(rows) {
+            assert_eq!(got.t_us, want.t_us);
+            assert_eq!(got.slot, want.slot);
+            assert_eq!(got.cycle, want.cycle);
+            assert_eq!(got.ab, want.ab, "channel A/B flags");
+            assert_eq!(got.payload, want.payload);
+            assert_eq!(got.name, want.name);
+        }
+    }
+
+    /// A recording mixes the two bus kinds in one file. Each reader side gets
+    /// its own list; the timestamps say which came first.
+    #[test]
+    fn can_and_flexray_share_one_asc_file() {
+        let path = std::env::temp_dir().join("roxy_can_fr_mixed.asc");
+        let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+        w.write(&classic(0x1A4, &[1, 2, 3])).unwrap();
+        w.write_fr(&fr_slot(0, 13, 0, 0, &[0xA0], Some("Frame_13_0_2")))
+            .unwrap();
+        let mut late = classic(0x1A5, &[4, 5]);
+        late.t_us = 5_000_000;
+        w.write(&late).unwrap();
+        w.write_fr(&fr_slot(6_000_000, 16, 1, 1, &[0xB0], None))
+            .unwrap();
+        w.finish().unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let (can, fr) = parse_asc_full(&content);
+        assert_eq!(can.iter().map(|f| f.id).collect::<Vec<_>>(), vec![0x1A4, 0x1A5]);
+        assert_eq!(fr.len(), 2);
+        assert_eq!(fr[0].slot, 13);
+        assert_eq!(fr[1].slot, 16);
+        assert_eq!(fr[1].t_us, 6_000_000);
+        // The name is the writer's to keep or drop; the slot it names is not.
+        assert_eq!(fr[0].name.as_deref(), Some("Frame_13_0_2"));
+        assert_eq!(fr[1].name, None);
     }
 
     fn classic(id: u32, bytes: &[u8]) -> CanFrame {

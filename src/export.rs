@@ -3,18 +3,20 @@ use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
 use crate::workspace::SigScope;
 impl App {
-    /// Exports the frames that pass the given Trace window's filter as
-    /// ASC. Frames the ring archived to disk (the ones the live view
+    /// Exports the frames and FlexRay rows that pass the given Trace window's
+    /// filter as ASC. Frames the ring archived to disk (the ones the live view
     /// already trimmed) come first, in trim order -- the export covers
-    /// the whole run, not just the hot ring's window.
+    /// the whole run, not just the hot ring's window. FlexRay rows have no
+    /// archive, so the export covers the ring for them.
     pub fn export_trace(&mut self, win: usize, path: &str) {
-        if self.snap.trace.is_empty() {
+        if self.snap.trace.is_empty() && self.snap.fr_trace.is_empty() {
             self.status = "export: trace is empty".to_string();
             return;
         }
         let Some(w) = self.trace_windows.get(win) else {
             return;
         };
+        let flt = w.filter_lens();
         // The archive leads: its frames are strictly older than anything
         // in the hot ring.
         let (archived, archived_total): (Vec<CanFrame>, u64) = match self.snap.trace.archive() {
@@ -22,7 +24,7 @@ impl App {
                 crate::trace::SpillFile::read_all(archive_path)
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|f| self.trace_match(w, f))
+                    .filter(|f| self.trace_match_lens(&flt, f))
                     .collect(),
                 total,
             ),
@@ -35,23 +37,50 @@ impl App {
                     .trace
                     .iter()
                     .copied()
-                    .filter(|f| self.trace_match(w, f)),
+                    .filter(|f| self.trace_match_lens(&flt, f)),
             )
             .collect();
-        if frames.is_empty() {
+        let rows: Vec<crate::trace::FrRow> = self
+            .snap
+            .fr_trace
+            .iter()
+            .filter(|r| self.trace_fr_match(&flt, r))
+            .cloned()
+            .collect();
+        if frames.is_empty() && rows.is_empty() {
             self.status = "export: no frames pass the trace filter".to_string();
             return;
         }
         match AscWriter::new(path) {
             Ok(mut w) => {
-                for f in &frames {
-                    w.write(f).ok();
+                // One time-ordered file: an ASC whose lines go backwards is a
+                // malformed log, and both lists are ascending on their own.
+                let mut can = frames.iter().peekable();
+                let mut fr = rows.iter().peekable();
+                loop {
+                    match (can.peek().map(|f| f.t_us), fr.peek().map(|r| r.t_us)) {
+                        (None, None) => break,
+                        (Some(t), Some(f)) if t <= f => {
+                            w.write(can.next().expect("peeked")).ok();
+                        }
+                        (Some(_), Some(_)) => {
+                            w.write_fr(fr.next().expect("peeked")).ok();
+                        }
+                        (Some(_), None) => {
+                            w.write(can.next().expect("peeked")).ok();
+                        }
+                        (None, Some(_)) => {
+                            w.write_fr(fr.next().expect("peeked")).ok();
+                        }
+                    }
                 }
                 w.finish().ok();
                 self.status = format!(
-                    "exported {} of {} frames to {path}",
+                    "exported {} frames + {} FlexRay rows of {} + {} to {path}",
                     frames.len(),
-                    self.snap.trace.len() + archived_total as usize
+                    rows.len(),
+                    self.snap.trace.len() + archived_total as usize,
+                    self.snap.fr_trace.len(),
                 );
             }
             Err(e) => self.status = format!("export failed: {e}"),

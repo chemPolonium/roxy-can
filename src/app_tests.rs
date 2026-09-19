@@ -1319,6 +1319,70 @@ fn export_trace_writes_parseable_asc() {
     app.stop();
 }
 
+/// The trace export is not CAN-only: the FlexRay rows in the ring cross into
+/// the ASC file too, and the file stays in time order, so an exported mixed
+/// run is still a log rather than two logs glued together.
+#[test]
+fn the_trace_export_carries_flexray_rows() {
+    use crate::trace::FrRow;
+    let mut app = App::headless();
+    let src = std::env::temp_dir().join(format!("roxy_can_export_fr_in_{}.asc", std::process::id()));
+    {
+        let mut w = AscWriter::new(&src.to_string_lossy()).unwrap();
+        for i in 0..4u64 {
+            let mut f = CanFrame {
+                t_us: i * 2_000,
+                channel: 0,
+                id: 0x100,
+                extended: false,
+                len: 2,
+                data: [0; MAX_CAN_FD_LEN],
+                dir: Direction::Rx,
+                flags: FrameFlags::NONE,
+            };
+            f.data[0] = i as u8;
+            w.write(&f).unwrap();
+            w.write_fr(&FrRow {
+                bus: 0,
+                t_us: i * 2_000 + 1_000,
+                ab: 0,
+                slot: 13,
+                cycle: i as u8,
+                payload: vec![0xF0, i as u8],
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            })
+            .unwrap();
+        }
+        w.finish().unwrap();
+    }
+    app.load_log(&src.to_string_lossy());
+    app.replay();
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    app.stop();
+    assert_eq!(app.snap.fr_trace.len(), 4, "the replay fed the FR ring");
+
+    let out = std::env::temp_dir().join("roxy_can_export_fr_out.asc");
+    app.export_trace(0, &out.to_string_lossy());
+    std::fs::remove_file(&src).ok();
+    let content = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).ok();
+    let (can, fr) = crate::log::asc::parse_asc_full(&content);
+    assert_eq!(can.len(), 4, "the CAN side still crosses");
+    assert_eq!(fr.len(), 4, "so does FlexRay");
+    assert_eq!(fr[2].slot, 13);
+    assert_eq!(fr[2].payload, vec![0xF0, 2]);
+    assert_eq!(fr[2].t_us, 5_000);
+    assert!(
+        content.matches("Fr RMSG").count() == 4,
+        "one line per row"
+    );
+}
+
 /// The report carries its own premises -- which databases, the tolerance
 /// and grace in effect, how many messages declared a period -- plus every
 /// latched row. Without the header, the same table means something else

@@ -546,6 +546,62 @@ fn convert_transcodes_a_log_to_asc_losslessly() {
     std::fs::remove_file(&again).ok();
 }
 
+/// The transcode is not CAN-only: a FlexRay log crosses into ASC with its
+/// rows in place, so `--convert` can hand a mixed recording to a tool that
+/// only reads ASC.
+#[test]
+fn convert_carries_flexray_rows_across() {
+    let src = std::env::temp_dir().join("roxy_can_convert_mixed.blf");
+    {
+        let mut w = crate::log::blf::BlfWriter::create(&src.to_string_lossy()).unwrap();
+        for i in 0..20u64 {
+            let mut f = CanFrame {
+                t_us: i * 2_000,
+                channel: 0,
+                id: 0x100,
+                extended: false,
+                len: 2,
+                data: [0; MAX_CAN_FD_LEN],
+                dir: Direction::Rx,
+                flags: FrameFlags::NONE,
+            };
+            f.data[0] = i as u8;
+            w.write(&f);
+            w.write_fr(&crate::trace::FrRow {
+                bus: 0,
+                t_us: i * 2_000 + 1_000,
+                ab: 0,
+                slot: 13,
+                cycle: i as u8 % 16,
+                payload: vec![0xF0, i as u8],
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            });
+        }
+        w.finish().unwrap();
+    }
+    let out = tmp("roxy_can_convert_mixed.asc");
+    let report = convert_log(src.to_string_lossy().as_ref(), &out).unwrap();
+    assert!(report.contains("20 frame(s)"), "{report}");
+    assert!(report.contains("20 FlexRay row(s)"), "{report}");
+
+    let (can, fr) = crate::log::asc::parse_asc_full(&std::fs::read_to_string(&out).unwrap());
+    assert_eq!(can.len(), 20);
+    assert_eq!(fr.len(), 20);
+    assert_eq!(fr[3].slot, 13);
+    assert_eq!(fr[3].payload, vec![0xF0, 3]);
+    // Interleaved as recorded: a row sits between the frames around it.
+    assert_eq!(can[3].t_us, 6_000);
+    assert_eq!(fr[3].t_us, 7_000);
+    assert!(
+        fr.windows(2).all(|w| w[1].t_us > w[0].t_us) && can.windows(2).all(|w| w[1].t_us > w[0].t_us),
+        "both sides keep their order"
+    );
+    std::fs::remove_file(&src).ok();
+    std::fs::remove_file(&out).ok();
+}
+
 /// A missing input names the failure instead of writing an empty file.
 #[test]
 fn convert_reports_a_broken_input() {

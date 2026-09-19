@@ -80,6 +80,14 @@
 - 顺带待清：`observe.rs:18`/`:312`、`cli.rs:303` 三处注释还在描述已删除的"窗口回填"。
 - S1b 的 frameId/slot 担忧**实测不成立**：两份真实 CANoe 日志（39 156 行、60 072 行）的 `slot` 取值恰好都是描述库里存在的槽号，`frame_at` 解析率 100%，故不做特殊处理，只在 `fr_rcv_event` 的注释里记下这个事实。
 
+### 2026-09-20：ASC 也能录 FlexRay，导出与转码不再是 CAN-only
+
+- **先修读法再写法**（上一轮的阻塞点）：`parse_fr_rmsg` 不再假设"`Rx`/`Tx` 后第一个非数字 token 是帧名"，改成**用两个字节计数定位 payload**（第一对能解析、且后面跟着那么多可解码 token 的位置）；计数按文件声明的进制解析，于是 `base hex` 与 `base dec` 两种日志都读得对。真实 CANoe 资产 30 600 行仍全部解析（`the_real_canoe_flexray_asc_parses`）。
+- **写侧**：`AscWriter::write_fr` 产出 CANoe 形状的 `Fr RMSG` 行（A/B 标志、槽、周期、名、计数 + 十六进制数据；故意省掉随版本变化的寄存器 dump —— 读侧不依赖它）。`Recorder::write_fr` 的 ASC 分支不再是空操作。回环测试：有名/无名/空 payload/计数在十六进制下与十进制不同（26 → `1A`）四种形状。
+- **`export_trace` 纳入 FR**：同一份 Trace 过滤器的 `trace_fr_match` 筛 FR 行，CAN 与 FR 两路**按时间归并**成一个升序 ASC（ASC 时间乱序即畸形日志）；FR 环没有磁盘归档，故导出只覆盖热环窗口，状态行按两类分别报数。测试 `the_trace_export_carries_flexray_rows`（回放真混合 ASC → 导出 → 读回两边各 4 条）。
+- **`--convert` 同样不再丢 FR**：BLF→ASC 混合转码保持交错顺序，报告写成"N frame(s) and M FlexRay row(s)"。测试 `convert_carries_flexray_rows_across`。
+- **S4 剩余**：每路 FR 负载/周期/抖动统计（占用率口径待定）、触发条件支持 slot/帧到达、FR 的 Buses/Statistics 一等化（并入 S3）。
+
 ## 结构待办（零散）
 
 - **外部仿真元件动态库加载**：进程内注册表已就绪（`script::register_extern`），动态库 C ABI 插件约定与加载器另议（含沙箱边界）。

@@ -639,7 +639,10 @@ impl App {
     }
 
     /// Applies one Trace window's filter: scope, direction, DBC-only,
-    /// payload search, frame kind, and ID/name substring.
+    /// payload search, frame kind, and ID/name substring. Production callers
+    /// hold the lens already -- the row refresh and the export clone it once
+    /// per walk -- so only the filter tests go through a window.
+    #[cfg(test)]
     pub fn trace_match(&self, w: &TraceWin, f: &CanFrame) -> bool {
         self.trace_match_lens(&w.filter_lens(), f)
     }

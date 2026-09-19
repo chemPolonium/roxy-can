@@ -13,12 +13,6 @@ use std::sync::Arc;
 /// tail that outgrows [`SEAL_POINTS`] is sealed by move -- zero point
 /// copies. Mutation of a shared chunk goes through `Arc::make_mut`, so
 /// the working cache never disturbs a view the UI is still reading.
-///
-/// A `VecDeque` sufficed while samples only ever arrived through the playback
-/// stream. Window backfill also decodes the stretch *behind* the playhead, so
-/// insertion must work from either end: the hot streaming path still appends in
-/// O(1), and out-of-order points fall back to a flatten-merge-rechunk (the
-/// same O(total) the flat buffer always paid).
 #[derive(Debug, Default)]
 pub struct SampleCache {
     chunks: Vec<std::sync::Arc<Vec<(u64, f64)>>>,
@@ -309,8 +303,8 @@ pub struct Subscription {
     pub last_sample_us: u64,
     pub history: SampleCache,
     /// The published view of `history`, shared with the frontend by Arc
-    /// and rebuilt only when sampling or a backfill actually changed the
-    /// cache -- the same discipline as the trace ring's `publish_trace`.
+    /// and rebuilt only when sampling actually changed the cache -- the
+    /// same discipline as the trace ring's `publish_trace`.
     /// Core-side only; the snapshot carries `published`.
     pub(crate) published: Arc<SampleCache>,
     pub(crate) history_dirty: bool,
