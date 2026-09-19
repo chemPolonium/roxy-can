@@ -6643,6 +6643,48 @@ fn the_trace_text_filter_matches_fr_frame_names() {
     app.stop();
 }
 
+/// A CANoe ASC names the rows it logs even where no cluster description is
+/// loaded, and the Trace table shows that name -- so the text filter has to
+/// match the name the row *displays*, not just the description's. The visible
+/// slot number counts too: it is what the address column shows.
+#[test]
+fn the_trace_text_filter_matches_a_log_carried_fr_frame_name() {
+    let mut app = quiet_app();
+    assert!(
+        app.fr_buses.is_empty(),
+        "this case is about a row with no description behind it"
+    );
+    let row = crate::trace::FrRow {
+        bus: 0,
+        t_us: 1_000,
+        ab: 2,
+        slot: 47,
+        cycle: 3,
+        payload: vec![1],
+        header_crc: 0,
+        flags: 0,
+        name: Some("Frame_47_3_1".into()),
+    };
+    let flt = |app: &App, filter: &str| {
+        let mut w = app.trace_windows[0].clone();
+        w.filter = filter.to_string();
+        w.filter_lens()
+    };
+    assert!(
+        app.trace_fr_match(&flt(&app, "frame_47"), &row),
+        "the log's own name matches, case-insensitively"
+    );
+    assert!(
+        app.trace_fr_match(&flt(&app, "47"), &row),
+        "so does the slot number the address column shows"
+    );
+    assert!(
+        !app.trace_fr_match(&flt(&app, "Frame_13"), &row),
+        "another frame's name still filters it out"
+    );
+    app.stop();
+}
+
 /// R2 装配层校验：脚本发送了不属于自己节点的报文 → 节点日志出 warning。
 /// 脚本绑定 EngineECU，但 send 的是 0x200（ChassisECU 的 VehicleState）。
 #[test]

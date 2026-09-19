@@ -756,9 +756,10 @@ impl App {
     /// The FlexRay side of the same filter lens. FR rows carry no id,
     /// direction or frame kind, so those filters hide them rather than
     /// half-match: a specific bus scope, `Tx`, DBC only and a frame-kind
-    /// pick all restrict the table to CAN. The text filter matches FR
-    /// frame names from the watch's description database (or the slot
-    /// number), payload search and the time range apply as on CAN.
+    /// pick all restrict the table to CAN. The text filter matches the frame
+    /// name the row shows (its cluster's description, else the name the log
+    /// carried) or the slot number; payload search and the time range apply as
+    /// on CAN.
     pub fn trace_fr_match(&self, flt: &TraceFilter, r: &crate::trace::FrRow) -> bool {
         if !matches!(flt.scope, SigScope::All) {
             return false;
@@ -771,23 +772,20 @@ impl App {
             return false;
         }
         let q = flt.filter.trim();
-        // With value conditions present the filter text IS the condition,
-        // which is CAN-only -- FR rows leave.
-        let name = if flt.value_conds.is_empty() && !q.is_empty() {
+        // The filter text is a name/number search for these rows: match the
+        // name the row actually *displays* -- the cluster description's, or the
+        // one the log carried -- plus the slot number. A row must never be
+        // filtered out from under its own visible Name column, which is what
+        // reading only the description used to do to a CANoe-logged frame name.
+        if !q.is_empty() {
             let qup = q.to_ascii_uppercase();
-            self.fr_db(r.bus)
-                .and_then(|db| db.frame_at(r.slot, r.cycle, r.ab))
-                .map(|f| {
-                    f.name.to_ascii_uppercase().contains(&qup)
-                        || format!("slot {}", f.triggering.slot_id).contains(q)
-                        || f.triggering.slot_id.to_string().contains(q)
-                })
-                .unwrap_or(false)
-        } else {
-            true
-        };
-        if !name {
-            return false;
+            let slot = r.slot.to_string();
+            let named = self
+                .fr_row_name(r)
+                .is_some_and(|n| n.to_ascii_uppercase().contains(&qup));
+            if !named && !slot.contains(q) && !format!("slot {slot}").contains(q) {
+                return false;
+            }
         }
         let pat = flt.payload.replace(' ', "");
         if !pat.is_empty()
