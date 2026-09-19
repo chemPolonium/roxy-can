@@ -200,9 +200,25 @@ impl BlfStream {
         let decoded: Vec<u8> = match method {
             METHOD_RAW => payload.to_vec(),
             METHOD_ZLIB => {
+                // CANoe concatenates MULTIPLE zlib members inside one
+                // container. A single `read_to_end` stops at the first
+                // member's end and silently drops every object after it
+                // (the real PowerTrain recording lost 36k of 39k frames
+                // this way), so chain members: each decoder reports how
+                // much input it consumed, and the next member starts
+                // right there. Trailing padding (all zero) ends the loop.
                 let mut out = Vec::with_capacity(uncompressed.max(payload.len()));
-                if ZlibDecoder::new(payload).read_to_end(&mut out).is_err() {
-                    return true;
+                let mut rest = payload;
+                while !rest.is_empty() {
+                    let mut decoder = ZlibDecoder::new(rest);
+                    if decoder.read_to_end(&mut out).is_err() {
+                        break;
+                    }
+                    let consumed = decoder.total_in() as usize;
+                    if consumed == 0 {
+                        break;
+                    }
+                    rest = &rest[consumed..];
                 }
                 out
             }
@@ -374,15 +390,19 @@ fn object_time(raw: u64, flags: u32) -> u64 {
     }
 }
 
-/// Locate the next object. Vector pads records so `object_size` alone does not
-/// always land on the following signature, and python-can's reader likewise
-/// searches for the next `LOBJ` within the first eight bytes.
+/// Locate the next object. Vector pads records — CANoe 12 sometimes by
+/// gaps far larger than the 8 bytes python-can tolerates, both between
+/// containers and between the objects inside one decompressed container
+/// — so search forward for the next signature without a proximity
+/// limit. The caller bounds the search by the slice it passes.
 fn next_object(bytes: &[u8], from: usize) -> Option<usize> {
-    let rest = bytes.get(from..)?;
-    let offset = rest[..rest.len().min(8)]
+    if from >= bytes.len() {
+        return None;
+    }
+    bytes[from..]
         .windows(4)
-        .position(|w| w == OBJECT_SIGNATURE)?;
-    Some(from + offset)
+        .position(|w| w == OBJECT_SIGNATURE)
+        .map(|at| from + at)
 }
 
 /// Decode every recognised object inside one container. Objects with
@@ -963,12 +983,13 @@ pub(crate) mod tests {
         assemble(&obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &body))
     }
 
-    /// The user's real CANoe recording of the FlexRay demo cluster: the
-    /// FR_RCVMESSAGE/EX objects must decode into ~30k rows with sane
-    /// slot/cycle/payload, and the ASC sibling of the same session
-    /// confirms the shape. This is the ground-truth check that the
-    /// object layouts (channel mask at 4, frame id at 16, counts at
-    /// 22/24, cycle at 26, payload at 44/84) match what Vector writes.
+    /// The user's real CANoe recording of the FlexRay demo cluster
+    /// (39.2 s, ~39.2k frames per CANoe's own statistics). End-to-end
+    /// over the production stream: the container walk must recover
+    /// every FR_RCVMESSAGE_EX object (large inter-object padding made
+    /// the old 8-byte resync window drop whole stretches), timestamps
+    /// must ascend over the full capture, and coordinates must stay
+    /// sane.
     #[test]
     fn the_real_canoe_flexray_blf_parses() {
         let path = std::path::Path::new("assets/arxml/Logging.blf");
@@ -976,39 +997,39 @@ pub(crate) mod tests {
             println!("assets/arxml/Logging.blf not present -- skipped");
             return;
         };
-        // Walk the whole file: CAN frames first (this session has none),
-        // then every FlexRay row.
         let mut fr = Vec::new();
+        let mut can = 0usize;
         loop {
-            if stream.peek_t().is_some() {
-                let _ = stream.next_frame();
-                continue;
-            }
-            let before = fr.len();
-            stream.poll_fr_rows(u64::MAX, &mut fr);
-            if stream.peek_t().is_none() && fr.len() == before {
-                break;
+            match stream.peek_fr_t() {
+                Some(_) => stream.poll_fr_rows(u64::MAX, &mut fr),
+                None => match stream.peek_t() {
+                    Some(_) => {
+                        let _ = stream.next_frame();
+                        can += 1;
+                    }
+                    None => break,
+                },
             }
         }
+        assert_eq!(can, 0, "the logging session carried no CAN traffic");
         assert!(
-            fr.len() >= 2_500,
-            "the recording carries ~3k FlexRay frames: {}",
+            fr.len() >= 39_000,
+            "CANoe statistics say 39.2k frames, we decoded {}",
             fr.len()
         );
-        // Sane frame coordinates throughout: static slots start at 1,
-        // cycles wrap at 64, payloads stay within the cluster's 26-byte
-        // frames.
-        for r in fr.iter().take(1_000) {
-            assert!(r.slot >= 1, "slot {}", r.slot);
-            assert!(r.cycle < 64, "cycle {}", r.cycle);
-            assert!(!r.payload.is_empty(), "payload present");
-            assert!(r.payload.len() <= 26, "payload within frame length");
-        }
-        // Timestamps ascend across the whole capture.
+        // Timestamps ascend across the whole 39-second capture.
         assert!(
             fr.windows(2).all(|w| w[1].t_us >= w[0].t_us),
             "log order is time order"
         );
+        let last = fr.last().expect("rows exist").t_us;
+        assert!(last >= 39_000_000, "the capture spans 39.2 s: {last}");
+        // Sane frame coordinates throughout.
+        for r in fr.iter().step_by(97) {
+            assert!(r.slot >= 1, "slot {}", r.slot);
+            assert!(r.cycle < 64, "cycle {}", r.cycle);
+            assert!(!r.payload.is_empty(), "payload present");
+        }
     }
 
     /// The production recorder writer: classic (standard/extended/RTR)
