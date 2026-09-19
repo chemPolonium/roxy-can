@@ -2702,7 +2702,7 @@ impl BusCore {
             .filter_map(|(mut k, owner)| {
                 // A stream rides the CAN channel of its owning node, so only
                 // a CAN key shifts here. FlexRay signals are never
-                // script-emitted, and the one FlexRay bus is not part of the
+                // script-emitted, and no FlexRay cluster index is part of the
                 // CAN channel list this removal renumbers.
                 if let SigKey::Can { ch, .. } = &mut k {
                     let nc = remap(*ch)?;

@@ -213,8 +213,8 @@ impl App {
         }
         let remap_keys = |signals: &mut Vec<GfxSignal>| {
             // Only CAN keys carry a CAN channel number. A FlexRay key's bus
-            // index names the one FlexRay bus, which this CAN-channel removal
-            // does not manage, so it is neither dropped nor shifted.
+            // index names a cluster, which this CAN-channel removal does not
+            // manage, so such a curve is neither dropped nor shifted.
             signals.retain(|s| match &s.key {
                 SigKey::Can { ch, .. } => remap(*ch).is_some(),
                 SigKey::Fr { .. } => true,

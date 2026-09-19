@@ -147,8 +147,8 @@ pub struct TraceWin {
     /// range) is expanded. Session state; starts collapsed so the main
     /// toolbar stays short.
     pub filters_open: bool,
-    /// Whether FlexRay rows expand into decoded signal child rows
-    /// (needs the watch's description database). Session state.
+    /// Whether FlexRay rows expand into decoded signal child rows (needs
+    /// the arriving row's own cluster description). Session state.
     pub fr_expand: bool,
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).

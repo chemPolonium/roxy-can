@@ -189,8 +189,8 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             &mut app.trace_windows[i].dbc_only,
         );
         ui.same_line();
-        // Expand FlexRay rows into their decoded signal children (needs
-        // the watch's description database).
+        // Expand FlexRay rows into their decoded signal children (needs the
+        // arriving row's own cluster description).
         ui.checkbox(
             format!("FR 信号##tfrx{i}"),
             &mut app.trace_windows[i].fr_expand,
