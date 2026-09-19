@@ -153,6 +153,17 @@
 - 回归 `a_channel_disagreement_still_resolves_the_scheduled_frame`（声明 A、日志 B 的行照样解出物理值）。两份真实资产的 100% 解析率不受影响（严格匹配本来就命中）。
 - **仍未决**：这种"声明与实收不符"要不要**显式报出来**（例如 Messages 那条注释文案 / 一个计数）。现在它是静默宽容的 —— 宽容本身对用户是好事（他早说过"可能实际信号和 fibex 定义不同"），但一条不告诉用户"你的描述和总线对不上"的工具也放过了一个真问题。等用户看过再定，别加个没人要的告警。
 
+### 2026-09-20：分析窗口能只看一路 FlexRay 了（`SigScope::FrBus`）
+
+- **症状**：两份 cluster 的日志并进一张表以后，用户**没有办法只看一路**。Trace/Messages/Statistics 的 scope 只有 `All`/`Bus(通道)`/`Manual`，而 FR 行原先的规则是"scope 不是 All 就整批隐藏"（`trace_fr_match`、`sync_msg_text`、`sync_stats_text`、两个 CSV 导出四处各自 `matches!(scope, All)`）。文本框过滤救不了：没名字的行走不了名字过滤，槽号又是两路共用。
+- **改法**：scope 枚举加 **`FrBus(u8)`（一路 cluster，索引就是表格里 `FR{n}` 那个数）**，与 `Bus(u8)`（CAN 通道）并列而不是复用 —— 这是教训 #18 的同一个坑：两个编号空间的同一个整数指的是两根不同的线。判定收成两个函数 `App::scope_match`（CAN 侧，`FrBus` → false）/ `App::scope_match_fr`（FR 侧，`Bus`/`Manual` → false，仍是"CAN 专属作用域不看 FR"），四处调用点全部换成 `scope_match_fr`，于是 CAN 与 FR 各自的作用域在两边都是**互斥**的：选了 FR1 就只剩 FR1，CAN 行也一并出去（回归 `an_analysis_window_can_be_scoped_to_one_flexray_cluster` 同时钉住这两向）。
+- **下拉里列哪些 cluster**：`App::fr_scope_buses` = 已配置（`fr_buses` ∪ `snap.fr_watches`）∪ **当前有统计行的**（`snap.fr_aggs` 的 bus）∪ 窗口自己已选中的那个。纯回放机器上一份描述都没加载，但日志里有两路流量 —— 那两路必须能选；反过来"选中项永远留在表里"是为了环尾老化掉最后几行时下拉不会把自己变没。
+- **`scope_combo` 顺手去掉了裸下标算术**：原来是 `Bus(ch) → ch+1` 再 `.min(manual_idx)`，插入 FR 项后这个偏移就错了；改成 `items`/`kinds` 两张平行表 + `position(|k| *k == scope)`。附带效果：工程里存了一个通道数已变小的 `Bus(n)`，过去会被钳成 Manual，现在读回 **All**（最宽的那一档，宁可多看不可漏看）。
+- **不留悬空引用**：`detach_fr_watch`（整路下线：端口 + 描述一起走）把指向该路的作用域退回 All，与 CAN 的 `remove_bus → fix_scope` 同一政策；**`forget_cluster_description` 故意不退回** —— 只移除描述时，回放的日志仍能送出这一路的行，此时清空表格是错的答案（注释写在 `reset_fr_scope` 上）。删 CAN 通道**不**挪 FR 作用域：回归加在 `channels_can_be_added_removed_and_renamed`（`Bus(2) → Bus(1)` 同时 `FrBus(1)` 原地不动）。
+- **工程文件**：`SigScope` 是 serde 直接派生，新变体天然向后兼容（老工程不会有 `{"FrBus":n}`），回归扩了 `config_round_trips_through_json`（一路 CAN `Bus(1)` + 一路 `FrBus(2)` 同时存亡）。
+- **仍留的不对称**：`dbc_only`（"只显示库里有的报文"）对 FR 仍是**整批隐藏**，于是"FR1 + DBC only"= 空表。语义上它现在可以变成"该槽在描述里排到了帧"（`frame_at` 已经算出来了，三份循环里都现成），但那等于替用户重定义一个他可能只按 CAN 理解过的复选框 —— 等他提。同理 `dir == Tx`、`flags_kind`、`Signal>10` 这类值条件对 FR 依旧只能隐藏（FlexRay 没有发送方向、没有帧类型）。
+- **S4 剩下的**：还是那条负载/占用率进 bus_loads/状态栏（口径待定）。
+
 ## 结构待办（零散）
 
 - **外部仿真元件动态库加载**：进程内注册表已就绪（`script::register_extern`），动态库 C ABI 插件约定与加载器另议（含沙箱边界）。

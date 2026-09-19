@@ -1580,6 +1580,9 @@ mod tests {
         app.trace_windows[0].filter = "Motor".to_string();
         app.trace_windows[0].scope = SigScope::Bus(1);
         app.trace_windows[0].manual.insert((1, 0x123));
+        // A FlexRay cluster scope is its own numbering space and its own
+        // variant, so a project can hold one of each without either moving.
+        app.stats_windows[0].scope = SigScope::FrBus(2);
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 50_000;
         app.refresh_snapshot();
@@ -1594,6 +1597,7 @@ mod tests {
         assert_eq!(restored.replay_speed, 2.0);
         assert_eq!(restored.trace_windows[0].filter, "Motor");
         assert_eq!(restored.trace_windows[0].scope, SigScope::Bus(1));
+        assert_eq!(restored.stats_windows[0].scope, SigScope::FrBus(2));
         assert!(restored.trace_windows[0].manual.contains(&(1, 0x123)));
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);

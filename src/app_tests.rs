@@ -1673,6 +1673,10 @@ fn channels_can_be_added_removed_and_renamed() {
     );
     app.trace_windows[0].manual.insert((2, 0x200));
     app.trace_windows[0].scope = SigScope::Bus(2);
+    // A FlexRay cluster scope on another window: cluster indices are their own
+    // numbering space, so removing a CAN channel must not renumber it -- the
+    // shift below would otherwise point the window at a different cable.
+    app.msg_windows[0].scope = SigScope::FrBus(1);
     let w = app.trace_windows[0].clone();
 
     app.remove_channel(0);
@@ -1691,6 +1695,11 @@ fn channels_can_be_added_removed_and_renamed() {
         app.trace_windows[0].scope,
         SigScope::Bus(1),
         "Bus scope indices shift with the channels"
+    );
+    assert_eq!(
+        app.msg_windows[0].scope,
+        SigScope::FrBus(1),
+        "a FlexRay cluster scope is not a CAN channel index and does not move"
     );
 
     while app.channels.len() > 1 {
@@ -6122,6 +6131,23 @@ fn two_flexray_watches_feed_their_own_buses() {
         format!("{} messages", win.text_rows.len()),
         "the header counts what is on screen"
     );
+
+    // Scoping the window to one cluster leaves the other cluster's rows out --
+    // the whole point of numbering the slots by bus in a two-cluster table.
+    app.msg_windows[0].scope = SigScope::FrBus(0);
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    let buses: Vec<String> = app.msg_windows[0]
+        .text_rows
+        .iter()
+        .map(|r| r.bus.clone())
+        .collect();
+    assert_eq!(buses, vec!["FR0".to_string(), "FR0".to_string()]);
+
+    // A cluster that goes away releases the windows pointed at it: an
+    // unexplained empty table is worse than falling back to the widest view.
+    app.detach_fr_watch(0);
+    assert_eq!(app.msg_windows[0].scope, SigScope::All);
     app.stop();
 }
 
@@ -6787,6 +6813,153 @@ fn the_trace_text_filter_matches_a_log_carried_fr_frame_name() {
     assert!(
         !app.trace_fr_match(&flt(&app, "Frame_13"), &row),
         "another frame's name still filters it out"
+    );
+    app.stop();
+}
+
+/// Slot numbers repeat across clusters, so a table showing two of them cannot
+/// be read as one network. `FlexRay: FR{n}` in the scope combo narrows a
+/// Trace/Messages/Statistics window to that cluster -- the same number its Bus
+/// column prints -- and CAN rows leave with it. Before this the only way to
+/// look at one of a two-cluster recording was the text filter, which cannot
+/// name a row that has no name.
+#[test]
+fn an_analysis_window_can_be_scoped_to_one_flexray_cluster() {
+    use crate::aggregate::FrSlotAgg;
+    let mut app = App::headless();
+    for (bus, slot) in [(0u8, 13u16), (0, 24), (1, 13)] {
+        app.fr_aggs.insert(
+            (bus, slot),
+            FrSlotAgg {
+                bus,
+                slot,
+                count: 10,
+                // ab = 2 ("unknown"): the Messages label would otherwise print
+                // the channel letter after the slot, which is not what this
+                // test is about.
+                ab: 2,
+                ..Default::default()
+            },
+        );
+    }
+    app.aggs.insert(
+        (0, 0x100, false),
+        MessageAgg {
+            id: 0x100,
+            channel: 0,
+            extended: false,
+            dir: Direction::Rx,
+            count: 5,
+            rx: 5,
+            tx: 0,
+            last_t_us: 0,
+            cycle_us: 0.0,
+            min_us: 0.0,
+            max_us: 0.0,
+            jitter_us: 0.0,
+            len: 8,
+            data: [0; MAX_CAN_FD_LEN],
+            flags: FrameFlags::NONE,
+        },
+    );
+    app.refresh_snapshot();
+    assert_eq!(app.snap.fr_aggs.len(), 3, "one tally per bus and slot");
+
+    // The combo offers every cluster the windows could show. Nothing is
+    // configured here -- the rows alone make both clusters pickable.
+    assert_eq!(app.fr_scope_buses(SigScope::All), vec![0, 1]);
+    // A choice whose rows have all aged out stays listed, or the combo would
+    // drop the entry the window is looking at.
+    assert_eq!(app.fr_scope_buses(SigScope::FrBus(3)), vec![0, 1, 3]);
+
+    let fr_row = |bus: u8, slot: u16| crate::trace::FrRow {
+        bus,
+        t_us: 1_000,
+        ab: 0,
+        slot,
+        cycle: 0,
+        payload: vec![0],
+        header_crc: 0,
+        flags: 0,
+        name: None,
+    };
+    let flt = |app: &App, scope: SigScope| {
+        let mut w = app.trace_windows[0].clone();
+        w.scope = scope;
+        w.filter_lens()
+    };
+    let (r0, r1) = (fr_row(0, 13), fr_row(1, 13));
+    assert!(app.trace_fr_match(&flt(&app, SigScope::All), &r0));
+    assert!(
+        app.trace_fr_match(&flt(&app, SigScope::FrBus(1)), &r1),
+        "the scoped cluster's rows stay"
+    );
+    assert!(
+        !app.trace_fr_match(&flt(&app, SigScope::FrBus(1)), &r0),
+        "the other cluster is out, same slot number and all"
+    );
+    assert!(
+        !app.trace_fr_match(&flt(&app, SigScope::Bus(0)), &r0),
+        "a CAN channel scope is still CAN-only"
+    );
+    let mut w = app.trace_windows[0].clone();
+    w.scope = SigScope::FrBus(1);
+    let can = frame_at(1_000, 0x100, 8, Direction::Rx);
+    assert!(
+        !app.trace_match(&w, &can),
+        "an FR cluster scope keeps CAN out of the table"
+    );
+
+    // The Messages table: one cluster's slots, and not the CAN row.
+    let shown = |app: &App| -> Vec<(String, String)> {
+        app.msg_windows[0]
+            .text_rows
+            .iter()
+            .map(|r| (r.bus.clone(), r.label.clone()))
+            .collect()
+    };
+    app.msg_windows[0].scope = SigScope::FrBus(1);
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    assert_eq!(shown(&app), vec![("FR1".to_string(), "slot 13".to_string())]);
+    app.msg_windows[0].scope = SigScope::FrBus(0);
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    assert_eq!(
+        shown(&app),
+        vec![
+            ("FR0".to_string(), "slot 13".to_string()),
+            ("FR0".to_string(), "slot 24".to_string())
+        ],
+        "cluster 0 alone, its two slots in slot order"
+    );
+
+    // Statistics: the share column is that cluster's own traffic once scoped,
+    // not a slice of everything the run carried.
+    app.stats_windows[0].scope = SigScope::FrBus(1);
+    app.text_fresh = true;
+    app.sync_stats_text(0);
+    let stats = &app.stats_windows[0].text_rows;
+    assert_eq!(stats.len(), 1, "one row for that cluster");
+    assert_eq!((stats[0].bus.as_str(), stats[0].share.as_str()), ("FR1", "100.0%"));
+    app.stats_windows[0].scope = SigScope::All;
+    app.text_fresh = true;
+    app.sync_stats_text(0);
+    let shares: Vec<(&str, &str)> = app.stats_windows[0]
+        .text_rows
+        .iter()
+        .map(|r| (r.bus.as_str(), r.share.as_str()))
+        .collect();
+    assert_eq!(shares.len(), 4, "CAN row plus three slots: {shares:?}");
+    assert_eq!(
+        shares,
+        vec![
+            ("CAN1", "14.3%"),
+            ("FR0", "28.6%"),
+            ("FR0", "28.6%"),
+            ("FR1", "28.6%")
+        ],
+        "unscoped, all 35 frames of the run are shared out"
     );
     app.stop();
 }

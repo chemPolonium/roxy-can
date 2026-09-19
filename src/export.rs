@@ -1,7 +1,7 @@
 use crate::app::{App, MessageAgg};
 use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
-use crate::workspace::SigScope;
+
 impl App {
     /// Exports the frames and FlexRay rows that pass the given Trace window's
     /// filter as ASC. Frames the ring archived to disk (the ones the live view
@@ -153,26 +153,29 @@ impl App {
             ));
         }
         // FlexRay slots join the same table, after the CAN rows and under the
-        // same scope rule the windows apply: a scoped window is a CAN scope, so
-        // it stays CAN-only. `id` carries the slot number, `flags` has no
-        // FlexRay meaning and reads as blank.
-        if matches!(scope, SigScope::All) {
-            for a in &self.snap.fr_aggs {
-                let name = self.fr_frame_name(a);
-                let (cmin, cavg, cmax) = if a.count > 1 {
-                    (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
-                } else {
-                    (0.0, 0.0, 0.0)
-                };
-                s.push_str(&format!(
-                    "FR{},{},{name},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{flag}\n",
-                    a.bus,
-                    a.slot,
-                    a.count,
-                    a.payload.len(),
-                    flag = crate::can::frame::FrameFlags::NONE.tag(),
-                ));
-            }
+        // same scope rule the windows apply: a CAN scope is CAN-only, a
+        // FlexRay cluster scope is that cluster only. `id` carries the slot
+        // number, `flags` has no FlexRay meaning and reads as blank.
+        for a in self
+            .snap
+            .fr_aggs
+            .iter()
+            .filter(|a| Self::scope_match_fr(scope, a.bus))
+        {
+            let name = self.fr_frame_name(a);
+            let (cmin, cavg, cmax) = if a.count > 1 {
+                (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            s.push_str(&format!(
+                "FR{},{},{name},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{}\n",
+                a.bus,
+                a.slot,
+                a.count,
+                a.payload.len(),
+                crate::can::frame::FrameFlags::NONE.tag(),
+            ));
         }
         self.write_export(path, s);
     }
@@ -245,8 +248,11 @@ impl App {
         }
         // FlexRay slots ride the same CSV, after the CAN rows, matching
         // the on-screen table (window text filter matches names/slots).
-        if matches!(scope, SigScope::All) && !dbc_only {
+        if !dbc_only {
             for agg in &self.snap.fr_aggs {
+                if !Self::scope_match_fr(scope, agg.bus) {
+                    continue;
+                }
                 let name = self.fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)

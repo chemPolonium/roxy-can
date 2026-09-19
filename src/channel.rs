@@ -399,6 +399,30 @@ impl App {
         self.fr_buses.remove(&bus);
         self.push_fr_db_to_core();
         self.set_fr_watch(bus, None, "");
+        self.reset_fr_scope(bus);
+    }
+
+    /// A window left pointing at a cluster that no longer exists would show an
+    /// unexplained empty table, so its scope goes back to All buses -- what
+    /// `remove_bus` does for a CAN channel. Only called when the whole bus
+    /// goes away: `forget_cluster_description` deliberately leaves scopes
+    /// alone, because a replayed log can still carry that cluster's rows with
+    /// no description and no watch behind them.
+    fn reset_fr_scope(&mut self, bus: u8) {
+        let drop_bus = |s: &mut SigScope| {
+            if matches!(*s, SigScope::FrBus(b) if b == bus) {
+                *s = SigScope::All;
+            }
+        };
+        for w in &mut self.trace_windows {
+            drop_bus(&mut w.scope);
+        }
+        for w in &mut self.msg_windows {
+            drop_bus(&mut w.scope);
+        }
+        for w in &mut self.stats_windows {
+            drop_bus(&mut w.scope);
+        }
     }
 
     /// Drops one bus's description and leaves any watch alone: the undo of a

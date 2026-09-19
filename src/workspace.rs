@@ -3,11 +3,16 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Which buses/messages an analysis window looks at.
+/// Which buses/messages an analysis window looks at. The two bus numbering
+/// spaces are separate variants on purpose: `Bus` is a CAN channel index,
+/// `FrBus` a FlexRay cluster index (the number the tables print as
+/// `FR{n}`) -- the same integer means a different cable in each.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SigScope {
     All,
     Bus(u8),
+    /// One FlexRay cluster: its rows only, no CAN rows.
+    FrBus(u8),
     Manual,
 }
 
@@ -609,13 +614,49 @@ impl App {
     }
 
     /// Scope check shared by all analysis windows: All passes everything,
-    /// Bus passes one channel, Manual uses that window's own selection set.
+    /// Bus passes one CAN channel, Manual uses that window's own selection
+    /// set, FrBus passes nothing on this side of the table.
     pub fn scope_match(scope: SigScope, manual: &HashSet<(u8, u32)>, channel: u8, id: u32) -> bool {
         match scope {
             SigScope::All => true,
             SigScope::Bus(ch) => channel == ch,
+            SigScope::FrBus(_) => false,
             SigScope::Manual => manual.contains(&(channel, id)),
         }
+    }
+
+    /// The FlexRay side of [`Self::scope_match`]: `FrBus` keeps one
+    /// cluster's rows, anything CAN-shaped (a channel pick, a hand-picked
+    /// id list) drops them -- a slot number is not a CAN id and a cluster
+    /// is not a CAN channel.
+    pub fn scope_match_fr(scope: SigScope, bus: u8) -> bool {
+        match scope {
+            SigScope::All => true,
+            SigScope::FrBus(b) => b == bus,
+            SigScope::Bus(_) | SigScope::Manual => false,
+        }
+    }
+
+    /// The FlexRay clusters a scope combo can offer: the ones configured in
+    /// this session (description loaded and/or a watch attached) plus the
+    /// ones that currently have rows, so replaying a multi-cluster log
+    /// makes its clusters selectable without loading anything. The
+    /// window's own choice is always kept, or a cluster would vanish from
+    /// the list the moment its last row aged out of the ring.
+    pub fn fr_scope_buses(&self, chosen: SigScope) -> Vec<u8> {
+        let mut buses: Vec<u8> = self
+            .fr_buses
+            .keys()
+            .copied()
+            .chain(self.snap.fr_watches.iter().map(|w| w.bus))
+            .chain(self.snap.fr_aggs.iter().map(|a| a.bus))
+            .collect();
+        if let SigScope::FrBus(b) = chosen {
+            buses.push(b);
+        }
+        buses.sort_unstable();
+        buses.dedup();
+        buses
     }
 
     /// Manual selection set of the window named by `t` (None for
@@ -755,13 +796,14 @@ impl App {
 
     /// The FlexRay side of the same filter lens. FR rows carry no id,
     /// direction or frame kind, so those filters hide them rather than
-    /// half-match: a specific bus scope, `Tx`, DBC only and a frame-kind
-    /// pick all restrict the table to CAN. The text filter matches the frame
-    /// name the row shows (its cluster's description, else the name the log
-    /// carried) or the slot number; payload search and the time range apply as
-    /// on CAN.
+    /// half-match: a CAN channel or Manual id scope, `Tx`, DBC only and a
+    /// frame-kind pick all restrict the table to CAN, while a FlexRay cluster
+    /// scope keeps that cluster's rows and drops CAN. The text filter matches
+    /// the frame name the row shows (its cluster's description, else the name
+    /// the log carried) or the slot number; payload search and the time range
+    /// apply as on CAN.
     pub fn trace_fr_match(&self, flt: &TraceFilter, r: &crate::trace::FrRow) -> bool {
-        if !matches!(flt.scope, SigScope::All) {
+        if !Self::scope_match_fr(flt.scope, r.bus) {
             return false;
         }
         if flt.dir == 2 || flt.dbc_only || flt.flags_kind != 0 {

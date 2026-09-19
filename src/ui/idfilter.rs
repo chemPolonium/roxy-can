@@ -18,9 +18,15 @@ struct TreeMsg {
 }
 
 /// Shared "Signals" selector used by Trace/Messages/Statistics: All buses /
-/// one bus / Manual selection. The "…" button opens the Message Selection
-/// popup bound to `target`; selecting messages there switches the window to
-/// Manual.
+/// one CAN channel / one FlexRay cluster / Manual selection. The "…" button
+/// opens the Message Selection popup bound to `target`; selecting messages
+/// there switches the window to Manual.
+///
+/// The two bus numbering spaces are separate entries: a FlexRay cluster index
+/// and a CAN channel index are different numbers for different cables, so
+/// picking one here must not silently decide what the other shows. A scope
+/// naming a channel that no longer exists reads back as All buses -- the
+/// widest view, never a hidden row.
 pub fn scope_combo(
     app: &mut App,
     ui: &Ui,
@@ -29,17 +35,19 @@ pub fn scope_combo(
     target: PopupTarget,
 ) -> SigScope {
     let mut items: Vec<String> = vec!["All buses".to_string()];
+    let mut kinds: Vec<SigScope> = vec![SigScope::All];
     for ch in 0..app.snap.channel_count {
         items.push(format!("Bus: {}", app.channel_name(ch as u8)));
+        kinds.push(SigScope::Bus(ch as u8));
+    }
+    for bus in app.fr_scope_buses(scope) {
+        items.push(format!("FlexRay: FR{bus}"));
+        kinds.push(SigScope::FrBus(bus));
     }
     let n = app.win_manual(target).map(|m| m.len()).unwrap_or(0);
     items.push(format!("Manual ({n})"));
-    let manual_idx = items.len() - 1;
-    let mut cur = match scope {
-        SigScope::All => 0,
-        SigScope::Bus(ch) => ((ch as usize) + 1).min(manual_idx),
-        SigScope::Manual => manual_idx,
-    };
+    kinds.push(SigScope::Manual);
+    let mut cur = kinds.iter().position(|k| *k == scope).unwrap_or(0);
     ui.set_next_item_width(140.0);
     ui.combo_simple_string(id, &mut cur, &items);
     ui.same_line();
@@ -47,11 +55,7 @@ pub fn scope_combo(
         app.popup_target = Some(target);
         app.show_id_filter = true;
     }
-    match cur {
-        0 => SigScope::All,
-        c if c == manual_idx => SigScope::Manual,
-        c => SigScope::Bus((c - 1) as u8),
-    }
+    kinds[cur.min(kinds.len() - 1)]
 }
 
 /// Opens the selection popup for the window named by app.popup_target.

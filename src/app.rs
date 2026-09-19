@@ -968,14 +968,16 @@ impl App {
             return;
         }
         // FlexRay slots share the table, so they count in its denominator too.
-        // Like the Messages window and the Trace filter, a scoped window (one
-        // CAN bus, a hand-picked id list) stays CAN-only: a slot number is not
-        // a CAN id and a FlexRay cluster is not a CAN channel.
-        let fr_aggs: Vec<&crate::aggregate::FrSlotAgg> = if matches!(scope, SigScope::All) {
-            self.snap.fr_aggs.iter().collect()
-        } else {
-            Vec::new()
-        };
+        // A CAN-scoped window (one channel, a hand-picked id list) stays
+        // CAN-only: a slot number is not a CAN id and a FlexRay cluster is not
+        // a CAN channel. A cluster scope does the mirror image -- that cluster
+        // alone -- and the percentage is then that cluster's own traffic.
+        let fr_aggs: Vec<&crate::aggregate::FrSlotAgg> = self
+            .snap
+            .fr_aggs
+            .iter()
+            .filter(|a| App::scope_match_fr(scope, a.bus))
+            .collect();
         let total: u64 = aggs
             .iter()
             .map(|a| a.count)
@@ -1207,11 +1209,14 @@ impl App {
         }
         // FlexRay rows ride the same table, after the CAN rows: one row
         // per slot the watch has seen. The same scope/DBC/text rules
-        // apply as in the Trace window -- a specific bus, DBC-only or a
-        // text filter restricts the table to CAN; the decimal filter
-        // text also matches a slot number.
-        if matches!(scope, SigScope::All) && !dbc_only {
+        // apply as in the Trace window -- a CAN channel or Manual id scope
+        // and DBC-only keep the table on CAN, a cluster scope keeps just that
+        // cluster, and the decimal filter text also matches a slot number.
+        if !dbc_only {
             for agg in &self.snap.fr_aggs {
+                if !App::scope_match_fr(scope, agg.bus) {
+                    continue;
+                }
                 // The description of the bus this slot arrived on, when the
                 // watch came with one, names its frame and decodes the
                 // signals. The cycle the last frame arrived in picks the right
