@@ -503,3 +503,73 @@ fn editor_popups_draw_without_panicking() {
         .map(|t| crate::ui::triggers::TrigDraft::new(0, t.cond.clone(), t.action));
     frames(&mut app, &mut ctx, 3);
 }
+
+/// A plot window must not starve the replay it is plotting. The real
+/// FlexRay capture (60k rows, ~50 s) runs behind an open Graphics window with
+/// one FlexRay curve selected; the clock has to keep pace with the wall clock
+/// and no single lap may balloon. This is the headless shape of the report
+/// that switching to a Graphics desktop froze playback.
+#[test]
+fn a_plot_window_never_starves_the_replay() {
+    use crate::app::PopupTarget;
+    use std::time::{Duration, Instant};
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    if !std::path::Path::new("assets/fibex/Logging.blf").exists() {
+        println!("assets/fibex/Logging.blf not present -- skipped");
+        return;
+    }
+    let mut ctx = harness();
+    // The real app: the core runs on its own thread, which is the shape
+    // the stall was reported in.
+    let mut app = App::new();
+    app.load_log("assets/fibex/Logging.blf");
+    let bytes = std::fs::read("assets/arxml/PowerTrain.arxml").expect("arxml");
+    let text = crate::dbc::text_from_bytes(bytes);
+    let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));
+    let (slot, _, sigs) = db
+        .slot_signals()
+        .into_iter()
+        .find(|(_, frame, _)| frame.contains("13"))
+        .expect("slot 13 exposes signals");
+    app.fr_db = Some(db);
+    app.push_fr_db_to_core();
+    app.new_graphics_window();
+    app.set_win_signal(
+        PopupTarget::Graphics(0),
+        crate::app::fr_signal_key(0, slot, &sigs[0]),
+        true,
+    );
+    app.replay();
+
+    let start = Instant::now();
+    let mut worst_lap = Duration::ZERO;
+    let mut laps = 0usize;
+    while start.elapsed() < Duration::from_millis(1500) {
+        std::thread::sleep(Duration::from_millis(5));
+        let t = Instant::now();
+        app.update();
+        {
+            let ui = ctx.frame();
+            crate::ui::render(&mut app, ui);
+            let _ = ctx.render_legacy();
+        }
+        worst_lap = worst_lap.max(t.elapsed());
+        laps += 1;
+    }
+    let wall = start.elapsed().as_secs_f64();
+    let (pos, dur) = app.replay_position().expect("a replay timeline");
+    assert!(
+        app.snap.measuring,
+        "the run is still measuring after {wall:.2} s of plotting"
+    );
+    assert!(
+        pos >= wall * 0.25,
+        "the log clock kept pace: {pos:.2} s of log in {wall:.2} s of wall \
+         ({dur:.1} s log total, {laps} laps, worst lap {worst_lap:?})"
+    );
+    assert!(
+        worst_lap < Duration::from_secs(2),
+        "one lap took {worst_lap:?} with a plot window open ({laps} laps, pos={pos:.2})"
+    );
+    app.stop();
+}

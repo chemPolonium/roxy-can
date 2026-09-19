@@ -62,6 +62,18 @@ impl Recorder {
         };
     }
 
+    /// FlexRay rows for the open recording. The record-id whitelist is a list
+    /// of CAN `(id, extended)` pairs, so it cannot express a FlexRay slot and
+    /// deliberately does not gate these. Only the BLF backend has a FlexRay
+    /// object to write; an ASC recording skips them, because writing a line the
+    /// reader could not tell from a named one would corrupt the file.
+    pub fn write_fr(&mut self, r: &crate::trace::FrRow) {
+        match &mut self.writer {
+            Some(Backend::Blf(w)) => w.write_fr(r),
+            Some(Backend::Asc(_)) | None => {}
+        }
+    }
+
     /// Closes the file, if any. Recorded data stays; only the handle goes.
     pub fn close(&mut self) {
         if let Some(w) = self.writer.take() {

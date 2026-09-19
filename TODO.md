@@ -70,6 +70,14 @@
 - **S5 硬件在环（有 VN7640，可实测）**：多路 FR 同时打开、各自集群配置、`xlFrGetChannelConfiguration` 回读校验、真机确认 `ab` 与 slot 语义；CLI 探针扩到逐路报告。
 - 明细见对应任务与 git log。
 
+### 2026-09-20 凌晨：S4 部分落地 + "Graphics 卡住"翻案 + 挖到一个更严重的老 bug
+
+- **S4 已落地部分**：FlexRay 行进 `frame_counter`（f/s 与帧数终于包含 FR）；**录制写 BLF**（`BlfWriter::write_fr` → `FR_RCVMESSAGE` 对象，`Recorder::write_fr`），混合 CAN+FR 录制的回环测试证明两边都能读回并保持交错顺序。ASC 侧**故意没写**：我们的 ASC 读法假设"`Rx`/`Tx` 之后第一个非数字 token 是帧名"，所以无帧名的 `Fr RMSG` 行会被误读（十六进制数据字节被当成名字）—— 先把这个消歧做对，再谈写。`export_trace` 同理仍是 CAN-only（它输出 ASC）。
+- **翻案**：切到 Graphics 桌面卡回放 ≠ 绘图/分片所致。A/B 实测（同一份合成混合日志、线程驱动、1.5 s 墙钟）：**开不开 Graphics 窗口都只推进 0.06–0.07 s**；真实 FR-only 资产 + 开窗口 + 加曲线反而正常。护栏留在 `ui_tests::a_plot_window_never_starves_the_replay`（阈值 0.25×，能抓住实测的 0.04×）。所以"每帧一条回填命令"和"分片机制"都不是这次的原因，已删的 backfill 不背这个锅。
+- **新线索（严重，优先做）**：**我们自己录制出来的 BLF 时间轴是塌的** —— 相隔 1 s 的三帧读回只差几毫秒，整段录制的时长 ≈0.01 s 而非真实秒数，所以回放自己的录制文件会 ~100× 快进、进度与曲线全不对。`recorder_writer_round_trips_frames` 一直没抓到，因为它只比 id/flags/payload，从没断言时间戳。已用 `#[ignore]` 钉住：`log::blf::record_times::a_recording_keeps_its_second_apart_frames_a_second_apart`。怀疑点在写入侧的对象时间戳编码/单位（`obj_header_v1_bytes` 的 flags 与 `object_time` 的 `TS_TEN_MICRO` 约定）或读取侧的 rebase 基准。**修好后去掉 ignore。**
+- 顺带待清：`observe.rs:18`/`:312`、`cli.rs:303` 三处注释还在描述已删除的"窗口回填"。
+- S1b 的 frameId/slot 担忧**实测不成立**：两份真实 CANoe 日志（39 156 行、60 072 行）的 `slot` 取值恰好都是描述库里存在的槽号，`frame_at` 解析率 100%，故不做特殊处理，只在 `fr_rcv_event` 的注释里记下这个事实。
+
 ## 结构待办（零散）
 
 - **外部仿真元件动态库加载**：进程内注册表已就绪（`script::register_extern`），动态库 C ABI 插件约定与加载器另议（含沙箱边界）。

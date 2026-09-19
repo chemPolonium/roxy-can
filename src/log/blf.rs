@@ -863,6 +863,31 @@ fn error_ext_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
     obj_header_v1_bytes(OBJ_CAN_ERROR_EXT, ts_raw, 0, &b)
 }
 
+/// One FlexRay receive object in the FR_RCVMESSAGE (50) layout, which is what
+/// CANoe records static-slot frames with and what the reader decodes. BLF
+/// carries no slot field -- `frameId` is the only frame coordinate the object
+/// has -- and the real captures put the schedule slot there, so the row's slot
+/// rides in it (measured: every row of both bundled CANoe captures resolves
+/// against the cluster description this way).
+fn fr_rcv_event(r: &crate::trace::FrRow, ts_raw: u64) -> Vec<u8> {
+    let mut b = vec![0u8; 44 + r.payload.len()];
+    b[4..6].copy_from_slice(&(match r.ab {
+        0 => 1u16,  // channel A
+        1 => 2,     // channel B
+        _ => 3,     // both / unknown
+    })
+    .to_le_bytes());
+    b[16..18].copy_from_slice(&r.slot.to_le_bytes());
+    b[18..20].copy_from_slice(&r.header_crc.to_le_bytes());
+    let len = r.payload.len() as u16;
+    b[22..24].copy_from_slice(&len.to_le_bytes()); // payloadLength
+    b[24..26].copy_from_slice(&len.to_le_bytes()); // payloadLengthValid
+    b[26] = r.cycle;
+    b[36..38].copy_from_slice(&r.flags.to_le_bytes());
+    b[44..].copy_from_slice(&r.payload);
+    obj_header_v1_bytes(OBJ_FR_RCVMESSAGE, ts_raw, 0, &b)
+}
+
 fn zlib_bytes(data: &[u8]) -> Vec<u8> {
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -911,6 +936,17 @@ impl BlfWriter {
             classic_event(f, ts_raw)
         };
         self.pending.extend_from_slice(&ev);
+        if self.pending.len() >= CONTAINER_FLUSH_BYTES {
+            self.flush_container();
+        }
+    }
+
+    /// FlexRay rows join the same container stream as the CAN frames -- that
+    /// is how CANoe records a mixed capture, and it is what makes a recording
+    /// of a FlexRay bus replay and re-export like the file it came from.
+    pub fn write_fr(&mut self, r: &crate::trace::FrRow) {
+        let ts_raw = r.t_us.saturating_mul(1_000); // nanoseconds
+        self.pending.extend_from_slice(&fr_rcv_event(r, ts_raw));
         if self.pending.len() >= CONTAINER_FLUSH_BYTES {
             self.flush_container();
         }
@@ -1917,5 +1953,180 @@ pub(crate) mod tests {
             assert!(n > 0, "expected frames in {path:?}");
             eprintln!("  total: {n} frames");
         }
+    }
+
+    /// A FlexRay row survives the recorder's write -> read round trip: the
+    /// slot, cycle, reception channel, payload and the two header words come
+    /// back unchanged. Before this the recorder could only save CAN, so a
+    /// FlexRay session was unrecoverable.
+    #[test]
+    fn flexray_rows_survive_a_recording_round_trip() {
+        use crate::trace::FrRow;
+        let path = std::env::temp_dir().join(format!("roxy_can_blf_fr_{}.blf", std::process::id()));
+        let rows = vec![
+            FrRow {
+                bus: 0,
+                t_us: 1_000,
+                ab: 0,
+                slot: 13,
+                cycle: 0,
+                payload: vec![0x00, 0xEC, 0x00],
+                header_crc: 0xABCD,
+                flags: 0x1234,
+                name: None,
+            },
+            FrRow {
+                bus: 0,
+                t_us: 2_000,
+                ab: 1,
+                slot: 52,
+                cycle: 5,
+                payload: vec![1, 2, 3, 4],
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            },
+            FrRow {
+                bus: 0,
+                t_us: 3_000,
+                ab: 2,
+                slot: 141,
+                cycle: 12,
+                payload: vec![7; 20],
+                header_crc: 1,
+                flags: 2,
+                name: None,
+            },
+        ];
+        {
+            let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
+            for r in &rows {
+                w.write_fr(r);
+            }
+            w.finish().expect("finish");
+        }
+        let mut stream = BlfStream::open(&path).expect("the FR-only file opens");
+        let mut got: Vec<FrRow> = Vec::new();
+        while stream.peek_fr_t().is_some() {
+            stream.poll_fr_rows(u64::MAX, &mut got);
+        }
+        assert_eq!(got.len(), rows.len(), "every FR row read back");
+        for (g, want) in got.iter().zip(rows.iter()) {
+            assert_eq!(
+                (g.slot, g.cycle, g.ab, &g.payload),
+                (want.slot, want.cycle, want.ab, &want.payload),
+                "the frame coordinates survive"
+            );
+            // The reader rebases a log so its first row lands at zero (that is
+            // where a replay starts), so what survives is the spacing.
+            assert_eq!(
+                g.t_us,
+                want.t_us - rows[0].t_us,
+                "the spacing between rows survives the rebase"
+            );
+            assert_eq!(g.header_crc, want.header_crc, "headerCrc1 survives");
+            assert_eq!(g.flags, want.flags, "frameFlags survive");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The recorder writes both kinds into one container stream, the way a
+    /// real FlexRay session looks: reading it back keeps each side intact and
+    /// the two interleaved in log order.
+    #[test]
+    fn a_mixed_can_and_flexray_recording_reads_back_in_order() {
+        let path = std::env::temp_dir().join(format!(
+            "roxy_can_mixed_{}.blf",
+            std::process::id()
+        ));
+        {
+            let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
+            for i in 0..40u64 {
+                let mut f = CanFrame {
+                    t_us: i * 2_000,
+                    channel: 0,
+                    id: 0x100,
+                    extended: false,
+                    len: 2,
+                    data: [i as u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    dir: Direction::Rx,
+                    flags: FrameFlags::NONE,
+                };
+                f.data[1] = i as u8;
+                w.write(&f);
+                w.write_fr(&crate::trace::FrRow {
+                    bus: 0,
+                    t_us: i * 2_000 + 1_000,
+                    ab: 0,
+                    slot: 13,
+                    cycle: i as u8 % 16,
+                    payload: vec![0x00, i as u8],
+                    header_crc: 0,
+                    flags: 0,
+                    name: None,
+                });
+            }
+            w.finish().expect("finish");
+        }
+        let mut s = BlfStream::open(&path).expect("open");
+        let mut can_ts = Vec::new();
+        while let Some(f) = s.next_frame() {
+            can_ts.push(f.t_us);
+        }
+        let mut fr = Vec::new();
+        while s.peek_fr_t().is_some() {
+            s.poll_fr_rows(u64::MAX, &mut fr);
+        }
+        assert_eq!(can_ts.len(), 40, "every CAN frame reads back");
+        assert!(can_ts.windows(2).all(|w| w[1] > w[0]), "ascending");
+        assert_eq!(fr.len(), 40, "every FlexRay row reads back beside them");
+        assert_eq!(fr[10].slot, 13);
+        assert_eq!(fr[10].payload, vec![0x00, 10]);
+        // The FlexRay row of pair i sits between CAN frames i and i+1.
+        assert_eq!(fr[10].t_us, can_ts[10] + 1_000, "the interleave survives");
+        std::fs::remove_file(&path).ok();
+    }
+}
+
+#[cfg(test)]
+mod record_times {
+    use super::*;
+
+    /// Pinned repro, ignored until fixed: a BLF written by our recorder loses
+    /// its timeline. Three frames a second apart read back within a few
+    /// milliseconds, so replaying a recording runs ~100x too fast. The existing
+    /// round trip missed it: it compares ids, flags and payloads and never
+    /// asserted the stamps.
+    #[test]
+    #[ignore = "recorded BLF collapses its own timestamps; see TODO.md"]
+    fn a_recording_keeps_its_second_apart_frames_a_second_apart() {
+        let path =
+            std::env::temp_dir().join(format!("roxy_can_ts_gap_{}.blf", std::process::id()));
+        {
+            let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
+            for i in 1..=3u64 {
+                w.write(&CanFrame {
+                    t_us: i * 1_000_000,
+                    channel: 0,
+                    id: 0x100,
+                    extended: false,
+                    len: 0,
+                    data: [0u8; MAX_CAN_FD_LEN],
+                    dir: Direction::Rx,
+                    flags: FrameFlags::NONE,
+                });
+            }
+            w.finish().expect("finish");
+        }
+        let mut s = BlfStream::open(&path).expect("open");
+        let mut got = Vec::new();
+        while let Some(f) = s.next_frame() {
+            got.push(f.t_us);
+        }
+        std::fs::remove_file(&path).ok();
+        assert_eq!(got, vec![0, 1_000_000, 2_000_000], "the spacing survives");
     }
 }

@@ -1569,6 +1569,13 @@ impl BusCore {
         if row.t_us == 0 {
             row.t_us = self.sim_t_us;
         }
+        // A FlexRay arrival is traffic like any CAN frame: it counts, and an
+        // open recording captures it, so a FlexRay session survives as a file
+        // that replays and re-exports.
+        self.frame_counter += 1;
+        if self.recorder.recording {
+            self.recorder.write_fr(&row);
+        }
         let agg = self.fr_aggs.entry((row.bus, row.slot)).or_default();
         agg.bus = row.bus;
         // Only a strictly later timestamp marks a real cycle (seek /
@@ -4089,6 +4096,10 @@ mod tests {
         assert_eq!(snap.fr_trace[1].t_us, 2_000, "a real time survives");
         assert_eq!(snap.fr_trace[1].slot, 11);
         assert_eq!(snap.fr_dropped, 0);
+        assert_eq!(
+            core.frame_counter, 2,
+            "a FlexRay arrival counts like any other traffic"
+        );
 
         // A clear resets both ring and view.
         core.fr_trace.clear();
