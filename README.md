@@ -16,7 +16,7 @@
 - **Network 视图**：每条总线一段拓扑，点击节点打开该节点的详情——角色两态声明（带说明文案）——**模拟**（允许按 DBC 声明的周期模拟整个 ECU）/ **离线**（不模拟，未声明即离线）；**该节点的生成器条目、响应规则与脚本也在这里**，一个节点的一切一处看完；顶部 Profile 行下拉应用 `profiles/*.toml` 角色覆盖与硬件映射（all-or-nothing）
 - **节点角色模型**：DBC 是网络拓扑的唯一事实源，角色声明决定"这个节点现在谁扮演"——角色只是闸门，条目发不发还看生成器逐条开关；缺省即离线，restbus 无需配置；`profiles/<名>.toml`（角色覆盖 + `[[hw]]` 硬件映射）+ CLI `--profile` / Network 窗口 Profile 行让同一工程在 simulation / bench / CI 零修改切换，错配整份拒绝
 - **Kvaser / Vector 硬件联动**：canlib32 / vxlapi64 运行时加载（驱动未装各自优雅降级）；Buses 窗口挂接通道（被占用自动降级只收并标注，CAN FD 数据段预设自动申请，不匹配降级经典并标注），适配器收到的帧（含 FD/BRS/ESI 徽标）照常进总线；工具栏 **Simulated / Real bus** 一个开关决定模拟流量上不上线——Real bus 下"模拟"节点的发车（生成器、脚本、反应帧）直接上挂接通道，与 CANoe 的 simulated/real bus 同义
-- **FlexRay 只收监听 + 数据库**：Buses 窗口挂接 FlexRay 能力的 Vector 通道（`--vector-probe` 逐通道 FR 试开，portal 设备能力位不可信时以试开为准），配一份 FIBEX 2.x/3.x 或 AUTOSAR ARXML 描述文件（roxmltree 宽容解析，GBK 编码无碍）即收帧；Trace 窗口 CAN/FlexRay 按时间混排（slot.cycle 地址 + 描述文件帧名 + 可展开的解码信号子行），Messages 按槽位聚合（周期均值±抖动 + 解码信号），调度表一览 slot/周期/通道布局
+- **FlexRay 只收监听 + 集群描述**：Buses 窗口可**同时挂多路** FlexRay（每路一个有 FR 能力的 Vector 端口 + 自己那份 FIBEX 2.x/3.x 或 AUTOSAR ARXML 描述，roxmltree 宽容解析、GBK 编码无碍；`--vector-probe` 逐通道 FR 试开，portal 设备能力位不可信时以试开为准）。槽号跨 cluster 不通用，**每路的帧只按该路的描述解**——帧名、解码信号、调度表都分 `FR{n}`。Trace 与 CAN 按时间混排（slot.cycle 地址 + 帧名 + 可展开的解码信号子行），Messages 按 (bus, 槽) 聚合（周期均值±抖动），Statistics 并列 CAN 报文与 FR 槽位的间隔 min/avg/max，信号可订阅画曲线，帧到达 / 信号越阈可作触发条件。录与放对称：BLF 的 FR_RCVMESSAGE 对象与 ASC 的 `Fr RMSG` 行**读写双向**，`--convert` 与 Trace 的 ASC 导出都保留 FlexRay 流量
 - **回放块**：依附于 DBC 节点（Network 节点详情里创建与编辑）——把该节点录制日志按 id 过滤后注回仿真总线，按录制间距发车——restbus 的落地方案；仅仿真模式生效，绝不与回放模式二次投递
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布——表达式即求值逻辑（`sig()` 读数、数学与波形内建自由组合），派生信号像数据库信号一样进 Graphics / Data / State Tracker
 - **系统变量**：CANoe 式命名空间变量（初值 / 可选界限 / 单位 / 备注）在专用管理窗口定义、随工程保存；脚本 `sys_get` / `sys_set` 读写，写入自动夹到界限内；每个变量发布为可观测流，Data / Graphics 按 namespace 分组直接选用；每次测量开始复位为初值
@@ -25,7 +25,7 @@
 - **仿真节点**：类 CAPL 脚本语言（编译成字节码跑在自带 VM 上）驱动的自定义 ECU 节点——`on start` / `on message`（含 `*` 通配与错误帧事件）/ `on timer`（周期与一次性）事件驱动，读写 DBC 信号、收发帧、随机与波形内建；每回调 10 万指令预算，坏脚本卡不死总线；可**绑定**到 DBC 节点，绑定后发帧受该节点角色闸。编辑器仿 CAPL Browser 三栏：左栏处理器大纲（点击跳转）与**静态收发事实表**（发送集按 DBC 归属标注、响应映射、系统变量访问集），右栏函数模板 / SysVar / 本总线全部报文速插，源码带行号、语法着色与错误行标记。语言参考见 `docs/script_language.md`，可运行示例见 `examples/`
 - **Specification（规格监视）**：实测流量与数据库声明逐条对账，四类判定——Unknown（未知 ID）、Dlc（长度不符）、Cycle（周期漂移）、Missing（掉线）；容差与宽限可调并随工程保存
 - **State Tracker（状态带观察器）**：订阅信号按状态分段绘制——VAL_ 值表标签、二进制方波、会话稳定配色，支持自定义阈值区间（名字 + 颜色）与颜色钉住；碎带按最短显示时长合并，区段表可导出 CSV
-- **录制与回放**：读写 Vector ASC（经典 / FD / 错误 / 远程帧），读取 Vector BLF（raw 与 zlib 压缩容器）；大文件走 mmap 流式加载；播放器式走带控制——倍速增减、倍速直选、可拖动时间轴任意定位；录制支持 id 白名单过滤，Trace 容量可调（50k–2M 帧）且头部被裁时明确提示
+- **录制与回放**：读写 Vector ASC（经典 / FD / 错误 / 远程帧，FlexRay 的 `Fr RMSG` 行）与 Vector BLF（raw 与 zlib 容器；写侧覆盖经典 / FD 报文与 FlexRay 收帧对象，错误帧暂不写）；大文件走 mmap 流式加载；播放器式走带控制——倍速增减与直选、进度条只跟随不回跳（回放按时间戳顺序调度，与 CANoe 的录制模式一样不做随机跳转；要向后快进用 as-fast-as-possible）；录制支持 id 白名单过滤并计入 FlexRay 帧，Trace 容量可调（50k–2M 帧）且头部被裁时明确提示
 - **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、窗口布局全部存一个 JSON；DBC 路径相对工程目录，工程文件夹可整体移动；30 秒自动保存，异常退出后恢复
 - **多桌面**：多个桌面工作区，各自记住观测窗口与全局面板的开关和布局
 - **中文字体**：内嵌 Inconsolata 并合并系统中文字体字形，支持中文输入法（IME）

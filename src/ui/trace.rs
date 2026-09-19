@@ -196,7 +196,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             &mut app.trace_windows[i].fr_expand,
         );
         if ui.is_item_hovered() {
-            ui.tooltip_text("FlexRay 帧下方展开解码后的信号值（需挂接带数据库的 FR 监听）");
+            ui.tooltip_text("FlexRay 帧下方展开解码后的信号值（需该路总线的集群描述数据库）");
         }
         // Time window: two small numeric boxes in seconds -- empty means
         // unbounded on that side. Same parse semantics as the filter's
