@@ -2683,7 +2683,9 @@ impl BusCore {
                 | TriggerCond::ErrorFrame { ch }
                 | TriggerCond::CycleTimeout { ch, .. } => ch,
                 // Global, or aiming at a FlexRay bus: no CAN index to shift.
-                TriggerCond::SysVar { .. } | TriggerCond::FrFramePresent { .. } => continue,
+                TriggerCond::SysVar { .. }
+                | TriggerCond::FrFramePresent { .. }
+                | TriggerCond::FrSignalCross { .. } => continue,
             };
             if *cond_ch > removed {
                 *cond_ch -= 1;
@@ -3698,7 +3700,40 @@ impl BusCore {
                         }
                         true // latch: once seen, it stays seen
                     }
-                    // Everything else watches CAN frames.
+                    TriggerCond::FrSignalCross {
+                        bus,
+                        slot,
+                        signal,
+                        threshold,
+                        rising,
+                    } => {
+                        if row.bus != *bus || row.slot != *slot {
+                            continue;
+                        }
+                        let Some(db) = self.fr_dbs.get(bus) else {
+                            continue; // no description for this cluster
+                        };
+                        match db
+                            .frame_at(row.slot, row.cycle, row.ab)
+                            .and_then(|frame| {
+                                db.decode_signals(frame, &row.payload)
+                                    .into_iter()
+                                    .find(|d| d.name == *signal)
+                            }) {
+                            Some(d) => {
+                                if *rising {
+                                    d.phys >= *threshold
+                                } else {
+                                    d.phys <= *threshold
+                                }
+                            }
+                            // A slot the description has no frame for, or a
+                            // signal it does not declare: no opinion, the
+                            // level holds -- same courtesy as the CAN arm.
+                            None => continue,
+                        }
+                    }
+                    // Everything else watches CAN frames or is swept by step.
                     _ => continue,
                 }
             };
@@ -3781,7 +3816,8 @@ impl BusCore {
                     // or per FlexRay row in `eval_fr_triggers`.
                     TriggerCond::CycleTimeout { .. }
                     | TriggerCond::SysVar { .. }
-                    | TriggerCond::FrFramePresent { .. } => continue,
+                    | TriggerCond::FrFramePresent { .. }
+                    | TriggerCond::FrSignalCross { .. } => continue,
                 }
             };
             let t = &mut self.triggers[i];
@@ -4145,6 +4181,78 @@ mod tests {
         assert_eq!(sub.latest, 42.0, "physical value folded in");
         assert_eq!(sub.last_raw, 42);
         assert_eq!(sub.unit, "km/h", "unit carried from the description");
+    }
+
+    /// A FlexRay signal crossing fires on the value the description computes,
+    /// not on the raw slot: the level follows the decoded signal, a second high
+    /// frame is not a second edge, and only a frame that says otherwise clears
+    /// it -- the same level discipline the CAN `SignalCross` arm uses.
+    #[test]
+    fn a_flexray_signal_crossing_fires_on_the_decoded_value() {
+        let mut core = BusCore::new(Vec::new());
+        core.fr_dbs.insert(0, fr_db_one_signal(12, "Speed", "km/h"));
+        core.triggers.push(crate::trigger::Trigger::new(
+            crate::trigger::TriggerCond::FrSignalCross {
+                bus: 0,
+                slot: 12,
+                signal: "Speed".into(),
+                threshold: 100.0,
+                rising: true,
+            },
+            crate::trigger::TriggerAction::InsertMarker,
+        ));
+        let mut status = String::new();
+        // A free item rather than a closure: the closure would hold `status`
+        // borrowed across the direct calls below.
+        fn fr_fire(core: &mut BusCore, status: &mut String, t_us: u64, v: u8) {
+            let mut row = fr_row(t_us, 12);
+            row.ab = 0;
+            row.cycle = 0;
+            row.payload = vec![v, 0, 0, 0, 0, 0, 0, 0];
+            core.eval_fr_triggers(&row, status);
+            core.ingest_fr_row(row);
+        }
+
+        fr_fire(&mut core, &mut status, 1_000, 17);
+        assert!(core.markers.is_empty(), "17 km/h has not crossed 100");
+        fr_fire(&mut core, &mut status, 2_000, 120);
+        assert_eq!(core.markers, vec![2_000], "the crossing edge marks");
+        fr_fire(&mut core, &mut status, 3_000, 130);
+        assert_eq!(core.markers.len(), 1, "still high is not a new edge");
+        fr_fire(&mut core, &mut status, 4_000, 50);
+        assert_eq!(core.markers.len(), 1, "going low marks nothing");
+        fr_fire(&mut core, &mut status, 5_000, 150);
+        assert_eq!(
+            core.markers,
+            vec![2_000, 5_000],
+            "and the next crossing is a fresh edge"
+        );
+
+        // Another cluster's slot 12 is not this rule's slot 12, and a rule
+        // naming a signal the description lacks never fires.
+        let mut other = fr_row(6_000, 12);
+        other.bus = 1;
+        other.ab = 0;
+        other.cycle = 0;
+        other.payload = vec![200, 0, 0, 0, 0, 0, 0, 0];
+        core.eval_fr_triggers(&other, &mut status);
+        assert_eq!(core.markers.len(), 2, "the other bus is not this one's");
+        core.triggers.push(crate::trigger::Trigger::new(
+            crate::trigger::TriggerCond::FrSignalCross {
+                bus: 0,
+                slot: 12,
+                signal: "Absent".into(),
+                threshold: 0.0,
+                rising: true,
+            },
+            crate::trigger::TriggerAction::InsertMarker,
+        ));
+        fr_fire(&mut core, &mut status, 7_000, 200);
+        assert_eq!(
+            core.markers.len(),
+            2,
+            "an undecodable signal holds the level and never fires"
+        );
     }
 
     /// Two clusters, two descriptions, the same slot number: each bus decodes

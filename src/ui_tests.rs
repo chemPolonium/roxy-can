@@ -569,6 +569,19 @@ fn editor_popups_draw_without_panicking() {
         "the new rule points at the cluster with a description"
     );
     frames(&mut app, &mut ctx, 3);
+    // ...and its signal crossing sibling, whose picker lists the signals that
+    // slot declares. `push_trigger` already opens the editor on the new row.
+    app.add_fr_signal_trigger();
+    app.settle();
+    assert!(
+        matches!(
+            app.snap.triggers.last().map(|t| &t.cond),
+            Some(crate::trigger::TriggerCond::FrSignalCross { .. })
+        ),
+        "the row is the crossing kind"
+    );
+    assert!(app.trig_draft.is_some(), "and its editor is open");
+    frames(&mut app, &mut ctx, 3);
 }
 
 /// A plot window must not starve the replay it is plotting. The real

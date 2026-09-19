@@ -48,6 +48,18 @@ pub enum TriggerCond {
     /// index, not a CAN channel -- the two numbering spaces are separate, so
     /// nothing here may hand one to the other.
     FrFramePresent { bus: u8, slot: u16 },
+    /// A decoded FlexRay signal at or past a threshold. The identity is the
+    /// subscription key's own triple `(bus, slot, signal)`, so a trigger and a
+    /// Graphics curve name the same value. Unlike `SignalCross`, whose level
+    /// holds between its message's frames in silence, this one can only move
+    /// when the slot carries a frame -- a quiet cluster keeps the last verdict.
+    FrSignalCross {
+        bus: u8,
+        slot: u16,
+        signal: String,
+        threshold: f64,
+        rising: bool,
+    },
     /// A system variable at or past a threshold (`rising`), or at/below
     /// it with `rising == false`. Swept once per step against the live
     /// registry -- sysvars are the user-input channel, so "the operator
@@ -134,23 +146,27 @@ impl TriggerCond {
             | TriggerCond::IdPresent { ch, .. }
             | TriggerCond::ErrorFrame { ch }
             | TriggerCond::CycleTimeout { ch, .. } => Some(*ch),
-            // System variables are global; FlexRay slots name a cluster.
-            TriggerCond::SysVar { .. } | TriggerCond::FrFramePresent { .. } => None,
+            // System variables are global; a FlexRay rule names a cluster.
+            TriggerCond::SysVar { .. }
+            | TriggerCond::FrFramePresent { .. }
+            | TriggerCond::FrSignalCross { .. } => None,
         }
     }
 
-    /// The FlexRay bus a condition watches.
+    /// The FlexRay bus a rule watches, whichever FlexRay condition it is.
     pub fn fr_bus(&self) -> Option<u8> {
         match self {
-            TriggerCond::FrFramePresent { bus, .. } => Some(*bus),
+            TriggerCond::FrFramePresent { bus, .. } | TriggerCond::FrSignalCross { bus, .. } => {
+                Some(*bus)
+            }
             _ => None,
         }
     }
 
     /// True for conditions whose level is a **latch** -- once the event is
     /// seen the level stays true for the run. Re-arming means clearing
-    /// exactly these; signal-cross and cycle-timeout levels are real
-    /// levels and must never be touched.
+    /// exactly these; the crossing and timeout conditions carry real levels,
+    /// which a frame or a value moves back down, and must never be touched.
     pub fn latches_once(&self) -> bool {
         matches!(
             self,
@@ -180,6 +196,16 @@ impl TriggerCond {
             TriggerCond::ErrorFrame { .. } => "error frames".to_string(),
             TriggerCond::CycleTimeout { id, .. } => format!("0x{id:X} timeout"),
             TriggerCond::FrFramePresent { slot, .. } => format!("slot {slot} frame"),
+            TriggerCond::FrSignalCross {
+                slot,
+                signal,
+                threshold,
+                rising,
+                ..
+            } => format!(
+                "{signal} {} {threshold} @ slot {slot}",
+                if *rising { ">=" } else { "<=" }
+            ),
             TriggerCond::SysVar {
                 key,
                 threshold,
@@ -220,6 +246,20 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// Signal names the cluster description declares in `slot` on `bus`, for
+    /// the editor's FlexRay signal picker; empty when the bus has no
+    /// description or the slot declares no signals.
+    pub fn fr_signal_names(&self, bus: u8, slot: u16) -> Vec<String> {
+        self.fr_db(bus)
+            .and_then(|db| {
+                db.slot_signals()
+                    .into_iter()
+                    .find(|(s, _, _)| *s == slot)
+                    .map(|(_, _, names)| names)
+            })
+            .unwrap_or_default()
+    }
+
     pub fn add_signal_trigger(&mut self) {
         // Default to the database's first message and signal so the row
         // starts watching something real instead of a blind id.
@@ -247,25 +287,37 @@ impl App {
         self.push_trigger(TriggerCond::IdPresent { ch: 0, id: 0x100 });
     }
 
-    /// Arms a FlexRay frame-arrival rule, defaulting to the first static slot
-    /// of the first loaded cluster description so the row watches a slot that
-    /// exists. With no description loaded there is nothing to name, and slot 1
-    /// is at least editable in the popup.
+    /// The first FlexRay cluster's first slot that declares signals, with those
+    /// signal names, so a new FlexRay rule starts watching something a curve
+    /// could actually be drawn from. `(0, 1, [])` when no description is loaded
+    /// to ask -- the popup still lets the user type a slot.
+    fn fr_default_slot(&self) -> (u8, u16, Vec<String>) {
+        for (bus, cfg) in self.fr_buses.iter() {
+            if let Some((slot, _, names)) = cfg.db.slot_signals().into_iter().next() {
+                return (*bus, slot, names);
+            }
+        }
+        (0, 1, Vec::new())
+    }
+
     pub fn add_fr_trigger(&mut self) {
-        let (bus, slot) = match self.fr_buses.iter().next() {
-            Some((bus, cfg)) => (
-                *bus,
-                cfg.db
-                    .frames
-                    .iter()
-                    .map(|f| f.triggering.slot_id)
-                    .min()
-                    .map(|s| s as u16)
-                    .unwrap_or(1),
-            ),
-            None => (0, 1),
-        };
+        let (bus, slot, _) = self.fr_default_slot();
         self.push_trigger(TriggerCond::FrFramePresent { bus, slot });
+    }
+
+    pub fn add_fr_signal_trigger(&mut self) {
+        let (bus, slot, names) = self.fr_default_slot();
+        let signal = names
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Signal".to_string());
+        self.push_trigger(TriggerCond::FrSignalCross {
+            bus,
+            slot,
+            signal,
+            threshold: 0.0,
+            rising: true,
+        });
     }
 
     pub fn add_error_trigger(&mut self) {

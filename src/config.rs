@@ -1033,11 +1033,26 @@ impl Config {
                             rising,
                         } => (4, 0, 0, false, key.clone(), *threshold, *rising),
                         // A FlexRay rule's `ch` is a FlexRay bus index and its
-                        // `id` the slot: `kind` 5 is what says so, and no
+                        // `id` the slot: `kind` 5/6 is what says so, and no
                         // arbitration id is invented for a schedule position.
                         TriggerCond::FrFramePresent { bus, slot } => {
                             (5, *bus, u32::from(*slot), false, String::new(), 0.0, false)
                         }
+                        TriggerCond::FrSignalCross {
+                            bus,
+                            slot,
+                            signal,
+                            threshold,
+                            rising,
+                        } => (
+                            6,
+                            *bus,
+                            u32::from(*slot),
+                            false,
+                            signal.clone(),
+                            *threshold,
+                            *rising,
+                        ),
                     };
                     TriggerCfg {
                         kind,
@@ -1400,10 +1415,17 @@ impl Config {
                         rising: c.rising,
                     },
                     // A FlexRay rule's `ch` is a FlexRay bus index and its `id`
-                    // the slot; kind 5 is what says so.
+                    // the slot; kind 5/6 is what says so.
                     5 => TriggerCond::FrFramePresent {
                         bus: c.ch,
                         slot: c.id.min(u32::from(u16::MAX)) as u16,
+                    },
+                    6 => TriggerCond::FrSignalCross {
+                        bus: c.ch,
+                        slot: c.id.min(u32::from(u16::MAX)) as u16,
+                        signal: c.signal.clone(),
+                        threshold: c.threshold,
+                        rising: c.rising,
                     },
                     _ => return None,
                 };
@@ -1943,7 +1965,7 @@ mod tests {
         );
     }
 
-    /// A FlexRay rule persists as kind 5, which is what states that `ch` names
+    /// A FlexRay rule persists as kind 5/6, which is what states that `ch` names
     /// a FlexRay bus and `id` a schedule slot. Reloaded as any other kind it
     /// would become a CAN watch on a made-up arbitration id.
     #[test]
@@ -1954,11 +1976,28 @@ mod tests {
             TriggerCond::FrFramePresent { bus: 1, slot: 13 },
             TriggerAction::StartRecording,
         ));
+        app.triggers.push(Trigger::new(
+            TriggerCond::FrSignalCross {
+                bus: 0,
+                slot: 24,
+                signal: "CarSpeed".into(),
+                threshold: 118.0,
+                rising: false,
+            },
+            TriggerAction::InsertMarker,
+        ));
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         assert!(
             json.contains(r#""kind":5"#) && json.contains(r#""id":13"#) && json.contains(r#""ch":1"#),
             "the slot is stored as a slot: {json}"
+        );
+        assert!(
+            json.contains(r#""kind":6"#)
+                && json.contains(r#""id":24"#)
+                && json.contains("CarSpeed")
+                && json.contains(r#""rising":false"#),
+            "so is the signal, its threshold and its edge: {json}"
         );
 
         let mut restored = App::headless();
@@ -1970,6 +2009,18 @@ mod tests {
             TriggerCond::FrFramePresent { bus: 1, slot: 13 },
             "and comes back as the same cluster's slot"
         );
+        assert_eq!(
+            restored.snap.triggers[1].cond,
+            TriggerCond::FrSignalCross {
+                bus: 0,
+                slot: 24,
+                signal: "CarSpeed".into(),
+                threshold: 118.0,
+                rising: false,
+            },
+            "the FlexRay crossing condition survives whole"
+        );
+        assert_eq!(restored.snap.triggers[1].action, TriggerAction::InsertMarker);
     }
 
     /// The bitrates feed the load view's arithmetic, so a saved opinion about

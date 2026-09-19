@@ -24,7 +24,8 @@ impl TrigDraft {
             // The FlexRay slot is edited as a number, not a hex id.
             TriggerCond::ErrorFrame { .. }
             | TriggerCond::SysVar { .. }
-            | TriggerCond::FrFramePresent { .. } => String::new(),
+            | TriggerCond::FrFramePresent { .. }
+            | TriggerCond::FrSignalCross { .. } => String::new(),
         };
         TrigDraft {
             index,
@@ -84,6 +85,10 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     if ui.button("+ FlexRay frame") {
         app.add_fr_trigger();
+    }
+    ui.same_line();
+    if ui.button("+ FlexRay signal") {
+        app.add_fr_signal_trigger();
     }
     ui.same_line();
     if ui.button("+ Timeout") {
@@ -231,6 +236,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             TriggerCond::CycleTimeout { .. } => "cycle timeout",
             TriggerCond::ErrorFrame { .. } => "error frames",
             TriggerCond::FrFramePresent { .. } => "FlexRay frame",
+            TriggerCond::FrSignalCross { .. } => "FlexRay signal",
             TriggerCond::SysVar { .. } => "system variable",
         };
         ui.text(format!(
@@ -268,10 +274,8 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                 let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
                 let mut pick = buses.iter().position(|b| *b == fr_bus).unwrap_or(0);
                 ui.set_next_item_width(-1.0);
-                if ui.combo_simple_string("##trigfrbus", &mut pick, &refs)
-                    && let TriggerCond::FrFramePresent { bus, .. } = &mut draft.cond
-                {
-                    *bus = buses[pick.min(buses.len() - 1)];
+                if ui.combo_simple_string("##trigfrbus", &mut pick, &refs) {
+                    set_fr_bus(&mut draft.cond, buses[pick.min(buses.len() - 1)]);
                 }
             });
         } else if !matches!(draft.cond, TriggerCond::SysVar { .. }) {
@@ -287,6 +291,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             });
         }
         let cond_bus = draft.cond.can_bus().unwrap_or(0);
+        let fr_bus = draft.cond.fr_bus();
         match &mut draft.cond {
             TriggerCond::SignalCross {
                 id,
@@ -317,23 +322,8 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                         }
                     }
                 });
-                row(ui, "Threshold", |ui| {
-                    let mut th = *threshold as f32;
-                    let th_fmt = NumericFormat::new("%g").expect("static format");
-                    if ui
-                        .input_float_config("##trigth")
-                        .display_format(th_fmt)
-                        .build(&mut th)
-                    {
-                        *threshold = th as f64;
-                    }
-                });
-                row(ui, "Direction", |ui| {
-                    let mut dir = *rising as usize;
-                    if ui.combo_simple_string("##trigdir", &mut dir, &["rising", "falling"]) {
-                        *rising = dir == 0;
-                    }
-                });
+                threshold_row(ui, "##trigth", threshold);
+                direction_row(ui, rising);
             }
             TriggerCond::IdPresent { id, .. } => {
                 row(ui, "Message", |ui| {
@@ -341,15 +331,41 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                 });
             }
             TriggerCond::FrFramePresent { slot, .. } => {
-                // Decimal: a slot number is a schedule position, not an
-                // identifier to be read in hex like a CAN arbitration id.
-                row(ui, "Slot", |ui| {
+                slot_row(ui, slot);
+            }
+            // The FlexRay crossing condition's identity is the subscription
+            // key's own `(bus, slot, signal)`, so its editor asks the same
+            // description a curve would: the slot, then one of the signals that
+            // slot declares.
+            TriggerCond::FrSignalCross {
+                slot,
+                signal,
+                threshold,
+                rising,
+                ..
+            } => {
+                slot_row(ui, slot);
+                row(ui, "Signal", |ui| {
+                    let names = app.fr_signal_names(fr_bus.unwrap_or(0), *slot);
                     ui.set_next_item_width(-1.0);
-                    let mut s = *slot as i32;
-                    if ui.input_int_config("##trigfrslot").step(1).build(&mut s) {
-                        *slot = s.clamp(1, i32::from(u16::MAX)) as u16;
+                    if names.is_empty() {
+                        // Nothing to pick from: keep the name editable by hand,
+                        // and evaluation says nothing until it names a signal
+                        // the description declares.
+                        let mut s = signal.clone();
+                        if ui.input_text("##trigfrsignal", &mut s).build() {
+                            *signal = s;
+                        }
+                    } else {
+                        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                        let mut pick = refs.iter().position(|n| n == &signal.as_str()).unwrap_or(0);
+                        if ui.combo_simple_string("##trigfrsignal", &mut pick, &refs) {
+                            *signal = names[pick].clone();
+                        }
                     }
                 });
+                threshold_row(ui, "##trigfrth", threshold);
+                direction_row(ui, rising);
             }
             TriggerCond::SysVar {
                 key,
@@ -520,15 +536,66 @@ fn row(ui: &Ui, label: &str, body: impl FnOnce(&Ui)) {
     body(ui);
 }
 
+/// The threshold line, shared by the CAN and FlexRay crossing conditions. The
+/// caller's `id` keeps the two widgets distinguishable when a rule changes kind
+/// under the still-open popup.
+fn threshold_row(ui: &Ui, id: &str, threshold: &mut f64) {
+    row(ui, "Threshold", |ui| {
+        let mut th = *threshold as f32;
+        let th_fmt = NumericFormat::new("%g").expect("static format");
+        ui.set_next_item_width(-1.0);
+        if ui
+            .input_float_config(id)
+            .display_format(th_fmt)
+            .build(&mut th)
+        {
+            *threshold = th as f64;
+        }
+    });
+}
+
+fn direction_row(ui: &Ui, rising: &mut bool) {
+    row(ui, "Direction", |ui| {
+        let mut dir = *rising as usize;
+        if ui.combo_simple_string("##trigdir", &mut dir, &["rising", "falling"]) {
+            *rising = dir == 0;
+        }
+    });
+}
+
+/// A FlexRay slot number, edited as the decimal schedule position it is -- not
+/// in hex like a CAN arbitration id.
+fn slot_row(ui: &Ui, slot: &mut u16) {
+    row(ui, "Slot", |ui| {
+        ui.set_next_item_width(-1.0);
+        let mut s = *slot as i32;
+        if ui.input_int_config("##trigfrslot").step(1).build(&mut s) {
+            *slot = s.clamp(1, i32::from(u16::MAX)) as u16;
+        }
+    });
+}
+
 fn set_bus(cond: &mut TriggerCond, ch: u8) {
     match cond {
         TriggerCond::SignalCross { ch: c, .. }
         | TriggerCond::IdPresent { ch: c, .. }
         | TriggerCond::CycleTimeout { ch: c, .. }
         | TriggerCond::ErrorFrame { ch: c } => *c = ch,
-        // Global, and its bus comes from the cluster on offer: no CAN channel
-        // to point a FlexRay rule at.
-        TriggerCond::SysVar { .. } | TriggerCond::FrFramePresent { .. } => {}
+        // Global, and the FlexRay ones' bus comes from the cluster combo: no
+        // CAN channel to point them at.
+        TriggerCond::SysVar { .. }
+        | TriggerCond::FrFramePresent { .. }
+        | TriggerCond::FrSignalCross { .. } => {}
+    }
+}
+
+/// Points a FlexRay rule at another cluster.
+fn set_fr_bus(cond: &mut TriggerCond, bus: u8) {
+    match cond {
+        TriggerCond::FrFramePresent { bus: b, .. } | TriggerCond::FrSignalCross { bus: b, .. } => {
+            *b = bus
+        }
+        _ => {}
     }
 }
 
