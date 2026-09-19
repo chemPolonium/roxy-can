@@ -819,28 +819,41 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut frames = 0usize;
-        let mut raw_dumped = false;
+        // A live cluster delivers a frame per millisecond, so the report shows
+        // the first few and counts the rest -- a probe that drowns the terminal
+        // is not a diagnostic.
+        let mut shown = 0usize;
+        // And up to eight *distinct* event headers, deduplicated on the 40
+        // bytes ahead of the payload: one event confirms the offsets already
+        // known, a handful that differ from each other is what pins down the
+        // ones that are not (the reception channel A/B above all).
+        const KEEP_HEADERS: usize = 8;
+        let mut seen: Vec<[u8; 40]> = Vec::new();
         while std::time::Instant::now() < deadline {
             match ch.try_read_with_raw() {
                 Some((f, raw)) => {
                     frames += 1;
-                    s.push_str(&format!(
-                        "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
-                        f.slot,
-                        f.cycle,
-                        f.payload.len(),
-                        f.header_crc
-                    ));
-                    // The first frame's raw header, so a real session can
-                    // pin down the unverified offsets (reception channel
-                    // A/B notably).
-                    if !raw_dumped {
-                        raw_dumped = true;
+                    if shown < 10 {
+                        shown += 1;
                         s.push_str(&format!(
-                            "  first event, raw bytes 0..64 (known: size@0 tag@4 flags@32 headerCRC@34 slot@36 cycle@38 len@39 data@40):\n    {:02x?}\n    {:02x?}\n",
-                            &raw[..32],
-                            &raw[32..],
+                            "  frame slot={} cycle={} len={} crc=0x{:04X}\n",
+                            f.slot,
+                            f.cycle,
+                            f.payload.len(),
+                            f.header_crc
                         ));
+                    }
+                    if seen.len() < KEEP_HEADERS {
+                        let head: [u8; 40] = raw[..40].try_into().expect("40 bytes");
+                        if !seen.contains(&head) {
+                            seen.push(head);
+                            s.push_str(&format!(
+                                "  event {} raw bytes 0..64 (known: size@0 tag@4 flags@32 headerCRC@34 slot@36 cycle@38 len@39 data@40):\n    {:02x?}\n    {:02x?}\n",
+                                seen.len(),
+                                &raw[..32],
+                                &raw[32..],
+                            ));
+                        }
                     }
                 }
                 None => {
@@ -848,7 +861,10 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
                 }
             }
         }
-        s.push_str(&format!("  drained {frames} frame(s)\n"));
+        s.push_str(&format!(
+            "  drained {frames} frame(s), {shown} shown, {} distinct event header(s) dumped\n",
+            seen.len()
+        ));
     }
     Ok(s)
 }

@@ -113,6 +113,12 @@
 - `TriggerCond::FrSignalCross { bus, slot, signal, threshold, rising }`：电平跟着解出的物理值（与 CAN `SignalCross` 同样的"高企期间再来一帧不算新边沿、只有说相反的话才清零"），解不出（该 bus 没描述、槽解不出帧、信号不存在）就**不动电平**，不报错。回归 `a_flexray_signal_crossing_fires_on_the_decoded_value`（含"别的路 cluster 的同号槽不算"）。
 - UI：`+ FlexRay signal` 按钮；编辑器里 cluster 下拉对两种 FR 规则共用（`set_fr_bus`），槽十进制输入框、信号下拉列该槽声明的信号（`App::fr_signal_names`，走该 bus 自己的描述），阈值/方向两行提成了 `threshold_row`/`direction_row` 共用助手。工程 `kind = 6`，回归 `a_flexray_trigger_keeps_its_kind_and_slot` 扩到两种 FR 规则；`editor_popups_draw_without_panicking` 画到这一种。
 
+### 2026-09-20：一条"待优化"实测否决 + 给台架留够原始事件
+
+- **`slot_signals()` 每帧重算不再算优化项**（实测，`--release`，5000 次循环）：48 帧的 ARXML **4.5 µs/次**、6 帧的 FIBEX **1.7 µs/次**，约 90 ns/帧 —— 它走的是已解析的帧表（线性于帧数），文档级的二次开销早在 `DocIndex` 那批消掉了。弹窗开着时每秒 60 次也只有几十微秒。**没有新数字就别再动它**。
+- **`--vector-probe` 的 FlexRay 采集改成能给离线分析用的样本**：原来每个通道只印**第一帧**的原始 64 字节，而真正要定的偏移（接收通道 A/B）恰恰要看彼此不同的事件；现在按**载荷前 40 字节去重**，每通道最多印 8 个不同事件头的原始字节。顺带修了刷屏：活的 cluster 每毫秒一帧，逐帧印行会把终端埋掉，现在最多印 10 帧解码结果，末行给"N frame(s), M shown, K distinct event header(s) dumped"。—— 这一条是 S5 的前置：用户接上 VN7640 跑一次，把这段输出贴回来就能定 `ab`（以及验证 BLF 里 frameId/slot 的口径）。
+
+
 
 
 
