@@ -57,6 +57,13 @@ pub struct FrSlotAgg {
     pub count: u64,
     pub last_t_us: u64,
     pub cycle_us: f64,
+    /// Extremes of the observed inter-arrival intervals, as on the CAN side --
+    /// the smoothed `cycle_us` alone cannot show a slot that is mostly steady
+    /// with the occasional late cycle. Zero means no interval yet (CAN keeps
+    /// its floor at `f64::MAX` instead; a FlexRay slot starts at zero because
+    /// `or_default` builds it, and the views only read these from `count >= 2`).
+    pub min_us: f64,
+    pub max_us: f64,
     pub jitter_us: f64,
     pub payload: Vec<u8>,
     /// The frame name the log carried, when the format names frames.

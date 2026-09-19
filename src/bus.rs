@@ -146,10 +146,11 @@ pub enum BusCommand {
     /// Replay-speed multiplier applied to the log source. (The remembered
     /// choice for the next run and the combo's display stay frontend.)
     SetReplaySpeed(f64),
-    /// Loads (or clears, with `None`) the FlexRay description database the
-    /// core decodes arriving FlexRay frames against, so their signals can feed
-    /// the Graphics / Data / State observers during replay.
-    SetFrDb(Option<Arc<crate::fr_db::FrDb>>),
+    /// Replaces the FlexRay descriptions the core decodes arriving frames
+    /// against, one per bus: their signals feed the Graphics / Data / State
+    /// observers during replay and live watch. The whole map moves at once so
+    /// the core's view can never hold a bus the frontend dropped.
+    SetFrDbs(std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>),
     /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
     /// dedupes on that pair, so the key is stable where an index would
     /// shift under the sender's feet.
@@ -842,11 +843,12 @@ pub struct BusCore {
     pub(crate) published_fr: Arc<crate::trace::FrTraceView>,
     /// Per-(bus, slot) FlexRay tallies behind the Messages window's FR rows.
     pub(crate) fr_aggs: HashMap<(u8, u16), crate::aggregate::FrSlotAgg>,
-    /// The parsed FlexRay description database, when the project has loaded
-    /// one. Held here (not only in the frontend) so an arriving FlexRay frame
-    /// can be decoded to numeric signals and folded into subscriptions for the
-    /// Graphics / Data / State observers, exactly like a CAN frame's signals.
-    pub(crate) fr_db: Option<Arc<crate::fr_db::FrDb>>,
+    /// The parsed FlexRay descriptions, one per bus, when the project has
+    /// loaded them. Held here (not only in the frontend) so an arriving
+    /// FlexRay frame can be decoded against *its own cluster's* description and
+    /// folded into subscriptions for the Graphics / Data / State observers,
+    /// exactly like a CAN frame's signals.
+    pub(crate) fr_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -983,7 +985,7 @@ impl BusCore {
             fr_trace: crate::trace::FrRing::default(),
             published_fr: Arc::new(crate::trace::FrTraceView::default()),
             fr_aggs: HashMap::new(),
-            fr_db: None,
+            fr_dbs: Default::default(),
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -1276,7 +1278,7 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
-            BusCommand::SetFrDb(db) => self.fr_db = db,
+            BusCommand::SetFrDbs(dbs) => self.fr_dbs = dbs,
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
                 // `next_t_us` still sits at the last slot before the entry
@@ -1449,20 +1451,22 @@ impl BusCore {
             } => match channel_index {
                 Some(idx) => {
                     // The description is configured from the database the
-                    // frontend already parsed and pushed with `SetFrDb`;
-                    // re-reading the file here parsed it a second time.
-                    match self.fr_db.clone() {
-                        Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, &db) {
+                    // frontend parsed for *this* bus and pushed with
+                    // `SetFrDbs`; re-reading the file here parsed it a second
+                    // time.
+                    match self.fr_dbs.get(&bus) {
+                        Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, db) {
                             Ok(()) => {
                                 *status =
                                     format!("FlexRay 监听已挂接: FR{bus} / Vector ch{idx}（只收）");
                             }
                             Err(e) => {
-                                *status = format!("FlexRay 监听挂接失败: {e}");
+                                *status = format!("FlexRay 监听挂接失败: FR{bus} {e}");
                             }
                         },
                         None => {
-                            *status = "FlexRay 监听挂接失败: 尚未解析 FlexRay 描述文件".to_string()
+                            *status =
+                                format!("FlexRay 监听挂接失败: FR{bus} 尚未解析描述文件")
                         }
                     }
                 }
@@ -1594,6 +1598,14 @@ impl BusCore {
             } else {
                 agg.jitter_us * 0.9 + dev * 0.1
             };
+            // Zero means "no interval yet", so the floor is set by the first
+            // real one rather than by a sentinel the views would have to know.
+            if agg.min_us == 0.0 || dt < agg.min_us {
+                agg.min_us = dt;
+            }
+            if dt > agg.max_us {
+                agg.max_us = dt;
+            }
         }
         agg.slot = row.slot;
         agg.count += 1;
@@ -1606,12 +1618,12 @@ impl BusCore {
         agg.payload = row.payload.clone();
         // Fold the frame's FlexRay signals into their subscriptions so the
         // Graphics / Data / State / Monitor observers can plot live values,
-        // mirroring [`BusCore::ingest`]'s CAN fold. `fr_db` is cloned to an
-        // owned `Arc` so decoding it does not borrow `self` while `subs` is
-        // mutated. Rows for a slot the database has no frame for decode to
+        // mirroring [`BusCore::ingest`]'s CAN fold. The row's own cluster
+        // supplies the description, because a slot number means nothing on
+        // another one; rows for a slot its database has no frame for decode to
         // nothing, which is the same "watch-only" outcome as before.
         if !self.subs.is_empty()
-            && let Some(db) = self.fr_db.clone()
+            && let Some(db) = self.fr_dbs.get(&row.bus)
             && let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab)
         {
             let stride = self.applied_stride_us;
@@ -4010,15 +4022,12 @@ mod tests {
         assert_eq!(second.cycle_us, 2000.0, "its cycle mixes only its own arrivals");
     }
 
-    /// With a FlexRay description database loaded, an arriving FR frame
-    /// decodes into its signals and folds into the subscriptions -- the same
-    /// live-value path a CAN frame drives, which is what lets the observers
-    /// plot a FlexRay signal during replay.
-    #[test]
-    fn flexray_frames_fold_signals_into_subscriptions() {
+    /// A one-PDU, one-frame description whose single 8-bit signal at slot
+    /// `slot` reads the payload's first byte.
+    fn fr_db_one_signal(slot: u16, sig_name: &str, unit: &str) -> std::sync::Arc<crate::fr_db::FrDb> {
         use crate::fr_db::{FrChannel, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
         let sig = FrSignal {
-            name: "Speed".into(),
+            name: sig_name.into(),
             start_bit: 0,
             length_bits: 8,
             big_endian: false,
@@ -4027,7 +4036,7 @@ mod tests {
             offset: 0.0,
             min: 0.0,
             max: 255.0,
-            unit: "km/h".into(),
+            unit: unit.into(),
             comment: String::new(),
             value_descriptions: vec![],
         };
@@ -4039,12 +4048,12 @@ mod tests {
             signals: vec![sig],
         };
         let frame = FrFrameDb {
-            name: "F1".into(),
+            name: format!("F{slot}"),
             length: 8,
             payload_preamble: false,
             triggering: FrTriggering {
                 channel: FrChannel::Both,
-                slot_id: 12,
+                slot_id: u32::from(slot),
                 base_cycle: 0,
                 cycle_repetition: 1,
                 startup: false,
@@ -4052,15 +4061,22 @@ mod tests {
             pdus: vec![("P1".into(), 0u32)],
             comment: String::new(),
         };
-        let db = std::sync::Arc::new(FrDb::assemble(
+        std::sync::Arc::new(FrDb::assemble(
             Default::default(),
             vec![],
             vec![pdu],
             vec![frame],
-        ));
+        ))
+    }
 
+    /// With a FlexRay description database loaded, an arriving FR frame
+    /// decodes into its signals and folds into the subscriptions -- the same
+    /// live-value path a CAN frame drives, which is what lets the observers
+    /// plot a FlexRay signal during replay.
+    #[test]
+    fn flexray_frames_fold_signals_into_subscriptions() {
         let mut core = BusCore::new(Vec::new());
-        core.fr_db = Some(db);
+        core.fr_dbs.insert(0, fr_db_one_signal(12, "Speed", "km/h"));
         let key = crate::app::fr_signal_key(0, 12, "Speed");
         core.subscribe_signal(key.clone());
 
@@ -4074,6 +4090,50 @@ mod tests {
         assert_eq!(sub.latest, 42.0, "physical value folded in");
         assert_eq!(sub.last_raw, 42);
         assert_eq!(sub.unit, "km/h", "unit carried from the description");
+    }
+
+    /// Two clusters, two descriptions, the same slot number: each bus decodes
+    /// against its own file. Merging them into one description -- which is what
+    /// a single global database amounted to -- would hand bus 1's frames bus 0's
+    /// signal names, or decode to nothing.
+    #[test]
+    fn each_flexray_bus_decodes_against_its_own_description() {
+        let mut core = BusCore::new(Vec::new());
+        core.fr_dbs.insert(0, fr_db_one_signal(12, "Speed", "km/h"));
+        core.fr_dbs.insert(1, fr_db_one_signal(12, "Torque", "Nm"));
+        let on0 = crate::app::fr_signal_key(0, 12, "Speed");
+        let on1 = crate::app::fr_signal_key(1, 12, "Torque");
+        // The names that belong to the *other* cluster: subscribing them
+        // proves no row leaks across buses.
+        let wrong0 = crate::app::fr_signal_key(0, 12, "Torque");
+        let wrong1 = crate::app::fr_signal_key(1, 12, "Speed");
+        for key in [&on0, &on1, &wrong0, &wrong1] {
+            core.subscribe_signal(key.clone());
+        }
+
+        for bus in [0u8, 1u8] {
+            let mut row = fr_row(1_000, 12);
+            row.bus = bus;
+            row.ab = 0;
+            row.cycle = 0;
+            row.payload = vec![7, 0, 0, 0, 0, 0, 0, 0];
+            core.ingest_fr_row(row);
+        }
+
+        assert_eq!(core.subs.get(&on0).expect("sub").latest, 7.0);
+        assert_eq!(core.subs.get(&on1).expect("sub").latest, 7.0);
+        assert_eq!(core.subs.get(&on0).expect("sub").unit, "km/h");
+        assert_eq!(core.subs.get(&on1).expect("sub").unit, "Nm");
+        assert_eq!(
+            core.subs.get(&wrong0).expect("sub").latest,
+            0.0,
+            "bus 0 has no Torque signal to fold"
+        );
+        assert_eq!(
+            core.subs.get(&wrong1).expect("sub").latest,
+            0.0,
+            "bus 1 has no Speed signal to fold"
+        );
     }
 
     /// The FR ring publishes through the same lifecycle as the CAN ring:
@@ -4152,11 +4212,11 @@ mod tests {
         assert!(core.hw.fr_watch.is_none());
     }
 
-    /// The watch configures itself from the database pushed with `SetFrDb`, so
-    /// a request that arrives before any description -- or after the one the
-    /// core held was cleared -- is refused without a driver call. Description
-    /// *validity* (a DBC is no cluster spec) is now the frontend's gate:
-    /// `FrDb::parse` there rejects it before anything reaches the bus.
+    /// The watch configures itself from the database pushed with `SetFrDbs`, so
+    /// a request for a bus with no description of its own -- or after the one
+    /// the core held was cleared -- is refused without a driver call.
+    /// Description *validity* (a DBC is no cluster spec) is now the frontend's
+    /// gate: `FrDb::parse` there rejects it before anything reaches the bus.
     #[test]
     fn fr_watch_requires_a_description_the_core_holds() {
         let mut core = BusCore::new(Vec::new());
@@ -4176,8 +4236,17 @@ mod tests {
         if let Ok(bytes) = bytes {
             let text = crate::dbc::text_from_bytes(bytes);
             let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));
-            core.handle(BusCommand::SetFrDb(Some(db)), &mut status);
-            core.handle(BusCommand::SetFrDb(None), &mut status);
+            let mut dbs = std::collections::BTreeMap::new();
+            // The description belongs to bus 1; asking for a watch on bus 0 is
+            // still a bus with no description.
+            dbs.insert(1u8, db);
+            core.handle(BusCommand::SetFrDbs(dbs.clone()), &mut status);
+            core.handle(watch(), &mut status);
+            assert!(
+                status.contains("尚未解析"),
+                "another bus's description does not count: {status}"
+            );
+            core.handle(BusCommand::SetFrDbs(Default::default()), &mut status);
             core.handle(watch(), &mut status);
             assert!(
                 status.contains("尚未解析"),

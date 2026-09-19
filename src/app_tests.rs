@@ -1319,51 +1319,63 @@ fn export_trace_writes_parseable_asc() {
     app.stop();
 }
 
-/// The trace export is not CAN-only: the FlexRay rows in the ring cross into
-/// the ASC file too, and the file stays in time order, so an exported mixed
-/// run is still a log rather than two logs glued together.
-#[test]
-fn the_trace_export_carries_flexray_rows() {
+/// A mixed log: one CAN frame and one FlexRay row per 2 ms step, the row a
+/// millisecond after its frame. Both sides therefore have `rows` arrivals at a
+/// 2 ms cadence, and the file's line order interleaves the two buses.
+fn write_mixed_fr_asc(name: &str, rows: u64) -> std::path::PathBuf {
     use crate::trace::FrRow;
-    let mut app = App::headless();
-    let src = std::env::temp_dir().join(format!("roxy_can_export_fr_in_{}.asc", std::process::id()));
-    {
-        let mut w = AscWriter::new(&src.to_string_lossy()).unwrap();
-        for i in 0..4u64 {
-            let mut f = CanFrame {
-                t_us: i * 2_000,
-                channel: 0,
-                id: 0x100,
-                extended: false,
-                len: 2,
-                data: [0; MAX_CAN_FD_LEN],
-                dir: Direction::Rx,
-                flags: FrameFlags::NONE,
-            };
-            f.data[0] = i as u8;
-            w.write(&f).unwrap();
-            w.write_fr(&FrRow {
-                bus: 0,
-                t_us: i * 2_000 + 1_000,
-                ab: 0,
-                slot: 13,
-                cycle: i as u8,
-                payload: vec![0xF0, i as u8],
-                header_crc: 0,
-                flags: 0,
-                name: None,
-            })
-            .unwrap();
-        }
-        w.finish().unwrap();
+    let path = std::env::temp_dir()
+        .join(format!("{name}_{}.asc", std::process::id()));
+    let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
+    for i in 0..rows {
+        let mut f = CanFrame {
+            t_us: i * 2_000,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 2,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        };
+        f.data[0] = i as u8;
+        w.write(&f).unwrap();
+        w.write_fr(&FrRow {
+            bus: 0,
+            t_us: i * 2_000 + 1_000,
+            ab: 0,
+            slot: 13,
+            cycle: i as u8,
+            payload: vec![0xF0, i as u8],
+            header_crc: 0,
+            flags: 0,
+            name: None,
+        })
+        .unwrap();
     }
-    app.load_log(&src.to_string_lossy());
+    w.finish().unwrap();
+    path
+}
+
+/// Replays `path` on the manual drive until the core has published it.
+fn replay_to_the_end(app: &mut App, path: &std::path::Path) {
+    app.load_log(&path.to_string_lossy());
     app.replay();
     for _ in 0..8 {
         std::thread::sleep(std::time::Duration::from_millis(11));
         app.update();
     }
     app.stop();
+}
+
+/// The trace export is not CAN-only: the FlexRay rows in the ring cross into
+/// the ASC file too, and the file stays in time order, so an exported mixed
+/// run is still a log rather than two logs glued together.
+#[test]
+fn the_trace_export_carries_flexray_rows() {
+    let mut app = App::headless();
+    let src = write_mixed_fr_asc("roxy_can_export_fr_in", 4);
+    replay_to_the_end(&mut app, &src);
     assert_eq!(app.snap.fr_trace.len(), 4, "the replay fed the FR ring");
 
     let out = std::env::temp_dir().join("roxy_can_export_fr_out.asc");
@@ -1377,9 +1389,55 @@ fn the_trace_export_carries_flexray_rows() {
     assert_eq!(fr[2].slot, 13);
     assert_eq!(fr[2].payload, vec![0xF0, 2]);
     assert_eq!(fr[2].t_us, 5_000);
+    assert_eq!(content.matches("Fr RMSG").count(), 4);
+}
+
+/// The Message Statistics table carries FlexRay slots with the same columns it
+/// computes for CAN -- count, the min/avg/max of the observed intervals and
+/// the share of the run -- and the same scope rule: pin the window to a CAN
+/// bus and the slots leave, because a slot is not a CAN id.
+#[test]
+fn the_statistics_window_lists_flexray_slots() {
+    let mut app = App::headless();
+    let src = write_mixed_fr_asc("roxy_can_stats_fr_in", 4);
+    replay_to_the_end(&mut app, &src);
+    std::fs::remove_file(&src).ok();
+
+    app.sync_stats_text(0);
+    let rows = &app.stats_windows[0].text_rows;
+    let fr = rows.iter().find(|r| r.bus == "FR0").expect("a FlexRay row");
+    assert_eq!(fr.label, "slot 13");
+    assert_eq!(fr.count, "4");
+    // Four arrivals 2 ms apart: every interval is the same, so min, avg and
+    // max all read 2.00 ms.
+    assert_eq!((fr.min.as_str(), fr.avg.as_str(), fr.max.as_str()), ("2.00", "2.00", "2.00"));
+    assert_eq!(fr.len, "2");
+    assert_eq!(fr.share, "50.0%", "half the run's frames are FlexRay");
     assert!(
-        content.matches("Fr RMSG").count() == 4,
-        "one line per row"
+        app.stats_windows[0].text_header.starts_with(&format!("{} messages", rows.len())),
+        "the header counts the rows it shows: {:?}",
+        app.stats_windows[0].text_header
+    );
+
+    let csv = std::env::temp_dir().join("roxy_can_stats_fr.csv");
+    app.export_stats_csv(0, &csv.to_string_lossy());
+    let text = std::fs::read_to_string(&csv).unwrap();
+    std::fs::remove_file(&csv).ok();
+    assert!(
+        text.lines().any(|l| l.starts_with("FR0,13,")),
+        "the CSV carries the slot: {text}"
+    );
+
+    // A bus-scoped window is a CAN scope.
+    app.stats_windows[0].scope = crate::workspace::SigScope::Bus(0);
+    app.text_fresh = true;
+    app.sync_stats_text(0);
+    assert!(
+        app.stats_windows[0]
+            .text_rows
+            .iter()
+            .all(|r| r.bus != "FR0"),
+        "FlexRay leaves a CAN-bus window"
     );
 }
 
@@ -6405,10 +6463,16 @@ fn the_trace_text_filter_matches_fr_frame_names() {
         return;
     };
     let db = crate::fr_db::FrDb::parse(&text).expect("PowerTrain.arxml parses");
-    app.fr_db = Some(std::sync::Arc::new(db));
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "assets/arxml/PowerTrain.arxml".into(),
+            db: std::sync::Arc::new(db),
+        },
+    );
     // The database's first frame defines the identity the filter must
     // match: its name and its slot number.
-    let first = &app.fr_db.as_ref().unwrap().frames[0];
+    let first = &app.fr_db(0).expect("bus 0 has a description").frames[0];
     let name = first.name.clone();
     let slot = first.triggering.slot_id;
     let row = crate::trace::FrRow {

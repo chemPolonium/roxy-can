@@ -320,7 +320,8 @@ fn content(app: &mut App, ui: &Ui) {
     match app.snap.fr_watch.clone() {
         Some(w) => {
             ui.text(format!(
-                "[V] ch{} · {} （只收）",
+                "FR{} · [V] ch{} · {} （只收）",
+                w.bus,
                 w.channel_index,
                 file_name(&w.fibex_path)
             ));
@@ -335,7 +336,7 @@ fn content(app: &mut App, ui: &Ui) {
             }
             ui.same_line();
             if ui.button("断开##frdet") {
-                app.detach_fr_watch();
+                app.detach_fr_watch(w.bus);
             }
         }
         None => match ensure_fr_list(app) {
@@ -363,15 +364,21 @@ fn content(app: &mut App, ui: &Ui) {
         },
     }
 
-    // The schedule table: the loaded database's slot/cycle layout, the
-    // ground truth the watch receives against.
-    let Some(db) = app.fr_db.clone() else {
+    // The schedule table: every loaded description's slot/cycle layout, the
+    // ground truth each watch receives against. Slot numbers repeat across
+    // clusters, so the bus is a column of its own.
+    if app.fr_buses.is_empty() {
         return;
-    };
+    }
+    let mut frames: Vec<(u8, &crate::fr_db::FrFrameDb)> = app
+        .fr_buses
+        .iter()
+        .flat_map(|(bus, cfg)| cfg.db.frames.iter().map(move |f| (*bus, f)))
+        .collect();
     let open = ui.collapsing_header(
         format!(
             "调度表（{} 帧）##frsched",
-            db.frames.len()
+            frames.len()
         ),
         dear_imgui_rs::TreeNodeFlags::empty(),
     );
@@ -385,10 +392,11 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::SCROLL_Y;
     let opts = dear_imgui_rs::TableOptions::from(tbl_flags)
         .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
-    let Some(_table) = ui.begin_table_with_flags("fr_schedule", 5, opts) else {
+    let Some(_table) = ui.begin_table_with_flags("fr_schedule", 6, opts) else {
         return;
     };
     for (label, w) in [
+        ("Bus", 52.0),
         ("Slot", 46.0),
         ("周期", 46.0),
         ("重复", 40.0),
@@ -400,13 +408,14 @@ fn content(app: &mut App, ui: &Ui) {
     ui.table_setup_scroll_freeze(0, 1);
     ui.table_headers_row();
 
-    let mut frames: Vec<&crate::fr_db::FrFrameDb> = db.frames.iter().collect();
-    frames.sort_by_key(|f| (f.triggering.slot_id, f.triggering.base_cycle));
-    for f in frames {
+    frames.sort_by_key(|(bus, f)| (*bus, f.triggering.slot_id, f.triggering.base_cycle));
+    for (bus, f) in frames {
         ui.table_next_row();
         if !ui.table_next_column() {
             continue;
         }
+        ui.text(format!("FR{bus}"));
+        ui.table_next_column();
         ui.text(format!("{}", f.triggering.slot_id));
         ui.table_next_column();
         ui.text(format!("{}", f.triggering.base_cycle));

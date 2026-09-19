@@ -47,6 +47,15 @@ pub const FR_SIG_BASE: u32 = 0x4000_0000;
 pub fn fr_signal_key(bus: u8, slot: u16, name: &str) -> crate::observe::SigKey {
     crate::observe::SigKey::fr(bus, slot, name)
 }
+
+/// One FlexRay bus the tool knows about: the cluster description file it was
+/// configured from and the database parsed out of it. Kept together so a bus
+/// can never end up displaying one file's frames and configuring the port from
+/// another's.
+pub struct FrBusCfg {
+    pub path: String,
+    pub db: std::sync::Arc<crate::fr_db::FrDb>,
+}
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 /// The replay speed ladder. The last entry is "as fast as possible":
 /// infinity makes the replay clock jump to the end immediately while the
@@ -290,13 +299,12 @@ pub struct App {
     /// FlexRay-capable Vector channels, enumerated once on first need
     /// (a real vxlapi call). `Err` = the Vector driver is unavailable.
     pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
-    /// The FlexRay database behind the FR watch, parsed when the user
-    /// picked the description file: the frontend's display copy -- the
-    /// core re-parses the same file for the driver configuration.
-    pub fr_db: Option<std::sync::Arc<crate::fr_db::FrDb>>,
-    /// Where `fr_db` came from; saved with the project so a replay of a
-    /// FlexRay log decodes against the same description next session.
-    pub fr_fibex_path: Option<String>,
+    /// The FlexRay descriptions behind the watches, one per bus, parsed when
+    /// the user picked each description file. Slot numbers repeat across
+    /// clusters, so a frame's identity is `(bus, slot)` and every lookup goes
+    /// through the bus the row arrived on. The core is handed the same `Arc`s,
+    /// so no file is read or parsed twice.
+    pub fr_buses: std::collections::BTreeMap<u8, FrBusCfg>,
     /// The picked row in the FR channel combo.
     pub fr_pick: usize,
     /// Profile names from the project's `profiles/` directory, listed
@@ -559,8 +567,7 @@ impl App {
             // Vector probe is a real driver call) and the combo pick.
             fr_channels: None,
             fr_pick: 0,
-            fr_db: None,
-            fr_fibex_path: None,
+            fr_buses: Default::default(),
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -959,8 +966,31 @@ impl App {
         if self.stats_windows[i].text_keys == keys && !self.text_fresh {
             return;
         }
-        let total: u64 = aggs.iter().map(|a| a.count).sum();
-        let mut rows = Vec::with_capacity(aggs.len());
+        // FlexRay slots share the table, so they count in its denominator too.
+        // Like the Messages window and the Trace filter, a scoped window (one
+        // CAN bus, a hand-picked id list) stays CAN-only: a slot number is not
+        // a CAN id and a FlexRay cluster is not a CAN channel.
+        let fr_aggs: Vec<&crate::aggregate::FrSlotAgg> = if matches!(scope, SigScope::All) {
+            self.snap.fr_aggs.iter().collect()
+        } else {
+            Vec::new()
+        };
+        let total: u64 = aggs
+            .iter()
+            .map(|a| a.count)
+            .chain(fr_aggs.iter().map(|a| a.count))
+            .sum();
+        let share = |count: u64| {
+            format!(
+                "{:.1}%",
+                if total > 0 {
+                    count as f64 / total as f64 * 100.0
+                } else {
+                    0.0
+                }
+            )
+        };
+        let mut rows = Vec::with_capacity(aggs.len() + fr_aggs.len());
         for agg in &aggs {
             let agg = **agg;
             let id_str = if agg.extended {
@@ -990,14 +1020,37 @@ impl App {
                 },
                 len: agg.len.to_string(),
                 flags: agg.flags,
-                share: format!(
-                    "{:.1}%",
-                    if total > 0 {
-                        agg.count as f64 / total as f64 * 100.0
-                    } else {
-                        0.0
-                    }
-                ),
+                share: share(agg.count),
+            });
+        }
+        for agg in fr_aggs {
+            let name = self.fr_frame_name(agg);
+            rows.push(StatsRowText {
+                label: if name.is_empty() {
+                    format!("slot {}", agg.slot)
+                } else {
+                    format!("slot {}  {name}", agg.slot)
+                },
+                bus: format!("FR{}", agg.bus),
+                count: agg.count.to_string(),
+                min: if agg.count >= 2 {
+                    ms_text(agg.min_us)
+                } else {
+                    "-".to_string()
+                },
+                avg: if agg.count >= 2 {
+                    ms_text(agg.cycle_us)
+                } else {
+                    "-".to_string()
+                },
+                max: if agg.count >= 2 {
+                    ms_text(agg.max_us)
+                } else {
+                    "-".to_string()
+                },
+                len: agg.payload.len().to_string(),
+                flags: crate::can::frame::FrameFlags::NONE,
+                share: share(agg.count),
             });
         }
         let win = &mut self.stats_windows[i];
@@ -1005,9 +1058,40 @@ impl App {
         win.text_rows = rows;
         win.text_header = format!(
             "{} messages, {} frames since start",
-            win.text_keys.len(),
+            win.text_rows.len(),
             total
         );
+    }
+
+    /// The name a FlexRay slot's last frame goes by, in a table or an export:
+    /// the loaded cluster description of its own bus wins (that is the
+    /// cluster's own definition), then the name the log carried, then nothing.
+    /// `frame_at` resolves a slot that several frames share by the cycle the
+    /// frame arrived in.
+    pub(crate) fn fr_frame_name<'a>(
+        &'a self,
+        agg: &'a crate::aggregate::FrSlotAgg,
+    ) -> &'a str {
+        self.fr_db(agg.bus)
+            .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab))
+            .map(|f| f.name.as_str())
+            .or(agg.name.as_deref())
+            .unwrap_or("")
+    }
+
+    /// The same precedence for a Trace row, which carries its own name column.
+    pub fn fr_row_name<'a>(&'a self, row: &'a crate::trace::FrRow) -> Option<&'a str> {
+        self.fr_db(row.bus)
+            .and_then(|db| db.frame_at(row.slot, row.cycle, row.ab))
+            .map(|f| f.name.as_str())
+            .or(row.name.as_deref())
+    }
+
+    /// The cluster description loaded for one FlexRay bus. `None` means the
+    /// bus is watched without a description: rows still reach the Trace
+    /// window, they just stay undecoded.
+    pub fn fr_db(&self, bus: u8) -> Option<&crate::fr_db::FrDb> {
+        self.fr_buses.get(&bus).map(|c| &*c.db)
     }
 
     /// Refreshes Messages window `i`'s throttled text snapshot: the header
@@ -1116,18 +1200,13 @@ impl App {
         // text also matches a slot number.
         if matches!(scope, SigScope::All) && !dbc_only {
             for agg in &self.snap.fr_aggs {
-                // The display database, when the watch came with one,
-                // names the slot's frame and decodes its signals. The
-                // cycle the last frame arrived in picks the right frame
-                // when several share a slot across repetitions.
-                let frame = self
-                    .fr_db
-                    .as_ref()
-                    .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
-                let name = frame
-                    .map(|f| f.name.as_str())
-                    .or(agg.name.as_deref())
-                    .unwrap_or("");
+                // The description of the bus this slot arrived on, when the
+                // watch came with one, names its frame and decodes the
+                // signals. The cycle the last frame arrived in picks the right
+                // frame when several share a slot across repetitions.
+                let db = self.fr_db(agg.bus);
+                let frame = db.and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
+                let name = self.fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)
                     && !agg.slot.to_string().contains(&filter)
@@ -1149,7 +1228,7 @@ impl App {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join("  ");
-                let signals = match (self.fr_db.as_ref(), frame) {
+                let signals = match (db, frame) {
                     (Some(db), Some(frame)) => db.decode(frame, &agg.payload),
                     _ => Vec::new(),
                 };
@@ -1235,11 +1314,11 @@ impl App {
                 }
             }
             // A FlexRay frame row expands into its decoded signal child
-            // rows, the CANoe trace shape, when the window asks and the
-            // watch's description database is loaded.
+            // rows, the CANoe trace shape, when the window asks and that
+            // bus's description database is loaded.
             if fr_expand
                 && let Some(TraceRow::Fr(row)) = rows.last().cloned()
-                && let Some(db) = self.fr_db.as_ref()
+                && let Some(db) = self.fr_db(row.bus)
                 && let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab)
             {
                 for (name, value) in db.decode(frame, &row.payload) {

@@ -77,8 +77,19 @@
 - **已修（同日第二轮）：回放自家录制的 BLF 时进度与曲线爬不动。** 我先前把它写成"录制的时间戳编码塌陷"并用 `#[ignore]` 钉住 —— **那个判断是错的**：把钉住的复现跑起来直接通过，对象时间戳与头部偏移两侧一致。真正的因是两条：① `BlfWriter::finish` 拿**写文件的墙钟**当头部 stop，于是自家录制的 duration≈0 或为空，`duration_us()` 退化成"最后读到的时间戳"这一滞后估计；② 上一轮为 as-fast-as-possible 加的 `position()` 钳制 `pos.min(duration)` 无条件生效，把**有限播放头压到该滞后估计之下**（实测 1.5 s 墙钟只报 0.06 s），表现即"回放卡住但窗口还能拖"。
   - 修法：录制头部改写**流量跨度**（跟踪 first/last 对象戳，stop = start + span；t=0 是合法起点故不跳过）；`position()` 的钳制**只在播放头无穷大时**生效。四条防线：`log::blf::record_times::a_recording_keeps_its_second_apart_frames_a_second_apart`（兼断言头部时长，已从 ignore 转常开）、`a_flexray_only_recording_states_its_span_too`（FR-only 录制也报得出跨度）、`source::replay::tests::a_short_duration_estimate_never_caps_the_playhead`、端到端节奏 `ui_tests::a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window`。
   - **仍未验证**：用户报的"切到 Graphics 桌面卡住"是否就是这个 —— 他们的日志若头部 duration 正常就不该中。等他在 GUI 里确认。
-- 顺带待清：`observe.rs:18`/`:312`、`cli.rs:303` 三处注释还在描述已删除的"窗口回填"。
+- ~~顺带待清：`observe.rs:18`/`:312`、`cli.rs:303` 三处注释还在描述已删除的"窗口回填"~~ ✅（同日随 ASC 提交清掉）。
 - S1b 的 frameId/slot 担忧**实测不成立**：两份真实 CANoe 日志（39 156 行、60 072 行）的 `slot` 取值恰好都是描述库里存在的槽号，`frame_at` 解析率 100%，故不做特殊处理，只在 `fr_rcv_event` 的注释里记下这个事实。
+
+### 2026-09-20：S3 第一步 —— 描述数据库按总线走（一份全局 `fr_db` 已废除）
+
+- 动机：槽号在两个 cluster 之间会重复。全局一份 `FrDb` 意味着第二路 FR 一接上，第一路的帧名/信号就会去错的表里查（或查不到）。
+- **前端**：`App.fr_db: Option<Arc<FrDb>>` + `fr_fibex_path` → `App.fr_buses: BTreeMap<u8, FrBusCfg{path, db}>`，读法统一走 `app.fr_db(bus)` / `fr_frame_name(&agg)` / `fr_row_name(&row)`（三级优先：本总线描述 → 日志自带的名 → 无）。`pick_fibex_for` 挂到**第一个空闲总线索引**（还没有 FR 通道列表可挑），`detach_fr_watch(bus)` 只摘那一路。
+- **核心**：`BusCommand::SetFrDb(Option<_>)` → `SetFrDbs(BTreeMap<u8, Arc<FrDb>>)`，整张图一次替换，核心不可能留有前端已删的那一路；`ingest_fr_row` 用 `row.bus` 查本 cluster 的描述（订阅折叠路径不再 clone Arc，改成 `fr_dbs.get(&row.bus)` 的字段级不相邻借用）。`SetFrWatch` 现在要求**那一路**有描述，别的总线的不算（回归 `fr_watch_requires_a_description_the_core_holds`）。
+- **UI**：Buses 窗口的调度表加 Bus 列并按 (bus, slot, cycle) 排序；信号选择树按 (bus, slot) 出条目、id 串里带 bus、多于一路线上标 `FR{n}`；Trace 帧名走 `fr_row_name`。
+- **工程文件**：新字段 `fr_buses: Vec<FrBusFile{bus, path}>`；旧 `fr_fibex: Option<String>` 保留读取（迁移到 bus 0）并 `skip_serializing_if`，保存后消失。回归 `a_legacy_single_fibex_path_becomes_a_bus_entry`（旧单文件 → bus 0；两路两文件 → 存回再读出仍是两路、两份不同的帧表）。
+- 跨总线隔离回归：`each_flexray_bus_decodes_against_its_own_description`（同一槽号在两路各自解出自己的信号名，串名的键拿不到值）。
+- **S3 剩余**：`Hardware.fr_watch: Option<FrWatch>` 仍是**单路**（`attach_fr(bus,…)` 覆盖同一格，`detach_fr()` 不分总线）→ 下一批：`fr_watches` 按 bus 存 + `FrPort` 测试替身（照 `HwPort::Mock` 的样子）+ 快照出列表 + Buses 窗口改成表；再之后才是工程里的 `channel_index`/使能持久化与删 `replay()` 里的 `push_fr_db_to_core` 兜底。
+
 
 ### 2026-09-20：ASC 也能录 FlexRay，导出与转码不再是 CAN-only
 

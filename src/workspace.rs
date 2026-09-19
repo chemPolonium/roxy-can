@@ -775,8 +775,7 @@ impl App {
         // which is CAN-only -- FR rows leave.
         let name = if flt.value_conds.is_empty() && !q.is_empty() {
             let qup = q.to_ascii_uppercase();
-            self.fr_db
-                .as_ref()
+            self.fr_db(r.bus)
                 .and_then(|db| db.frame_at(r.slot, r.cycle, r.ab))
                 .map(|f| {
                     f.name.to_ascii_uppercase().contains(&qup)

@@ -505,6 +505,16 @@ impl Default for SpecCfg {
 /// default, per the missing-key convention.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// One FlexRay bus in a project file: which bus the description belongs to
+/// and the file it was parsed from. Slot numbers repeat across clusters, so
+/// a path without its bus index would not say what it describes.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FrBusFile {
+    #[serde(default)]
+    pub bus: u8,
+    pub path: String,
+}
+
 /// Trigger-recording context sizes: pre-trigger frames kept for
 /// trigger-started recordings, post-roll frames after a trigger-stopped
 /// edge, and the marker list cap.
@@ -554,9 +564,14 @@ pub struct Config {
     pub channels: Vec<ChannelCfg>,
     #[serde(default)]
     pub bus_counter: usize,
-    /// The FlexRay description file behind the FR watch/replay decoding,
-    /// stored relative to the project directory like the DBC paths.
+    /// The FlexRay descriptions, one entry per bus, behind the FR
+    /// watch/replay decoding, stored like the DBC paths.
     #[serde(default)]
+    pub fr_buses: Vec<FrBusFile>,
+    /// Legacy: the single description file from before FlexRay got a bus
+    /// index. It loads as bus 0, which is the only bus a project of that
+    /// shape could have watched; new files write `fr_buses` and drop this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fr_fibex: Option<String>,
     #[serde(default = "true_default")]
     pub show_tx: bool,
@@ -774,7 +789,17 @@ impl Config {
                 })
                 .collect(),
             bus_counter: app.snap.bus_counter,
-            fr_fibex: app.fr_fibex_path.clone(),
+            fr_buses: app
+                .fr_buses
+                .iter()
+                .map(|(bus, c)| FrBusFile {
+                    bus: *bus,
+                    path: c.path.clone(),
+                })
+                .collect(),
+            // Written only by the legacy loader; a save drops it in favour of
+            // `fr_buses` above.
+            fr_fibex: None,
             show_tx: app.show_tx,
             show_network: app.show_network,
             show_measurement: app.show_measurement,
@@ -1047,6 +1072,9 @@ impl Config {
         }
         if let Some(p) = &mut self.fr_fibex {
             *p = resolve_dbc(p, base);
+        }
+        for f in &mut self.fr_buses {
+            f.path = resolve_dbc(&f.path, base);
         }
     }
 
@@ -1388,18 +1416,31 @@ impl Config {
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
-        // The FlexRay description: parse it back into the display
-        // database so a FlexRay replay decodes against the same network.
+        // The FlexRay descriptions: each bus's file is parsed back into that
+        // bus's database so a FlexRay replay decodes against the same network.
         // A file that moved or broke is reported, not fatal.
-        if let Some(path) = &self.fr_fibex {
+        // `fr_buses` is per-bus; the older single path describes bus 0, the
+        // only bus that session could have watched.
+        let legacy = (self.fr_buses.is_empty() && self.fr_fibex.is_some())
+            .then(|| FrBusFile {
+                bus: 0,
+                path: self.fr_fibex.clone().unwrap_or_default(),
+            });
+        for file in self.fr_buses.iter().chain(legacy.iter()) {
+            let path = &file.path;
             match std::fs::read(path)
                 .map_err(|e| e.to_string())
                 .map(crate::dbc::text_from_bytes)
                 .and_then(|t| crate::fr_db::FrDb::parse(&t))
             {
                 Ok(db) => {
-                    app.fr_db = Some(std::sync::Arc::new(db));
-                    app.fr_fibex_path = Some(path.clone());
+                    app.fr_buses.insert(
+                        file.bus,
+                        crate::app::FrBusCfg {
+                            path: path.clone(),
+                            db: std::sync::Arc::new(db),
+                        },
+                    );
                 }
                 Err(e) => app.status = format!("FlexRay 描述加载失败: {e}"),
             }
@@ -1811,6 +1852,67 @@ mod tests {
         assert_eq!(
             again.graphics[0].signals[0].key, *key,
             "the key is stable across saves"
+        );
+    }
+
+    /// The FR watch of a project saved before FlexRay had a bus index states
+    /// one description file: it describes bus 0, the only bus such a session
+    /// could have watched. Saving again must state the bus outright, and a
+    /// second cluster has to survive the trip.
+    #[test]
+    fn a_legacy_single_fibex_path_becomes_a_bus_entry() {
+        let arxml = "assets/arxml/PowerTrain.arxml";
+        let fibex = "assets/fibex/PowerTrain_v2.xml";
+        if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
+            println!("{arxml} or {fibex} not present -- skipped");
+            return;
+        }
+        let cfg: Config =
+            serde_json::from_str(&format!(r#"{{"fr_fibex":"{arxml}"}}"#)).unwrap();
+        let mut restored = App::headless();
+        cfg.apply(&mut restored);
+        assert_eq!(
+            restored.fr_buses.keys().copied().collect::<Vec<_>>(),
+            vec![0],
+            "the legacy path lands on bus 0"
+        );
+        assert!(restored.fr_db(0).is_some(), "and parses into a description");
+
+        // A second cluster on a second bus, as the Buses window's picker
+        // would have left it.
+        let text = crate::dbc::text_from_bytes(std::fs::read(fibex).expect("fibex"));
+        let db = crate::fr_db::FrDb::parse(&text).expect("the bundled FIBEX parses");
+        restored.fr_buses.insert(
+            1,
+            crate::app::FrBusCfg {
+                path: fibex.to_string(),
+                db: std::sync::Arc::new(db),
+            },
+        );
+
+        let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
+        assert!(
+            json.contains(r#""fr_buses":[{"bus":0"#) && json.contains(r#"},{"bus":1,"#),
+            "both buses are stated: {json}"
+        );
+        assert!(
+            !json.contains("\"fr_fibex\""),
+            "the legacy field is not written again: {json}"
+        );
+
+        let mut again = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut again);
+        assert_eq!(
+            again.fr_buses.keys().copied().collect::<Vec<_>>(),
+            vec![0, 1],
+            "each bus keeps its own description"
+        );
+        assert_ne!(
+            again.fr_db(0).expect("bus 0").frames[0].name,
+            again.fr_db(1).expect("bus 1").frames[0].name,
+            "the two entries are the two files, not one copied twice"
         );
     }
 

@@ -74,6 +74,29 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
     }
 }
 
+/// Puts a cluster description on one FlexRay bus, the way the Buses window's
+/// picker does. False when the asset is missing or does not parse, so a test
+/// can skip rather than draw an empty table.
+fn load_fr_db(app: &mut App, bus: u8, path: &str) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let text = crate::dbc::text_from_bytes(bytes);
+    match crate::fr_db::FrDb::parse(&text) {
+        Ok(db) => {
+            app.fr_buses.insert(
+                bus,
+                crate::app::FrBusCfg {
+                    path: path.to_string(),
+                    db: std::sync::Arc::new(db),
+                },
+            );
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Regression driver for the observer signal drag-reorder: a fixed
 /// window draws the shared siglist, then synthesized mouse events
 /// (press on the row-leading grip, drag, release) must flip the two
@@ -407,12 +430,7 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
     app.new_trace_window();
     // The real description, when present; the draw path is the same for
     // any database, and for none.
-    if let Ok(bytes) = std::fs::read("assets/arxml/PowerTrain.arxml") {
-        let text = crate::dbc::text_from_bytes(bytes);
-        if let Ok(db) = crate::fr_db::FrDb::parse(&text) {
-            app.fr_db = Some(std::sync::Arc::new(db));
-        }
-    }
+    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
     app.settle();
     app.text_fresh = false;
     app.trace_windows[0].rows = vec![
@@ -463,16 +481,20 @@ fn flexray_signal_picker_draws_without_panicking() {
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_graphics_window();
-    if let Ok(bytes) = std::fs::read("assets/arxml/PowerTrain.arxml") {
-        let text = crate::dbc::text_from_bytes(bytes);
-        if let Ok(db) = crate::fr_db::FrDb::parse(&text) {
-            assert!(
-                db.slot_signals().iter().any(|(_, _, s)| !s.is_empty()),
-                "the bundled FlexRay description should expose signals to pick"
-            );
-            app.fr_db = Some(std::sync::Arc::new(db));
-        }
+    if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
+        assert!(
+            app.fr_db(0)
+                .expect("the bus has a description")
+                .slot_signals()
+                .iter()
+                .any(|(_, _, s)| !s.is_empty()),
+            "the bundled FlexRay description should expose signals to pick"
+        );
     }
+    // A second cluster on a second bus: the same slot number there names a
+    // different signal, and the section has to show both.
+    load_fr_db(&mut app, 1, "assets/fibex/PowerTrain_v2.xml");
+    assert_eq!(app.fr_buses.len(), 2, "both descriptions loaded");
     app.settle();
     app.popup_target = Some(PopupTarget::Graphics(0));
     app.show_id_filter = true;
@@ -531,7 +553,13 @@ fn a_plot_window_never_starves_the_replay() {
         .into_iter()
         .find(|(_, frame, _)| frame.contains("13"))
         .expect("slot 13 exposes signals");
-    app.fr_db = Some(db);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "assets/arxml/PowerTrain.arxml".into(),
+            db,
+        },
+    );
     app.push_fr_db_to_core();
     app.new_graphics_window();
     app.set_win_signal(
@@ -633,7 +661,13 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
         .into_iter()
         .find(|(_, frame, _)| frame.contains("13"))
         .expect("slot 13 exposes signals");
-    app.fr_db = Some(db);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "assets/arxml/PowerTrain.arxml".into(),
+            db,
+        },
+    );
     app.push_fr_db_to_core();
     app.new_graphics_window();
     app.set_win_signal(

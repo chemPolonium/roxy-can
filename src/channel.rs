@@ -317,7 +317,12 @@ impl App {
 
     /// Opens a FIBEX/ARXML cluster-description picker; a pick parses the
     /// database (refusing broken files outright), keeps the display copy
-    /// and attaches the FlexRay RX-only watch to the Vector channel.
+    /// against the FlexRay bus it names and attaches the FlexRay RX-only
+    /// watch to the Vector channel.
+    ///
+    /// The bus is the first free index, because the tool has no FlexRay
+    /// channel list of its own yet -- the description, the port and the bus
+    /// index are all keyed to it from here on.
     pub fn pick_fibex_for(&mut self, channel_index: i32) {
         let Some(p) = rfd::FileDialog::new()
             .set_title("Open FlexRay cluster description")
@@ -334,32 +339,41 @@ impl App {
         let text = crate::dbc::text_from_bytes(bytes);
         match crate::fr_db::FrDb::parse(&text) {
             Ok(db) => {
-                self.fr_db = Some(std::sync::Arc::new(db));
-                self.fr_fibex_path = Some(path.clone());
-                // Hand the same database to the core so live FlexRay frames
+                let bus = (0..=u8::MAX)
+                    .find(|b| !self.fr_buses.contains_key(b))
+                    .expect("every FlexRay bus index is taken");
+                self.fr_buses.insert(
+                    bus,
+                    crate::app::FrBusCfg {
+                        path: path.clone(),
+                        db: std::sync::Arc::new(db),
+                    },
+                );
+                // Hand the same databases to the core so live FlexRay frames
                 // decode into the observers, then attach the RX-only watch.
                 self.push_fr_db_to_core();
-                // One FlexRay bus today; the index becomes real with the channel list.
-                self.set_fr_watch(0, Some(channel_index), &path);
+                self.set_fr_watch(bus, Some(channel_index), &path);
             }
             Err(e) => self.status = format!("FlexRay 描述解析失败: {e}"),
         }
     }
 
-    /// Copies the frontend's parsed FlexRay database into the bus core, which
-    /// decodes arriving FlexRay frames against it to drive the observers.
-    /// `None` clears the core's copy to match.
+    /// Copies the frontend's parsed FlexRay databases into the bus core, which
+    /// decodes arriving FlexRay frames against the one for their own bus.
     pub(crate) fn push_fr_db_to_core(&mut self) {
-        let db = self.fr_db.clone();
-        self.send(crate::bus::BusCommand::SetFrDb(db));
+        let dbs: std::collections::BTreeMap<u8, _> = self
+            .fr_buses
+            .iter()
+            .map(|(b, c)| (*b, std::sync::Arc::clone(&c.db)))
+            .collect();
+        self.send(crate::bus::BusCommand::SetFrDbs(dbs));
     }
 
-    /// Detaches the FlexRay watch and forgets its display database.
-    pub fn detach_fr_watch(&mut self) {
-        self.fr_db = None;
-        self.fr_fibex_path = None;
+    /// Detaches one FlexRay watch and forgets its bus, description included.
+    pub fn detach_fr_watch(&mut self, bus: u8) {
+        self.fr_buses.remove(&bus);
         self.push_fr_db_to_core();
-        self.set_fr_watch(0, None, "");
+        self.set_fr_watch(bus, None, "");
     }
 
     /// Attaches one more DBC file to the bus as an extra database (the

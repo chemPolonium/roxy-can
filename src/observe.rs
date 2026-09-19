@@ -685,11 +685,8 @@ impl App {
                     .and_then(|m| m.signals.iter().find(|s| &s.name == name))?;
                 (sig.min, sig.max)
             }
-            SigKey::Fr { slot, name, .. } => {
-                let sig = self
-                    .fr_db
-                    .as_ref()
-                    .and_then(|db| db.slot_signal(*slot, name))?;
+            SigKey::Fr { bus, slot, name } => {
+                let sig = self.fr_db(*bus).and_then(|db| db.slot_signal(*slot, name))?;
                 (sig.min, sig.max)
             }
         };

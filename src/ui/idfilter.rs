@@ -487,11 +487,11 @@ fn emitted_section(
     }
 }
 
-/// Adds a checkbox per FlexRay signal in the loaded description database,
-/// grouped by static slot and frame name below the derived-signal section. A
-/// FlexRay signal joins the same subscription space as CAN signals under its
-/// own `SigKey::Fr` identity, so selecting one plots its live values exactly
-/// like a DBC signal. Hidden until a FlexRay database loads.
+/// Adds a checkbox per FlexRay signal in every loaded cluster description,
+/// grouped by bus, static slot and frame name below the derived-signal
+/// section. A FlexRay signal joins the same subscription space as CAN signals
+/// under its own `SigKey::Fr` identity, so selecting one plots its live values
+/// exactly like a DBC signal. Hidden until a FlexRay database loads.
 fn flexray_section(
     app: &mut App,
     ui: &Ui,
@@ -499,13 +499,21 @@ fn flexray_section(
     actions: &mut Vec<(crate::observe::SigKey, bool)>,
     q: &str,
 ) {
-    let Some(db) = app.fr_db.clone() else {
+    if app.fr_buses.is_empty() {
         return;
-    };
-    let hits: Vec<(u16, String, Vec<String>)> = db
-        .slot_signals()
-        .into_iter()
-        .filter(|(slot, frame, sigs)| {
+    }
+    // One entry per (bus, slot): the same slot number on two clusters names two
+    // different frames, so the bus is part of the identity everywhere here.
+    let hits: Vec<(u8, u16, String, Vec<String>)> = app
+        .fr_buses
+        .iter()
+        .flat_map(|(bus, cfg)| {
+            cfg.db
+                .slot_signals()
+                .into_iter()
+                .map(move |(slot, frame, sigs)| (*bus, slot, frame, sigs))
+        })
+        .filter(|(_, slot, frame, sigs)| {
             q.is_empty()
                 || frame.to_ascii_uppercase().contains(q)
                 || sigs.iter().any(|s| s.to_ascii_uppercase().contains(q))
@@ -515,17 +523,14 @@ fn flexray_section(
     if hits.is_empty() {
         return;
     }
-    let keys_of = |slot: u16, sigs: &[String]| -> Vec<crate::observe::SigKey> {
-        sigs.iter()
-            .map(|s| crate::app::fr_signal_key(0, slot, s))
-            .collect()
-    };
-    let total: usize = hits.iter().map(|(_, _, s)| s.len()).sum();
+    let key = |bus: u8, slot: u16, s: &str| crate::app::fr_signal_key(bus, slot, s);
+    let total: usize = hits.iter().map(|(_, _, _, s)| s.len()).sum();
     let sel_n: usize = hits
         .iter()
-        .flat_map(|(slot, _, sigs)| keys_of(*slot, sigs))
+        .flat_map(|(bus, slot, _, sigs)| sigs.iter().map(move |s| key(*bus, *slot, s)))
         .filter(|k| sel.contains(k))
         .count();
+    let multi = app.fr_buses.len() > 1;
     ui.spacing();
     ui.separator();
     ui.text_colored(
@@ -533,11 +538,11 @@ fn flexray_section(
         format!("FlexRay ({sel_n}/{total})"),
     );
     ui.text_disabled("FlexRay 描述数据库解析出的信号");
-    for (slot, frame, sigs) in &hits {
-        let keys = keys_of(*slot, sigs);
+    for (bus, slot, frame, sigs) in &hits {
+        let keys: Vec<_> = sigs.iter().map(|s| key(*bus, *slot, s)).collect();
         let m_sel = keys.iter().filter(|k| sel.contains(k)).count();
         let mut msg_on = m_sel == keys.len() && !keys.is_empty();
-        if ui.checkbox(format!("##frmsgchk{slot}"), &mut msg_on) {
+        if ui.checkbox(format!("##frmsgchk{bus}_{slot}"), &mut msg_on) {
             for k in &keys {
                 actions.push((k.clone(), msg_on));
             }
@@ -545,16 +550,17 @@ fn flexray_section(
         ui.same_line();
         let mtoken = ui
             .tree_node_config(format!(
-                "slot {slot}  {frame} ({m_sel}/{})",
+                "{}slot {slot}  {frame} ({m_sel}/{})",
+                if multi { format!("FR{bus}  ") } else { String::new() },
                 keys.len()
             ))
             .default_open(!q.is_empty())
             .push();
         if mtoken.is_some() {
-            for (s, key) in sigs.iter().zip(&keys) {
-                let mut son = sel.contains(key);
-                if ui.checkbox(format!("{s}##frsig{slot}"), &mut son) {
-                    actions.push((key.clone(), son));
+            for (s, k) in sigs.iter().zip(&keys) {
+                let mut son = sel.contains(k);
+                if ui.checkbox(format!("{s}##frsig{bus}_{slot}"), &mut son) {
+                    actions.push((k.clone(), son));
                 }
             }
         }

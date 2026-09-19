@@ -152,6 +152,28 @@ impl App {
                 a.flags.tag()
             ));
         }
+        // FlexRay slots join the same table, after the CAN rows and under the
+        // same scope rule the windows apply: a scoped window is a CAN scope, so
+        // it stays CAN-only. `id` carries the slot number, `flags` has no
+        // FlexRay meaning and reads as blank.
+        if matches!(scope, SigScope::All) {
+            for a in &self.snap.fr_aggs {
+                let name = self.fr_frame_name(a);
+                let (cmin, cavg, cmax) = if a.count > 1 {
+                    (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+                s.push_str(&format!(
+                    "FR{},{},{name},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{flag}\n",
+                    a.bus,
+                    a.slot,
+                    a.count,
+                    a.payload.len(),
+                    flag = crate::can::frame::FrameFlags::NONE.tag(),
+                ));
+            }
+        }
         self.write_export(path, s);
     }
 
@@ -225,12 +247,7 @@ impl App {
         // the on-screen table (window text filter matches names/slots).
         if matches!(scope, SigScope::All) && !dbc_only {
             for agg in &self.snap.fr_aggs {
-                let name = self
-                    .fr_db
-                    .as_ref()
-                    .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab))
-                    .map(|f| f.name.clone())
-                    .unwrap_or_default();
+                let name = self.fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)
                     && !agg.slot.to_string().contains(&filter)
