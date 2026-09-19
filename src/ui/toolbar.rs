@@ -1,5 +1,5 @@
 use crate::app::{App, Mode, REPLAY_SPEEDS, TOOLBAR_H};
-use dear_imgui_rs::{Condition, NumericFormat, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, Ui, WindowFlags};
 
 fn vsep(ui: &Ui) {
     ui.same_line();
@@ -20,8 +20,8 @@ pub(crate) fn file_name(p: &str) -> String {
 }
 
 /// True while a replay is running, i.e. while swapping the selected log would
-/// leave the status bar and the scrub bar naming a file the live source is not
-/// playing. `App::load_log` refuses too; this only stops the UI from offering
+/// leave the status bar naming a file the live source is not playing.
+/// `App::load_log` refuses too; this only stops the UI from offering
 /// what it would reject.
 fn log_switch_blocked(app: &App) -> bool {
     app.snap.measuring && matches!(app.snap.mode, Mode::Replay)
@@ -45,7 +45,7 @@ fn shortcuts(app: &mut App, ui: &Ui) {
             if app.snap.measuring {
                 app.stop();
             } else {
-                app.play();
+                app.start_selected();
             }
         }
         2 => app.toggle_record(),
@@ -259,8 +259,8 @@ pub fn render(app: &mut App, ui: &Ui) {
             slower.end();
             ui.same_line();
             // Fixed width so toggling Play/Pause never shifts the buttons
-            // behind it. App::toggle_play decides between resuming a scrubbed
-            // replay and re-opening the log.
+            // behind it. App::toggle_play either freezes the replay clock or
+            // re-opens the log.
             let label = if app.snap.measuring && !app.snap.trace_paused {
                 "Pause"
             } else {
@@ -342,33 +342,6 @@ pub fn render(app: &mut App, ui: &Ui) {
             ui.set_next_item_width(104.0);
             if ui.combo_simple_string("##textrate", &mut pick, &rates) {
                 app.text_rate_hz = vals[pick];
-            }
-            // Scrub bar. Live whenever a replay source with a known length
-            // exists -- running, paused, or stopped after the log ran out.
-            if matches!(app.snap.mode, Mode::Replay) {
-                vsep(ui);
-                let timeline = app.replay_position();
-                let scrub = ui.begin_disabled_with_cond(timeline.is_none());
-                if let Some((pos_s, dur_s)) = timeline {
-                    let mut t_s = pos_s.min(dur_s) as f32;
-                    ui.set_next_item_width(240.0);
-                    let seconds = NumericFormat::new("%.2f").expect("static format");
-                    if ui
-                        .slider_config("##scrub", 0.0f32, dur_s as f32)
-                        .display_format(seconds)
-                        .build(&mut t_s)
-                    {
-                        app.seek_replay_seconds(t_s as f64);
-                    }
-                } else {
-                    ui.set_next_item_width(240.0);
-                    let mut unused = 0.0f32;
-                    let paused = NumericFormat::new("log length unknown").expect("static format");
-                    ui.slider_config("##scrub", 0.0f32, 1.0f32)
-                        .display_format(paused)
-                        .build(&mut unused);
-                }
-                scrub.end();
             }
             if matches!(app.snap.run_mode, Mode::Virtual) {
                 vsep(ui);

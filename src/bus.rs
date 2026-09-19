@@ -150,10 +150,6 @@ pub enum BusCommand {
     /// core decodes arriving FlexRay frames against, so their signals can feed
     /// the Graphics / Data / State observers during replay.
     SetFrDb(Option<Arc<crate::fr_db::FrDb>>),
-    /// Move the replay playhead to `t_s` seconds, clamped to the log's
-    /// duration. Works while running, paused, or stopped after the log
-    /// ran out; a scrub past the right edge lands on the last frame.
-    SeekReplay(f64),
     /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
     /// dedupes on that pair, so the key is stable where an index would
     /// shift under the sender's feet.
@@ -233,13 +229,6 @@ pub enum BusCommand {
     /// knobs.
     StartReplay {
         path: String,
-        speed: f64,
-    },
-    /// Resume a scrubbed replay in place: measurement restarts with the
-    /// trace unfrozen, captured history untouched, so playback continues
-    /// from the playhead. `speed` is the frontend's remembered
-    /// multiplier, for the status line.
-    ResumeReplay {
         speed: f64,
     },
     /// Static per-bus declarations from the Buses window / project
@@ -400,16 +389,6 @@ pub enum BusCommand {
         flags: Option<crate::can::frame::FrameFlags>,
         data_text: Option<String>,
         srcs: Vec<crate::sim::ValueSrc>,
-    },
-    /// Decode the frames covering `[from_us, to_us]` into the signal
-    /// caches at `stride_us`. This is core work (it scans the log
-    /// source), requested by a plot window that wants to draw ground the
-    /// playhead has not reached yet. The request is idempotent: covered
-    /// spans are skipped on the bus side.
-    Backfill {
-        from_us: u64,
-        to_us: u64,
-        stride_us: u64,
     },
     /// Blank every bus's database and drop the generator and the signal
     /// subscriptions with it -- the bus half of "new project".
@@ -605,9 +584,6 @@ pub struct Snapshot {
     pub bus_counter: usize,
     /// The simulation clock, for frontends that anchor plots on bus time.
     pub sim_t_us: u64,
-    /// Contiguous log-time span whose frames are already decoded into the
-    /// signal caches; a plot asks for scans outside it.
-    pub sample_cover: Option<(u64, u64)>,
     /// The violation monitor's latched rows, for the report export.
     pub spec: crate::spec::Spec,
     /// Per-bus load rollups as of the last publish; the Bus Statistics
@@ -829,8 +805,7 @@ pub struct BusCore {
     pub(crate) mode: Mode,
     /// The mode the current run started in; switching buses restores it.
     pub(crate) run_mode: Mode,
-    /// The bus's frame input: the virtual idle bus, or the log being
-    /// replayed / scanned for backfill.
+    /// The bus's frame input: the virtual idle bus, or the log being replayed.
     pub(crate) source: Box<dyn crate::source::FrameSource>,
     /// Every (channel, id) the loaded log carries. While replaying,
     /// generator entries carrying one of these ids stand down -- replaying
@@ -905,14 +880,8 @@ pub struct BusCore {
     /// While `Some(n)`, a trigger-initiated stop is rolling: the recorder
     /// stays open for `n` more frames, then closes.
     pub(crate) post_roll: Option<u32>,
-    /// Contiguous log-time span whose frames have already been decoded into
-    /// the signal caches. A Graphics window asking for a range outside it
-    /// triggers a backfill scan.
-    pub(crate) sample_cover: Option<(u64, u64)>,
-    /// The sampling stride currently applied to the signal caches. When the
-    /// smallest Graphics window shrinks, the stride gets finer -- and spans
-    /// already scanned at the coarse stride must rescan, so `sample_cover`
-    /// is invalidated here too.
+    /// The sampling stride currently applied to the signal caches, pushed by
+    /// the frontend's knob whenever the smallest open Graphics window changes.
     pub(crate) applied_stride_us: u64,
     /// True while the measurement runs: the clock advances, generators
     /// emit, replay polls. A pause stops all of it in place.
@@ -1027,7 +996,6 @@ impl BusCore {
             markers: Vec::new(),
             pre_buffer: std::collections::VecDeque::new(),
             post_roll: None,
-            sample_cover: None,
             applied_stride_us: SAMPLE_INTERVAL_US,
             measuring: false,
             buf: Vec::new(),
@@ -1309,7 +1277,6 @@ impl BusCore {
             }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SetFrDb(db) => self.fr_db = db,
-            BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
                 // `next_t_us` still sits at the last slot before the entry
@@ -1372,16 +1339,6 @@ impl BusCore {
                 self.subs.remove(&key);
             }
             BusCommand::StartReplay { path, speed } => self.start_replay(&path, speed, status),
-            BusCommand::ResumeReplay { speed } => {
-                // The poll clock uses `saturating_sub`, so rewinding
-                // `sim_prev_us` to zero is harmless; the frontend restarts
-                // its own wall clock (`t0`) alongside this command.
-                self.sim_prev_us = 0;
-                self.trace_paused = false;
-                self.paused_at_us = None;
-                self.measuring = true;
-                *status = format!("resumed at {speed}x");
-            }
             BusCommand::SetChannelConfig {
                 ch,
                 name,
@@ -1539,11 +1496,6 @@ impl BusCore {
                 data_text,
                 srcs,
             } => self.set_entry_config(ch, id, active, cycle_us, fd, flags, data_text, srcs),
-            BusCommand::Backfill {
-                from_us,
-                to_us,
-                stride_us,
-            } => self.backfill(from_us, to_us, stride_us, status),
             BusCommand::ClearDatabases => {
                 for c in &mut self.channels {
                     c.dbc_paths.clear();
@@ -1591,8 +1543,8 @@ impl BusCore {
     }
 
     /// Republishes changed signal caches for the next snapshot; pointer
-    /// clones otherwise. One call per step (and after backfills and
-    /// resets), never per frame.
+    /// clones otherwise. One call per step (and after a run reset),
+    /// never per frame.
     fn refresh_sub_histories(&mut self) {
         for sub in self.subs.values_mut() {
             sub.refresh_published_history();
@@ -2095,7 +2047,6 @@ impl BusCore {
             laps: self.laps,
             bus_counter: self.bus_counter,
             sim_t_us: self.sim_t_us,
-            sample_cover: self.sample_cover,
             spec: self.spec.clone(),
             bus_loads: Arc::clone(&self.published_loads),
             nodes: Arc::clone(&self.published_nodes),
@@ -2581,56 +2532,6 @@ impl BusCore {
         tx.srcs = srcs;
     }
 
-    /// One scan + merge over a span known to be uncovered: the plot's
-    /// history beyond the playhead. Lives on the bus because the scan
-    /// owns the log source and the caches it fills.
-    fn backfill(&mut self, t_from_us: u64, t_to_us: u64, stride: u64, status: &mut String) {
-        let mut frames = Vec::new();
-        let capped =
-            !self
-                .source
-                .scan_range(t_from_us, t_to_us, crate::app::MAX_SCAN_FRAMES, &mut frames);
-        // A scan-local stride: the shared per-signal baseline sits at the
-        // playhead and would reject every point that lies behind it.
-        let mut stride_map: HashMap<SigKey, u64> = HashMap::new();
-        let mut batches: HashMap<SigKey, Vec<(u64, f64)>> = HashMap::new();
-        for f in &frames {
-            for (key, d) in self.subscribed_values(f) {
-                if stride_map.get(&key).is_some_and(|&lt| f.t_us < lt + stride) {
-                    continue;
-                }
-                stride_map.insert(key.clone(), f.t_us);
-                batches.entry(key).or_default().push((f.t_us, d.phys));
-            }
-        }
-        for (key, pts) in batches {
-            if let Some(sub) = self.subs.get_mut(&key) {
-                let taken = sub.history.merge(&pts, stride);
-                for v in taken {
-                    sub.observe(v);
-                }
-                sub.history_dirty = true;
-            }
-        }
-        self.refresh_sub_histories();
-        // Claim the span that was *asked for*, not merely what was read. Repeating
-        // an unsatisfied request every frame would rescan the same stretch
-        // forever; a scan stopped by the frame cap can therefore leave the tail of
-        // a very dense window thin until the view moves enough to ask again.
-        self.sample_cover = match self.sample_cover {
-            Some((lo, hi)) if t_from_us <= hi && t_to_us >= lo => {
-                Some((lo.min(t_from_us), hi.max(t_to_us)))
-            }
-            _ => Some((t_from_us, t_to_us)),
-        };
-        if capped {
-            *status = format!(
-                "plot: window too dense to decode fully ({})",
-                crate::app::MAX_SCAN_FRAMES
-            );
-        }
-    }
-
     /// Loads every bus's declared database in one go. This is bootstrap
     /// work, run before the first publish (and before the core thread
     /// ever starts), not a command: there is no frontend yet to receive
@@ -3052,39 +2953,6 @@ impl BusCore {
         true
     }
 
-    /// Moves the replay playhead to `t_s` seconds. The log's own duration
-    /// bounds the request so a drag past the right edge lands on the last
-    /// frame.
-    fn seek_replay(&mut self, t_s: f64, status: &mut String) {
-        if !matches!(self.mode, Mode::Replay) {
-            return;
-        }
-        let dur_us = self.source.duration();
-        let target = match dur_us {
-            Some(d) => ((t_s.max(0.0) * 1e6) as u64).min(d),
-            None => (t_s.max(0.0) * 1e6) as u64,
-        };
-        match self.source.set_position_us(target) {
-            Some(landed) => {
-                self.rewind_samples_to(landed);
-                let dur = dur_us.map(|d| d as f64 / 1e6);
-                *status = match dur {
-                    Some(d) => format!("seek {:.2} / {:.2} s", landed as f64 / 1e6, d),
-                    None => format!("seek {:.2} s", landed as f64 / 1e6),
-                };
-            }
-            None => *status = "seek: past end of log".to_string(),
-        }
-    }
-
-    /// Lets every signal's sampler resume at a scrubbed playhead. Retained
-    /// samples are left in place; see [`Subscription::resume_sampling_at`].
-    pub(crate) fn rewind_samples_to(&mut self, t_us: u64) {
-        for sub in self.subs.values_mut() {
-            sub.resume_sampling_at(t_us);
-        }
-    }
-
     /// Fresh virtual run: new source, blank run state, wall-clock
     /// measuring.
     fn start_virtual(&mut self, status: &mut String) {
@@ -3151,7 +3019,6 @@ impl BusCore {
         // interval memory would turn the first step of a new run into one
         // enormous measured period.
         self.spec = crate::spec::Spec::default();
-        self.sample_cover = None;
         self.markers.clear();
         self.pre_buffer.clear();
         self.post_roll = None;
@@ -3355,7 +3222,6 @@ impl BusCore {
         }
         let source_empty = self.buf.is_empty();
         if stride != self.applied_stride_us {
-            self.sample_cover = None;
             self.applied_stride_us = stride;
         }
 

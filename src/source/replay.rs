@@ -117,66 +117,6 @@ impl FrameSource for ReplaySource {
         }
     }
 
-    fn set_position_us(&mut self, us: u64) -> Option<u64> {
-        let landed = self.stream.seek_to_us(us)?;
-        // Adopt the frame we actually landed on rather than the requested
-        // value, so scrubbing back and forth never accumulates a bias.
-        self.pos_us = landed as f64;
-        // `done` is otherwise latched forever, which would leave the source
-        // silent after a jump back from the end.
-        self.done = false;
-        // Re-anchor the wall clock: the next poll sees `last == None`, adds
-        // nothing, and playback continues from the landing point. Without
-        // this the seek itself is credited as elapsed playback time.
-        self.last = None;
-        self.refresh_next();
-        Some(landed)
-    }
-
-    fn scan_range(
-        &mut self,
-        from_us: u64,
-        to_us: u64,
-        max_frames: usize,
-        out: &mut Vec<CanFrame>,
-    ) -> bool {
-        // Backfill exists to fill CAN signal history for the plot windows. A
-        // FlexRay-only log has no CAN frames to collect, so scanning would
-        // re-decompress containers every frame for nothing -- skip it and
-        // report the span complete.
-        if !self.stream.has_can_frames() {
-            return true;
-        }
-        let playhead = self.pos_us as u64;
-        self.stream.seek_to_us(from_us);
-        let mut complete = true;
-        while let Some(t) = self.stream.peek_t() {
-            if t > to_us {
-                break;
-            }
-            if out.len() >= max_frames {
-                complete = false;
-                break;
-            }
-            match self.stream.next_frame() {
-                Some(f) => out.push(f),
-                None => {
-                    complete = false;
-                    break;
-                }
-            }
-        }
-        // Put the cursor back where playback left it. `done` is cleared because
-        // the scan may have looked at the tail; the next poll re-latches it from
-        // the playhead. `last` goes to None so the scan's own wall time is not
-        // credited to playback on the next poll.
-        self.stream.seek_to_us(playhead);
-        self.done = false;
-        self.last = None;
-        self.refresh_next();
-        complete
-    }
-
     fn poll_fr(&mut self, _now_us: u64, out: &mut Vec<crate::trace::FrRow>) {
         // The playhead is the same one the CAN loop paced against, so
         // FR rows stream in log order interleaved with the CAN frames.
@@ -328,72 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn seek_forward_does_not_re_emit_discarded_frames() {
-        let frames: Vec<CanFrame> = (0..10u64).map(|i| frame(i * 100_000)).collect();
-        let mut src = ReplaySource::from_frames(frames);
-        let mut out = Vec::new();
-        src.poll(0, &mut out);
-        src.poll(250_000, &mut out);
-        assert_eq!(out.len(), 3, "t=0,100k,200k due by 250ms");
-        out.clear();
-        assert_eq!(src.set_position_us(700_000), Some(700_000));
-        src.poll(250_000, &mut out);
-        assert_eq!(
-            out.iter().map(|f| f.t_us).collect::<Vec<_>>(),
-            vec![700_000],
-            "playhead continues from the landing frame, skipping 300k..600k"
-        );
-    }
-
-    #[test]
-    fn seek_backward_clears_done_and_resumes() {
-        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000)]);
-        let mut out = Vec::new();
-        src.poll(0, &mut out);
-        src.poll(1_000_000, &mut out);
-        assert!(src.is_done(), "stream exhausted");
-        out.clear();
-        assert_eq!(src.set_position_us(0), Some(0));
-        assert!(!src.is_done(), "a jump back from the end must unlatch done");
-        src.poll(1_000_000, &mut out);
-        assert_eq!(out.len(), 1, "first poll only re-anchors the clock");
-        src.poll(2_000_000, &mut out);
-        assert_eq!(out.len(), 2, "playhead advances over both frames again");
-    }
-
-    #[test]
-    fn seek_lands_on_a_real_frame_instead_of_the_request() {
-        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
-        // Nothing sits at 150 ms, so the clock must adopt 200 ms -- using the
-        // request would leave the playhead between frames and drift.
-        assert_eq!(src.set_position_us(150_000), Some(200_000));
-        assert_eq!(src.position(), Some(200_000));
-    }
-
-    #[test]
-    fn seek_does_not_credit_its_own_cost_as_playback_time() {
-        let mut src = ReplaySource::from_frames(vec![frame(0), frame(500_000)]);
-        let mut out = Vec::new();
-        src.poll(10_000, &mut out);
-        src.poll(20_000, &mut out);
-        assert_eq!(src.set_position_us(500_000), Some(500_000));
-        // The next poll re-anchors instead of adding the 10 ms gap on top.
-        src.poll(30_000, &mut out);
-        assert_eq!(src.position(), Some(500_000), "no phantom advance");
-    }
-
-    #[test]
-    fn a_failed_seek_leaves_the_source_alone() {
-        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000)]);
-        let mut out = Vec::new();
-        src.poll(0, &mut out);
-        src.poll(40_000, &mut out);
-        let before = src.position();
-        assert_eq!(src.set_position_us(9_000_000), None, "past the end");
-        assert_eq!(src.position(), before, "a rejected seek is a no-op");
-    }
-
-    #[test]
     fn next_deadline_tracks_the_next_frame_in_log_time() {
         let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
         // Never polled: the anchor is "now", and the t=0 frame is due now.
@@ -421,17 +295,13 @@ mod tests {
         src.poll(1_000_000, &mut out);
         src.poll(2_000_000, &mut out);
         assert_eq!(src.next_deadline(2_000_000), None);
-        // A seek back relights the schedule.
-        assert_eq!(src.set_position_us(0), Some(0));
-        assert!(src.next_deadline(2_000_000).is_some());
     }
 
     #[test]
-    fn flexray_only_replay_restarts_after_it_finishes() {
-        // A pure-FlexRay log carries no CAN frames to seek against. The
-        // source must still land a scrub on an FR row, unlatch `done`, and
-        // re-emit -- otherwise a finished FlexRay replay is stuck at the end
-        // and reading it again does nothing.
+    fn a_flexray_only_replay_runs_its_full_length() {
+        // A pure-FlexRay log carries no CAN frames, so the CAN side is at EOF
+        // from the first poll. `done` must wait for the FlexRay rows to drain,
+        // or a FlexRay replay stops after one frame.
         use crate::trace::FrRow;
         let fr = |t_us: u64| FrRow {
             bus: 0,
@@ -456,48 +326,5 @@ mod tests {
         assert_eq!(fr_out.len(), 3, "all three FlexRay rows emit over the run");
         src.poll(400_000, &mut Vec::new());
         assert!(src.is_done(), "an exhausted FlexRay stream reports done");
-
-        // The "read it again" gesture: seek back to the top.
-        assert_eq!(
-            src.set_position_us(0),
-            Some(0),
-            "a FlexRay-only seek lands on the first row, not EOF"
-        );
-        assert!(!src.is_done(), "a jump back unlatches done");
-        fr_out.clear();
-        src.poll(0, &mut Vec::new());
-        src.poll_fr(0, &mut fr_out);
-        assert_eq!(fr_out.len(), 1, "first poll only re-anchors at the t=0 row");
-        src.poll(300_000, &mut Vec::new());
-        src.poll_fr(300_000, &mut fr_out);
-        assert_eq!(fr_out.len(), 3, "the whole FlexRay log re-emits from the top");
-    }
-
-    #[test]
-    fn scan_range_skips_a_flexray_only_log() {
-        // Backfill only collects CAN frames. A FlexRay-only stream has none,
-        // so scan_range must report the span complete and collect nothing --
-        // rather than re-decompressing containers every frame for nothing,
-        // which is what pegged the core once a plot window was open.
-        use crate::trace::FrRow;
-        let fr = |t_us: u64| FrRow {
-            bus: 0,
-            t_us,
-            ab: 0,
-            slot: 1,
-            cycle: 0,
-            payload: Vec::new(),
-            header_crc: 0,
-            flags: 0,
-            name: None,
-        };
-        let stream = VecStream::with_fr(Vec::new(), vec![fr(0), fr(100_000)]);
-        let mut src = ReplaySource::new(Box::new(stream));
-        let mut out = Vec::new();
-        assert!(
-            src.scan_range(0, 200_000, 1000, &mut out),
-            "FR-only span reports complete"
-        );
-        assert!(out.is_empty(), "nothing collected without CAN frames");
     }
 }

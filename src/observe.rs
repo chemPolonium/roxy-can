@@ -106,10 +106,9 @@ impl SampleCache {
     /// another accepted candidate. Returns the values it actually took, so the
     /// caller only folds those into its statistics.
     ///
-    /// The gap rule matters: overlapping window requests re-read ground that is
-    /// already cached, and without it each re-scan injects near-duplicate
-    /// timestamps whose values differ, so the polyline zig-zags between them and
-    /// the curve reads as a thick band instead of a line.
+    /// The gap rule matters: a re-delivered frame would otherwise inject a
+    /// near-duplicate timestamp whose value differs, so the polyline zig-zags
+    /// between the two and the curve reads as a thick band instead of a line.
     pub fn merge(&mut self, batch: &[(u64, f64)], min_gap: u64) -> Vec<f64> {
         let gap = min_gap.max(1);
         if batch.is_empty() {
@@ -324,9 +323,8 @@ impl Subscription {
     /// run began -- recomputing them every time the oldest point is trimmed would
     /// cost an O(n) rescan per sample.
     pub(crate) fn push_sample(&mut self, t_us: u64, v: f64, min_gap: u64) {
-        // Same spacing rule as a backfill merge. Comparing only against the
-        // newest cached point would be wrong after a rewind, where the cache
-        // legitimately still holds points ahead of the playhead.
+        // The cache owns the spacing rule: judging a candidate only against
+        // the newest point would let a re-delivered frame through.
         if self.history.merge(&[(t_us, v)], min_gap).is_empty() {
             return;
         }
@@ -362,8 +360,8 @@ impl Subscription {
     }
 
     /// Rebuilds the published Arc when the working cache changed; a
-    /// pointer clone otherwise. Called once per step (and after backfills
-    /// and resets), never per frame.
+    /// pointer clone otherwise. Called once per step (and after a run
+    /// reset), never per frame.
     pub(crate) fn refresh_published_history(&mut self) {
         if self.history_dirty {
             self.published = Arc::new(self.history.clone());
@@ -382,15 +380,6 @@ impl Subscription {
         self.n = 0;
         self.last_update_us = 0;
         self.last_sample_us = 0;
-    }
-
-    /// Lets the sampler resume at a scrubbed playhead. The cache is deliberately
-    /// left alone: points ahead of the playhead are simply outside the visible
-    /// window, and deleting them is what used to blank the curve on a rewind.
-    pub(crate) fn resume_sampling_at(&mut self, t_us: u64) {
-        if self.last_sample_us > t_us {
-            self.last_sample_us = t_us;
-        }
     }
 }
 
@@ -610,8 +599,7 @@ pub struct StateWin {
     pub opened: bool,
     pub signals: Vec<GfxSignal>,
     /// Width of the live trailing window in seconds. The tracker always
-    /// rides the live edge; panning and scrubbing belong to the curve
-    /// windows.
+    /// rides the live edge; panning belongs to the curve windows.
     pub time_window_s: f64,
     /// Session memory of one palette slot per state value, keyed by signal
     /// then by the value's bits: a value keeps the slot it first drew
@@ -683,45 +671,6 @@ impl App {
             .min()
             .unwrap_or(u64::MAX);
         (min_window_us / STRIDE_POINTS_PER_WINDOW).clamp(MIN_STRIDE_US, SAMPLE_INTERVAL_US)
-    }
-
-    /// Requests that whatever frames cover `[t_from_us, t_to_us]` be
-    /// decoded into the signal caches, unless an earlier scan already read
-    /// that span.
-    ///
-    /// This is what makes the plot independent of the playback cursor. Deriving
-    /// samples only as playback walks past them meant a Graphics window showing
-    /// ground the cursor had not reached contained no points at all -- which is
-    /// exactly what a forward scrub looked like. The scan itself is core work
-    /// (it owns the log source), so it goes through as a command; the filled
-    /// history arrives in a later snapshot. Cover tracking rides the snapshot
-    /// too, so an in-flight request is not re-sent.
-    pub fn ensure_samples_in(&mut self, t_from_us: u64, t_to_us: u64) {
-        if t_to_us <= t_from_us {
-            return;
-        }
-        // Read only the edges the cache does not already cover. During playback
-        // the visible window slides forward by tens of milliseconds every frame,
-        // and re-reading the whole window each time would both cost that much
-        // again and overwrite the cache's spacing.
-        let (cov_lo, cov_hi) = self.snap.sample_cover.unwrap_or((t_from_us, t_from_us));
-        let mut edges = Vec::new();
-        if t_from_us < cov_lo {
-            edges.push((t_from_us, t_to_us.min(cov_lo)));
-        }
-        if t_to_us > cov_hi {
-            edges.push((cov_hi.max(t_from_us), t_to_us));
-        }
-        let stride = self.wanted_stride_us();
-        for (from, to) in edges {
-            if to > from {
-                self.send(crate::bus::BusCommand::Backfill {
-                    from_us: from,
-                    to_us: to,
-                    stride_us: stride,
-                });
-            }
-        }
     }
 
     /// The database's declared min..max for a signal -- the scale the Data

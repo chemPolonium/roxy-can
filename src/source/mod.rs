@@ -20,16 +20,6 @@ pub trait FrameStream: Send {
     /// Consumes the frame `peek_t` returned.
     fn next_frame(&mut self) -> Option<CanFrame>;
 
-    /// Repositions the cursor so the next unread frame is the first one with
-    /// `t_us >= target`. Returns the timestamp actually landed on (>= target),
-    /// which lets the caller sync its clock to a real frame instead of the
-    /// requested value and avoid accumulating drift. `None` means `target` is
-    /// past the end and the cursor now sits at EOF.
-    ///
-    /// Deliberately has no default impl: positioning differs per container
-    /// format, and a wrong inherited default would silently mis-date playback.
-    fn seek_to_us(&mut self, target: u64) -> Option<u64>;
-
     /// Total length of the log timeline in microseconds, relative to the
     /// same zero point the frames use.
     fn duration_us(&self) -> Option<u64> {
@@ -54,14 +44,6 @@ pub trait FrameStream: Send {
     fn peek_fr_t(&mut self) -> Option<u64> {
         None
     }
-
-    /// Whether the container carries any CAN frames at all. A FlexRay-only
-    /// log reports `false` (once known), letting the replay skip the CAN
-    /// backfill scan entirely instead of re-decompressing containers every
-    /// frame to collect nothing. Defaults to `true` (assume CAN present).
-    fn has_can_frames(&self) -> bool {
-        true
-    }
 }
 
 /// One bus input. `Send` because stage 3 moves the whole core -- sources
@@ -84,28 +66,6 @@ pub trait FrameSource: Send {
     /// Current position on the source's clock, in microseconds.
     fn position(&self) -> Option<u64> {
         None
-    }
-
-    /// Jumps the source's clock to `us` and returns the timestamp actually
-    /// landed on. The no-op default is how a source without a timeline tells
-    /// the UI it cannot be scrubbed.
-    fn set_position_us(&mut self, _us: u64) -> Option<u64> {
-        None
-    }
-
-    /// Collects every frame inside `[from_us, to_us]` into `out` **without**
-    /// moving the playhead, and reports whether the span was read completely
-    /// (a capped scan returns false). This is what lets a plot show a window the
-    /// playback cursor has not walked into yet. Sources with no file to re-read
-    /// do nothing and report true, meaning "there is no pending work".
-    fn scan_range(
-        &mut self,
-        _from_us: u64,
-        _to_us: u64,
-        _max_frames: usize,
-        _out: &mut Vec<CanFrame>,
-    ) -> bool {
-        true
     }
 
     /// Total length of the source's timeline, in microseconds.

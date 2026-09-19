@@ -46,7 +46,7 @@ pub fn render(app: &App, ui: &Ui) {
                 ui.text_colored([1.0, 0.4, 0.4, 1.0], "| REC");
             }
             // Not gated on `measuring`: after a log runs out the source keeps
-            // its timeline, and the scrub bar needs the readout to stay put.
+            // its timeline, so the readout holds at the end of the run.
             if matches!(app.snap.mode, Mode::Replay)
                 && let Some((pos_s, dur_s)) = app.replay_position()
             {

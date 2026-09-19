@@ -373,7 +373,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     let stacked = app.graphics[i].stacked;
     let tw = app.graphics[i].time_window_s;
     // Follows the replay playhead, not the wall clock, so the axis moves with
-    // the scrub bar and the curve stays in view at any playback speed.
+    // the playback and the curve stays in view at any playback speed.
     let t_now = app.plot_now_s();
     let keys: Vec<crate::observe::SigKey> = app.graphics[i]
         .signals
@@ -401,9 +401,10 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
         0.0
     };
     // Re-clamp unconditionally: the pan and zoom handlers were not the only
-    // thing that can make an existing offset unreachable. Scrubbing moves the
-    // playhead and rewinds history out from under it, and without this the
-    // window sits over ground with no samples and the curve looks gone.
+    // thing that can make an existing offset unreachable. The playhead only
+    // ever moves forward, so history grows out from under a stale offset, and
+    // without this the window sits over ground with no samples and the curve
+    // looks gone.
     if app.graphics[i].t_offset_s > max_off {
         app.graphics[i].t_offset_s = max_off;
     }
@@ -433,13 +434,6 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     }
 
     let t_right = t_now - app.graphics[i].t_offset_s;
-    // The view asks for its own data rather than waiting for playback to walk
-    // past it, so a scrubbed or panned-to window is complete immediately. The
-    // extra window-width ahead of the right edge keeps ordinary playback from
-    // triggering a scan every frame.
-    let need_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
-    let need_hi = ((t_right + tw).max(0.0) * 1e6) as u64;
-    app.ensure_samples_in(need_lo, need_hi);
     let cursor = if hover && app.graphics[i].show_cursor {
         let frac = ((mx - ix0) / iw) as f64;
         Some((mx, t_right - tw * (1.0 - frac)))

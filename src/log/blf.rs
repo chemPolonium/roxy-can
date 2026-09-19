@@ -90,26 +90,19 @@ const FD64_STRUCT_SIZE: usize = 40;
 pub struct BlfStream {
     data: Backing,
     pos: usize,
-    /// Offset just past the file header, as declared by the header itself.
-    objects_at: usize,
     duration: Option<u64>,
     describe: String,
     pending: VecDeque<CanFrame>,
     /// FlexRay receive objects encountered while reading containers for
-    /// CAN frames. Delivered via `poll_fr_rows`; dropped on seek, where
-    /// rows before the new position are gone and rows after re-appear as
-    /// the stream re-reads.
+    /// CAN frames. Delivered via `poll_fr_rows` as the same containers are
+    /// read, in file order.
     fr_pending: VecDeque<crate::trace::FrRow>,
-    /// Ascending `(rebased t_us, container byte offset)` index, grown as
-    /// containers are read. See [`Self::note_checkpoint`].
-    checkpoints: Vec<(u64, usize)>,
     /// Sticky: did any scan ever surface a CAN frame?
     saw_can: bool,
     /// Set once a scan reaches EOF having seen no CAN frame. The whole file
     /// is then CAN-free, so `peek_t` returns `None` at once instead of
-    /// re-decompressing every container. Without this, a FlexRay-only log's
-    /// plot backfill pegged the core: each `scan_range` called `peek_t`, which
-    /// scanned to EOF hunting CAN frames that never come.
+    /// re-decompressing every container on every replay poll -- which is what
+    /// pegged the core on a FlexRay-only log.
     no_can_frames: bool,
     /// Absolute t_us of the first frame we emitted; every subsequent
     /// frame is rebased by this so `ReplaySource::pos_us = 0` matches the
@@ -153,12 +146,10 @@ impl BlfStream {
         Ok(BlfStream {
             data,
             pos: header.objects_at,
-            objects_at: header.objects_at,
             duration,
             describe,
             pending: VecDeque::new(),
             fr_pending: VecDeque::new(),
-            checkpoints: Vec::new(),
             saw_can: false,
             no_can_frames: false,
             t_base: None,
@@ -239,37 +230,7 @@ impl BlfStream {
             }
         };
         parse_container_objects(&decoded, &mut self.pending, &mut self.fr_pending);
-        // Checkpoint on the first row the container produced, CAN *or*
-        // FlexRay. Keying this on CAN frames alone left a FlexRay-only log
-        // with an empty checkpoint index, so every `seek_to_us` rewound to
-        // the file start and read the whole thing -- which is what pinned
-        // replay near 1x once a plot window backfilled against the stream.
-        let head_raw = match (self.pending.front(), self.fr_pending.front()) {
-            (Some(f), Some(r)) => Some(f.t_us.min(r.t_us)),
-            (Some(f), None) => Some(f.t_us),
-            (None, Some(r)) => Some(r.t_us),
-            (None, None) => None,
-        };
-        if let Some(raw) = head_raw {
-            self.note_checkpoint(raw, container_start);
-        }
         true
-    }
-
-    /// Keeps a `(rebased t_us -> byte offset)` entry per container we walk
-    /// into. BLF carries no timestamps in the container *header*, so this is
-    /// the finest index available without a full decompress pass up front.
-    fn note_checkpoint(&mut self, raw_us: u64, container_start: usize) {
-        let t = self.rebase(raw_us);
-        let at = self.checkpoints.partition_point(|(ct, _)| *ct < t);
-        if self
-            .checkpoints
-            .get(at)
-            .is_some_and(|(ct, p)| *ct == t && *p == container_start)
-        {
-            return;
-        }
-        self.checkpoints.insert(at, (t, container_start));
     }
 
     fn rebase(&mut self, raw_us: u64) -> u64 {
@@ -280,53 +241,13 @@ impl BlfStream {
         }
         t
     }
-
-    /// Rebased timestamp of the oldest undelivered row of *either* kind,
-    /// reading containers forward until one queues. `None` at EOF. Pairs
-    /// with [`Self::drop_head`] to walk the playhead without a CAN-only
-    /// assumption.
-    fn peek_head_t(&mut self) -> Option<u64> {
-        while self.pending.is_empty() && self.fr_pending.is_empty() {
-            if !self.enter_next_container() {
-                return None;
-            }
-        }
-        let can = self.pending.front().map(|f| f.t_us);
-        let fr = self.fr_pending.front().map(|r| r.t_us);
-        let raw = can.into_iter().chain(fr).min()?;
-        Some(self.rebase(raw))
-    }
-
-    /// Consumes the oldest undelivered row, CAN or FlexRay, whichever is
-    /// earlier. Must be called right after [`Self::peek_head_t`] on a
-    /// non-empty head.
-    fn drop_head(&mut self) {
-        let can = self.pending.front().map(|f| f.t_us);
-        let fr = self.fr_pending.front().map(|r| r.t_us);
-        match (can, fr) {
-            (Some(c), Some(f)) => {
-                if c <= f {
-                    self.pending.pop_front();
-                } else {
-                    self.fr_pending.pop_front();
-                }
-            }
-            (Some(_), None) => {
-                self.pending.pop_front();
-            }
-            (None, Some(_)) => {
-                self.fr_pending.pop_front();
-            }
-            (None, None) => {}
-        }
-    }
 }
 
 impl FrameStream for BlfStream {
     fn peek_t(&mut self) -> Option<u64> {
         // A prior full scan proved the file carries no CAN frames: report EOF
         // at once rather than decompressing every container again. This is
-        // what keeps a FlexRay-only log's plot backfill from pegging the core.
+        // what keeps a FlexRay-only log's replay from re-scanning on every poll.
         if self.no_can_frames {
             return None;
         }
@@ -357,29 +278,6 @@ impl FrameStream for BlfStream {
         }
     }
 
-    fn seek_to_us(&mut self, target: u64) -> Option<u64> {
-        match self.checkpoints.partition_point(|(t, _)| *t <= target) {
-            0 => self.pos = self.objects_at,
-            k => self.pos = self.checkpoints[k - 1].1,
-        }
-        // Queue state is pure; `t_base` deliberately survives so a scrub does
-        // not move the log's zero point under the playhead.
-        self.pending.clear();
-        self.fr_pending.clear();
-        // Land on the first row of either kind at or after `target`, reading
-        // only the containers in between. Stopping on the CAN side alone would
-        // send a FlexRay-only stream to EOF, return `None`, and so latch
-        // `done` shut -- which is why a finished FlexRay replay could not be
-        // scrubbed back and re-run.
-        loop {
-            let head = self.peek_head_t()?;
-            if head >= target {
-                return Some(head);
-            }
-            self.drop_head();
-        }
-    }
-
     fn duration_us(&self) -> Option<u64> {
         if self.duration.is_some() {
             return self.duration;
@@ -393,13 +291,6 @@ impl FrameStream for BlfStream {
 
     fn describe(&self) -> String {
         self.describe.clone()
-    }
-
-    fn has_can_frames(&self) -> bool {
-        // Once a full scan has proved the file is CAN-free, the replay can
-        // skip the backfill scan instead of re-decompressing containers to
-        // collect nothing. Before that scan, assume CAN frames exist.
-        !self.no_can_frames
     }
 
     fn peek_fr_t(&mut self) -> Option<u64> {
@@ -1067,7 +958,6 @@ impl BlfWriter {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::log::vec_stream::VecStream;
     use std::io::Write;
 
     /// A one-frame log built by the encoders below, for tests elsewhere in the
@@ -1128,10 +1018,8 @@ pub(crate) mod tests {
 
     /// A FlexRay-only BLF has no CAN frames; once the first scan proves that,
     /// `peek_t` must keep reporting EOF cheaply (no re-decompress) while the
-    /// FlexRay rows stay readable across seeks. This is the guard against the
-    /// plot-backfill death spiral: every `scan_range` calls `peek_t`, and if
-    /// it re-scanned to EOF each time the core would peg and the transport
-    /// buttons would stop answering.
+    /// FlexRay rows stay readable. Without the latch every replay poll walked
+    /// the whole file hunting CAN frames that never come, which pegged the core.
     #[test]
     fn flexray_only_stream_stays_can_exhausted() {
         let path = std::path::Path::new("assets/arxml/Logging.blf");
@@ -1141,18 +1029,13 @@ pub(crate) mod tests {
         };
         // The first CAN peek scans to EOF and finds none; the flag latches.
         assert!(stream.peek_t().is_none(), "no CAN frames in an FR-only log");
-        // A repeat CAN peek (what a backfill does every frame) stays None.
+        // A repeat CAN peek (what every replay poll does) stays None.
         assert!(stream.peek_t().is_none(), "CAN stays exhausted");
-        // FlexRay rows still queue and survive a seek back to the top.
         assert!(stream.peek_fr_t().is_some(), "FlexRay rows still queue");
-        assert!(
-            stream.seek_to_us(0).is_some(),
-            "a FlexRay-only seek lands on the first row"
-        );
-        assert!(stream.peek_t().is_none(), "a seek does not resurrect CAN");
         let mut fr = Vec::new();
         stream.poll_fr_rows(u64::MAX, &mut fr);
-        assert!(!fr.is_empty(), "FlexRay rows still deliver after the seek");
+        assert!(!fr.is_empty(), "FlexRay rows still deliver");
+        assert!(stream.peek_t().is_none(), "the rows do not resurrect CAN");
     }
 
     /// The production recorder writer: classic (standard/extended/RTR)
@@ -1966,124 +1849,12 @@ pub(crate) mod tests {
         v
     }
 
-    /// One container per run; `runs` holds the raw start timestamps.
-    fn multi_container_file(runs: &[u64], zlib: bool) -> Vec<u8> {
-        let mut v = file_header(
-            Some((2024, 1, 1, 1, 0, 0, 0, 0)),
-            Some((2024, 1, 1, 1, 0, 0, 5, 0)),
-        );
-        for start in runs {
-            let objects = can_run(*start, 5);
-            let container = if zlib {
-                zlib_container(&objects)
-            } else {
-                raw_container(&objects)
-            };
-            v.extend_from_slice(&container);
-        }
-        v
-    }
-
     fn times(s: &mut dyn FrameStream) -> Vec<u64> {
         let mut out = Vec::new();
         while let Some(f) = s.next_frame() {
             out.push(f.t_us);
         }
         out
-    }
-
-    fn read_all(bytes: &[u8]) -> Vec<CanFrame> {
-        let mut s = BlfStream::from_bytes(bytes).unwrap();
-        let mut out = Vec::new();
-        while let Some(f) = s.next_frame() {
-            out.push(f);
-        }
-        out
-    }
-
-    #[test]
-    fn seek_lands_inside_a_later_container() {
-        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
-        let mut s = BlfStream::from_bytes(&bytes).unwrap();
-        assert_eq!(s.seek_to_us(20_000), Some(20_000));
-        assert_eq!(times(&mut s), vec![20_000, 21_000, 22_000, 23_000, 24_000]);
-    }
-
-    #[test]
-    fn seek_rewinds_across_containers() {
-        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
-        let mut s = BlfStream::from_bytes(&bytes).unwrap();
-        assert_eq!(times(&mut s).len(), 15);
-        assert_eq!(s.seek_to_us(10_000), Some(10_000));
-        assert_eq!(
-            times(&mut s),
-            vec![
-                10_000, 11_000, 12_000, 13_000, 14_000, 20_000, 21_000, 22_000, 23_000, 24_000
-            ],
-            "rewind replays the remaining containers in order"
-        );
-    }
-
-    #[test]
-    fn one_checkpoint_is_recorded_per_container() {
-        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
-        let mut s = BlfStream::from_bytes(&bytes).unwrap();
-        assert!(s.checkpoints.is_empty(), "nothing walked yet");
-        assert_eq!(times(&mut s).len(), 15);
-        assert_eq!(s.checkpoints.len(), 3, "one entry per container");
-    }
-
-    #[test]
-    fn scrubbing_does_not_move_the_rebase_base() {
-        // Raw stamps start well past zero, so the rebased timeline has to stay
-        // pinned to the first frame ever read -- not to wherever we seek.
-        let bytes = multi_container_file(&[5_000_000, 5_010_000], false);
-        let mut s = BlfStream::from_bytes(&bytes).unwrap();
-        assert_eq!(s.seek_to_us(10_000), Some(10_000), "rebased 10 s");
-        assert_eq!(times(&mut s), vec![10_000, 11_000, 12_000, 13_000, 14_000]);
-        assert_eq!(s.seek_to_us(0), Some(0));
-        assert_eq!(
-            times(&mut s).first(),
-            Some(&0),
-            "the log's zero point must not shift after a scrub"
-        );
-    }
-
-    #[test]
-    fn seek_works_through_zlib_containers() {
-        let bytes = multi_container_file(&[0, 10_000, 20_000], true);
-        let mut s = BlfStream::from_bytes(&bytes).unwrap();
-        assert_eq!(s.seek_to_us(21_000), Some(21_000));
-        assert_eq!(times(&mut s), vec![21_000, 22_000, 23_000, 24_000]);
-    }
-
-    #[test]
-    fn seek_past_the_end_reports_eof() {
-        let bytes = multi_container_file(&[0, 10_000], false);
-        let mut s = BlfStream::from_bytes(&bytes).unwrap();
-        assert_eq!(s.seek_to_us(999_999), None);
-        assert_eq!(s.peek_t(), None);
-    }
-
-    #[test]
-    fn seek_agrees_with_the_in_memory_stream() {
-        let bytes = multi_container_file(&[0, 10_000, 20_000], false);
-        let all = read_all(&bytes);
-        assert_eq!(all.len(), 15);
-        for target in [0u64, 1, 3_000, 10_000, 12_500, 24_000, 24_001] {
-            let mut a = BlfStream::from_bytes(&bytes).unwrap();
-            let mut v = VecStream::new(all.clone());
-            assert_eq!(
-                a.seek_to_us(target),
-                v.seek_to_us(target),
-                "landing differs at t={target}"
-            );
-            assert_eq!(
-                times(&mut a),
-                times(&mut v),
-                "tail after seeking differs at t={target}"
-            );
-        }
     }
 
     /// Reads real Vector-authored BLF files to catch dialect drift that our own

@@ -503,7 +503,7 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
 
     let tw = app.state_trackers[i].time_window_s;
     // Always live: the right edge is the plot clock, which follows the
-    // replay playhead in replay, so the bands track scrubbing too.
+    // replay playhead in replay, so the bands track playback too.
     let t_right = app.plot_now_s();
     let t_left = (t_right - tw).max(0.0);
     let lo_us = (t_left * 1e6) as u64;

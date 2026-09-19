@@ -25,10 +25,6 @@ pub(crate) const SAMPLE_INTERVAL_US: u64 = 50_000;
 /// every update), while the hour window keeps the 50 ms memory bound.
 pub(crate) const STRIDE_POINTS_PER_WINDOW: u64 = 200;
 pub(crate) const MIN_STRIDE_US: u64 = 1_000;
-/// Frames one window backfill may collect. Bounds a single synchronous pass so
-/// a dense hour-wide window cannot lock the UI; the plot shows what it got and
-/// asks again on the next change.
-pub(crate) const MAX_SCAN_FRAMES: usize = 300_000;
 /// Row cache cap of one Trace window (R1 virtual scrolling): the newest
 /// matching frames the clipper draws from. Memory ≈ 88 B per frame, so
 /// 200 k rows ≈ 18 MB per window in the worst case.
@@ -217,9 +213,6 @@ pub struct App {
     pub desktop_rename_target: Option<usize>,
     pub desktop_rename_buf: String,
     pub replay_speed: f64,
-    /// Set by `stop`: the next Play re-opens the log from zero instead of
-    /// resuming wherever the scrub bar left the playhead.
-    pub replay_reset_pending: bool,
     /// The Triggers window's editor popup, if open: the row it edits plus
     /// the not-yet-applied shape. `None` while the popup is closed.
     pub(crate) trig_draft: Option<crate::ui::triggers::TrigDraft>,
@@ -501,7 +494,6 @@ impl App {
             desktop_rename_target: None,
             desktop_rename_buf: String::new(),
             replay_speed: 1.0,
-            replay_reset_pending: false,
             trig_draft: None,
             sysvar_draft: None,
             spec_show: [true; 4],
@@ -767,9 +759,6 @@ impl App {
 
     pub fn stop(&mut self) {
         self.send(crate::bus::BusCommand::Stop);
-        // Set by `stop`: the next Play re-opens the log from zero instead
-        // of resuming wherever the scrub bar left the playhead.
-        self.replay_reset_pending = true;
     }
 
     pub fn toggle_record(&mut self) {
@@ -822,9 +811,8 @@ impl App {
     /// The stream is dropped here so the mmap handle closes before `replay`
     /// reopens it 鈥?Windows refuses to move/rename a mapped file.
     ///
-    /// Refused while a replay is running: `log_path`, the status bar and the
-    /// scrub bar's length would describe the new file while the live source
-    /// keeps streaming the old one.
+    /// Refused while a replay is running: `log_path` and the status bar would
+    /// describe the new file while the live source keeps streaming the old one.
     pub fn load_log(&mut self, path: &str) {
         if self.snap.measuring && matches!(self.snap.mode, Mode::Replay) {
             self.status = "stop the replay before loading another log".to_string();
@@ -844,10 +832,6 @@ impl App {
                 } else {
                     Some(info.clone())
                 };
-                // A newly selected log must be opened from scratch; without
-                // this, Play after a finished run would resume the previous
-                // file's source while the UI named the new one.
-                self.replay_reset_pending = true;
                 self.status = if info.is_empty() {
                     format!("loaded {name}")
                 } else {
@@ -862,8 +846,8 @@ impl App {
     /// Starts playback of the selected log (the path the user loaded, or
     /// the last recording as a fallback). The open, the silence-set scan
     /// and the source swap live in the command; what stays here is the
-    /// frontend's own memory: which path it selected, the wall-clock
-    /// anchors, and the not-a-resume mark.
+    /// frontend's own memory: which path it selected and the wall-clock
+    /// anchors.
     pub fn replay(&mut self) {
         let path = {
             let p = self.log_path.trim();
@@ -879,7 +863,6 @@ impl App {
         }
         self.t0 = Instant::now();
         self.last_tick_us = 0;
-        self.replay_reset_pending = false;
         // A replayed FlexRay log decodes into the observers only if the core
         // holds the description database; re-push it here so a project loaded
         // from disk -- where `pick_fibex_for` never ran -- still plots.
@@ -910,53 +893,16 @@ impl App {
         self.set_replay_speed(REPLAY_SPEEDS[next]);
     }
 
-    /// Moves the replay playhead to `t_s` seconds.
-    pub fn seek_replay_seconds(&mut self, t_s: f64) {
-        self.send(crate::bus::BusCommand::SeekReplay(t_s));
-    }
-
-    /// True when a scrubbed replay is parked mid-log and Play should pick up
-    /// from there instead of re-opening the file at zero.
-    ///
-    /// A run that reached the log's end is deliberately excluded: its source
-    /// has latched `done`, so resuming it in place is a no-op that leaves the
-    /// scrub bar stuck at the tail. Falling through to a fresh replay restarts
-    /// from zero instead. A scrub clears the latch and moves the playhead
-    /// back below the end, so it still resumes in place.
-    fn can_resume_replay(&self) -> bool {
-        let parked_mid_log = self.snap.replay.is_some_and(|(pos, dur)| pos < dur);
-        matches!(self.snap.mode, Mode::Replay) && !self.replay_reset_pending && parked_mid_log
-    }
-
-    /// Resumes a scrubbed replay in place: the wall clock restarts here on
-    /// the frontend, the bus unfreezes and resumes measuring via the
-    /// command. Captured history is untouched, so playback continues from
-    /// the scrubbed position.
-    fn resume_replay(&mut self) {
-        self.t0 = Instant::now();
-        self.send(crate::bus::BusCommand::ResumeReplay {
-            speed: self.replay_speed,
-        });
-    }
-
-    /// Starts playback, resuming a scrubbed replay in place when there is one.
-    pub fn play(&mut self) {
-        if self.can_resume_replay() {
-            self.resume_replay();
-        } else {
-            self.start_selected();
-        }
-    }
-
     /// Play/pause as a single action, shared by the toolbar button, Space and
-    /// F9 so the resume rule lives in exactly one place.
+    /// F9. A pause freezes the replay clock in place; resuming is the same
+    /// action, and starting when nothing runs re-opens the selected log.
     pub fn toggle_play(&mut self) {
         if self.snap.measuring {
             self.send(crate::bus::BusCommand::SetTracePaused(
                 !self.snap.trace_paused,
             ));
         } else {
-            self.play();
+            self.start_selected();
         }
     }
 
@@ -971,8 +917,7 @@ impl App {
     ///
     /// While replaying that is the playhead, not the wall clock: samples are
     /// stamped with the log's own `t_us`, so anchoring a window on wall time
-    /// slides the curve out of view as soon as the speed is not exactly 1x or
-    /// as soon as the user scrubs.
+    /// slides the curve out of view as soon as the speed is not exactly 1x.
     ///
     /// While simulating it is `sim_t_us`, which stops during a pause; the wall
     /// clock does not, so a paused window used to drift its own curve away.
@@ -1236,9 +1181,9 @@ impl App {
 
     /// Advances Trace window `i`'s reveal watermark on text frames: the rows
     /// already on screen never change, so the throttle decides how quickly
-    /// *new* rows may appear. A run restart or a backward seek re-stamps
-    /// frames below the watermark, and [`App::trace_revealed`] shows those
-    /// immediately -- only the fresh tail is batched.
+    /// *new* rows may appear. A run restart re-stamps frames below the
+    /// watermark, and [`App::trace_revealed`] shows those immediately -- only
+    /// the fresh tail is batched.
     /// Rebuilds Trace window `i`'s filtered row cache on the text gate:
     /// the whole revealed ring is walked once against the window's filter
     /// and the matches become the row cache the clipper draws from. The
@@ -1327,7 +1272,7 @@ impl App {
 
     /// Refreshes the status bar's throttled counters line. The state, the REC
     /// marker and the replay position beside it stay live on purpose: they
-    /// change rarely or must track the scrub bar.
+    /// change rarely or must track the replay position.
     pub(crate) fn sync_status_text(&mut self) {
         if !self.text_fresh {
             return;

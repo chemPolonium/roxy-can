@@ -1639,86 +1639,27 @@ fn write_timed_asc(name: &str, n: u32, step_us: u64) -> std::path::PathBuf {
 }
 
 #[test]
-fn seek_replay_moves_the_playhead() {
-    let mut app = App::headless();
-    let path = write_timed_asc("roxy_can_scrub.asc", 100, 10_000);
-    app.load_log(&path.to_string_lossy());
-    app.replay();
-    assert!(app.measuring);
-
-    app.seek_replay_seconds(0.5);
-    let (pos, dur) = app.replay_position().expect("replay has a timeline");
-    assert!(
-        (pos - 0.5).abs() < 1e-6,
-        "playhead should land on the 0.5 s frame, got {pos}"
-    );
-    assert!(dur > 0.9, "timeline covers the log, got {dur}");
-
-    // The first update after a seek only re-anchors the clock, so exactly
-    // the landing frame is emitted -- a scrub must not dump the prefix.
-    app.update();
-    assert_eq!(app.trace.len(), 1, "no flood of skipped frames");
-    assert_eq!(app.trace.back().unwrap().t_us, 500_000);
-
-    app.seek_replay_seconds(0.1);
-    app.update();
-    assert_eq!(app.trace.len(), 2, "seeking backwards replays earlier rows");
-    assert_eq!(app.trace.back().unwrap().t_us, 100_000);
-    app.stop();
-    std::fs::remove_file(&path).ok();
-}
-
-#[test]
-fn play_after_a_scrub_resumes_in_place() {
-    let mut app = App::headless();
-    let path = write_timed_asc("roxy_can_scrub_resume.asc", 100, 10_000);
-    app.load_log(&path.to_string_lossy());
-    app.replay();
-
-    // Run the log out the far end without touching Stop.
-    let (_, dur) = app.replay_position().unwrap();
-    app.seek_replay_seconds(dur);
-    app.update();
-    app.update();
-    assert!(!app.measuring, "the replay finished on its own");
-
-    app.seek_replay_seconds(0.3);
-    assert!(
-        app.replay_position().is_some(),
-        "the timeline must survive the end of the log so the scrub bar stays usable"
-    );
-    app.toggle_play();
-    assert!(app.measuring, "Play resumes a finished, scrubbed replay");
-    let (pos, _) = app.replay_position().unwrap();
-    assert!(
-        (pos - 0.3).abs() < 1e-6,
-        "must continue from the scrubbed position, got {pos}"
-    );
-    app.stop();
-    std::fs::remove_file(&path).ok();
-}
-
-#[test]
 fn play_after_a_finished_run_restarts_from_the_top() {
     // Regression: pressing Play once a replay had run out resumed an
-    // exhausted source -- a silent no-op that left the scrub bar stuck at the
+    // exhausted source -- a silent no-op that left the readout stuck at the
     // tail. Play must instead re-open the log and run from zero.
     let mut app = App::headless();
     let path = write_timed_asc("roxy_can_replay_restart.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
+    // Run the log out the far end without touching Stop: the infinite speed
+    // drains it in two laps.
+    app.set_replay_speed(f64::INFINITY);
     app.replay();
-    let (_, dur) = app.replay_position().unwrap();
-    app.seek_replay_seconds(dur);
     app.update();
     app.update();
     assert!(!app.measuring, "the replay finished on its own");
-    let (pos_end, _) = app.replay_position().unwrap();
+    let (pos_end, dur) = app.replay_position().unwrap();
     assert!(
         pos_end >= dur - 1e-6,
-        "playhead parked at the end, got {pos_end}"
+        "playhead parked at the end, got {pos_end} of {dur}"
     );
 
-    app.toggle_play(); // Play, with no scrub in between
+    app.toggle_play(); // Play, with no Stop in between
     assert!(app.measuring, "Play restarts a finished replay, not a no-op");
     let (pos_top, _) = app.replay_position().unwrap();
     assert!(
@@ -1732,10 +1673,13 @@ fn play_after_a_finished_run_restarts_from_the_top() {
 #[test]
 fn stop_makes_the_next_play_restart_from_zero() {
     let mut app = App::headless();
-    let path = write_timed_asc("roxy_can_scrub_stop.asc", 100, 10_000);
+    let path = write_timed_asc("roxy_can_replay_stop.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
+    // Park the playhead deep in the log, then Stop explicitly -- the gesture
+    // that used to leave a resume-in-place option open.
+    app.set_replay_speed(f64::INFINITY);
     app.replay();
-    app.seek_replay_seconds(0.5);
+    app.update();
     app.update();
     app.stop();
     app.toggle_play();
@@ -1754,18 +1698,22 @@ fn the_plot_clock_follows_the_replay_playhead() {
     let path = write_timed_asc("roxy_can_plot_clock.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
     app.replay();
-    app.seek_replay_seconds(0.5);
+    app.update();
+    let advanced = app.plot_now_s();
     assert!(
-        (app.plot_now_s() - 0.5).abs() < 1e-6,
-        "the Graphics axis must track the scrub bar, got {}",
+        (advanced - app.replay_position().unwrap().0).abs() < 1e-9,
+        "the Graphics axis must ride the playhead, got {advanced}"
+    );
+    // A faster clock moves the axis with it rather than lagging on wall time.
+    app.set_replay_speed(f64::INFINITY);
+    app.update();
+    let (pos, dur) = app.replay_position().unwrap();
+    assert!(
+        (app.plot_now_s() - dur).abs() < 1e-9,
+        "the axis follows the drained playhead, got {} of {dur}",
         app.plot_now_s()
     );
-    app.seek_replay_seconds(0.2);
-    assert!(
-        (app.plot_now_s() - 0.2).abs() < 1e-6,
-        "and track a rewind, got {}",
-        app.plot_now_s()
-    );
+    assert!(pos >= dur - 1e-6, "setup: the log ran to its end");
     app.stop();
     std::fs::remove_file(&path).ok();
 }
@@ -1797,14 +1745,10 @@ fn loading_another_log_mid_replay_is_refused() {
         "a refused load must not enter the recent list"
     );
 
-    // Stopped, the same selection goes through and demands a fresh open.
+    // Stopped, the same selection goes through.
     app.stop();
     app.load_log(&b.to_string_lossy());
     assert_eq!(app.log_path, b.to_string_lossy());
-    assert!(
-        app.replay_reset_pending,
-        "a newly selected log must not be resumed over"
-    );
     app.stop();
     std::fs::remove_file(&a).ok();
     std::fs::remove_file(&b).ok();
@@ -1817,17 +1761,24 @@ fn play_after_choosing_a_new_log_opens_that_log() {
     let b = write_timed_asc("roxy_can_switch_b.asc", 20, 10_000);
     app.load_log(&a.to_string_lossy());
     app.replay();
-    // Let the first log run to its natural end, which leaves the source
-    // parked but replay-able -- exactly where the old code could resume the
+    app.set_replay_speed(8.0);
+    // Let the first log run to its natural end, which leaves the run settled
+    // but still replay-able -- exactly where the old code could resume the
     // wrong file.
     let (_, dur_a) = app.replay_position().unwrap();
-    app.seek_replay_seconds(dur_a);
-    app.update();
-    app.update();
-    assert!(!app.measuring, "setup: the first log finished on its own");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.measuring && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    assert!(
+        !app.measuring,
+        "setup: the first log finished on its own, {} s of it unread",
+        dur_a
+    );
 
     app.load_log(&b.to_string_lossy());
-    app.play();
+    app.toggle_play();
     let (_, dur_b) = app.replay_position().expect("the new log has a timeline");
     assert!(
         dur_b < dur_a,
@@ -1942,98 +1893,6 @@ fn app_with_replayable_recording(
 }
 
 #[test]
-fn a_backward_scrub_rewinds_signal_state() {
-    let (mut app, key, file) = app_with_replayable_recording("scrub_history", 60);
-    app.replay();
-    // Let the clock actually run so sampling fills history across the log;
-    // a forward seek cannot do it, since seeking discards the prefix.
-    app.set_replay_speed(4.0);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-    while std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(11));
-        app.update();
-    }
-    let filled = app.subs.get(&key).expect("subscribed");
-    assert!(
-        filled.history.len() > 3,
-        "expected samples across the log, got {}",
-        filled.history.len()
-    );
-    let (_, dur) = app.replay_position().unwrap();
-
-    app.seek_replay_seconds(dur / 3.0);
-    let landed = app.replay_position().unwrap().0;
-    let sub = app.subs.get(&key).unwrap();
-    assert!(
-        sub.history.iter().any(|(t, _)| *t as f64 / 1e6 > landed),
-        "the cache keeps samples ahead of a rewound playhead; the window \
-             slice hides them, and deleting them was what blanked the curve"
-    );
-    assert!(
-        sub.history
-            .iter()
-            .zip(sub.history.iter().skip(1))
-            .all(|(a, b)| a.0 <= b.0),
-        "the cache must stay ascending for the binary search in value_at"
-    );
-    let after_rewind = sub.history.len();
-
-    // Replaying across ground the cache already holds must not inject
-    // near-duplicates: the sampler's own baseline was pulled back to the
-    // rewind point, so only the cache's spacing rule keeps it honest.
-    app.play();
-    assert!(app.measuring, "Play resumes the rewound replay");
-    app.set_replay_speed(4.0);
-    for _ in 0..5 {
-        std::thread::sleep(std::time::Duration::from_millis(11));
-        app.update();
-    }
-    let (pos_now, _) = app.replay_position().unwrap();
-    assert!(
-        pos_now * 1e6 > landed,
-        "the playhead should advance past the rewind point, got {pos_now}"
-    );
-    let sub = app.subs.get(&key).unwrap();
-    assert_eq!(
-        sub.history.len(),
-        after_rewind,
-        "replaying cached ground must add nothing, not even near-duplicates"
-    );
-    assert!(
-        sub.history
-            .iter()
-            .zip(sub.history.iter().skip(1))
-            .all(|(a, b)| a.0 <= b.0),
-        "re-sampled history must remain ascending"
-    );
-    app.stop();
-    std::fs::remove_file(&file).ok();
-}
-
-#[test]
-fn sample_cache_stays_ascending_when_filled_from_either_end() {
-    let mut c = SampleCache::default();
-    // Streaming fills the later stretch first, then a backfill lands behind
-    // it; the buffer must still read ascending for the plot and value_at.
-    c.merge(
-        &(100..110u64)
-            .map(|i| (i * 1_000, i as f64))
-            .collect::<Vec<_>>(),
-        1_000,
-    );
-    c.merge(
-        &(0..10).map(|i| (i * 1_000, i as f64)).collect::<Vec<_>>(),
-        1_000,
-    );
-    assert_eq!(c.len(), 20);
-    assert!(
-        c.iter().zip(c.iter().skip(1)).all(|(a, b)| a.0 <= b.0),
-        "merge behind existing points must keep the buffer sorted"
-    );
-    assert_eq!(c.first().unwrap().0, 0);
-}
-
-#[test]
 fn the_published_cache_view_stays_still_while_the_run_goes_on() {
     let mut c = SampleCache::default();
     c.merge(
@@ -2145,108 +2004,6 @@ fn sample_cache_trims_by_span_not_by_count() {
         "newest is 290 s, so everything from 190 s on survives"
     );
     assert_eq!(c.len(), 11);
-}
-
-#[test]
-fn overlapping_backfills_do_not_pile_up_near_duplicates() {
-    let (mut app, key, file) = app_with_replayable_recording("dupstride", 60);
-    app.replay();
-    // Two requests overlapping by most of their span -- exactly what
-    // happens on consecutive frames as the playhead advances.
-    app.ensure_samples_in(100_000, 400_000);
-    app.ensure_samples_in(110_000, 410_000);
-    let sub = app.subs.get(&key).unwrap();
-    let mut tight = 0usize;
-    let mut prev: Option<u64> = None;
-    for &(t, _) in sub.history.iter() {
-        if let Some(p) = prev
-            && t.saturating_sub(p) < SAMPLE_INTERVAL_US
-        {
-            tight += 1;
-        }
-        prev = Some(t);
-    }
-    assert_eq!(
-        tight, 0,
-        "{} samples landed within one stride of a neighbour; the polyline \
-             then zig-zags between them and reads as a thick band",
-        tight
-    );
-    app.stop();
-    std::fs::remove_file(&file).ok();
-}
-
-#[test]
-fn a_rewind_does_not_record_a_zero_cycle_time() {
-    let (mut app, _key, file) = app_with_replayable_recording("cycle_rebase", 60);
-    app.replay();
-    app.set_replay_speed(4.0);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-    while std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(11));
-        app.update();
-    }
-    let (_, dur) = app.replay_position().unwrap();
-    assert!(!app.aggs.is_empty(), "setup: messages should be aggregated");
-
-    // Walk back over ground already seen: every replayed frame is a
-    // backwards timestamp for its message, which used to be folded in as a
-    // zero-length cycle.
-    app.seek_replay_seconds(dur / 3.0);
-    app.play();
-    for _ in 0..10 {
-        std::thread::sleep(std::time::Duration::from_millis(11));
-        app.update();
-    }
-    for agg in app.aggs.values() {
-        if agg.count > 1 {
-            assert!(
-                agg.min_us > 0.0,
-                "message {:#05X} reports a {} us minimum cycle after a rewind",
-                agg.id,
-                agg.min_us
-            );
-        }
-    }
-    app.stop();
-    std::fs::remove_file(&file).ok();
-}
-
-#[test]
-fn a_plot_window_decodes_without_waiting_for_playback() {
-    let (mut app, key, file) = app_with_replayable_recording("backfill", 60);
-    app.replay();
-    let (pos0, dur) = app.replay_position().unwrap();
-    assert!(
-        dur > 0.4,
-        "setup: the log should span the window under test, got {dur} s"
-    );
-
-    {
-        // Ask for a stretch the playback cursor has never walked through.
-        // Under the old streaming-only design this window was simply empty.
-        app.ensure_samples_in(200_000, 400_000);
-        let sub = app.subs.get(&key).unwrap();
-        let win = sub.history.range(200_000, 400_000);
-        assert!(
-            win.len() > 3,
-            "the window must decode on demand, got {} points",
-            win.len()
-        );
-        let stamps: Vec<u64> = win.map(|(t, _)| *t).collect();
-        assert!(
-            stamps.windows(2).all(|w| w[1] - w[0] >= SAMPLE_INTERVAL_US),
-            "a backfill must honour the sampling stride"
-        );
-        assert!(
-            stamps.first().unwrap() >= &200_000 && stamps.last().unwrap() <= &400_000,
-            "returned points must lie inside the request"
-        );
-    }
-    let (pos1, _) = app.replay_position().unwrap();
-    assert_eq!(pos1, pos0, "a backfill must not move the playhead");
-    app.stop();
-    std::fs::remove_file(&file).ok();
 }
 
 #[test]
@@ -4559,20 +4316,6 @@ fn a_small_graphics_window_pulls_the_sample_stride_down() {
     );
 }
 
-/// A span backfilled at the coarse stride holds no fine detail, so a
-/// stride change must forget the scan cover and let the windows rescan.
-#[test]
-fn shrinking_the_window_forgets_the_scan_cover() {
-    let mut app = quiet_app();
-    app.sample_cover = Some((0, 1_000_000));
-    app.graphics[0].time_window_s = 0.1;
-    receive(&mut app, 0, vec![]);
-    assert!(
-        app.sample_cover.is_none(),
-        "the finer stride invalidates what 'covered' means"
-    );
-}
-
 #[test]
 fn triggers_round_trip_through_a_project() {
     let mut app = App::headless();
@@ -4780,9 +4523,6 @@ fn visible_curve(app: &mut App, key: &crate::observe::SigKey) -> (f64, usize, f6
     let t_now = app.plot_now_s();
     let tw = app.graphics[0].time_window_s;
     let t_right = t_now - app.graphics[0].t_offset_s;
-    let need_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
-    let need_hi = ((t_right + tw).max(0.0) * 1e6) as u64;
-    app.ensure_samples_in(need_lo, need_hi);
     let lo_us = ((t_right - tw).max(0.0) * 1e6) as u64;
     let hi_us = (t_right.max(0.0) * 1e6) as u64;
     let pts = app
