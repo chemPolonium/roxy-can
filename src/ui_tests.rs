@@ -501,6 +501,35 @@ fn flexray_signal_picker_draws_without_panicking() {
     frames(&mut app, &mut ctx, 3);
 }
 
+/// The Buses window's FlexRay section is a list now: two watched clusters,
+/// each with its own row, its own parked marker and its own detach, above the
+/// combo that offers only the channels still free. Drawing it is the point --
+/// a view shaped like the old single `Option<FrWatch>` panics right where a
+/// user looks for their second bus, and the schedule table below has to carry
+/// two clusters' frames in two different rows.
+#[test]
+fn the_buses_window_draws_two_flexray_watches() {
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.show_buses = true;
+    app.hw.attach_fr_mock(0, 5);
+    app.hw.attach_fr_mock(1, 6);
+    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    load_fr_db(&mut app, 1, "assets/fibex/PowerTrain_v2.xml");
+    app.refresh_snapshot();
+    assert_eq!(
+        app.snap
+            .fr_watches
+            .iter()
+            .map(|w| (w.bus, w.channel_index))
+            .collect::<Vec<_>>(),
+        vec![(0, 5), (1, 6)],
+        "both watches are listed, in bus order"
+    );
+    frames(&mut app, &mut ctx, 3);
+}
+
 /// The two armed editor popups render from their draft state across
 /// frames (the frame-persistence path the stale-draft bug lived in).
 #[test]
