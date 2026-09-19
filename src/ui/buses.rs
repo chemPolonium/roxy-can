@@ -373,6 +373,17 @@ fn content(app: &mut App, ui: &Ui) {
         Ok(_) => ui.text_disabled("无 FlexRay 通道"),
         Err(e) => ui.text_disabled(&e),
     }
+    // A description for a cluster no port is opened for: a recording can hold
+    // two clusters, and the second one needs its own description before its
+    // frames can be named or decoded -- which has nothing to do with hardware.
+    if ui.button("加载集群描述...##frdbonly") {
+        app.pick_cluster_description();
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "给下一条尚无描述的 FlexRay 路加载 FIBEX/ARXML 集群描述：只用于解码（回放或监听），不开端口",
+        );
+    }
     if let Some(bus) = detach {
         app.detach_fr_watch(bus);
     }

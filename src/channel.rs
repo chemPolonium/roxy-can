@@ -316,46 +316,71 @@ impl App {
     }
 
     /// Opens a FIBEX/ARXML cluster-description picker; a pick parses the
-    /// database (refusing broken files outright), keeps the display copy
-    /// against the FlexRay bus it names and attaches the FlexRay RX-only
-    /// watch to the Vector channel.
-    ///
-    /// The bus is the first free index, because the tool has no FlexRay
-    /// channel list of its own yet -- the description, the port and the bus
-    /// index are all keyed to it from here on.
+    /// database, keeps it against the first FlexRay bus without one, and
+    /// attaches the FlexRay RX-only watch to the Vector channel.
     pub fn pick_fibex_for(&mut self, channel_index: i32) {
-        let Some(p) = rfd::FileDialog::new()
+        let Some(path) = Self::pick_cluster_file() else {
+            return;
+        };
+        if let Some(bus) = self.load_cluster_description(&path) {
+            self.set_fr_watch(bus, Some(channel_index), &path);
+        }
+    }
+
+    /// Loads a cluster description **without** attaching a watch: a replayed
+    /// recording can hold two clusters (BLF states which one each frame came
+    /// from), and the second one needs its own description to be named or
+    /// decoded at all -- which has nothing to do with opening a port for it.
+    pub fn pick_cluster_description(&mut self) {
+        let Some(path) = Self::pick_cluster_file() else {
+            return;
+        };
+        if let Some(bus) = self.load_cluster_description(&path) {
+            self.status = format!("已加载 FR{bus} 集群描述（未挂监听，供回放解码）: {path}");
+        }
+    }
+
+    /// The shared file picker of the two entry points above.
+    fn pick_cluster_file() -> Option<String> {
+        let p = rfd::FileDialog::new()
             .set_title("Open FlexRay cluster description")
             .add_filter("Cluster descriptions", &["xml", "arxml", "fibex"])
-            .pick_file()
-        else {
-            return;
-        };
-        let path = p.to_string_lossy().into_owned();
-        let Ok(bytes) = std::fs::read(&path) else {
+            .pick_file()?;
+        Some(p.to_string_lossy().into_owned())
+    }
+
+    /// Parses `path` as a cluster description and puts it on the first FlexRay
+    /// bus that has none, then hands the whole set to the core. No hardware is
+    /// touched, so this is also what a replay-only session uses. Returns the
+    /// bus index, having set a failure status if it did not.
+    pub fn load_cluster_description(&mut self, path: &str) -> Option<u8> {
+        let Ok(bytes) = std::fs::read(path) else {
             self.status = format!("FIBEX 读取失败: {path}");
-            return;
+            return None;
         };
         let text = crate::dbc::text_from_bytes(bytes);
-        match crate::fr_db::FrDb::parse(&text) {
-            Ok(db) => {
-                let bus = (0..=u8::MAX)
-                    .find(|b| !self.fr_buses.contains_key(b))
-                    .expect("every FlexRay bus index is taken");
-                self.fr_buses.insert(
-                    bus,
-                    crate::app::FrBusCfg {
-                        path: path.clone(),
-                        db: std::sync::Arc::new(db),
-                    },
-                );
-                // Hand the same databases to the core so live FlexRay frames
-                // decode into the observers, then attach the RX-only watch.
-                self.push_fr_db_to_core();
-                self.set_fr_watch(bus, Some(channel_index), &path);
+        let db = match crate::fr_db::FrDb::parse(&text) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status = format!("FlexRay 描述解析失败: {e}");
+                return None;
             }
-            Err(e) => self.status = format!("FlexRay 描述解析失败: {e}"),
-        }
+        };
+        let Some(bus) = (0..=u8::MAX)
+            .find(|b| !self.fr_buses.contains_key(b))
+        else {
+            self.status = "FlexRay 总线索引已用尽（256 路）".to_string();
+            return None;
+        };
+        self.fr_buses.insert(
+            bus,
+            crate::app::FrBusCfg {
+                path: path.to_string(),
+                db: std::sync::Arc::new(db),
+            },
+        );
+        self.push_fr_db_to_core();
+        Some(bus)
     }
 
     /// Copies the frontend's parsed FlexRay databases into the bus core, which

@@ -7012,3 +7012,38 @@ fn a_published_trace_view_stays_frozen_while_the_ring_moves_on() {
     assert_eq!(app.trace.len(), 2);
     assert_eq!(app.snap.trace.len(), 2, "the next snapshot sees the growth");
 }
+
+/// Loading a second cluster's description is not the same act as opening a
+/// second port: a recording can hold two clusters and the second one needs its
+/// own description before its frames can be named, decoded, subscribed or
+/// exported -- with no hardware in the loop. A file that cannot be read is
+/// reported and takes no bus index with it.
+#[test]
+fn a_second_cluster_description_loads_without_any_hardware() {
+    let first = "assets/arxml/PowerTrain.arxml";
+    let second = "assets/fibex/PowerTrain_v2.xml";
+    if !std::path::Path::new(first).exists() || !std::path::Path::new(second).exists() {
+        println!("assets absent -- skipped");
+        return;
+    }
+    let mut app = quiet_app();
+    assert_eq!(app.load_cluster_description(first), Some(0));
+    assert_eq!(app.load_cluster_description(second), Some(1));
+    assert_eq!(
+        app.load_cluster_description("assets/no-such-cluster.xml"),
+        None,
+        "a file that cannot be read is refused"
+    );
+    assert!(app.status.contains("读取失败"), "{}", app.status);
+    assert_eq!(
+        app.fr_buses.keys().copied().collect::<Vec<_>>(),
+        [0, 1],
+        "each description got its own bus"
+    );
+    assert_eq!(
+        app.fr_dbs.keys().copied().collect::<Vec<_>>(),
+        [0, 1],
+        "and the core was told about both, so a replay decodes per cluster"
+    );
+    app.stop();
+}
