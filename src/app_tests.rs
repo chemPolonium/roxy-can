@@ -5964,6 +5964,72 @@ fn hardware_rx_frames_ingest_like_bus_traffic() {
     app.stop();
 }
 
+/// Two FlexRay clusters watched at once: each port's rows arrive stamped with
+/// their own bus, and detaching one watch leaves its sibling running. A single
+/// watch per machine meant a second port's traffic merged into the first bus --
+/// the same slot number on two clusters is two different frames.
+#[test]
+fn two_flexray_watches_feed_their_own_buses() {
+    use crate::hw::vector::flexray::FrFrame;
+    let fr = |slot: u16| FrFrame {
+        slot,
+        cycle: 1,
+        payload: vec![slot as u8],
+        header_crc: 0,
+        flags: 0,
+    };
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    let q1 = app.hw.attach_fr_mock(1, 6);
+    app.start_virtual();
+    q0.lock().expect("mock lock").push_back(fr(13));
+    q1.lock().expect("mock lock").push_back(fr(13));
+    for t in 1..=4u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.refresh_snapshot();
+    let rows = app.snap.fr_aggs.clone();
+    assert_eq!(
+        rows.iter().map(|a| (a.bus, a.slot)).collect::<Vec<_>>(),
+        vec![(0, 13), (1, 13)],
+        "one tally per watched bus"
+    );
+
+    // Dropping one watch must not take the other with it, and the surviving
+    // port keeps delivering.
+    app.send(crate::bus::BusCommand::SetFrWatch {
+        bus: 1,
+        channel_index: None,
+        fibex_path: String::new(),
+    });
+    assert_eq!(
+        app.hw.fr_watches.keys().copied().collect::<Vec<_>>(),
+        vec![0],
+        "only the requested bus was detached"
+    );
+    q0.lock().expect("mock lock").push_back(fr(14));
+    q1.lock().expect("mock lock").push_back(fr(99));
+    for t in 5..=8u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.refresh_snapshot();
+    let slots: Vec<(u8, u16)> = app
+        .snap
+        .fr_aggs
+        .iter()
+        .map(|a| (a.bus, a.slot))
+        .collect();
+    assert!(slots.contains(&(0, 14)), "bus 0 keeps feeding: {slots:?}");
+    assert!(
+        !slots.contains(&(1, 99)),
+        "the detached port's queue is nobody's traffic: {slots:?}"
+    );
+    app.stop();
+}
+
 /// Script frames ride the Real bus egress: a running script's `send()`
 /// frames go to the wire alongside the internal bus -- no per-node dial,
 /// the bus mode is the switch.

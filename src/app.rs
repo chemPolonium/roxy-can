@@ -870,10 +870,6 @@ impl App {
         }
         self.t0 = Instant::now();
         self.last_tick_us = 0;
-        // A replayed FlexRay log decodes into the observers only if the core
-        // holds the description database; re-push it here so a project loaded
-        // from disk -- where `pick_fibex_for` never ran -- still plots.
-        self.push_fr_db_to_core();
         self.send(crate::bus::BusCommand::StartReplay {
             path,
             speed: self.replay_speed,

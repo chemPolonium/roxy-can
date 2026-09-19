@@ -65,7 +65,7 @@
   - 建议独立一轮专门做（约 15-20 个编辑回合，每回合都要过编译器），不与其他改动混在同一轮。
 - ~~**S1 FrRow 携带总线归属**~~ ✅（2026-09-19 部分）：`FrRow` 增 `bus: u8`（日志一次抓取只有一个 cluster → 回放侧恒 0；实时 watch 打自己的索引），`FrSlotAgg` 与核心表改按 `(bus, slot)` keyed，`SetFrWatch`/`attach_fr`/`FrWatch`/`FrWatchView` 全程带 `bus`，Trace 总线列、Messages 行与导出 CSV 都显示 `FR{n}`；回归 `the_same_slot_on_two_flexray_buses_stays_two_rows`。**剩余**：`ab` 真实化依赖真机确认事件缓冲 channelMask 偏移 → 并入 S5。
 - **S1b 事件语义**：`frameId → frame` 与真实 slot 分开解析（BLF 只有 frameId，`blf.rs:572` 现把 frameId 塞进 `slot`；实时 VX1070/VN7640 给真 slot）——回放要按 frameId 解析帧，不能冒充 slot 键。
-- **S3 FR 通道列表一等化**：`fr_fibex: Option<String>` → `fr_channels: Vec<FrChannelCfg>`（每路：硬件端口、自己的 FIBEX/ARXML、使能、显示名）；`Option<FrWatch>` → 按 bus 索引的多路；工程打开即挂 watch + 推 DB 给 core，删 app.rs:891 的回放前兜底补丁；Buses 窗口 FR 区从"单选挂接"改为通道表（对齐 CAN 的 AddChannel/RemoveChannel/SetChannelConfig 命令面）。
+- ~~**S3 FR 通道列表一等化**~~ ✅（2026-09-20 落地，见下面两节）：描述数据库按 bus 存（`fr_buses`/`fr_dbs`，工程里是 `fr_buses: Vec<FrBusFile{bus,path}>`，旧 `fr_fibex` 单路径迁移到 bus 0）；`Option<FrWatch>` → `fr_watches` 按 bus 多路 + 快照列表 + Buses 窗口列表化；工程打开即推 DB 给 core（删 `replay()` 兜底）。**改主意的一项**：原计划把"工程打开即挂 watch"也做掉，但 CAN 侧工程载入并不自动挂硬件（`apply` 里没有 AttachHardware），FR 自动挂会在启动时打驱动、失败还得弹状态 —— 与 CAN 行为不一致，故不做；每路的 `channel_index` 也就不进工程文件（挂哪路端口是会话决定）。
 - **S4 接收侧对齐 CAN**：`ingest_fr_row` 补 frame_counter、每路 FR 负载与周期/抖动统计（沿用 aggs 形状，槽占用率口径另定）、FR 过滤（`workspace.rs:759` 的 `trace_fr_match` 现为一律丢弃）、录制写出 FR 帧（BLF FR_RCVMESSAGE 对象 + ASC `Fr RMSG` 行，回环自证）、`export_trace`（export.rs:10 现 CAN-only）纳入 FR、触发条件支持 slot/帧到达。
 - **S5 硬件在环（有 VN7640，可实测）**：多路 FR 同时打开、各自集群配置、`xlFrGetChannelConfiguration` 回读校验、真机确认 `ab` 与 slot 语义；CLI 探针扩到逐路报告。
 - 明细见对应任务与 git log。
@@ -89,6 +89,16 @@
 - **工程文件**：新字段 `fr_buses: Vec<FrBusFile{bus, path}>`；旧 `fr_fibex: Option<String>` 保留读取（迁移到 bus 0）并 `skip_serializing_if`，保存后消失。回归 `a_legacy_single_fibex_path_becomes_a_bus_entry`（旧单文件 → bus 0；两路两文件 → 存回再读出仍是两路、两份不同的帧表）。
 - 跨总线隔离回归：`each_flexray_bus_decodes_against_its_own_description`（同一槽号在两路各自解出自己的信号名，串名的键拿不到值）。
 - **S3 剩余**：`Hardware.fr_watch: Option<FrWatch>` 仍是**单路**（`attach_fr(bus,…)` 覆盖同一格，`detach_fr()` 不分总线）→ 下一批：`fr_watches` 按 bus 存 + `FrPort` 测试替身（照 `HwPort::Mock` 的样子）+ 快照出列表 + Buses 窗口改成表；再之后才是工程里的 `channel_index`/使能持久化与删 `replay()` 里的 `push_fr_db_to_core` 兜底。
+
+### 2026-09-20：S3 第二、三步 —— 多路监听真的存在了（已落地 ✅）
+
+- **硬件层**：`Hardware.fr_watch: Option<FrWatch>` → `fr_watches: HashMap<u8, FrWatch>`；`attach_fr(bus,…)` 按路插入（重复挂接替换自己那路），`detach_fr(bus)` 只摘那一路，`poll_fr` **按总线索引升序**抽干每一路（结果可复现）。新增 `FrPort{Vector, #[cfg(test)] Mock}` 与 `attach_fr_mock`（照 `HwPort::Mock` 的既有做法）——这就是"没有 FR 硬件也能证明多路管道"的缝。
+- **快照**：`fr_watch: Option<FrWatchView>` → `fr_watches: Vec<FrWatchView>`（bus 升序）。
+- **Buses 窗口**：FlexRay 区从"要么显示那一路、要么显示挂接控件"改成**先列表后控件**：每路一行（`FR{bus} · [V] ch{n} · 文件（只收）` + 已下线标记 + 自己的断开按钮），挂接下拉框**过滤掉已经在收的 Vector 通道**（同一端口开两次只会在驱动里失败，两路监听也从来不是"同一端口的两条 cluster"的意思），全被占用时显示"无空闲 FlexRay 通道"。
+- **状态移动**：`Config::apply` 解析完描述就 `push_fr_db_to_core()`，于是 `replay()` 里那处"回放前兜底再推一次"删掉（回归断言在 `a_legacy_single_fibex_path_becomes_a_bus_entry` 里：工程载入后核心的 `fr_dbs` 必须已经有那几路）。
+- 回归 `two_flexray_watches_feed_their_own_buses`：两路 mock 端口各发同槽号的帧 → 两条独立 tally；`SetFrWatch{bus:1,None}` 只摘 bus 1，幸存端口继续进帧，被摘端口的队列不再属于任何总线。
+- **仍待真机（S5）**：`ab` 事件偏移、`channel_index` 是否要进工程文件（CAN 侧工程打开也**不**自动挂硬件，FR 保持一致，故现在只存路径）、总线增删后空闲总线索引被复用会让旧曲线的 `(bus, slot)` 键指向新 cluster —— 与 CAN 通道重映射同一类问题，等 FR 通道列表可编辑时一起处理。
+
 
 
 ### 2026-09-20：ASC 也能录 FlexRay，导出与转码不再是 CAN-only

@@ -1445,6 +1445,10 @@ impl Config {
                 Err(e) => app.status = format!("FlexRay 描述加载失败: {e}"),
             }
         }
+        // The descriptions move to the core with the rest of the restored bus
+        // state, so a replay or a watch attach finds them where the user left
+        // them -- no lazy re-push at the moment of use.
+        app.push_fr_db_to_core();
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
         app.recent_log = self.recent_log;
@@ -1877,6 +1881,12 @@ mod tests {
             "the legacy path lands on bus 0"
         );
         assert!(restored.fr_db(0).is_some(), "and parses into a description");
+        assert_eq!(
+            restored.fr_dbs.keys().copied().collect::<Vec<_>>(),
+            vec![0],
+            "the core is handed what the project loaded, so a replay decodes \
+             without pushing again at the moment of use"
+        );
 
         // A second cluster on a second bus, as the Buses window's picker
         // would have left it.
@@ -1908,6 +1918,11 @@ mod tests {
             again.fr_buses.keys().copied().collect::<Vec<_>>(),
             vec![0, 1],
             "each bus keeps its own description"
+        );
+        assert_eq!(
+            again.fr_dbs.keys().copied().collect::<Vec<_>>(),
+            vec![0, 1],
+            "and the core is told about both"
         );
         assert_ne!(
             again.fr_db(0).expect("bus 0").frames[0].name,

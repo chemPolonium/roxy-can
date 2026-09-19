@@ -310,38 +310,48 @@ fn content(app: &mut App, ui: &Ui) {
         app.remove_channel(i);
     }
 
-    // FlexRay RX-only watch: a Vector channel carrying the FR capability,
-    // configured from a FIBEX/ARXML cluster description. Watch-only --
-    // received frames land in the Trace window's FlexRay section; nothing
-    // ever transmits and no CAN bus is touched.
+    // FlexRay RX-only watches: Vector channels carrying the FR capability,
+    // each configured from its own FIBEX/ARXML cluster description and feeding
+    // one FlexRay bus. Watch-only -- received frames land in the Trace window's
+    // FlexRay section; nothing ever transmits and no CAN bus is touched.
     ui.separator();
     ui.text_colored([0.55, 0.8, 1.0, 1.0], "FlexRay");
-    ui.same_line();
-    match app.snap.fr_watch.clone() {
-        Some(w) => {
-            ui.text(format!(
-                "FR{} · [V] ch{} · {} （只收）",
-                w.bus,
-                w.channel_index,
-                file_name(&w.fibex_path)
-            ));
-            if !app.snap.real_bus {
-                ui.same_line();
-                ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
-                if ui.is_item_hovered() {
-                    ui.tooltip_text(
-                        "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
-                    );
-                }
-            }
+    let watches = app.snap.fr_watches.clone();
+    let mut detach = None;
+    for w in &watches {
+        ui.text(format!(
+            "FR{} · [V] ch{} · {} （只收）",
+            w.bus,
+            w.channel_index,
+            file_name(&w.fibex_path)
+        ));
+        if !app.snap.real_bus {
             ui.same_line();
-            if ui.button("断开##frdet") {
-                app.detach_fr_watch(w.bus);
+            ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+            if ui.is_item_hovered() {
+                ui.tooltip_text(
+                    "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
+                );
             }
         }
-        None => match ensure_fr_list(app) {
-            Ok(list) if !list.is_empty() => {
-                let labels: Vec<String> = list
+        ui.same_line();
+        if ui.button(format!("断开##frdet{}", w.bus)) {
+            detach = Some(w.bus);
+        }
+    }
+    match ensure_fr_list(app) {
+        // A channel already feeding a watch is not offered again: the second
+        // open would fail in the driver, and two watches on one port are never
+        // what "another cluster" means.
+        Ok(list) if !list.is_empty() => {
+            let free: Vec<_> = list
+                .into_iter()
+                .filter(|c| !watches.iter().any(|w| w.channel_index == c.index))
+                .collect();
+            if free.is_empty() {
+                ui.text_disabled("无空闲 FlexRay 通道");
+            } else {
+                let labels: Vec<String> = free
                     .iter()
                     .map(|c| format!("[V] ch{}: {}", c.index, c.name))
                     .collect();
@@ -350,7 +360,7 @@ fn content(app: &mut App, ui: &Ui) {
                 ui.combo_simple_string("##frch", &mut app.fr_pick, &refs);
                 ui.same_line();
                 if ui.button("挂接监听...##frfib") {
-                    let idx = list[app.fr_pick.min(list.len() - 1)].index;
+                    let idx = free[app.fr_pick.min(free.len() - 1)].index;
                     app.pick_fibex_for(idx);
                 }
                 if ui.is_item_hovered() {
@@ -359,9 +369,12 @@ fn content(app: &mut App, ui: &Ui) {
                     );
                 }
             }
-            Ok(_) => ui.text_disabled("无 FlexRay 通道"),
-            Err(e) => ui.text_disabled(&e),
-        },
+        }
+        Ok(_) => ui.text_disabled("无 FlexRay 通道"),
+        Err(e) => ui.text_disabled(&e),
+    }
+    if let Some(bus) = detach {
+        app.detach_fr_watch(bus);
     }
 
     // The schedule table: every loaded description's slot/cycle layout, the

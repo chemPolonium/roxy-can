@@ -605,8 +605,8 @@ pub struct Snapshot {
     pub write: Arc<Vec<WriteLine>>,
     /// Hardware attachments: one per wired-up bus.
     pub hw: Vec<HwBusView>,
-    /// The FlexRay RX-only watch, when attached.
-    pub fr_watch: Option<FrWatchView>,
+    /// The FlexRay RX-only watches, one per watched bus, in bus order.
+    pub fr_watches: Vec<FrWatchView>,
     /// Whether the attachments are wire-connected (Real bus) or parked
     /// (Simulated): the toolbar bus-mode switch reads this.
     pub real_bus: bool,
@@ -1471,8 +1471,8 @@ impl BusCore {
                     }
                 }
                 None => {
-                    self.hw.detach_fr();
-                    *status = "FlexRay 监听已断开".to_string();
+                    self.hw.detach_fr(bus);
+                    *status = format!("FlexRay 监听已断开: FR{bus}");
                 }
             },
             BusCommand::SetRunLimits {
@@ -2055,11 +2055,20 @@ impl BusCore {
             trace: Arc::clone(&self.published_trace),
             fr_trace: Arc::clone(&self.published_fr),
             fr_dropped: self.fr_trace.dropped(),
-            fr_watch: self.hw.fr_watch.as_ref().map(|w| FrWatchView {
-                bus: w.bus,
-                channel_index: w.channel_index,
-                fibex_path: w.fibex_path.clone(),
-            }),
+            fr_watches: {
+                let mut watches: Vec<FrWatchView> = self
+                    .hw
+                    .fr_watches
+                    .values()
+                    .map(|w| FrWatchView {
+                        bus: w.bus,
+                        channel_index: w.channel_index,
+                        fibex_path: w.fibex_path.clone(),
+                    })
+                    .collect();
+                watches.sort_by_key(|w| w.bus);
+                watches
+            },
             sub_count: self.subs.len(),
             replay,
             channel_count: self.channels.len(),
@@ -4198,7 +4207,7 @@ mod tests {
             &mut status,
         );
         assert!(status.contains("失败"), "attach failure reports: {status}");
-        assert!(core.hw.fr_watch.is_none());
+        assert!(core.hw.fr_watches.is_empty());
 
         core.handle(
             BusCommand::SetFrWatch {
@@ -4209,7 +4218,7 @@ mod tests {
             &mut status,
         );
         assert!(status.contains("断开"));
-        assert!(core.hw.fr_watch.is_none());
+        assert!(core.hw.fr_watches.is_empty());
     }
 
     /// The watch configures itself from the database pushed with `SetFrDbs`, so
@@ -4253,6 +4262,6 @@ mod tests {
                 "a cleared description is refused too: {status}"
             );
         }
-        assert!(core.hw.fr_watch.is_none(), "a refusal leaves no watch");
+        assert!(core.hw.fr_watches.is_empty(), "a refusal leaves no watch");
     }
 }

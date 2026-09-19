@@ -191,15 +191,58 @@ impl MockPort {
     }
 }
 
+/// The FlexRay receive ports a watch can drain. Mirrors [`HwPort`]: one
+/// adapter per kind, and a test double so the plumbing around a watch --
+/// which bus it feeds, what it does to its siblings -- is provable without
+/// a FlexRay-capable interface in the machine.
+#[derive(Debug)]
+pub enum FrPort {
+    Vector(vector::flexray::FlexRayChannel),
+    #[cfg(test)]
+    Mock(MockFrPort),
+}
+
+impl FrPort {
+    fn try_read(&mut self) -> Option<vector::flexray::FrFrame> {
+        match self {
+            FrPort::Vector(ch) => ch.try_read(),
+            #[cfg(test)]
+            FrPort::Mock(m) => m.try_read(),
+        }
+    }
+}
+
+/// The receive queue [`Hardware::attach_fr_mock`] hands back to a test.
+#[cfg(test)]
+pub type MockFrHandles = std::sync::Arc<
+    std::sync::Mutex<std::collections::VecDeque<vector::flexray::FrFrame>>,
+>;
+
+/// Test double for a FlexRay port: hands back whatever the test queued.
+#[cfg(test)]
+#[derive(Debug)]
+pub struct MockFrPort {
+    pub incoming: MockFrHandles,
+}
+
+#[cfg(test)]
+impl MockFrPort {
+    fn try_read(&mut self) -> Option<vector::flexray::FrFrame> {
+        self.incoming.lock().expect("mock lock").pop_front()
+    }
+}
+
 /// All hardware attachments plus the CANoe-style bus mode.
 #[derive(Debug)]
 pub struct Hardware {
     /// Bus index → attachment. One adapter per bus.
     pub buses: HashMap<u8, BusHardware>,
-    /// The FlexRay RX-only watch, when attached. Bind to no CAN bus --
-    /// drained alongside the CAN adapters, its rows land in the Trace
+    /// FlexRay bus index → its RX-only watch. Several clusters can be watched
+    /// at once, and a slot number only means something inside its own one, so
+    /// the watch -- and the description it was configured from -- belongs to
+    /// the bus. Drained alongside the CAN adapters; rows land in the Trace
     /// window's FR section and nowhere else.
-    pub fr_watch: Option<FrWatch>,
+    pub fr_watches: HashMap<u8, FrWatch>,
     /// CANoe-style bus mode. `false` (Simulated) parks every attachment:
     /// received frames are discarded and wire writes are suppressed, while
     /// the attachments stay configured for the moment the mode flips
@@ -221,7 +264,7 @@ pub struct FrWatch {
     pub bus: u8,
     pub channel_index: i32,
     pub fibex_path: String,
-    pub port: crate::hw::vector::flexray::FlexRayChannel,
+    pub port: FrPort,
 }
 
 impl Hardware {
@@ -231,7 +274,7 @@ impl Hardware {
     pub fn new() -> Self {
         Self {
             buses: Default::default(),
-            fr_watch: None,
+            fr_watches: Default::default(),
             live: true,
         }
     }
@@ -283,18 +326,44 @@ impl Hardware {
     ) -> Result<(), String> {
         let port =
             crate::hw::vector::flexray::FlexRayChannel::open_rx_with_db(channel_index, db)?;
-        self.fr_watch = Some(FrWatch {
+        self.fr_watches.insert(
             bus,
-            channel_index,
-            fibex_path: fibex_path.to_string(),
-            port,
-        });
+            FrWatch {
+                bus,
+                channel_index,
+                fibex_path: fibex_path.to_string(),
+                port: FrPort::Vector(port),
+            },
+        );
         Ok(())
     }
 
-    /// Drops the FlexRay watch; the port closes with it.
-    pub fn detach_fr(&mut self) {
-        self.fr_watch = None;
+    /// Attaches a test FlexRay watch on a bus and returns the queue to feed.
+    /// No driver call happens, which is the point: the multi-watch plumbing is
+    /// testable on a machine with no FlexRay hardware.
+    #[cfg(test)]
+    pub fn attach_fr_mock(&mut self, bus: u8, channel_index: i32) -> MockFrHandles {
+        let incoming = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::new(),
+        ));
+        self.fr_watches.insert(
+            bus,
+            FrWatch {
+                bus,
+                channel_index,
+                fibex_path: String::new(),
+                port: FrPort::Mock(MockFrPort {
+                    incoming: incoming.clone(),
+                }),
+            },
+        );
+        incoming
+    }
+
+    /// Drops one bus's watch; its port closes with it. The other buses keep
+    /// theirs.
+    pub fn detach_fr(&mut self, bus: u8) {
+        self.fr_watches.remove(&bus);
     }
 
     /// Drops the attachment of a bus being removed and shifts the
@@ -345,30 +414,35 @@ impl Hardware {
         }
     }
 
-    /// Drains the FlexRay watch's receive queue into `out`, discarding
-    /// when parked (`!live`) exactly like `poll_rx` -- the queue must
-    /// not back up with stale frames, but parked traffic stays off the
-    /// tool's timeline. The reception channel (A/B) reads as unknown
-    /// until the event offset is probe-verified.
+    /// Drains every FlexRay watch's receive queue into `out`, discarding when
+    /// parked (`!live`) exactly like `poll_rx` -- the queue must not back up
+    /// with stale frames, but parked traffic stays off the tool's timeline.
+    /// Buses are drained in index order so a run is reproducible. The reception
+    /// channel (A/B) reads as unknown until the event offset is
+    /// probe-verified.
     pub fn poll_fr(&mut self, out: &mut Vec<crate::trace::FrRow>) {
-        let Some(w) = &mut self.fr_watch else {
-            return;
-        };
-        while let Some(f) = w.port.try_read() {
-            if !self.live {
+        let mut buses: Vec<u8> = self.fr_watches.keys().copied().collect();
+        buses.sort();
+        for bus in buses {
+            let Some(w) = self.fr_watches.get_mut(&bus) else {
                 continue;
+            };
+            while let Some(f) = w.port.try_read() {
+                if !self.live {
+                    continue;
+                }
+                out.push(crate::trace::FrRow {
+                    bus: w.bus,
+                    t_us: 0, // stamped against the sim clock by the core
+                    ab: 2,
+                    slot: f.slot,
+                    cycle: f.cycle,
+                    payload: f.payload,
+                    header_crc: f.header_crc,
+                    flags: f.flags,
+                    name: None,
+                });
             }
-            out.push(crate::trace::FrRow {
-                bus: w.bus,
-                t_us: 0, // stamped against the sim clock by the core
-                ab: 2,
-                slot: f.slot,
-                cycle: f.cycle,
-                payload: f.payload,
-                header_crc: f.header_crc,
-                flags: f.flags,
-                name: None,
-            });
         }
     }
 
