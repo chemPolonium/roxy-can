@@ -2,6 +2,7 @@ use super::*;
 // The tests rely on the parent's imports through `use super::*`; the
 // ones app.rs itself no longer needs are imported directly here.
 use crate::bus::MAX_TX_CATCHUP;
+use crate::observe::SigKey;
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
 use crate::generator::TxMsg;
@@ -527,12 +528,7 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (
-            0u8,
-            id,
-            false,
-            db.messages[&(id, false)].signals[0].name.clone(),
-        )
+        SigKey::can(0u8, id, false, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -1406,7 +1402,7 @@ fn csv_exports_match_window_state() {
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
     let id = db.order[0].0;
     let sig = db.messages[&(id, false)].signals[0].name.clone();
-    let key = (0u8, id, false, sig);
+    let key = SigKey::can(0, id, false, sig);
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
         key: key.clone(),
@@ -1442,12 +1438,12 @@ fn csv_exports_match_window_state() {
     let gfx = dir.join("roxy_gfx_test.csv");
     app.export_graphics_csv(0, &gfx.to_string_lossy());
     let g = std::fs::read_to_string(&gfx).unwrap();
-    assert!(g.contains(&key.3), "graphics history names the signal");
+    assert!(g.contains(key.name()), "graphics history names the signal");
 
     let data = dir.join("roxy_data_test.csv");
     app.export_data_csv(0, &data.to_string_lossy());
     let d = std::fs::read_to_string(&data).unwrap();
-    assert!(d.contains(&key.3), "data snapshot names the signal");
+    assert!(d.contains(key.name()), "data snapshot names the signal");
 
     for p in [&stats, &msgs, &gfx, &data] {
         std::fs::remove_file(p).ok();
@@ -1703,6 +1699,37 @@ fn play_after_a_scrub_resumes_in_place() {
 }
 
 #[test]
+fn play_after_a_finished_run_restarts_from_the_top() {
+    // Regression: pressing Play once a replay had run out resumed an
+    // exhausted source -- a silent no-op that left the scrub bar stuck at the
+    // tail. Play must instead re-open the log and run from zero.
+    let mut app = App::headless();
+    let path = write_timed_asc("roxy_can_replay_restart.asc", 100, 10_000);
+    app.load_log(&path.to_string_lossy());
+    app.replay();
+    let (_, dur) = app.replay_position().unwrap();
+    app.seek_replay_seconds(dur);
+    app.update();
+    app.update();
+    assert!(!app.measuring, "the replay finished on its own");
+    let (pos_end, _) = app.replay_position().unwrap();
+    assert!(
+        pos_end >= dur - 1e-6,
+        "playhead parked at the end, got {pos_end}"
+    );
+
+    app.toggle_play(); // Play, with no scrub in between
+    assert!(app.measuring, "Play restarts a finished replay, not a no-op");
+    let (pos_top, _) = app.replay_position().unwrap();
+    assert!(
+        pos_top < pos_end,
+        "the playhead returned to the top, got {pos_top}"
+    );
+    app.stop();
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn stop_makes_the_next_play_restart_from_zero() {
     let mut app = App::headless();
     let path = write_timed_asc("roxy_can_scrub_stop.asc", 100, 10_000);
@@ -1891,12 +1918,7 @@ fn app_with_replayable_recording(
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (
-            0u8,
-            id,
-            false,
-            db.messages[&(id, false)].signals[0].name.clone(),
-        )
+        SigKey::can(0u8, id, false, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
@@ -2650,12 +2672,7 @@ fn signal_stats_track_min_avg_max() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (
-            0u8,
-            id,
-            false,
-            db.messages[&(id, false)].signals[0].name.clone(),
-        )
+        SigKey::can(0, id, false, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -2684,12 +2701,7 @@ fn restored_signals_are_resubscribed() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (
-            0u8,
-            id,
-            false,
-            db.messages[&(id, false)].signals[0].name.clone(),
-        )
+        SigKey::can(0, id, false, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
@@ -3309,8 +3321,8 @@ BO_ 2147483904 Twin: 2 ECU
     ));
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
-    let std_key = (0u8, 0x100u32, false, "StdSig".to_string());
-    let ext_key = (0u8, 0x100u32, true, "ExtSig".to_string());
+    let std_key = SigKey::can(0, 0x100, false, "StdSig");
+    let ext_key = SigKey::can(0, 0x100, true, "ExtSig");
     app.subscribe(std_key.clone());
     app.subscribe(ext_key.clone());
 
@@ -3348,8 +3360,8 @@ BO_ 2147483904 Twin: 2 ECU
 #[test]
 fn a_signal_of_the_inactive_group_is_not_sampled() {
     let mut app = mux_app();
-    let g1 = (0u8, 400u32, false, "G1_A".to_string());
-    let g2 = (0u8, 400u32, false, "G2_C".to_string());
+    let g1 = SigKey::can(0, 400, false, "G1_A");
+    let g2 = SigKey::can(0, 400, false, "G2_C");
     app.subscribe(g1.clone());
     app.subscribe(g2.clone());
     assert!(app.subs.contains_key(&g1), "both signals are subscribed");
@@ -3370,7 +3382,7 @@ fn a_signal_of_the_inactive_group_is_not_sampled() {
 #[test]
 fn a_group_signal_gains_samples_once_its_group_is_switched_in() {
     let mut app = mux_app();
-    let g2 = (0u8, 400u32, false, "G2_C".to_string());
+    let g2 = SigKey::can(0, 400, false, "G2_C");
     app.subscribe(g2.clone());
 
     receive(&mut app, 100_000, vec![mux_frame(100_000, 1)]);
@@ -3642,7 +3654,7 @@ fn the_state_csv_writes_one_row_per_state_segment() {
     let mut app = App::headless();
     app.tx_list.retain(|t| t.channel != 0);
     app.new_state_window();
-    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
+    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
     app.state_trackers[0]
         .signals
@@ -3753,8 +3765,8 @@ BO_ 257 OnlyInB: 1 ECU
     assert_eq!(db.message_name_of((0x101, false)), Some("OnlyInB"));
 
     // Both databases decode live traffic on the same bus.
-    let psig = (0u8, 0x100u32, false, "PSig".to_string());
-    let bonly = (0u8, 0x101u32, false, "BOnly".to_string());
+    let psig = SigKey::can(0, 0x100, false, "PSig");
+    let bonly = SigKey::can(0, 0x101, false, "BOnly");
     app.subscribe(psig.clone());
     app.subscribe(bonly.clone());
     app.start_virtual();
@@ -4518,7 +4530,7 @@ fn a_cycle_timeout_trigger_fires_on_each_dropout() {
 #[test]
 fn a_small_graphics_window_pulls_the_sample_stride_down() {
     let mut app = quiet_app();
-    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
+    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
 
     // The default 10 s window keeps the coarse stride: 21 frames at 100 Hz
@@ -4706,7 +4718,7 @@ fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
     // The reaction target, inactive so only the reaction itself emits it;
     // its base payload is all zeroes.
     app.add_tx(0, 0x200);
-    let key = (0u8, 0x200u32, false, "EngineSpeed".to_string());
+    let key = SigKey::can(0, 0x200, false, "EngineSpeed");
     app.subscribe(key.clone());
     app.triggers.push(Trigger::new(
         TriggerCond::SignalCross {
@@ -4835,12 +4847,7 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        (
-            0u8,
-            id,
-            false,
-            db.messages[&(id, false)].signals[0].name.clone(),
-        )
+        SigKey::can(0, id, false, db.messages[&(id, false)].signals[0].name.clone())
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -4890,7 +4897,7 @@ fn feed_rpm(app: &mut App, pts: &[(u64, f64)]) {
 /// not the window.
 fn gfx_app(mode: YMode) -> (App, crate::observe::SigKey) {
     let mut app = quiet_app();
-    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
+    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
     app.graphics[0].opened = true;
     app.graphics[0].signals.push(GfxSignal {
@@ -4990,7 +4997,7 @@ fn each_signal_keeps_its_own_axis_in_the_overlay_union() {
     // locked keeps its span as a floor/ceiling while an Auto neighbour
     // widens the shared span past it.
     let (mut app, key) = gfx_app(YMode::Lock);
-    let temp = (0u8, 0x100u32, false, "EngineTemp".to_string());
+    let temp = SigKey::can(0, 0x100, false, "EngineTemp");
     app.subscribe(temp.clone());
     app.graphics[0].signals.push(GfxSignal {
         key: temp.clone(),
@@ -5047,7 +5054,7 @@ fn the_y_mode_round_trips_through_a_project() {
 #[test]
 fn the_state_tracker_round_trips_through_a_project() {
     let mut app = App::headless();
-    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
+    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
     app.state_trackers[0].signals.push(GfxSignal {
         key: key.clone(),
         visible: true,
@@ -5379,12 +5386,7 @@ fn emit_value_publishes_a_derived_signal_stream() {
         app.tick(t * 1_000);
     }
 
-    let key = (
-        0u8,
-        crate::app::EMITTED_ID_BASE | id as u32,
-        false,
-        "SpeedKmh".to_string(),
-    );
+    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | id as u32, false, "SpeedKmh".to_string());
     assert!(
         app.snap
             .emitted
@@ -5484,7 +5486,7 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
 fn monitor_rows_hold_the_subscription_against_data_removal() {
     let mut app = App::headless();
     app.new_data_window();
-    let key = (0u8, 0x100u32, false, "EngineStatus".to_string());
+    let key = SigKey::can(0, 0x100, false, "EngineStatus");
     app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
     app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
     assert_eq!(app.monitor_rows.len(), 1, "the Monitor row was added");
@@ -5594,12 +5596,7 @@ fn a_script_sys_set_publishes_the_value_and_the_stream() {
         app.snap.sysvars[0].value, 42.0,
         "the script write landed"
     );
-    let key = (
-        0u8,
-        crate::app::EMITTED_ID_BASE | (crate::bus::SYSVAR_STREAM_ID as u32),
-        false,
-        "Setpoint".to_string(),
-    );
+    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | (crate::bus::SYSVAR_STREAM_ID as u32), false, "Setpoint".to_string());
     assert!(
         app.snap
             .emitted
@@ -5834,12 +5831,7 @@ fn emit_value_works_from_message_handlers() {
     );
     app.settle();
 
-    let key = (
-        0u8,
-        crate::app::EMITTED_ID_BASE | id as u32,
-        false,
-        "Seen".to_string(),
-    );
+    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | id as u32, false, "Seen".to_string());
     let sub = app.subs.get(&key).expect("frame-driven emission published");
     assert_eq!(sub.latest, 7.0, "the handler ran once for the frame");
     app.stop();
@@ -5871,12 +5863,7 @@ fn derived_streams_follow_their_node_across_edits() {
         app.tick(t * 1_000);
     }
     let key = |ch: u8| {
-        (
-            ch,
-            crate::app::EMITTED_ID_BASE | id as u32,
-            false,
-            "X".to_string(),
-        )
+        SigKey::can(ch, crate::app::EMITTED_ID_BASE | id as u32, false, "X")
     };
     assert!(
         app.snap.emitted.iter().any(|(k, _)| *k == key(0)),
@@ -5928,7 +5915,7 @@ fn an_errored_handler_discards_its_emissions() {
     let node = app.snap.nodes.iter().find(|n| n.id == id).expect("node");
     assert!(node.errored, "the bad sig() tripped the fuse");
     assert!(
-        !app.snap.emitted.iter().any(|(k, _)| k.3 == "Ghost"),
+        !app.snap.emitted.iter().any(|(k, _)| k.name() == "Ghost"),
         "the partial emission never published"
     );
     app.stop();
@@ -5976,7 +5963,7 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
         app.tick(t * 1_000);
     }
     assert!(
-        app.snap.emitted.iter().any(|(k, _)| k.0 == 1),
+        app.snap.emitted.iter().any(|(k, _)| matches!(k, SigKey::Can { ch: 1, .. })),
         "the surviving node emitted on bus CAN2"
     );
 
@@ -5992,7 +5979,7 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     assert_eq!(app.snap.blocks.len(), 1);
     assert_eq!(app.snap.blocks[0].channel, 0, "the block shifted down too");
     assert!(
-        app.snap.emitted.iter().all(|(k, _)| k.0 == 0),
+        app.snap.emitted.iter().all(|(k, _)| matches!(k, SigKey::Can { ch: 0, .. })),
         "derived streams follow their node's bus"
     );
     app.stop();
@@ -6273,7 +6260,7 @@ fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
 fn removing_a_bus_remaps_state_trackers() {
     let mut app = App::headless();
     app.new_state_window();
-    let key = (1u8, 0x200u32, false, "VehicleSpeed".to_string());
+    let key = SigKey::can(1, 0x200, false, "VehicleSpeed");
     app.set_win_signal(crate::app::PopupTarget::State(0), key.clone(), true);
     assert!(!app.state_trackers[0].signals.is_empty(), "the row landed");
     app.state_trackers[0]
@@ -6284,8 +6271,8 @@ fn removing_a_bus_remaps_state_trackers() {
     app.settle();
 
     let sig = &app.state_trackers[0].signals[0];
-    assert_eq!(sig.key.0, 0, "the row's key shifted down with the bus");
-    let shifted = (0u8, 0x200u32, false, "VehicleSpeed".to_string());
+    assert!(matches!(sig.key, SigKey::Can { ch: 0, .. }), "the row is a CAN key that shifted down with the bus");
+    let shifted = SigKey::can(0, 0x200, false, "VehicleSpeed");
     assert!(
         app.state_trackers[0].color_slots.contains_key(&shifted),
         "the color memory follows the key"
@@ -6400,7 +6387,7 @@ fn the_text_gate_fires_on_its_cadence() {
 #[test]
 fn data_values_hold_still_until_the_text_gate_fires() {
     let mut app = quiet_app();
-    let key = (0u8, 0x100u32, false, "EngineSpeed".to_string());
+    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
     if app.data_windows.is_empty() {
         app.new_data_window();
@@ -6621,6 +6608,7 @@ fn the_trace_text_filter_matches_fr_frame_names() {
     let name = first.name.clone();
     let slot = first.triggering.slot_id;
     let row = crate::trace::FrRow {
+        bus: 0,
         t_us: 1_000,
         ab: 0,
         slot: slot as u16,

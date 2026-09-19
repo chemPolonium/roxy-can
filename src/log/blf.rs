@@ -103,6 +103,14 @@ pub struct BlfStream {
     /// Ascending `(rebased t_us, container byte offset)` index, grown as
     /// containers are read. See [`Self::note_checkpoint`].
     checkpoints: Vec<(u64, usize)>,
+    /// Sticky: did any scan ever surface a CAN frame?
+    saw_can: bool,
+    /// Set once a scan reaches EOF having seen no CAN frame. The whole file
+    /// is then CAN-free, so `peek_t` returns `None` at once instead of
+    /// re-decompressing every container. Without this, a FlexRay-only log's
+    /// plot backfill pegged the core: each `scan_range` called `peek_t`, which
+    /// scanned to EOF hunting CAN frames that never come.
+    no_can_frames: bool,
     /// Absolute t_us of the first frame we emitted; every subsequent
     /// frame is rebased by this so `ReplaySource::pos_us = 0` matches the
     /// log's opening record.
@@ -151,6 +159,8 @@ impl BlfStream {
             pending: VecDeque::new(),
             fr_pending: VecDeque::new(),
             checkpoints: Vec::new(),
+            saw_can: false,
+            no_can_frames: false,
             t_base: None,
             t_last: 0,
         })
@@ -229,8 +239,18 @@ impl BlfStream {
             }
         };
         parse_container_objects(&decoded, &mut self.pending, &mut self.fr_pending);
-        if let Some(first) = self.pending.front() {
-            let raw = first.t_us;
+        // Checkpoint on the first row the container produced, CAN *or*
+        // FlexRay. Keying this on CAN frames alone left a FlexRay-only log
+        // with an empty checkpoint index, so every `seek_to_us` rewound to
+        // the file start and read the whole thing -- which is what pinned
+        // replay near 1x once a plot window backfilled against the stream.
+        let head_raw = match (self.pending.front(), self.fr_pending.front()) {
+            (Some(f), Some(r)) => Some(f.t_us.min(r.t_us)),
+            (Some(f), None) => Some(f.t_us),
+            (None, Some(r)) => Some(r.t_us),
+            (None, None) => None,
+        };
+        if let Some(raw) = head_raw {
             self.note_checkpoint(raw, container_start);
         }
         true
@@ -260,16 +280,66 @@ impl BlfStream {
         }
         t
     }
+
+    /// Rebased timestamp of the oldest undelivered row of *either* kind,
+    /// reading containers forward until one queues. `None` at EOF. Pairs
+    /// with [`Self::drop_head`] to walk the playhead without a CAN-only
+    /// assumption.
+    fn peek_head_t(&mut self) -> Option<u64> {
+        while self.pending.is_empty() && self.fr_pending.is_empty() {
+            if !self.enter_next_container() {
+                return None;
+            }
+        }
+        let can = self.pending.front().map(|f| f.t_us);
+        let fr = self.fr_pending.front().map(|r| r.t_us);
+        let raw = can.into_iter().chain(fr).min()?;
+        Some(self.rebase(raw))
+    }
+
+    /// Consumes the oldest undelivered row, CAN or FlexRay, whichever is
+    /// earlier. Must be called right after [`Self::peek_head_t`] on a
+    /// non-empty head.
+    fn drop_head(&mut self) {
+        let can = self.pending.front().map(|f| f.t_us);
+        let fr = self.fr_pending.front().map(|r| r.t_us);
+        match (can, fr) {
+            (Some(c), Some(f)) => {
+                if c <= f {
+                    self.pending.pop_front();
+                } else {
+                    self.fr_pending.pop_front();
+                }
+            }
+            (Some(_), None) => {
+                self.pending.pop_front();
+            }
+            (None, Some(_)) => {
+                self.fr_pending.pop_front();
+            }
+            (None, None) => {}
+        }
+    }
 }
 
 impl FrameStream for BlfStream {
     fn peek_t(&mut self) -> Option<u64> {
+        // A prior full scan proved the file carries no CAN frames: report EOF
+        // at once rather than decompressing every container again. This is
+        // what keeps a FlexRay-only log's plot backfill from pegging the core.
+        if self.no_can_frames {
+            return None;
+        }
         loop {
             if let Some(f) = self.pending.front() {
+                self.saw_can = true;
                 let raw = f.t_us;
                 return Some(self.rebase(raw));
             }
             if !self.enter_next_container() {
+                if !self.saw_can {
+                    self.no_can_frames = true;
+                }
                 return None;
             }
         }
@@ -296,14 +366,17 @@ impl FrameStream for BlfStream {
         // not move the log's zero point under the playhead.
         self.pending.clear();
         self.fr_pending.clear();
+        // Land on the first row of either kind at or after `target`, reading
+        // only the containers in between. Stopping on the CAN side alone would
+        // send a FlexRay-only stream to EOF, return `None`, and so latch
+        // `done` shut -- which is why a finished FlexRay replay could not be
+        // scrubbed back and re-run.
         loop {
-            match self.peek_t() {
-                Some(t) if t >= target => return Some(t),
-                Some(_) => {
-                    self.next_frame();
-                }
-                None => return None,
+            let head = self.peek_head_t()?;
+            if head >= target {
+                return Some(head);
             }
+            self.drop_head();
         }
     }
 
@@ -320,6 +393,13 @@ impl FrameStream for BlfStream {
 
     fn describe(&self) -> String {
         self.describe.clone()
+    }
+
+    fn has_can_frames(&self) -> bool {
+        // Once a full scan has proved the file is CAN-free, the replay can
+        // skip the backfill scan instead of re-decompressing containers to
+        // collect nothing. Before that scan, assume CAN frames exist.
+        !self.no_can_frames
     }
 
     fn peek_fr_t(&mut self) -> Option<u64> {
@@ -474,17 +554,30 @@ fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
     if body.len() < 42 {
         return None;
     }
+    // Field layout per Vector's `FlexRayVFrReceiveMsg` / `..Ex` (blf.h),
+    // body-relative: channel@0, version@2, channelMask@4, dir@6,
+    // clientIndex@8, clusterNo@12, frameId@16, headerCrc1@18, headerCrc2@20,
+    // payloadLength@22, payloadLengthValid@24, cycle@26, tag@28, data@32,
+    // frameFlags@36, appParameter@40, payload@44 (Ex inserts a further 40 B
+    // reserved block, so its payload starts at 84).
     // channelMask: 0 invalid, 1 = A, 2 = B, 3 = both. FrRow's `ab` runs
-    // 0 = A / 1 = B / 2 = unknown.
+    // 0 = A / 1 = B / 2 = unknown-or-both (a dual-channel frame decodes
+    // identically on either side, so `frame_at` drops the channel preference).
     let channel_mask = u16_at(body, 4);
     let ab = match channel_mask {
         1 => 0,
         2 => 1,
         _ => 2,
     };
+    // The object carries a `frameId` but no slot id -- frameId is the only
+    // frame coordinate BLF records, so it rides in `slot`. (A live VxlApi
+    // FlexRay watch reports a true slotId there instead; replaying a BLF
+    // cannot recover the slot from these objects.)
     let frame_id = u16_at(body, 16);
-    let byte_count = u16_at(body, 22) as usize;
-    let data_count = u16_at(body, 24) as usize;
+    let header_crc = u16_at(body, 18); // headerCrc1 (channel A's frame header)
+    let frame_flags = u32_at(body, 36) as u16;
+    let byte_count = u16_at(body, 22) as usize; // payloadLength
+    let data_count = u16_at(body, 24) as usize; // payloadLengthValid
     let (cycle, data_at) = if ex {
         // Ex: cycle is u16 at 26, and the payload starts after the
         // 26-byte reserved block (header ends at 84).
@@ -497,13 +590,14 @@ fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
     let len = byte_count.min(data_count).min(avail).min(254);
     let payload = body[data_at..data_at + len].to_vec();
     Some(FrOrCan::Fr(crate::trace::FrRow {
+        bus: 0, // a log carries one cluster
         t_us,
         ab,
         slot: frame_id,
         cycle,
         payload,
-        header_crc: 0,
-        flags: 0,
+        header_crc,
+        flags: frame_flags,
         name: None,
     }))
 }
@@ -1032,6 +1126,35 @@ pub(crate) mod tests {
         }
     }
 
+    /// A FlexRay-only BLF has no CAN frames; once the first scan proves that,
+    /// `peek_t` must keep reporting EOF cheaply (no re-decompress) while the
+    /// FlexRay rows stay readable across seeks. This is the guard against the
+    /// plot-backfill death spiral: every `scan_range` calls `peek_t`, and if
+    /// it re-scanned to EOF each time the core would peg and the transport
+    /// buttons would stop answering.
+    #[test]
+    fn flexray_only_stream_stays_can_exhausted() {
+        let path = std::path::Path::new("assets/arxml/Logging.blf");
+        let Ok(mut stream) = BlfStream::open(path) else {
+            println!("assets/arxml/Logging.blf not present -- skipped");
+            return;
+        };
+        // The first CAN peek scans to EOF and finds none; the flag latches.
+        assert!(stream.peek_t().is_none(), "no CAN frames in an FR-only log");
+        // A repeat CAN peek (what a backfill does every frame) stays None.
+        assert!(stream.peek_t().is_none(), "CAN stays exhausted");
+        // FlexRay rows still queue and survive a seek back to the top.
+        assert!(stream.peek_fr_t().is_some(), "FlexRay rows still queue");
+        assert!(
+            stream.seek_to_us(0).is_some(),
+            "a FlexRay-only seek lands on the first row"
+        );
+        assert!(stream.peek_t().is_none(), "a seek does not resurrect CAN");
+        let mut fr = Vec::new();
+        stream.poll_fr_rows(u64::MAX, &mut fr);
+        assert!(!fr.is_empty(), "FlexRay rows still deliver after the seek");
+    }
+
     /// The production recorder writer: classic (standard/extended/RTR)
     /// and FD frames survive a write → read round trip with ids, flags,
     /// and payloads intact.
@@ -1204,6 +1327,21 @@ pub(crate) mod tests {
             panic!("plain variant decodes");
         };
         assert_eq!(r.payload.len(), 2, "dataCount caps the payload");
+    }
+
+    /// The header CRC and frame-flag words the object carries are surfaced,
+    /// not dropped: headerCrc1 at 18 and frameFlags at 36 per blf.h.
+    #[test]
+    fn flexray_receive_object_carries_header_crc_and_flags() {
+        let mut body = fr_rcv_body(false, 1, 5, 3, &[0x11, 0x22]);
+        body[18..20].copy_from_slice(&0xABCDu16.to_le_bytes()); // headerCrc1
+        body[36..40].copy_from_slice(&0x1234_5678u32.to_le_bytes()); // frameFlags
+        let Some(FrOrCan::Fr(r)) = decode_fr_rcv(false, &body, 1000) else {
+            panic!("plain variant decodes");
+        };
+        assert_eq!(r.header_crc, 0xABCD, "headerCrc1 at 18");
+        assert_eq!(r.flags, 0x5678, "frameFlags at 36, low 16 bits");
+        assert_eq!(r.slot, 5, "frameId is the frame coordinate BLF records");
     }
 
     /// A `LOG_CONTAINER` object: the 16 B base header is followed straight by

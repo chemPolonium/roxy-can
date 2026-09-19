@@ -105,7 +105,16 @@ impl FrameSource for ReplaySource {
     }
 
     fn position(&self) -> Option<u64> {
-        Some(self.pos_us as u64)
+        // "As fast as possible" parks `pos_us` at infinity so the drain emits
+        // every remaining frame in one lap. Report the log's end instead of
+        // the saturated `u64::MAX` that cast yields, so the plot windows --
+        // which read this as "now" -- stay on the data rather than jumping
+        // ~1.8e13 s past it.
+        let pos = self.pos_us as u64;
+        match self.stream.duration_us() {
+            Some(d) => Some(pos.min(d)),
+            None => Some(pos),
+        }
     }
 
     fn set_position_us(&mut self, us: u64) -> Option<u64> {
@@ -131,6 +140,13 @@ impl FrameSource for ReplaySource {
         max_frames: usize,
         out: &mut Vec<CanFrame>,
     ) -> bool {
+        // Backfill exists to fill CAN signal history for the plot windows. A
+        // FlexRay-only log has no CAN frames to collect, so scanning would
+        // re-decompress containers every frame for nothing -- skip it and
+        // report the span complete.
+        if !self.stream.has_can_frames() {
+            return true;
+        }
         let playhead = self.pos_us as u64;
         self.stream.seek_to_us(from_us);
         let mut complete = true;
@@ -251,6 +267,23 @@ mod tests {
             src.position(),
             Some(50_000),
             "position tracks the virtual clock"
+        );
+    }
+
+    #[test]
+    fn as_fast_as_possible_reports_the_log_end() {
+        // Infinite speed parks the playhead at infinity to drain the whole log
+        // in one lap. position() must clamp to the last frame, not saturate to
+        // u64::MAX -- which sent the plot windows' "now" ~1.8e13 s past data.
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
+        src.set_speed(f64::INFINITY);
+        let mut out = Vec::new();
+        src.poll(1_000_000, &mut out);
+        assert_eq!(out.len(), 3, "one lap drains the whole log");
+        assert_eq!(
+            src.position(),
+            Some(200_000),
+            "position clamps to the log end, not u64::MAX"
         );
     }
 
@@ -391,5 +424,80 @@ mod tests {
         // A seek back relights the schedule.
         assert_eq!(src.set_position_us(0), Some(0));
         assert!(src.next_deadline(2_000_000).is_some());
+    }
+
+    #[test]
+    fn flexray_only_replay_restarts_after_it_finishes() {
+        // A pure-FlexRay log carries no CAN frames to seek against. The
+        // source must still land a scrub on an FR row, unlatch `done`, and
+        // re-emit -- otherwise a finished FlexRay replay is stuck at the end
+        // and reading it again does nothing.
+        use crate::trace::FrRow;
+        let fr = |t_us: u64| FrRow {
+            bus: 0,
+            t_us,
+            ab: 0,
+            slot: 1,
+            cycle: 0,
+            payload: Vec::new(),
+            header_crc: 0,
+            flags: 0,
+            name: None,
+        };
+        let stream = VecStream::with_fr(Vec::new(), vec![fr(0), fr(100_000), fr(200_000)]);
+        let mut src = ReplaySource::new(Box::new(stream));
+        let mut fr_out = Vec::new();
+        // Drive the clock to and past the last row: `poll` paces, `poll_fr`
+        // drains, exactly as `step` pairs them each lap.
+        src.poll(0, &mut Vec::new());
+        src.poll_fr(0, &mut fr_out);
+        src.poll(300_000, &mut Vec::new());
+        src.poll_fr(300_000, &mut fr_out);
+        assert_eq!(fr_out.len(), 3, "all three FlexRay rows emit over the run");
+        src.poll(400_000, &mut Vec::new());
+        assert!(src.is_done(), "an exhausted FlexRay stream reports done");
+
+        // The "read it again" gesture: seek back to the top.
+        assert_eq!(
+            src.set_position_us(0),
+            Some(0),
+            "a FlexRay-only seek lands on the first row, not EOF"
+        );
+        assert!(!src.is_done(), "a jump back unlatches done");
+        fr_out.clear();
+        src.poll(0, &mut Vec::new());
+        src.poll_fr(0, &mut fr_out);
+        assert_eq!(fr_out.len(), 1, "first poll only re-anchors at the t=0 row");
+        src.poll(300_000, &mut Vec::new());
+        src.poll_fr(300_000, &mut fr_out);
+        assert_eq!(fr_out.len(), 3, "the whole FlexRay log re-emits from the top");
+    }
+
+    #[test]
+    fn scan_range_skips_a_flexray_only_log() {
+        // Backfill only collects CAN frames. A FlexRay-only stream has none,
+        // so scan_range must report the span complete and collect nothing --
+        // rather than re-decompressing containers every frame for nothing,
+        // which is what pegged the core once a plot window was open.
+        use crate::trace::FrRow;
+        let fr = |t_us: u64| FrRow {
+            bus: 0,
+            t_us,
+            ab: 0,
+            slot: 1,
+            cycle: 0,
+            payload: Vec::new(),
+            header_crc: 0,
+            flags: 0,
+            name: None,
+        };
+        let stream = VecStream::with_fr(Vec::new(), vec![fr(0), fr(100_000)]);
+        let mut src = ReplaySource::new(Box::new(stream));
+        let mut out = Vec::new();
+        assert!(
+            src.scan_range(0, 200_000, 1000, &mut out),
+            "FR-only span reports complete"
+        );
+        assert!(out.is_empty(), "nothing collected without CAN frames");
     }
 }

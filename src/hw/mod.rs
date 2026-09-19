@@ -216,6 +216,9 @@ pub struct Hardware {
 /// index and the description file it was configured from.
 #[derive(Debug)]
 pub struct FrWatch {
+    /// The FlexRay bus this watch feeds. One watch per bus index, so rows
+    /// arriving from different ports stay separable downstream.
+    pub bus: u8,
     pub channel_index: i32,
     pub fibex_path: String,
     pub port: crate::hw::vector::flexray::FlexRayChannel,
@@ -266,15 +269,22 @@ impl Hardware {
         self.buses.remove(&bus);
     }
 
-    /// Attaches the FlexRay RX-only watch: reads the FIBEX description,
-    /// parses the cluster parameters from it and opens the Vector
-    /// channel. A failure leaves any previous watch untouched.
-    pub fn attach_fr(&mut self, channel_index: i32, fibex_path: &str) -> Result<(), String> {
-        let text = std::fs::read_to_string(fibex_path)
-            .map_err(|e| format!("FIBEX 读取失败: {e}"))?;
+    /// Attaches the FlexRay RX-only watch from the cluster description the
+    /// frontend already parsed. Reading and parsing the file again here doubled
+    /// the load cost of a big FIBEX -- and `read_to_string` refused the
+    /// GBK-encoded exports the frontend's tolerant read accepts, so the watch
+    /// could not be opened at all for those.
+    pub fn attach_fr(
+        &mut self,
+        bus: u8,
+        channel_index: i32,
+        fibex_path: &str,
+        db: &crate::fr_db::FrDb,
+    ) -> Result<(), String> {
         let port =
-            crate::hw::vector::flexray::FlexRayChannel::open_rx_with_fibex(channel_index, &text)?;
+            crate::hw::vector::flexray::FlexRayChannel::open_rx_with_db(channel_index, db)?;
         self.fr_watch = Some(FrWatch {
+            bus,
             channel_index,
             fibex_path: fibex_path.to_string(),
             port,
@@ -349,6 +359,7 @@ impl Hardware {
                 continue;
             }
             out.push(crate::trace::FrRow {
+                bus: w.bus,
                 t_us: 0, // stamped against the sim clock by the core
                 ab: 2,
                 slot: f.slot,

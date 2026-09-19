@@ -115,9 +115,16 @@ fn rule_editor(app: &mut App, ui: &Ui) {
     let Some((wi, key)) = app.state_rule_edit.clone() else {
         return;
     };
+    // The window id must tell two same-named signals apart, so it carries the
+    // identity: arbitration id and frame class for CAN, bus and slot for
+    // FlexRay.
+    let id_tag = match &key {
+        crate::observe::SigKey::Can { id, ext, .. } => format!("{id}{}", *ext as u8),
+        crate::observe::SigKey::Fr { bus, slot, .. } => format!("fr{bus}_{slot}"),
+    };
     let title = format!(
-        "State bands \u{2014} {}###srules{wi}{}{}",
-        key.3, key.1, key.2 as u8
+        "State bands \u{2014} {}###srules{wi}{id_tag}",
+        key.name()
     );
     let mut open = true;
     ui.window(title)
@@ -149,11 +156,17 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                 mode = chosen;
             }
             ui.separator();
-            let dbc = app
-                .snap
-                .channels
-                .get(key.0 as usize)
-                .and_then(|c| c.dbc.clone());
+            let dbc = match &key {
+                crate::observe::SigKey::Can { ch, .. } => app
+                    .snap
+                    .channels
+                    .get(*ch as usize)
+                    .and_then(|c| c.dbc.clone()),
+                // Only a CAN key can name a DBC message; a FlexRay signal has
+                // no VAL_ table, so its default states come from the observed
+                // values alone.
+                crate::observe::SigKey::Fr { .. } => None,
+            };
             if mode == 0 {
                 default_panel(ui, dbc.as_deref(), w, &key, &mut app.state_rule_pick, wi);
             } else {
@@ -276,15 +289,17 @@ fn default_panel(
     wi: usize,
 ) {
     let mut states: Vec<(u64, String)> = Vec::new();
-    if let Some(db) = dbc {
+    // `dbc` only arrives for a CAN key (see `rule_editor`), so the frame the
+    // value table hangs off is the key's own id and class.
+    if let (Some(db), crate::observe::SigKey::Can { id, ext, name, .. }) = (dbc, key) {
         let sig = db
             .messages
-            .get(&(key.1, key.2))
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.3))
+            .get(&(*id, *ext))
+            .and_then(|m| m.signals.iter().find(|s| &s.name == name))
             .cloned();
         let table = db
             .value_tables
-            .get(&((key.1, key.2), key.3.clone()))
+            .get(&((*id, *ext), name.clone()))
             .cloned();
         if let (Some(sig), Some(table)) = (sig, table) {
             let mut entries: Vec<(i64, &String)> = table.iter().map(|(r, l)| (*r, l)).collect();
@@ -561,13 +576,13 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         dl.add_rect([x0, ry], [x0 + w, ry + ROW_H], bg)
             .filled(true)
             .build();
-        let tsz = ui.calc_text_size(&key.3);
+        let tsz = ui.calc_text_size(key.name());
         let name_col = if visible {
             [0.9, 0.9, 0.95, 1.0]
         } else {
             [0.45, 0.45, 0.5, 1.0]
         };
-        dl.add_text([x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5], name_col, &key.3);
+        dl.add_text([x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5], name_col, key.name());
         dl.add_rect(
             [geo.bx0, ry],
             [geo.bx1, ry + ROW_H],
@@ -744,16 +759,20 @@ fn draw_wave(
 /// Physical maps back to raw through the signal's own factor/offset;
 /// None when there is no table or no entry for that raw value.
 fn table_label(app: &App, key: &crate::observe::SigKey, v: f64) -> Option<String> {
-    let db = app.snap.channels.get(key.0 as usize)?.dbc.as_deref()?;
+    // A `VAL_` value table is a DBC concept, so only a CAN key can have one.
+    let crate::observe::SigKey::Can { ch, id, ext, name } = key else {
+        return None;
+    };
+    let db = app.snap.channels.get(*ch as usize)?.dbc.as_deref()?;
     let sig = db
         .messages
-        .get(&(key.1, key.2))?
+        .get(&(*id, *ext))?
         .signals
         .iter()
-        .find(|s| s.name == key.3)?
+        .find(|s| &s.name == name)?
         .clone();
     let raw = ((v - sig.offset) / sig.factor).round() as i64;
-    let table = db.value_tables.get(&((key.1, key.2), key.3.clone()))?;
+    let table = db.value_tables.get(&((*id, *ext), name.clone()))?;
     table.get(&raw).cloned()
 }
 
@@ -1169,7 +1188,7 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
         ));
         // table_label reads the snapshot's view of the channels.
         app.refresh_snapshot();
-        let gear = (0u8, 410u32, false, "Gear".to_string());
+        let gear = SigKey::can(0, 410, false, "Gear");
         assert_eq!(table_label(&app, &gear, 2.0).as_deref(), Some("Gear_2"));
         assert_eq!(table_label(&app, &gear, 0.0).as_deref(), Some("Neutral"));
         assert_eq!(
@@ -1177,7 +1196,7 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
             None,
             "a raw value with no entry stays numeric"
         );
-        let free = (0u8, 410u32, false, "Free".to_string());
+        let free = SigKey::can(0, 410, false, "Free");
         assert_eq!(
             table_label(&app, &free, 1.0),
             None,

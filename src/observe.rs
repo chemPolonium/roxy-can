@@ -394,11 +394,55 @@ impl Subscription {
     }
 }
 
-/// One subscribed signal: bus, message id, the message's frame class, and
-/// the signal name. The frame class rides the key so a standard and an
-/// extended message sharing one numeric id stay two different signals
-/// everywhere a subscription is stored, listed, or plotted.
-pub type SigKey = (u8, u32, bool, String);
+/// One subscribed signal and the bus identity it is keyed by.
+///
+/// The two buses are different kinds of thing, so the key says so: a CAN
+/// signal is named by its arbitration id and frame class (a standard and an
+/// extended message sharing one number stay apart), a FlexRay signal by the
+/// bus and the schedule slot carrying it. FlexRay used to be folded into the
+/// CAN tuple behind a reserved id bit, which left A/B, the cycle and a second
+/// cluster unexpressible and made every consumer guess which bus it was on --
+/// including the CAN channel add/remove path, which rewrote that shared field
+/// and so moved FlexRay keys that were never on a CAN channel at all.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SigKey {
+    Can {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    Fr {
+        bus: u8,
+        slot: u16,
+        name: String,
+    },
+}
+
+impl SigKey {
+    pub fn can(ch: u8, id: u32, ext: bool, name: impl Into<String>) -> Self {
+        Self::Can {
+            ch,
+            id,
+            ext,
+            name: name.into(),
+        }
+    }
+
+    pub fn fr(bus: u8, slot: u16, name: impl Into<String>) -> Self {
+        Self::Fr {
+            bus,
+            slot,
+            name: name.into(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Can { name, .. } | Self::Fr { name, .. } => name,
+        }
+    }
+}
 
 pub struct GfxSignal {
     pub key: SigKey,
@@ -684,13 +728,29 @@ impl App {
     /// window's bar draws against. None when no database names the signal
     /// or declares a usable range on it.
     pub(crate) fn declared_range(&self, key: &SigKey) -> Option<(f64, f64)> {
-        self.snap
-            .channels
-            .get(key.0 as usize)
-            .and_then(|c| c.dbc.as_deref())
-            .and_then(|db| db.messages.get(&(key.1, key.2)))
-            .and_then(|m| m.signals.iter().find(|s| s.name == key.3))
-            .and_then(|s| (s.max > s.min).then_some((s.min, s.max)))
+        // The two databases are shaped differently -- a DBC message is named by
+        // its arbitration id, a FlexRay one by the slot carrying it -- so the
+        // lookup dispatches on the key instead of reading one field as both.
+        let (min, max) = match key {
+            SigKey::Can { ch, id, ext, name } => {
+                let sig = self
+                    .snap
+                    .channels
+                    .get(*ch as usize)
+                    .and_then(|c| c.dbc.as_deref())
+                    .and_then(|db| db.messages.get(&(*id, *ext)))
+                    .and_then(|m| m.signals.iter().find(|s| &s.name == name))?;
+                (sig.min, sig.max)
+            }
+            SigKey::Fr { slot, name, .. } => {
+                let sig = self
+                    .fr_db
+                    .as_ref()
+                    .and_then(|db| db.slot_signal(*slot, name))?;
+                (sig.min, sig.max)
+            }
+        };
+        (max > min).then_some((min, max))
     }
 
     /// Refreshes Data window `i`'s throttled text snapshot. Called every
@@ -748,7 +808,7 @@ impl App {
                 Some(sub) => {
                     format!(
                         "{} = {}",
-                        key.3,
+                        key.name(),
                         crate::dbc::fmt_signal_value(
                             sub.latest,
                             &sub.unit,
@@ -757,7 +817,7 @@ impl App {
                         )
                     )
                 }
-                None => format!("{} = -", key.3),
+                None => format!("{} = -", key.name()),
             })
             .collect();
         let win = &mut self.graphics[i];

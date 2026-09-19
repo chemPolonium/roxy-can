@@ -12,6 +12,7 @@ use crate::app::{
     App, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin,
     WindowKind, YMode,
 };
+use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 use crate::trigger::{TriggerAction, TriggerCond};
 
@@ -198,6 +199,12 @@ pub struct SignalCfg {
     /// only have selected standard-class signals.
     #[serde(default)]
     pub ext: bool,
+    /// The FlexRay slot carrying the signal, with `ch` naming the FlexRay
+    /// bus. Absent for a CAN signal; a project saved before it existed puts
+    /// its FlexRay signals in `id` behind `FR_SIG_BASE`, which
+    /// [`sig_key`] migrates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fr_slot: Option<u16>,
     pub signal: String,
     #[serde(default = "true_default")]
     pub visible: bool,
@@ -265,6 +272,9 @@ pub struct MonitorRowCfg {
     pub id: u32,
     #[serde(default)]
     pub ext: bool,
+    /// See [`SignalCfg::fr_slot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fr_slot: Option<u16>,
     pub signal: String,
     #[serde(default)]
     pub label: String,
@@ -620,18 +630,47 @@ pub struct Config {
     pub triggers: Vec<TriggerCfg>,
 }
 
+/// The project-file fields a signal key writes: the CAN triple, or the
+/// FlexRay bus in `ch` with its slot in `fr_slot`. A FlexRay signal no longer
+/// borrows an arbitration id, so nothing here can be mistaken for one.
+fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>) {
+    match key {
+        SigKey::Can { ch, id, ext, .. } => (*ch, *id, *ext, None),
+        SigKey::Fr { bus, slot, .. } => (*bus, 0, false, Some(*slot)),
+    }
+}
+
+/// The key a project-file field set names, migrating what older projects
+/// wrote: they had no `fr_slot` and squeezed FlexRay into `id` behind
+/// `FR_SIG_BASE`, with the slot in the low bits and the bus fixed to the only
+/// one a FlexRay watch could have. Loading those as FlexRay keys is what keeps
+/// their curves.
+fn sig_key(ch: u8, id: u32, ext: bool, fr_slot: Option<u16>, signal: String) -> SigKey {
+    match fr_slot {
+        Some(slot) => SigKey::fr(ch, slot, signal),
+        None if id & crate::app::FR_SIG_BASE != 0 => {
+            SigKey::fr(0, (id & 0x3F_FF) as u16, signal)
+        }
+        None => SigKey::can(ch, id, ext, signal),
+    }
+}
+
 fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
     signals
         .iter()
-        .map(|s| SignalCfg {
-            ch: s.key.0,
-            id: s.key.1,
-            ext: s.key.2,
-            signal: s.key.3.clone(),
-            visible: s.visible,
-            y_mode: s.y_mode.to_u8(),
-            state_rule: None,
-            state_overrides: None,
+        .map(|s| {
+            let (ch, id, ext, fr_slot) = sig_cfg_of(&s.key);
+            SignalCfg {
+                ch,
+                id,
+                ext,
+                fr_slot,
+                signal: s.key.name().to_string(),
+                visible: s.visible,
+                y_mode: s.y_mode.to_u8(),
+                state_rule: None,
+                state_overrides: None,
+            }
         })
         .collect()
 }
@@ -691,7 +730,7 @@ fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
     signals
         .iter()
         .map(|s| GfxSignal {
-            key: (s.ch, s.id, s.ext, s.signal.clone()),
+            key: sig_key(s.ch, s.id, s.ext, s.fr_slot, s.signal.clone()),
             visible: s.visible,
             y_mode: YMode::from_u8(s.y_mode),
         })
@@ -819,17 +858,21 @@ impl Config {
             monitor_rows: app
                 .monitor_rows
                 .iter()
-                .map(|r| MonitorRowCfg {
-                    ch: r.key.0,
-                    id: r.key.1,
-                    ext: r.key.2,
-                    signal: r.key.3.clone(),
-                    label: r.label.clone(),
-                    digits: r.digits,
-                    rule_on: r.rule_on,
-                    rising: r.rising,
-                    threshold: r.threshold,
-                    color: r.color,
+                .map(|r| {
+                    let (ch, id, ext, fr_slot) = sig_cfg_of(&r.key);
+                    MonitorRowCfg {
+                        ch,
+                        id,
+                        ext,
+                        fr_slot,
+                        signal: r.key.name().to_string(),
+                        label: r.label.clone(),
+                        digits: r.digits,
+                        rule_on: r.rule_on,
+                        rising: r.rising,
+                        threshold: r.threshold,
+                        color: r.color,
+                    }
                 })
                 .collect(),
             state_trackers: app
@@ -843,26 +886,30 @@ impl Config {
                     signals: w
                         .signals
                         .iter()
-                        .map(|s| SignalCfg {
-                            ch: s.key.0,
-                            id: s.key.1,
-                            ext: s.key.2,
-                            signal: s.key.3.clone(),
-                            visible: s.visible,
-                            y_mode: s.y_mode.to_u8(),
-                            state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
-                                cuts: r.cuts.clone(),
-                                names: r.names.clone(),
-                                colors: r.colors.clone(),
-                            }),
-                            state_overrides: w.overrides.get(&s.key).map(|m| {
-                                m.iter()
-                                    .map(|(bits, c)| StateOverrideCfg {
-                                        value: f64::from_bits(*bits),
-                                        color: *c,
-                                    })
-                                    .collect()
-                            }),
+                        .map(|s| {
+                            let (ch, id, ext, fr_slot) = sig_cfg_of(&s.key);
+                            SignalCfg {
+                                ch,
+                                id,
+                                ext,
+                                fr_slot,
+                                signal: s.key.name().to_string(),
+                                visible: s.visible,
+                                y_mode: s.y_mode.to_u8(),
+                                state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
+                                    cuts: r.cuts.clone(),
+                                    names: r.names.clone(),
+                                    colors: r.colors.clone(),
+                                }),
+                                state_overrides: w.overrides.get(&s.key).map(|m| {
+                                    m.iter()
+                                        .map(|(bits, c)| StateOverrideCfg {
+                                            value: f64::from_bits(*bits),
+                                            color: *c,
+                                        })
+                                        .collect()
+                                }),
+                            }
                         })
                         .collect(),
                 })
@@ -1200,7 +1247,7 @@ impl Config {
                 .monitor_rows
                 .into_iter()
                 .map(|m| crate::app::MonitorRow {
-                    key: (m.ch, m.id, m.ext, m.signal),
+                    key: sig_key(m.ch, m.id, m.ext, m.fr_slot, m.signal),
                     label: m.label,
                     digits: m.digits,
                     rule_on: m.rule_on,
@@ -1599,7 +1646,7 @@ mod tests {
         let mut app = App::headless();
         app.set_win_signal(
             crate::workspace::PopupTarget::Monitor,
-            (0, 0x100, false, "EngineStatus".to_string()),
+            SigKey::can(0, 0x100, false, "EngineStatus"),
             true,
         );
         assert_eq!(app.monitor_rows.len(), 1, "the row was added");
@@ -1616,8 +1663,19 @@ mod tests {
             .apply(&mut restored);
         assert_eq!(restored.monitor_rows.len(), 1);
         let r = &restored.monitor_rows[0];
-        assert_eq!((r.key.0, r.key.1, r.key.2), (0, 0x100, false));
-        assert_eq!(r.key.3, "EngineStatus");
+        assert!(
+            matches!(
+                r.key,
+                crate::observe::SigKey::Can {
+                    ch: 0,
+                    id: 0x100,
+                    ext: false,
+                    ..
+                }
+            ),
+            "the round trip keeps a standard-class CAN key"
+        );
+        assert_eq!(r.key.name(), "EngineStatus");
         assert_eq!((r.digits, r.rule_on, r.rising, r.threshold, r.color),
             (2, true, false, 87.5, 3));
     }
@@ -1716,6 +1774,43 @@ mod tests {
         assert!(
             serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
             "name is still required"
+        );
+    }
+
+    /// Projects saved while FlexRay signals borrowed a CAN id (bit 30 set, the
+    /// slot in the low bits) must come back as real FlexRay keys, and saving
+    /// them again must state the slot outright -- a key that round-trips
+    /// through a fake arbitration id would break the moment a second cluster
+    /// or a real id range touches it.
+    #[test]
+    fn legacy_flexray_keys_migrate_and_stop_being_synthetic() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"graphics":[{"name":"G","opened":true,"signals":[
+                 {"ch":0,"id":1073741837,"signal":"CarSpeed"}]}]}"#,
+        )
+        .unwrap();
+        let mut restored = App::headless();
+        cfg.apply(&mut restored);
+        let key = &restored.graphics[0].signals[0].key;
+        assert!(
+            matches!(key, crate::observe::SigKey::Fr { bus: 0, slot: 13, .. }),
+            "the synthetic id loads as a FlexRay key, not a CAN message: {key:?}"
+        );
+        assert_eq!(key.name(), "CarSpeed");
+
+        let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
+        assert!(json.contains("\"fr_slot\":13"), "the slot says so: {json}");
+        assert!(
+            !json.contains("1073741837"),
+            "no synthetic arbitration id survives a save: {json}"
+        );
+        let mut again = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut again);
+        assert_eq!(
+            again.graphics[0].signals[0].key, *key,
+            "the key is stable across saves"
         );
     }
 

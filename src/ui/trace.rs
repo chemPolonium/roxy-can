@@ -370,11 +370,15 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_column();
                 ui.text_colored(
                     [0.55, 0.8, 1.0, 1.0],
-                    match fr.ab {
-                        0 => "FR A",
-                        1 => "FR B",
-                        _ => "FR",
-                    },
+                    format!(
+                        "FR{}{}",
+                        fr.bus,
+                        match fr.ab {
+                            0 => " A",
+                            1 => " B",
+                            _ => "",
+                        }
+                    ),
                 );
                 hovered |= ui.is_item_hovered();
                 ui.table_next_column();

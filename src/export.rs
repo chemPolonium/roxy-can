@@ -221,7 +221,8 @@ impl App {
                     .collect::<Vec<_>>()
                     .join(" ");
                 s.push_str(&format!(
-                    "FR,{},{},{},{},{cycle:.3},{},{},{}\n",
+                    "FR{},{},{},{},{},{cycle:.3},{},{},{}\n",
+                    agg.bus,
                     agg.slot,
                     name,
                     "Rx",
@@ -265,9 +266,9 @@ impl App {
             let Some(sub) = self.sub_view(key) else {
                 continue;
             };
-            let bus = self.channel_name(key.0);
+            let bus = self.sig_bus_label(key);
             for (t, v) in sub.history.iter() {
-                s.push_str(&format!("{t},{bus},{},{v}\n", key.3));
+                s.push_str(&format!("{t},{bus},{},{v}\n", key.name()));
                 n += 1;
             }
         }
@@ -370,7 +371,7 @@ impl App {
             let held = sub.history.at(lo_us).map(crate::ui::state::quantize);
             let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
             let segs = crate::ui::state::compute_segs(self, i, &key, held, &pts, lo_us, hi_us);
-            let bus = self.channel_name(key.0);
+            let bus = self.sig_bus_label(&key);
             for seg in &segs {
                 let start = (seg.t0_us as f64 / 1e6).max(t_left);
                 let end = (seg.t1_us as f64 / 1e6).min(t_right);
@@ -379,7 +380,7 @@ impl App {
                 }
                 s.push_str(&format!(
                     "{bus},{},{start:.3},{end:.3},{:.3},{}\n",
-                    key.3,
+                    key.name(),
                     end - start,
                     seg.label
                 ));
@@ -412,11 +413,11 @@ impl App {
             let Some(sub) = self.sub_view(key) else {
                 continue;
             };
-            let bus = self.channel_name(key.0);
+            let bus = self.sig_bus_label(key);
             let label = sub.label.as_deref().unwrap_or("");
             s.push_str(&format!(
                 "{bus},{},{},{},{},{label}\n",
-                key.3, sub.latest, sub.unit, sub.type_tag
+                key.name(), sub.latest, sub.unit, sub.type_tag
             ));
         }
         self.write_export(path, s);

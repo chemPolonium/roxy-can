@@ -528,6 +528,17 @@ fn main() {
             }
             return;
         }
+        Ok(cli::Cli::Export(opts)) => {
+            cli::attach_parent_console();
+            match cli::export_signals_csv(&opts) {
+                Ok(report) => println!("{report}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Ok(cli::Cli::KvaserProbe) => {
             cli::attach_parent_console();
             match cli::kvaser_probe() {

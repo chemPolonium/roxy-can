@@ -2,7 +2,10 @@
 //! real log on disk at high playback speed so the wall-clock loop finishes
 //! in milliseconds.
 
-use super::{check_scripts, convert_log, parse_args, run, Cli, CliOpts, ScriptCheck};
+use super::{
+    ExportOpts, check_scripts, convert_log, export_signals_csv, parse_args, run, Cli, CliOpts,
+    ScriptCheck,
+};
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::channel::NodeRole;
 use crate::log::AscWriter;
@@ -716,4 +719,140 @@ fn a_bad_profile_aborts_the_run_before_traffic() {
     .unwrap_err();
     assert!(err.contains("EngineEcu"), "{err}");
     fs::remove_dir_all(&dir).ok();
+}
+
+/// `--export-csv <log> --out <csv> --dbc <f>`: accepted, and every input
+/// travels into the export options.
+#[test]
+fn export_csv_flag_set_parses_and_collects_definitions() {
+    let cli = parse_args(&flag_set(&[
+        "--export-csv",
+        "run.blf",
+        "--out",
+        "out.csv",
+        "--dbc",
+        "a.dbc",
+        "--dbc",
+        "b.dbc",
+        "--fibex",
+        "cluster.arxml",
+    ]))
+    .unwrap();
+    let Cli::Export(o) = cli else {
+        panic!("expected an export, got {cli:?}");
+    };
+    assert_eq!(o.input, "run.blf");
+    assert_eq!(o.out, "out.csv");
+    assert_eq!(o.dbcs, ["a.dbc", "b.dbc"]);
+    assert_eq!(o.fibex.as_deref(), Some("cluster.arxml"));
+}
+
+/// `--export-csv` is self-contained: it needs `--out`, at least one signal
+/// definition, and refuses to share the line with a run or probe.
+#[test]
+fn export_csv_validates_its_inputs() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["--export-csv", "a.blf"], "--out"),
+        (&["--export-csv", "a.blf", "--out", "c.csv"], "signal definition"),
+        (
+            &["--export-csv", "a.blf", "--out", "c.csv", "--replay", "a.asc", "--dbc", "x.dbc"],
+            "on its own",
+        ),
+        (&["--out", "c.csv"], "--export-csv"),
+    ];
+    for (args, needle) in cases {
+        let err = parse_args(&flag_set(args)).unwrap_err();
+        assert!(err.contains(needle), "`{err}` should mention `{needle}`");
+    }
+}
+
+/// End to end: a CAN log and a DBC produce a CSV whose rows carry the
+/// physical value, raw integer, unit and message name for the defined
+/// signal. The frame whose id the DBC does not name is skipped.
+#[test]
+fn export_csv_decodes_can_signals_through_the_dbc() {
+    let dir = std::env::temp_dir();
+    let dbc = dir.join("roxy_can_export.dbc");
+    std::fs::write(
+        &dbc,
+        "VERSION \"\"\n\nBS_:\n\nBU_: ECU\n\nBO_ 256 EngineStatus: 8 ECU\n SG_ RPM : 0|16@1+ (1,0) [0|8000] \"rpm\" ECU\n",
+    )
+    .unwrap();
+    let log = dir.join("roxy_can_export.asc");
+    {
+        let mut w = AscWriter::new(&log.to_string_lossy()).unwrap();
+        for id in [0x100u32, 0x7FF] {
+            let mut f = CanFrame {
+                t_us: 1000,
+                channel: 0,
+                id,
+                extended: false,
+                len: 2,
+                data: [0; MAX_CAN_FD_LEN],
+                dir: Direction::Rx,
+                flags: FrameFlags::NONE,
+            };
+            f.data[0] = 0x10; // 0x2710 = 10000 for the defined frame
+            f.data[1] = 0x27;
+            w.write(&f).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    let out = tmp("roxy_can_export.csv");
+    let report = export_signals_csv(&ExportOpts {
+        input: log.to_string_lossy().into_owned(),
+        out: out.clone(),
+        dbcs: vec![dbc.to_string_lossy().into_owned()],
+        fibex: None,
+    })
+    .unwrap();
+    // Two frames cross, but only the DBC-defined one decodes a signal.
+    assert!(report.contains("1 signal row"), "{report}");
+    assert!(report.contains("2 CAN"), "{report}");
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        csv.starts_with("time_us,bus,message,signal,value,raw,unit,label\n"),
+        "{csv}"
+    );
+    assert!(
+        csv.contains("1000,CAN0,EngineStatus,RPM,10000,10000,rpm,"),
+        "{csv}"
+    );
+    std::fs::remove_file(&dbc).ok();
+    std::fs::remove_file(&log).ok();
+    std::fs::remove_file(&out).ok();
+}
+
+/// End to end against a real FlexRay capture: the export walks the FR queue
+/// through the description database without erroring and writes the header.
+/// The slot/frameId coupling between this particular log and cluster file is
+/// not asserted (it is the same coordinate the GUI decodes with); this proves
+/// the offline path runs and drains the frames.
+#[test]
+fn export_csv_walks_a_real_flexray_log() {
+    let blf = std::path::Path::new("assets/fibex/Logging.blf");
+    let arxml = std::path::Path::new("assets/arxml/PowerTrain.arxml");
+    if !blf.exists() || !arxml.exists() {
+        println!("assets absent -- skipped");
+        return;
+    }
+    let out = tmp("roxy_can_export_fr.csv");
+    let report = export_signals_csv(&ExportOpts {
+        input: blf.to_string_lossy().into_owned(),
+        out: out.clone(),
+        dbcs: Vec::new(),
+        fibex: Some(arxml.to_string_lossy().into_owned()),
+    })
+    .unwrap();
+    assert!(report.contains("FlexRay frame(s)"), "{report}");
+    assert!(
+        !report.contains("0 FlexRay frame(s)"),
+        "the capture has FlexRay traffic to walk: {report}"
+    );
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        csv.starts_with("time_us,bus,message,signal,value,raw,unit,label\n"),
+        "{csv}"
+    );
+    std::fs::remove_file(&out).ok();
 }

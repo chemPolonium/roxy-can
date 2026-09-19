@@ -383,7 +383,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
             .flat_map(|m| {
                 m.signals
                     .iter()
-                    .map(move |s| (ch as u8, m.id, m.ext, s.clone()))
+                    .map(move |s| crate::observe::SigKey::can(ch as u8, m.id, m.ext, s.clone()))
             })
             .collect();
         let sel_n = bus_keys.iter().filter(|k| sel.contains(k)).count();
@@ -399,7 +399,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
             let msg_keys: Vec<crate::observe::SigKey> = m
                 .signals
                 .iter()
-                .map(|s| (ch as u8, m.id, m.ext, s.clone()))
+                .map(|s| crate::observe::SigKey::can(ch as u8, m.id, m.ext, s.clone()))
                 .collect();
             let m_sel = msg_keys.iter().filter(|k| sel.contains(k)).count();
             let m_tot = msg_keys.len();
@@ -426,7 +426,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
                 .push();
             if mtoken.is_some() {
                 for s in &m.signals {
-                    let key = (ch as u8, m.id, m.ext, s.clone());
+                    let key = crate::observe::SigKey::can(ch as u8, m.id, m.ext, s.clone());
                     let mut son = sel.contains(&key);
                     if ui.checkbox(
                         format!("{s}##selsig{ch}_{:X}{}", m.id, m.ext as u8),
@@ -440,6 +440,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
     }
 
     emitted_section(app, ui, &sel, &mut actions);
+    flexray_section(app, ui, &sel, &mut actions, &q);
 
     for (key, on) in actions {
         app.set_win_signal(target, key, on);
@@ -468,11 +469,95 @@ fn emitted_section(
     ui.text_disabled("脚本节点 emit_value 发布的派生信号");
     for (key, node_name) in &streams {
         let mut on = sel.contains(key);
-        if ui.checkbox(format!("{}##emit{}_{:X}_{}", key.3, key.0, key.1, node_name), &mut on) {
+        // The id suffix only has to be unique per stream, so it spells
+        // whatever identity the key carries: arbitration id for a CAN
+        // (derived streams are CAN by construction), slot for a FlexRay one.
+        let (ch, id) = match key {
+            crate::observe::SigKey::Can { ch, id, .. } => (*ch, *id),
+            crate::observe::SigKey::Fr { bus, slot, .. } => (*bus, u32::from(*slot)),
+        };
+        if ui.checkbox(
+            format!("{}##emit{ch}_{id:X}_{node_name}", key.name()),
+            &mut on,
+        ) {
             actions.push((key.clone(), on));
         }
         ui.same_line();
         ui.text_disabled(format!("← {node_name}"));
+    }
+}
+
+/// Adds a checkbox per FlexRay signal in the loaded description database,
+/// grouped by static slot and frame name below the derived-signal section. A
+/// FlexRay signal joins the same subscription space as CAN signals under its
+/// own `SigKey::Fr` identity, so selecting one plots its live values exactly
+/// like a DBC signal. Hidden until a FlexRay database loads.
+fn flexray_section(
+    app: &mut App,
+    ui: &Ui,
+    sel: &HashSet<crate::observe::SigKey>,
+    actions: &mut Vec<(crate::observe::SigKey, bool)>,
+    q: &str,
+) {
+    let Some(db) = app.fr_db.clone() else {
+        return;
+    };
+    let hits: Vec<(u16, String, Vec<String>)> = db
+        .slot_signals()
+        .into_iter()
+        .filter(|(slot, frame, sigs)| {
+            q.is_empty()
+                || frame.to_ascii_uppercase().contains(q)
+                || sigs.iter().any(|s| s.to_ascii_uppercase().contains(q))
+                || slot.to_string() == q
+        })
+        .collect();
+    if hits.is_empty() {
+        return;
+    }
+    let keys_of = |slot: u16, sigs: &[String]| -> Vec<crate::observe::SigKey> {
+        sigs.iter()
+            .map(|s| crate::app::fr_signal_key(0, slot, s))
+            .collect()
+    };
+    let total: usize = hits.iter().map(|(_, _, s)| s.len()).sum();
+    let sel_n: usize = hits
+        .iter()
+        .flat_map(|(slot, _, sigs)| keys_of(*slot, sigs))
+        .filter(|k| sel.contains(k))
+        .count();
+    ui.spacing();
+    ui.separator();
+    ui.text_colored(
+        [0.35, 0.80, 0.60, 1.0],
+        format!("FlexRay ({sel_n}/{total})"),
+    );
+    ui.text_disabled("FlexRay 描述数据库解析出的信号");
+    for (slot, frame, sigs) in &hits {
+        let keys = keys_of(*slot, sigs);
+        let m_sel = keys.iter().filter(|k| sel.contains(k)).count();
+        let mut msg_on = m_sel == keys.len() && !keys.is_empty();
+        if ui.checkbox(format!("##frmsgchk{slot}"), &mut msg_on) {
+            for k in &keys {
+                actions.push((k.clone(), msg_on));
+            }
+        }
+        ui.same_line();
+        let mtoken = ui
+            .tree_node_config(format!(
+                "slot {slot}  {frame} ({m_sel}/{})",
+                keys.len()
+            ))
+            .default_open(!q.is_empty())
+            .push();
+        if mtoken.is_some() {
+            for (s, key) in sigs.iter().zip(&keys) {
+                let mut son = sel.contains(key);
+                if ui.checkbox(format!("{s}##frsig{slot}"), &mut son) {
+                    actions.push((key.clone(), son));
+                }
+            }
+        }
     }
 }
 

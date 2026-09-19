@@ -122,7 +122,7 @@ impl Channel {
 use std::collections::HashSet;
 
 use crate::app::App;
-use crate::observe::GfxSignal;
+use crate::observe::{GfxSignal, SigKey};
 use crate::workspace::SigScope;
 impl App {
     /// The bus's database, from this frame's snapshot. This inherent method
@@ -154,6 +154,16 @@ impl App {
             .get(ch as usize)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("CAN{}", ch + 1))
+    }
+
+    /// The bus a signal key lives on, spelled the way the tables and legends
+    /// name it. A FlexRay key's index is not a CAN channel, so it must not be
+    /// looked up in the channel list.
+    pub fn sig_bus_label(&self, key: &SigKey) -> String {
+        match key {
+            SigKey::Can { ch, .. } => self.channel_name(*ch),
+            SigKey::Fr { bus, .. } => format!("FR{bus}"),
+        }
     }
 
     /// Adds a new bus, loads its default DBC, and pre-populates the
@@ -202,9 +212,17 @@ impl App {
             remap_set(&mut w.manual);
         }
         let remap_keys = |signals: &mut Vec<GfxSignal>| {
-            signals.retain(|s| remap(s.key.0).is_some());
+            // Only CAN keys carry a CAN channel number. A FlexRay key's bus
+            // index names the one FlexRay bus, which this CAN-channel removal
+            // does not manage, so it is neither dropped nor shifted.
+            signals.retain(|s| match &s.key {
+                SigKey::Can { ch, .. } => remap(*ch).is_some(),
+                SigKey::Fr { .. } => true,
+            });
             for s in signals.iter_mut() {
-                s.key.0 = remap(s.key.0).unwrap();
+                if let SigKey::Can { ch, .. } = &mut s.key {
+                    *ch = remap(*ch).unwrap();
+                }
             }
         };
         for g in &mut self.graphics {
@@ -221,10 +239,13 @@ impl App {
         ) -> std::collections::HashMap<crate::observe::SigKey, V> {
             m.into_iter()
                 .filter_map(|(mut k, v)| {
-                    remap(k.0).map(|nc| {
-                        k.0 = nc;
-                        (k, v)
-                    })
+                    // The map's FlexRay entries are keyed by the FR bus, not
+                    // by a CAN channel, so they neither shift nor drop.
+                    if let SigKey::Can { ch, .. } = &mut k {
+                        let nc = remap(*ch)?;
+                        *ch = nc;
+                    }
+                    Some((k, v))
                 })
                 .collect()
         }
@@ -235,10 +256,17 @@ impl App {
             w.overrides = remap_key_map(std::mem::take(&mut w.overrides), &remap);
         }
         // Monitor rows carry signal keys too.
-        self.monitor_rows.retain(|r| remap(r.key.0).is_some());
+        self.monitor_rows.retain(|r| match &r.key {
+            // Same rule as the curve lists: the removed CAN channel takes its
+            // CAN rows with it and leaves every FlexRay row alone.
+            SigKey::Can { ch, .. } => remap(*ch).is_some(),
+            SigKey::Fr { .. } => true,
+        });
         for r in &mut self.monitor_rows {
-            if let Some(nc) = remap(r.key.0) {
-                r.key.0 = nc;
+            if let SigKey::Can { ch, .. } = &mut r.key
+                && let Some(nc) = remap(*ch)
+            {
+                *ch = nc;
             }
         }
         let fix_scope = |s: &mut SigScope| {
@@ -308,17 +336,30 @@ impl App {
             Ok(db) => {
                 self.fr_db = Some(std::sync::Arc::new(db));
                 self.fr_fibex_path = Some(path.clone());
-                self.set_fr_watch(Some(channel_index), &path);
+                // Hand the same database to the core so live FlexRay frames
+                // decode into the observers, then attach the RX-only watch.
+                self.push_fr_db_to_core();
+                // One FlexRay bus today; the index becomes real with the channel list.
+                self.set_fr_watch(0, Some(channel_index), &path);
             }
             Err(e) => self.status = format!("FlexRay 描述解析失败: {e}"),
         }
+    }
+
+    /// Copies the frontend's parsed FlexRay database into the bus core, which
+    /// decodes arriving FlexRay frames against it to drive the observers.
+    /// `None` clears the core's copy to match.
+    pub(crate) fn push_fr_db_to_core(&mut self) {
+        let db = self.fr_db.clone();
+        self.send(crate::bus::BusCommand::SetFrDb(db));
     }
 
     /// Detaches the FlexRay watch and forgets its display database.
     pub fn detach_fr_watch(&mut self) {
         self.fr_db = None;
         self.fr_fibex_path = None;
-        self.set_fr_watch(None, "");
+        self.push_fr_db_to_core();
+        self.set_fr_watch(0, None, "");
     }
 
     /// Attaches one more DBC file to the bus as an extra database (the

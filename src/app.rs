@@ -38,6 +38,19 @@ pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// far above every real identifier (max 0x1FFFFFFF), so a derived stream
 /// can never collide with a frame's own signals.
 pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
+/// Legacy: the synthetic id prefix FlexRay signals used when they shared the
+/// CAN subscription tuple (`(0, FR_SIG_BASE | slot, false, name)`). Nothing
+/// writes it any more -- [`crate::observe::SigKey::Fr`] says so outright -- but
+/// projects saved before the change still carry it, and loading them has to
+/// turn those keys into real FlexRay ones rather than drop the curves.
+pub const FR_SIG_BASE: u32 = 0x4000_0000;
+
+/// The subscription key for a FlexRay signal named `name` in `slot` on `bus`.
+/// Both the selection tree and the live decode build it from the resolved
+/// frame's slot, so a curve and its decoded values share one identity.
+pub fn fr_signal_key(bus: u8, slot: u16, name: &str) -> crate::observe::SigKey {
+    crate::observe::SigKey::fr(bus, slot, name)
+}
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 /// The replay speed ladder. The last entry is "as fast as possible":
 /// infinity makes the replay clock jump to the end immediately while the
@@ -140,7 +153,7 @@ pub struct MonitorRow {
 impl Default for MonitorRow {
     fn default() -> Self {
         Self {
-            key: (0, 0, false, String::new()),
+            key: crate::observe::SigKey::can(0, 0, false, String::new()),
             label: String::new(),
             digits: 1,
             rule_on: false,
@@ -867,6 +880,10 @@ impl App {
         self.t0 = Instant::now();
         self.last_tick_us = 0;
         self.replay_reset_pending = false;
+        // A replayed FlexRay log decodes into the observers only if the core
+        // holds the description database; re-push it here so a project loaded
+        // from disk -- where `pick_fibex_for` never ran -- still plots.
+        self.push_fr_db_to_core();
         self.send(crate::bus::BusCommand::StartReplay {
             path,
             speed: self.replay_speed,
@@ -900,10 +917,15 @@ impl App {
 
     /// True when a scrubbed replay is parked mid-log and Play should pick up
     /// from there instead of re-opening the file at zero.
+    ///
+    /// A run that reached the log's end is deliberately excluded: its source
+    /// has latched `done`, so resuming it in place is a no-op that leaves the
+    /// scrub bar stuck at the tail. Falling through to a fresh replay restarts
+    /// from zero instead. A scrub clears the latch and moves the playhead
+    /// back below the end, so it still resumes in place.
     fn can_resume_replay(&self) -> bool {
-        matches!(self.snap.mode, Mode::Replay)
-            && !self.replay_reset_pending
-            && self.snap.replay.is_some()
+        let parked_mid_log = self.snap.replay.is_some_and(|(pos, dur)| pos < dur);
+        matches!(self.snap.mode, Mode::Replay) && !self.replay_reset_pending && parked_mid_log
     }
 
     /// Resumes a scrubbed replay in place: the wall clock restarts here on
@@ -1188,7 +1210,7 @@ impl App {
                 };
                 rows.push(MsgRowText {
                     label,
-                    bus: "FR".to_string(),
+                    bus: format!("FR{}", agg.bus),
                     dir: "Rx",
                     count: agg.count.to_string(),
                     cycle: if agg.count > 1 {

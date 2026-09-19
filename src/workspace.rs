@@ -466,7 +466,7 @@ impl App {
                 }
                 self.monitor_rows.push(crate::app::MonitorRow {
                     key: key.clone(),
-                    label: key.3.clone(),
+                    label: key.name().to_string(),
                     ..Default::default()
                 });
                 self.subscribe(key);

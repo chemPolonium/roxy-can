@@ -293,8 +293,9 @@ impl App {
 
     /// Attaches the FlexRay RX-only watch to a Vector channel, configured
     /// from the FIBEX description file. `None` detaches.
-    pub fn set_fr_watch(&mut self, channel_index: Option<i32>, fibex_path: &str) {
+    pub fn set_fr_watch(&mut self, bus: u8, channel_index: Option<i32>, fibex_path: &str) {
         self.send(crate::bus::BusCommand::SetFrWatch {
+            bus,
             channel_index,
             fibex_path: fibex_path.to_string(),
         });

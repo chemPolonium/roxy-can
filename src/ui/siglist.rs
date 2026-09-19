@@ -130,7 +130,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
             None
         };
         ui.same_line();
-        ui.text(&key.3);
+        ui.text(key.name());
         // Right-click a Graphics/Data row routes the signal into a State
         // Tracker -- one more way to start watching a signal's states
         // without visiting the Signal Selection popup.
@@ -190,7 +190,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         // the state; any other window must leave DRAG untouched, otherwise
         // an earlier-rendered window would cancel the drag on mouse release.
         if dk == kind && from < tops.len() {
-            let label = signals_mut(app, kind)[from].key.3.clone();
+            let label = signals_mut(app, kind)[from].key.name().to_string();
             dl.add_text(
                 [mouse[0] + 12.0, mouse[1] + 12.0],
                 [0.9, 0.9, 0.95, 1.0],

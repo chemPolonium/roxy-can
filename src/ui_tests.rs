@@ -11,6 +11,7 @@
 //! directly, the way a user's first frame would see it.
 
 use crate::app::{App, TraceRow};
+use crate::observe::SigKey;
 use crate::can::frame::CanFrame;
 use dear_imgui_rs::{ConfigFlags, Context, FontConfig, FontSource};
 use std::sync::Mutex;
@@ -87,8 +88,8 @@ fn siglist_drag_reorders_a_row() {
     let mut app = App::headless();
     app.new_graphics_window();
     let keys = [
-        (0u8, 0x100u32, false, "Alpha".to_string()),
-        (0, 0x101, false, "Beta".to_string()),
+        SigKey::can(0, 0x100, false, "Alpha"),
+        SigKey::can(0, 0x101, false, "Beta"),
     ];
     for key in &keys {
         app.set_win_signal(PopupTarget::Graphics(0), key.clone(), true);
@@ -96,7 +97,7 @@ fn siglist_drag_reorders_a_row() {
     assert_eq!(app.graphics[0].signals.len(), 2);
 
     let order = |app: &App| -> Vec<String> {
-        app.graphics[0].signals.iter().map(|s| s.key.3.clone()).collect()
+        app.graphics[0].signals.iter().map(|s| s.key.name().to_string()).collect()
     };
     let before = order(&app);
 
@@ -158,7 +159,7 @@ fn siglist_drag_reorders_a_row() {
             .graphics[0]
             .signals
             .iter()
-            .map(|s| s.key.3.clone())
+            .map(|s| s.key.name().to_string())
             .collect();
     }
     assert!(
@@ -430,6 +431,7 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             flags: crate::can::frame::FrameFlags::NONE,
         }),
         TraceRow::Fr(crate::trace::FrRow {
+            bus: 0,
             t_us: 5_000,
             ab: 1,
             slot: 3,
@@ -447,6 +449,34 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
         },
     ];
     frames(&mut app, &mut ctx, 5);
+}
+
+/// The signal-selection popup renders its FlexRay section -- a checkbox per
+/// decoded FlexRay signal -- against a real cluster description without
+/// panicking. This is the ImGui path an observer uses to add a FlexRay
+/// signal; the interaction can't be driven headless, but the draw must not
+/// break on the synthetic FlexRay keys.
+#[test]
+fn flexray_signal_picker_draws_without_panicking() {
+    use crate::app::PopupTarget;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_graphics_window();
+    if let Ok(bytes) = std::fs::read("assets/arxml/PowerTrain.arxml") {
+        let text = crate::dbc::text_from_bytes(bytes);
+        if let Ok(db) = crate::fr_db::FrDb::parse(&text) {
+            assert!(
+                db.slot_signals().iter().any(|(_, _, s)| !s.is_empty()),
+                "the bundled FlexRay description should expose signals to pick"
+            );
+            app.fr_db = Some(std::sync::Arc::new(db));
+        }
+    }
+    app.settle();
+    app.popup_target = Some(PopupTarget::Graphics(0));
+    app.show_id_filter = true;
+    frames(&mut app, &mut ctx, 3);
 }
 
 /// The two armed editor popups render from their draft state across

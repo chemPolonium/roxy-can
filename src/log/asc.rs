@@ -240,6 +240,7 @@ fn parse_fr_rmsg(t_us: u64, toks: &[&str], base: u32) -> Option<crate::trace::Fr
         _ => 0,              // A
     };
     Some(crate::trace::FrRow {
+        bus: 0, // a log carries one cluster
         t_us,
         ab,
         slot,

@@ -5,6 +5,7 @@
 //! imgui, winit or the real wall clock.
 
 use crate::app::{App, Mode, NodeRole};
+use crate::observe::SigKey;
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::log::AscWriter;
 use crate::sim::{SrcKind, ValueSrc};
@@ -62,7 +63,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
         src: ValueSrc::new("EngineSpeed", SrcKind::Sine, 0.0, 8000.0),
     });
     app.send(crate::bus::BusCommand::Subscribe {
-        key: (0, 0x100, false, "EngineSpeed".to_string()),
+        key: SigKey::can(0, 0x100, false, "EngineSpeed"),
     });
 
     // Three simulated seconds at 1 ms. 0x100 has no declared cycle in
@@ -92,7 +93,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
         agg.cycle_us
     );
     let sub = app
-        .sub_view(&(0, 0x100, false, "EngineSpeed".to_string()))
+        .sub_view(&SigKey::can(0, 0x100, false, "EngineSpeed"))
         .expect("subscribed");
     assert!(
         sub.history.len() >= 20,
@@ -811,7 +812,7 @@ fn perf_snapshot_publish_under_load() {
     for (id, ext) in &db.order {
         let msg = db.messages.get(&(*id, *ext)).expect("message table");
         for s in &msg.signals {
-            keys.push((0, *id, *ext, s.name.clone()));
+            keys.push(SigKey::can(0, *id, *ext, s.name.clone()));
         }
     }
     assert!(keys.len() >= 4, "need a handful of signals to subscribe");

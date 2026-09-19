@@ -877,8 +877,8 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
                 continue;
             };
             let txt = match value_at(&sub.history, t_us) {
-                Some(v) => format!("{} = {}", key.3, fmt_val(v)),
-                None => format!("{} = -", key.3),
+                Some(v) => format!("{} = {}", key.name(), fmt_val(v)),
+                None => format!("{} = -", key.name()),
             };
             let lx = if left_side {
                 cx - 8.0 - txt.len() as f32 * 6.5

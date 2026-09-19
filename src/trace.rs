@@ -19,6 +19,10 @@ use std::sync::Arc;
 /// rollups or signal subscriptions -- a watch-only diagnostic.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrRow {
+    /// Which FlexRay bus this row arrived on. A replayed log carries one
+    /// cluster, so every row off a file is bus 0; the live watch stamps its
+    /// own index, which is what lets several ports be watched at once.
+    pub bus: u8,
     pub t_us: u64,
     /// The reception channel: 0 = A, 1 = B. 2 = unknown -- the event
     /// buffer's channel-mask offset is not probe-verified yet.
@@ -34,13 +38,18 @@ pub struct FrRow {
     pub name: Option<String>,
 }
 
-/// The FlexRay trace ring: the run's last rows, oldest first. A plain
-/// `VecDeque` on purpose -- the CAN ring's chunked Arc sharing exists
-/// for 50k-frame pipelines; FR rows are a bounded diagnostic feed whose
-/// publish copies one bounded Vec.
+/// The FlexRay trace ring: the run's last rows, oldest first. Chunked and
+/// `Arc`-shared like the CAN ring: a FlexRay-only log ingests a row roughly
+/// every millisecond, and each of those laps republishes, so a whole-ring copy
+/// here would cost the ring's size per lap (measured 8 ms at 39k rows, 47 ms
+/// at the 200k cap -- enough to pin the core thread and stop it answering
+/// commands). Sealing bounds one publish to the live tail plus chunk
+/// refcounts.
 #[derive(Debug, Default)]
 pub struct FrRing {
-    rows: std::collections::VecDeque<FrRow>,
+    chunks: Vec<Arc<Vec<FrRow>>>,
+    tail: Vec<FrRow>,
+    total: usize,
     /// Rows trimmed from the head since the last `clear`.
     dropped: u64,
 }
@@ -48,10 +57,41 @@ pub struct FrRing {
 impl FrRing {
     /// Appends a row and trims the head past `limit`.
     pub fn push(&mut self, row: FrRow, limit: usize) {
-        self.rows.push_back(row);
-        let overflow = self.rows.len().saturating_sub(limit.max(1));
-        self.rows.drain(..overflow);
-        self.dropped += overflow as u64;
+        self.tail.push(row);
+        self.total += 1;
+        if self.tail.len() >= SEAL_FRAMES {
+            let sealed = Arc::new(std::mem::take(&mut self.tail));
+            self.chunks.push(sealed);
+        }
+        self.enforce_limit(limit.max(1));
+    }
+
+    /// Drops the oldest rows until at most `limit` remain: whole stale chunks
+    /// first, then the head chunk trimmed in place (COW, so a published view
+    /// keeps reading the chunk it holds).
+    fn enforce_limit(&mut self, limit: usize) {
+        let mut overflow = self.total.saturating_sub(limit);
+        while overflow > 0 {
+            let Some(head_len) = self.chunks.first().map(|c| c.len()) else {
+                let stale = overflow.min(self.tail.len());
+                self.tail.drain(..stale);
+                self.total -= stale;
+                self.dropped += stale as u64;
+                return;
+            };
+            if head_len <= overflow {
+                let gone = self.chunks.remove(0);
+                self.total -= gone.len();
+                self.dropped += gone.len() as u64;
+                overflow -= gone.len();
+            } else {
+                let head = Arc::make_mut(self.chunks.first_mut().expect("checked above"));
+                head.drain(..overflow);
+                self.total -= overflow;
+                self.dropped += overflow as u64;
+                overflow = 0;
+            }
+        }
     }
 
     /// Rows trimmed from the head since the last clear.
@@ -60,19 +100,138 @@ impl FrRing {
     }
 
     pub fn clear(&mut self) {
-        self.rows.clear();
+        self.chunks.clear();
+        self.tail.clear();
+        self.total = 0;
         self.dropped = 0;
     }
 
-    /// The snapshot's view: one bounded clone of the whole ring.
-    pub fn publish(&self) -> Arc<Vec<FrRow>> {
-        Arc::new(self.rows.iter().cloned().collect())
+    /// The snapshot's view: chunk refcounts plus one tail copy.
+    pub fn publish(&self) -> Arc<FrTraceView> {
+        Arc::new(FrTraceView {
+            chunks: self.chunks.clone(),
+            tail: self.tail.clone(),
+            total: self.total,
+        })
     }
 
     /// Core-side iteration, for test assertions on the working ring.
     #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &FrRow> {
-        self.rows.iter()
+        self.chunks
+            .iter()
+            .flat_map(|c| c.iter())
+            .chain(self.tail.iter())
+    }
+}
+
+/// The published view of an [`FrRing`]: sealed chunks shared by `Arc`, only
+/// the live tail copied. Indexable and double-ended because the Trace window
+/// merges FlexRay rows into the CAN table newest-first.
+#[derive(Debug, Default)]
+pub struct FrTraceView {
+    chunks: Vec<Arc<Vec<FrRow>>>,
+    tail: Vec<FrRow>,
+    total: usize,
+}
+
+impl FrTraceView {
+    pub fn len(&self) -> usize {
+        self.total
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.total == 0
+    }
+
+    pub fn get(&self, i: usize) -> Option<&FrRow> {
+        let mut off = i;
+        for c in &self.chunks {
+            if off < c.len() {
+                return c.get(off);
+            }
+            off -= c.len();
+        }
+        self.tail.get(off)
+    }
+
+    pub fn iter(&self) -> FrTraceIter<'_> {
+        let mut front_segs: Vec<&[FrRow]> = Vec::with_capacity(self.chunks.len() + 1);
+        let mut back_segs: Vec<&[FrRow]> = Vec::with_capacity(self.chunks.len() + 1);
+        for c in &self.chunks {
+            front_segs.push(c);
+            back_segs.push(c);
+        }
+        front_segs.push(&self.tail);
+        back_segs.push(&self.tail);
+        back_segs.reverse();
+        FrTraceIter {
+            front_segs: front_segs.into_iter(),
+            front_cur: &[],
+            back_segs: back_segs.into_iter(),
+            back_cur: &[],
+            remaining: self.total,
+        }
+    }
+}
+
+impl std::ops::Index<usize> for FrTraceView {
+    type Output = FrRow;
+
+    fn index(&self, i: usize) -> &Self::Output {
+        self.get(i)
+            .unwrap_or_else(|| panic!("FR trace view index {i} out of bounds"))
+    }
+}
+
+/// Double-ended iteration over an [`FrTraceView`]. Front and back cursors walk
+/// their own copies of the segment list; the shared count is what keeps a
+/// mixed-direction walk yielding every row exactly once.
+pub struct FrTraceIter<'a> {
+    front_segs: std::vec::IntoIter<&'a [FrRow]>,
+    front_cur: &'a [FrRow],
+    back_segs: std::vec::IntoIter<&'a [FrRow]>,
+    back_cur: &'a [FrRow],
+    remaining: usize,
+}
+
+impl<'a> Iterator for FrTraceIter<'a> {
+    type Item = &'a FrRow;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        loop {
+            if let Some((r, rest)) = self.front_cur.split_first() {
+                self.front_cur = rest;
+                self.remaining -= 1;
+                return Some(r);
+            }
+            self.front_cur = self.front_segs.next()?;
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for FrTraceIter<'_> {}
+
+impl<'a> DoubleEndedIterator for FrTraceIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        loop {
+            if let Some((r, rest)) = self.back_cur.split_last() {
+                self.back_cur = rest;
+                self.remaining -= 1;
+                return Some(r);
+            }
+            self.back_cur = self.back_segs.next()?;
+        }
     }
 }
 
@@ -600,6 +759,7 @@ mod tests {
 
     fn fr_row(slot: u16, cycle: u8) -> FrRow {
         FrRow {
+            bus: 0,
             t_us: 0,
             ab: 2,
             slot,
@@ -632,5 +792,31 @@ mod tests {
         ring.clear();
         assert_eq!(ring.iter().count(), 0);
         assert_eq!(ring.dropped(), 0, "a fresh run forgets the loss");
+    }
+
+    /// Two publishes of an unchanged ring hand out the *same* sealed chunk:
+    /// a publish ref-counts chunks and copies only the live tail. Deep-copying
+    /// the ring instead costs its size per lap -- 8 ms at 39k FlexRay rows,
+    /// 47 ms at the 200k cap -- and a FlexRay replay ingests a row about every
+    /// millisecond, which pins the core thread so it stops answering commands.
+    #[test]
+    fn an_fr_publish_shares_its_sealed_chunks() {
+        let mut ring = FrRing::default();
+        for i in 0..(SEAL_FRAMES as u64 * 3) {
+            ring.push(fr_row(1, i as u8), usize::MAX);
+        }
+        let first = ring.publish();
+        assert_eq!(first.len(), SEAL_FRAMES * 3, "all three chunks are in");
+        let sealed = Arc::as_ptr(first.chunks.first().expect("a sealed chunk"));
+
+        ring.push(fr_row(2, 0), usize::MAX);
+        let second = ring.publish();
+        assert_eq!(
+            Arc::as_ptr(second.chunks.first().expect("a sealed chunk")),
+            sealed,
+            "the chunk the first view already holds is shared, not recopied"
+        );
+        assert_eq!(second.len(), first.len() + 1);
+        assert_eq!(second.iter().next_back().map(|r| r.slot), Some(2));
     }
 }

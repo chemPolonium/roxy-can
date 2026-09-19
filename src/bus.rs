@@ -92,6 +92,9 @@ pub struct HwBusView {
 /// the port itself stays core-side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrWatchView {
+    /// The FlexRay bus the watch feeds; rows carry it so several ports stay
+    /// separable.
+    pub bus: u8,
     pub channel_index: i32,
     pub fibex_path: String,
 }
@@ -143,6 +146,10 @@ pub enum BusCommand {
     /// Replay-speed multiplier applied to the log source. (The remembered
     /// choice for the next run and the combo's display stay frontend.)
     SetReplaySpeed(f64),
+    /// Loads (or clears, with `None`) the FlexRay description database the
+    /// core decodes arriving FlexRay frames against, so their signals can feed
+    /// the Graphics / Data / State observers during replay.
+    SetFrDb(Option<Arc<crate::fr_db::FrDb>>),
     /// Move the replay playhead to `t_s` seconds, clamped to the log's
     /// duration. Works while running, paused, or stopped after the log
     /// ran out; a scrub past the right edge lands on the last frame.
@@ -293,6 +300,9 @@ pub enum BusCommand {
     /// detaches. RX-only and read-only: it never transmits, and its
     /// frames feed the Trace window's FR section alone.
     SetFrWatch {
+        /// The FlexRay bus this watch feeds. One bus today; the index is
+        /// threaded through now so several ports can be watched at once.
+        bus: u8,
         channel_index: Option<i32>,
         fibex_path: String,
     },
@@ -654,7 +664,7 @@ pub struct Snapshot {
     pub trace: std::sync::Arc<crate::trace::TraceView>,
     /// FlexRay frames as of the last publish, oldest first -- the Trace
     /// window's FR section. Shared like `trace`.
-    pub fr_trace: std::sync::Arc<Vec<crate::trace::FrRow>>,
+    pub fr_trace: std::sync::Arc<crate::trace::FrTraceView>,
     /// FR rows the ring trimmed from its head since the run began.
     pub fr_dropped: u64,
     /// Which timeline the bus runs on this frame.
@@ -849,14 +859,19 @@ pub struct BusCore {
     /// only on steps that ingested frames -- an idle bus copies nothing,
     /// and even then only refcounts plus one sealed tail.
     pub(crate) published_trace: Arc<crate::trace::TraceView>,
-    /// FlexRay frames received this run, in their own ring: they never
-    /// enter the CAN aggregates or subscriptions, the Trace window is
-    /// their only consumer.
+    /// FlexRay frames received this run, in their own ring: they skip the CAN
+    /// aggregates and load rollups, and their decoded signals reach the
+    /// observers through [`BusCore::ingest_fr_row`]'s fold.
     pub(crate) fr_trace: crate::trace::FrRing,
     /// The FR ring as of the last publish, shared with snapshots.
-    pub(crate) published_fr: Arc<Vec<crate::trace::FrRow>>,
-    /// Per-slot FlexRay tallies behind the Messages window's FR rows.
-    pub(crate) fr_aggs: HashMap<u16, crate::aggregate::FrSlotAgg>,
+    pub(crate) published_fr: Arc<crate::trace::FrTraceView>,
+    /// Per-(bus, slot) FlexRay tallies behind the Messages window's FR rows.
+    pub(crate) fr_aggs: HashMap<(u8, u16), crate::aggregate::FrSlotAgg>,
+    /// The parsed FlexRay description database, when the project has loaded
+    /// one. Held here (not only in the frontend) so an arriving FlexRay frame
+    /// can be decoded to numeric signals and folded into subscriptions for the
+    /// Graphics / Data / State observers, exactly like a CAN frame's signals.
+    pub(crate) fr_db: Option<Arc<crate::fr_db::FrDb>>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -967,6 +982,17 @@ pub struct BusCore {
     pub(crate) marker_cap: usize,
 }
 
+/// The script node a derived-signal stream key belongs to: `emit_value`
+/// folds `EMITTED_ID_BASE | node_id` into the CAN id field, so the stream's
+/// owner is readable without a second registry. Only a CAN key can name a
+/// stream -- FlexRay signals arrive from the bus, never from a script.
+fn emitted_node_id(key: &SigKey) -> Option<u64> {
+    match key {
+        SigKey::Can { id, .. } => Some((id & !crate::app::EMITTED_ID_BASE) as u64),
+        SigKey::Fr { .. } => None,
+    }
+}
+
 impl BusCore {
     /// Empty bus state; `App::new` layers the sample channel configuration
     /// and the measurement start on top.
@@ -986,8 +1012,9 @@ impl BusCore {
             trace: crate::trace::TraceRing::default(),
             published_trace: Arc::new(crate::trace::TraceView::default()),
             fr_trace: crate::trace::FrRing::default(),
-            published_fr: Arc::new(Vec::new()),
+            published_fr: Arc::new(crate::trace::FrTraceView::default()),
             fr_aggs: HashMap::new(),
+            fr_db: None,
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -1083,7 +1110,7 @@ impl BusCore {
                 // emitter; drop them from the selection tree. Existing
                 // window selections keep working like after a DBC swap.
                 self.emitted_streams
-                    .retain(|(k, _)| k.1 & !crate::app::EMITTED_ID_BASE != id as u32);
+                    .retain(|(k, _)| emitted_node_id(k) != Some(id));
                 self.nodes_dirty = true;
             }
             BusCommand::SetNodeName { id, name } => {
@@ -1092,7 +1119,7 @@ impl BusCore {
                     // The selection tree lists streams under the owner's
                     // name: a rename rewrites the owner, not the key.
                     for (k, owner) in &mut self.emitted_streams {
-                        if k.1 & !crate::app::EMITTED_ID_BASE == id as u32 {
+                        if emitted_node_id(k) == Some(id) {
                             *owner = name.clone();
                         }
                     }
@@ -1196,8 +1223,14 @@ impl BusCore {
                     self.refresh_node_sysvar_keys();
                     // The dead variable's stream has no future writer.
                     let dead = crate::app::EMITTED_ID_BASE | (SYSVAR_STREAM_ID as u32);
-                    self.emitted_streams
-                        .retain(|(k, owner)| !(k.1 == dead && k.3 == name && *owner == namespace));
+                    self.emitted_streams.retain(|(k, owner)| {
+                        // Sysvar streams are CAN keys built by
+                        // `ingest_emitted`; a FlexRay key is never one.
+                        let SigKey::Can { id, name: sig, .. } = k else {
+                            return true;
+                        };
+                        !(id == &dead && sig == &name && owner == &namespace)
+                    });
                     self.nodes_dirty = true;
                 }
             }
@@ -1275,6 +1308,7 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
+            BusCommand::SetFrDb(db) => self.fr_db = db,
             BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
@@ -1452,17 +1486,29 @@ impl BusCore {
                 *status = format!("hardware detached from bus {}", bus + 1);
             }
             BusCommand::SetFrWatch {
+                bus,
                 channel_index,
                 fibex_path,
             } => match channel_index {
-                Some(idx) => match self.hw.attach_fr(idx, &fibex_path) {
-                    Ok(()) => {
-                        *status = format!("FlexRay 监听已挂接: Vector ch{idx}（只收）");
+                Some(idx) => {
+                    // The description is configured from the database the
+                    // frontend already parsed and pushed with `SetFrDb`;
+                    // re-reading the file here parsed it a second time.
+                    match self.fr_db.clone() {
+                        Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, &db) {
+                            Ok(()) => {
+                                *status =
+                                    format!("FlexRay 监听已挂接: FR{bus} / Vector ch{idx}（只收）");
+                            }
+                            Err(e) => {
+                                *status = format!("FlexRay 监听挂接失败: {e}");
+                            }
+                        },
+                        None => {
+                            *status = "FlexRay 监听挂接失败: 尚未解析 FlexRay 描述文件".to_string()
+                        }
                     }
-                    Err(e) => {
-                        *status = format!("FlexRay 监听挂接失败: {e}");
-                    }
-                },
+                }
                 None => {
                     self.hw.detach_fr();
                     *status = "FlexRay 监听已断开".to_string();
@@ -1564,13 +1610,15 @@ impl BusCore {
     /// One FlexRay frame lands: stamped against the sim clock when the
     /// source had no time of its own, then into the FR ring and the
     /// per-slot aggregates. Kept apart from [`BusCore::ingest`] -- FR
-    /// rows deliberately skip the CAN aggregates, load rollups and
-    /// subscriptions.
+    /// rows skip the CAN aggregates and load rollups, but when a FlexRay
+    /// description database is loaded their decoded signals fold into
+    /// subscriptions so the observers can plot them.
     pub(crate) fn ingest_fr_row(&mut self, mut row: crate::trace::FrRow) {
         if row.t_us == 0 {
             row.t_us = self.sim_t_us;
         }
-        let agg = self.fr_aggs.entry(row.slot).or_default();
+        let agg = self.fr_aggs.entry((row.bus, row.slot)).or_default();
+        agg.bus = row.bus;
         // Only a strictly later timestamp marks a real cycle (seek /
         // out-of-order rows), and the smoothing mirrors the CAN path.
         if agg.count > 0 && row.t_us > agg.last_t_us {
@@ -1597,6 +1645,35 @@ impl BusCore {
             agg.name = row.name.clone();
         }
         agg.payload = row.payload.clone();
+        // Fold the frame's FlexRay signals into their subscriptions so the
+        // Graphics / Data / State / Monitor observers can plot live values,
+        // mirroring [`BusCore::ingest`]'s CAN fold. `fr_db` is cloned to an
+        // owned `Arc` so decoding it does not borrow `self` while `subs` is
+        // mutated. Rows for a slot the database has no frame for decode to
+        // nothing, which is the same "watch-only" outcome as before.
+        if !self.subs.is_empty()
+            && let Some(db) = self.fr_db.clone()
+            && let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab)
+        {
+            let stride = self.applied_stride_us;
+            let slot = frame.triggering.slot_id as u16;
+            let t_us = row.t_us;
+            for d in db.decode_signals(frame, &row.payload) {
+                let key = crate::app::fr_signal_key(row.bus, slot, &d.name);
+                let Some(entry) = self.subs.get_mut(&key) else {
+                    continue;
+                };
+                entry.latest = d.phys;
+                entry.last_raw = d.raw;
+                entry.unit = d.unit;
+                entry.type_tag = d.type_tag;
+                entry.label = d.label;
+                entry.last_update_us = t_us;
+                if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
+                    entry.push_sample(t_us, d.phys, stride);
+                }
+            }
+        }
         self.fr_trace.push(row, self.trace_limit);
     }
 
@@ -1883,11 +1960,11 @@ impl BusCore {
     /// never collide with a real frame's signals; the selection tree lists
     /// these streams under the owning node's name.
     fn ingest_emitted(&mut self, ch: u8, node_id: u64, node_name: &str, name: &str, v: f64) {
-        let key: SigKey = (
+        let key = SigKey::can(
             ch,
             crate::app::EMITTED_ID_BASE | node_id as u32,
             false,
-            name.to_string(),
+            name,
         );
         if !self.emitted_streams.iter().any(|(k, _)| k == &key) {
             // A script computing names in a loop would otherwise balloon
@@ -2008,6 +2085,7 @@ impl BusCore {
             fr_trace: Arc::clone(&self.published_fr),
             fr_dropped: self.fr_trace.dropped(),
             fr_watch: self.hw.fr_watch.as_ref().map(|w| FrWatchView {
+                bus: w.bus,
                 channel_index: w.channel_index,
                 fibex_path: w.fibex_path.clone(),
             }),
@@ -2070,7 +2148,7 @@ impl BusCore {
             fr_aggs: {
                 let mut rows: Vec<crate::aggregate::FrSlotAgg> =
                     self.fr_aggs.values().cloned().collect();
-                rows.sort_by_key(|a| a.slot);
+                rows.sort_by_key(|a| (a.bus, a.slot));
                 rows
             },
             subs: self
@@ -2197,12 +2275,18 @@ impl BusCore {
     /// until the first frame refreshes it -- and forever when no database
     /// names it.
     fn signal_meta(&self, key: &SigKey) -> String {
+        // A type tag is a DBC concept; the FlexRay database has no equivalent
+        // and `decode_signals` leaves it empty, so only a CAN key can declare
+        // one.
+        let SigKey::Can { ch, id, ext, name } = key else {
+            return String::new();
+        };
         let msg = self
             .channels
-            .get(key.0 as usize)
+            .get(*ch as usize)
             .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.messages.get(&(key.1, key.2)));
-        msg.and_then(|m| m.signals.iter().find(|s| s.name == key.3))
+            .and_then(|db| db.messages.get(&(*id, *ext)));
+        msg.and_then(|m| m.signals.iter().find(|s| &s.name == name))
             .map(|s| s.type_tag.clone())
             .unwrap_or_default()
     }
@@ -2616,7 +2700,16 @@ impl BusCore {
         self.subs = self
             .subs
             .drain()
-            .filter_map(|((c, id, ext, sig), s)| remap(c).map(|nc| ((nc, id, ext, sig), s)))
+            .filter_map(|(k, s)| match k {
+                // Only CAN keys follow the channel list. A FlexRay key's bus
+                // index is not a CAN channel -- and there is exactly one
+                // FlexRay bus today, which no CAN add/remove renumbers -- so
+                // Fr keys keep their identity untouched.
+                SigKey::Can { ch, id, ext, name } => {
+                    remap(ch).map(|nc| (SigKey::can(nc, id, ext, name), s))
+                }
+                k @ SigKey::Fr { .. } => Some((k, s)),
+            })
             .collect();
         self.spec.drop_channel(ch as u8);
         self.tx_list.retain(|t| t.channel as usize != ch);
@@ -2675,10 +2768,15 @@ impl BusCore {
             .emitted_streams
             .drain(..)
             .filter_map(|(mut k, owner)| {
-                remap(k.0).map(|nc| {
-                    k.0 = nc;
-                    (k, owner)
-                })
+                // A stream rides the CAN channel of its owning node, so only
+                // a CAN key shifts here. FlexRay signals are never
+                // script-emitted, and the one FlexRay bus is not part of the
+                // CAN channel list this removal renumbers.
+                if let SigKey::Can { ch, .. } = &mut k {
+                    let nc = remap(*ch)?;
+                    *ch = nc;
+                }
+                Some((k, owner))
             })
             .collect();
         self.nodes_dirty = true;
@@ -3674,7 +3772,7 @@ impl BusCore {
         db.decode_signals(f)
             .into_iter()
             .filter_map(|d| {
-                let key = (f.channel, f.id, f.extended, d.name.clone());
+                let key = SigKey::can(f.channel, f.id, f.extended, d.name.clone());
                 self.subs.contains_key(&key).then_some((key, d))
             })
             .collect()
@@ -3976,6 +4074,7 @@ mod tests {
 
     fn fr_row(t_us: u64, slot: u16) -> crate::trace::FrRow {
         crate::trace::FrRow {
+            bus: 0,
             t_us,
             ab: 2,
             slot,
@@ -4008,6 +4107,100 @@ mod tests {
         assert_eq!(agg.count, 2);
         assert_eq!(agg.last_cycle, 4, "the name lookup cycle follows arrivals");
         assert_eq!(agg.cycle_us, 5000.0, "first interval seeds the EMA");
+    }
+
+    /// Slot numbers repeat across clusters, so the tally is keyed by bus and
+    /// slot together: the same slot on two FlexRay buses stays two rows, each
+    /// with its own cycle history. Without the bus in the key, watching a
+    /// second port would silently merge its traffic into the first.
+    #[test]
+    fn the_same_slot_on_two_flexray_buses_stays_two_rows() {
+        let mut core = BusCore::new(Vec::new());
+        let mut on_bus1 = fr_row(1_000_000, 10);
+        on_bus1.bus = 1;
+        let mut later_on_bus1 = fr_row(1_002_000, 10);
+        later_on_bus1.bus = 1;
+        core.ingest_fr_row(fr_row(1_000_000, 10));
+        core.ingest_fr_row(on_bus1);
+        core.ingest_fr_row(later_on_bus1);
+
+        core.publish_trace();
+        let snap = core.snapshot();
+        assert_eq!(snap.fr_aggs.len(), 2, "one row per (bus, slot)");
+        assert_eq!(
+            snap.fr_aggs.iter().map(|a| (a.bus, a.slot)).collect::<Vec<_>>(),
+            vec![(0, 10), (1, 10)],
+            "ordered by bus first, so the Messages list groups one cluster's slots together"
+        );
+        let second = snap.fr_aggs.iter().find(|a| a.bus == 1).expect("bus 1 row");
+        assert_eq!(second.count, 2);
+        assert_eq!(second.cycle_us, 2000.0, "its cycle mixes only its own arrivals");
+    }
+
+    /// With a FlexRay description database loaded, an arriving FR frame
+    /// decodes into its signals and folds into the subscriptions -- the same
+    /// live-value path a CAN frame drives, which is what lets the observers
+    /// plot a FlexRay signal during replay.
+    #[test]
+    fn flexray_frames_fold_signals_into_subscriptions() {
+        use crate::fr_db::{FrChannel, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+        let sig = FrSignal {
+            name: "Speed".into(),
+            start_bit: 0,
+            length_bits: 8,
+            big_endian: false,
+            signed: false,
+            factor: 1.0,
+            offset: 0.0,
+            min: 0.0,
+            max: 255.0,
+            unit: "km/h".into(),
+            comment: String::new(),
+            value_descriptions: vec![],
+        };
+        let pdu = FrPdu {
+            name: "P1".into(),
+            length: 8,
+            dynamic: false,
+            comment: String::new(),
+            signals: vec![sig],
+        };
+        let frame = FrFrameDb {
+            name: "F1".into(),
+            length: 8,
+            payload_preamble: false,
+            triggering: FrTriggering {
+                channel: FrChannel::Both,
+                slot_id: 12,
+                base_cycle: 0,
+                cycle_repetition: 1,
+                startup: false,
+            },
+            pdus: vec![("P1".into(), 0u32)],
+            comment: String::new(),
+        };
+        let db = std::sync::Arc::new(FrDb::assemble(
+            Default::default(),
+            vec![],
+            vec![pdu],
+            vec![frame],
+        ));
+
+        let mut core = BusCore::new(Vec::new());
+        core.fr_db = Some(db);
+        let key = crate::app::fr_signal_key(0, 12, "Speed");
+        core.subscribe_signal(key.clone());
+
+        let mut row = fr_row(1_000, 12);
+        row.ab = 0;
+        row.cycle = 0;
+        row.payload = vec![42, 0, 0, 0, 0, 0, 0, 0];
+        core.ingest_fr_row(row);
+
+        let sub = core.subs.get(&key).expect("FR signal subscribed");
+        assert_eq!(sub.latest, 42.0, "physical value folded in");
+        assert_eq!(sub.last_raw, 42);
+        assert_eq!(sub.unit, "km/h", "unit carried from the description");
     }
 
     /// The FR ring publishes through the same lifecycle as the CAN ring:
@@ -4061,6 +4254,7 @@ mod tests {
         let mut status = String::new();
         core.handle(
             BusCommand::SetFrWatch {
+                bus: 0,
                 channel_index: Some(0),
                 fibex_path: "target/definitely-missing.fibex".into(),
             },
@@ -4071,6 +4265,7 @@ mod tests {
 
         core.handle(
             BusCommand::SetFrWatch {
+                bus: 0,
                 channel_index: None,
                 fibex_path: String::new(),
             },
@@ -4080,21 +4275,38 @@ mod tests {
         assert!(core.hw.fr_watch.is_none());
     }
 
-    /// A description without FlexRay cluster parameters is refused
-    /// before any driver call: a DBC parses fine as text but is no
-    /// cluster spec.
+    /// The watch configures itself from the database pushed with `SetFrDb`, so
+    /// a request that arrives before any description -- or after the one the
+    /// core held was cleared -- is refused without a driver call. Description
+    /// *validity* (a DBC is no cluster spec) is now the frontend's gate:
+    /// `FrDb::parse` there rejects it before anything reaches the bus.
     #[test]
-    fn fr_watch_refuses_a_non_fibex_description() {
+    fn fr_watch_requires_a_description_the_core_holds() {
         let mut core = BusCore::new(Vec::new());
         let mut status = String::new();
-        core.handle(
-            BusCommand::SetFrWatch {
-                channel_index: Some(0),
-                fibex_path: "assets/sample.dbc".into(),
-            },
-            &mut status,
+        let watch = || BusCommand::SetFrWatch {
+            bus: 0,
+            channel_index: Some(0),
+            fibex_path: "assets/sample.dbc".into(),
+        };
+        core.handle(watch(), &mut status);
+        assert!(
+            status.contains("尚未解析"),
+            "no description pushed yet: {status}"
         );
-        assert!(status.contains("失败"), "refusal reports: {status}");
-        assert!(core.hw.fr_watch.is_none());
+
+        let bytes = std::fs::read("assets/arxml/PowerTrain.arxml");
+        if let Ok(bytes) = bytes {
+            let text = crate::dbc::text_from_bytes(bytes);
+            let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));
+            core.handle(BusCommand::SetFrDb(Some(db)), &mut status);
+            core.handle(BusCommand::SetFrDb(None), &mut status);
+            core.handle(watch(), &mut status);
+            assert!(
+                status.contains("尚未解析"),
+                "a cleared description is refused too: {status}"
+            );
+        }
+        assert!(core.hw.fr_watch.is_none(), "a refusal leaves no watch");
     }
 }

@@ -54,6 +54,14 @@ pub trait FrameStream: Send {
     fn peek_fr_t(&mut self) -> Option<u64> {
         None
     }
+
+    /// Whether the container carries any CAN frames at all. A FlexRay-only
+    /// log reports `false` (once known), letting the replay skip the CAN
+    /// backfill scan entirely instead of re-decompressing containers every
+    /// frame to collect nothing. Defaults to `true` (assume CAN present).
+    fn has_can_frames(&self) -> bool {
+        true
+    }
 }
 
 /// One bus input. `Send` because stage 3 moves the whole core -- sources

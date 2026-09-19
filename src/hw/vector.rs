@@ -821,16 +821,6 @@ impl FlexRayChannel {
         Self::open_rx(index, &config_from_db(&db.params))
     }
 
-    /// Opens the channel with a FIBEX/ARXML-parsed cluster configuration:
-    /// parses `fibex_text` and applies it.
-    pub fn open_rx_with_fibex(
-        index: i32,
-        fibex_text: &str,
-    ) -> Result<FlexRayChannel, String> {
-        let db = crate::fr_db::FrDb::parse(fibex_text)?;
-        Self::open_rx_with_db(index, &db)
-    }
-
     /// Opens the channel and applies the cluster configuration. RX-only:
     /// the port never requests init access, so it succeeds even on a
     /// bus another tool cold-starts.

@@ -135,7 +135,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 // FlexRay rows are not DBC-declared by definition; the
                 // empty case there means the watch has no description
                 // database to decode with.
-                if row.label.starts_with("FR slot") {
+                if row.bus.starts_with("FR") {
                     ui.text("   （无描述文件，无法解码信号）");
                 } else {
                     ui.text("   (not in DBC)");

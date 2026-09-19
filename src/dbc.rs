@@ -634,8 +634,12 @@ pub fn absorb(primary: &mut SymbolTable, extra: SymbolTable) {
     for (key, msg) in extra.messages {
         primary.messages.entry(key).or_insert(msg);
     }
+    // The display order is one entry per message, so a `contains` per merged
+    // key is quadratic in the size of the combined database -- a few thousand
+    // messages across several DBC files is already seconds of merge work.
+    let mut seen: std::collections::HashSet<MsgKey> = primary.order.iter().copied().collect();
     for key in extra.order {
-        if !primary.order.contains(&key) {
+        if seen.insert(key) {
             primary.order.push(key);
         }
     }
@@ -1328,3 +1332,4 @@ VAL_ 420 S States;
         assert!(db.is_err(), "the named-table VAL_ form is unparseable");
     }
 }
+

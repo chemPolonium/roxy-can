@@ -13,7 +13,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// FlexRay transmission channel. A / B / both at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -40,7 +40,7 @@ impl FrChannel {
 }
 
 /// One signal of a PDU: position, encoding and display metadata.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrSignal {
     pub name: String,
     pub start_bit: u32,
@@ -59,7 +59,7 @@ pub struct FrSignal {
 }
 
 /// One PDU: a payload chunk with its signal layout.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrPdu {
     pub name: String,
     /// Byte length.
@@ -92,14 +92,16 @@ impl FrTriggering {
 }
 
 /// One frame: payload size, schedule and the PDUs it carries.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrFrameDb {
     pub name: String,
     /// Byte length 0..=254.
     pub length: u32,
     pub payload_preamble: bool,
     pub triggering: FrTriggering,
-    /// (PDU name, start byte in the frame).
+    /// (PDU name, start bit within the frame payload). Both the FIBEX and
+    /// ARXML dialects express the frame's PDU placement in bits, so the
+    /// decoder adds it to each signal's bit offset directly.
     pub pdus: Vec<(String, u32)>,
     pub comment: String,
 }
@@ -108,7 +110,7 @@ pub struct FrFrameDb {
 /// editor's set; the `extra` block collects the raw vxlapi-oriented
 /// values (payload length, correction windows, sample clock) that the
 /// driver configuration needs and only some files carry.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrClusterParams {
     pub name: String,
     /// fx:SPEED, normalised to kbit/s (5000 or 10000).
@@ -180,15 +182,54 @@ pub struct FrClusterParams {
 }
 
 /// The parsed FlexRay database.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrDb {
     pub params: FrClusterParams,
     pub ecus: Vec<String>,
     pub pdus: Vec<FrPdu>,
     pub frames: Vec<FrFrameDb>,
+    /// `PDU name -> index into `pdus``, filled by [`Self::parse`]. Decoding a
+    /// frame used to scan the whole PDU list once per PDU it carried, which on
+    /// a production cluster is per-arrival work: 5k PDUs x 20 PDUs x 1k rows/s.
+    pdu_ix: HashMap<String, usize>,
+    /// `slot id -> indices into `frames``, document order. `frame_at` scanned
+    /// every frame of the database for every arriving FlexRay row.
+    slot_ix: HashMap<u32, Vec<usize>>,
 }
 
 impl FrDb {
+    /// Assembles a database from its parts, with the decode lookup tables
+    /// filled. Every `FrDb` in the program comes through here, so the lookups
+    /// can rely on the indexes being there.
+    pub fn assemble(
+        params: FrClusterParams,
+        ecus: Vec<String>,
+        pdus: Vec<FrPdu>,
+        frames: Vec<FrFrameDb>,
+    ) -> Self {
+        let mut db = Self {
+            params,
+            ecus,
+            pdus,
+            frames,
+            pdu_ix: HashMap::new(),
+            slot_ix: HashMap::new(),
+        };
+        for (i, p) in db.pdus.iter().enumerate() {
+            // First declaration wins, as `iter().find` did.
+            db.pdu_ix.entry(p.name.clone()).or_insert(i);
+        }
+        for (i, f) in db.frames.iter().enumerate() {
+            db.slot_ix.entry(f.triggering.slot_id).or_default().push(i);
+        }
+        db
+    }
+
+    /// The PDU named `name`.
+    fn pdu_of(&self, name: &str) -> Option<&FrPdu> {
+        self.pdu_ix.get(name).and_then(|&i| self.pdus.get(i))
+    }
+
     /// Parses FIBEX or ARXML text, detecting the dialect from the root
     /// element and, failing that, from characteristic children.
     pub fn parse(text: &str) -> Result<FrDb, String> {
@@ -238,14 +279,20 @@ impl FrDb {
             1 => Some(FrChannel::B),
             _ => None,
         };
-        self.frames
-            .iter()
-            .filter(|f| f.triggering.slot_id == slot as u32)
-            .filter(|f| f.triggering.is_active_at_cycle(cycle as u32))
-            .find(|f| match want {
-                Some(w) => f.triggering.channel.covers(w),
-                None => true,
-            })
+        let fits = |f: &FrFrameDb| {
+            f.triggering.slot_id == slot as u32
+                && f.triggering.is_active_at_cycle(cycle as u32)
+                && match want {
+                    Some(w) => f.triggering.channel.covers(w),
+                    None => true,
+                }
+        };
+        self.slot_ix
+            .get(&(slot as u32))
+            .into_iter()
+            .flatten()
+            .filter_map(|&i| self.frames.get(i))
+            .find(|f| fits(f))
     }
 
     /// Decodes a frame payload into `(signal, text)` pairs: physical
@@ -254,12 +301,16 @@ impl FrDb {
     pub fn decode(&self, frame: &FrFrameDb, payload: &[u8]) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let total_bits = payload.len() * 8;
-        for (pdu_name, start_byte) in &frame.pdus {
-            let Some(pdu) = self.pdus.iter().find(|p| p.name == *pdu_name) else {
+        // The logged payload begins at the frame's first PDU; AUTOSAR PDU
+        // START-POSITIONs are measured from the frame head, so subtract the
+        // lowest one to align them with the bytes actually recorded.
+        let base = frame.pdus.iter().map(|(_, b)| *b).min().unwrap_or(0);
+        for (pdu_name, pdu_start_bit) in &frame.pdus {
+            let Some(pdu) = self.pdu_of(pdu_name) else {
                 continue;
             };
             for sig in &pdu.signals {
-                let abs_bit = *start_byte as usize * 8 + sig.start_bit as usize;
+                let abs_bit = (*pdu_start_bit - base) as usize + sig.start_bit as usize;
                 let len = sig.length_bits as usize;
                 if abs_bit + len > total_bits {
                     continue;
@@ -289,6 +340,104 @@ impl FrDb {
         }
         out
     }
+
+    /// Numeric sibling of [`Self::decode`]: the physical value, the raw
+    /// integer, the unit and any enum label, per signal. This is what feeds
+    /// a Graphics/Data/State curve -- the plotting path needs an `f64`, not
+    /// the display text `decode` returns.
+    pub fn decode_signals(
+        &self,
+        frame: &FrFrameDb,
+        payload: &[u8],
+    ) -> Vec<crate::dbc::DecodedSignal> {
+        let mut out = Vec::new();
+        let total_bits = payload.len() * 8;
+        // See [`Self::decode`]: align AUTOSAR PDU positions with the logged
+        // payload, which begins at the frame's first PDU.
+        let base = frame.pdus.iter().map(|(_, b)| *b).min().unwrap_or(0);
+        for (pdu_name, pdu_start_bit) in &frame.pdus {
+            let Some(pdu) = self.pdu_of(pdu_name) else {
+                continue;
+            };
+            for sig in &pdu.signals {
+                let abs_bit = (*pdu_start_bit - base) as usize + sig.start_bit as usize;
+                let len = sig.length_bits as usize;
+                if abs_bit + len > total_bits {
+                    continue;
+                }
+                let raw = crate::decode::extract_raw(
+                    payload,
+                    abs_bit as u64,
+                    len as u64,
+                    sig.big_endian,
+                );
+                let phys =
+                    crate::decode::to_physical(raw, len as u64, sig.signed, sig.factor, sig.offset);
+                let label = sig
+                    .value_descriptions
+                    .iter()
+                    .find(|(v, _)| *v as f64 == phys)
+                    .map(|(_, t)| t.clone());
+                out.push(crate::dbc::DecodedSignal {
+                    name: sig.name.clone(),
+                    phys,
+                    raw: raw as i64,
+                    unit: sig.unit.clone(),
+                    type_tag: String::new(),
+                    label,
+                });
+            }
+        }
+        out
+    }
+
+    /// The signal names a frame carries, in payload order. The selection
+    /// tree lists a FlexRay frame's signals from this, so a picker entry and
+    /// a decoded value share one source of truth and cannot drift apart.
+    pub fn signal_names(&self, frame: &FrFrameDb) -> Vec<String> {
+        let mut names = Vec::new();
+        for (pdu_name, _) in &frame.pdus {
+            if let Some(pdu) = self.pdu_of(pdu_name) {
+                names.extend(pdu.signals.iter().map(|s| s.name.clone()));
+            }
+        }
+        names
+    }
+
+    /// The declaration of signal `name` in the frame that holds `slot`.
+    /// Slots shared by several frames (cycle repetition) resolve to the
+    /// first, as [`Self::slot_signals`] lists it, so a curve and the picker
+    /// that offered it read the same layout. A signal's declared range does
+    /// not depend on which cycle the frame is active in, so unlike
+    /// [`Self::frame_at`] this ignores the schedule.
+    pub fn slot_signal(&self, slot: u16, name: &str) -> Option<&FrSignal> {
+        let &i = self.slot_ix.get(&(slot as u32))?.first()?;
+        let frame = self.frames.get(i)?;
+        frame.pdus.iter().find_map(|(pdu_name, _)| {
+            self.pdu_of(pdu_name)
+                .and_then(|pdu| pdu.signals.iter().find(|s| s.name == name))
+        })
+    }
+
+    /// One entry per distinct static slot: the slot id, a representative
+    /// frame name and that frame's signal names. Frames sharing a slot
+    /// (cycle repetition) collapse to the first, matching [`Self::frame_at`]
+    /// so a curve keyed by the slot sees the layout it will decode against.
+    pub fn slot_signals(&self) -> Vec<(u16, String, Vec<String>)> {
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut out = Vec::new();
+        for f in &self.frames {
+            if !seen.insert(f.triggering.slot_id) {
+                continue;
+            }
+            let names = self.signal_names(f);
+            if names.is_empty() {
+                continue;
+            }
+            out.push((f.triggering.slot_id as u16, f.name.clone(), names));
+        }
+        out
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -296,6 +445,7 @@ impl FrDb {
 // ----------------------------------------------------------------------
 
 /// Collects all descendants with the given tag name (namespace ignored).
+/// For *subtree* searches; whole-document searches go through [`DocIndex`].
 fn collect<'a, 'b>(node: &roxmltree::Node<'a, 'b>, tag: &str, out: &mut Vec<roxmltree::Node<'a, 'b>>) {
     if node.is_element() && node.tag_name().name() == tag {
         out.push(*node);
@@ -303,6 +453,85 @@ fn collect<'a, 'b>(node: &roxmltree::Node<'a, 'b>, tag: &str, out: &mut Vec<roxm
     for child in node.children() {
         collect(&child, tag, out);
     }
+}
+
+/// Every element of the document, indexed once by tag name and by `ID`
+/// attribute.
+///
+/// Both parsers used to walk the whole tree once per tag they cared about, and
+/// once *per item* wherever a reference had to be resolved -- 42x the element
+/// count in node visits on a 426 KB ARXML, and O(items x document) for the
+/// UNIT lookups a FIBEX does per CODING. That is the difference between
+/// milliseconds on a demo cluster and seconds on a production one. The lists
+/// keep document order, so every "first match wins" rule reads the same as it
+/// did when the scan was literal.
+struct DocIndex<'a, 'b> {
+    by_tag: HashMap<String, Vec<roxmltree::Node<'a, 'b>>>,
+    by_id: HashMap<String, roxmltree::Node<'a, 'b>>,
+}
+
+impl<'a, 'b> DocIndex<'a, 'b> {
+    fn build(root: &roxmltree::Node<'a, 'b>) -> Self {
+        let mut index = DocIndex {
+            by_tag: HashMap::new(),
+            by_id: HashMap::new(),
+        };
+        index.walk(root);
+        index
+    }
+
+    /// Pre-order walk, so every list keeps document order -- the order the
+    /// per-tag scans used to produce, and what "first match wins" means here.
+    fn walk(&mut self, node: &roxmltree::Node<'a, 'b>) {
+        if node.is_element() {
+            self.by_tag
+                .entry(node.tag_name().name().to_string())
+                .or_default()
+                .push(*node);
+            if let Some(id) = node.attribute("ID") {
+                // First wins, as `find` over a document-order scan did.
+                self.by_id.entry(id.to_string()).or_insert(*node);
+            }
+        }
+        for child in node.children() {
+            self.walk(&child);
+        }
+    }
+
+    /// Every element named `tag`, document order.
+    fn nodes(&self, tag: &str) -> &[roxmltree::Node<'a, 'b>] {
+        self.by_tag.get(tag).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The element carrying `id` as its `ID` attribute.
+    fn element(&self, id: &str) -> Option<roxmltree::Node<'a, 'b>> {
+        self.by_id.get(id).copied()
+    }
+
+    /// Text of the first element anywhere in the document named `tag`. The
+    /// whole-document fallbacks used to re-walk the tree looking for a tag
+    /// that is usually absent -- the commonest case, and the most expensive.
+    fn text(&self, tag: &str) -> Option<String> {
+        self.nodes(tag)
+            .iter()
+            .find_map(|n| {
+                n.text()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            })
+    }
+}
+
+/// The first non-empty text under `tag` inside the subtree, document order.
+fn first_text<'a, 'b>(node: &roxmltree::Node<'a, 'b>, tag: &str) -> Option<String> {
+    if node.is_element()
+        && node.tag_name().name() == tag
+        && let Some(t) = node.text().map(str::trim).filter(|t| !t.is_empty())
+    {
+        return Some(t.to_string());
+    }
+    node.children().find_map(|c| first_text(&c, tag))
 }
 
 /// The element's SHORT-NAME text.
@@ -316,21 +545,10 @@ fn short_name(node: &roxmltree::Node) -> String {
 }
 
 /// First non-empty text under any of the candidate tag names, inside the
-/// node's subtree.
+/// node's subtree. Candidates keep their priority: the first tag with a
+/// non-empty match wins, even when a later tag appears earlier in the tree.
 fn text_of(node: &roxmltree::Node, tags: &[&str]) -> Option<String> {
-    for tag in tags {
-        let mut found = Vec::new();
-        collect(node, tag, &mut found);
-        for f in found {
-            if let Some(t) = f.text() {
-                let t = t.trim();
-                if !t.is_empty() {
-                    return Some(t.to_string());
-                }
-            }
-        }
-    }
-    None
+    tags.iter().find_map(|t| first_text(node, t))
 }
 
 /// A child element's reference: ID-REF attribute first, element text as
@@ -428,9 +646,10 @@ fn parse_signal_instances(node: &roxmltree::Node) -> Vec<(String, u32, bool)> {
     out
 }
 
-/// FRAME's PDU placements: (PDU ref id, start byte). Two dialects:
-/// PDU-MAPPING + START-BIT-POSITION (in bytes) and PDU-INSTANCE +
-/// BIT-POSITION (in bits, byte-aligned, divided by 8).
+/// FRAME's PDU placements: (PDU ref id, start bit). The FIBEX dialects all
+/// express the placement in bits -- BIT-POSITION, START-BIT-POSITION and
+/// Vector's START-POSITION alike -- stored as a bit offset the decoder adds
+/// to each signal's bit position.
 fn parse_pdu_placements(frame: &roxmltree::Node) -> Vec<(String, u32)> {
     let mut out = Vec::new();
     for tag in ["PDU-MAPPING", "PDU-INSTANCE"] {
@@ -441,12 +660,9 @@ fn parse_pdu_placements(frame: &roxmltree::Node) -> Vec<(String, u32)> {
             if pdu_ref.is_empty() {
                 continue;
             }
-            let start = match text_of(m, &["BIT-POSITION"]).and_then(|t| parse_u32(&t)) {
-                Some(bits) => bits / 8,
-                None => text_of(m, &["START-BIT-POSITION", "START-POSITION"])
-                    .and_then(|t| parse_u32(&t))
-                    .unwrap_or(0),
-            };
+            let start = text_of(m, &["BIT-POSITION", "START-BIT-POSITION", "START-POSITION"])
+                .and_then(|t| parse_u32(&t))
+                .unwrap_or(0);
             out.push((pdu_ref, start));
         }
         if !out.is_empty() {
@@ -480,12 +696,11 @@ fn classify_channel(channel: &roxmltree::Node, ch_idx: usize, total: usize) -> F
 
 pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     let root = doc.root_element();
+    let index = DocIndex::build(&root);
 
     // 1. Signals and codings: the CODING carries the physical encoding.
-    let mut signal_nodes = Vec::new();
-    collect(&root, "SIGNAL", &mut signal_nodes);
-    let mut coding_nodes = Vec::new();
-    collect(&root, "CODING", &mut coding_nodes);
+    let signal_nodes = index.nodes("SIGNAL");
+    let coding_nodes = index.nodes("CODING");
 
     struct CodingInfo {
         bit_length: u32,
@@ -499,7 +714,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     let mut codings: HashMap<String, CodingInfo> = HashMap::new();
-    for coding in &coding_nodes {
+    for coding in coding_nodes {
         let id = coding.attribute("ID").unwrap_or_default().to_string();
         let bit_length = text_of(coding, &["BIT-LENGTH"])
             .and_then(|t| parse_u32(&t))
@@ -570,14 +785,11 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         collect(coding, "UNIT-REF", &mut unit_refs);
         if let Some(unit_ref) = unit_refs.first() {
             let unit_id = unit_ref.attribute("ID-REF").unwrap_or_default();
-            if !unit_id.is_empty() {
-                let mut unit_nodes = Vec::new();
-                collect(&root, "UNIT", &mut unit_nodes);
-                if let Some(u) = unit_nodes.iter().find(|n| n.attribute("ID") == Some(unit_id))
-                    && let Some(dn) = text_of(u, &["DISPLAY-NAME"])
-                {
-                    unit = dn;
-                }
+            if !unit_id.is_empty()
+                && let Some(u) = index.element(unit_id)
+                && let Some(dn) = text_of(&u, &["DISPLAY-NAME"])
+            {
+                unit = dn;
             }
         } else if let Some(dn) = text_of(coding, &["DISPLAY-NAME"]) {
             unit = dn;
@@ -618,7 +830,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
     // Signal ID -> (name, CODING-REF, comment).
     let mut signal_defs: HashMap<String, (String, String, String)> = HashMap::new();
-    for sig in &signal_nodes {
+    for sig in signal_nodes {
         let Some(id) = sig.attribute("ID") else {
             continue;
         };
@@ -629,8 +841,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 2. PDUs.
-    let mut pdu_nodes = Vec::new();
-    collect(&root, "PDU", &mut pdu_nodes);
+    let pdu_nodes = index.nodes("PDU");
 
     struct PduRaw {
         name: String,
@@ -641,7 +852,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     let mut pdu_raws: Vec<(String, PduRaw)> = Vec::new();
-    for pdu in &pdu_nodes {
+    for pdu in pdu_nodes {
         let Some(id) = pdu.attribute("ID") else {
             continue;
         };
@@ -670,8 +881,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 3. Frames.
-    let mut frame_nodes = Vec::new();
-    collect(&root, "FRAME", &mut frame_nodes);
+    let frame_nodes = index.nodes("FRAME");
 
     struct FrameRaw {
         name: String,
@@ -683,7 +893,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     let mut frame_raws: Vec<(String, FrameRaw)> = Vec::new();
-    for frame in &frame_nodes {
+    for frame in frame_nodes {
         let Some(id) = frame.attribute("ID") else {
             continue;
         };
@@ -714,8 +924,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     //    A frame appearing on both channels -> Both.
     let mut triggerings: HashMap<String, FrTriggering> = HashMap::new();
 
-    let mut channel_nodes = Vec::new();
-    collect(&root, "CHANNEL", &mut channel_nodes);
+    let channel_nodes = index.nodes("CHANNEL");
 
     for (ch_idx, channel) in channel_nodes.iter().enumerate() {
         let ch = classify_channel(channel, ch_idx, channel_nodes.len());
@@ -760,17 +969,17 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 5. ECUs: fx:ECU first, top-level CONTROLLER as the fallback.
-    let mut ecu_nodes = Vec::new();
-    collect(&root, "ECU", &mut ecu_nodes);
-    if ecu_nodes.is_empty() {
-        collect(&root, "CONTROLLER", &mut ecu_nodes);
-    }
+    let ecu_nodes = index.nodes("ECU");
+    let ecu_nodes = if ecu_nodes.is_empty() {
+        index.nodes("CONTROLLER")
+    } else {
+        ecu_nodes
+    };
     let mut ecus: Vec<String> = ecu_nodes.iter().map(short_name).collect();
     ecus.retain(|n| !n.is_empty() && n != "Unnamed");
 
     // 6. Cluster parameters.
-    let mut cluster_nodes = Vec::new();
-    collect(&root, "CLUSTER", &mut cluster_nodes);
+    let cluster_nodes = index.nodes("CLUSTER");
     let mut params = default_cluster_params();
     if let Some(cluster_node) = cluster_nodes.first() {
         params.name = short_name(cluster_node);
@@ -847,7 +1056,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     // element, in Vector exports: fall back to the first occurrence in
     // the whole document.
     if params.p_samples_per_microtick == 0
-        && let Some(v) = text_of(&root, &["SAMPLES-PER-MICROTICK"]).and_then(|t| parse_u32(&t))
+        && let Some(v) = index.text("SAMPLES-PER-MICROTICK").and_then(|t| parse_u32(&t))
     {
         params.p_samples_per_microtick = v;
     }
@@ -911,11 +1120,18 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         });
     }
 
+    // Reference resolution for frames: the PDU list by id, first wins -- the
+    // same rule the linear `find` over `pdu_raws` applied per mapping.
+    let mut pdu_by_id: HashMap<&str, &PduRaw> = HashMap::new();
+    for (id, raw) in &pdu_raws {
+        pdu_by_id.entry(id.as_str()).or_insert(raw);
+    }
+
     let mut frames: Vec<FrFrameDb> = Vec::new();
     for (frame_id, raw) in &frame_raws {
         let mut pdus_in_frame = Vec::new();
         for (pdu_ref, start) in &raw.pdu_mappings {
-            let Some((_, pdu_raw)) = pdu_raws.iter().find(|(id, _)| id == pdu_ref) else {
+            let Some(pdu_raw) = pdu_by_id.get(pdu_ref.as_str()).copied() else {
                 continue;
             };
             pdus_in_frame.push((pdu_raw.name.clone(), *start));
@@ -930,12 +1146,7 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         });
     }
 
-    Ok(FrDb {
-        params,
-        ecus,
-        pdus,
-        frames,
-    })
+    Ok(FrDb::assemble(params, ecus, pdus, frames))
 }
 
 /// The extra vxlapi-oriented cluster fields, shared by both parsers.
@@ -1059,39 +1270,164 @@ fn default_cluster_params() -> FrClusterParams {
 // AUTOSAR ARXML (R4.x)
 // ----------------------------------------------------------------------
 
+/// A COMPU-METHOD's linear scaling and (for TEXTTABLE-style methods) the
+/// enumeration labels -- the physical-value half of an ARXML I-SIGNAL, which
+/// the FIBEX path reads from CODING but ARXML keeps in a separate, referenced
+/// COMPU-METHOD element.
+struct CompuMethod {
+    factor: f64,
+    offset: f64,
+    unit: String,
+    value_descriptions: Vec<(i64, String)>,
+}
+
+fn parse_compu_method(
+    node: &roxmltree::Node,
+    unit_display: &HashMap<String, String>,
+) -> CompuMethod {
+    let mut cm = CompuMethod {
+        factor: 1.0,
+        offset: 0.0,
+        unit: String::new(),
+        value_descriptions: Vec::new(),
+    };
+    // COMPU-RATIONAL-COEFFS numerator = [offset, factor], denominator = [1].
+    let mut coeffs = Vec::new();
+    collect(node, "COMPU-RATIONAL-COEFFS", &mut coeffs);
+    if let Some(coeff) = coeffs.first() {
+        let mut vs = Vec::new();
+        collect(coeff, "V", &mut vs);
+        let values: Vec<f64> = vs.iter().filter_map(|n| n.text().and_then(parse_f64)).collect();
+        if values.len() >= 2 {
+            cm.offset = values[0];
+            cm.factor = values[1];
+        } else if values.len() == 1 {
+            cm.factor = values[0];
+        }
+    }
+    // Enumeration: a COMPU-SCALE carrying a COMPU-CONST/VT, keyed by its
+    // internal LOWER-LIMIT. Linear scales (no COMPU-CONST) are skipped.
+    let mut scales = Vec::new();
+    collect(node, "COMPU-SCALE", &mut scales);
+    for sc in &scales {
+        let mut consts = Vec::new();
+        collect(sc, "COMPU-CONST", &mut consts);
+        if let Some(cc) = consts.first()
+            && let Some(vt) = text_of(cc, &["VT"])
+        {
+            let key = text_of(sc, &["LOWER-LIMIT"])
+                .and_then(|t| parse_f64(&t))
+                .map(|f| f as i64)
+                .unwrap_or(0);
+            cm.value_descriptions.push((key, vt));
+        }
+    }
+    // Unit: UNIT-REF resolved against the document's UNIT display names.
+    if let Some(uref) = text_of(node, &["UNIT-REF"])
+        && let Some(dn) = unit_display.get(ref_short_name(&uref))
+    {
+        cm.unit = dn.clone();
+    }
+    cm
+}
+
 pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     let root = doc.root_element();
+    let index = DocIndex::build(&root);
 
     // 1. I-SIGNAL / SYSTEM-SIGNAL definitions.
-    let mut signal_nodes = Vec::new();
+    let mut signal_nodes: Vec<roxmltree::Node> = Vec::new();
     for tag in ["I-SIGNAL", "SYSTEM-SIGNAL"] {
-        collect(&root, tag, &mut signal_nodes);
+        signal_nodes.extend_from_slice(index.nodes(tag));
+    }
+
+    // COMPU-METHODs carry each signal's physical scaling and enum labels; an
+    // I-SIGNAL references one by name. The FIBEX path folds these into CODING;
+    // ARXML keeps them separate, so resolve them here.
+    //
+    // UNIT display names are resolved once per document: each COMPU-METHOD used
+    // to re-walk the whole tree for its own UNIT reference, which is
+    // O(COMPU-METHODs x document).
+    let mut unit_display: HashMap<String, String> = HashMap::new();
+    for u in index.nodes("UNIT") {
+        if let Some(dn) = text_of(u, &["DISPLAY-NAME"]) {
+            unit_display.entry(short_name(u)).or_insert(dn);
+        }
+    }
+    let mut compu_methods: HashMap<String, CompuMethod> = HashMap::new();
+    for cm in index.nodes("COMPU-METHOD") {
+        compu_methods.insert(short_name(cm), parse_compu_method(cm, &unit_display));
     }
 
     struct SignalDef {
         length_bits: u32,
         signed: bool,
         comment: String,
+        factor: f64,
+        offset: f64,
+        unit: String,
+        value_descriptions: Vec<(i64, String)>,
     }
 
     let mut signal_defs: HashMap<String, SignalDef> = HashMap::new();
     for sig in &signal_nodes {
         let name = short_name(sig);
-        let length_bits = text_of(sig, &["LENGTH"])
-            .and_then(|t| parse_u32(&t))
-            .unwrap_or(1);
+        // `Option`: only an explicit <LENGTH> is a real bit width. A
+        // SYSTEM-SIGNAL shares its I-SIGNAL's SHORT-NAME but carries no
+        // LENGTH, so a plain default would clobber the I-SIGNAL's width.
+        let length_bits = text_of(sig, &["LENGTH"]).and_then(|t| parse_u32(&t));
         let signed = is_signed_text(text_of(
             sig,
             &["SIGN-CONVENTION", "I-SIGNAL-TYPE", "NETWORK-REPRESENTATION-PROPS"],
         ));
         let comment = text_of(sig, &["L-2", "DESC"]).unwrap_or_default();
-        signal_defs.insert(name, SignalDef { length_bits, signed, comment });
+        let compu = text_of(sig, &["COMPU-METHOD-REF"])
+            .map(|r| ref_short_name(&r).to_string())
+            .and_then(|n| compu_methods.get(&n));
+        match signal_defs.get_mut(&name) {
+            Some(existing) => {
+                if let Some(l) = length_bits {
+                    existing.length_bits = l;
+                }
+                if existing.comment.is_empty() {
+                    existing.comment = comment;
+                }
+                // Only a node that references a COMPU-METHOD supplies scaling;
+                // a SYSTEM-SIGNAL (none) must not reset the I-SIGNAL's.
+                if let Some(cm) = compu {
+                    existing.factor = cm.factor;
+                    existing.offset = cm.offset;
+                    if existing.unit.is_empty() {
+                        existing.unit = cm.unit.clone();
+                    }
+                    if existing.value_descriptions.is_empty() {
+                        existing.value_descriptions = cm.value_descriptions.clone();
+                    }
+                }
+            }
+            None => {
+                signal_defs.insert(
+                    name,
+                    SignalDef {
+                        length_bits: length_bits.unwrap_or(1),
+                        signed,
+                        comment,
+                        factor: compu.map(|c| c.factor).unwrap_or(1.0),
+                        offset: compu.map(|c| c.offset).unwrap_or(0.0),
+                        unit: compu.map(|c| c.unit.clone()).unwrap_or_default(),
+                        value_descriptions: compu
+                            .map(|c| c.value_descriptions.clone())
+                            .unwrap_or_default(),
+                    },
+                );
+            }
+        }
     }
 
     // 2. PDUs: I-SIGNAL-I-PDU / FLEXRAY-I-PDU.
-    let mut pdu_nodes = Vec::new();
+    let mut pdu_nodes: Vec<roxmltree::Node> = Vec::new();
     for tag in ["I-SIGNAL-I-PDU", "FLEXRAY-I-PDU"] {
-        collect(&root, tag, &mut pdu_nodes);
+        pdu_nodes.extend_from_slice(index.nodes(tag));
     }
 
     struct PduMappingRaw {
@@ -1166,8 +1502,7 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 3. Frames.
-    let mut frame_nodes = Vec::new();
-    collect(&root, "FLEXRAY-FRAME", &mut frame_nodes);
+    let frame_nodes = index.nodes("FLEXRAY-FRAME");
 
     struct FrameRaw {
         name: String,
@@ -1178,7 +1513,7 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     let mut frames_by_name: HashMap<String, FrameRaw> = HashMap::new();
-    for frame in &frame_nodes {
+    for frame in frame_nodes {
         let name = short_name(frame);
         let length = text_of(frame, &["FRAME-LENGTH"])
             .and_then(|t| parse_u32(&t))
@@ -1214,8 +1549,7 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 4. Frame triggerings per physical channel.
-    let mut channel_nodes = Vec::new();
-    collect(&root, "FLEXRAY-PHYSICAL-CHANNEL", &mut channel_nodes);
+    let channel_nodes = index.nodes("FLEXRAY-PHYSICAL-CHANNEL");
 
     let mut triggerings: HashMap<String, FrTriggering> = HashMap::new();
     for (ch_idx, channel) in channel_nodes.iter().enumerate() {
@@ -1262,8 +1596,7 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 5. Cluster parameters.
-    let mut cluster_nodes = Vec::new();
-    collect(&root, "FLEXRAY-CLUSTER", &mut cluster_nodes);
+    let cluster_nodes = index.nodes("FLEXRAY-CLUSTER");
     let mut params = default_cluster_params();
     if let Some(cluster_node) = cluster_nodes.first() {
         params.name = short_name(cluster_node);
@@ -1330,14 +1663,13 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
     // Same document-level fallback as the FIBEX path.
     if params.p_samples_per_microtick == 0
-        && let Some(v) = text_of(&root, &["SAMPLES-PER-MICROTICK"]).and_then(|t| parse_u32(&t))
+        && let Some(v) = index.text("SAMPLES-PER-MICROTICK").and_then(|t| parse_u32(&t))
     {
         params.p_samples_per_microtick = v;
     }
 
     // 6. ECUs.
-    let mut ecu_nodes = Vec::new();
-    collect(&root, "ECU-INSTANCE", &mut ecu_nodes);
+    let ecu_nodes = index.nodes("ECU-INSTANCE");
     let mut ecus: Vec<String> = ecu_nodes.iter().map(short_name).collect();
     ecus.retain(|n| !n.is_empty() && n != "Unnamed");
 
@@ -1356,13 +1688,15 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
                 length_bits: def.map(|d| d.length_bits).unwrap_or(m.length_bits.max(1)),
                 big_endian: m.big_endian,
                 signed: def.map(|d| d.signed).unwrap_or(false),
-                factor: 1.0,
-                offset: 0.0,
+                factor: def.map(|d| d.factor).unwrap_or(1.0),
+                offset: def.map(|d| d.offset).unwrap_or(0.0),
                 min: 0.0,
                 max: 0.0,
-                unit: String::new(),
+                unit: def.map(|d| d.unit.clone()).unwrap_or_default(),
                 comment: def.map(|d| d.comment.clone()).unwrap_or_default(),
-                value_descriptions: Vec::new(),
+                value_descriptions: def
+                    .map(|d| d.value_descriptions.clone())
+                    .unwrap_or_default(),
             });
         }
         pdus.push(FrPdu {
@@ -1386,21 +1720,16 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         });
     }
 
-    let mut db = FrDb {
-        params,
-        ecus,
-        pdus,
-        frames,
-    };
-    dedup_frame_names(&mut db);
-    Ok(db)
+    dedup_frame_names(&mut frames);
+    // Index after the dedup: the tables hold positions in `frames`.
+    Ok(FrDb::assemble(params, ecus, pdus, frames))
 }
 
 /// Keeps the first frame of each name; duplicates only confuse the
 /// display-side lookups.
-fn dedup_frame_names(db: &mut FrDb) {
+fn dedup_frame_names(frames: &mut Vec<FrFrameDb>) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    db.frames.retain(|f| seen.insert(f.name.clone()));
+    frames.retain(|f| seen.insert(f.name.clone()));
 }
 
 #[cfg(test)]
@@ -1441,6 +1770,60 @@ mod tests {
         assert!(
             db.pdus.iter().any(|p| !p.signals.is_empty()),
             "signal layouts came along"
+        );
+    }
+
+    /// Two ARXML parsing regressions that made every FlexRay signal read 0:
+    /// (1) a SYSTEM-SIGNAL sharing an I-SIGNAL's SHORT-NAME clobbered its
+    /// bit width back to the default 1, (2) the frame's PDU START-POSITION
+    /// is a *bit* offset relative to the frame head while the logged payload
+    /// begins at the first PDU, so the base must be subtracted, and (3) the
+    /// ARXML path never read the COMPU-METHOD scale, so every physical value
+    /// came out as its raw integer.
+    #[test]
+    fn arxml_keeps_signal_widths_and_pdu_bit_offsets() {
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
+            return;
+        };
+        let db = FrDb::parse(&text).unwrap();
+        // (1) CarSpeed is a 16-bit I-SIGNAL; the SYSTEM-SIGNAL merge must
+        // not shrink it to 1. (3) Its COMPU-METHOD scales by 0.5.
+        let car = db
+            .pdus
+            .iter()
+            .flat_map(|p| p.signals.iter())
+            .find(|s| s.name == "CarSpeed")
+            .expect("CarSpeed signal");
+        assert_eq!(car.length_bits, 16, "I-SIGNAL LENGTH survives the merge");
+        assert!((car.factor - 0.5).abs() < 1e-9, "COMPU-METHOD factor parsed");
+        // (2)+(3): a payload whose CarSpeed bits read 236 must decode to 118
+        // at the frame's first PDU (base 7 subtracted).
+        let f13 = db.frames.iter().find(|f| f.name == "Frame_13_0_2").unwrap();
+        let cs = db
+            .decode_signals(f13, &[0x00, 0xEC, 0x00, 0x00, 0x00, 0x00])
+            .into_iter()
+            .find(|d| d.name == "CarSpeed")
+            .expect("CarSpeed decoded");
+        assert_eq!(cs.raw, 236, "CarSpeed raw at the corrected bit base");
+        assert_eq!(cs.phys, 118.0, "CarSpeed physical = raw * factor");
+        // (2) EngineData sits at bit 71 of Frame_25_0_2; its signals must
+        // decode rather than be skipped for "exceeding" the payload.
+        let frame = db
+            .frames
+            .iter()
+            .find(|f| f.name == "Frame_25_0_2")
+            .expect("Frame_25_0_2");
+        assert!(
+            frame.pdus.iter().any(|(n, b)| n == "EngineData" && *b == 71),
+            "EngineData placed at bit 71: {:?}",
+            frame.pdus
+        );
+        let decoded = db.decode_signals(frame, &[0xFF; 26]);
+        let names: Vec<String> = decoded.iter().map(|d| d.name.clone()).collect();
+        assert!(
+            decoded.iter().any(|d| d.name == "EngSpeed" && d.raw != 0),
+            "EngineData signals decode, not skipped: {names:?}"
         );
     }
 

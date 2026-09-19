@@ -45,6 +45,8 @@ impl MessageAgg {
 /// payload is the last frame the slot carried.
 #[derive(Clone, Debug, Default)]
 pub struct FrSlotAgg {
+    /// The bus this slot belongs to -- slot numbers repeat across clusters.
+    pub bus: u8,
     pub slot: u16,
     /// Reception channel: 0 = A, 1 = B, 2 = unknown.
     pub ab: u8,
