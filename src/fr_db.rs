@@ -270,29 +270,43 @@ impl FrDb {
     }
 
     /// The frame scheduled in `slot` and active on communication cycle
-    /// `cycle`, preferring one whose channel matches `ab` (0 = A, 1 = B,
-    /// 2 = unknown). Several frames may share a slot across repetitions;
-    /// the first whose schedule covers the cycle wins.
+    /// `cycle`, *preferring* one whose channel declaration matches `ab`
+    /// (0 = A, 1 = B, 2 = unknown). Several frames may share a slot across
+    /// repetitions; the first whose schedule covers the cycle wins.
+    ///
+    /// The channel is a preference, not a requirement, for two reasons. What
+    /// the cluster schedule actually fixes is `(slot, cycle)`; and a live frame
+    /// arrives with `ab` unknown, so requiring the declaration would resolve a
+    /// frame read off a port but not the same frame read out of a log -- with a
+    /// description whose channel attribute disagrees with reality (a stale
+    /// export, a frame logged on both channels) leaving the replay to decode
+    /// nothing. The check still breaks the tie between frames that share a slot
+    /// and cycle and differ only by channel.
     pub fn frame_at(&self, slot: u16, cycle: u8, ab: u8) -> Option<&FrFrameDb> {
         let want = match ab {
             0 => Some(FrChannel::A),
             1 => Some(FrChannel::B),
             _ => None,
         };
-        let fits = |f: &FrFrameDb| {
-            f.triggering.slot_id == slot as u32
-                && f.triggering.is_active_at_cycle(cycle as u32)
-                && match want {
-                    Some(w) => f.triggering.channel.covers(w),
-                    None => true,
-                }
+        let cands = self.slot_ix.get(&(slot as u32));
+        let scheduled =
+            |f: &FrFrameDb| f.triggering.slot_id == u32::from(slot)
+                && f.triggering.is_active_at_cycle(u32::from(cycle));
+        let lookup = |prefer_channel: bool| {
+            cands
+                .into_iter()
+                .flatten()
+                .filter_map(|&i| self.frames.get(i))
+                .find(|f| {
+                    scheduled(f)
+                        && (!prefer_channel
+                            || match want {
+                                Some(w) => f.triggering.channel.covers(w),
+                                None => true,
+                            })
+                })
         };
-        self.slot_ix
-            .get(&(slot as u32))
-            .into_iter()
-            .flatten()
-            .filter_map(|&i| self.frames.get(i))
-            .find(|f| fits(f))
+        lookup(true).or_else(|| lookup(false))
     }
 
     /// Decodes a frame payload into `(signal, text)` pairs: physical

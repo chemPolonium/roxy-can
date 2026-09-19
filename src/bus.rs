@@ -4114,9 +4114,14 @@ mod tests {
     }
 
     /// A one-PDU, one-frame description whose single 8-bit signal at slot
-    /// `slot` reads the payload's first byte.
-    fn fr_db_one_signal(slot: u16, sig_name: &str, unit: &str) -> std::sync::Arc<crate::fr_db::FrDb> {
-        use crate::fr_db::{FrChannel, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+    /// `slot` reads the payload's first byte, scheduled on `channel`.
+    fn fr_db_one_signal_on(
+        slot: u16,
+        sig_name: &str,
+        unit: &str,
+        channel: crate::fr_db::FrChannel,
+    ) -> std::sync::Arc<crate::fr_db::FrDb> {
+        use crate::fr_db::{FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
         let sig = FrSignal {
             name: sig_name.into(),
             start_bit: 0,
@@ -4143,8 +4148,8 @@ mod tests {
             length: 8,
             payload_preamble: false,
             triggering: FrTriggering {
-                channel: FrChannel::Both,
-                slot_id: u32::from(slot),
+                channel,
+                slot_id: slot as u32,
                 base_cycle: 0,
                 cycle_repetition: 1,
                 startup: false,
@@ -4158,6 +4163,108 @@ mod tests {
             vec![pdu],
             vec![frame],
         ))
+    }
+
+    fn fr_db_one_signal(slot: u16, sig_name: &str, unit: &str) -> std::sync::Arc<crate::fr_db::FrDb> {
+        fr_db_one_signal_on(slot, sig_name, unit, crate::fr_db::FrChannel::Both)
+    }
+
+    /// A description that schedules the slot on channel A still decodes a row
+    /// the log says arrived on B. `(slot, cycle)` is what the cluster schedule
+    /// fixes, and the same frame off a live port -- whose channel is not known
+    /// at all -- has always decoded, so requiring the declaration made a
+    /// replay stricter than the watch and left a disagreeing description
+    /// showing nothing.
+    #[test]
+    fn a_channel_disagreement_still_resolves_the_scheduled_frame() {
+        let mut core = BusCore::new(Vec::new());
+        core.fr_dbs.insert(
+            0,
+            fr_db_one_signal_on(12, "Speed", "km/h", crate::fr_db::FrChannel::A),
+        );
+        let key = crate::app::fr_signal_key(0, 12, "Speed");
+        core.subscribe_signal(key.clone());
+
+        let mut row = fr_row(1_000, 12);
+        row.ab = 1; // logged on B, declared on A
+        row.cycle = 0;
+        row.payload = vec![80, 0, 0, 0, 0, 0, 0, 0];
+        core.ingest_fr_row(row);
+
+        assert_eq!(
+            core.subs.get(&key).expect("sub").latest,
+            80.0,
+            "the frame the schedule puts in that slot at that cycle decodes"
+        );
+    }
+
+    /// The channel is a preference, not a fallback: when two frames really do
+    /// share a slot and cycle and differ by channel, the matching one wins and
+    /// the other is only reached when nothing declares this channel.
+    #[test]
+    fn the_declared_channel_breaks_a_tie_between_frames_in_one_slot() {
+        use crate::fr_db::{FrChannel, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+        let sig = |name: &str| FrSignal {
+            name: name.into(),
+            start_bit: 0,
+            length_bits: 8,
+            big_endian: false,
+            signed: false,
+            factor: 1.0,
+            offset: 0.0,
+            min: 0.0,
+            max: 255.0,
+            unit: String::new(),
+            comment: String::new(),
+            value_descriptions: vec![],
+        };
+        let frame = |name: &str, channel: FrChannel| FrFrameDb {
+            name: name.into(),
+            length: 8,
+            payload_preamble: false,
+            triggering: FrTriggering {
+                channel,
+                slot_id: 12,
+                base_cycle: 0,
+                cycle_repetition: 1,
+                startup: false,
+            },
+            pdus: vec![(format!("P{name}"), 0u32)],
+            comment: String::new(),
+        };
+        let pdus = vec![
+            FrPdu {
+                name: "PA".into(),
+                length: 8,
+                dynamic: false,
+                comment: String::new(),
+                signals: vec![sig("OnA")],
+            },
+            FrPdu {
+                name: "PB".into(),
+                length: 8,
+                dynamic: false,
+                comment: String::new(),
+                signals: vec![sig("OnB")],
+            },
+        ];
+        let db = FrDb::assemble(
+            Default::default(),
+            vec![],
+            pdus,
+            vec![frame("A", FrChannel::A), frame("B", FrChannel::B)],
+        );
+        assert_eq!(db.frame_at(12, 0, 0).map(|f| f.name.as_str()), Some("A"));
+        assert_eq!(db.frame_at(12, 0, 1).map(|f| f.name.as_str()), Some("B"));
+        // An unknown channel takes the first scheduled frame either way, and a
+        // channel nothing declares falls back rather than resolving nothing.
+        assert!(db.frame_at(12, 0, 2).is_some());
+        let only_a = fr_db_one_signal_on(9, "S", "", FrChannel::A);
+        assert_eq!(
+            only_a.frame_at(9, 0, 1).map(|f| f.name.as_str()),
+            Some("F9"),
+            "a row logged on B still finds the A-declared frame in its slot"
+        );
     }
 
     /// With a FlexRay description database loaded, an arriving FR frame
