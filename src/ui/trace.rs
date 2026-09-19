@@ -381,12 +381,16 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("{}.{}", fr.slot, fr.cycle));
                 hovered |= ui.is_item_hovered();
                 ui.table_next_column();
+                // The description database wins; a name carried by the
+                // log itself (CANoe ASC) is the fallback.
                 match app
                     .fr_db
                     .as_ref()
                     .and_then(|db| db.frame_at(fr.slot, fr.cycle, fr.ab))
+                    .map(|f| f.name.as_str())
+                    .or(fr.name.as_deref())
                 {
-                    Some(frame) => ui.text(&frame.name),
+                    Some(name) => ui.text(name),
                     None => ui.text("-"),
                 }
                 hovered |= ui.is_item_hovered();

@@ -45,31 +45,47 @@ impl ReplaySource {
     }
 
     fn refresh_next(&mut self) {
-        self.next_t = self.stream.peek_t();
+        // The replay clock ends when both frame kinds run out; a pure
+        // FlexRay log has no CAN timestamps at all.
+        let can = self.stream.peek_t();
+        let fr = self.stream.peek_fr_t();
+        self.next_t = match (can, fr) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
     }
 }
 
 impl FrameSource for ReplaySource {
     fn poll(&mut self, now_us: u64, out: &mut Vec<CanFrame>) {
-        let prev = self.last.unwrap_or(now_us);
-        self.pos_us += now_us.saturating_sub(prev) as f64 * self.speed;
+        // "As fast as possible" (infinite speed): the playhead jumps to
+        // the end of the log at once. A plain `delta * inf` would turn
+        // the first poll's zero delta into NaN, so the jump is explicit.
+        if self.speed.is_infinite() {
+            self.pos_us = f64::INFINITY;
+        } else {
+            let prev = self.last.unwrap_or(now_us);
+            self.pos_us += now_us.saturating_sub(prev) as f64 * self.speed;
+        }
         self.last = Some(now_us);
         let target = self.pos_us as u64;
         while out.len() < MAX_POLL_FRAMES {
             match self.stream.peek_t() {
                 Some(t) if t <= target => match self.stream.next_frame() {
                     Some(f) => out.push(f),
-                    None => {
-                        self.done = true;
-                        break;
-                    }
+                    // peek_t promised a frame; treat a miss as EOF but let
+                    // the FlexRay side below decide `done`.
+                    None => break,
                 },
                 Some(_) => break,
-                None => {
-                    self.done = true;
-                    break;
-                }
+                None => break, // CAN EOF; FR rows may still be due
             }
+        }
+        // The done latch fires only when neither stream side has
+        // anything left, so a pure FlexRay replay runs its full length.
+        // The rows themselves drain through `poll_fr`.
+        if self.stream.peek_t().is_none() && self.stream.peek_fr_t().is_none() {
+            self.done = true;
         }
         self.refresh_next();
     }
@@ -145,12 +161,15 @@ impl FrameSource for ReplaySource {
         complete
     }
 
-    fn duration(&self) -> Option<u64> {
-        self.stream.duration_us()
+    fn poll_fr(&mut self, _now_us: u64, out: &mut Vec<crate::trace::FrRow>) {
+        // The playhead is the same one the CAN loop paced against, so
+        // FR rows stream in log order interleaved with the CAN frames.
+        let target = self.pos_us as u64;
+        self.stream.poll_fr_rows(target, out);
     }
 
-    fn poll_fr(&mut self, _now_us: u64, out: &mut Vec<crate::trace::FrRow>) {
-        self.stream.poll_fr_rows(out);
+    fn duration(&self) -> Option<u64> {
+        self.stream.duration_us()
     }
 
     fn next_deadline(&self, now_us: u64) -> Option<u64> {

@@ -404,10 +404,14 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_trace_window();
-    app.fr_db = Some(std::sync::Arc::new(
-        crate::fr_db::FrDb::parse(include_str!("../assets/powertrain.fibex"))
-            .expect("fixture parses"),
-    ));
+    // The real description, when present; the draw path is the same for
+    // any database, and for none.
+    if let Ok(bytes) = std::fs::read("assets/arxml/PowerTrain.arxml") {
+        let text = crate::dbc::text_from_bytes(bytes);
+        if let Ok(db) = crate::fr_db::FrDb::parse(&text) {
+            app.fr_db = Some(std::sync::Arc::new(db));
+        }
+    }
     app.settle();
     app.text_fresh = false;
     app.trace_windows[0].rows = vec![
@@ -433,6 +437,7 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             payload: vec![1, 2, 3],
             header_crc: 0xBEEF,
             flags: 0,
+            name: Some("ChassisStatus".to_string()),
         }),
         TraceRow::FrSig {
             t_us: 5_000,

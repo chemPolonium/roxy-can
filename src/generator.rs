@@ -300,29 +300,6 @@ impl App {
         });
     }
 
-    /// Offline analysis (R1): ingests the whole loaded log once so every
-    /// observer holds the full file -- no playback, no trigger actions,
-    /// no node dispatch, no recording.
-    pub fn scan_log(&mut self) {
-        let path = {
-            let p = self.log_path.trim();
-            if p.is_empty() {
-                self.snap.last_record.clone()
-            } else {
-                p.to_string()
-            }
-        };
-        if path.is_empty() {
-            self.status = "scan: no log selected".to_string();
-            return;
-        }
-        self.send(crate::bus::BusCommand::ScanLog {
-            path,
-            tol_pct: self.spec_tol_pct,
-            grace: self.spec_grace,
-        });
-    }
-
     /// Adds the generator entry unless it exists (command `AddEntry`).
     pub fn add_tx(&mut self, channel: u8, id: u32) {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });

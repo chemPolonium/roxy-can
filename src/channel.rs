@@ -307,6 +307,7 @@ impl App {
         match crate::fr_db::FrDb::parse(&text) {
             Ok(db) => {
                 self.fr_db = Some(std::sync::Arc::new(db));
+                self.fr_fibex_path = Some(path.clone());
                 self.set_fr_watch(Some(channel_index), &path);
             }
             Err(e) => self.status = format!("FlexRay 描述解析失败: {e}"),
@@ -316,6 +317,7 @@ impl App {
     /// Detaches the FlexRay watch and forgets its display database.
     pub fn detach_fr_watch(&mut self) {
         self.fr_db = None;
+        self.fr_fibex_path = None;
         self.set_fr_watch(None, "");
     }
 

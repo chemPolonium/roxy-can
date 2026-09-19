@@ -286,14 +286,17 @@ pub fn render(app: &mut App, ui: &Ui) {
             // a control that does nothing.
             if matches!(app.snap.mode, Mode::Replay) {
                 ui.same_line();
-                let labels = ["0.5x", "1x", "2x", "4x"];
+                let labels = ["0.5x", "1x", "2x", "4x", "∞"];
                 let mut pick = REPLAY_SPEEDS
                     .iter()
-                    .position(|s| (*s - app.replay_speed).abs() < 1e-9)
+                    .position(|s| *s == app.replay_speed || (*s - app.replay_speed).abs() < 1e-9)
                     .unwrap_or(1);
                 ui.set_next_item_width(64.0);
                 if ui.combo_simple_string("##speed", &mut pick, &labels) {
                     app.set_replay_speed(REPLAY_SPEEDS[pick]);
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("回放倍速：∞ = as fast as possible（不限速，观测器照常逐批刷新）");
                 }
             }
             vsep(ui);
@@ -430,18 +433,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                     app.pick_log();
                 }
                 open.end();
-                ui.same_line();
-                // Offline analysis: ingest the whole log for browsing
-                // without playing it. A rescan is refused, a replay
-                // restart resets it.
-                if ui.button("Scan") {
-                    app.scan_log();
-                }
-                if ui.is_item_hovered() {
-                    ui.tooltip_text(
-                        "一次性把整份日志灌进统计 / 规格 / 曲线 / Trace——不用回放即可浏览全量结果",
-                    );
-                }
             }
         });
 }

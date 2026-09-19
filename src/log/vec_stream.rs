@@ -1,5 +1,6 @@
 use crate::can::frame::CanFrame;
 use crate::source::FrameStream;
+use crate::trace::FrRow;
 
 /// In-memory stream used by tests and by the small-ASC path in
 /// [`crate::log::open_stream`], where a full `Vec<CanFrame>` is cheaper
@@ -7,11 +8,30 @@ use crate::source::FrameStream;
 pub struct VecStream {
     frames: Vec<CanFrame>,
     idx: usize,
+    /// FlexRay rows the container carried, in file order.
+    fr_rows: Vec<FrRow>,
+    fr_idx: usize,
 }
 
 impl VecStream {
     pub fn new(frames: Vec<CanFrame>) -> Self {
-        VecStream { frames, idx: 0 }
+        VecStream {
+            frames,
+            idx: 0,
+            fr_rows: Vec::new(),
+            fr_idx: 0,
+        }
+    }
+
+    /// The small-ASC path: CAN frames plus the FlexRay rows the same
+    /// parse produced.
+    pub fn with_fr(frames: Vec<CanFrame>, fr_rows: Vec<FrRow>) -> Self {
+        VecStream {
+            frames,
+            idx: 0,
+            fr_rows,
+            fr_idx: 0,
+        }
     }
 }
 
@@ -26,16 +46,34 @@ impl FrameStream for VecStream {
         Some(f)
     }
 
+    fn peek_fr_t(&mut self) -> Option<u64> {
+        self.fr_rows.get(self.fr_idx).map(|r| r.t_us)
+    }
+
+    fn poll_fr_rows(&mut self, upto_t_us: u64, out: &mut Vec<FrRow>) {
+        while let Some(r) = self.fr_rows.get(self.fr_idx) {
+            if r.t_us > upto_t_us {
+                break;
+            }
+            out.push(self.fr_rows[self.fr_idx].clone());
+            self.fr_idx += 1;
+        }
+    }
+
     fn seek_to_us(&mut self, target: u64) -> Option<u64> {
         // Log timestamps ascend, so the first frame with t >= target is a
         // plain lower bound over the whole buffer -- no checkpoint needed.
         let hit = self.frames.partition_point(|f| f.t_us < target);
         self.idx = hit;
+        self.fr_idx = self.fr_rows.partition_point(|r| r.t_us < target);
         self.frames.get(hit).map(|f| f.t_us)
     }
 
     fn duration_us(&self) -> Option<u64> {
-        self.frames.last().map(|f| f.t_us)
+        self.frames
+            .last()
+            .map(|f| f.t_us)
+            .or_else(|| self.fr_rows.last().map(|r| r.t_us))
     }
 
     fn describe(&self) -> String {

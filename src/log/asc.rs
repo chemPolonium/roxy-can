@@ -113,15 +113,34 @@ impl AscWriter {
 /// backward-compatibility, the older type-token-less layout this tool emitted
 /// before the Vector rewrite. Remote and error frames are recognised and
 /// skipped cleanly.
+/// Parses an ASC log's CAN frames. The FlexRay-aware variant is
+/// [`parse_asc_full`]; this wrapper keeps the plain-CAN entry point the
+/// tests use. Non-test builds go through [`parse_asc_full`].
+#[cfg(test)]
 pub fn parse_asc(content: &str) -> Vec<CanFrame> {
+    parse_asc_full(content).0
+}
+
+/// [`parse_asc`](Self::parse_asc) plus the FlexRay receive rows the same
+/// file carries (`Fr RMSG` lines, CANoe's FlexRay logging shape).
+pub fn parse_asc_full(content: &str) -> (Vec<CanFrame>, Vec<crate::trace::FrRow>) {
     let mut frames = Vec::new();
+    let mut fr = Vec::new();
     let mut base: u32 = 16;
     for raw in content.lines() {
-        if let Some(f) = parse_asc_line(raw, &mut base) {
-            frames.push(f);
+        match parse_asc_row(raw, &mut base) {
+            Some(AscRow::Can(f)) => frames.push(f),
+            Some(AscRow::Fr(r)) => fr.push(r),
+            None => {}
         }
     }
-    frames
+    (frames, fr)
+}
+
+/// One parsed ASC line: a CAN frame or a FlexRay receive row.
+enum AscRow {
+    Can(CanFrame),
+    Fr(crate::trace::FrRow),
 }
 
 /// Parses one ASC line, mutating `base` when the header `base hex|dec`
@@ -129,6 +148,13 @@ pub fn parse_asc(content: &str) -> Vec<CanFrame> {
 /// trailing fields. Shared with [`AscStream`] so the mmap path and the
 /// string path can never drift on line semantics.
 fn parse_asc_line(raw: &str, base: &mut u32) -> Option<CanFrame> {
+    match parse_asc_row(raw, base) {
+        Some(AscRow::Can(f)) => Some(f),
+        _ => None,
+    }
+}
+
+fn parse_asc_row(raw: &str, base: &mut u32) -> Option<AscRow> {
     let line = raw.trim();
     if line.is_empty() {
         return None;
@@ -150,10 +176,79 @@ fn parse_asc_line(raw: &str, base: &mut u32) -> Option<CanFrame> {
     };
     let t_us = (t * 1e6).round() as u64;
     if toks[1].eq_ignore_ascii_case("CANFD") {
-        parse_fd(t_us, &toks, *base)
+        parse_fd(t_us, &toks, *base).map(AscRow::Can)
+    } else if toks[1].eq_ignore_ascii_case("Fr") && toks[2].eq_ignore_ascii_case("RMSG") {
+        // Receive-message lines only: `Fr PDU` rows re-describe the same
+        // frames per-PDU, and `Fr SE`/`Fr SCE` are status events.
+        parse_fr_rmsg(t_us, &toks, *base).map(AscRow::Fr)
     } else {
-        parse_classic(t_us, &toks, *base)
+        parse_classic(t_us, &toks, *base).map(AscRow::Can)
     }
+}
+
+/// CANoe's FlexRay receive line:
+/// `<t> Fr RMSG <..> <chA> <chB> <slot> <cycle> <dir> <nums..> [name]
+///  <byteCount> <dataCount> <data bytes...>`
+/// The channel flags are separate 0/1 tokens for channel A and B; the
+/// frame name (when the logging config knows one) sits between the
+/// numeric register dump and the two byte counts. Data bytes use the
+/// file's declared base.
+fn parse_fr_rmsg(t_us: u64, toks: &[&str], base: u32) -> Option<crate::trace::FrRow> {
+    let ch_a = toks.get(5)?.parse::<u8>().ok()?;
+    let ch_b = toks.get(6)?.parse::<u8>().ok()?;
+    let slot = toks.get(7)?.parse::<u16>().ok()?;
+    let cycle = toks.get(8)?.parse::<u8>().ok()?;
+    // The direction token ends the fixed header; everything between it
+    // and the first non-numeric token is a register dump whose layout
+    // varies by CANoe version, so it is skipped wholesale.
+    let dir_pos = (9..toks.len()).find(|&i| {
+        matches!(
+            toks[i].to_ascii_lowercase().as_str(),
+            "tx" | "rx" | "txrq" | "tx req"
+        )
+    })?;
+    let mut i = dir_pos + 1;
+    let mut name = None;
+    while i < toks.len() {
+        match toks[i].parse::<u32>() {
+            Ok(_) => i += 1,
+            Err(_) => {
+                name = Some(toks[i].to_string());
+                i += 1;
+                break;
+            }
+        }
+    }
+    let byte_count: usize = toks.get(i)?.parse().ok()?;
+    let data_count: usize = toks.get(i + 1)?.parse().ok()?;
+    // dataCount is what actually landed in the file; a truncated capture
+    // stores fewer bytes than the frame carried.
+    let len = byte_count.min(data_count).min(254);
+    let mut payload = Vec::with_capacity(len);
+    for tok in toks.iter().skip(i + 2) {
+        if payload.len() >= len {
+            break;
+        }
+        match u8::from_str_radix(tok, base) {
+            Ok(v) => payload.push(v),
+            Err(_) => break,
+        }
+    }
+    let ab = match (ch_a > 0, ch_b > 0) {
+        (true, true) => 2u8, // both channels
+        (false, true) => 1,  // B
+        _ => 0,              // A
+    };
+    Some(crate::trace::FrRow {
+        t_us,
+        ab,
+        slot,
+        cycle,
+        payload,
+        header_crc: 0,
+        flags: 0,
+        name,
+    })
 }
 
 fn parse_id(s: &str, base: u32) -> Option<(u32, bool)> {
@@ -283,6 +378,11 @@ pub struct AscStream {
     /// name the exact line boundary to resume from.
     front_start: usize,
     eof: bool,
+    /// FlexRay receive rows encountered while hunting for CAN frames.
+    /// Delivered through [`FrameStream::poll_fr_rows`]; cleared on seek,
+    /// where rows before the new position are gone and later ones
+    /// re-appear as the cursor re-reads them.
+    fr_pending: std::collections::VecDeque<crate::trace::FrRow>,
     duration: Option<u64>,
     /// `(t_us, byte offset, radix in force there)` for a handful of positions
     /// we have already walked past, ascending by `t_us`. Recording happens as
@@ -314,6 +414,7 @@ impl AscStream {
             front: None,
             front_start: 0,
             eof: false,
+            fr_pending: std::collections::VecDeque::new(),
             duration,
             checkpoints: Vec::new(),
             since_ckpt: 0,
@@ -322,6 +423,7 @@ impl AscStream {
 
     /// Reads forward until `front` holds a frame or the file is exhausted.
     /// Kept at one frame of lookahead so `peek_t` never over-consumes.
+    /// FlexRay rows met on the way queue in `fr_pending`.
     fn fill(&mut self) {
         while self.front.is_none() && !self.eof {
             let start = self.pos;
@@ -335,14 +437,19 @@ impl AscStream {
             };
             self.pos = end.saturating_add(1).min(len);
             let raw = &self.data.as_slice()[start..end];
-            let Some(frame) = Self::parse_line_bytes(raw, &mut self.base) else {
+            let Some(row) = Self::parse_line_bytes(raw, &mut self.base) else {
                 if self.pos >= len {
                     self.eof = true;
                 }
                 continue;
             };
-            self.front_start = start;
-            self.front = Some(frame);
+            match row {
+                AscRow::Can(frame) => {
+                    self.front_start = start;
+                    self.front = Some(frame);
+                }
+                AscRow::Fr(r) => self.fr_pending.push_back(r),
+            }
         }
     }
 
@@ -369,16 +476,17 @@ impl AscStream {
         self.front = None;
         self.front_start = 0;
         self.eof = false;
+        self.fr_pending.clear();
         self.since_ckpt = 0;
     }
 
-    fn parse_line_bytes(bytes: &[u8], base: &mut u32) -> Option<CanFrame> {
+    fn parse_line_bytes(bytes: &[u8], base: &mut u32) -> Option<AscRow> {
         // Non-UTF-8 bytes are rare (Vector writes ASCII), but a stray byte
         // must not abort a whole capture; drop the line and keep going.
         let Ok(s) = std::str::from_utf8(bytes) else {
             return None;
         };
-        parse_asc_line(s, base)
+        parse_asc_row(s, base)
     }
 }
 
@@ -419,6 +527,7 @@ impl FrameStream for AscStream {
                 self.front = None;
                 self.front_start = pos;
                 self.eof = false;
+                self.fr_pending.clear();
                 self.since_ckpt = 0;
             }
         }
@@ -445,6 +554,28 @@ impl FrameStream for AscStream {
         match self.duration {
             Some(d) => format!("ASC, {:.1} s", d as f64 / 1e6),
             None => "ASC".to_string(),
+        }
+    }
+
+    fn peek_fr_t(&mut self) -> Option<u64> {
+        // A FlexRay-only file never fills `front`, so keep reading here
+        // until a row queues or the file ends.
+        while self.fr_pending.is_empty() && !self.eof {
+            self.fill();
+            if self.front.is_some() {
+                break; // more CAN first; FR rows re-queue on later fills
+            }
+        }
+        self.fr_pending.front().map(|r| r.t_us)
+    }
+
+    fn poll_fr_rows(&mut self, upto_t_us: u64, out: &mut Vec<crate::trace::FrRow>) {
+        while let Some(r) = self.fr_pending.front() {
+            if r.t_us > upto_t_us {
+                break;
+            }
+            let r = self.fr_pending.pop_front().expect("checked above");
+            out.push(r);
         }
     }
 }
@@ -474,6 +605,43 @@ pub fn asc_tail_duration_us(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::log::vec_stream::VecStream;
+
+    /// The user's real CANoe recording of the FlexRay demo cluster: a
+    /// pure-FlexRay log (no CAN frames at all) whose `Fr RMSG` lines
+    /// carry slot/cycle/name and the full payload. This is the
+    /// ground-truth check for the ASC FlexRay reader.
+    #[test]
+    fn the_real_canoe_flexray_asc_parses() {
+        let Ok(text) = std::fs::read_to_string("assets/arxml/Logging.asc") else {
+            println!("assets/arxml/Logging.asc not present -- skipped");
+            return;
+        };
+        let (frames, fr) = parse_asc_full(&text);
+        assert!(
+            frames.is_empty(),
+            "the logging session carried no CAN traffic: {}",
+            frames.len()
+        );
+        assert_eq!(fr.len(), 30_600, "every Fr RMSG line becomes a row");
+
+        // The file's first receive: slot 13, cycle 0, named from the
+        // logging configuration, 26-byte payload.
+        let first = &fr[0];
+        assert_eq!(first.t_us, 549);
+        assert_eq!(first.slot, 13);
+        assert_eq!(first.cycle, 0);
+        assert_eq!(first.name.as_deref(), Some("Frame_13_0_2"));
+        assert_eq!(first.payload.len(), 26);
+        // The payload is read in the file's declared base (dec here):
+        // this row is all zeros but one byte.
+        assert_eq!(first.payload[0], 0);
+
+        // Timestamps ascend over the whole 30-second capture.
+        assert!(
+            fr.windows(2).all(|w| w[1].t_us >= w[0].t_us),
+            "log order is time order"
+        );
+    }
 
     fn classic(id: u32, bytes: &[u8]) -> CanFrame {
         let mut data = [0u8; MAX_CAN_FD_LEN];

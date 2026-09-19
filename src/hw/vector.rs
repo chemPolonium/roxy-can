@@ -1076,18 +1076,27 @@ mod tests {
         assert_eq!(cfg.baudrate, 0);
     }
 
-    /// The database → driver-config derivation: the CANoe demo cluster
-    /// (3636 macroticks × 1.375 µs = 5 ms cycle, 10 Mbit/s, sample
-    /// clock 0.0125 µs × 2 samples) must produce the exact numbers the
-    /// file declares, and the derived microtick ratio must be exact.
+    /// The database → driver-config derivation, on the demo cluster's
+    /// numbers (3636 macroticks × 1.375 µs = 5 ms cycle, 10 Mbit/s,
+    /// sample clock 0.0125 µs × 2 samples): the derived fields must come
+    /// out exact, not defaulted.
     #[test]
     fn config_from_db_derives_the_demo_cluster() {
-        let db = crate::fr_db::FrDb::parse(include_str!("../../assets/DemoFile_v3_FIBEX_3_0.xml"))
-            .expect("demo parses");
-        let cfg = config_from_db(&db.params);
+        let params = crate::fr_db::FrClusterParams {
+            speed_kbps: 10000,
+            cycle_time_ms: 5.0,
+            macrotick_duration_us: 1.375,
+            g_macro_per_cycle: Some(3636),
+            p_samples_per_microtick: 2,
+            sample_clock_period_us: 0.0125,
+            number_of_static_slots: 60,
+            payload_length_static: 21,
+            ..Default::default()
+        };
+        let cfg = config_from_db(&params);
         assert_eq!(cfg.baudrate, 10_000_000);
         assert_eq!(cfg.gd_macrotick, 1375, "1.375 µs in ns");
-        assert_eq!(cfg.g_macro_per_cycle, 3636, "from MACRO-PER-CYCLE");
+        assert_eq!(cfg.g_macro_per_cycle, 3636, "declared, not re-derived");
         assert_eq!(cfg.p_micro_per_macro_nom, 55, "1375 ns / 25 ns pdMicrotick");
         assert_eq!(cfg.pd_microtick, 25, "0.0125 µs × 2 samples = 25 ns");
         assert_eq!(cfg.g_number_of_static_slots, 60);

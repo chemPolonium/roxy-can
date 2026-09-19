@@ -39,7 +39,10 @@ pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// can never collide with a frame's own signals.
 pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
-pub const REPLAY_SPEEDS: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
+/// The replay speed ladder. The last entry is "as fast as possible":
+/// infinity makes the replay clock jump to the end immediately while the
+/// UI keeps stepping between polls, so every observer updates in chunks.
+pub const REPLAY_SPEEDS: [f64; 5] = [0.5, 1.0, 2.0, 4.0, f64::INFINITY];
 /// Cycle a new generator entry gets when its DBC declares none. A declared
 /// value always wins; this is only the invention we fall back to.
 pub(crate) const DEFAULT_TX_CYCLE_US: u64 = 100_000;
@@ -285,6 +288,9 @@ pub struct App {
     /// picked the description file: the frontend's display copy -- the
     /// core re-parses the same file for the driver configuration.
     pub fr_db: Option<std::sync::Arc<crate::fr_db::FrDb>>,
+    /// Where `fr_db` came from; saved with the project so a replay of a
+    /// FlexRay log decodes against the same description next session.
+    pub fr_fibex_path: Option<String>,
     /// The picked row in the FR channel combo.
     pub fr_pick: usize,
     /// Profile names from the project's `profiles/` directory, listed
@@ -549,6 +555,7 @@ impl App {
             fr_channels: None,
             fr_pick: 0,
             fr_db: None,
+            fr_fibex_path: None,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -880,7 +887,7 @@ impl App {
     pub fn step_replay_speed(&mut self, delta: i32) {
         let idx = REPLAY_SPEEDS
             .iter()
-            .position(|s| (*s - self.replay_speed).abs() < 1e-9)
+            .position(|s| *s == self.replay_speed || (*s - self.replay_speed).abs() < 1e-9)
             .unwrap_or(1);
         let next = (idx as i32 + delta).clamp(0, REPLAY_SPEEDS.len() as i32 - 1) as usize;
         self.set_replay_speed(REPLAY_SPEEDS[next]);
@@ -1150,7 +1157,10 @@ impl App {
                     .fr_db
                     .as_ref()
                     .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
-                let name = frame.map(|f| f.name.as_str()).unwrap_or("");
+                let name = frame
+                    .map(|f| f.name.as_str())
+                    .or(agg.name.as_deref())
+                    .unwrap_or("");
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)
                     && !agg.slot.to_string().contains(&filter)

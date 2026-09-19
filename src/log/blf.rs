@@ -306,8 +306,23 @@ impl FrameStream for BlfStream {
         self.describe.clone()
     }
 
-    fn poll_fr_rows(&mut self, out: &mut Vec<crate::trace::FrRow>) {
-        while let Some(mut r) = self.fr_pending.pop_front() {
+    fn peek_fr_t(&mut self) -> Option<u64> {
+        // Read containers until an FR row queues — but stop as soon as
+        // CAN frames are pending, so a sparse-FR log does not read the
+        // whole file into memory hunting for the next row.
+        while self.fr_pending.is_empty() && self.pending.is_empty() && self.enter_next_container()
+        {
+        }
+        let raw = self.fr_pending.front().map(|r| r.t_us);
+        raw.map(|t| self.rebase(t))
+    }
+
+    fn poll_fr_rows(&mut self, upto_t_us: u64, out: &mut Vec<crate::trace::FrRow>) {
+        while let Some(front) = self.fr_pending.front() {
+            if self.rebase(front.t_us) > upto_t_us {
+                break;
+            }
+            let mut r = self.fr_pending.pop_front().expect("checked above");
             r.t_us = self.rebase(r.t_us);
             out.push(r);
         }
@@ -469,6 +484,7 @@ fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
         payload,
         header_crc: 0,
         flags: 0,
+        name: None,
     }))
 }
 
@@ -945,6 +961,54 @@ pub(crate) mod tests {
     pub(crate) fn minimal_file() -> Vec<u8> {
         let body = can_body(0, 1, 0, 0x100, &[0xAB]);
         assemble(&obj_header_v1(OBJ_CAN_MESSAGE, ns(1_000_000), 0, &body))
+    }
+
+    /// The user's real CANoe recording of the FlexRay demo cluster: the
+    /// FR_RCVMESSAGE/EX objects must decode into ~30k rows with sane
+    /// slot/cycle/payload, and the ASC sibling of the same session
+    /// confirms the shape. This is the ground-truth check that the
+    /// object layouts (channel mask at 4, frame id at 16, counts at
+    /// 22/24, cycle at 26, payload at 44/84) match what Vector writes.
+    #[test]
+    fn the_real_canoe_flexray_blf_parses() {
+        let path = std::path::Path::new("assets/arxml/Logging.blf");
+        let Ok(mut stream) = BlfStream::open(path) else {
+            println!("assets/arxml/Logging.blf not present -- skipped");
+            return;
+        };
+        // Walk the whole file: CAN frames first (this session has none),
+        // then every FlexRay row.
+        let mut fr = Vec::new();
+        loop {
+            if stream.peek_t().is_some() {
+                let _ = stream.next_frame();
+                continue;
+            }
+            let before = fr.len();
+            stream.poll_fr_rows(u64::MAX, &mut fr);
+            if stream.peek_t().is_none() && fr.len() == before {
+                break;
+            }
+        }
+        assert!(
+            fr.len() >= 2_500,
+            "the recording carries ~3k FlexRay frames: {}",
+            fr.len()
+        );
+        // Sane frame coordinates throughout: static slots start at 1,
+        // cycles wrap at 64, payloads stay within the cluster's 26-byte
+        // frames.
+        for r in fr.iter().take(1_000) {
+            assert!(r.slot >= 1, "slot {}", r.slot);
+            assert!(r.cycle < 64, "cycle {}", r.cycle);
+            assert!(!r.payload.is_empty(), "payload present");
+            assert!(r.payload.len() <= 26, "payload within frame length");
+        }
+        // Timestamps ascend across the whole capture.
+        assert!(
+            fr.windows(2).all(|w| w[1].t_us >= w[0].t_us),
+            "log order is time order"
+        );
     }
 
     /// The production recorder writer: classic (standard/extended/RTR)

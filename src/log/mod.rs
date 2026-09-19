@@ -8,7 +8,7 @@ mod backing;
 use std::path::Path;
 
 use crate::source::FrameStream;
-use asc::{AscStream, parse_asc};
+use asc::{AscStream, parse_asc_full};
 use blf::BlfStream;
 use error::LogError;
 use vec_stream::VecStream;
@@ -64,7 +64,8 @@ pub(crate) fn open_stream_at(
             let size = std::fs::metadata(path)?.len();
             if size < asc_mmap_threshold {
                 let s = std::fs::read_to_string(path)?;
-                Ok(Box::new(VecStream::new(parse_asc(&s))))
+                let (frames, fr) = parse_asc_full(&s);
+                Ok(Box::new(VecStream::with_fr(frames, fr)))
             } else {
                 Ok(Box::new(AscStream::open(path)?))
             }

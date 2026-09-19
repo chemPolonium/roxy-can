@@ -28,6 +28,10 @@ pub struct FrRow {
     pub payload: Vec<u8>,
     pub header_crc: u16,
     pub flags: u16,
+    /// The frame name the log carried, when the format names frames
+    /// (CANoe ASC does). The description database, when one is loaded,
+    /// takes precedence in the display.
+    pub name: Option<String>,
 }
 
 /// The FlexRay trace ring: the run's last rows, oldest first. A plain
@@ -603,6 +607,7 @@ mod tests {
             payload: vec![slot as u8; 8],
             header_crc: 0xABCD,
             flags: 0,
+            name: None,
         }
     }
 

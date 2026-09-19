@@ -42,9 +42,18 @@ pub trait FrameStream: Send {
     }
 
     /// Drains FlexRay rows the underlying container carried alongside its
-    /// CAN traffic (BLF FR_RCVMESSAGE objects). Containers without FR
-    /// events deliver nothing.
-    fn poll_fr_rows(&mut self, _out: &mut Vec<crate::trace::FrRow>) {}
+    /// CAN traffic (BLF FR_RCVMESSAGE objects, ASC `Fr RMSG` lines),
+    /// delivering only rows stamped `t_us <= upto` -- the replay clock
+    /// paces them like the CAN side. Containers without FR events
+    /// deliver nothing.
+    fn poll_fr_rows(&mut self, _upto_t_us: u64, _out: &mut Vec<crate::trace::FrRow>) {}
+
+    /// Timestamp of the next undelivered FlexRay row without consuming
+    /// it; `None` when none is queued (or the container has none). May
+    /// read ahead, queuing CAN frames the same way `next_frame` would.
+    fn peek_fr_t(&mut self) -> Option<u64> {
+        None
+    }
 }
 
 /// One bus input. `Send` because stage 3 moves the whole core -- sources

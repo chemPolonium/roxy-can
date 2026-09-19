@@ -376,17 +376,6 @@ pub enum BusCommand {
     SetReplayBlocks {
         blocks: Vec<crate::config::BlockCfg>,
     },
-    /// Offline analysis (R1): ingest the whole loaded log once -- no
-    /// playback clock, no trigger actions, no node dispatch, no
-    /// recording -- so every observer (aggregates, Statistics, the load
-    /// history, spec verdicts, Graphics/Tracker caches, Trace) holds the
-    /// full file for browsing. The source is opened fresh and parked
-    /// after the scan; Play afterwards restarts the replay the normal way.
-    ScanLog {
-        path: String,
-        tol_pct: u64,
-        grace: u64,
-    },
     /// Restore one generator row wholesale from a saved project. `None`
     /// data_text keeps the row's current base payload. Rows the bus does
     /// not know are ignored -- the database decides which messages exist.
@@ -945,9 +934,6 @@ pub struct BusCore {
     pub(crate) replay_blocks: Vec<crate::block::ReplayBlock>,
     /// Counter minting stable replay-block ids; never resets.
     pub(crate) block_counter: u64,
-    /// An offline scan already ingested the whole log this run. A second
-    /// scan would double every figure; cleared by any run restart.
-    pub(crate) scan_done: bool,
     /// Derived-signal streams a node has opened with `emit_value`:
     /// synthetic key plus the owning node's name, for the selection tree.
     pub(crate) emitted_streams: Vec<(SigKey, String)>,
@@ -1029,7 +1015,6 @@ impl BusCore {
             nodes_dirty: false,
             replay_blocks: Vec::new(),
             block_counter: 0,
-            scan_done: false,
             emitted_streams: Vec::new(),
             sysvars: Vec::new(),
             write_log: VecDeque::new(),
@@ -1289,11 +1274,6 @@ impl BusCore {
                     .collect();
                 self.nodes_dirty = true;
             }
-            BusCommand::ScanLog {
-                path,
-                tol_pct,
-                grace,
-            } => self.scan_log(&path, tol_pct, grace, status),
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SeekReplay(t_s) => self.seek_replay(t_s, status),
             BusCommand::SetEntryActive { ch, id, on } => {
@@ -1613,6 +1593,9 @@ impl BusCore {
         agg.last_t_us = row.t_us;
         agg.ab = row.ab;
         agg.last_cycle = row.cycle;
+        if row.name.is_some() {
+            agg.name = row.name.clone();
+        }
         agg.payload = row.payload.clone();
         self.fr_trace.push(row, self.trace_limit);
     }
@@ -3057,7 +3040,6 @@ impl BusCore {
         // A fresh start must not inherit the previous run's pause state.
         self.trace_paused = false;
         self.paused_at_us = None;
-        self.scan_done = false;
         self.trace.clear();
         self.fr_trace.clear();
         self.publish_trace();
@@ -3137,72 +3119,6 @@ impl BusCore {
     }
 
     /// Offline analysis (R1): ingests the whole loaded log in one pass --
-    /// no playback clock, no trigger actions, no node dispatch, no
-    /// recording -- so every observer holds the full file for browsing.
-    /// Aggregates, load history, spec verdicts, the Graphics / Tracker
-    /// caches and the Trace ring all end up exactly as a replay that ran
-    /// to the end would leave them, just instantly. A second scan is
-    /// refused (it would double every figure); any run restart clears it.
-    fn scan_log(
-        &mut self,
-        path: &str,
-        tol_pct: u64,
-        grace: u64,
-        status: &mut String,
-    ) {
-        if self.measuring {
-            *status = "scan needs a stopped measurement".to_string();
-            return;
-        }
-        // A fresh replay source and clean tallies: the scan measures the
-        // file once, from zero, and a Play afterwards starts over the
-        // normal way (which also clears the scan results -- no double
-        // counting).
-        self.start_replay(path, 1.0, status);
-        if !matches!(self.mode, Mode::Replay) {
-            return; // start_replay reported the failure
-        }
-        let stride = self.applied_stride_us;
-        let mut scanned = 0u64;
-        let mut from = 0u64;
-        let mut batch: Vec<CanFrame> = Vec::with_capacity(8_192);
-        loop {
-            batch.clear();
-            // scan_range parks and restores the playhead, so a scan never
-            // disturbs where playback would resume.
-            let complete = self.source.scan_range(from, u64::MAX, 8_192, &mut batch);
-            for f in &batch {
-                scanned += 1;
-                self.ingest(*f, stride);
-            }
-            if complete || batch.is_empty() {
-                break;
-            }
-            // Resume past the last ingested stamp: seek lands on the first
-            // frame at/after the offset, so nothing is rescanned.
-            from = batch.last().map(|f| f.t_us + 1).unwrap_or(from);
-        }
-        // One spec sweep over the whole-file aggregates: the verdicts are
-        // facts about frames already seen. The Missing check stays
-        // replay-only anyway (no live claim over a scanned file).
-        self.sim_t_us = self
-            .aggs
-            .values()
-            .map(|a| a.last_t_us)
-            .max()
-            .unwrap_or_default();
-        self.check_spec(tol_pct, grace);
-        for load in &mut self.bus_loads {
-            load.sample();
-        }
-        self.publish_trace();
-        self.refresh_sub_histories();
-        // Park: browsing state, not a running replay. Play restarts.
-        self.measuring = false;
-        self.scan_done = true;
-        *status = format!("scan complete: {scanned} frame(s) ingested for browsing");
-    }
-
     /// Blanks the trace the way the Clear button means it: the frames on
     /// display (and their archive) go away; the measurement itself keeps
     /// running -- recording stays open, counts keep counting, arrivals
@@ -4067,6 +3983,7 @@ mod tests {
             payload: vec![0x11; 8],
             header_crc: 0xBEEF,
             flags: 0,
+            name: None,
         }
     }
 

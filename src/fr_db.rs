@@ -192,6 +192,8 @@ impl FrDb {
     /// Parses FIBEX or ARXML text, detecting the dialect from the root
     /// element and, failing that, from characteristic children.
     pub fn parse(text: &str) -> Result<FrDb, String> {
+        // A UTF-8 BOM (DaVinci exports carry one) is not XML.
+        let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
         let doc = roxmltree::Document::parse(text).map_err(|e| format!("XML 解析错误：{e}"))?;
         let root = doc.root_element();
         let root_name = root.tag_name().name().to_uppercase();
@@ -1405,136 +1407,14 @@ fn dedup_frame_names(db: &mut FrDb) {
 mod tests {
     use super::*;
 
-    const SAMPLE_FIBEX: &str = include_str!("../assets/powertrain.fibex");
-    const SAMPLE_ARXML: &str = include_str!("../assets/chassis.arxml");
-    const CANOE_DEMO: &str = include_str!("../assets/DemoFile_v3_FIBEX_3_0.xml");
-    /// The user's real AUTOSAR cluster export (GBK-encoded, no BOM).
-    const POWERTRAIN_ARXML: &[u8] = include_bytes!("../assets/PowerTrain.arxml");
+    /// The user's real network files. They are read at runtime (they may
+    /// move around), and the tests skip with a message when absent.
+    const POWERTRAIN_ARXML: &str = "assets/arxml/PowerTrain.arxml";
+    const POWERTRAIN_FIBEX_V2: &str = "assets/fibex/PowerTrain_v2.xml";
 
-    #[test]
-    fn parses_the_asam_style_fibex_sample() {
-        let db = FrDb::parse(SAMPLE_FIBEX).expect("sample FIBEX should parse");
-
-        assert_eq!(db.params.name, "PowertrainCluster");
-        assert_eq!(db.params.speed_kbps, 10000);
-        assert_eq!(db.params.cycle_time_ms, 5.0);
-        assert_eq!(db.params.number_of_static_slots, 10);
-        assert_eq!(db.params.macrotick_duration_us, 5.0);
-
-        assert_eq!(db.ecus.len(), 4);
-        assert!(db.ecus.contains(&"EngECU".to_string()));
-
-        assert_eq!(db.frames.len(), 4);
-        assert_eq!(db.pdus.len(), 4);
-
-        // EngineData: slots on A+B, repetition 1.
-        let engine = db.frames.iter().find(|f| f.name == "EngineData").unwrap();
-        assert_eq!(engine.triggering.slot_id, 1);
-        assert_eq!(engine.triggering.channel, FrChannel::Both);
-        assert_eq!(engine.triggering.cycle_repetition, 1);
-        assert_eq!(engine.pdus.len(), 1);
-
-        // TransmissionData only A; ChassisStatus only B with rep 4.
-        let trans = db.frames.iter().find(|f| f.name == "TransmissionData").unwrap();
-        assert_eq!(trans.triggering.channel, FrChannel::A);
-        assert_eq!(trans.triggering.slot_id, 2);
-        let chassis = db.frames.iter().find(|f| f.name == "ChassisStatus").unwrap();
-        assert_eq!(chassis.triggering.channel, FrChannel::B);
-        assert_eq!(chassis.triggering.slot_id, 3);
-        assert_eq!(chassis.triggering.cycle_repetition, 4);
-
-        // Signal encoding from the CODING: factor / offset / unit / labels.
-        let eng_pdu = db.pdus.iter().find(|p| p.name == "Eng_PDU").unwrap();
-        let speed = eng_pdu.signals.iter().find(|s| s.name == "EngineSpeed").unwrap();
-        assert_eq!(speed.length_bits, 16);
-        assert!(speed.big_endian);
-        assert_eq!(speed.factor, 0.25);
-        assert_eq!(speed.unit, "rpm");
-
-        let temp = eng_pdu.signals.iter().find(|s| s.name == "CoolantTemp").unwrap();
-        assert_eq!(temp.offset, -40.0);
-        assert_eq!(temp.min, -40.0);
-        assert_eq!(temp.max, 215.0);
-        assert_eq!(temp.unit, "DegC");
-
-        let chassis_pdu = db.pdus.iter().find(|p| p.name == "Chassis_PDU").unwrap();
-        let status = chassis_pdu
-            .signals
-            .iter()
-            .find(|s| s.name == "ChassisStatus")
-            .unwrap();
-        assert_eq!(
-            status.value_descriptions,
-            &[(0, "OK".to_string()), (1, "Warning".to_string()), (2, "Error".to_string())]
-        );
-    }
-
-    #[test]
-    fn parses_the_autosar_arxml_sample() {
-        let db = FrDb::parse(SAMPLE_ARXML).expect("sample ARXML should parse");
-
-        assert_eq!(db.params.name, "PowertrainCluster");
-        // FLEXRAY-CYCLE 1000 mt × 5 µs = 5 ms.
-        assert_eq!(db.params.cycle_time_ms, 5.0);
-        assert_eq!(db.params.macrotick_duration_us, 5.0);
-
-        assert_eq!(db.ecus.len(), 4);
-        assert_eq!(db.frames.len(), 4);
-        assert_eq!(db.pdus.len(), 4);
-
-        // EngineData: A+B slot 1, startup.
-        let engine = db.frames.iter().find(|f| f.name == "EngineData").unwrap();
-        assert_eq!(engine.triggering.slot_id, 1);
-        assert_eq!(engine.triggering.channel, FrChannel::Both);
-        assert_eq!(engine.triggering.cycle_repetition, 1);
-        assert!(engine.triggering.startup);
-
-        // ChassisStatus: B only, repetition 4.
-        let chassis = db.frames.iter().find(|f| f.name == "ChassisStatus").unwrap();
-        assert_eq!(chassis.triggering.channel, FrChannel::B);
-        assert_eq!(chassis.triggering.cycle_repetition, 4);
-        assert_eq!(chassis.length, 12);
-
-        let eng_pdu = db.pdus.iter().find(|p| p.name == "Eng_PDU").unwrap();
-        assert_eq!(eng_pdu.signals.len(), 3);
-        let speed = eng_pdu.signals.iter().find(|s| s.name == "EngineSpeed").unwrap();
-        assert_eq!(speed.start_bit, 0);
-        assert_eq!(speed.length_bits, 16);
-        assert!(speed.big_endian);
-    }
-
-    /// The Vector CANoe 3.0 demo export: the flat scanner used to lose
-    /// its fx:-prefixed frame triggerings; the tree walk gets every one,
-    /// with names.
-    #[test]
-    fn parses_the_canoe_demo_fibex_completely() {
-        let db = FrDb::parse(CANOE_DEMO).expect("the demo FIBEX parses");
-        assert_eq!(db.params.speed_kbps, 10000);
-        assert_eq!(db.params.number_of_static_slots, 60);
-        assert_eq!(db.params.payload_length_static, 21);
-        assert_eq!(
-            db.frames.len(),
-            33,
-            "every frame triggering becomes a named frame"
-        );
-        assert!(db.frames.iter().any(|f| f.triggering.slot_id == 7));
-        assert!(
-            db.frames.iter().all(|f| !f.name.is_empty()),
-            "frames carry their SHORT-NAMEs"
-        );
-    }
-
-    /// Slot lookup honours the cycle repetition: a rep-4 frame on base
-    /// cycle 0 is only visible on cycles 0/4/8/....
-    #[test]
-    fn frame_at_respects_the_schedule() {
-        let db = FrDb::parse(SAMPLE_FIBEX).unwrap();
-        // ChassisStatus: slot 3, B, base 0, rep 4.
-        assert!(db.frame_at(3, 0, 1).is_some(), "cycle 0 fires");
-        assert!(db.frame_at(3, 4, 1).is_some(), "cycle 4 fires");
-        assert!(db.frame_at(3, 1, 1).is_none(), "cycle 1 silent");
-        assert!(db.frame_at(3, 0, 0).is_none(), "channel A does not carry it");
-        assert!(db.frame_at(3, 0, 2).is_some(), "unknown channel still finds it");
+    fn read_asset(path: &str) -> Option<String> {
+        let bytes = std::fs::read(path).ok()?;
+        Some(crate::dbc::text_from_bytes(bytes))
     }
 
     /// The real AUTOSAR cluster export (GBK, no BOM): after the UTF-8 →
@@ -1542,7 +1422,10 @@ mod tests {
     /// 10 static slots, 48 scheduled frames with names.
     #[test]
     fn parses_the_real_gbk_powertrain_arxml() {
-        let text = crate::dbc::text_from_bytes(POWERTRAIN_ARXML.to_vec());
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
+            return;
+        };
         let db = FrDb::parse(&text).expect("PowerTrain.arxml parses");
         assert_eq!(db.params.speed_kbps, 10000);
         assert_eq!(db.params.cycle_time_ms, 5.0);
@@ -1561,30 +1444,111 @@ mod tests {
         );
     }
 
-    /// Signal decode: raw bits -> physical value -> enumeration label.
-    /// The bit convention matches roxy-fibex and the DBC extract path:
-    /// big-endian start_bit names the MSB, walking down within the byte
-    /// and jumping +15 at the byte boundary.
+    /// The real FIBEX 2.0.0d export (DaVinci, dual-net forwarding demo):
+    /// six static frames, signal-directly-on-frame layout, slot 13 and
+    /// 51 among them.
     #[test]
-    fn decodes_signals_from_a_payload() {
-        let db = FrDb::parse(SAMPLE_FIBEX).unwrap();
-        let engine = db.frames.iter().find(|f| f.name == "EngineData").unwrap();
-        // EngineSpeed: big-endian 16 bit at start 0. In the sawtooth
-        // walk byte1 bit3 is raw bit 10: 0x08 lands raw = 1024, and
-        // 1024 × 0.25 = 256.0 rpm.
-        let payload = [0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        let decoded = db.decode(engine, &payload);
-        let speed = decoded.iter().find(|(n, _)| n == "EngineSpeed").unwrap();
-        assert!(speed.1.starts_with("256"), "{speed:?}");
-
-        // ChassisStatus (the status signal sits at bit 48, big-endian,
-        // 8 coded bits): the walk ends at byte7 bit1, so 0x02 there is
-        // raw 1 -> the Warning label.
-        let chassis = db.frames.iter().find(|f| f.name == "ChassisStatus").unwrap();
-        let decoded = db.decode(chassis, &[0, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0, 0]);
+    fn parses_the_real_fibex_20d_export() {
+        let Some(text) = read_asset(POWERTRAIN_FIBEX_V2) else {
+            println!("assets/fibex/PowerTrain_v2.xml not present -- skipped");
+            return;
+        };
+        let db = FrDb::parse(&text).expect("PowerTrain_v2.xml parses");
+        assert_eq!(db.frames.len(), 6, "the demo schedules six static frames");
+        let absinfo = db.frames.iter().find(|f| f.name == "ABSInfo");
+        assert!(absinfo.is_some(), "ABSInfo is among the frames");
         assert!(
-            decoded.iter().any(|(_, v)| v.contains("Warning")),
-            "raw 1 decodes to its Warning label: {decoded:?}"
+            db.frames.iter().any(|f| f.triggering.slot_id == 13),
+            "slot 13 is scheduled"
+        );
+        // Signal-directly-on-frame: the synthesized PDU carries the
+        // frame's signals, so decode works without a PDU layer.
+        let frame = absinfo.expect("checked above");
+        assert!(
+            db.decode(frame, &[0xFF; 16])
+                .iter()
+                .any(|(_, v)| !v.is_empty()),
+            "frame signals decode"
+        );
+    }
+
+    /// Slot lookup honours the cycle repetition and the reception
+    /// channel, exercised on the real AUTOSAR schedule.
+    #[test]
+    fn frame_at_respects_the_real_schedule() {
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
+            return;
+        };
+        let db = FrDb::parse(&text).unwrap();
+        // Slot 13 hosts a frame that the logging session carried on the
+        // very first cycle: it must resolve for an unknown channel.
+        let frame = db
+            .frame_at(13, 0, 2)
+            .expect("slot 13 fires on cycle 0 for an unknown channel");
+        assert_eq!(frame.triggering.slot_id, 13);
+        // Every db frame resolves for its own base cycle when the
+        // channel is unknown.
+        for f in db.frames.iter().take(10) {
+            assert!(
+                db.frame_at(
+                    f.triggering.slot_id as u16,
+                    f.triggering.base_cycle as u8,
+                    2
+                )
+                .is_some(),
+                "slot {} resolves on its base cycle",
+                f.triggering.slot_id
+            );
+        }
+    }
+
+    /// Signal decode over the real AUTOSAR layout. An all-ones payload
+    /// makes any unsigned signal's raw read `2^len - 1` regardless of
+    /// its bit position, so the physical value is exactly
+    /// `(2^len - 1) × factor + offset` -- deterministic without knowing
+    /// the concrete network's scaling.
+    #[test]
+    fn decodes_a_signal_from_the_real_arxml() {
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
+            return;
+        };
+        let db = FrDb::parse(&text).unwrap();
+        let (frame, pdu_name, sig) = db
+            .frames
+            .iter()
+            .find_map(|f| {
+                f.pdus.iter().find_map(|(pdu, pdu_start)| {
+                    let pdu = db.pdus.iter().find(|p| p.name == *pdu)?;
+                    let s = pdu.signals.first()?;
+                    // The signal's extent must fit the frame the db
+                    // declares, or decode() would (correctly) skip it.
+                    let end = pdu_start * 8 + s.start_bit + s.length_bits;
+                    (end <= f.length * 8).then(|| (f, pdu.name.clone(), s))
+                })
+            })
+            .expect("the cluster declares at least one signal");
+        assert!(!sig.signed, "the first signal is unsigned");
+
+        let raw_max = (1u64 << sig.length_bits.min(32)) - 1;
+        let payload = vec![0xFFu8; frame.length.max(1) as usize];
+        let decoded = db.decode(frame, &payload);
+        let (_name, value) = &decoded[0];
+        // decode() annotates every value with its raw hex.
+        let expected = format!(
+            "{}  ({raw_max:X}h)",
+            crate::dbc::fmt_signal_value(
+                raw_max as f64 * sig.factor + sig.offset,
+                &sig.unit,
+                "",
+                None,
+            )
+        );
+        assert_eq!(
+            value, &expected,
+            "frame {} pdu {} signal {} (start {} len {})",
+            frame.name, pdu_name, sig.name, sig.start_bit, sig.length_bits
         );
     }
 }

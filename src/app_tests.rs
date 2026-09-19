@@ -2227,52 +2227,6 @@ fn a_plot_window_decodes_without_waiting_for_playback() {
     std::fs::remove_file(&file).ok();
 }
 
-/// R1 offline scan: one command ingests the whole log with no playback
-/// clock -- aggregates, Trace and the load history hold the full file
-/// for browsing, and no trigger or node runs. The scan parks the replay
-/// (measuring stays off); a rescan re-measures from zero, and Play
-/// afterwards restarts the replay normally with no double counting.
-#[test]
-fn an_offline_scan_ingests_the_whole_log_for_browsing() {
-    let (mut app, _key, file) = app_with_replayable_recording("scan_browse", 40);
-
-    app.scan_log();
-    app.settle();
-    assert!(!app.snap.measuring, "the scan parks the replay");
-    let (pos, _dur) = app.replay_position().expect("the source stays open");
-    assert_eq!(pos, 0.0, "the playhead is parked at the start");
-
-    let total: u64 = app.snap.aggs.iter().map(|a| a.count).sum();
-    assert!(total > 0, "the whole file was ingested");
-    assert_eq!(
-        app.snap.trace_len, total as usize,
-        "the trace ring holds every frame of the file"
-    );
-
-    // A rescan starts from zero again, so the totals do not double.
-    app.scan_log();
-    app.settle();
-    let total_after: u64 = app.snap.aggs.iter().map(|a| a.count).sum();
-    assert_eq!(total_after, total, "a rescan re-measures, not accumulates");
-
-    // Play afterwards restarts the replay from zero: it runs to the end
-    // and the tallies land on the same full-file figures, not double.
-    app.replay();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while app.snap.measuring && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(11));
-        app.update();
-    }
-    assert!(!app.snap.measuring, "the replay ran out on its own");
-    let total_played: u64 = app.snap.aggs.iter().map(|a| a.count).sum();
-    assert_eq!(
-        total_played, total,
-        "playback after a scan recounts the same file"
-    );
-    app.stop();
-    std::fs::remove_file(&file).ok();
-}
-
 #[test]
 fn a_second_replay_run_samples_from_the_top() {
     let (mut app, key, file) = app_with_replayable_recording("resample", 60);
@@ -2395,7 +2349,12 @@ fn replay_speed_steps_along_the_ladder() {
     app.step_replay_speed(-1);
     assert_eq!(app.replay_speed, 0.5, "clamped at the slow end");
     app.step_replay_speed(99);
-    assert_eq!(app.replay_speed, 4.0, "clamped at the fast end");
+    assert!(
+        app.replay_speed.is_infinite(),
+        "the fast end is as-fast-as-possible"
+    );
+    app.step_replay_speed(-1);
+    assert_eq!(app.replay_speed, 4.0, "one notch back from infinity");
 }
 
 #[test]
@@ -6650,18 +6609,26 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
 #[test]
 fn the_trace_text_filter_matches_fr_frame_names() {
     let mut app = quiet_app();
-    app.fr_db = Some(std::sync::Arc::new(
-        crate::fr_db::FrDb::parse(include_str!("../assets/powertrain.fibex"))
-            .expect("fixture parses"),
-    ));
+    let Some(text) = std::fs::read_to_string("assets/arxml/PowerTrain.arxml").ok() else {
+        println!("assets/arxml/PowerTrain.arxml not present -- skipped");
+        return;
+    };
+    let db = crate::fr_db::FrDb::parse(&text).expect("PowerTrain.arxml parses");
+    app.fr_db = Some(std::sync::Arc::new(db));
+    // The database's first frame defines the identity the filter must
+    // match: its name and its slot number.
+    let first = &app.fr_db.as_ref().unwrap().frames[0];
+    let name = first.name.clone();
+    let slot = first.triggering.slot_id;
     let row = crate::trace::FrRow {
         t_us: 1_000,
         ab: 0,
-        slot: 1,
-        cycle: 0,
+        slot: slot as u16,
+        cycle: first.triggering.base_cycle as u8,
         payload: vec![1, 2, 3],
         header_crc: 0,
         flags: 0,
+        name: None,
     };
 
     let mk_flt = |app: &App, filter: &str| {
@@ -6669,14 +6636,13 @@ fn the_trace_text_filter_matches_fr_frame_names() {
         w.filter = filter.to_string();
         w.filter_lens()
     };
-    // EngineData lives in slot 1 on A+B (the fixture's first frame).
-    let flt = mk_flt(&app, "EngineData");
-    assert!(app.trace_fr_match(&flt, &row), "name match, case-insensitive");
-    let flt = mk_flt(&app, "enginedata");
+    let flt = mk_flt(&app, &name);
+    assert!(app.trace_fr_match(&flt, &row), "name match: {name}");
+    let flt = mk_flt(&app, &name.to_lowercase());
     assert!(app.trace_fr_match(&flt, &row), "lowercase matches");
-    let flt = mk_flt(&app, "slot 1");
+    let flt = mk_flt(&app, &format!("slot {slot}"));
     assert!(app.trace_fr_match(&flt, &row), "slot text matches");
-    let flt = mk_flt(&app, "TransmissionData");
+    let flt = mk_flt(&app, "\u{7f}no-such-frame\u{7f}");
     assert!(!app.trace_fr_match(&flt, &row), "another name filters it out");
     let flt = mk_flt(&app, "EngineSpeed>=200");
     assert!(

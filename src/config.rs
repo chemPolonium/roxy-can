@@ -544,6 +544,10 @@ pub struct Config {
     pub channels: Vec<ChannelCfg>,
     #[serde(default)]
     pub bus_counter: usize,
+    /// The FlexRay description file behind the FR watch/replay decoding,
+    /// stored relative to the project directory like the DBC paths.
+    #[serde(default)]
+    pub fr_fibex: Option<String>,
     #[serde(default = "true_default")]
     pub show_tx: bool,
     #[serde(default = "true_default")]
@@ -731,6 +735,7 @@ impl Config {
                 })
                 .collect(),
             bus_counter: app.snap.bus_counter,
+            fr_fibex: app.fr_fibex_path.clone(),
             show_tx: app.show_tx,
             show_network: app.show_network,
             show_measurement: app.show_measurement,
@@ -741,7 +746,13 @@ impl Config {
             show_id_filter: app.show_id_filter,
             show_sysvars: app.show_sysvars,
             show_write: app.show_write,
-            replay_speed: app.replay_speed,
+            // "As fast as possible" (infinity) cannot serialize; it
+            // persists as the ladder's fastest finite notch.
+            replay_speed: if app.replay_speed.is_finite() {
+                app.replay_speed
+            } else {
+                100.0
+            },
             text_rate_hz: app.text_rate_hz,
             trace_limit: app.trace_limit,
             limits: app.limits,
@@ -986,6 +997,9 @@ impl Config {
             for p in &mut c.dbc_paths_extra {
                 *p = resolve_dbc(p, base);
             }
+        }
+        if let Some(p) = &mut self.fr_fibex {
+            *p = resolve_dbc(p, base);
         }
     }
 
@@ -1327,6 +1341,22 @@ impl Config {
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
+        // The FlexRay description: parse it back into the display
+        // database so a FlexRay replay decodes against the same network.
+        // A file that moved or broke is reported, not fatal.
+        if let Some(path) = &self.fr_fibex {
+            match std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .map(crate::dbc::text_from_bytes)
+                .and_then(|t| crate::fr_db::FrDb::parse(&t))
+            {
+                Ok(db) => {
+                    app.fr_db = Some(std::sync::Arc::new(db));
+                    app.fr_fibex_path = Some(path.clone());
+                }
+                Err(e) => app.status = format!("FlexRay 描述加载失败: {e}"),
+            }
+        }
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
         app.recent_log = self.recent_log;

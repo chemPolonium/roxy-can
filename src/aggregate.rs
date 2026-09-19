@@ -57,4 +57,6 @@ pub struct FrSlotAgg {
     pub cycle_us: f64,
     pub jitter_us: f64,
     pub payload: Vec<u8>,
+    /// The frame name the log carried, when the format names frames.
+    pub name: Option<String>,
 }

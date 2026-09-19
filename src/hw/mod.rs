@@ -356,6 +356,7 @@ impl Hardware {
                 payload: f.payload,
                 header_crc: f.header_crc,
                 flags: f.flags,
+                name: None,
             });
         }
     }
