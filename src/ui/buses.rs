@@ -26,6 +26,19 @@ fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
+/// What a bus's loaded description says its cluster is called, plus how many
+/// frames it schedules. The one piece of identity a description file carries
+/// that a recording does not -- with two networks in one log it is how the
+/// user checks he put the right file on the right 路.
+fn fr_cluster_tag(app: &App, bus: u8) -> String {
+    match app.fr_db(bus) {
+        Some(db) if !db.params.name.is_empty() => {
+            format!(" · cluster {}（{} 帧）", db.params.name, db.frames.len())
+        }
+        _ => String::new(),
+    }
+}
+
 /// Enumerates the hardware channels of every supported driver once per
 /// session; later calls reuse the cached answer (including "driver
 /// unavailable").
@@ -341,10 +354,11 @@ fn content(app: &mut App, ui: &Ui) {
         match watches.iter().find(|w| w.bus == bus) {
             Some(w) => {
                 ui.text(format!(
-                    "FR{} · [V] ch{} · {} （只收）",
+                    "FR{} · [V] ch{} · {}{}（只收）",
                     w.bus,
                     w.channel_index,
-                    file_name(&w.fibex_path)
+                    file_name(&w.fibex_path),
+                    fr_cluster_tag(app, bus),
                 ));
                 if !app.snap.real_bus {
                     ui.same_line();
@@ -362,7 +376,11 @@ fn content(app: &mut App, ui: &Ui) {
             }
             None => {
                 let path = app.fr_buses.get(&bus).map(|c| c.path.as_str()).unwrap_or("");
-                ui.text(format!("FR{bus} · 仅描述 {}", file_name(path)));
+                ui.text(format!(
+                    "FR{bus} · 仅描述 {}{}",
+                    file_name(path),
+                    fr_cluster_tag(app, bus)
+                ));
                 if !free.is_empty() {
                     ui.same_line();
                     if ui.button(format!("挂接监听…##fratt{bus}")) {
@@ -409,12 +427,36 @@ fn content(app: &mut App, ui: &Ui) {
     // A description for a cluster no port is opened for: a recording can hold
     // two clusters, and the second one needs its own description before its
     // frames can be named or decoded -- which has nothing to do with hardware.
+    // Which 路 a file describes is the user's call: a recording numbers its
+    // clusters 0/1 with no names, a file only carries a name, and the order
+    // files happen to be picked in must not decide which network gets which
+    // schedule -- that mistake names every frame of one cluster with the
+    // other cluster's slots, which reads as plausible data.
+    let targets = app.fr_description_targets();
+    if app.fr_db_pick >= targets.len() {
+        app.fr_db_pick = 0;
+    }
+    let labels: Vec<String> = targets
+        .iter()
+        .map(|b| {
+            format!(
+                "FR{b}{}",
+                if app.fr_buses.contains_key(b) { "*" } else { "" }
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    ui.text_disabled("给这路");
+    ui.same_line();
+    ui.set_next_item_width(80.0);
+    ui.combo_simple_string("##frdbbus", &mut app.fr_db_pick, &refs);
+    ui.same_line();
     if ui.button("加载集群描述...##frdbonly") {
-        app.pick_cluster_description();
+        app.pick_cluster_description(targets[app.fr_db_pick.min(targets.len() - 1)]);
     }
     if ui.is_item_hovered() {
         ui.tooltip_text(
-            "给下一条尚无描述的 FlexRay 路加载 FIBEX/ARXML 集群描述：只用于解码（回放或监听），不开端口",
+            "给下拉选中的那条 FlexRay 路加载 FIBEX/ARXML 集群描述：只用于解码（回放或监听），不开端口。\n带 * 的路已有描述，选中它就是把这份换上去（正在监听的路要先断开）。",
         );
     }
     if let Some(bus) = detach {

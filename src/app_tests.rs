@@ -7200,10 +7200,10 @@ fn a_second_cluster_description_loads_without_any_hardware() {
         return;
     }
     let mut app = quiet_app();
-    assert_eq!(app.load_cluster_description(first), Some(0));
-    assert_eq!(app.load_cluster_description(second), Some(1));
+    assert_eq!(app.load_cluster_description(first, None), Some(0));
+    assert_eq!(app.load_cluster_description(second, None), Some(1));
     assert_eq!(
-        app.load_cluster_description("assets/no-such-cluster.xml"),
+        app.load_cluster_description("assets/no-such-cluster.xml", None),
         None,
         "a file that cannot be read is refused"
     );
@@ -7221,6 +7221,51 @@ fn a_second_cluster_description_loads_without_any_hardware() {
     app.stop();
 }
 
+/// Which FlexRay 路 a description file describes is the user's call: a
+/// recording numbers its clusters 0/1 and names nothing, and a 路 given the
+/// wrong schedule keeps working -- it just names and decodes every frame of
+/// one network against the other network's slots. That is the one failure mode
+/// worse than having no names at all, so the file lands where it is pointed
+/// rather than on "the first 路 without one", in whatever order the files
+/// happened to be picked. A 路 with a port open refuses the swap, because its
+/// watch was configured from the description already there.
+#[test]
+fn a_description_lands_on_the_bus_it_is_pointed_at() {
+    let first = "assets/arxml/PowerTrain.arxml";
+    let second = "assets/fibex/PowerTrain_v2.xml";
+    if !std::path::Path::new(first).exists() || !std::path::Path::new(second).exists() {
+        println!("assets absent -- skipped");
+        return;
+    }
+    let mut app = quiet_app();
+    let sig = |app: &App, bus: u8| -> (String, usize) {
+        let db = app.fr_db(bus).expect("that 路 has a description");
+        (db.params.name.clone(), db.frames.len())
+    };
+    assert_eq!(app.load_cluster_description(first, Some(1)), Some(1));
+    assert_eq!(app.load_cluster_description(second, Some(0)), Some(0));
+    let (on_first, on_second) = (sig(&app, 1), sig(&app, 0));
+    assert_ne!(on_first, on_second, "the two assets are told apart");
+    // Replacing is how a misplaced file gets moved off a 路.
+    assert_eq!(app.load_cluster_description(first, Some(0)), Some(0));
+    assert_eq!(sig(&app, 0), on_first, "bus 0 now carries the file it was given");
+    assert_eq!(
+        app.fr_dbs.keys().copied().collect::<Vec<_>>(),
+        [0, 1],
+        "the core still has one description per 路"
+    );
+    assert_eq!(sig(&app, 1), on_first, "bus 1 already had this one");
+    // A watched 路 refuses, and keeps what its port runs from.
+    let _q = app.hw.attach_fr_mock(1, 5);
+    app.refresh_snapshot();
+    assert_eq!(app.load_cluster_description(second, Some(1)), None);
+    assert!(app.status.contains("请先断开监听"), "{}", app.status);
+    assert_eq!(sig(&app, 1), on_first, "the live 路 kept its file");
+    // The 路 the picker offers: both configured ones plus the next free index.
+    assert_eq!(app.fr_description_targets(), [0, 1, 2]);
+    app.stop();
+}
+
 /// A bus that has a description but no port can be attached with the file it
 /// already holds (no second picker), and its description can be dropped again
 /// -- which a watched bus must not do, because its port was configured from
@@ -7233,7 +7278,7 @@ fn a_described_bus_can_be_attached_or_forgot() {
         return;
     }
     let mut app = quiet_app();
-    assert_eq!(app.load_cluster_description(arxml), Some(0));
+    assert_eq!(app.load_cluster_description(arxml, None), Some(0));
 
     // Attaching uses the loaded description: what comes back is the missing
     // driver, not a missing file.
@@ -7255,7 +7300,7 @@ fn a_described_bus_can_be_attached_or_forgot() {
 
     // While a port is watching that bus, the same action refuses: the
     // description is what the open was configured from.
-    app.load_cluster_description(arxml);
+    app.load_cluster_description(arxml, None);
     app.hw.attach_fr_mock(0, 5);
     app.refresh_snapshot();
     app.forget_cluster_description(0);

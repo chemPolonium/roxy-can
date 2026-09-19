@@ -2073,6 +2073,15 @@ pub(crate) mod tests {
     /// the field is the only thing that keeps the two clusters apart in Trace,
     /// Messages and every key downstream -- and until now every row said
     /// "cluster 0".
+    ///
+    /// The shape of the traffic says the same thing: these are two independent
+    /// networks running one schedule template, not one cluster captured on its
+    /// redundant A/B channels. Both clusters use slots 13/16/25/26/51/52 in the
+    /// same even cycles, yet no instant carries a frame from both, and the
+    /// payloads of a shared slot barely overlap. A redundant pair would show
+    /// the same frames twice at the same time -- and would then have to be
+    /// merged into one bus with the cluster number as the channel, which is
+    /// the opposite of what this reader does.
     #[test]
     fn a_real_two_cluster_recording_keeps_its_clusters_apart() {
         let p = std::path::Path::new("assets/fibex/Logging.blf");
@@ -2103,6 +2112,40 @@ pub(crate) mod tests {
         assert!(
             !shared.is_empty(),
             "the clusters really do reuse slot numbers, which is the point"
+        );
+        let mut instants: std::collections::BTreeMap<u64, (bool, bool)> = Default::default();
+        for r in &rows {
+            let e = instants.entry(r.t_us).or_default();
+            if r.bus == 0 {
+                e.0 = true;
+            } else {
+                e.1 = true;
+            }
+        }
+        assert_eq!(
+            instants.len(),
+            rows.len(),
+            "each row has an instant to itself, so nothing here is one frame \
+             captured twice"
+        );
+        assert!(
+            instants.values().all(|&(a, b)| !(a && b)),
+            "no instant carries a frame from both clusters"
+        );
+        let payloads = |bus: u8| -> std::collections::BTreeSet<Vec<u8>> {
+            rows.iter()
+                .filter(|r| r.bus == bus && r.slot == 13 && r.cycle == 0)
+                .map(|r| r.payload.clone())
+                .collect()
+        };
+        let (a, b) = (payloads(0), payloads(1));
+        let same = a.intersection(&b).count();
+        assert!(
+            a.len() > 100 && b.len() > 100 && same * 4 < a.len().min(b.len()),
+            "slot 13 in cycle 0 is different traffic on the two clusters: \
+             {} vs {} payloads, {same} shared",
+            a.len(),
+            b.len()
         );
     }
 

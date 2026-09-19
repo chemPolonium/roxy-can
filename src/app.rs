@@ -312,6 +312,9 @@ pub struct App {
     pub fr_buses: std::collections::BTreeMap<u8, FrBusCfg>,
     /// The picked row in the FR channel combo.
     pub fr_pick: usize,
+    /// The picked row in the "which FlexRay 路 does this description file
+    /// describe" combo. Session state, like the one above.
+    pub fr_db_pick: usize,
     /// Profile names from the project's `profiles/` directory, listed
     /// once on first need (`Err` = driver/unavailable? no — parse or IO
     /// failure of the directory scan). Session cache; refresh via
@@ -572,6 +575,7 @@ impl App {
             // Vector probe is a real driver call) and the combo pick.
             fr_channels: None,
             fr_pick: 0,
+            fr_db_pick: 0,
             fr_buses: Default::default(),
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,

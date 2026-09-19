@@ -322,7 +322,7 @@ impl App {
         let Some(path) = Self::pick_cluster_file() else {
             return;
         };
-        if let Some(bus) = self.load_cluster_description(&path) {
+        if let Some(bus) = self.load_cluster_description(&path, None) {
             self.set_fr_watch(bus, Some(channel_index), &path);
         }
     }
@@ -331,12 +331,21 @@ impl App {
     /// recording can hold two clusters (BLF states which one each frame came
     /// from), and the second one needs its own description to be named or
     /// decoded at all -- which has nothing to do with opening a port for it.
-    pub fn pick_cluster_description(&mut self) {
+    /// `bus` is the FlexRay 路 the user says this file describes; the log
+    /// itself never names its clusters, so guessing (first free bus, in file
+    /// picking order) silently reads one network's slots against the other's
+    /// schedule -- plausible wrong names, the worst possible failure here.
+    pub fn pick_cluster_description(&mut self, bus: u8) {
         let Some(path) = Self::pick_cluster_file() else {
             return;
         };
-        if let Some(bus) = self.load_cluster_description(&path) {
-            self.status = format!("已加载 FR{bus} 集群描述（未挂监听，供回放解码）: {path}");
+        if let Some(bus) = self.load_cluster_description(&path, Some(bus)) {
+            let name = self
+                .fr_db(bus)
+                .map(|db| db.params.name.as_str())
+                .unwrap_or("");
+            self.status =
+                format!("已加载 FR{bus} 集群描述（{name}，未挂监听，供回放解码）: {path}");
         }
     }
 
@@ -349,11 +358,34 @@ impl App {
         Some(p.to_string_lossy().into_owned())
     }
 
-    /// Parses `path` as a cluster description and puts it on the first FlexRay
-    /// bus that has none, then hands the whole set to the core. No hardware is
-    /// touched, so this is also what a replay-only session uses. Returns the
-    /// bus index, having set a failure status if it did not.
-    pub fn load_cluster_description(&mut self, path: &str) -> Option<u8> {
+    /// The FlexRay 路 a description can be placed on: every 路 the tool knows
+    /// is in play (described, watched, or carrying rows in the current run)
+    /// plus the first index with none of those, which is how a first
+    /// description gets a 路 and a third cluster gets one to be added under.
+    pub fn fr_description_targets(&self) -> Vec<u8> {
+        let mut buses: Vec<u8> = self
+            .fr_buses
+            .keys()
+            .copied()
+            .chain(self.snap.fr_watches.iter().map(|w| w.bus))
+            .chain(self.snap.fr_aggs.iter().map(|a| a.bus))
+            .collect();
+        buses.sort_unstable();
+        buses.dedup();
+        if let Some(fresh) = (0..=u8::MAX).find(|b| !buses.contains(b)) {
+            buses.push(fresh);
+        }
+        buses
+    }
+
+    /// Parses `path` as a cluster description and puts it on a FlexRay 路, then
+    /// hands the whole set to the core. No hardware is touched, so this is also
+    /// what a replay-only session uses. `None` picks the first 路 without a
+    /// description; `Some(bus)` replaces that 路's description, which is how a
+    /// file put on the wrong 路 gets moved. A watched 路 refuses: its port was
+    /// configured from the file already there. Returns the bus index, having
+    /// set a failure status if it did not.
+    pub fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         let Ok(bytes) = std::fs::read(path) else {
             self.status = format!("FIBEX 读取失败: {path}");
             return None;
@@ -366,11 +398,22 @@ impl App {
                 return None;
             }
         };
-        let Some(bus) = (0..=u8::MAX)
-            .find(|b| !self.fr_buses.contains_key(b))
-        else {
-            self.status = "FlexRay 总线索引已用尽（256 路）".to_string();
-            return None;
+        let bus = match bus {
+            Some(want) => {
+                if self.snap.fr_watches.iter().any(|w| w.bus == want) {
+                    self.status =
+                        format!("FR{want} 正在监听：请先断开监听，再给它换集群描述");
+                    return None;
+                }
+                want
+            }
+            None => match (0..=u8::MAX).find(|b| !self.fr_buses.contains_key(b)) {
+                Some(free) => free,
+                None => {
+                    self.status = "FlexRay 总线索引已用尽（256 路）".to_string();
+                    return None;
+                }
+            },
         };
         self.fr_buses.insert(
             bus,
