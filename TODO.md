@@ -63,7 +63,7 @@
   - **两处必须人判断的语义点**（不能当机械替换）：① **通道增删的重映射**（channel.rs:205/207/238/240/241、bus.rs:2263/2739/2740 那类 `key.0 -= 1`）——那是 CAN 通道号，FlexRay 键现在靠 `ch=0` 混在同一字段里，重映射会把 FR 键一起挪走；枚举化后这些站点只能作用于 `Can`，`Fr` 键要按 FR 总线索引另走一套（与 S3 的通道列表同批）。② **DBC/信号元数据查找**（bus.rs:1946/3739 的 `subscribed_values`、observe 的 `signal_meta`）拿到的是 `(u32,bool)` 报文键，必须显式 `match` 出 FR 分支走 `fr_db`，不能再靠 id 位猜。
   - 另需一并决定：工程文件里 FR 键的写法——`SignalCfg{ch,id,ext,signal}`（config.rs:194）加一个 `fr_slot: Option<u16>` 显式表达，读取时仍认旧的 `id & FR_SIG_BASE` 合成键（迁移而不是兼容层：写出不再产生合成 id）。
   - 建议独立一轮专门做（约 15-20 个编辑回合，每回合都要过编译器），不与其他改动混在同一轮。
-- ~~**S1 FrRow 携带总线归属**~~ ✅（2026-09-19 部分）：`FrRow` 增 `bus: u8`（日志一次抓取只有一个 cluster → 回放侧恒 0；实时 watch 打自己的索引），`FrSlotAgg` 与核心表改按 `(bus, slot)` keyed，`SetFrWatch`/`attach_fr`/`FrWatch`/`FrWatchView` 全程带 `bus`，Trace 总线列、Messages 行与导出 CSV 都显示 `FR{n}`；回归 `the_same_slot_on_two_flexray_buses_stays_two_rows`。**剩余**：`ab` 真实化依赖真机确认事件缓冲 channelMask 偏移 → 并入 S5。
+- ~~**S1 FrRow 携带总线归属**~~ ✅（2026-09-19 部分）：`FrRow` 增 `bus: u8`（~~日志一次抓取只有一个 cluster → 回放侧恒 0~~ **该假设已于同日纠正**：BLF 有 `wClusterNo`，`assets/fibex/Logging.blf` 实为两 cluster，见下面"BLF 里的 clusterNo"一节；ASC 无此字段才真的恒 0；实时 watch 打自己的索引），`FrSlotAgg` 与核心表改按 `(bus, slot)` keyed，`SetFrWatch`/`attach_fr`/`FrWatch`/`FrWatchView` 全程带 `bus`，Trace 总线列、Messages 行与导出 CSV 都显示 `FR{n}`；回归 `the_same_slot_on_two_flexray_buses_stays_two_rows`。**剩余**：`ab` 真实化依赖真机确认事件缓冲 channelMask 偏移 → 并入 S5。
 - **S1b 事件语义**：`frameId → frame` 与真实 slot 分开解析（BLF 只有 frameId，`blf.rs:572` 现把 frameId 塞进 `slot`；实时 VX1070/VN7640 给真 slot）——回放要按 frameId 解析帧，不能冒充 slot 键。
 - ~~**S3 FR 通道列表一等化**~~ ✅（2026-09-20 落地，见下面两节）：描述数据库按 bus 存（`fr_buses`/`fr_dbs`，工程里是 `fr_buses: Vec<FrBusFile{bus,path}>`，旧 `fr_fibex` 单路径迁移到 bus 0）；`Option<FrWatch>` → `fr_watches` 按 bus 多路 + 快照列表 + Buses 窗口列表化；工程打开即推 DB 给 core（删 `replay()` 兜底）。**改主意的一项**：原计划把"工程打开即挂 watch"也做掉，但 CAN 侧工程载入并不自动挂硬件（`apply` 里没有 AttachHardware），FR 自动挂会在启动时打驱动、失败还得弹状态 —— 与 CAN 行为不一致，故不做；每路的 `channel_index` 也就不进工程文件（挂哪路端口是会话决定）。
 - **S4 接收侧对齐 CAN**：`ingest_fr_row` 补 frame_counter、每路 FR 负载与周期/抖动统计（沿用 aggs 形状，槽占用率口径另定）、FR 过滤（`workspace.rs:759` 的 `trace_fr_match` 现为一律丢弃）、录制写出 FR 帧（BLF FR_RCVMESSAGE 对象 + ASC `Fr RMSG` 行，回环自证）、`export_trace`（export.rs:10 现 CAN-only）纳入 FR、触发条件支持 slot/帧到达。
@@ -132,6 +132,17 @@
 - **`export_trace` 纳入 FR**：同一份 Trace 过滤器的 `trace_fr_match` 筛 FR 行，CAN 与 FR 两路**按时间归并**成一个升序 ASC（ASC 时间乱序即畸形日志）；FR 环没有磁盘归档，故导出只覆盖热环窗口，状态行按两类分别报数。测试 `the_trace_export_carries_flexray_rows`（回放真混合 ASC → 导出 → 读回两边各 4 条）。
 - **`--convert` 同样不再丢 FR**：BLF→ASC 混合转码保持交错顺序，报告写成"N frame(s) and M FlexRay row(s)"。测试 `convert_carries_flexray_rows_across`。
 - **S4 剩余**：每路 FR 负载/周期/抖动统计（占用率口径待定）、触发条件支持 slot/帧到达、FR 的 Buses/Statistics 一等化（并入 S3）。
+
+### 2026-09-20：BLF 里的 `clusterNo` —— 一份 CANoe 日志真的可以有两个 cluster（纠正早前假设）
+
+- **早前写下的假设是错的**：S1 那节说"日志一次抓取只有一个 cluster → 回放侧恒 0"。实测（临时 census 读两份真实资产，跑完即删）：
+  - `assets/arxml/Logging.blf` → `(channel=1, mask=1, clusterNo=0)` ×39 156，单 cluster，假设恰好成立。
+  - `assets/fibex/Logging.blf` → `(1, 1, 0)` ×29 738 **+** `(2, 1, 1)` ×30 334 —— **两个 cluster**，`clusterNo` 与 Vector channel 号一一对应（channel = clusterNo + 1）。
+- **后果**：所有 FR 行被硬编成 `bus: 0`，两个 cluster 的槽位并到一张表里 —— 一路的帧拿另一路的描述解名/解信号，聚合键 `(bus, slot)` 失去区分，表格里同一槽号出现"重复行"（正是用户截图里 slot 24 / 48 / 70 各两行的成因）。
+- **修法**：`decode_fr_rcv` 读 `wClusterNo@12` 当 bus（钳到 u8）；`fr_rcv_event` 把 `r.bus` 写回同一偏移，于是自家录的两 cluster 文件能原样读回。ASC 的 `Fr RMSG` 行没有这个字段（CANoe 那个位置的 token 只有一份"=0"的证据，不敢当 cluster 用），所以 ASC 仍读成单 cluster —— 注释写在**决定处**而不是假设处。
+- **回归**：`a_real_two_cluster_recording_keeps_its_clusters_apart`（钉住 60 072 = 29 738 + 30 334，且两路槽号确有重叠）、`flexray_rows_survive_a_recording_round_trip`（中间那行改到 bus 1，断言 bus 也过得了环）。
+- **顺带**：`--export-csv` 只吃一份 `--fibex`，两 cluster 日志里另一路的帧以前是**静默丢弃**；现在 CSV 的 bus 列按 Trace 口径写 `FR{n} A/B`，报告末尾报"N of them with no frame in the description"。**留**：`--fibex` 能按 bus 给多次（多路描述导出）。
+- **另一半证据**：两份真实资产的 `channelMask` 全是 1（=通道 A），所以回放侧 `ab` 一直是 0 且与描述匹配；**实时监听的 `ab` 仍是恒 2（未证）**，那要真机事件缓冲偏移 —— 归 S5。
 
 ## 结构待办（零散）
 
