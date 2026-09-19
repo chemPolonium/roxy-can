@@ -21,7 +21,10 @@ impl TrigDraft {
             TriggerCond::SignalCross { id, .. }
             | TriggerCond::IdPresent { id, .. }
             | TriggerCond::CycleTimeout { id, .. } => format!("{id:X}"),
-            TriggerCond::ErrorFrame { .. } | TriggerCond::SysVar { .. } => String::new(),
+            // The FlexRay slot is edited as a number, not a hex id.
+            TriggerCond::ErrorFrame { .. }
+            | TriggerCond::SysVar { .. }
+            | TriggerCond::FrFramePresent { .. } => String::new(),
         };
         TrigDraft {
             index,
@@ -79,6 +82,10 @@ fn content(app: &mut App, ui: &Ui) {
         app.add_error_trigger();
     }
     ui.same_line();
+    if ui.button("+ FlexRay frame") {
+        app.add_fr_trigger();
+    }
+    ui.same_line();
     if ui.button("+ Timeout") {
         app.add_timeout_trigger();
     }
@@ -91,7 +98,7 @@ fn content(app: &mut App, ui: &Ui) {
         app.send(crate::bus::BusCommand::RearmTriggers);
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("重置出现类条件的锁存（ID 出现 / 错误帧）：下一个对应事件再次触发");
+        ui.tooltip_text("重置出现类条件的锁存（CAN ID / 错误帧 / FlexRay 槽）：下一个对应事件再次触发");
     }
     // Trigger-recording context: pre-trigger frames, post-roll frames,
     // and the marker cap. Each accepted edit is its own command, like the
@@ -223,6 +230,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             TriggerCond::IdPresent { .. } => "id present",
             TriggerCond::CycleTimeout { .. } => "cycle timeout",
             TriggerCond::ErrorFrame { .. } => "error frames",
+            TriggerCond::FrFramePresent { .. } => "FlexRay frame",
             TriggerCond::SysVar { .. } => "system variable",
         };
         ui.text(format!(
@@ -244,19 +252,41 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 84.0);
         ui.table_setup_column_stretch_weight("", TableColumnFlags::NONE, 1.0);
 
-        // System variables are global: the bus picker would lie.
-        if !matches!(draft.cond, TriggerCond::SysVar { .. }) {
+        // System variables are global: the bus picker would lie. A FlexRay rule
+        // picks a cluster, and the clusters on offer are the ones the tool knows
+        // a thing about -- a description loaded or a watch attached.
+        if let Some(fr_bus) = draft.cond.fr_bus() {
+            row(ui, "Bus", |ui| {
+                let mut buses: Vec<u8> = app.fr_buses.keys().copied().collect();
+                buses.extend(app.snap.fr_watches.iter().map(|w| w.bus));
+                buses.sort_unstable();
+                buses.dedup();
+                if !buses.contains(&fr_bus) {
+                    buses.insert(0, fr_bus);
+                }
+                let names: Vec<String> = buses.iter().map(|b| format!("FR{b}")).collect();
+                let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                let mut pick = buses.iter().position(|b| *b == fr_bus).unwrap_or(0);
+                ui.set_next_item_width(-1.0);
+                if ui.combo_simple_string("##trigfrbus", &mut pick, &refs)
+                    && let TriggerCond::FrFramePresent { bus, .. } = &mut draft.cond
+                {
+                    *bus = buses[pick.min(buses.len() - 1)];
+                }
+            });
+        } else if !matches!(draft.cond, TriggerCond::SysVar { .. }) {
             row(ui, "Bus", |ui| {
                 let names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
                 let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                let mut bus = (draft.cond.bus() as usize).min(refs.len().saturating_sub(1));
+                let mut bus = (draft.cond.can_bus().unwrap_or(0) as usize)
+                    .min(refs.len().saturating_sub(1));
                 ui.set_next_item_width(-1.0);
                 if ui.combo_simple_string("##trigbus", &mut bus, &refs) {
                     set_bus(&mut draft.cond, bus as u8);
                 }
             });
         }
-        let cond_bus = draft.cond.bus();
+        let cond_bus = draft.cond.can_bus().unwrap_or(0);
         match &mut draft.cond {
             TriggerCond::SignalCross {
                 id,
@@ -308,6 +338,17 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             TriggerCond::IdPresent { id, .. } => {
                 row(ui, "Message", |ui| {
                     id_field(ui, &mut draft.id_buf, id);
+                });
+            }
+            TriggerCond::FrFramePresent { slot, .. } => {
+                // Decimal: a slot number is a schedule position, not an
+                // identifier to be read in hex like a CAN arbitration id.
+                row(ui, "Slot", |ui| {
+                    ui.set_next_item_width(-1.0);
+                    let mut s = *slot as i32;
+                    if ui.input_int_config("##trigfrslot").step(1).build(&mut s) {
+                        *slot = s.clamp(1, i32::from(u16::MAX)) as u16;
+                    }
                 });
             }
             TriggerCond::SysVar {
@@ -485,8 +526,9 @@ fn set_bus(cond: &mut TriggerCond, ch: u8) {
         | TriggerCond::IdPresent { ch: c, .. }
         | TriggerCond::CycleTimeout { ch: c, .. }
         | TriggerCond::ErrorFrame { ch: c } => *c = ch,
-        // System variables are global: no bus to point anywhere.
-        TriggerCond::SysVar { .. } => {}
+        // Global, and its bus comes from the cluster on offer: no CAN channel
+        // to point a FlexRay rule at.
+        TriggerCond::SysVar { .. } | TriggerCond::FrFramePresent { .. } => {}
     }
 }
 

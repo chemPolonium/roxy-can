@@ -1032,6 +1032,12 @@ impl Config {
                             threshold,
                             rising,
                         } => (4, 0, 0, false, key.clone(), *threshold, *rising),
+                        // A FlexRay rule's `ch` is a FlexRay bus index and its
+                        // `id` the slot: `kind` 5 is what says so, and no
+                        // arbitration id is invented for a schedule position.
+                        TriggerCond::FrFramePresent { bus, slot } => {
+                            (5, *bus, u32::from(*slot), false, String::new(), 0.0, false)
+                        }
                     };
                     TriggerCfg {
                         kind,
@@ -1392,6 +1398,12 @@ impl Config {
                         key: c.signal.clone(),
                         threshold: c.threshold,
                         rising: c.rising,
+                    },
+                    // A FlexRay rule's `ch` is a FlexRay bus index and its `id`
+                    // the slot; kind 5 is what says so.
+                    5 => TriggerCond::FrFramePresent {
+                        bus: c.ch,
+                        slot: c.id.min(u32::from(u16::MAX)) as u16,
                     },
                     _ => return None,
                 };
@@ -1928,6 +1940,35 @@ mod tests {
             again.fr_db(0).expect("bus 0").frames[0].name,
             again.fr_db(1).expect("bus 1").frames[0].name,
             "the two entries are the two files, not one copied twice"
+        );
+    }
+
+    /// A FlexRay rule persists as kind 5, which is what states that `ch` names
+    /// a FlexRay bus and `id` a schedule slot. Reloaded as any other kind it
+    /// would become a CAN watch on a made-up arbitration id.
+    #[test]
+    fn a_flexray_trigger_keeps_its_kind_and_slot() {
+        use crate::trigger::{Trigger, TriggerAction, TriggerCond};
+        let mut app = App::headless();
+        app.triggers.push(Trigger::new(
+            TriggerCond::FrFramePresent { bus: 1, slot: 13 },
+            TriggerAction::StartRecording,
+        ));
+        app.refresh_snapshot();
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        assert!(
+            json.contains(r#""kind":5"#) && json.contains(r#""id":13"#) && json.contains(r#""ch":1"#),
+            "the slot is stored as a slot: {json}"
+        );
+
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(
+            restored.snap.triggers[0].cond,
+            TriggerCond::FrFramePresent { bus: 1, slot: 13 },
+            "and comes back as the same cluster's slot"
         );
     }
 

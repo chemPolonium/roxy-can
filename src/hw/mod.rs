@@ -414,13 +414,15 @@ impl Hardware {
         }
     }
 
-    /// Drains every FlexRay watch's receive queue into `out`, discarding when
-    /// parked (`!live`) exactly like `poll_rx` -- the queue must not back up
-    /// with stale frames, but parked traffic stays off the tool's timeline.
-    /// Buses are drained in index order so a run is reproducible. The reception
-    /// channel (A/B) reads as unknown until the event offset is
-    /// probe-verified.
-    pub fn poll_fr(&mut self, out: &mut Vec<crate::trace::FrRow>) {
+    /// Drains every FlexRay watch's receive queue into `out`, stamped against
+    /// `sim_t_us` exactly as `poll_rx` stamps a CAN frame -- the row a trigger
+    /// judges and the row the trace shows must carry the clock the arrival
+    /// happened on. Discards when parked (`!live`) like the CAN side: the queue
+    /// must not back up with stale frames, but parked traffic stays off the
+    /// tool's timeline. Buses are drained in index order so a run is
+    /// reproducible. The reception channel (A/B) reads as unknown until the
+    /// event offset is probe-verified.
+    pub fn poll_fr(&mut self, sim_t_us: u64, out: &mut Vec<crate::trace::FrRow>) {
         let mut buses: Vec<u8> = self.fr_watches.keys().copied().collect();
         buses.sort();
         for bus in buses {
@@ -433,7 +435,7 @@ impl Hardware {
                 }
                 out.push(crate::trace::FrRow {
                     bus: w.bus,
-                    t_us: 0, // stamped against the sim clock by the core
+                    t_us: sim_t_us,
                     ab: 2,
                     slot: f.slot,
                     cycle: f.cycle,

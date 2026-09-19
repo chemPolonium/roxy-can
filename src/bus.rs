@@ -2668,10 +2668,11 @@ impl BusCore {
         }
         // Triggers bind to a bus by index as well: a rule watching the
         // removed bus is meaningless, and a Send reaction aimed at it has
-        // no target left. Everything else shifts down.
+        // no target left. Everything else shifts down. A FlexRay rule's index
+        // is not in this space at all -- the CAN renumbering leaves it alone.
         let removed = ch as u8;
         self.triggers.retain(|t| {
-            let cond_gone = t.cond.bus() == removed;
+            let cond_gone = t.cond.can_bus() == Some(removed);
             let action_gone = matches!(&t.action, TriggerAction::Send { ch, .. } if *ch == removed);
             !cond_gone && !action_gone
         });
@@ -2681,8 +2682,8 @@ impl BusCore {
                 | TriggerCond::IdPresent { ch, .. }
                 | TriggerCond::ErrorFrame { ch }
                 | TriggerCond::CycleTimeout { ch, .. } => ch,
-                // System variables are global: no bus to shift.
-                TriggerCond::SysVar { .. } => continue,
+                // Global, or aiming at a FlexRay bus: no CAN index to shift.
+                TriggerCond::SysVar { .. } | TriggerCond::FrFramePresent { .. } => continue,
             };
             if *cond_ch > removed {
                 *cond_ch -= 1;
@@ -3337,6 +3338,9 @@ impl BusCore {
         // section would freeze until the next CAN arrival.
         let mut fr_landed = fr_replayed;
         for row in fr_replay {
+            // Judged before the ingest, like a CAN frame: a FlexRay edge that
+            // starts a recording still captures the frame that fired it.
+            self.eval_fr_triggers(&row, status);
             self.ingest_fr_row(row);
         }
 
@@ -3362,10 +3366,11 @@ impl BusCore {
             // adapters. Its rows skip the CAN pipeline: the ingest goes
             // straight to the FR ring.
             let mut fr_rx: Vec<crate::trace::FrRow> = Vec::new();
-            self.hw.poll_fr(&mut fr_rx);
+            self.hw.poll_fr(sim, &mut fr_rx);
             if !fr_rx.is_empty() {
                 fr_landed = true;
                 for row in fr_rx {
+                    self.eval_fr_triggers(&row, status);
                     self.ingest_fr_row(row);
                 }
             }
@@ -3672,6 +3677,46 @@ impl BusCore {
             .collect()
     }
 
+    /// The FlexRay side of [`BusCore::eval_triggers`]: a row folds into the
+    /// cluster-keeping conditions before its ingest, so a rule that starts a
+    /// recording still captures the frame that fired it.
+    pub(crate) fn eval_fr_triggers(&mut self, row: &crate::trace::FrRow, status: &mut String) {
+        if self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
+        for i in 0..self.triggers.len() {
+            let now = {
+                let t = &self.triggers[i];
+                if !t.enabled {
+                    continue;
+                }
+                match &t.cond {
+                    TriggerCond::FrFramePresent { bus, slot } => {
+                        if row.bus != *bus || row.slot != *slot {
+                            continue;
+                        }
+                        true // latch: once seen, it stays seen
+                    }
+                    // Everything else watches CAN frames.
+                    _ => continue,
+                }
+            };
+            let t = &mut self.triggers[i];
+            let was = t.level;
+            t.level = now;
+            if now && !was {
+                t.fired += 1;
+                t.last_fire_t_us = row.t_us;
+                fired.push((t.action, row.t_us));
+            }
+        }
+        // A FlexRay edge has no CAN frame to mirror into a reaction send, and
+        // the actions a send could aim at are CAN generator entries: the
+        // payload map stays empty, so a `Send` rule is a no-op here.
+        self.run_actions(fired, &HashMap::new(), status);
+    }
+
     /// Folds one frame into every enabled trigger and acts on edges.
     /// Runs as the first thing that happens to a received frame, so a
     /// trigger that starts a recording still captures the frame that
@@ -3731,11 +3776,12 @@ impl BusCore {
                         }
                         true
                     }
-                    // Not a frame condition: swept once per step against
-                    // the aggregates in `eval_timeout_triggers`.
                     // Not frame conditions: swept once per step in
-                    // `eval_timeout_triggers` (cycle silence, system vars).
-                    TriggerCond::CycleTimeout { .. } | TriggerCond::SysVar { .. } => continue,
+                    // `eval_timeout_triggers` (cycle silence, system vars),
+                    // or per FlexRay row in `eval_fr_triggers`.
+                    TriggerCond::CycleTimeout { .. }
+                    | TriggerCond::SysVar { .. }
+                    | TriggerCond::FrFramePresent { .. } => continue,
                 }
             };
             let t = &mut self.triggers[i];

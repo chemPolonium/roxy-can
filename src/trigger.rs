@@ -43,6 +43,11 @@ pub enum TriggerCond {
     /// per frame; the level clears when traffic resumes, so every new
     /// dropout is a fresh edge.
     CycleTimeout { ch: u8, id: u32 },
+    /// A FlexRay frame arriving in `slot` on the cluster `bus`. Latches for
+    /// the run like the other presence conditions. `bus` is a **FlexRay** bus
+    /// index, not a CAN channel -- the two numbering spaces are separate, so
+    /// nothing here may hand one to the other.
+    FrFramePresent { bus: u8, slot: u16 },
     /// A system variable at or past a threshold (`rising`), or at/below
     /// it with `rising == false`. Swept once per step against the live
     /// registry -- sysvars are the user-input channel, so "the operator
@@ -118,15 +123,27 @@ impl Trigger {
 }
 
 impl TriggerCond {
-    /// The bus the condition watches.
-    pub fn bus(&self) -> u8 {
+    /// The CAN channel a condition watches, or `None` for the global and the
+    /// FlexRay ones. Named rather than plain `bus` because the two bus spaces
+    /// are separate: renumbering CAN channels on a bus removal must not reach
+    /// into a FlexRay index, and a CAN channel name must not be printed for
+    /// one.
+    pub fn can_bus(&self) -> Option<u8> {
         match self {
             TriggerCond::SignalCross { ch, .. }
             | TriggerCond::IdPresent { ch, .. }
             | TriggerCond::ErrorFrame { ch }
-            | TriggerCond::CycleTimeout { ch, .. } => *ch,
-            // System variables are global: no bus to watch.
-            TriggerCond::SysVar { .. } => 0,
+            | TriggerCond::CycleTimeout { ch, .. } => Some(*ch),
+            // System variables are global; FlexRay slots name a cluster.
+            TriggerCond::SysVar { .. } | TriggerCond::FrFramePresent { .. } => None,
+        }
+    }
+
+    /// The FlexRay bus a condition watches.
+    pub fn fr_bus(&self) -> Option<u8> {
+        match self {
+            TriggerCond::FrFramePresent { bus, .. } => Some(*bus),
+            _ => None,
         }
     }
 
@@ -137,7 +154,9 @@ impl TriggerCond {
     pub fn latches_once(&self) -> bool {
         matches!(
             self,
-            TriggerCond::IdPresent { .. } | TriggerCond::ErrorFrame { .. }
+            TriggerCond::IdPresent { .. }
+                | TriggerCond::ErrorFrame { .. }
+                | TriggerCond::FrFramePresent { .. }
         )
     }
 
@@ -160,6 +179,7 @@ impl TriggerCond {
             TriggerCond::IdPresent { id, .. } => format!("0x{id:X} present"),
             TriggerCond::ErrorFrame { .. } => "error frames".to_string(),
             TriggerCond::CycleTimeout { id, .. } => format!("0x{id:X} timeout"),
+            TriggerCond::FrFramePresent { slot, .. } => format!("slot {slot} frame"),
             TriggerCond::SysVar {
                 key,
                 threshold,
@@ -178,7 +198,15 @@ impl App {
     /// on the bus, the window only shapes them.
     pub fn trigger_summary(&self, i: usize) -> String {
         match self.snap.triggers.get(i) {
-            Some(t) => format!("{}  {}", self.channel_name(t.cond.bus()), t.cond.short()),
+            Some(t) => {
+                // The two bus spaces name differently: a FlexRay rule reads
+                // `FR1`, a CAN one keeps its channel name.
+                let bus = match t.cond.fr_bus() {
+                    Some(b) => format!("FR{b}"),
+                    None => self.channel_name(t.cond.can_bus().unwrap_or(0)),
+                };
+                format!("{bus}  {}", t.cond.short())
+            }
             None => String::new(),
         }
     }
@@ -217,6 +245,27 @@ impl App {
 
     pub fn add_id_trigger(&mut self) {
         self.push_trigger(TriggerCond::IdPresent { ch: 0, id: 0x100 });
+    }
+
+    /// Arms a FlexRay frame-arrival rule, defaulting to the first static slot
+    /// of the first loaded cluster description so the row watches a slot that
+    /// exists. With no description loaded there is nothing to name, and slot 1
+    /// is at least editable in the popup.
+    pub fn add_fr_trigger(&mut self) {
+        let (bus, slot) = match self.fr_buses.iter().next() {
+            Some((bus, cfg)) => (
+                *bus,
+                cfg.db
+                    .frames
+                    .iter()
+                    .map(|f| f.triggering.slot_id)
+                    .min()
+                    .map(|s| s as u16)
+                    .unwrap_or(1),
+            ),
+            None => (0, 1),
+        };
+        self.push_trigger(TriggerCond::FrFramePresent { bus, slot });
     }
 
     pub fn add_error_trigger(&mut self) {

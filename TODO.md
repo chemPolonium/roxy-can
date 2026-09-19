@@ -99,6 +99,15 @@
 - 回归 `two_flexray_watches_feed_their_own_buses`：两路 mock 端口各发同槽号的帧 → 两条独立 tally；`SetFrWatch{bus:1,None}` 只摘 bus 1，幸存端口继续进帧，被摘端口的队列不再属于任何总线。
 - **仍待真机（S5）**：`ab` 事件偏移、`channel_index` 是否要进工程文件（CAN 侧工程打开也**不**自动挂硬件，FR 保持一致，故现在只存路径）、总线增删后空闲总线索引被复用会让旧曲线的 `(bus, slot)` 键指向新 cluster —— 与 CAN 通道重映射同一类问题，等 FR 通道列表可编辑时一起处理。
 
+### 2026-09-20：FlexRay 帧到达能触发动作了（S4 的触发项）
+
+- **新条件** `TriggerCond::FrFramePresent { bus, slot }`：出现类（与 CAN 的 `IdPresent`/`ErrorFrame` 一样锁存到整轮，`RearmTriggers` 才重来）。判定在 `BusCore::eval_fr_triggers`，**在 ingest 之前**逐行跑，所以"触发开始录制"的 FlexRay 边沿仍能录进那一行 —— 与 CAN 侧同一顺序理由。动作复用 `run_actions`（start/stop rec、clear trace、marker 都可用；`Send` 目标是 CAN 发生表条目，FR 边沿下是 no-op，注释写明了）。
+- **两套 bus 空间显式分开**：`TriggerCond::bus()` 删掉，换成 `can_bus() -> Option<u8>`（SysVar 与 FlexRay 都返回 `None`）+ `fr_bus()`。这不是改名：`remove_bus` 那段"删掉的总线上的规则一起删、其余下移"只能作用在 CAN 空间里，一个 FlexRay 索引被它挪一下就错了。回归 `removing_a_bus_drops_its_triggers_and_shifts_the_rest`（加了一条 `FR bus 1` 规则，删 CAN 通道 0 后它既不消失也不变号）。
+- **顺带修的时序隐患**：`Hardware::poll_fr` 原来把行留成 `t_us: 0` 交给 `ingest_fr_row` 补，而触发判定发生在 ingest 之前 —— 边沿会记到 0 时刻。现在照 `poll_rx` 的做法在 poll 时用 sim 时钟打戳。
+- **UI**：Triggers 窗口多一个 `+ FlexRay frame` 按钮；编辑器里 bus 下拉对 FR 规则列 cluster（已加载描述 ∪ 已挂监听 ∪ 规则自己那路），槽用十进制输入框（槽号是调度位置，不是该按十六进制读的仲裁 id）。工程持久化用 `kind = 5`（`ch`=FR bus、`id`=slot），回归 `a_flexray_trigger_keeps_its_kind_and_slot`；`editor_popups_draw_without_panicking` 覆盖有/无描述两种弹出。
+- **S4 剩下**：每路 FR 负载/占用率进 bus_loads/状态栏（口径待定）；FlexRay 信号的 `SignalCross`（`TriggerCond::SignalCross` 仍按 `(ch,id,ext)` 走 DBC，FR 侧要先决定阈值绑信号名还是槽+信号）。
+
+
 
 
 ### 2026-09-20：ASC 也能录 FlexRay，导出与转码不再是 CAN-only

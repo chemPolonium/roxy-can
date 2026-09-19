@@ -5896,7 +5896,8 @@ fn an_orphan_script_is_adopted_by_the_first_dbc_node_on_its_bus() {
 
 /// Triggers bind to a bus by index too: a rule watching the removed bus
 /// is meaningless, and a Send reaction aimed at it has no target -- both
-/// are dropped; the survivors shift down.
+/// are dropped; the survivors shift down. A FlexRay rule's index is not in
+/// that space at all, so removal neither drops it nor renumbers it.
 #[test]
 fn removing_a_bus_drops_its_triggers_and_shifts_the_rest() {
     let mut app = App::headless();
@@ -5916,19 +5917,87 @@ fn removing_a_bus_drops_its_triggers_and_shifts_the_rest() {
         TriggerCond::ErrorFrame { ch: 1 },
         TriggerAction::Send { ch: 1, id: 199 },
     ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::FrFramePresent { bus: 1, slot: 13 },
+        TriggerAction::StartRecording,
+    ));
     app.refresh_snapshot();
 
     app.remove_channel(0);
     app.settle();
 
-    assert_eq!(app.snap.triggers.len(), 2, "two of four survive");
-    assert_eq!(app.snap.triggers[0].cond.bus(), 0, "shifted down");
-    assert_eq!(app.snap.triggers[1].cond.bus(), 0);
+    assert_eq!(app.snap.triggers.len(), 3, "two CAN rules and the FR one");
+    assert_eq!(app.snap.triggers[0].cond.can_bus(), Some(0), "shifted down");
+    assert_eq!(app.snap.triggers[1].cond.can_bus(), Some(0));
     assert_eq!(
         app.snap.triggers[1].action,
         TriggerAction::Send { ch: 0, id: 199 },
         "the Send reaction follows its bus down"
     );
+    assert_eq!(
+        app.snap.triggers[2].cond.fr_bus(),
+        Some(1),
+        "a FlexRay bus index is not a CAN channel: it survives as it was"
+    );
+    assert_eq!(app.snap.triggers[2].cond.can_bus(), None);
+}
+
+/// Queues one FlexRay frame on a mock port, steps the core to `t_us`, and
+/// pulls the snapshot back. A free function rather than a closure: the closure
+/// would hold the app borrowed across the assertions that read it.
+fn fr_step(app: &mut App, q: &crate::hw::MockFrHandles, slot: u16, t_us: u64) {
+    use crate::hw::vector::flexray::FrFrame;
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot,
+        cycle: 0,
+        payload: vec![0, 0],
+        header_crc: 0,
+        flags: 0,
+    });
+    app.advance_clock(t_us);
+    app.tick(t_us);
+    app.refresh_snapshot();
+}
+
+/// A FlexRay arrival arms the same trigger layer a CAN frame does: the edge on
+/// the watched slot acts, an arrival of the same slot on another cluster does
+/// not, and the presence latch holds until it is re-armed.
+#[test]
+fn a_flexray_arrival_fires_a_trigger_on_the_watched_bus() {
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    let q1 = app.hw.attach_fr_mock(1, 6);
+    app.start_virtual();
+    app.triggers.push(Trigger::new(
+        TriggerCond::FrFramePresent { bus: 1, slot: 13 },
+        TriggerAction::InsertMarker,
+    ));
+
+    fr_step(&mut app, &q0, 13, 10_000);
+    assert!(
+        app.snap.markers.is_empty(),
+        "the watched rule names cluster 1, not this one"
+    );
+
+    fr_step(&mut app, &q1, 13, 20_000);
+    assert_eq!(
+        app.snap.markers,
+        [20_000],
+        "the edge stamps the bus clock it arrived on"
+    );
+
+    fr_step(&mut app, &q1, 13, 30_000);
+    assert_eq!(app.snap.markers.len(), 1, "presence latches for the run");
+
+    app.send(crate::bus::BusCommand::RearmTriggers);
+    fr_step(&mut app, &q1, 13, 40_000);
+    assert_eq!(
+        app.snap.markers,
+        [20_000, 40_000],
+        "re-arming lets the next arrival fire again"
+    );
+    app.stop();
 }
 
 /// Hardware RX: frames received on an attached adapter ingest like any

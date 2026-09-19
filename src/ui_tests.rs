@@ -530,8 +530,10 @@ fn the_buses_window_draws_two_flexray_watches() {
     frames(&mut app, &mut ctx, 3);
 }
 
-/// The two armed editor popups render from their draft state across
-/// frames (the frame-persistence path the stale-draft bug lived in).
+/// The armed editor popups -- a system variable and three trigger kinds
+/// (signal cross, FlexRay frame with and without a description) -- render from
+/// their draft state across frames (the frame-persistence path the stale-draft
+/// bug lived in).
 #[test]
 fn editor_popups_draw_without_panicking() {
     let _ui_lock = UI_LOCK.lock().unwrap();
@@ -544,14 +546,28 @@ fn editor_popups_draw_without_panicking() {
 
     app.add_signal_trigger();
     app.settle();
-    if let Some(t) = app.trig_draft.clone() {
-        let _ = t;
-    }
     app.trig_draft = app
         .snap
         .triggers
         .first()
         .map(|t| crate::ui::triggers::TrigDraft::new(0, t.cond.clone(), t.action));
+    frames(&mut app, &mut ctx, 3);
+    app.trig_draft = None;
+
+    // The FlexRay editor, twice: once with nothing loaded (the cluster combo
+    // has to fall back to the rule's own index instead of an empty list), then
+    // with a description on bus 0 -- which is also what lets `add_fr_trigger`
+    // default the slot to one the schedule really has.
+    app.add_fr_trigger();
+    frames(&mut app, &mut ctx, 3);
+    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    app.add_fr_trigger();
+    app.settle();
+    assert_eq!(
+        app.snap.triggers.last().map(|t| t.cond.fr_bus()),
+        Some(Some(0)),
+        "the new rule points at the cluster with a description"
+    );
     frames(&mut app, &mut ctx, 3);
 }
 
