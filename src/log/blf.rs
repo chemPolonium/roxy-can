@@ -455,6 +455,13 @@ fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
     // 0 = A / 1 = B / 2 = unknown-or-both (a dual-channel frame decodes
     // identically on either side, so `frame_at` drops the channel preference).
     let channel_mask = u16_at(body, 4);
+    // `wClusterNo` is the cluster the object belongs to, and a CANoe
+    // recording really does hold more than one: `assets/fibex/Logging.blf`
+    // carries 29 738 rows of cluster 0 (Vector channel 1) and 30 334 of
+    // cluster 1 (channel 2). So this is the FlexRay bus index -- two clusters
+    // share slot numbers, and folding them together names one's frames from
+    // the other's description.
+    let cluster_no = u16_at(body, 12).min(u16::from(u8::MAX)) as u8;
     let ab = match channel_mask {
         1 => 0,
         2 => 1,
@@ -481,7 +488,7 @@ fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
     let len = byte_count.min(data_count).min(avail).min(254);
     let payload = body[data_at..data_at + len].to_vec();
     Some(FrOrCan::Fr(crate::trace::FrRow {
-        bus: 0, // a log carries one cluster
+        bus: cluster_no,
         t_us,
         ab,
         slot: frame_id,
@@ -878,6 +885,9 @@ fn fr_rcv_event(r: &crate::trace::FrRow, ts_raw: u64) -> Vec<u8> {
         _ => 3,     // both / unknown
     })
     .to_le_bytes());
+    // `wClusterNo`: the FlexRay bus the row arrived on, so a recording of two
+    // clusters reads back as two -- the same field [`decode_fr_rcv`] reads.
+    b[12..14].copy_from_slice(&u16::from(r.bus).to_le_bytes());
     b[16..18].copy_from_slice(&r.slot.to_le_bytes());
     b[18..20].copy_from_slice(&r.header_crc.to_le_bytes());
     let len = r.payload.len() as u16;
@@ -2003,7 +2013,7 @@ pub(crate) mod tests {
                 name: None,
             },
             FrRow {
-                bus: 0,
+                bus: 1,
                 t_us: 2_000,
                 ab: 1,
                 slot: 52,
@@ -2040,9 +2050,9 @@ pub(crate) mod tests {
         assert_eq!(got.len(), rows.len(), "every FR row read back");
         for (g, want) in got.iter().zip(rows.iter()) {
             assert_eq!(
-                (g.slot, g.cycle, g.ab, &g.payload),
-                (want.slot, want.cycle, want.ab, &want.payload),
-                "the frame coordinates survive"
+                (g.bus, g.slot, g.cycle, g.ab, &g.payload),
+                (want.bus, want.slot, want.cycle, want.ab, &want.payload),
+                "the frame coordinates -- and which cluster they belong to -- survive"
             );
             // The reader rebases a log so its first row lands at zero (that is
             // where a replay starts), so what survives is the spacing.
@@ -2055,6 +2065,45 @@ pub(crate) mod tests {
             assert_eq!(g.flags, want.flags, "frameFlags survive");
         }
         std::fs::remove_file(&path).ok();
+    }
+
+    /// The bundled CANoe recording at `assets/fibex/Logging.blf` is the ground
+    /// truth for `wClusterNo`: 60 072 FlexRay objects, 29 738 of them cluster 0
+    /// and 30 334 cluster 1, and the same slot numbers appear on both. Reading
+    /// the field is the only thing that keeps the two clusters apart in Trace,
+    /// Messages and every key downstream -- and until now every row said
+    /// "cluster 0".
+    #[test]
+    fn a_real_two_cluster_recording_keeps_its_clusters_apart() {
+        let p = std::path::Path::new("assets/fibex/Logging.blf");
+        if !p.exists() {
+            println!("{p:?} not present -- skipped");
+            return;
+        }
+        let mut s = BlfStream::open(p).expect("open");
+        let mut rows = Vec::new();
+        while s.peek_fr_t().is_some() {
+            s.poll_fr_rows(u64::MAX, &mut rows);
+        }
+        assert_eq!(rows.len(), 60_072, "every FR object decoded");
+        let mut per_bus: std::collections::BTreeMap<u8, u64> = Default::default();
+        let mut slots: [std::collections::HashSet<u16>; 2] = Default::default();
+        for r in &rows {
+            *per_bus.entry(r.bus).or_default() += 1;
+            if let Some(set) = slots.get_mut(r.bus as usize) {
+                set.insert(r.slot);
+            }
+        }
+        assert_eq!(
+            per_bus.into_iter().collect::<Vec<_>>(),
+            vec![(0, 29_738), (1, 30_334)],
+            "the two clusters, as the file states them"
+        );
+        let shared: Vec<u16> = slots[0].intersection(&slots[1]).copied().collect();
+        assert!(
+            !shared.is_empty(),
+            "the clusters really do reuse slot numbers, which is the point"
+        );
     }
 
     /// The recorder writes both kinds into one container stream, the way a

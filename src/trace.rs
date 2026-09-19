@@ -19,9 +19,11 @@ use std::sync::Arc;
 /// rollups or signal subscriptions -- a watch-only diagnostic.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrRow {
-    /// Which FlexRay bus this row arrived on. A replayed log carries one
-    /// cluster, so every row off a file is bus 0; the live watch stamps its
-    /// own index, which is what lets several ports be watched at once.
+    /// Which FlexRay bus this row arrived on -- the cluster index, not a CAN
+    /// channel. The live watch stamps its own index, which is what lets
+    /// several ports be watched at once; a BLF carries the same number per
+    /// object (`wClusterNo`, and real recordings do hold two clusters), while
+    /// an ASC has no such field and reads back as bus 0.
     pub bus: u8,
     pub t_us: u64,
     /// The reception channel: 0 = A, 1 = B. 2 = unknown -- the event

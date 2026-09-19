@@ -288,7 +288,9 @@ fn parse_fr_rmsg(t_us: u64, toks: &[&str], base: u32) -> Option<crate::trace::Fr
         _ => 0,              // A
     };
     Some(crate::trace::FrRow {
-        bus: 0, // a log carries one cluster
+        // ASC's `Fr RMSG` line has no cluster field to read (BLF has one), so a
+        // two-cluster ASC log reads back as one bus. See `AscWriter::write_fr`.
+        bus: 0,
         t_us,
         ab,
         slot,

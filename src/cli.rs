@@ -554,6 +554,10 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     let mut rows = 0u64;
     let mut can_frames = 0u64;
     let mut fr_frames = 0u64;
+    // FlexRay rows the one description resolved no frame for -- on a
+    // two-cluster log that is the whole other cluster, and the report has to
+    // say so rather than let the row count speak for itself.
+    let mut fr_skipped = 0u64;
     let mut batch: Vec<crate::trace::FrRow> = Vec::new();
 
     loop {
@@ -574,7 +578,15 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
             }
             (None, Some(ft)) => {
                 stream.poll_fr_rows(ft, &mut batch);
-                emit_fr_batch(&frdb, &mut batch, &mut w, &write_line, &mut rows, &mut fr_frames)?;
+                emit_fr_batch(
+                    &frdb,
+                    &mut batch,
+                    &mut w,
+                    &write_line,
+                    &mut rows,
+                    &mut fr_frames,
+                    &mut fr_skipped,
+                )?;
             }
             (Some(ct), Some(ft)) => {
                 if ct <= ft {
@@ -590,14 +602,20 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
                         &write_line,
                         &mut rows,
                         &mut fr_frames,
+                        &mut fr_skipped,
                     )?;
                 }
             }
         }
     }
     w.flush().map_err(|e| format!("flush failed: {e}"))?;
+    let skipped = if fr_skipped == 0 {
+        String::new()
+    } else {
+        format!(", {fr_skipped} of them with no frame in the description")
+    };
     Ok(format!(
-        "exported {rows} signal row(s) from {can_frames} CAN + {fr_frames} FlexRay frame(s)\n  log : {}\n  out : {}",
+        "exported {rows} signal row(s) from {can_frames} CAN + {fr_frames} FlexRay frame(s){skipped}\n  log : {}\n  out : {}",
         opts.input, opts.out
     ))
 }
@@ -640,8 +658,10 @@ fn emit_can(
 }
 
 /// Writes one drained FlexRay batch to CSV through the description database
-/// and clears it. A row whose slot the database resolves no frame for is
-/// skipped -- nothing to decode it against.
+/// and counts the rows. A row whose slot the database resolves no frame for is
+/// skipped -- nothing to decode it against -- and counted in `skipped`, because
+/// on a two-cluster log that is the whole other cluster and a silent half
+/// export reads as a complete one.
 fn emit_fr_batch(
     frdb: &Option<crate::fr_db::FrDb>,
     batch: &mut Vec<crate::trace::FrRow>,
@@ -649,6 +669,7 @@ fn emit_fr_batch(
     write_line: &impl Fn(&mut std::io::BufWriter<std::fs::File>, String) -> Result<(), String>,
     rows: &mut u64,
     fr_frames: &mut u64,
+    skipped: &mut u64,
 ) -> Result<(), String> {
     let Some(db) = frdb else {
         batch.clear();
@@ -657,6 +678,7 @@ fn emit_fr_batch(
     for row in batch.drain(..) {
         *fr_frames += 1;
         let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab) else {
+            *skipped += 1;
             continue;
         };
         let msg = if frame.name.is_empty() {
@@ -664,11 +686,18 @@ fn emit_fr_batch(
         } else {
             frame.name.clone()
         };
-        let bus = match row.ab {
-            0 => "FlexRay A",
-            1 => "FlexRay B",
-            _ => "FlexRay",
-        };
+        // Spelled the way the Trace window's Bus column spells it, so a CSV
+        // row says which cluster it came from: slot numbers repeat across
+        // clusters.
+        let bus = format!(
+            "FR{}{}",
+            row.bus,
+            match row.ab {
+                0 => " A",
+                1 => " B",
+                _ => "",
+            }
+        );
         for d in db.decode_signals(frame, &row.payload) {
             *rows += 1;
             write_line(
@@ -676,7 +705,7 @@ fn emit_fr_batch(
                 format!(
                     "{},{},{},{},{},{},{},{}",
                     row.t_us,
-                    csv_field(bus),
+                    csv_field(&bus),
                     csv_field(&msg),
                     csv_field(&d.name),
                     crate::dbc::fmt_decoded(&d.type_tag, d.phys),
