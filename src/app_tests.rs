@@ -6096,6 +6096,32 @@ fn two_flexray_watches_feed_their_own_buses() {
         !slots.contains(&(1, 99)),
         "the detached port's queue is nobody's traffic: {slots:?}"
     );
+
+    // The Messages table has to tell the two clusters apart: slot 13 exists on
+    // both, so the Bus column is what keeps the rows from looking duplicated,
+    // and the header counts the rows the window actually shows.
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    let win = &app.msg_windows[0];
+    let fr: Vec<(&str, &str)> = win
+        .text_rows
+        .iter()
+        .filter(|r| r.fr)
+        .map(|r| (r.bus.as_str(), r.label.as_str()))
+        .collect();
+    assert!(
+        fr.iter().any(|(b, l)| *b == "FR0" && l.starts_with("slot 13")),
+        "bus 0's slot 13: {fr:?}"
+    );
+    assert!(
+        fr.iter().any(|(b, l)| *b == "FR1" && l.starts_with("slot 13")),
+        "bus 1's slot 13, told apart by its bus: {fr:?}"
+    );
+    assert_eq!(
+        win.text_header,
+        format!("{} messages", win.text_rows.len()),
+        "the header counts what is on screen"
+    );
     app.stop();
 }
 

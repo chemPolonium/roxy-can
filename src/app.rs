@@ -125,6 +125,10 @@ pub struct StatsRowText {
 pub struct MsgRowText {
     pub label: String,
     pub bus: String,
+    /// Whether this is a FlexRay slot row rather than a CAN message. The
+    /// window's copy says so outright instead of sniffing `bus`, which is a
+    /// user-editable name.
+    pub fr: bool,
     pub dir: &'static str,
     pub count: String,
     pub cycle: String,
@@ -1173,6 +1177,7 @@ impl App {
             rows.push(MsgRowText {
                 label: format!("{id_str}  {name}"),
                 bus: self.channel_name(agg.channel),
+                fr: false,
                 dir: match (agg.rx > 0, agg.tx > 0) {
                     (true, true) => "Rx+Tx",
                     (false, true) => "Tx",
@@ -1210,8 +1215,11 @@ impl App {
                 {
                     continue;
                 }
+                // No "FR" prefix here: the Bus column already says which
+                // cluster the slot belongs to, and with two clusters watched
+                // at once a bare "FR" would leave two identical-looking rows
+                // for the same slot number.
                 let label = [
-                    "FR".to_string(),
                     format!("slot {}", agg.slot),
                     match agg.ab {
                         0 => "A".to_string(),
@@ -1231,6 +1239,7 @@ impl App {
                 rows.push(MsgRowText {
                     label,
                     bus: format!("FR{}", agg.bus),
+                    fr: true,
                     dir: "Rx",
                     count: agg.count.to_string(),
                     cycle: if agg.count > 1 {
@@ -1251,7 +1260,9 @@ impl App {
         let win = &mut self.msg_windows[i];
         win.text_keys = keys;
         win.text_rows = rows;
-        win.text_header = format!("{} messages", win.text_keys.len());
+        // The rows, not the CAN keys: FlexRay slots are in this table too, and
+        // a count that ignored them did not match what is on screen.
+        win.text_header = format!("{} messages", win.text_rows.len());
     }
 
     /// Advances Trace window `i`'s reveal watermark on text frames: the rows
