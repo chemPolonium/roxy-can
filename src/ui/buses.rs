@@ -310,68 +310,101 @@ fn content(app: &mut App, ui: &Ui) {
         app.remove_channel(i);
     }
 
-    // FlexRay RX-only watches: Vector channels carrying the FR capability,
-    // each configured from its own FIBEX/ARXML cluster description and feeding
-    // one FlexRay bus. Watch-only -- received frames land in the Trace window's
-    // FlexRay section; nothing ever transmits and no CAN bus is touched.
+    // FlexRay buses: one row each for every bus the tool knows -- watched (a
+    // Vector port configured from its own FIBEX/ARXML cluster description),
+    // described only (loaded so a replay of a two-cluster recording can name
+    // that cluster's frames), or both. Watches are RX-only: received frames
+    // land in the Trace window's FlexRay section, nothing ever transmits and no
+    // CAN bus is touched.
     ui.separator();
     ui.text_colored([0.55, 0.8, 1.0, 1.0], "FlexRay");
     let watches = app.snap.fr_watches.clone();
+    // A channel already feeding a watch is not offered again: the second open
+    // would fail in the driver, and two watches on one port are never what
+    // "another cluster" means.
+    let listed = ensure_fr_list(app);
+    let free: Vec<_> = match &listed {
+        Ok(list) => list
+            .iter()
+            .filter(|c| !watches.iter().any(|w| w.channel_index == c.index))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    let mut buses: Vec<u8> = watches.iter().map(|w| w.bus).collect();
+    buses.extend(app.fr_buses.keys().copied());
+    buses.sort_unstable();
+    buses.dedup();
     let mut detach = None;
-    for w in &watches {
-        ui.text(format!(
-            "FR{} · [V] ch{} · {} （只收）",
-            w.bus,
-            w.channel_index,
-            file_name(&w.fibex_path)
-        ));
-        if !app.snap.real_bus {
-            ui.same_line();
-            ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
-            if ui.is_item_hovered() {
-                ui.tooltip_text(
-                    "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
-                );
+    let mut forget = None;
+    let mut attach = None;
+    for bus in buses {
+        match watches.iter().find(|w| w.bus == bus) {
+            Some(w) => {
+                ui.text(format!(
+                    "FR{} · [V] ch{} · {} （只收）",
+                    w.bus,
+                    w.channel_index,
+                    file_name(&w.fibex_path)
+                ));
+                if !app.snap.real_bus {
+                    ui.same_line();
+                    ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
+                        );
+                    }
+                }
+                ui.same_line();
+                if ui.button(format!("断开##frdet{bus}")) {
+                    detach = Some(w.bus);
+                }
             }
-        }
-        ui.same_line();
-        if ui.button(format!("断开##frdet{}", w.bus)) {
-            detach = Some(w.bus);
+            None => {
+                let path = app.fr_buses.get(&bus).map(|c| c.path.as_str()).unwrap_or("");
+                ui.text(format!("FR{bus} · 仅描述 {}", file_name(path)));
+                if !free.is_empty() {
+                    ui.same_line();
+                    if ui.button(format!("挂接监听…##fratt{bus}")) {
+                        attach = Some((bus, free[app.fr_pick.min(free.len() - 1)].index));
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "用下面下拉选中的空闲通道打开这一路的只收监听：描述已经加载，不必再挑文件",
+                        );
+                    }
+                }
+                ui.same_line();
+                if ui.button(format!("移除描述##frfor{bus}")) {
+                    forget = Some(bus);
+                }
+            }
         }
     }
-    match ensure_fr_list(app) {
-        // A channel already feeding a watch is not offered again: the second
-        // open would fail in the driver, and two watches on one port are never
-        // what "another cluster" means.
-        Ok(list) if !list.is_empty() => {
-            let free: Vec<_> = list
-                .into_iter()
-                .filter(|c| !watches.iter().any(|w| w.channel_index == c.index))
-                .collect();
-            if free.is_empty() {
-                ui.text_disabled("无空闲 FlexRay 通道");
-            } else {
-                let labels: Vec<String> = free
-                    .iter()
-                    .map(|c| format!("[V] ch{}: {}", c.index, c.name))
-                    .collect();
-                let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-                ui.set_next_item_width(170.0);
-                ui.combo_simple_string("##frch", &mut app.fr_pick, &refs);
-                ui.same_line();
-                if ui.button("挂接监听...##frfib") {
-                    let idx = free[app.fr_pick.min(free.len() - 1)].index;
-                    app.pick_fibex_for(idx);
-                }
-                if ui.is_item_hovered() {
-                    ui.tooltip_text(
-                        "挂接 FlexRay 只收监听：选通道后挑选 FIBEX/ARXML 集群描述文件，收到的帧显示在 Trace 窗口的 FlexRay 区",
-                    );
-                }
-            }
+    if !free.is_empty() {
+        let labels: Vec<String> = free
+            .iter()
+            .map(|c| format!("[V] ch{}: {}", c.index, c.name))
+            .collect();
+        let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        ui.set_next_item_width(170.0);
+        ui.combo_simple_string("##frch", &mut app.fr_pick, &refs);
+        ui.same_line();
+        if ui.button("挑描述并挂接…##frfib") {
+            let idx = free[app.fr_pick.min(free.len() - 1)].index;
+            app.pick_fibex_for(idx);
         }
-        Ok(_) => ui.text_disabled("无 FlexRay 通道"),
-        Err(e) => ui.text_disabled(&e),
+        if ui.is_item_hovered() {
+            ui.tooltip_text(
+                "挂接新的一路 FlexRay 只收监听：选通道后挑选该 cluster 的 FIBEX/ARXML 描述文件，收到的帧显示在 Trace 窗口的 FlexRay 区",
+            );
+        }
+    } else {
+        match &listed {
+            Ok(list) if list.is_empty() => ui.text_disabled("无 FlexRay 通道"),
+            Err(e) => ui.text_disabled(e),
+            _ => ui.text_disabled("无空闲 FlexRay 通道"),
+        }
     }
     // A description for a cluster no port is opened for: a recording can hold
     // two clusters, and the second one needs its own description before its
@@ -386,6 +419,12 @@ fn content(app: &mut App, ui: &Ui) {
     }
     if let Some(bus) = detach {
         app.detach_fr_watch(bus);
+    }
+    if let Some(bus) = forget {
+        app.forget_cluster_description(bus);
+    }
+    if let Some((bus, channel_index)) = attach {
+        app.attach_fr_watch_on(bus, channel_index);
     }
 
     // The schedule table: every loaded description's slot/cycle layout, the

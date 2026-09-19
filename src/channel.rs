@@ -401,6 +401,32 @@ impl App {
         self.set_fr_watch(bus, None, "");
     }
 
+    /// Drops one bus's description and leaves any watch alone: the undo of a
+    /// description loaded for a replay, which never opened a port to begin with.
+    /// A watched bus refuses -- its port was configured from that file, and
+    /// forgetting it would leave a port running on a configuration the tool can
+    /// no longer explain. "断开" is the action for that.
+    pub fn forget_cluster_description(&mut self, bus: u8) {
+        if self.snap.fr_watches.iter().any(|w| w.bus == bus) {
+            self.status = format!("FR{bus} 正在监听：请先断开监听再移除描述");
+            return;
+        }
+        self.fr_buses.remove(&bus);
+        self.push_fr_db_to_core();
+        self.status = format!("已移除 FR{bus} 集群描述");
+    }
+
+    /// Opens a watch for a bus whose description is already loaded, taking the
+    /// cluster configuration from that bus's own file -- the route that needs
+    /// no second file picker.
+    pub fn attach_fr_watch_on(&mut self, bus: u8, channel_index: i32) {
+        let Some(path) = self.fr_buses.get(&bus).map(|c| c.path.clone()) else {
+            self.status = format!("FR{bus} 没有集群描述，无法挂接");
+            return;
+        };
+        self.set_fr_watch(bus, Some(channel_index), &path);
+    }
+
     /// Attaches one more DBC file to the bus as an extra database (the
     /// primary stays); re-attaching the same path is a no-op.
     pub fn attach_dbc_to(&mut self, ch: usize, path: String) {

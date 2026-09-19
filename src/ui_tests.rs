@@ -517,6 +517,9 @@ fn the_buses_window_draws_two_flexray_watches() {
     app.hw.attach_fr_mock(1, 6);
     load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
     load_fr_db(&mut app, 1, "assets/fibex/PowerTrain_v2.xml");
+    // A third bus with a description and no port at all: the list has to show
+    // it, because loading a description is state the user can create and undo.
+    load_fr_db(&mut app, 2, "assets/fibex/PowerTrain2_v2.xml");
     app.refresh_snapshot();
     assert_eq!(
         app.snap
@@ -526,6 +529,11 @@ fn the_buses_window_draws_two_flexray_watches() {
             .collect::<Vec<_>>(),
         vec![(0, 5), (1, 6)],
         "both watches are listed, in bus order"
+    );
+    assert_eq!(
+        app.fr_buses.keys().copied().collect::<Vec<_>>(),
+        [0, 1, 2],
+        "and one of the three buses is described-only"
     );
     frames(&mut app, &mut ctx, 3);
 }

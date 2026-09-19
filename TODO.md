@@ -98,7 +98,7 @@
 - **状态移动**：`Config::apply` 解析完描述就 `push_fr_db_to_core()`，于是 `replay()` 里那处"回放前兜底再推一次"删掉（回归断言在 `a_legacy_single_fibex_path_becomes_a_bus_entry` 里：工程载入后核心的 `fr_dbs` 必须已经有那几路）。
 - 回归 `two_flexray_watches_feed_their_own_buses`：两路 mock 端口各发同槽号的帧 → 两条独立 tally；`SetFrWatch{bus:1,None}` 只摘 bus 1，幸存端口继续进帧，被摘端口的队列不再属于任何总线。
 - **仍待真机（S5）**：`ab` 事件偏移、`channel_index` 是否要进工程文件（CAN 侧工程打开也**不**自动挂硬件，FR 保持一致，故现在只存路径）、总线增删后空闲总线索引被复用会让旧曲线的 `(bus, slot)` 键指向新 cluster —— 与 CAN 通道重映射同一类问题，等 FR 通道列表可编辑时一起处理。
-- **UI 缺口（记下但先不动，等用户眼过上一版布局）**：FlexRay 列表按 `snap.fr_watches` 出行，于是"工程载入了两路描述但一路都没挂"时这些 bus 在界面上完全不可见，也没有"只忘掉这份描述"的入口（现在 detach 是"摘监听 + 连描述一起忘"，两者绑死；唯一解法是载入另一个工程整体重置）。做法应是按 `fr_buses ∪ fr_watches` 的 bus 并集出行，每行标明"仅描述 / 在收(端口 n)"并分别给挂接/移除动作。
+- **~~UI 缺口~~ ✅ 同日已补（`a_described_bus_can_be_attached_or_forgot`）**：FlexRay 列表原来按 `snap.fr_watches` 出行，"工程载入/手动加载了描述但没挂监听"的 bus 在界面上完全不可见，也没有"只忘掉这份描述"的入口。现在列表按 **`fr_buses ∪ fr_watches`** 出行：有监听的行给"断开"（连描述一起忘，照旧），只有描述的行给"挂接监听…"（用下拉选中的空闲通道 + **该路已加载的描述**，不再弹第二次文件框，`attach_fr_watch_on`）与"移除描述"（`forget_cluster_description`，**正在监听的 bus 拒绝**——端口就是照那份配置开的，要先断开）。挂接新路的按钮改名"挑描述并挂接…"以区别于上面那个。
 
 
 ### 2026-09-20：FlexRay 帧到达能触发动作了（S4 的触发项）
@@ -141,7 +141,8 @@
 - **后果**：所有 FR 行被硬编成 `bus: 0`，两个 cluster 的槽位并到一张表里 —— 一路的帧拿另一路的描述解名/解信号，聚合键 `(bus, slot)` 失去区分，表格里同一槽号出现"重复行"（正是用户截图里 slot 24 / 48 / 70 各两行的成因）。
 - **修法**：`decode_fr_rcv` 读 `wClusterNo@12` 当 bus（钳到 u8）；`fr_rcv_event` 把 `r.bus` 写回同一偏移，于是自家录的两 cluster 文件能原样读回。ASC 的 `Fr RMSG` 行没有这个字段（CANoe 那个位置的 token 只有一份"=0"的证据，不敢当 cluster 用），所以 ASC 仍读成单 cluster —— 注释写在**决定处**而不是假设处。
 - **回归**：`a_real_two_cluster_recording_keeps_its_clusters_apart`（钉住 60 072 = 29 738 + 30 334，且两路槽号确有重叠）、`flexray_rows_survive_a_recording_round_trip`（中间那行改到 bus 1，断言 bus 也过得了环）。
-- **顺带**：`--export-csv` 只吃一份 `--fibex`，两 cluster 日志里另一路的帧以前是**静默丢弃**；现在 CSV 的 bus 列按 Trace 口径写 `FR{n} A/B`，报告末尾报"N of them with no frame in the description"。**留**：`--fibex` 能按 bus 给多次（多路描述导出）。
+- **顺带**：`--export-csv` 只吃一份 `--fibex`，两 cluster 日志里另一路的帧以前是**静默丢弃**；现在 CSV 的 bus 列按 Trace 口径写 `FR{n} A/B`，报告末尾报"N of them with no frame in the description"。**✅ 同日已补**：`--fibex` 可重复，第 N 份描述第 N-1 路（`2f5e70d`，用真实两路资产钉住：一份描述 → 60 072 帧里报 30 334 解不出且 CSV 只有 `FR0 A`；两份描述 → 无跳过且出现 `FR1 A`）。
+- **同日再补（`6a1399a`）**：加载集群描述**不再需要先挂监听**。原来唯一的入口是"选一个 FlexRay 能力的 Vector 通道 → 挑文件"，纯回放机器（或台架只有一个 FR 口）上下拉框显示"无 FlexRay 通道"，于是第二路描述**根本没法给**。现在 Buses 窗口 FlexRay 区有独立的"加载集群描述…"按钮（`App::load_cluster_description`：解析 → 放到下一条无描述的 bus → 推给核心，不碰硬件），挂接路径复用它；顺手把"文件读不到"从 `expect`  panic 改成状态行报错且不占索引。回归 `a_second_cluster_description_loads_without_any_hardware`。**仍留**：这样加载进来的路在 FlexRay 列表里看不见（列表按 `snap.fr_watches` 出行）→ 就是 #19 那条 UI 缺口，现在更有必要了。
 - **另一半证据**：两份真实资产的 `channelMask` 全是 1（=通道 A），所以回放侧 `ab` 一直是 0 且与描述匹配；**实时监听的 `ab` 仍是恒 2（未证）**，那要真机事件缓冲偏移 —— 归 S5。
 
 ## 结构待办（零散）

@@ -7047,3 +7047,49 @@ fn a_second_cluster_description_loads_without_any_hardware() {
     );
     app.stop();
 }
+
+/// A bus that has a description but no port can be attached with the file it
+/// already holds (no second picker), and its description can be dropped again
+/// -- which a watched bus must not do, because its port was configured from
+/// that very file.
+#[test]
+fn a_described_bus_can_be_attached_or_forgot() {
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    if !std::path::Path::new(arxml).exists() {
+        println!("{arxml} not present -- skipped");
+        return;
+    }
+    let mut app = quiet_app();
+    assert_eq!(app.load_cluster_description(arxml), Some(0));
+
+    // Attaching uses the loaded description: what comes back is the missing
+    // driver, not a missing file.
+    app.attach_fr_watch_on(0, 5);
+    assert!(app.status.contains("FR0"), "{}", app.status);
+    assert!(
+        !app.status.contains("没有集群描述"),
+        "the description was there to use: {}",
+        app.status
+    );
+    // A bus with nothing loaded cannot be attached.
+    app.attach_fr_watch_on(3, 5);
+    assert!(app.status.contains("没有集群描述"), "{}", app.status);
+
+    // Dropping the description is the undo of loading it, core included.
+    app.forget_cluster_description(0);
+    assert!(app.fr_buses.is_empty(), "the frontend forgot it");
+    assert!(app.fr_dbs.is_empty(), "and told the core");
+
+    // While a port is watching that bus, the same action refuses: the
+    // description is what the open was configured from.
+    app.load_cluster_description(arxml);
+    app.hw.attach_fr_mock(0, 5);
+    app.refresh_snapshot();
+    app.forget_cluster_description(0);
+    assert!(app.status.contains("请先断开监听"), "{}", app.status);
+    assert!(
+        app.fr_buses.contains_key(&0),
+        "a watched bus keeps the file its port runs from"
+    );
+    app.stop();
+}
