@@ -573,3 +573,104 @@ fn a_plot_window_never_starves_the_replay() {
     );
     app.stop();
 }
+
+/// Replaying a recording this tool wrote must keep pace, with a plot window
+/// open and one curve of each bus. Such a file states no duration in its
+/// header, so the reported position used to be capped by a lagging estimate of
+/// it -- which read as the replay freezing at a fraction of a second while the
+/// bus thread carried on. The header now carries the traffic span and the
+/// finite playhead is never capped.
+#[test]
+fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
+    use crate::app::PopupTarget;
+    use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+    use crate::log::blf::BlfWriter;
+    use crate::trace::FrRow;
+    use std::time::{Duration, Instant};
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let path =
+        std::env::temp_dir().join(format!("roxy_can_pace_{}.blf", std::process::id()));
+    {
+        let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
+        for i in 0..10_000u64 {
+            if i % 10 == 0 {
+                w.write(&CanFrame {
+                    t_us: i * 1_000,
+                    channel: 0,
+                    id: 0x100,
+                    extended: false,
+                    len: 8,
+                    data: [1; MAX_CAN_FD_LEN],
+                    dir: Direction::Rx,
+                    flags: FrameFlags::NONE,
+                });
+            }
+            w.write_fr(&FrRow {
+                bus: 0,
+                t_us: i * 1_000,
+                ab: 0,
+                slot: 13,
+                cycle: (i % 16) as u8,
+                payload: vec![0x00, (i % 200) as u8, 0, 0, 0, 0, 0, 0],
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            });
+        }
+        w.finish().expect("finish");
+    }
+    let mut ctx = harness();
+    let mut app = App::new();
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec!["assets/sample.dbc".to_string()],
+    });
+    let text =
+        crate::dbc::text_from_bytes(std::fs::read("assets/arxml/PowerTrain.arxml").expect("arxml"));
+    let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));
+    let (slot, _, sigs) = db
+        .slot_signals()
+        .into_iter()
+        .find(|(_, frame, _)| frame.contains("13"))
+        .expect("slot 13 exposes signals");
+    app.fr_db = Some(db);
+    app.push_fr_db_to_core();
+    app.new_graphics_window();
+    app.set_win_signal(
+        PopupTarget::Graphics(0),
+        crate::observe::SigKey::can(0, 0x100, false, "EngineSpeed"),
+        true,
+    );
+    app.set_win_signal(
+        PopupTarget::Graphics(0),
+        crate::app::fr_signal_key(0, slot, &sigs[0]),
+        true,
+    );
+    app.load_log(&path.to_string_lossy());
+    app.replay();
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(1200) {
+        std::thread::sleep(Duration::from_millis(5));
+        app.update();
+        {
+            let ui = ctx.frame();
+            crate::ui::render(&mut app, ui);
+            let _ = ctx.render_legacy();
+        }
+    }
+    let wall = start.elapsed().as_secs_f64();
+    let (pos, dur) = app.replay_position().expect("a replay timeline");
+    app.stop();
+    std::fs::remove_file(&path).ok();
+    assert!(
+        dur > 9.0,
+        "the file states its 10 s span: {dur:.2} s -- a recording with no \
+         header duration leaves the progress bar guessing"
+    );
+    assert!(
+        pos >= wall * 0.5,
+        "the log clock reached {pos:.2} s in {wall:.2} s of wall time of a \
+         {dur:.1} s recording"
+    );
+}

@@ -74,7 +74,9 @@
 
 - **S4 已落地部分**：FlexRay 行进 `frame_counter`（f/s 与帧数终于包含 FR）；**录制写 BLF**（`BlfWriter::write_fr` → `FR_RCVMESSAGE` 对象，`Recorder::write_fr`），混合 CAN+FR 录制的回环测试证明两边都能读回并保持交错顺序。ASC 侧**故意没写**：我们的 ASC 读法假设"`Rx`/`Tx` 之后第一个非数字 token 是帧名"，所以无帧名的 `Fr RMSG` 行会被误读（十六进制数据字节被当成名字）—— 先把这个消歧做对，再谈写。`export_trace` 同理仍是 CAN-only（它输出 ASC）。
 - **翻案**：切到 Graphics 桌面卡回放 ≠ 绘图/分片所致。A/B 实测（同一份合成混合日志、线程驱动、1.5 s 墙钟）：**开不开 Graphics 窗口都只推进 0.06–0.07 s**；真实 FR-only 资产 + 开窗口 + 加曲线反而正常。护栏留在 `ui_tests::a_plot_window_never_starves_the_replay`（阈值 0.25×，能抓住实测的 0.04×）。所以"每帧一条回填命令"和"分片机制"都不是这次的原因，已删的 backfill 不背这个锅。
-- **新线索（严重，优先做）**：**我们自己录制出来的 BLF 时间轴是塌的** —— 相隔 1 s 的三帧读回只差几毫秒，整段录制的时长 ≈0.01 s 而非真实秒数，所以回放自己的录制文件会 ~100× 快进、进度与曲线全不对。`recorder_writer_round_trips_frames` 一直没抓到，因为它只比 id/flags/payload，从没断言时间戳。已用 `#[ignore]` 钉住：`log::blf::record_times::a_recording_keeps_its_second_apart_frames_a_second_apart`。怀疑点在写入侧的对象时间戳编码/单位（`obj_header_v1_bytes` 的 flags 与 `object_time` 的 `TS_TEN_MICRO` 约定）或读取侧的 rebase 基准。**修好后去掉 ignore。**
+- **已修（同日第二轮）：回放自家录制的 BLF 时进度与曲线爬不动。** 我先前把它写成"录制的时间戳编码塌陷"并用 `#[ignore]` 钉住 —— **那个判断是错的**：把钉住的复现跑起来直接通过，对象时间戳与头部偏移两侧一致。真正的因是两条：① `BlfWriter::finish` 拿**写文件的墙钟**当头部 stop，于是自家录制的 duration≈0 或为空，`duration_us()` 退化成"最后读到的时间戳"这一滞后估计；② 上一轮为 as-fast-as-possible 加的 `position()` 钳制 `pos.min(duration)` 无条件生效，把**有限播放头压到该滞后估计之下**（实测 1.5 s 墙钟只报 0.06 s），表现即"回放卡住但窗口还能拖"。
+  - 修法：录制头部改写**流量跨度**（跟踪 first/last 对象戳，stop = start + span；t=0 是合法起点故不跳过）；`position()` 的钳制**只在播放头无穷大时**生效。四条防线：`log::blf::record_times::a_recording_keeps_its_second_apart_frames_a_second_apart`（兼断言头部时长，已从 ignore 转常开）、`a_flexray_only_recording_states_its_span_too`（FR-only 录制也报得出跨度）、`source::replay::tests::a_short_duration_estimate_never_caps_the_playhead`、端到端节奏 `ui_tests::a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window`。
+  - **仍未验证**：用户报的"切到 Graphics 桌面卡住"是否就是这个 —— 他们的日志若头部 duration 正常就不该中。等他在 GUI 里确认。
 - 顺带待清：`observe.rs:18`/`:312`、`cli.rs:303` 三处注释还在描述已删除的"窗口回填"。
 - S1b 的 frameId/slot 担忧**实测不成立**：两份真实 CANoe 日志（39 156 行、60 072 行）的 `slot` 取值恰好都是描述库里存在的槽号，`frame_at` 解析率 100%，故不做特殊处理，只在 `fr_rcv_event` 的注释里记下这个事实。
 

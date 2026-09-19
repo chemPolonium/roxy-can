@@ -105,12 +105,18 @@ impl FrameSource for ReplaySource {
     }
 
     fn position(&self) -> Option<u64> {
-        // "As fast as possible" parks `pos_us` at infinity so the drain emits
-        // every remaining frame in one lap. Report the log's end instead of
-        // the saturated `u64::MAX` that cast yields, so the plot windows --
-        // which read this as "now" -- stay on the data rather than jumping
-        // ~1.8e13 s past it.
         let pos = self.pos_us as u64;
+        if self.pos_us.is_finite() {
+            return Some(pos);
+        }
+        // "As fast as possible" parks `pos_us` at infinity so the drain emits
+        // every remaining frame in one lap; report the log's end instead of the
+        // saturated `u64::MAX` that cast yields, so the plot windows -- which
+        // read this as "now" -- stay on the data. The clamp belongs to the
+        // infinite case only: a stream's duration estimate can lag the playhead
+        // (`BlfStream` falls back to the last timestamp it has read when the
+        // header states no length), and capping a finite playhead by that
+        // estimate freezes the plot clock behind the traffic it should follow.
         match self.stream.duration_us() {
             Some(d) => Some(pos.min(d)),
             None => Some(pos),
@@ -207,6 +213,38 @@ mod tests {
             src.position(),
             Some(50_000),
             "position tracks the virtual clock"
+        );
+    }
+
+    /// A length estimate that lags the traffic must not cap the playhead.
+    /// `BlfStream` falls back to the last timestamp it has read whenever the
+    /// file header states no duration -- capping a finite playhead by that
+    /// estimate is how a recording's plot clock froze behind the traffic it
+    /// should have been following.
+    #[test]
+    fn a_short_duration_estimate_never_caps_the_playhead() {
+        struct Lagging;
+        impl FrameStream for Lagging {
+            fn peek_t(&mut self) -> Option<u64> {
+                Some(10_000_000)
+            }
+            fn next_frame(&mut self) -> Option<CanFrame> {
+                None
+            }
+            fn duration_us(&self) -> Option<u64> {
+                Some(0)
+            }
+        }
+        let mut src = ReplaySource::new(Box::new(Lagging));
+        let mut out = Vec::new();
+        // The first poll only anchors the clock; the second is the one that
+        // advances three seconds of playback.
+        src.poll(0, &mut out);
+        src.poll(3_000_000, &mut out);
+        assert_eq!(
+            src.position(),
+            Some(3_000_000),
+            "three seconds of playback reports three seconds"
         );
     }
 

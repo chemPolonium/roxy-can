@@ -771,18 +771,19 @@ fn system_time_us(b: &[u8], at: usize) -> Option<u64> {
 /// 每个压缩容器攒多少未压缩事件字节后落盘。Vector 自家工具用 ~128 KiB。
 const CONTAINER_FLUSH_BYTES: usize = 128 * 1024;
 
-fn system_time_fields() -> [u16; 8] {
-    use chrono::{Local, Timelike};
-    let n = Local::now();
+/// The eight `SYSTEMTIME` words of a wall-clock instant, in the order the
+/// header stores them.
+fn fields_at(t: &chrono::DateTime<chrono::Local>) -> [u16; 8] {
+    use chrono::Timelike;
     [
-        n.year() as u16,
-        n.month() as u16,
-        n.weekday().num_days_from_sunday() as u16,
-        n.day() as u16,
-        n.hour() as u16,
-        n.minute() as u16,
-        n.second() as u16,
-        (n.nanosecond() / 1_000_000) as u16,
+        t.year() as u16,
+        t.month() as u16,
+        t.weekday().num_days_from_sunday() as u16,
+        t.day() as u16,
+        t.hour() as u16,
+        t.minute() as u16,
+        t.second() as u16,
+        (t.nanosecond() / 1_000_000) as u16,
     ]
 }
 
@@ -905,15 +906,24 @@ pub struct BlfWriter {
     file: std::fs::File,
     pending: Vec<u8>,
     containers: u32,
+    /// The wall-clock instant written as the header's start time. The stop time
+    /// is derived from it plus the recorded traffic span, so the header's
+    /// duration describes the frames, not how long the process took to write
+    /// them -- a reader (and a replay's progress) needs a span even for a file
+    /// produced in one go.
+    start: chrono::DateTime<chrono::Local>,
+    first_ns: Option<u64>,
+    last_ns: u64,
 }
 
 impl BlfWriter {
     pub fn create(path: &str) -> std::io::Result<Self> {
         let mut file = std::fs::File::create(path)?;
+        let start = chrono::Local::now();
         let mut hdr = vec![0u8; FILE_HEADER_SIZE];
         hdr[0..4].copy_from_slice(FILE_SIGNATURE);
         hdr[4..8].copy_from_slice(&(FILE_HEADER_SIZE as u32).to_le_bytes());
-        let st = system_time_fields();
+        let st = fields_at(&start);
         for (i, f) in st.iter().enumerate() {
             hdr[HDR_START_TIME + i * 2..HDR_START_TIME + i * 2 + 2]
                 .copy_from_slice(&f.to_le_bytes());
@@ -923,11 +933,23 @@ impl BlfWriter {
             file,
             pending: Vec::new(),
             containers: 0,
+            start,
+            first_ns: None,
+            last_ns: 0,
         })
+    }
+
+    /// Records the span the objects cover, in the file's own nanosecond units.
+    /// A stamp of zero is a real position (a recording started at log time 0),
+    /// so it counts rather than being skipped as unstamped.
+    fn note_ts(&mut self, ts_raw: u64) {
+        self.first_ns = Some(self.first_ns.map_or(ts_raw, |f| f.min(ts_raw)));
+        self.last_ns = self.last_ns.max(ts_raw);
     }
 
     pub fn write(&mut self, f: &CanFrame) {
         let ts_raw = f.t_us.saturating_mul(1_000); // nanoseconds
+        self.note_ts(ts_raw);
         let ev = if f.flags.contains(FrameFlags::ERROR) {
             error_ext_event(f, ts_raw)
         } else if f.flags.contains(FrameFlags::FD) {
@@ -946,6 +968,7 @@ impl BlfWriter {
     /// of a FlexRay bus replay and re-export like the file it came from.
     pub fn write_fr(&mut self, r: &crate::trace::FrRow) {
         let ts_raw = r.t_us.saturating_mul(1_000); // nanoseconds
+        self.note_ts(ts_raw);
         self.pending.extend_from_slice(&fr_rcv_event(r, ts_raw));
         if self.pending.len() >= CONTAINER_FLUSH_BYTES {
             self.flush_container();
@@ -984,7 +1007,11 @@ impl BlfWriter {
         self.file.seek(SeekFrom::Start(HDR_OBJECT_COUNT as u64))?;
         self.file.write_all(&self.containers.to_le_bytes())?;
         self.file.seek(SeekFrom::Start(HDR_STOP_TIME as u64))?;
-        for f in system_time_fields() {
+        let span_ns = self
+            .first_ns
+            .map_or(0u64, |first| self.last_ns.saturating_sub(first));
+        let stop = self.start + chrono::Duration::nanoseconds(span_ns as i64);
+        for f in fields_at(&stop) {
             self.file.write_all(&f.to_le_bytes())?;
         }
         self.file.flush()
@@ -2095,13 +2122,12 @@ pub(crate) mod tests {
 mod record_times {
     use super::*;
 
-    /// Pinned repro, ignored until fixed: a BLF written by our recorder loses
-    /// its timeline. Three frames a second apart read back within a few
-    /// milliseconds, so replaying a recording runs ~100x too fast. The existing
-    /// round trip missed it: it compares ids, flags and payloads and never
-    /// asserted the stamps.
+    /// A recording states its own traffic span: frames a second apart must
+    /// come back a second apart, and the header must say how long the file is
+    /// even though the process wrote it in one go. The earlier round trip
+    /// compared ids, flags and payloads and never looked at the stamps, so a
+    /// collapsed timeline stayed invisible.
     #[test]
-    #[ignore = "recorded BLF collapses its own timestamps; see TODO.md"]
     fn a_recording_keeps_its_second_apart_frames_a_second_apart() {
         let path =
             std::env::temp_dir().join(format!("roxy_can_ts_gap_{}.blf", std::process::id()));
@@ -2126,7 +2152,48 @@ mod record_times {
         while let Some(f) = s.next_frame() {
             got.push(f.t_us);
         }
-        std::fs::remove_file(&path).ok();
         assert_eq!(got, vec![0, 1_000_000, 2_000_000], "the spacing survives");
+        assert_eq!(
+            s.duration_us(),
+            Some(2_000_000),
+            "the header states the span the frames cover: {}",
+            s.describe()
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// FlexRay rows count toward that span too -- a FlexRay-only recording has
+    /// no CAN frame to carry it.
+    #[test]
+    fn a_flexray_only_recording_states_its_span_too() {
+        let path = std::env::temp_dir().join(format!(
+            "roxy_can_ts_fr_{}.blf",
+            std::process::id()
+        ));
+        {
+            let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
+            for i in 0..3u64 {
+                w.write_fr(&crate::trace::FrRow {
+                    bus: 0,
+                    t_us: i * 500_000,
+                    ab: 0,
+                    slot: 13,
+                    cycle: i as u8,
+                    payload: vec![1, 2],
+                    header_crc: 0,
+                    flags: 0,
+                    name: None,
+                });
+            }
+            w.finish().expect("finish");
+        }
+        let s = BlfStream::open(&path).expect("open");
+        assert_eq!(
+            s.duration_us(),
+            Some(1_000_000),
+            "FlexRay traffic alone still sizes the file: {}",
+            s.describe()
+        );
+        std::fs::remove_file(&path).ok();
     }
 }
