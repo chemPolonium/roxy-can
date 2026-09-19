@@ -6106,7 +6106,7 @@ fn two_flexray_watches_feed_their_own_buses() {
     let fr: Vec<(&str, &str)> = win
         .text_rows
         .iter()
-        .filter(|r| r.fr)
+        .filter(|r| r.bus.starts_with("FR"))
         .map(|r| (r.bus.as_str(), r.label.as_str()))
         .collect();
     assert!(
@@ -6125,7 +6125,87 @@ fn two_flexray_watches_feed_their_own_buses() {
     app.stop();
 }
 
-/// Script frames ride the Real bus egress: a running script's `send()`
+/// The empty FlexRay child row has to say *which* empty it is: a cluster with
+/// no description loaded, a description that has no frame for that slot and
+/// cycle, and a frame that declares no signals are three different things to
+/// act on -- and on a real two-cluster log they arrive mixed in one table.
+#[test]
+fn an_empty_flexray_message_row_names_its_reason() {
+    use crate::hw::vector::flexray::FrFrame;
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let Ok(bytes) = std::fs::read(arxml) else {
+        println!("{arxml} not present -- skipped");
+        return;
+    };
+    let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
+    // A slot the description schedules but does not name any signals for, when
+    // the asset has one; otherwise the case below is the only one to check.
+    let silent = db
+        .slot_signals()
+        .into_iter()
+        .find(|(_, _, names)| names.is_empty())
+        .map(|(slot, _, _)| slot);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    let q1 = app.hw.attach_fr_mock(1, 6);
+    app.start_virtual();
+    for (q, slot) in [(&q0, 13u16), (&q0, 4_095), (&q1, 13)]
+        .into_iter()
+        .chain(silent.map(|s| (&q0, s)))
+    {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot,
+            cycle: 0,
+            payload: vec![0; 8],
+            header_crc: 0,
+            flags: 0,
+        });
+    }
+    for t in 1..=4u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    let note = |bus: &str, slot: u16| {
+        app.msg_windows[0]
+            .text_rows
+            .iter()
+            .find(|r| r.bus == bus && r.label.starts_with(&format!("slot {slot}")))
+            .and_then(|r| r.empty_note.clone())
+    };
+    assert_eq!(
+        note("FR0", 4_095).as_deref(),
+        Some("（FR0 的描述里 slot 4095 在周期 0 没有帧）"),
+        "a slot the description resolves no frame for says so"
+    );
+    assert_eq!(
+        note("FR0", 13),
+        None,
+        "slot 13 is in this description and decodes, so it carries no note at all"
+    );
+    assert_eq!(
+        note("FR1", 13).as_deref(),
+        Some("（FR1 未加载集群描述）"),
+        "an undescribed cluster says that instead"
+    );
+    if let Some(slot) = silent {
+        assert_eq!(
+            note("FR0", slot).as_deref(),
+            Some("（该帧不声明信号）"),
+            "a frame the description does have says a third thing"
+        );
+    }
+    app.stop();
+}
 /// frames go to the wire alongside the internal bus -- no per-node dial,
 /// the bus mode is the switch.
 #[test]

@@ -135,14 +135,12 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
             if row.signals.is_empty() {
                 ui.table_next_row();
                 ui.table_next_column();
-                // FlexRay rows are not DBC-declared by definition; the
-                // empty case there means the watch has no description
-                // database to decode with.
-                if row.fr {
-                    ui.text("   （无描述文件，无法解码信号）");
-                } else {
-                    ui.text("   (not in DBC)");
-                }
+                // The sync pass worked out *why* there is nothing here; the
+                // window only prints it.
+                ui.text(format!(
+                    "   {}",
+                    row.empty_note.as_deref().unwrap_or("(no signals)")
+                ));
             } else {
                 for (name, value) in &row.signals {
                     ui.table_next_row();

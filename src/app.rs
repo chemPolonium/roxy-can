@@ -125,16 +125,17 @@ pub struct StatsRowText {
 pub struct MsgRowText {
     pub label: String,
     pub bus: String,
-    /// Whether this is a FlexRay slot row rather than a CAN message. The
-    /// window's copy says so outright instead of sniffing `bus`, which is a
-    /// user-editable name.
-    pub fr: bool,
     pub dir: &'static str,
     pub count: String,
     pub cycle: String,
     pub flags: FrameFlags,
     pub data: String,
     pub signals: Vec<(String, String)>,
+    /// Why the expanded row has no signals to show. Naming the actual reason
+    /// matters on a FlexRay table: "no description loaded" and "the
+    /// description has no frame for this slot" look identical in the window
+    /// and call for opposite fixes.
+    pub empty_note: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -1144,7 +1145,8 @@ impl App {
             } else {
                 format!("{:03X}", agg.id)
             };
-            let name = self.message_name(agg.channel, agg.id).unwrap_or("-");
+            let declared = self.message_name(agg.channel, agg.id);
+            let name = declared.unwrap_or("-");
             // The expanded tree reads the last frame's signals exactly as
             // before; only the refresh rate changed.
             let frame = CanFrame {
@@ -1157,7 +1159,7 @@ impl App {
                 dir: agg.dir,
                 flags: agg.flags,
             };
-            let signals = self
+            let signals: Vec<(String, String)> = self
                 .channel_dbc(agg.channel)
                 .map(|db| db.decode_signals(&frame))
                 .unwrap_or_default()
@@ -1174,10 +1176,18 @@ impl App {
                     )
                 })
                 .collect();
+            // A message the DBC does not declare and one that declares no
+            // signals are different facts.
+            let empty_note = if !signals.is_empty() {
+                None
+            } else if declared.is_none() {
+                Some("(not in DBC)".to_string())
+            } else {
+                Some("（该报文不声明信号）".to_string())
+            };
             rows.push(MsgRowText {
                 label: format!("{id_str}  {name}"),
                 bus: self.channel_name(agg.channel),
-                fr: false,
                 dir: match (agg.rx > 0, agg.tx > 0) {
                     (true, true) => "Rx+Tx",
                     (false, true) => "Tx",
@@ -1192,6 +1202,7 @@ impl App {
                 flags: agg.flags,
                 data: agg.payload().iter().map(|b| format!("{b:02X} ")).collect(),
                 signals,
+                empty_note,
             });
         }
         // FlexRay rows ride the same table, after the CAN rows: one row
@@ -1236,10 +1247,24 @@ impl App {
                     (Some(db), Some(frame)) => db.decode(frame, &agg.payload),
                     _ => Vec::new(),
                 };
+                // Which of the three reasons it is: no description for this
+                // cluster, a description that has no frame for this slot and
+                // cycle, or a frame that declares no signals.
+                let empty_note = if !signals.is_empty() {
+                    None
+                } else if db.is_none() {
+                    Some(format!("（FR{} 未加载集群描述）", agg.bus))
+                } else if frame.is_none() {
+                    Some(format!(
+                        "（FR{} 的描述里 slot {} 在周期 {} 没有帧）",
+                        agg.bus, agg.slot, agg.last_cycle
+                    ))
+                } else {
+                    Some("（该帧不声明信号）".to_string())
+                };
                 rows.push(MsgRowText {
                     label,
                     bus: format!("FR{}", agg.bus),
-                    fr: true,
                     dir: "Rx",
                     count: agg.count.to_string(),
                     cycle: if agg.count > 1 {
@@ -1254,6 +1279,7 @@ impl App {
                     flags: crate::can::frame::FrameFlags::NONE,
                     data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
                     signals,
+                    empty_note,
                 });
             }
         }
