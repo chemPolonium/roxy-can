@@ -32,19 +32,25 @@ pub enum Cli {
     },
     /// Decode a log's signals through its description database(s) and write
     /// a CSV, with no window and no bus clock: `--export-csv <log> --out
-    /// <csv> [--dbc <f> ...] [--fibex <f>]`. CAN signals decode through the
-    /// DBC(s), FlexRay signals through the FIBEX/ARXML description.
+    /// <csv> [--dbc <f> ...] [--fibex <f> ...]`. CAN signals decode through the
+    /// DBC(s), FlexRay signals through the cluster description of the bus the
+    /// row arrived on -- so a recording with two clusters takes two `--fibex`.
     Export(ExportOpts),
 }
 
 /// Inputs of the `--export-csv` signal dump: the log, the destination CSV,
-/// the (repeatable) CAN DBCs, and the optional FlexRay cluster description.
+/// the (repeatable) CAN DBCs, and the FlexRay cluster descriptions -- also
+/// repeatable, in bus order.
 #[derive(Debug)]
 pub struct ExportOpts {
     pub input: String,
     pub out: String,
     pub dbcs: Vec<String>,
-    pub fibex: Option<String>,
+    /// One description per FlexRay cluster: the first names bus 0, the second
+    /// bus 1, and so on. A real CANoe recording can hold two clusters (see
+    /// `log::blf`'s `wClusterNo`), and the same slot number on the other one
+    /// means something else entirely.
+    pub fibex: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -120,9 +126,11 @@ run options
                      merged in order, first library wins on clashes)
   --node <name>      the DBC node name the checked scripts act as; turns
                      on the send-set and reverse implementation checks
-  --fibex <path>     FIBEX/ARXML cluster description for --vector-probe:
-                     parsed, reported, then applied to the RX-only open; also
-                     the FlexRay definition source for --export-csv
+  --fibex <path>     FIBEX/ARXML cluster description. For --vector-probe it
+                     configures every channel probed (the first one given).
+                     For --export-csv it is repeatable, one FlexRay cluster
+                     each: the first describes bus 0, the second bus 1, and a
+                     recording holding two clusters needs two to decode fully
   --export-csv <log> decode <log>'s signals to CSV through --dbc/--fibex
   --out <path>       destination CSV for --export-csv
   -h, --help         this text"
@@ -141,7 +149,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut convert: Option<(String, String)> = None;
     let mut kvaser_probe = false;
     let mut vector_probe = false;
-    let mut fibex = None;
+    let mut fibex = Vec::new();
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
@@ -173,7 +181,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             }
             "--kvaser-probe" => kvaser_probe = true,
             "--vector-probe" => vector_probe = true,
-            "--fibex" => fibex = Some(value(args, &mut i, "--fibex")?),
+            "--fibex" => fibex.push(value(args, &mut i, "--fibex")?),
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--dbc" => dbcs.push(value(args, &mut i, "--dbc")?),
             "--node" => script_check.node = Some(value(args, &mut i, "--node")?),
@@ -229,7 +237,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         let Some(out) = out else {
             return Err("`--export-csv` needs `--out <file.csv>`".to_string());
         };
-        if dbcs.is_empty() && fibex.is_none() {
+        if dbcs.is_empty() && fibex.is_empty() {
             return Err("`--export-csv` needs a `--dbc` and/or `--fibex` signal definition".to_string());
         }
         return Ok(Cli::Export(ExportOpts {
@@ -266,9 +274,14 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         if replay.is_some() || project.is_some() || profile.is_some() {
             return Err("`--vector-probe` runs on its own; drop the other run flags".to_string());
         }
-        return Ok(Cli::VectorProbe { fibex });
+        // The probe configures every channel it opens from one description, so
+        // it takes the first; a multi-cluster probe is not what this diagnostic
+        // does.
+        return Ok(Cli::VectorProbe {
+            fibex: fibex.into_iter().next(),
+        });
     }
-    if let Some(path) = &fibex {
+    if let Some(path) = fibex.first() {
         return Err(format!(
             "`--fibex` belongs to `--vector-probe` or `--export-csv`; got `{path}` alone"
         ));
@@ -519,26 +532,30 @@ fn csv_field(s: &str) -> String {
 
 /// Decodes a log's signals through its description file(s) into a CSV, with
 /// no bus, clock, or window: CAN signals through the merged DBC(s), FlexRay
-/// signals through the FIBEX/ARXML. Both kinds stream off the same
-/// `FrameStream` the replayer reads, emitted merged in log-time order, one
-/// row per decoded signal. Frames whose message the databases do not name
-/// contribute nothing -- the export is driven by the definitions, exactly as
-/// requested.
+/// signals through the cluster description of the bus the row arrived on. Both
+/// kinds stream off the same `FrameStream` the replayer reads, emitted merged
+/// in log-time order, one row per decoded signal. Frames whose message the
+/// databases do not name contribute nothing -- the export is driven by the
+/// definitions, exactly as requested.
 pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     use std::io::Write;
 
     let dbc = merge_dbc_files(&opts.dbcs)?;
-    let frdb = match &opts.fibex {
-        Some(path) => {
-            // Chinese-locale FIBEX/ARXML exports are often ANSI (GBK); the
-            // same tolerant read the DBC loader and the vector probe use.
-            let bytes = std::fs::read(path).map_err(|e| format!("FIBEX 读取失败: {path}: {e}"))?;
-            let text = crate::dbc::text_from_bytes(bytes);
-            Some(crate::fr_db::FrDb::parse(&text).map_err(|e| format!("{path}: {e}"))?)
-        }
-        None => None,
-    };
-    if dbc.is_none() && frdb.is_none() {
+    // One description per FlexRay cluster, in the order given: the first
+    // describes bus 0, the second bus 1. A recording can hold both, and a slot
+    // number means something different in each cluster -- so the same
+    // description passed twice decodes both clusters, while passing one leaves
+    // the other's rows undecodable and reported as such.
+    let mut fr_dbs: std::collections::BTreeMap<u8, crate::fr_db::FrDb> = Default::default();
+    for path in &opts.fibex {
+        // Chinese-locale FIBEX/ARXML exports are often ANSI (GBK); the
+        // same tolerant read the DBC loader and the vector probe use.
+        let bytes = std::fs::read(path).map_err(|e| format!("FIBEX 读取失败: {path}: {e}"))?;
+        let text = crate::dbc::text_from_bytes(bytes);
+        let db = crate::fr_db::FrDb::parse(&text).map_err(|e| format!("{path}: {e}"))?;
+        fr_dbs.insert(fr_dbs.len().try_into().unwrap_or(u8::MAX), db);
+    }
+    if dbc.is_none() && fr_dbs.is_empty() {
         return Err("no usable signal definition loaded".to_string());
     }
 
@@ -554,9 +571,10 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     let mut rows = 0u64;
     let mut can_frames = 0u64;
     let mut fr_frames = 0u64;
-    // FlexRay rows the one description resolved no frame for -- on a
+    // FlexRay rows no description could decode -- either their cluster got no
+    // description at all or that description has no frame for the slot. On a
     // two-cluster log that is the whole other cluster, and the report has to
-    // say so rather than let the row count speak for itself.
+    // say so rather than let the frame count speak for itself.
     let mut fr_skipped = 0u64;
     let mut batch: Vec<crate::trace::FrRow> = Vec::new();
 
@@ -564,7 +582,7 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
         let can_head = stream.peek_t();
         // Hunt for FlexRay rows only when there is a description to decode
         // them with, so a CAN-only export never touches the FR queue.
-        let fr_head = if frdb.is_some() {
+        let fr_head = if !fr_dbs.is_empty() {
             stream.peek_fr_t()
         } else {
             None
@@ -579,7 +597,7 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
             (None, Some(ft)) => {
                 stream.poll_fr_rows(ft, &mut batch);
                 emit_fr_batch(
-                    &frdb,
+                    &fr_dbs,
                     &mut batch,
                     &mut w,
                     &write_line,
@@ -596,7 +614,7 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
                 } else {
                     stream.poll_fr_rows(ft, &mut batch);
                     emit_fr_batch(
-                        &frdb,
+                        &fr_dbs,
                         &mut batch,
                         &mut w,
                         &write_line,
@@ -657,13 +675,14 @@ fn emit_can(
     Ok(())
 }
 
-/// Writes one drained FlexRay batch to CSV through the description database
-/// and counts the rows. A row whose slot the database resolves no frame for is
-/// skipped -- nothing to decode it against -- and counted in `skipped`, because
-/// on a two-cluster log that is the whole other cluster and a silent half
-/// export reads as a complete one.
+/// Writes one drained FlexRay batch to CSV through the cluster description of
+/// the bus each row arrived on, and counts the rows. A row is skipped -- and
+/// counted in `skipped` -- when its cluster has no description, or that
+/// description resolves no frame for its slot: there is nothing to decode it
+/// against, and a silent half export of a two-cluster log reads as a complete
+/// one.
 fn emit_fr_batch(
-    frdb: &Option<crate::fr_db::FrDb>,
+    fr_dbs: &std::collections::BTreeMap<u8, crate::fr_db::FrDb>,
     batch: &mut Vec<crate::trace::FrRow>,
     w: &mut std::io::BufWriter<std::fs::File>,
     write_line: &impl Fn(&mut std::io::BufWriter<std::fs::File>, String) -> Result<(), String>,
@@ -671,12 +690,12 @@ fn emit_fr_batch(
     fr_frames: &mut u64,
     skipped: &mut u64,
 ) -> Result<(), String> {
-    let Some(db) = frdb else {
-        batch.clear();
-        return Ok(());
-    };
     for row in batch.drain(..) {
         *fr_frames += 1;
+        let Some(db) = fr_dbs.get(&row.bus) else {
+            *skipped += 1;
+            continue;
+        };
         let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab) else {
             *skipped += 1;
             continue;

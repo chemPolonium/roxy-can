@@ -778,7 +778,8 @@ fn a_bad_profile_aborts_the_run_before_traffic() {
 }
 
 /// `--export-csv <log> --out <csv> --dbc <f>`: accepted, and every input
-/// travels into the export options.
+/// travels into the export options -- `--dbc` and `--fibex` both keep their
+/// order, since the Nth `--fibex` is the description for FlexRay bus N.
 #[test]
 fn export_csv_flag_set_parses_and_collects_definitions() {
     let cli = parse_args(&flag_set(&[
@@ -792,6 +793,8 @@ fn export_csv_flag_set_parses_and_collects_definitions() {
         "b.dbc",
         "--fibex",
         "cluster.arxml",
+        "--fibex",
+        "other.arxml",
     ]))
     .unwrap();
     let Cli::Export(o) = cli else {
@@ -800,7 +803,7 @@ fn export_csv_flag_set_parses_and_collects_definitions() {
     assert_eq!(o.input, "run.blf");
     assert_eq!(o.out, "out.csv");
     assert_eq!(o.dbcs, ["a.dbc", "b.dbc"]);
-    assert_eq!(o.fibex.as_deref(), Some("cluster.arxml"));
+    assert_eq!(o.fibex, ["cluster.arxml", "other.arxml"]);
 }
 
 /// `--export-csv` is self-contained: it needs `--out`, at least one signal
@@ -859,7 +862,7 @@ fn export_csv_decodes_can_signals_through_the_dbc() {
         input: log.to_string_lossy().into_owned(),
         out: out.clone(),
         dbcs: vec![dbc.to_string_lossy().into_owned()],
-        fibex: None,
+        fibex: Vec::new(),
     })
     .unwrap();
     // Two frames cross, but only the DBC-defined one decodes a signal.
@@ -880,10 +883,12 @@ fn export_csv_decodes_can_signals_through_the_dbc() {
 }
 
 /// End to end against a real FlexRay capture: the export walks the FR queue
-/// through the description database without erroring and writes the header.
-/// The slot/frameId coupling between this particular log and cluster file is
-/// not asserted (it is the same coordinate the GUI decodes with); this proves
-/// the offline path runs and drains the frames.
+/// End to end against a real **two-cluster** FlexRay capture: the export walks
+/// the FR queue and writes the header, and -- because one `--fibex` describes
+/// one cluster -- it also reports what it could not decode. `assets/fibex/
+/// Logging.blf` holds 29 738 rows of cluster 0 and 30 334 of cluster 1, so a
+/// single description leaves exactly the second cluster undecoded; a
+/// description for each bus leaves nothing behind.
 #[test]
 fn export_csv_walks_a_real_flexray_log() {
     let blf = std::path::Path::new("assets/fibex/Logging.blf");
@@ -893,22 +898,45 @@ fn export_csv_walks_a_real_flexray_log() {
         return;
     }
     let out = tmp("roxy_can_export_fr.csv");
-    let report = export_signals_csv(&ExportOpts {
+    let one = export_signals_csv(&ExportOpts {
         input: blf.to_string_lossy().into_owned(),
         out: out.clone(),
         dbcs: Vec::new(),
-        fibex: Some(arxml.to_string_lossy().into_owned()),
+        fibex: vec![arxml.to_string_lossy().into_owned()],
     })
     .unwrap();
-    assert!(report.contains("FlexRay frame(s)"), "{report}");
+    assert!(one.contains("60072 FlexRay frame(s)"), "{one}");
     assert!(
-        !report.contains("0 FlexRay frame(s)"),
-        "the capture has FlexRay traffic to walk: {report}"
+        one.contains("30334 of them with no frame in the description"),
+        "the cluster with no description is reported, not dropped quietly: {one}"
     );
     let csv = std::fs::read_to_string(&out).unwrap();
     assert!(
         csv.starts_with("time_us,bus,message,signal,value,raw,unit,label\n"),
         "{csv}"
     );
+    // The bus column is the second field, so each row reads `,FR0 A,`.
+    assert!(
+        csv.contains(",FR0 A,") && !csv.contains(",FR1 A,"),
+        "only bus 0 decodes: {}",
+        &csv[..csv.len().min(200)]
+    );
+
+    let both = export_signals_csv(&ExportOpts {
+        input: blf.to_string_lossy().into_owned(),
+        out: out.clone(),
+        dbcs: Vec::new(),
+        fibex: vec![
+            arxml.to_string_lossy().into_owned(),
+            arxml.to_string_lossy().into_owned(),
+        ],
+    })
+    .unwrap();
+    assert!(
+        !both.contains("no frame in the description"),
+        "a description for each bus decodes them all: {both}"
+    );
+    let csv = std::fs::read_to_string(&out).unwrap();
     std::fs::remove_file(&out).ok();
+    assert!(csv.contains(",FR1 A,"), "bus 1 now decodes too");
 }

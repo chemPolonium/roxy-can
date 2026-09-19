@@ -12,7 +12,8 @@ roxy-can --check-script <f.rxcan> [...]    校验节点脚本（flag 可重复�
 roxy-can --convert <in.log> <out.asc>     BLF/ASC 转存为 ASC
 roxy-can --kvaser-probe                   列出 canlib 可见的 Kvaser 通道
 roxy-can --vector-probe                   列出 vxlapi 可见的 Vector 通道与总线类型；有 FlexRay 口时 RX 试开 2 秒
-roxy-can --vector-probe --fibex <f>       先校验 FIBEX/ARXML 集群描述（报告波特率/槽数/触发项），再按它配置 RX 试开，并转储首帧事件原始字节
+roxy-can --vector-probe --fibex <f>       先校验 FIBEX/ARXML 集群描述（报告波特率/槽数/触发项），再按它配置 RX 试开，并转储最多 8 个**互不相同**的事件头原始字节（定 A/B 通道偏移用）
+roxy-can --export-csv <log> --out <csv>   无窗口导出信号 CSV：--dbc 可重复（按序合并），--fibex 可重复（**第 N 份描述第 N-1 路 FlexRay cluster**，一份日志可以真有两个 cluster），解不出的行数写在报告里
 roxy-can -h                               完整帮助
 ```
 
