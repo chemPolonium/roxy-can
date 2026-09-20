@@ -614,7 +614,12 @@ pub fn fmt_signal_value(phys: f64, unit: &str, type_tag: &str, label: Option<&st
         s.push(' ');
         s.push_str(unit);
     }
-    s.push_str(&format!(" [{type_tag}]"));
+    // Only what exists: FlexRay signals have no type tag at all, and printing
+    // the empty brackets made every decoded FR row read "0 [] (正常)" -- the
+    // noise cost the reading exactly the width the value needs.
+    if !type_tag.is_empty() {
+        s.push_str(&format!(" [{type_tag}]"));
+    }
     if let Some(l) = label {
         s.push_str(&format!(" ({l})"));
     }
@@ -1262,6 +1267,10 @@ BO_ 441 Tags: 8 ECU
             fmt_signal_value(2.0, "", "u8", Some("Gear_2")),
             "2 [u8] (Gear_2)"
         );
+        // A missing part costs nothing, not an empty pair of brackets:
+        // FlexRay signals have no type tag, and "0 [] (正常)" read as a defect.
+        assert_eq!(fmt_signal_value(3.5, "Mpa", "", Some("正常")), "3.5 Mpa (正常)");
+        assert_eq!(fmt_signal_value(3.5, "", "", None), "3.5");
     }
 
     const VAL_DBC: &str = r#"VERSION "roxy-can val test"
