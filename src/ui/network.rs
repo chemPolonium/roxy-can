@@ -235,49 +235,83 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
         }
     }
 
-    // Frames by slot then cycle phase: the order a schedule is read in, rather
-    // than the order the document happened to declare them.
+    // The schedule read the way a schedule is written: by slot, and within a
+    // slot by cycle phase. A flat list of the bundled cluster's 220 frames is
+    // both unreadable and the wrong index -- the question this view answers
+    // first is "what sits in slot 13", and a slot is held by several frames in
+    // turn, which grouping shows and a list hides.
     let mut order: Vec<usize> = (0..db.frames.len()).collect();
     order.sort_by_key(|&i| {
         let t = db.frames[i].triggering;
-        (t.slot_id, t.base_cycle, i)
+        (t.slot_id, t.base_cycle, t.channel as u8, i)
     });
+    let mut groups: Vec<(u32, Vec<usize>)> = Vec::new();
+    for ix in order {
+        let slot = db.frames[ix].triggering.slot_id;
+        match groups.last_mut() {
+            Some((s, frames)) if *s == slot => frames.push(ix),
+            _ => groups.push((slot, vec![ix])),
+        }
+    }
+    // What has arrived, indexed by the frame rather than the slot: a count that
+    // mixed a slot's several occupants would belong to none of them.
+    let mut seen: std::collections::HashMap<usize, (u64, f64)> = std::collections::HashMap::new();
+    for a in app.snap.fr_aggs.iter().filter(|a| a.bus == bus) {
+        if let Some(ix) = a.occupant.frame_ix() {
+            seen.insert(ix, (a.count, a.cycle_us / 1000.0));
+        }
+    }
     if let Some(_f) = ui
-        .tree_node_config(format!("帧 ({})##frf{bus}", db.frames.len()))
+        .tree_node_config(format!(
+            "帧 ({} 帧 / {} 槽)##frf{bus}",
+            db.frames.len(),
+            groups.len()
+        ))
         .default_open(true)
         .push()
     {
-        for &ix in &order {
-            let f = &db.frames[ix];
-            let t = f.triggering;
-            // What has arrived in this slot, tracked per frame rather than per
-            // slot: a static slot is held by several frames in turn, and a count
-            // that mixed them would belong to none.
-            let seen = app
-                .snap
-                .fr_aggs
+        for (slot, frames) in &groups {
+            // Liveness at the slot level, so a collapsed row still says whether
+            // anything is coming through this slot at all.
+            let total: u64 = frames
                 .iter()
-                .find(|a| a.bus == bus && a.occupant.frame_ix() == Some(ix));
-            let (count, cycle) = seen.map_or((0, 0.0), |a| (a.count, a.cycle_us / 1000.0));
-            let live = if count >= 2 {
-                format!("  收到 {count} 帧 ~{cycle:.1} ms")
-            } else if count == 1 {
-                format!("  收到 {count} 帧")
+                .map(|ix| seen.get(ix).map_or(0, |(c, _)| *c))
+                .sum();
+            let head = if total > 0 {
+                format!("slot {slot} · {} 帧 · 收到 {total}", frames.len())
             } else {
-                "  本运行未收到".to_string()
+                format!("slot {slot} · {} 帧 · 静默", frames.len())
             };
-            let head = format!(
-                "slot {} · 相 {}/{} · {} · {} B  {}{live}",
-                t.slot_id,
-                t.base_cycle,
-                t.cycle_repetition,
-                t.channel.label(),
-                f.length,
-                f.name,
-            );
-            if let Some(_n) = ui.tree_node_config(format!("{head}##frframe{bus}_{ix}")).push() {
-                for name in db.signal_names(ix) {
-                    ui.bullet_text(name.as_str());
+            if let Some(_s) = ui.tree_node_config(format!("{head}##frslot{bus}_{slot}")).push() {
+                for &ix in frames {
+                    let f = &db.frames[ix];
+                    let t = f.triggering;
+                    // The frame name leads the row: it is what identifies it, and
+                    // the tree panel is narrow enough that whatever sits behind
+                    // the name gets clipped.
+                    let name = if f.name.is_empty() {
+                        format!("槽{slot}帧{ix}")
+                    } else {
+                        f.name.clone()
+                    };
+                    let live = match seen.get(&ix) {
+                        Some((c, cycle)) if *c >= 2 => format!(" · {c} 帧 ~{cycle:.1} ms"),
+                        Some((c, _)) => format!(" · {c} 帧"),
+                        None => " · 未收到".to_string(),
+                    };
+                    let leaf = format!(
+                        "{name} · 相 {}/{} · {} · {} B{live}",
+                        t.base_cycle,
+                        t.cycle_repetition,
+                        t.channel.label(),
+                        f.length,
+                    );
+                    if let Some(_n) = ui.tree_node_config(format!("{leaf}##frframe{bus}_{ix}")).push()
+                    {
+                        for sig in db.signal_names(ix) {
+                            ui.bullet_text(sig.as_str());
+                        }
+                    }
                 }
             }
         }
@@ -440,8 +474,9 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
 
                 // 左右分栏：左边树形拓扑，右边所选节点的详情。两栏各自
-                // 滚动——树的长度与详情的长度互不挤占。
-                const TREE_W: f32 = 240.0;
+                // 滚动——树的长度与详情的长度互不挤占。宽度要装得下
+                // FlexRay 的帧名行（名字打头，后面才是相位与载荷）。
+                const TREE_W: f32 = 320.0;
                 ui.child_window("net_tree")
                     .size([TREE_W, 0.0])
                     .border(true)
