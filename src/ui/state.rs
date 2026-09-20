@@ -754,11 +754,23 @@ fn draw_wave(
     }
 }
 
-/// The DBC value-table label for physical state value `v` of signal
-/// `key` -- CANoe shows `NM_STATE_NORMAL_OPERATION`, not the raw number.
-/// Physical maps back to raw through the signal's own factor/offset;
-/// None when there is no table or no entry for that raw value.
+/// The value-table label for physical state value `v` of signal `key` -- CANoe
+/// shows `NM_STATE_NORMAL_OPERATION`, not the raw number. Physical maps back to
+/// raw through the signal's own factor/offset; None when there is no table or no
+/// entry for that raw value.
 fn table_label(app: &App, key: &crate::observe::SigKey, v: f64) -> Option<String> {
+    // A FlexRay signal's labels are its own declaration (the description's
+    // VALUE table for the I-SIGNAL), so the state row reads the same as the
+    // Trace cell for that very signal -- both show `2 (完成)`, neither a bare 2.
+    if let crate::observe::SigKey::Fr { bus, slot, name } = key {
+        let sig = app.fr_db(*bus)?.slot_signal(*slot, name)?;
+        let raw = ((v - sig.offset) / sig.factor).round() as i64;
+        return sig
+            .value_descriptions
+            .iter()
+            .find(|(rv, _)| rv == &raw)
+            .map(|(_, t)| t.clone());
+    }
     // A `VAL_` value table is a DBC concept, so only a CAN key can have one.
     let crate::observe::SigKey::Can { ch, id, ext, name } = key else {
         return None;
@@ -1201,6 +1213,80 @@ VAL_ 410 Gear 2 "Gear_2" 1 "Gear_1" 0 "Neutral";
             table_label(&app, &free, 1.0),
             None,
             "a signal with no table stays numeric"
+        );
+    }
+
+    /// A FlexRay signal with a value table labels the state row the way the
+    /// Trace cell labels it: the description declares the text, so neither view
+    /// is left showing a bare number. The physical value maps back to raw
+    /// through the signal's own factor, which is not 1 here on purpose.
+    #[test]
+    fn state_labels_use_the_flexray_descriptions_own_value_table() {
+        use crate::fr_db::{
+            FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering,
+        };
+        let mut app = App::headless();
+        let db = FrDb::assemble(
+            FrClusterParams::default(),
+            vec![],
+            vec![FrPdu {
+                name: "P".into(),
+                length: 1,
+                dynamic: false,
+                comment: String::new(),
+                signals: vec![FrSignal {
+                    name: "State".into(),
+                    start_bit: 0,
+                    length_bits: 8,
+                    big_endian: false,
+                    signed: false,
+                    factor: 2.0,
+                    offset: 0.0,
+                    min: 0.0,
+                    max: 6.0,
+                    unit: String::new(),
+                    comment: String::new(),
+                    value_descriptions: vec![(1, "Idle".into()), (2, "Run".into())],
+                }],
+            }],
+            vec![FrFrameDb {
+                name: "F".into(),
+                length: 1,
+                payload_preamble: false,
+                triggering: FrTriggering {
+                    channel: FrChannel::Both,
+                    slot_id: 7,
+                    base_cycle: 0,
+                    cycle_repetition: 1,
+                    startup: false,
+                },
+                pdus: vec![("P".into(), 0u32)],
+                comment: String::new(),
+            }],
+        );
+        app.fr_buses.insert(
+            0,
+            crate::app::FrBusCfg {
+                path: "synthetic".into(),
+                db: db.into(),
+            },
+        );
+        let key = SigKey::fr(0, 7, "State");
+        assert_eq!(
+            table_label(&app, &key, 4.0).as_deref(),
+            Some("Run"),
+            "physical 4 is raw 2 at factor 2"
+        );
+        assert_eq!(table_label(&app, &key, 2.0).as_deref(), Some("Idle"));
+        assert_eq!(
+            table_label(&app, &key, 6.0),
+            None,
+            "a raw value with no entry stays numeric"
+        );
+        assert_eq!(
+            table_label(&app, &SigKey::fr(1, 7, "State"), 4.0),
+            None,
+            "a cluster with no description has no labels to offer"
         );
     }
 
