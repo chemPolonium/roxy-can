@@ -136,20 +136,38 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_row();
                 ui.table_next_column();
                 // The sync pass worked out *why* there is nothing here; the
-                // window only prints it.
-                ui.text(format!(
-                    "   {}",
-                    row.empty_note.as_deref().unwrap_or("(no signals)")
-                ));
+                // window only prints it. The note is a whole sentence, so it
+                // gets the row, not the width of one column.
+                span_row_text(
+                    ui,
+                    &format!(
+                        "   {}",
+                        row.empty_note.as_deref().unwrap_or("(no signals)")
+                    ),
+                );
             } else {
                 for (name, value) in &row.signals {
                     ui.table_next_row();
                     ui.table_next_column();
                     ui.text(format!("   {name}"));
                     ui.table_set_column_index(1);
-                    ui.text(value);
+                    span_row_text(ui, value);
                 }
             }
         }
     }
+}
+
+/// One line of text, allowed to run into the empty columns to its right.
+///
+/// A table clips every cell to its own column, and the value column here is
+/// the 60 px "Bus" one -- so a FlexRay reading like `2.54 Mpa [正常] (0x1F)`
+/// was cut mid-unit, which is the one thing the expanded row exists to show.
+/// Only this item's clip rect is widened; the table keeps clipping every other
+/// cell, which a frozen-header table needs (see the note on `tbl_flags`).
+fn span_row_text(ui: &Ui, text: &str) {
+    let [x, y] = ui.cursor_screen_pos();
+    let right = x + ui.content_region_avail_width();
+    let _clip = ui.push_clip_rect([x, y], [right, y + ui.text_line_height()], false);
+    ui.text(text);
 }
