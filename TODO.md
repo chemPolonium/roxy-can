@@ -237,6 +237,15 @@
 - **回归**：新增 `table_rows_map_back_to_their_frame_row`（前缀和与映射的边界：帧行、它的第一个/最后一个子行、相邻 CAN 行、无子行帧 —— 这套偏移错位无头测试看不见，只能靠纯函数单测）。`cache_shape` 改成**按表行展开**（一个带三个子行的帧行贡献四条），所以"分批扩展 vs 一次全走"那条等价性仍然逐字比较用户看得见的东西；`the_trace_row_cache_extends_in_place_without_losing_rows` 多加一条"表行数 > 缓存条目数"的断言，摊平没生效时它会响。`a_new_cluster_description_rebuilds_the_expanded_rows` 原样通过（计数来自描述，换描述必须重建 —— 这条判据现在守的是计数，不再是索引）。**全量 630 通过 / 0 失败**，clippy 干净。
 - **要看界面**（无头跑不到滚动与裁剪）：展开一条 FR 行，确认子行仍紧跟父行、`└`/名字/值三格位置没变；**拖滚动条到长表底部**看行号与内容是否错位（`locate_row` 的偏移错了就是这个症状）；点 Len/Flags/Name 列头排序，确认解码子行不再散到别处。
 
+### 2026-09-20：FlexRay 静态段占用率（S4 的最后一格，口径由用户选定）
+
+- **背景**：S4 盘点时唯一悬着的项就是"负载/占用率口径"——这不是能自己定的东西（数字要能和 CANoe 对得上），所以一直空着。用户选定**时间占用率（按描述参数算）**，不是"观测到的槽数占比"。
+- **口径**：一帧占用的介质时间 = 该路描述的 `gstaticSlot × gmacrotick`（与载荷长短无关，这是 FlexRay 与 CAN 的根本差别：槽是预留的）；占用率 = 窗口内到达帧的占用之和 / 窗口时长（沿用 CAN 的 1 s 滚动窗口 `WINDOW_US`，同样"只由新帧推进"）。写进 `crate::load::FrLoad` + `fr_slot_wire_us`，`ingest_fr_row` 每次到达记一笔，`step` 每拍 `sample()` 喂 Min/Max/Avg，随 `loads_dirty` 一起发布到 `snap.fr_loads`（按 cluster 索引，与 `FR{n}` 同一套编号）。
+- **两条明确不做的**：① **动态段不计入**——被动监听只报静态槽，算 minislot 需要参数里根本没有的 action point 索引，编出来的是假数；② **描述里没有槽时长就不报占用率**（`fr_slot_wire_us` 返回 `None`，Statistics 那行显示 `-`，而帧数照记）——0 % 会被读成"这条总线很闲"，而事实是"我们无从计算"。冗余集群不双算：一帧在日志里是一条记录（channel mask = both）。
+- **顺带修掉一个真 bug**：`clear_aggregates`（Messages/Statistics 的 Clear 按钮）以前只清 `self.aggs`，**没清 `fr_aggs`** —— FR 行如今与 CAN 同表并列，Clear 之后 FR 计数继续从旧值往上爬，等于按钮对一半表格说谎。现在两者一起清，状态行的计数也是两者之和（回归 `clearing_the_message_counters_clears_the_flexray_tallies_too`）。
+- **界面**：Bus Statistics 窗口每个有流量的 FlexRay cluster 一节（`FR{n}（cluster 名 / 无描述）`），行是 静态段占用 [%] / Frames [n/s] / Frames [total] / Slot wire time [µs]，节标题的 tooltip 写明口径与"动态段不计入"。
+- **回归**：`a_flexray_cluster_is_charged_one_slot_per_arrival`（100 帧 × 40 µs = 0.4 %，逐位精确）、`the_flexray_window_prunes_and_ignores_a_seek_back`（倒退的一帧计入总数但不进窗口——与 `BusLoad` 同一条纪律）、`an_untimed_cluster_counts_frames_without_a_load`、`slot_wire_time_comes_from_the_cluster_parameters`（0 槽时长 / 0 宏周期都返回 `None`），加两条走完整核心的 `app_tests`。**全量 637 通过 / 0 失败**，clippy 干净。**要看界面**：Bus Statistics 里 FR 那节的数字与 `-` 的分支（无描述那条路）。
+
 ## 结构待办（零散）
 
 - **外部仿真元件动态库加载**：进程内注册表已就绪（`script::register_extern`），动态库 C ABI 插件约定与加载器另议（含沙箱边界）。

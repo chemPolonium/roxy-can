@@ -1097,6 +1097,15 @@ impl App {
         self.fr_buses.get(&bus).map(|c| &*c.db)
     }
 
+    /// What one static slot of this cluster occupies of the medium, in
+    /// microseconds -- the unit the occupancy figure is built from. `None` when
+    /// the bus has no description or its carries no slot timing, which the
+    /// Statistics row shows as "-" rather than as a 0 % nobody measured.
+    pub(crate) fn fr_slot_wire_us(&self, bus: u8) -> Option<f64> {
+        self.fr_db(bus)
+            .and_then(|db| crate::load::fr_slot_wire_us(&db.params))
+    }
+
     /// Refreshes Messages window `i`'s throttled text snapshot: the header
     /// count and one pre-formatted struct per row, including the decoded
     /// signal pairs the expanded tree shows. Same gate as

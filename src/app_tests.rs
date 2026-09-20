@@ -6964,10 +6964,12 @@ fn an_edited_filter_or_a_cleared_trace_rebuilds_the_row_cache() {
     app.stop();
 }
 
-/// A one-slot FlexRay description whose frame declares exactly these signals.
-/// Enough to pin how many child rows a frame row owns, and which name each one
-/// prints.
-fn one_slot_db(signals: &[&str]) -> std::sync::Arc<crate::fr_db::FrDb> {
+/// A one-slot FlexRay description whose frame declares exactly these signals,
+/// on a cluster whose static slot lasts `slot_wire_us` microseconds (0 = the
+/// description declares no timing at all). Enough to pin how many child rows a
+/// frame row owns, which name each one prints, and what the cluster's occupancy
+/// is charged.
+fn one_slot_db(signals: &[&str], slot_wire_us: f64) -> std::sync::Arc<crate::fr_db::FrDb> {
     use crate::fr_db::{FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
     let sig = |name: &str| FrSignal {
         name: name.into(),
@@ -6984,7 +6986,13 @@ fn one_slot_db(signals: &[&str]) -> std::sync::Arc<crate::fr_db::FrDb> {
         value_descriptions: vec![],
     };
     FrDb::assemble(
-        FrClusterParams::default(),
+        FrClusterParams {
+            // One macrotick of `slot_wire_us`, so the product is the figure the
+            // load is charged per arrival.
+            static_slot_duration: 1,
+            macrotick_duration_us: slot_wire_us,
+            ..Default::default()
+        },
         vec![],
         vec![FrPdu {
             name: "P".into(),
@@ -7011,6 +7019,145 @@ fn one_slot_db(signals: &[&str]) -> std::sync::Arc<crate::fr_db::FrDb> {
     .into()
 }
 
+/// A FlexRay cluster's load is the same kind of number as a CAN channel's: the
+/// share of the rolling window the traffic occupied, with a FlexRay frame's
+/// occupancy being its static slot (`gstaticSlot` × `gmacrotick`) rather than
+/// its length. The description supplies the timing; nothing here is invented.
+#[test]
+fn a_flexray_cluster_reports_its_static_segment_occupancy() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    for i in 0..25u64 {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot: 5,
+            cycle: 0,
+            payload: vec![0x2A],
+            header_crc: 0,
+            flags: 0,
+        });
+        let t = (i + 1) * 20_000;
+        app.advance_clock(t);
+        app.tick(t);
+        app.refresh_snapshot();
+    }
+    let load = app.snap.fr_loads.get(&0).expect("bus 0 carried traffic");
+    assert_eq!(load.frames, 25);
+    assert!(
+        (load.load() - 25.0 * 40.0 / 1e6).abs() < 1e-12,
+        "25 slots of 40 us inside a one-second window: {}",
+        load.load()
+    );
+    assert_eq!(app.fr_slot_wire_us(0), Some(40.0));
+    app.stop();
+}
+
+/// A cluster watched with a description that declares no slot timing counts
+/// frames and claims no load, which is what keeps the Statistics row an honest
+/// "-" instead of a 0 %.
+#[test]
+fn an_undescribed_flexray_cluster_counts_frames_but_no_occupancy() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 0.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    app.refresh_snapshot();
+    assert_eq!(app.fr_slot_wire_us(0), None, "no timing to divide by");
+    let load = app.snap.fr_loads.get(&0).expect("bus 0 carried traffic");
+    assert_eq!(load.frames, 1, "the arrival still counts");
+    assert_eq!(load.load(), 0.0);
+    app.stop();
+}
+
+/// The Messages window's Clear resets the FlexRay tallies as well: they are rows
+/// of that table now, and leaving them to run up from their old counts made the
+/// button lie about half of what it shows.
+#[test]
+fn clearing_the_message_counters_clears_the_flexray_tallies_too() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    for i in 0..3u64 {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot: 5,
+            cycle: 0,
+            payload: vec![0x2A],
+            header_crc: 0,
+            flags: 0,
+        });
+        let t = (i + 1) * 20_000;
+        app.advance_clock(t);
+        app.tick(t);
+        app.refresh_snapshot();
+    }
+    app.sync_msg_text(0);
+    assert!(
+        app.msg_windows[0]
+            .text_rows
+            .iter()
+            .any(|r| r.bus == "FR0" && r.count == "3"),
+        "the tally is on screen before the clear: {:?}",
+        app.msg_windows[0]
+            .text_rows
+            .iter()
+            .map(|r| (r.bus.clone(), r.label.clone(), r.count.clone()))
+            .collect::<Vec<_>>()
+    );
+
+    app.send(crate::bus::BusCommand::ClearAggregates);
+    app.advance_clock(100_000);
+    app.tick(100_000);
+    app.refresh_snapshot();
+    assert!(
+        app.snap.fr_aggs.is_empty(),
+        "the FlexRay counters cleared with the CAN ones"
+    );
+    app.sync_msg_text(0);
+    assert!(
+        !app.msg_windows[0].text_rows.iter().any(|r| r.bus == "FR0"),
+        "and the window shows nothing until a frame arrives again"
+    );
+    app.stop();
+}
+
 /// What must also throw the expanded cache away: the cluster description a
 /// child row was indexed against. An expanded FlexRay row stores `(frame,
 /// child)` indices into that description, so when the bus gets a different one
@@ -7027,7 +7174,7 @@ fn a_new_cluster_description_rebuilds_the_expanded_rows() {
             0,
             crate::app::FrBusCfg {
                 path: "synthetic".into(),
-                db: one_slot_db(signals),
+                db: one_slot_db(signals, 40.0),
             },
         );
         app.push_fr_db_to_core();

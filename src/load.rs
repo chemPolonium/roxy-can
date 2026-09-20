@@ -93,6 +93,128 @@ fn classify(f: &CanFrame) -> usize {
 /// 1 ms read: nothing on a simulated bus argues for a configurable knob yet.
 pub const BURST_GAP_US: u64 = 1_000;
 
+/// The time one FlexRay static slot occupies the medium, from the cluster's own
+/// parameters: `gstaticSlot` macroticks, each `gmacrotick` long.
+///
+/// `None` when the description carries neither, because there is then no honest
+/// denominator to divide by -- the load row shows "-" rather than a made-up 0 %.
+pub fn fr_slot_wire_us(p: &crate::fr_db::FrClusterParams) -> Option<f64> {
+    let ticks = f64::from(p.static_slot_duration);
+    let us = p.macrotick_duration_us;
+    (ticks > 0.0 && us > 0.0).then_some(ticks * us)
+}
+
+/// One FlexRay cluster's rolling occupancy window.
+///
+/// The 口径 is **time on the medium**, the same shape as CAN's bus load, with the
+/// FlexRay twist that a frame's occupancy is set by the schedule rather than by
+/// what it carries: a static slot lasts `gstaticSlot` macroticks whether its
+/// payload is 24 bytes or 254. So every arrival is charged exactly one slot's
+/// wire time and the load is that share of the rolling window. Nothing is
+/// charged twice for a redundant cluster: a dual-channel frame is one row (the
+/// log's channel mask says "both"), not one per channel.
+///
+/// What it deliberately does not claim: the **dynamic segment**. A passive
+/// listen reports static slots, and charging minislots needs the action-point
+/// index the cluster parameters do not carry. A cluster whose description has no
+/// slot timing counts frames and reports no load -- see [`fr_slot_wire_us`].
+#[derive(Clone, Debug, Default)]
+pub struct FrLoad {
+    /// (arrival, medium time charged), oldest first, pruned to
+    /// [`WINDOW_US`] of bus time.
+    recent: VecDeque<(u64, f64)>,
+    window_wire_us: f64,
+    window_frames: u64,
+    /// Frames since the counters were cleared.
+    pub frames: u64,
+    /// Newest timestamp seen, so a seek backwards or an out-of-order arrival
+    /// cannot poison the sliding window -- same courtesy as [`BusLoad`].
+    newest_t_us: u64,
+    load_min: Option<f64>,
+    load_max: Option<f64>,
+    load_sum: f64,
+    load_n: u64,
+    rate_min: Option<f64>,
+    rate_max: Option<f64>,
+    rate_sum: f64,
+    rate_n: u64,
+}
+
+impl FrLoad {
+    /// One arrival on this cluster. `occupied_us` is [`fr_slot_wire_us`] for the
+    /// description the bus is watched with, or `None` when it has no slot timing
+    /// -- the frame still counts, only the occupancy stays unknown.
+    pub fn note(&mut self, t_us: u64, occupied_us: Option<f64>) {
+        self.frames += 1;
+        if t_us < self.newest_t_us {
+            return;
+        }
+        self.newest_t_us = t_us;
+        let wire = occupied_us.unwrap_or(0.0);
+        self.window_wire_us += wire;
+        self.window_frames += 1;
+        self.recent.push_back((t_us, wire));
+        self.prune(t_us);
+    }
+
+    /// Drops arrivals that left the window.
+    fn prune(&mut self, now: u64) {
+        let horizon = now.saturating_sub(WINDOW_US);
+        while let Some(&(t, wire)) = self.recent.front() {
+            if t > horizon {
+                break;
+            }
+            self.recent.pop_front();
+            self.window_wire_us -= wire;
+            self.window_frames -= 1;
+        }
+        if self.recent.is_empty() {
+            // Keep a pruned-to-nothing window from reading as a hair of load
+            // left over by accumulated rounding.
+            self.window_wire_us = 0.0;
+        }
+    }
+
+    /// Share of the last [`WINDOW_US`] of bus time occupied by static slots.
+    pub fn load(&self) -> f64 {
+        self.window_wire_us / WINDOW_US as f64
+    }
+
+    /// Frames per second over the window. The window is one second of bus time
+    /// ([`WINDOW_US`] µs), so the count *is* the rate -- as in the CAN rows.
+    pub fn frame_rate(&self) -> f64 {
+        self.window_frames as f64
+    }
+
+    /// One sample of the windowed numbers for the Min/Max/Avg columns; called
+    /// once per measurement step, so a quiet stretch is recorded as the load
+    /// holding still rather than skipped.
+    pub fn sample(&mut self) {
+        let l = self.load();
+        self.load_min = Some(self.load_min.map_or(l, |m| m.min(l)));
+        self.load_max = Some(self.load_max.map_or(l, |m| m.max(l)));
+        self.load_sum += l;
+        self.load_n += 1;
+        let r = self.frame_rate();
+        self.rate_min = Some(self.rate_min.map_or(r, |m| m.min(r)));
+        self.rate_max = Some(self.rate_max.map_or(r, |m| m.max(r)));
+        self.rate_sum += r;
+        self.rate_n += 1;
+    }
+
+    pub fn load_stats(&self) -> (Option<f64>, Option<f64>, Option<f64>) {
+        (self.load_min, self.load_max, divide(self.load_sum, self.load_n))
+    }
+
+    pub fn rate_stats(&self) -> (Option<f64>, Option<f64>, Option<f64>) {
+        (self.rate_min, self.rate_max, divide(self.rate_sum, self.rate_n))
+    }
+}
+
+fn divide(sum: f64, n: u64) -> Option<f64> {
+    (n > 0).then(|| sum / n as f64)
+}
+
 /// One bus's rolling traffic window and its run-long statistics: load and
 /// frame rate over the last [`WINDOW_US`], a 100 ms-bucketed history, the
 /// CAN statistics rows (per-class rates and totals, send distance, bursts),
@@ -722,5 +844,74 @@ mod tests {
             l_min.unwrap() < l_max.unwrap(),
             "load samples track the window too"
         );
+    }
+
+    /// A FlexRay frame's occupancy is its slot, not its payload: 100 arrivals
+    /// of a 40 µs slot over a 1 s window is 0.4 %, and the frame rate is the
+    /// window count because the window is one second of bus time.
+    #[test]
+    fn a_flexray_cluster_is_charged_one_slot_per_arrival() {
+        let mut load = FrLoad::default();
+        for i in 0..100u64 {
+            load.note((i + 1) * 10_000, Some(40.0));
+        }
+        assert!((load.load() - 0.004).abs() < 1e-12, "{} %", load.load() * 100.0);
+        assert_eq!(load.frame_rate(), 100.0);
+        assert_eq!(load.frames, 100);
+    }
+
+    /// The window slides on bus time, and an arrival from before what has
+    /// already been seen -- a seek back through a log -- must not extend it or
+    /// double-count into it.
+    #[test]
+    fn the_flexray_window_prunes_and_ignores_a_seek_back() {
+        let mut load = FrLoad::default();
+        load.note(0, Some(40.0));
+        load.note(2_000_000, Some(40.0));
+        assert_eq!(load.frame_rate(), 1.0, "the first arrival left the window");
+        assert!((load.load() - 40.0 / 1e6).abs() < 1e-12);
+        load.note(1_000_000, Some(40.0));
+        assert_eq!(load.frames, 3, "it was traffic, and it counts");
+        assert_eq!(
+            load.frame_rate(),
+            1.0,
+            "but it did not enter the window of a clock already past it"
+        );
+    }
+
+    /// Without slot timing there is no denominator, so there is no load -- but
+    /// the frames still count, which is the difference between "0 %" and a row
+    /// that says nothing was measurable.
+    #[test]
+    fn an_untimed_cluster_counts_frames_without_a_load() {
+        let mut load = FrLoad::default();
+        load.note(1_000, None);
+        load.note(2_000, None);
+        assert_eq!(load.frames, 2);
+        assert_eq!(load.frame_rate(), 2.0);
+        assert_eq!(load.load(), 0.0, "nothing was charged, so nothing is claimed");
+    }
+
+    /// `gstaticSlot` macroticks of `gmacrotick` each, and no invented number
+    /// when either is missing.
+    #[test]
+    fn slot_wire_time_comes_from_the_cluster_parameters() {
+        let p = crate::fr_db::FrClusterParams {
+            static_slot_duration: 8,
+            macrotick_duration_us: 5.0,
+            ..Default::default()
+        };
+        assert_eq!(fr_slot_wire_us(&p), Some(40.0));
+        assert_eq!(
+            fr_slot_wire_us(&crate::fr_db::FrClusterParams::default()),
+            None,
+            "a description that declares neither is not a licence to guess"
+        );
+        let no_slot = crate::fr_db::FrClusterParams {
+            static_slot_duration: 0,
+            macrotick_duration_us: 5.0,
+            ..Default::default()
+        };
+        assert_eq!(fr_slot_wire_us(&no_slot), None);
     }
 }

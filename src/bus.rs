@@ -590,6 +590,10 @@ pub struct Snapshot {
     /// Per-bus load rollups as of the last publish; the Bus Statistics
     /// window's whole data source.
     pub bus_loads: Arc<Vec<crate::load::BusLoad>>,
+    /// Per-FlexRay-cluster occupancy rollups as of the last publish, keyed by
+    /// cluster index (the number the tables print as `FR{n}`). The same window
+    /// the CAN rows use, with a static slot's wire time as the unit.
+    pub fr_loads: Arc<std::collections::BTreeMap<u8, crate::load::FrLoad>>,
     /// Simulation nodes as of the last publish: identity, source, state
     /// and log. The Nodes window's data source and the project save.
     pub nodes: Arc<Vec<NodeView>>,
@@ -864,14 +868,18 @@ pub struct BusCore {
     pub(crate) aggs: HashMap<(u8, u32, bool), MessageAgg>,
     /// Per-bus load / frame-rate / error rolling state, one entry per channel.
     pub(crate) bus_loads: Vec<crate::load::BusLoad>,
+    /// The same for each FlexRay cluster being watched, by cluster index.
+    pub(crate) fr_loads: std::collections::BTreeMap<u8, crate::load::FrLoad>,
     /// Send-now requests recorded by commands, built into frames at the
     /// next step. Kept apart from `buf` because `step` clears `buf` before
     /// polling its source.
     pub(crate) injected: Vec<(u8, u32)>,
     /// The load rollups as of the last publish. Rebuilt only when a step
     /// (or a channel add/remove) touched them; the Bus Statistics window
-    /// reads this, never the live state.
+    /// reads this, never the live state. FlexRay's rollups ride the same
+    /// dirty flag: they change on the same frames, and both are read together.
     pub(crate) published_loads: Arc<Vec<crate::load::BusLoad>>,
+    pub(crate) published_fr_loads: Arc<std::collections::BTreeMap<u8, crate::load::FrLoad>>,
     /// True when `bus_loads` changed since `published_loads` was built.
     pub(crate) loads_dirty: bool,
     /// Subscribed signals: latest value, min/max/avg, sampled history.
@@ -994,8 +1002,10 @@ impl BusCore {
             frame_counter: 0,
             aggs: HashMap::new(),
             bus_loads,
+            fr_loads: Default::default(),
             injected: Vec::new(),
             published_loads,
+            published_fr_loads: Arc::new(Default::default()),
             loads_dirty: false,
             subs: HashMap::new(),
             markers: Vec::new(),
@@ -1573,11 +1583,12 @@ impl BusCore {
     }
 
     /// One FlexRay frame lands: stamped against the sim clock when the
-    /// source had no time of its own, then into the FR ring and the
-    /// per-frame aggregates. Kept apart from [`BusCore::ingest`] -- FR
-    /// rows skip the CAN aggregates and load rollups, but when a FlexRay
-    /// description database is loaded their decoded signals fold into
-    /// subscriptions so the observers can plot them.
+    /// source had no time of its own, then into the FR ring, the per-frame
+    /// aggregates and the cluster's occupancy window. Kept apart from
+    /// [`BusCore::ingest`] -- FR rows roll up their own load, not the CAN
+    /// per-identifier classes -- but when a FlexRay description database is
+    /// loaded their decoded signals fold into subscriptions so the observers
+    /// can plot them.
     pub(crate) fn ingest_fr_row(&mut self, mut row: crate::trace::FrRow) {
         if row.t_us == 0 {
             row.t_us = self.sim_t_us;
@@ -1590,6 +1601,20 @@ impl BusCore {
             self.recorder.write_fr(&row);
         }
         let ix = self.tally_fr_row(&row);
+        // Its share of the medium is one static slot, however long the payload:
+        // `gstaticSlot` macroticks of the cluster's own `gmacrotick`. No
+        // description, or one without slot timing, and the frame still counts --
+        // only the load stays unknown, which the Statistics row prints as "-"
+        // rather than as a 0 % it never measured.
+        let occupied = self
+            .fr_dbs
+            .get(&row.bus)
+            .and_then(|db| crate::load::fr_slot_wire_us(&db.params));
+        self.fr_loads
+            .entry(row.bus)
+            .or_default()
+            .note(row.t_us, occupied);
+        self.loads_dirty = true;
         // Fold the frame's FlexRay signals into their subscriptions so the
         // Graphics / Data / State / Monitor observers can plot live values,
         // mirroring [`BusCore::ingest`]'s CAN fold. The row's own cluster
@@ -1717,6 +1742,7 @@ impl BusCore {
     pub(crate) fn publish_loads(&mut self) {
         if self.loads_dirty {
             self.published_loads = Arc::new(self.bus_loads.clone());
+            self.published_fr_loads = Arc::new(self.fr_loads.clone());
             self.loads_dirty = false;
         }
     }
@@ -2140,6 +2166,7 @@ impl BusCore {
             sim_t_us: self.sim_t_us,
             spec: self.spec.clone(),
             bus_loads: Arc::clone(&self.published_loads),
+            fr_loads: Arc::clone(&self.published_fr_loads),
             nodes: Arc::clone(&self.published_nodes),
             blocks: (*self.published_blocks).clone(),
             emitted: self.emitted_streams.clone(),
@@ -3118,6 +3145,8 @@ impl BusCore {
         for load in &mut self.bus_loads {
             load.clear();
         }
+        self.fr_loads.clear();
+        self.loads_dirty = true;
         // Along with the aggregates it reads: keeping the previous run's
         // interval memory would turn the first step of a new run into one
         // enormous measured period.
@@ -3202,8 +3231,12 @@ impl BusCore {
     /// rows. Deliberately narrower than `reset_run`: load, spec memory and
     /// the recording are mid-run state the user did not ask to lose.
     fn clear_aggregates(&mut self, status: &mut String) {
-        let n = self.aggs.len();
+        let n = self.aggs.len() + self.fr_aggs.len();
         self.aggs.clear();
+        // The FlexRay tallies too: the Messages window lists them beside the
+        // CAN rows now, and clearing it left the FR counts running up from
+        // wherever they were instead of from zero.
+        self.fr_aggs.clear();
         *status = format!("cleared {n} message counter(s)");
     }
 
@@ -3518,6 +3551,9 @@ impl BusCore {
         // One sample of the windowed numbers per step feeds the Min/Max/Avg
         // columns of the Bus Statistics window.
         for load in &mut self.bus_loads {
+            load.sample();
+        }
+        for load in self.fr_loads.values_mut() {
             load.sample();
         }
 

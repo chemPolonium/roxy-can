@@ -146,6 +146,80 @@ fn content(app: &mut App, ui: &Ui) {
             "-".to_string(),
         );
     }
+
+    // One section per FlexRay cluster that has arrived this run. Its load is
+    // the **static segment's** share of the same rolling window -- one slot's
+    // wire time per arrival, from that cluster's own `gstaticSlot` × `gmacrotick`
+    // -- so a cluster watched without a description, or with one that declares
+    // no slot timing, counts frames and shows "-" where the load would be a
+    // number it never measured. The dynamic segment is not in it either way: a
+    // passive listen reports static slots, and minislot charge needs the
+    // action-point index the parameters do not carry.
+    for bus in app.snap.fr_loads.keys().copied().collect::<Vec<_>>() {
+        let Some(load) = app.snap.fr_loads.get(&bus) else {
+            continue;
+        };
+        ui.table_next_row();
+        if !ui.table_next_column() {
+            continue;
+        }
+        let slot_us = app.fr_slot_wire_us(bus);
+        let cluster = app
+            .fr_db(bus)
+            .map(|db| db.params.name.as_str())
+            .unwrap_or("无描述");
+        ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("FR{bus} ({cluster})"));
+        if ui.is_item_hovered() {
+            ui.tooltip_text(
+                "占用率口径：一帧占用的介质时间 = gstaticSlot × gmacrotick，与载荷长短无关；\
+                 窗口内到达帧的占用之和 / 窗口时长。动态段不计入（被动监听只报静态槽），\
+                 没有描述或描述里没有槽时长时只数帧、不报占用率。",
+            );
+        }
+        for _ in 1..5 {
+            ui.table_next_column();
+        }
+        let (l_min, l_max, l_avg) = load.load_stats();
+        stat_row(
+            ui,
+            "静态段占用 [%]",
+            slot_us.map(|_| pct(load.load())).unwrap_or_else(|| "-".into()),
+            slot_us
+                .map(|_| opt_pct(l_min))
+                .unwrap_or_else(|| "-".into()),
+            slot_us
+                .map(|_| opt_pct(l_max))
+                .unwrap_or_else(|| "-".into()),
+            slot_us
+                .map(|_| opt_pct(l_avg))
+                .unwrap_or_else(|| "-".into()),
+        );
+        let (r_min, r_max, r_avg) = load.rate_stats();
+        stat_row(
+            ui,
+            "Frames [n/s]",
+            num(load.frame_rate()),
+            opt_num(r_min),
+            opt_num(r_max),
+            opt_num(r_avg),
+        );
+        stat_row(
+            ui,
+            "Frames [total]",
+            load.frames.to_string(),
+            "-".to_string(),
+            "-".to_string(),
+            "-".to_string(),
+        );
+        stat_row(
+            ui,
+            "Slot wire time [µs]",
+            slot_us.map(|v| format!("{v:.2}")).unwrap_or_else(|| "-".into()),
+            "-".to_string(),
+            "-".to_string(),
+            "-".to_string(),
+        );
+    }
 }
 
 /// The [n/s] and [total] pair of one identifier class.
