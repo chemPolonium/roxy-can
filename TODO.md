@@ -68,6 +68,26 @@
 - ~~**S3 FR 通道列表一等化**~~ ✅（2026-09-20 落地，见下面两节）：描述数据库按 bus 存（`fr_buses`/`fr_dbs`，工程里是 `fr_buses: Vec<FrBusFile{bus,path}>`，旧 `fr_fibex` 单路径迁移到 bus 0）；`Option<FrWatch>` → `fr_watches` 按 bus 多路 + 快照列表 + Buses 窗口列表化；工程打开即推 DB 给 core（删 `replay()` 兜底）。**改主意的一项**：原计划把"工程打开即挂 watch"也做掉，但 CAN 侧工程载入并不自动挂硬件（`apply` 里没有 AttachHardware），FR 自动挂会在启动时打驱动、失败还得弹状态 —— 与 CAN 行为不一致，故不做；每路的 `channel_index` 也就不进工程文件（挂哪路端口是会话决定）。
 - **S4 接收侧对齐 CAN**：`ingest_fr_row` 补 frame_counter、每路 FR 负载与周期/抖动统计（沿用 aggs 形状，槽占用率口径另定）、FR 过滤（`workspace.rs:759` 的 `trace_fr_match` 现为一律丢弃）、录制写出 FR 帧（BLF FR_RCVMESSAGE 对象 + ASC `Fr RMSG` 行，回环自证）、`export_trace`（export.rs:10 现 CAN-only）纳入 FR、触发条件支持 slot/帧到达。
 - **S5 硬件在环（有 VN7640，可实测）**：多路 FR 同时打开、各自集群配置、`xlFrGetChannelConfiguration` 回读校验、真机确认 `ab` 与 slot 语义；CLI 探针扩到逐路报告。
+
+### 2026-09-20 第二轮盘点：FlexRay 与 CAN 还差什么（逐项带位置，含已定的设计）
+
+本轮已落地（不再列为差距）：**S4 收尾**——静态段占用率（`load::FrLoad`，口径见《总线统计与规格监视》）；**Network 视图**列出每路 cluster 的调度表（参数行 / ECU / 帧按槽与相位排序 + 实测计数与周期，`ui/network.rs::draw_flexray_section`）；**脚本读数** `fr_sig(cluster, slot, "Name")`（`HostInput.fr_signals`，从 `fr_aggs` 现解，无节点时零开销）；**State 窗口枚举标签**走描述自己的 VALUE 表（`ui/state.rs::table_label` 的 Fr 分支）。
+
+剩下的差距，按"要不要用户拍板"分两类：
+
+**A. 需要拍板的两件（我已给出建议，等一句话就能做）**
+
+1. **`on fr slot` 事件处理器**（脚本的"反应"半边）。读数有了，唤醒还没有：`HandlerKind`（script/mod.rs:228-250）只有 CAN 的 `Message{id}/ExtendedMessage/AnyMessage/ErrorFrame`，派发只有 `dispatch_node_frame(&CanFrame)`（bus.rs:1913）。建议语法：`on fr slot 13 { }` = 任意一路的槽 13，`on fr 0 slot 13 { }` = 只看 FR0 —— 槽号在两路 cluster 上会重复，所以路号必须可写；节点属于 CAN 通道，没有"它自己那一路"可推断。**要拍板的是处理器里的取值语义**：建议 `frame_id()` 返回槽号、`frame_dlc()` 返回载荷字节数、`frame_byte(i)` 读载荷，另加 `fr_cycle()` 给通信周期号（FlexRay 独有、且 `on fr` 里最常被问的就是"这是第几拍"）。不拍板就不动语言——语法加错了收不回来。
+2. **窗口"手选"能不能选 FlexRay 帧**。`manual: HashSet<(u8,u32)>`（workspace.rs:110/188/358/374）是 CAN 的 `(通道, id)`，`scope_match_fr`（:790）在 Manual 下一律丢弃 FR 行——也就是说 Trace/Messages/Statistics 的手选过滤器对 FlexRay 完全不起作用（Graphics/Data/State 那侧没这个洞，它们选的是 `SigKey`，FlexRay 信号早就能勾）。改法：`Pick { Can{ch,id} | Fr{bus,slot} }` 枚举，`(0,5)` 不再同时是"CAN0 的 id 5"和"FR0 的槽 5"。**代价在这里而不在那 15 处代码**：`manual` 是**随工程保存**的（config.rs:830/845/857 写、1213/1240/1257 读，旧格式是无标签 `(u8,u32)` 数组），所以要一次格式迁移（规则：无标签一律当 CAN，因为今天根本存不进 FR 选择）；`channel.rs:206 remap_set` 的通道增删重映射必须只作用于 `Can` 分支（cluster 索引不是通道索引——这正是枚举化能顺手堵掉的一类错）。
+
+**B. 不用拍板、可以直接做的（按价值排序）**
+
+3. **规格监视（Spec）纳入 FlexRay** —— CAN 有四条判据（`spec.rs:23` Unknown/Dlc/Cycle/Missing，键 `(bus,id,ext,Kind)`），FlexRay 一条都没有：`Spec::check` 只看 CAN `aggs`（bus.rs:3600-3652）。而 FlexRay 的判据其实**更硬**：描述直接声明每帧的槽、周期相位与重复因子，期望周期 = `cycle_repetition × cycle_time_ms`，四条全能对上——`Unknown`＝"这一路的描述里没有这个槽/这一相"（就是 Messages 里那条"无名"行）、`Dlc`＝`FrFrameDb.length` vs 实到载荷、`Cycle`＝实测周期 vs 声明、`Missing`＝声明过的帧静默超过宽限。要做的是把 `Spec.rows` 的键换成 `SpecKey { Can{..} | Fr{bus,slot,frame_ix} }`（不能复用 `(u32,bool)` 塞槽号：两套总线编号会互相定罪），`ui/spec.rs` 与 CSV 导出跟着分节。
+4. **录制白名单不管 FlexRay**（recorder.rs:65-77 的 `write_fr` 明确不受 `admits` 约束，因为过滤器是 CAN id 列表）——与 A2 同一个 `Pick` 类型问题，等 A2 的迁移一起做。
+5. **回放块的 id 白名单是 `HashSet<(u8,u32)>`（bus.rs:820，CAN 通道+id）**，FlexRay 槽不在其列；同上，等 `Pick`。
+6. **`dbc_only`（"仅 DBC"）对 FlexRay 的口径混了两件事**：它按"名字是否为 `-`"隐藏行，而 FR 的"没挂描述"与"挂了但这一相不排这一帧"是两种不同的事实（app.rs:135-139 已注明）。要么让它只管"有没有数据库/描述"，要么给 FR 一个独立开关——**别继续用名字判**。
+7. **脚本编辑器的右栏只列 CAN 报文/信号**，`fr_sig` 的参数目前只能从 Network 树里抄。加一节 FlexRay（`slot_signals()` 已有，与选点树同源）。
+8. **`FrDb::ecus` 之外没有 ECU↔帧 关系**：ARXML 里帧挂在 ECU 的 PDU group 上，解析时丢掉了（`FrFrameDb` 无 sender 字段），所以 Network 的 FR 节只能列 ECU 名单、列不出"谁发这一帧"。要补就得回到 `parse_arxml_doc`/`parse_fibex_doc` 把 FLEXRAY-FRAME-TRIGGERING 的 `associated-frame-*` 引用接上——**先确认手上的文件里真有这个引用**（自带的两份是 DaVinci/CANoe demo，别为假设的字段写解析）。
 - 明细见对应任务与 git log。
 
 ### 2026-09-20 凌晨：S4 部分落地 + "Graphics 卡住"翻案 + 挖到一个更严重的老 bug
