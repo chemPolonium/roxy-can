@@ -216,6 +216,12 @@ pub struct FrDb {
     /// per call: decoding one frame resolved its PDU names and rebased their
     /// start positions again for every arrival.
     children: Vec<Vec<FrChild>>,
+    /// `frame index -> each of its signals' end bit, ascending`. The number of
+    /// decoded child rows a payload of `bytes` bytes carries is then one binary
+    /// search over this, which is the same answer [`Self::frame_values`] walks
+    /// the frame's children to give -- and a Trace rebuild wants the count for
+    /// every row of a 50 000-row ring, not the values.
+    child_ends: Vec<Vec<u32>>,
 }
 
 impl FrDb {
@@ -236,6 +242,7 @@ impl FrDb {
             pdu_ix: HashMap::new(),
             slot_ix: HashMap::new(),
             children: Vec::new(),
+            child_ends: Vec::new(),
         };
         for (i, p) in db.pdus.iter().enumerate() {
             // First declaration wins, as `iter().find` did.
@@ -248,6 +255,18 @@ impl FrDb {
             .frames
             .iter()
             .map(|f| Self::frame_children(f, &db.pdu_ix, &db.pdus))
+            .collect();
+        db.child_ends = db
+            .children
+            .iter()
+            .map(|cs| {
+                let mut ends: Vec<u32> = cs
+                    .iter()
+                    .filter_map(|c| db.sig_of(c).map(|s| c.bit + s.length_bits))
+                    .collect();
+                ends.sort_unstable();
+                ends
+            })
             .collect();
         db
     }
@@ -437,6 +456,17 @@ impl FrDb {
                 );
                 Some((child_ix as u32, raw, phys))
             })
+    }
+
+    /// How many of `frame_ix`'s signals a payload of `bytes` bytes carries: the
+    /// count [`Self::frame_values`] walks its children to produce, read off the
+    /// precomputed end bits instead. A Trace rebuild asks this for every row of
+    /// the ring and keeps nothing but the answer (see [`crate::workspace::TraceRow::Fr`]).
+    pub(crate) fn child_count(&self, frame_ix: usize, bytes: usize) -> usize {
+        let bits = (bytes * 8) as u32;
+        self.child_ends
+            .get(frame_ix)
+            .map_or(0, |ends| ends.partition_point(|&end| end <= bits))
     }
 
     fn label_of(sig: &FrSignal, phys: f64) -> Option<String> {
@@ -2039,6 +2069,41 @@ mod tests {
             db.decode(0, &one_byte),
             "the row's index lands on the same signal the eager decoder printed"
         );
+    }
+
+    /// The fast child count and the walked one have to answer the same question,
+    /// because the Trace row list stores the first and the draw resolves the
+    /// `n`-th through the second: a row counted but not resolvable would print
+    /// blank, one resolvable but not counted would never be drawn.
+    #[test]
+    fn the_counted_children_are_the_ones_that_resolve() {
+        // Declared in an order that does not follow their bit positions, so a
+        // count that only looked at the first few would be wrong here.
+        let db = one_frame_db(&[("Late", 8, 8), ("Early", 0, 8), ("Wide", 16, 16)]);
+        for bytes in 0..8usize {
+            let payload = vec![0u8; bytes];
+            assert_eq!(
+                db.child_count(0, bytes),
+                db.frame_values(0, &payload).count(),
+                "payload of {bytes} byte(s)",
+            );
+        }
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
+            return;
+        };
+        let db = FrDb::parse(&text).unwrap();
+        for ix in 0..db.frames.len() {
+            for bytes in [0usize, 1, 4, 8, 12, 16, 48, 64, 254] {
+                let payload = vec![0u8; bytes];
+                assert_eq!(
+                    db.child_count(ix, bytes),
+                    db.frame_values(ix, &payload).count(),
+                    "frame {ix} ({}) with a payload of {bytes} bytes",
+                    db.frames[ix].name,
+                );
+            }
+        }
     }
 
     /// The user's real network files. They are read at runtime (they may

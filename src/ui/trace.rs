@@ -294,7 +294,9 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // clicked, back to default on the third click (tri-state). The row
     // cache is the app's; a sort re-orders it in place -- and a sorted cache
     // is no longer time-ordered, which is what the next refresh's incremental
-    // walk depends on, so it says so and rebuilds instead.
+    // walk depends on, so it says so and rebuilds instead. A FlexRay frame row
+    // is one cache entry, so its decoded children travel with it rather than
+    // scattering into the rows their name or value sorts next to.
     if let Some(mut specs) = ui.table_get_sort_specs()
         && let Some(s) = specs.iter().next()
     {
@@ -305,10 +307,20 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         app.trace_windows[i].rows_sorted = true;
     }
 
+    // The clipper counts *table* rows, and a FlexRay frame row occupies one plus
+    // its decoded signal children, so the flattened total comes from the spans.
+    // They are rebuilt from the list on every draw -- after the sort above, which
+    // is why they are never stored between draws -- and the window's buffer only
+    // saves the allocation.
+    let mut ends = std::mem::take(&mut app.trace_windows[i].row_ends);
+    let flat = crate::workspace::table_row_spans(&rows, &mut ends);
+
     // Virtual scrolling: the clipper submits only the visible slice of
     // the (possibly very long) filtered row list.
-    let clip = ListClipper::new(rows.len()).begin(ui);
-    for r in clip.iter() {
+    let clip = ListClipper::new(flat).begin(ui);
+    for n in clip.iter() {
+        // Which cache entry this table row belongs to, and which part of it.
+        let (r, offset) = crate::workspace::locate_row(&ends, n);
         let row = &rows[r];
         let mut hovered = false;
         ui.table_next_row();
@@ -361,7 +373,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                     None
                 };
             }
-            TraceRow::Fr(fr) => {
+            TraceRow::Fr(fr, _) if offset == 0 => {
                 // A distinct cool tint keeps the FR stream readable inside
                 // the CAN rows; the reception channel rides the Bus cell.
                 ui.table_set_row_bg1_color([0.15, 0.35, 0.55, 0.20]);
@@ -411,22 +423,23 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 }
                 can_ctx = None;
             }
-            TraceRow::FrSig { .. } => {
-                // A decoded signal child under its FR frame row. The name goes
-                // in the Name column, not the 68 px ID one: FlexRay signal
+            TraceRow::Fr(fr, _) => {
+                // A decoded signal child under the frame row above it. The name
+                // goes in the Name column, not the 68 px ID one: FlexRay signal
                 // names are as long as any message name ("Drive_Attitude_
                 // Alarm_Valid") and were cut to a fragment where a CAN row's
                 // message name has room. The └ stays in ID, under the slot
                 // address of the frame it belongs to.
                 //
-                // The text is produced right here, for the rows on screen: the
-                // cache holds a quarter of a million of them and formatting all
-                // was what a rebuild used to cost (see [`TraceRow::FrSig`]).
-                ui.table_next_row();
+                // Decoded right here, for the rows on screen: the cache holds one
+                // entry per frame and this is where its signals become text (see
+                // [`TraceRow::Fr`]).
                 if !ui.table_next_column() {
                     continue;
                 }
-                let (signal, value) = app.fr_child_text(row).unwrap_or_default();
+                let (signal, value) = app
+                    .fr_child_cell(fr, (offset - 1) as u32)
+                    .unwrap_or_default();
                 ui.text("-");
                 ui.table_next_column();
                 ui.text("-");
@@ -451,8 +464,11 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         }
     }
     // The rows go back before the popup: its menu mutates the window's
-    // filter state.
-    app.trace_windows[i].rows = rows;
+    // filter state. The span buffer returns with them -- it describes that
+    // list, and nothing reads it between draws.
+    let w = &mut app.trace_windows[i];
+    w.row_ends = ends;
+    w.rows = rows;
 
     // The FlexRay row menu: the slot address and the payload, copied.
     if let Some(_p) = ui.begin_popup(format!("trace_fr_ctx{i}"))
@@ -541,43 +557,39 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
 
 fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> Ordering {
     // Bus sort keeps FR rows together after every CAN bus; the address
-    // column is a CAN id or an FR slot, both u32s.
+    // column is a CAN id or an FR slot, both u32s. A FlexRay frame row sorts as
+    // the frame -- its decoded children are not rows of the list, so they follow
+    // their parent instead of scattering among the rows its value sorts next to.
     let bus = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.channel as u32,
-        TraceRow::Fr(r) => 0x1000 + r.ab as u32,
-        TraceRow::FrSig { .. } => 0x1000 + 3,
+        TraceRow::Fr(r, _) => 0x1000 + u32::from(r.ab),
     };
     let addr = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.id,
-        TraceRow::Fr(r) => r.slot as u32,
-        TraceRow::FrSig { slot, .. } => u32::from(*slot),
+        TraceRow::Fr(r, _) => u32::from(r.slot),
     };
     let name = |r: &TraceRow| match r {
         TraceRow::Can(f) => app
             .message_name(f.channel, f.id)
             .unwrap_or_default()
             .to_string(),
-        TraceRow::Fr(_) => String::new(),
-        TraceRow::FrSig { .. } => app.fr_child_name(r).unwrap_or_default().to_string(),
+        TraceRow::Fr(f, _) => app.fr_row_name(f).unwrap_or_default().to_string(),
     };
     let len = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.len as usize,
-        TraceRow::Fr(r) => r.payload.len(),
-        TraceRow::FrSig { .. } => 0,
+        TraceRow::Fr(r, _) => r.payload.len(),
     };
     let flags_rank = |r: &TraceRow| match r {
         TraceRow::Can(f) => (f.is_fd(), f.esi(), f.brs()),
-        TraceRow::Fr(_) | TraceRow::FrSig { .. } => (false, false, false),
+        TraceRow::Fr(_, _) => (false, false, false),
     };
     let payload = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.payload().to_vec(),
-        TraceRow::Fr(r) => r.payload.clone(),
-        TraceRow::FrSig { .. } => Vec::new(),
+        TraceRow::Fr(r, _) => r.payload.clone(),
     };
     let dir = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.dir as u8,
-        TraceRow::Fr(_) => 0,
-        TraceRow::FrSig { .. } => 3,
+        TraceRow::Fr(_, _) => 0,
     };
     let ord = match col {
         0 => a.t_us().cmp(&b.t_us()),

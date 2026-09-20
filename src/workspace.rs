@@ -19,47 +19,68 @@ pub enum SigScope {
 /// One Trace row: a CAN frame or a FlexRay frame. The two share the
 /// Trace window's table, interleaved by time -- CANoe's Trace shape --
 /// while their storage and the rest of the CAN pipeline stay apart.
-/// `FrSig` is a decoded signal child row rendered indented under its FR
-/// frame row (only while the window's FR expansion is on).
 #[derive(Clone, Debug)]
 pub enum TraceRow {
     Can(crate::can::frame::CanFrame),
-    Fr(crate::trace::FrRow),
-    /// A decoded signal child row under its FR frame row: the value worked out,
-    /// the **text** left to the draw (only while the window's FR expansion is
-    /// on).
+    /// A FlexRay frame row and how many decoded signal child rows the window
+    /// shows under it.
     ///
-    /// The split is the whole point. A 50 000-row FlexRay ring expands into some
-    /// 217 000 of these, and formatting every one of them cost 51 ms per rebuild
-    /// of the cache, against the 5.4 ms it takes to find each frame and read all
-    /// its signals out (measured, `--release`,
-    /// [`crate::headless_tests::perf_flexray_child_build_split`]) -- for a table
-    /// that draws a few dozen rows at a time.
-    ///
-    /// `frame_ix` indexes the cluster description of `bus` as it was when the
-    /// row was built; [`RowsBuild::fr_dbs`] throws the cache out when a bus gets
-    /// a different description, so the indices cannot outlive what they mean.
-    FrSig {
-        /// The frame row's own timestamp and slot, so sorting keeps children
-        /// next to their parent's address without a borrow of the parent.
-        t_us: u64,
-        bus: u8,
-        slot: u16,
-        frame_ix: u32,
-        child_ix: u32,
-        raw: u64,
-        phys: f64,
-    },
+    /// The children are deliberately *not* entries of their own in the cache. A
+    /// 50 000-row FlexRay ring expands into some 217 000 of them, and carrying
+    /// that many 88-byte rows -- pushing them, moving the list into the cache and
+    /// dropping the previous one -- was most of a rebuild
+    /// ([`crate::headless_tests::perf_flexray_child_build_split`], `--release`),
+    /// for a table that shows a few dozen rows at a time. The count is all the
+    /// list has to remember; the draw resolves an ordinal against the frame row's
+    /// own payload ([`crate::app::App::fr_child_cell`]).
+    Fr(crate::trace::FrRow, u32),
 }
 
 impl TraceRow {
     pub fn t_us(&self) -> u64 {
         match self {
             TraceRow::Can(f) => f.t_us,
-            TraceRow::Fr(r) => r.t_us,
-            TraceRow::FrSig { t_us, .. } => *t_us,
+            TraceRow::Fr(r, _) => r.t_us,
         }
     }
+
+    /// The decoded signal child rows this row owns: one per signal of the frame
+    /// it carries that its payload actually holds.
+    pub fn kids(&self) -> u32 {
+        match self {
+            TraceRow::Can(_) => 0,
+            TraceRow::Fr(_, kids) => *kids,
+        }
+    }
+
+    /// How many table rows this cache entry occupies -- itself, plus its
+    /// children. The Trace table's virtual scrolling counts in these.
+    pub fn span(&self) -> usize {
+        1 + self.kids() as usize
+    }
+}
+
+/// The table rows a whole cache list occupies: `ends[i]` is the first table row
+/// *after* cache entry `i`, and the return value is the total the list covers.
+/// `ends` is a buffer the caller reuses (the Trace window's scratch pad, never
+/// read between draws), so a 50 000-row list costs no allocation per frame.
+pub(crate) fn table_row_spans(rows: &std::collections::VecDeque<TraceRow>, ends: &mut Vec<usize>) -> usize {
+    ends.clear();
+    ends.reserve(rows.len());
+    let mut total = 0usize;
+    for r in rows {
+        total += r.span();
+        ends.push(total);
+    }
+    total
+}
+
+/// Which cache entry table row `n` belongs to, and which part of it: offset `0`
+/// is the row itself, `1..` its decoded children. `ends` is what
+/// [`table_row_spans`] produced, and `n` must be inside it.
+pub(crate) fn locate_row(ends: &[usize], n: usize) -> (usize, usize) {
+    let ix = ends.partition_point(|&e| e <= n);
+    (ix, n - if ix == 0 { 0 } else { ends[ix - 1] })
 }
 
 /// Which analysis window the Filter Selection popup edits.
@@ -191,6 +212,12 @@ pub struct TraceWin {
     /// (see [`RowsBuild`]), and prepending into a `Vec` would move every
     /// cached row each time.
     pub(crate) rows: std::collections::VecDeque<TraceRow>,
+    /// Scratch for the Trace table's draw: the running total of
+    /// [`TraceRow::span`] over `rows`, so the clipper can count *table* rows
+    /// while the cache holds one entry per frame. Rebuilt from the list at the
+    /// start of every draw and never read before that -- owning the buffer here
+    /// just keeps a 50 000-entry `Vec` from being allocated per frame.
+    pub(crate) row_ends: Vec<usize>,
     /// What [`crate::app::App::sync_trace_rows`] last built the cache from, or
     /// `None` when there is nothing to extend. Session state only.
     pub(crate) rows_build: Option<RowsBuild>,
@@ -267,11 +294,12 @@ pub struct RowsBuild {
     /// lens does not carry.
     fr_expand: bool,
     /// Which cluster description each FlexRay bus was resolved against, as
-    /// `(bus, Arc address)`. An expanded child row stores an index into *that*
-    /// description's frame table, so a bus that gets a different description --
-    /// or loses one -- invalidates the cache even though nothing about the
-    /// filter or the rings changed. The new `Arc` is allocated while the old one
-    /// is still alive, so a reused address cannot hide a swap.
+    /// `(bus, Arc address)`. A frame row's child count was worked out from
+    /// *that* description's schedule, and the draw resolves a child ordinal
+    /// against whichever one the bus has now -- so a bus that gets a different
+    /// description, or loses one, invalidates the cache even though nothing
+    /// about the filter or the rings changed. The new `Arc` is allocated while
+    /// the old one is still alive, so a reused address cannot hide a swap.
     fr_dbs: Vec<(u8, usize)>,
 }
 
@@ -666,6 +694,7 @@ impl App {
             fr_expand: false,
             rows: std::collections::VecDeque::new(),
             rows_build: None,
+            row_ends: Vec::new(),
             rows_sorted: false,
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
             shown_count: self.snap.trace.len(),
@@ -983,5 +1012,62 @@ impl App {
         self.graphics_counter = c.graphics.max(self.graphics.len());
         self.data_counter = c.data.max(self.data_windows.len());
         self.state_counter = c.state.max(self.state_trackers.len());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn fr(t_us: u64, kids: u32) -> TraceRow {
+        TraceRow::Fr(
+            crate::trace::FrRow {
+                bus: 0,
+                t_us,
+                ab: 2,
+                slot: 5,
+                cycle: 0,
+                payload: vec![0],
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            },
+            kids,
+        )
+    }
+
+    fn can(t_us: u64) -> TraceRow {
+        TraceRow::Can(crate::can::frame::CanFrame {
+            t_us,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 2,
+            data: [0; crate::can::frame::MAX_CAN_FD_LEN],
+            dir: crate::can::frame::Direction::Rx,
+            flags: crate::can::frame::FrameFlags::NONE,
+        })
+    }
+
+    /// The Trace table scrolls in *table* rows while the cache holds one entry
+    /// per frame, so the mapping between the two is the one place a row can end
+    /// up drawn under the wrong frame -- and the headless harness never scrolls,
+    /// so off-by-ones live at the boundaries, which is what this walks.
+    #[test]
+    fn table_rows_map_back_to_their_frame_row() {
+        let rows: VecDeque<TraceRow> = vec![fr(10, 2), can(20), fr(30, 0)].into();
+        let mut ends = Vec::new();
+        assert_eq!(
+            table_row_spans(&rows, &mut ends),
+            5,
+            "two children + the frame, the CAN row, and a frame with nothing under it"
+        );
+        assert_eq!(ends, vec![3, 4, 5], "each entry ends where the next begins");
+        assert_eq!(locate_row(&ends, 0), (0, 0), "the frame row itself");
+        assert_eq!(locate_row(&ends, 1), (0, 1), "its first child");
+        assert_eq!(locate_row(&ends, 2), (0, 2), "its second child");
+        assert_eq!(locate_row(&ends, 3), (1, 0), "the CAN row is its own table row");
+        assert_eq!(locate_row(&ends, 4), (2, 0), "no children, no extra row");
     }
 }

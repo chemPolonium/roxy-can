@@ -1311,9 +1311,10 @@ impl App {
     ///
     /// Anything else -- an edited filter, a sorted column, a description swapped
     /// onto a FlexRay bus, a cleared or restarted run -- drops the cache and
-    /// walks the whole revealed ring once, exactly as before. That rebuild now
-    /// costs 20 ms where it cost 51, because a decoded child row carries its
-    /// value rather than its text: see [`TraceRow::FrSig`].
+    /// walks the whole revealed ring once, exactly as before. Expanding FlexRay
+    /// rows into their decoded signals costs that walk the count of child rows
+    /// per frame row, nothing else: the children are not entries of this list
+    /// (see [`TraceRow::Fr`]).
     pub(crate) fn sync_trace_rows(&mut self, i: usize) {
         if !self.text_fresh {
             return;
@@ -1417,14 +1418,14 @@ impl App {
             fi += 1;
             // A FlexRay frame row expands into its decoded signal child rows,
             // the CANoe trace shape, when the window asks and that bus's
-            // description database is loaded.
+            // description database is loaded. Only the count of them travels in
+            // the list -- see [`TraceRow::Fr`].
             let kids = if fr_expand {
-                self.fr_child_rows(&row)
+                self.fr_child_count(&row)
             } else {
-                Vec::new()
+                0
             };
-            merged.push(TraceRow::Fr(row));
-            merged.extend(kids);
+            merged.push(TraceRow::Fr(row, kids));
         }
         if since.is_some() {
             // Newest first on both sides: prepend the fresh batch by walking it
@@ -1440,66 +1441,38 @@ impl App {
         }
     }
 
-    /// The decoded signal child rows for one FlexRay frame row: the **values**,
-    /// not their text -- see [`TraceRow::FrSig`] for why the two are split
-    /// apart. Empty when the bus has no description or its schedule has no frame
-    /// in this slot at this cycle.
-    fn fr_child_rows(&self, row: &crate::trace::FrRow) -> Vec<TraceRow> {
+    /// How many decoded signal child rows one FlexRay frame row owns: the
+    /// signals of the frame its slot and cycle resolve to that this payload
+    /// actually carries. Zero when the bus has no description, or its schedule
+    /// has no frame in this slot at this cycle.
+    fn fr_child_count(&self, row: &crate::trace::FrRow) -> u32 {
         let Some(db) = self.fr_db(row.bus) else {
-            return Vec::new();
+            return 0;
         };
         let Some(frame_ix) = db.frame_ix_at(row.slot, row.cycle, row.ab) else {
-            return Vec::new();
+            return 0;
         };
-        db.frame_values(frame_ix, &row.payload)
-            // The value is read out here, where the payload is already in hand;
-            // the text waits for the draw. One walk decides which signals this
-            // payload carries, so the rows reserved and the rows resolved are
-            // the same rows.
-            .map(|(child_ix, raw, phys)| TraceRow::FrSig {
-                t_us: row.t_us,
-                bus: row.bus,
-                slot: row.slot,
-                frame_ix: frame_ix as u32,
-                child_ix,
-                raw,
-                phys,
-            })
-            .collect()
+        db.child_count(frame_ix, row.payload.len()) as u32
     }
 
-    /// The `(signal, value)` pair an expanded FlexRay child row prints,
-    /// formatted for the row being drawn. `None` when the description the cache
-    /// was built against is gone -- see [`RowsBuild::fr_dbs`].
-    pub(crate) fn fr_child_text(&self, row: &TraceRow) -> Option<(String, String)> {
-        let &TraceRow::FrSig {
-            bus,
-            frame_ix,
-            child_ix,
-            raw,
-            phys,
-            ..
-        } = row
-        else {
-            return None;
-        };
-        self.fr_db(bus)?
-            .child_text(frame_ix as usize, child_ix, raw, phys)
-    }
-
-    /// The signal name an expanded child row would print, without its value:
-    /// the Name column sorts on this.
-    pub(crate) fn fr_child_name(&self, row: &TraceRow) -> Option<&str> {
-        let &TraceRow::FrSig {
-            bus,
-            frame_ix,
-            child_ix,
-            ..
-        } = row
-        else {
-            return None;
-        };
-        self.fr_db(bus)?.child_name(frame_ix as usize, child_ix)
+    /// The `(signal, value)` pair of child `ordinal` under one FlexRay frame
+    /// row, decoded from that row's own payload as it is drawn.
+    ///
+    /// The same walk as [`Self::fr_child_count`], so an ordinal the list
+    /// reserved a table row for is one this resolves -- until the description
+    /// behind the count is swapped out, which is the case `RowsBuild::fr_dbs`
+    /// rebuilds the cache over instead of letting the rows print blank.
+    pub(crate) fn fr_child_cell(
+        &self,
+        row: &crate::trace::FrRow,
+        ordinal: u32,
+    ) -> Option<(String, String)> {
+        let db = self.fr_db(row.bus)?;
+        let frame_ix = db.frame_ix_at(row.slot, row.cycle, row.ab)?;
+        let (child_ix, raw, phys) = db
+            .frame_values(frame_ix, &row.payload)
+            .nth(ordinal as usize)?;
+        db.child_text(frame_ix, child_ix, raw, phys)
     }
 
     /// Trace window `w`'s revealed frames, newest first: the whole buffer

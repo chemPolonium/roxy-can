@@ -915,27 +915,29 @@ fn perf_snapshot_publish_under_load() {
 ///
 /// ```text
 ///                    rebuild   steady
-/// frames only         6.7 ms    1.5 us
-/// FR signals expanded 20 ms     1.6 us
-/// filter just edited  5.9 ms    1.5 us
+/// frames only         6.2 ms    1.4 us
+/// FR signals expanded 7.9 ms    2.0 us
+/// filter just edited  5.8 ms    1.9 us
 /// ```
 ///
-/// Three changes sit behind those numbers, each measured against the one
-/// before it. Before the row cache could extend itself, every column was the
-/// rebuild figure at 7 ms / 70 ms per refresh -- a FlexRay replay with the
-/// signal expansion open spent most of every 100 ms gate re-walking the ring.
-/// Then the expanded rebuild came down from 51 ms to 20 ms when a child row
-/// stopped carrying formatted text and started carrying its value: that text
-/// alone measures 56 ms for the ring's 216 000 child rows
-/// ([`crate::headless_tests::perf_flexray_child_build_split`]), and a table
-/// draws a few dozen rows at a time.
+/// Four changes sit behind those numbers, each measured against the one before
+/// it. Before the row cache could extend itself, every column was the rebuild
+/// figure at 7 ms / 70 ms per refresh -- a FlexRay replay with the signal
+/// expansion open spent most of every 100 ms gate re-walking the ring. Then the
+/// expanded rebuild came down from 51 ms to 20 ms when a child row stopped
+/// carrying formatted text and started carrying its value: that text alone
+/// measures 56 ms for the ring's 216 000 child rows
+/// ([`crate::headless_tests::perf_flexray_child_build_split`]), for a table that
+/// draws a few dozen rows at a time. And from 20 ms to 7.9 ms once the child
+/// rows stopped being entries of the list at all: a frame row now carries the
+/// *count* of its children -- a binary search over the description's
+/// precomputed signal end bits -- and the draw resolves an ordinal against the
+/// frame row it belongs to.
 ///
-/// What the 20 ms is now: the ring's 50 000 frame rows expand into 216 000
-/// child rows, and those are 266 000 entries of an 88-byte `TraceRow` --
-/// resolved and read out in ~5 ms, then pushed, moved into the deque and
-/// dropped for the rest. Making the expanded view as cheap as the plain one
-/// means the row list stops being a flat materialized thing (see the note in
-/// `TODO.md`); the decoding is no longer what costs.
+/// The expanded view therefore costs 1.7 ms more than the collapsed one on a
+/// ring at its cap, and the list holds 50 000 entries either way. It did not:
+/// `MAX_CACHED_ROWS` counted child rows too, so an expanded Trace silently
+/// dropped older frames than the collapsed one showed.
 #[test]
 #[ignore = "measurement probe"]
 fn perf_flexray_readouts_under_load() {
@@ -1028,8 +1030,8 @@ fn perf_flexray_readouts_under_load() {
 
 /// Where an expanded Trace rebuild's time goes, so the fix can be aimed rather
 /// than guessed: resolving which frame each row carries, reading the signal
-/// values out of the payloads, materializing the child rows in the cache, and
-/// formatting their text. Not a pass/fail test -- run it and read the numbers:
+/// values out of the payloads, building the cache rows, and formatting the
+/// values as text. Not a pass/fail test -- run it and read the numbers:
 ///
 /// `cargo test --release perf_flexray_child_build_split -- --ignored --nocapture`
 ///
@@ -1040,16 +1042,18 @@ fn perf_flexray_readouts_under_load() {
 /// 216 661 child rows, 88 B per cached row):
 ///
 /// ```text
-/// resolve frames:     1.1 ms   which frame each row carries
-/// read values    :    5.4 ms   + every signal's bits and physical value
-/// build rows     :    8.6 ms   + the child rows in the cache's row list
-/// format text    :   56.1 ms   + the value text nobody had asked to see
+/// resolve frames:     0.9 ms   which frame each row carries
+/// read values    :    4.2 ms   every signal's bits and physical value
+/// build rows     :    5.2 ms   the 50 000 cache rows, each with its child count
+/// format text    :   56.4 ms   the value text nobody had asked to see
 /// ```
 ///
-/// The first three are what an expanded rebuild pays now (20 ms, against the
-/// 51 ms all four used to cost -- see
-/// [`crate::headless_tests::perf_flexray_readouts_under_load`]); the last is
-/// left to the rows actually drawn.
+/// The first three are roughly what an expanded rebuild pays now (7.9 ms,
+/// against the 51 ms all four used to cost, and 6.2 ms for a collapsed one --
+/// see [`crate::headless_tests::perf_flexray_readouts_under_load`]). The last is
+/// left to the rows actually drawn, and "read values" with it: the list keeps a
+/// count per frame row, not the values, so a rebuild walks the description's
+/// precomputed signal end bits rather than the ring's payloads.
 #[test]
 #[ignore = "measurement probe"]
 fn perf_flexray_child_build_split() {
@@ -1112,35 +1116,23 @@ fn perf_flexray_child_build_split() {
         sink.set(acc);
         kids.set(n);
     });
-    // The same walk, with each child turned into a cache row -- i.e. what the
-    // rebuild pays for the row list itself.
-    let mut rows: Vec<TraceRow> = Vec::with_capacity(400_000);
+    // The same walk, with each frame turned into one cache row carrying its
+    // child count -- what the rebuild pays for the row list now.
+    let mut rows: Vec<TraceRow> = Vec::with_capacity(60_000);
     let build = rounds(&mut || {
         rows.clear();
         let mut acc = 0u64;
         for r in &ring {
             let d = app.fr_db(r.bus).unwrap();
-            let Some(ix) = d.frame_ix_at(r.slot, r.cycle, r.ab) else {
-                continue;
+            let kids = match d.frame_ix_at(r.slot, r.cycle, r.ab) {
+                Some(ix) => d.frame_values(ix, &r.payload).count() as u32,
+                None => 0,
             };
-            rows.extend(d.frame_values(ix, &r.payload).map(|(child_ix, raw, phys)| {
-                acc += raw;
-                TraceRow::FrSig {
-                    t_us: r.t_us,
-                    bus: r.bus,
-                    slot: r.slot,
-                    frame_ix: ix as u32,
-                    child_ix,
-                    raw,
-                    phys,
-                }
-            }));
-        }
-        if let Some(TraceRow::FrSig { raw, .. }) = rows.last() {
-            acc += *raw;
+            acc += kids as u64;
+            rows.push(TraceRow::Fr((**r).clone(), kids));
         }
         sink.set(acc);
-        kids.set(rows.len());
+        kids.set(rows.iter().map(|r| r.kids() as usize).sum());
     });
     // The text, which is what the rebuild used to do for all of them.
     let decode = rounds(&mut || {
@@ -1161,7 +1153,12 @@ fn perf_flexray_child_build_split() {
         ring.len()
     );
     eprintln!("read values   : {values:9.1} us ({} child rows)", kids.get());
-    eprintln!("build rows    : {build:9.1} us ({} child rows, {} B each)", kids.get(), std::mem::size_of::<TraceRow>());
+    eprintln!(
+        "build rows    : {build:9.1} us ({} cache rows, {} table rows, {} B each)",
+        ring.len(),
+        kids.get(),
+        std::mem::size_of::<TraceRow>()
+    );
     eprintln!("format text   : {decode:9.1} us ({} child rows)", kids.get());
     eprintln!("sink (kept so nothing above is optimised out): {}", sink.get());
     app.stop();

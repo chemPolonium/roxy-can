@@ -452,22 +452,25 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             dir: crate::can::frame::Direction::Rx,
             flags: crate::can::frame::FrameFlags::NONE,
         }),
-        TraceRow::Fr(crate::trace::FrRow {
-            bus: 0,
-            t_us: 5_000,
-            ab: 1,
-            slot: 3,
-            cycle: 4,
-            payload: vec![1, 2, 3],
-            header_crc: 0xBEEF,
-            flags: 0,
-            name: Some("ChassisStatus".to_string()),
-        }),
+        TraceRow::Fr(
+            crate::trace::FrRow {
+                bus: 0,
+                t_us: 5_000,
+                ab: 1,
+                slot: 3,
+                cycle: 4,
+                payload: vec![1, 2, 3],
+                header_crc: 0xBEEF,
+                flags: 0,
+                name: Some("ChassisStatus".to_string()),
+            },
+            0,
+        ),
     ];
-    // The child rows an expanded window actually holds: an index into the
-    // description, with the value text produced while drawing. So the slot,
-    // cycle and payload here have to be one the bundled description decodes,
-    // or the draw below never gets past the "cannot resolve" path.
+    // A frame row that really decodes, with the child count an expanded window
+    // would have given it: the values are produced while drawing, from the row's
+    // own payload, so the slot, cycle and payload here have to be one the bundled
+    // description resolves or the draw never leaves its "cannot resolve" path.
     let mut decoded = 0usize;
     if described {
         let db = app.fr_db(0).expect("loaded above");
@@ -489,23 +492,8 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
                 flags: 0,
                 name: Some(frame.name.clone()),
             };
-            rows.push(TraceRow::Fr(row.clone()));
-            // The same walk a refresh uses, so these are the child rows the
-            // window would have been handed.
-            rows.extend(db.frame_values(frame_ix, &row.payload).map(
-                |(child_ix, raw, phys)| {
-                    decoded += 1;
-                    TraceRow::FrSig {
-                        t_us: row.t_us,
-                        bus: row.bus,
-                        slot: row.slot,
-                        frame_ix: frame_ix as u32,
-                        child_ix,
-                        raw,
-                        phys,
-                    }
-                },
-            ));
+            decoded = db.frame_values(frame_ix, &row.payload).count();
+            rows.push(TraceRow::Fr(row, decoded as u32));
         }
     }
     if described {

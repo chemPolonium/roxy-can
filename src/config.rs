@@ -1222,6 +1222,7 @@ impl Config {
                     fr_expand: false,
                     rows: std::collections::VecDeque::new(),
                     rows_build: None,
+                    row_ends: Vec::new(),
                     rows_sorted: false,
                     shown_t_us: u64::MAX,
                     shown_count: 0,

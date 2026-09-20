@@ -6780,26 +6780,28 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     app.stop();
 }
 
-/// The shape of a Trace window's row cache, as far as a test is concerned: the
-/// order, which ring each row came from, its address, and for a decoded
-/// FlexRay child the signal and value text it would draw. Two caches with the
-/// same shape drew the same table.
+/// The shape of a Trace window's cache as the table would draw it: the order,
+/// which ring each row came from, its address, and for a decoded FlexRay signal
+/// row the signal and value text it prints -- one entry per *table* row, so a
+/// frame row with three children contributes four. Two caches with the same
+/// shape drew the same table.
 fn cache_shape(app: &App) -> Vec<(u64, u8, u32, String)> {
-    app.trace_windows[0]
-        .rows
-        .iter()
-        .map(|r| match r {
-            TraceRow::Can(f) => (f.t_us, 0, f.id, String::new()),
-            TraceRow::Fr(f) => (f.t_us, 1, f.slot as u32, String::new()),
-            r @ TraceRow::FrSig { slot, .. } => {
-                // Resolved the way the window resolves it, so the deferred
-                // decoding is what this compares, not just the indices behind
-                // it.
-                let (signal, value) = app.fr_child_text(r).unwrap_or_default();
-                (r.t_us(), 2, u32::from(*slot), format!("{signal}={value}"))
+    let mut out = Vec::new();
+    for r in app.trace_windows[0].rows.iter() {
+        match r {
+            TraceRow::Can(f) => out.push((f.t_us, 0, f.id, String::new())),
+            TraceRow::Fr(f, kids) => {
+                out.push((f.t_us, 1, u32::from(f.slot), String::new()));
+                for child in 0..*kids {
+                    // Resolved the way the window resolves it, so the deferred
+                    // decoding is what this compares, not just the count.
+                    let (signal, value) = app.fr_child_cell(f, child).unwrap_or_default();
+                    out.push((f.t_us, 2, u32::from(f.slot), format!("{signal}={value}")));
+                }
             }
-        })
-        .collect()
+        }
+    }
+    out
 }
 
 /// A steady run only prepends to the Trace row cache. Getting that wrong shows
@@ -6863,10 +6865,14 @@ fn the_trace_row_cache_extends_in_place_without_losing_rows() {
         app.sync_trace_rows(0);
     }
     let extended = cache_shape(&app);
-    assert_eq!(
-        extended.len(),
-        app.trace_windows[0].rows.len(),
+    assert!(
+        !app.trace_windows[0].rows.is_empty(),
         "the cache is not empty, or this proves nothing"
+    );
+    assert!(
+        extended.len() > app.trace_windows[0].rows.len(),
+        "the drawn table has more rows than the list has entries, because a \
+         FlexRay frame row carries its children: {extended:?}"
     );
     assert!(
         extended.iter().any(|(_, kind, ..)| *kind == 2),
