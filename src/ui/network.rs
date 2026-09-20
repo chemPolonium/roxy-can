@@ -163,6 +163,127 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
     }
 }
 
+/// The FlexRay clusters the topology lists: every bus with a description
+/// loaded, plus any that carried traffic without one. A watched bus with no
+/// description has no schedule to show, but leaving it out entirely would make
+/// a live cable invisible in the one view that answers "what is on this bus".
+fn fr_buses(app: &App) -> Vec<u8> {
+    let mut buses: Vec<u8> = app.fr_buses.keys().copied().collect();
+    for bus in app.snap.fr_loads.keys().copied() {
+        if !buses.contains(&bus) {
+            buses.push(bus);
+        }
+    }
+    buses.sort_unstable();
+    buses
+}
+
+/// One FlexRay cluster as a tree section: the schedule its description declares
+/// -- cluster timing, the ECUs on it, and every frame with the slot, cycle phase
+/// and channel it is scheduled in, annotated with what has actually arrived.
+///
+/// It is a declaration view, not an editor: a FlexRay node has no role to set
+/// and no generator row until the bus can transmit, so nothing here pretends
+/// otherwise. The groups open by default, as the CAN sections do -- the point of
+/// the view is to see what is on the bus without hunting through clicks; only
+/// one frame's signal list stays collapsed.
+fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
+    let label = match app.fr_db(bus) {
+        Some(db) => format!("FR{bus} · {}", db.params.name),
+        None => format!("FR{bus}（无描述）"),
+    };
+    let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
+        return;
+    };
+    let Some(db) = app.fr_db(bus) else {
+        let seen: u64 = app
+            .snap
+            .fr_loads
+            .get(&bus)
+            .map_or(0, |l| l.frames);
+        ui.text_disabled(if seen > 0 {
+            "该路在收帧，但没有集群描述：槽、周期与信号无从显示"
+        } else {
+            "该路已配置，尚无帧到达，也没有集群描述"
+        });
+        return;
+    };
+    // The cluster's own timing, which is also what the occupancy figure divides
+    // by -- stated here so a load number can be checked against it by hand.
+    let slot_us = crate::load::fr_slot_wire_us(&db.params);
+    ui.text_disabled(format!(
+        "{} kbit/s · 宏周期 {:.2} ms · 静态槽 {} × {} · 静态载荷 {} B",
+        db.params.speed_kbps,
+        db.params.cycle_time_ms,
+        db.params.number_of_static_slots,
+        slot_us
+            .map(|v| format!("{v:.2} µs"))
+            .unwrap_or_else(|| "槽时长未声明".to_string()),
+        db.params.payload_length_static,
+    ));
+
+    // `if let`, not `let else { return }`: a collapsed group must not hide the
+    // groups after it.
+    if !db.ecus.is_empty()
+        && let Some(_e) = ui
+            .tree_node_config(format!("ECU ({})##frecu{bus}", db.ecus.len()))
+            .default_open(true)
+            .push()
+    {
+        for ecu in &db.ecus {
+            ui.bullet_text(ecu.as_str());
+        }
+    }
+
+    // Frames by slot then cycle phase: the order a schedule is read in, rather
+    // than the order the document happened to declare them.
+    let mut order: Vec<usize> = (0..db.frames.len()).collect();
+    order.sort_by_key(|&i| {
+        let t = db.frames[i].triggering;
+        (t.slot_id, t.base_cycle, i)
+    });
+    if let Some(_f) = ui
+        .tree_node_config(format!("帧 ({})##frf{bus}", db.frames.len()))
+        .default_open(true)
+        .push()
+    {
+        for &ix in &order {
+            let f = &db.frames[ix];
+            let t = f.triggering;
+            // What has arrived in this slot, tracked per frame rather than per
+            // slot: a static slot is held by several frames in turn, and a count
+            // that mixed them would belong to none.
+            let seen = app
+                .snap
+                .fr_aggs
+                .iter()
+                .find(|a| a.bus == bus && a.occupant.frame_ix() == Some(ix));
+            let (count, cycle) = seen.map_or((0, 0.0), |a| (a.count, a.cycle_us / 1000.0));
+            let live = if count >= 2 {
+                format!("  收到 {count} 帧 ~{cycle:.1} ms")
+            } else if count == 1 {
+                format!("  收到 {count} 帧")
+            } else {
+                "  本运行未收到".to_string()
+            };
+            let head = format!(
+                "slot {} · 相 {}/{} · {} · {} B  {}{live}",
+                t.slot_id,
+                t.base_cycle,
+                t.cycle_repetition,
+                t.channel.label(),
+                f.length,
+                f.name,
+            );
+            if let Some(_n) = ui.tree_node_config(format!("{head}##frframe{bus}_{ix}")).push() {
+                for name in db.signal_names(ix) {
+                    ui.bullet_text(name.as_str());
+                }
+            }
+        }
+    }
+}
+
 /// One script node as a tree leaf: state marker + name, click opens the
 /// script editor.
 fn draw_script_leaf(
@@ -330,6 +451,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                             draw_tree_section(app, ui, ch, infos, flat_base);
                             flat_base += infos.len();
                         }
+                        // The FlexRay clusters after the CAN channels: same
+                        // topology view, different numbering space on purpose --
+                        // `FR{n}` is a cluster index, not a CAN channel.
+                        for bus in fr_buses(app) {
+                            draw_flexray_section(app, ui, bus);
+                        }
                     });
                 ui.same_line();
 
@@ -338,7 +465,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // outer window and shifts the topology sections.
                 ui.child_window("node_details").size([0.0, 0.0]).build(ui, || {
                     if total_dbc == 0 {
-                        ui.text("no DBC nodes to display");
+                        // The FlexRay side has no selection model yet (no roles,
+                        // no generator: the bus cannot transmit), so an empty CAN
+                        // tree with clusters listed beside it is not "nothing to
+                        // show" -- say where to look instead.
+                        if app.fr_buses.is_empty() && app.snap.fr_loads.is_empty() {
+                            ui.text("no DBC nodes to display");
+                        } else {
+                            ui.text("没有 DBC 节点；左侧的 FlexRay 集群展开即可看它的调度表");
+                        }
                         return;
                     }
                     // Locate the selected DBC node (channel, index).

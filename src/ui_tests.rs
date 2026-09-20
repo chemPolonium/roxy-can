@@ -577,6 +577,45 @@ fn the_buses_window_draws_two_flexray_watches() {
     frames(&mut app, &mut ctx, 3);
 }
 
+/// The Network view lists the FlexRay clusters beside the CAN channels: the
+/// schedule the description declares (cluster timing, the ECUs on it, every
+/// frame with its slot / cycle phase / channel), annotated with what has
+/// arrived. A cluster watched **without** a description is listed too -- a live
+/// cable must not be invisible in the one view that answers "what is on this
+/// bus", and its row says why there is nothing to show.
+#[test]
+fn the_network_view_draws_flexray_clusters_with_and_without_a_description() {
+    use crate::hw::vector::flexray::FrFrame;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.show_network = true;
+    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    // Bus 1 is watched and carries traffic, but never gets a description.
+    let q1 = app.hw.attach_fr_mock(1, 6);
+    app.start_virtual();
+    for (q, slot) in [(&q0, 13u16), (&q1, 40)] {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot,
+            cycle: 0,
+            payload: vec![0; 16],
+            header_crc: 0,
+            flags: 0,
+        });
+    }
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    app.refresh_snapshot();
+    assert_eq!(
+        app.snap.fr_loads.keys().copied().collect::<Vec<_>>(),
+        vec![0, 1],
+        "both clusters reached the bus"
+    );
+    app.settle();
+    frames(&mut app, &mut ctx, 3);
+}
+
 /// The armed editor popups -- a system variable and three trigger kinds
 /// (signal cross, FlexRay frame with and without a description) -- render from
 /// their draft state across frames (the frame-persistence path the stale-draft
