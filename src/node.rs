@@ -1529,6 +1529,7 @@ BO_ 256 Real: 2 ECU
         let input = HostInput {
             now_s: 1.5,
             signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
+            fr_signals: HashMap::new(),
             sysvars: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
@@ -1539,6 +1540,46 @@ BO_ 256 Real: 2 ECU
         n2.start(None);
         n2.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert!(n2.errored(), "a missing signal must not read as zero");
+    }
+
+    /// `fr_sig(cluster, slot, "Name")` reads the FlexRay side of the same
+    /// published input: the cluster index (the number the tables print as
+    /// `FR{n}`) and the slot pick the value, so two clusters carrying the same
+    /// slot number stay two separate reads. Like `sig`, an unseen signal is an
+    /// error rather than a silent zero.
+    #[test]
+    fn fr_sig_reads_the_flexray_side_of_the_published_input() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    print(fr_sig(0, 5, "One"));
+                    print(fr_sig(1, 5, "One"));
+                }
+            "#,
+        );
+        n.start(None);
+        let input = HostInput {
+            now_s: 0.0,
+            signals: HashMap::new(),
+            fr_signals: [
+                ((0, 5, "One".to_string()), 42.0),
+                ((1, 5, "One".to_string()), 7.0),
+            ]
+            .into_iter()
+            .collect(),
+            sysvars: HashMap::new(),
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(
+            n.log_snapshot(),
+            ["42.0", "7.0"],
+            "the cluster index selects which bus the slot number means"
+        );
+
+        let mut n2 = node(r#"on message 0x100 { print(fr_sig(0, 9, "Never")); }"#);
+        n2.start(None);
+        n2.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert!(n2.errored(), "a slot that never arrived must not read as zero");
     }
 
     /// `$Message::Signal` reads the same published value `sig` would,
@@ -1556,6 +1597,7 @@ BO_ 256 Real: 2 ECU
         let input = HostInput {
             now_s: 0.0,
             signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
+            fr_signals: HashMap::new(),
             sysvars: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);

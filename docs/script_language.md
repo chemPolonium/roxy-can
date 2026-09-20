@@ -268,6 +268,26 @@ send(0x200, buf);
 let rpm = sig(0x100, "EngineSpeed");
 ```
 
+### fr_sig(cluster, slot, "Name")
+
+FlexRay 侧的同一种读数：该路集群（Trace/统计里显示为 `FR{n}` 的那个编号）上，
+槽 `slot` 最近一帧解出的信号 `Name` 物理值。信号尚未出现时同样产生运行时错误，
+不会静默给 0。
+
+```c
+let speed = fr_sig(0, 13, "CarSpeed");
+emit_value("SpeedKmh", speed * 0.075);
+```
+
+用槽而不是帧名寻址，是因为槽才是"到达"与"调度"共同说得清的东西：一个静态槽按
+周期相位可以轮流属于好几个帧，脚本读到的是**实际到达那一帧**按自己的布局解出的
+值。集群编号是显式的——两路 cluster 上的同号槽是两个不同的读数，而脚本节点属于某条
+CAN 通道，没有"本节点所在的那一路"可推断。
+
+写方向目前没有：FlexRay 发车（静态/动态槽发送）尚未实现，所以没有
+`set_fr_sig`/`fr_send`，也不会有 `on fr slot` 事件处理器——等发送路径落地再补，
+不在这里承诺一个不存在的语法。
+
 ### set_sig(buffer, id, "Name", value)
 
 将物理值编码到字节缓冲中。buffer 不足 8 字节自动补齐。

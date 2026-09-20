@@ -586,6 +586,31 @@ impl Vm {
                 }
                 return Ok(());
             }
+            // `fr_sig(cluster, slot, "Name")`: the same read for a FlexRay
+            // signal, addressed by the cluster index the tables print as
+            // `FR{n}` and the slot number. Slot rather than frame because the
+            // slot is what the schedule and the received row agree on; a slot
+            // held by several frames in turn resolves through the frame that
+            // actually arrived, so the value is that frame's decoding of it.
+            "fr_sig" => {
+                let (Value::Int(bus), Value::Int(slot), Value::Str(sig)) =
+                    (&args[0], &args[1], &args[2])
+                else {
+                    return Err(VmError(
+                        "fr_sig(cluster, slot, \"Name\") needs two ints and a string".into(),
+                    ));
+                };
+                let key = (*bus as u8, *slot as u16, sig.clone());
+                match self.host_input.fr_signals.get(&key) {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "fr_sig: no value for FR{bus} slot {slot} {sig:?} (not seen yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
             // `send` / `send_ext`: identical argument shapes; the ext form
             // always travels extended, even for ids inside the standard
             // range (that is its whole point). `send(id, b0, ...)` or

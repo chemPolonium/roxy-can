@@ -2061,6 +2061,7 @@ impl BusCore {
             inputs.entry(node.channel).or_insert_with(|| HostInput {
                 now_s: now_us as f64 / 1e6,
                 signals: HashMap::new(),
+                fr_signals: HashMap::new(),
                 sysvars: HashMap::new(),
             });
         }
@@ -2092,6 +2093,30 @@ impl BusCore {
             };
             for d in db.decode_signals(&f) {
                 input.signals.insert((id, d.name), d.phys);
+            }
+        }
+        // The FlexRay half of the same read. `fr_sig` addresses a signal by
+        // (cluster, slot, name), and the value is the one the frame that last
+        // held that slot decoded to -- a slot is shared by several frames in
+        // turn, so the arriving row's own frame is the only layout that means
+        // anything. Decoded from the per-frame tallies rather than folded in on
+        // ingest, so a run with no script nodes pays nothing for a capability
+        // nobody calls; with nodes, this is the same per-build walk the CAN
+        // branch above already does over its own aggregates.
+        if !inputs.is_empty() {
+            for ((bus, slot, occupant), agg) in &self.fr_aggs {
+                let Some(db) = self.fr_dbs.get(bus) else {
+                    continue;
+                };
+                let Some(frame_ix) = occupant.frame_ix() else {
+                    continue;
+                };
+                for d in db.decode_signals(frame_ix, &agg.payload) {
+                    let key = (*bus, *slot, d.name);
+                    for input in inputs.values_mut() {
+                        input.fr_signals.insert(key.clone(), d.phys);
+                    }
+                }
             }
         }
         inputs

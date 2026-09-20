@@ -373,6 +373,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("now", 0, 0),
     ("sig", 2, 2),
     ("sig_named", 2, 2),
+    ("fr_sig", 3, 3),
     ("bytes", 1, 1),
     ("len", 1, 1),
     ("set_period", 1, 1),
@@ -453,13 +454,21 @@ pub(crate) fn extern_lookup(name: &str) -> Option<ExternFn> {
 
 /// What the host publishes for a script to read between events: the bus
 /// clock in seconds, the latest physical value of every decoded
-/// signal on the node's channel, keyed by `(message id, signal name)`,
-/// and the live system variables keyed by `"namespace::name"`.
+/// signal on the node's channel keyed by `(message id, signal name)`, the
+/// latest value of every decoded **FlexRay** signal keyed by
+/// `(cluster, slot, signal name)`, and the live system variables keyed by
+/// `"namespace::name"`.
 /// The node runtime refreshes this before each handler run.
+///
+/// The FlexRay signals are not filtered to the node's channel because a
+/// FlexRay cluster is not a CAN channel: there is no "this node's cluster" to
+/// scope by, so any script can read any cluster it names by index -- the same
+/// number the Trace and Statistics windows print as `FR{n}`.
 #[derive(Clone, Debug, Default)]
 pub struct HostInput {
     pub now_s: f64,
     pub signals: HashMap<(u32, String), f64>,
+    pub fr_signals: HashMap<(u8, u16, String), f64>,
     pub sysvars: HashMap<String, f64>,
 }
 

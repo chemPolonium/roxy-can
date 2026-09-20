@@ -7097,6 +7097,70 @@ fn an_undescribed_flexray_cluster_counts_frames_but_no_occupancy() {
     app.stop();
 }
 
+/// A script reads a FlexRay signal the same way it reads a CAN one. End to end
+/// on purpose -- a frame off the FlexRay watch, then a node timer that asks for
+/// its value -- because the read is worth nothing if the arrival never reaches
+/// it: the value has to travel the ingest → per-frame tally → decode → host
+/// input path, and the slot number has to mean the frame that actually arrived.
+#[test]
+fn a_node_script_reads_a_flexray_signal() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    // The node lives on a CAN channel and names the cluster by index: a FlexRay
+    // bus is not a channel a node could belong to.
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "reader".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 100 { emit_value(\"FromFr\", fr_sig(0, 5, \"One\")); }".to_string(),
+    });
+    app.settle();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    // Past the timer's 100 ms, so the handler runs with the frame already in.
+    for t in (30_000..=200_000).step_by(10_000) {
+        app.advance_clock(t);
+        app.tick(t);
+    }
+    app.refresh_snapshot();
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(
+        !node.errored,
+        "the read did not fail: {:?}",
+        node.log
+    );
+    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | id as u32, false, "FromFr".to_string());
+    let sub = app.subs.get(&key).expect("the derived stream");
+    assert_eq!(
+        sub.latest, 42.0,
+        "0x2A in slot 5's one 8-bit signal, decoded through its frame"
+    );
+    app.stop();
+}
+
 /// The Messages window's Clear resets the FlexRay tallies as well: they are rows
 /// of that table now, and leaving them to run up from their old counts made the
 /// button lie about half of what it shows.
