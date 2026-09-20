@@ -422,6 +422,10 @@ fn script_editor_draws_with_highlighting() {
 /// copy popup compiles. The producer (the FR watch drain) is
 /// hardware-bound, so the merged cache is injected directly; with the
 /// text gate frozen the cache survives the frames.
+///
+/// A FlexRay child row arrives as an index into the description, so the
+/// injected ones point at a frame the bundled ARXML really decodes: the value
+/// text is produced inside the draw, which is the part only this test reaches.
 #[test]
 fn trace_draws_merged_flexray_rows_without_panicking() {
     let _ui_lock = UI_LOCK.lock().unwrap();
@@ -430,10 +434,10 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
     app.new_trace_window();
     // The real description, when present; the draw path is the same for
     // any database, and for none.
-    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
     app.settle();
     app.text_fresh = false;
-    app.trace_windows[0].rows = vec![
+    let mut rows = vec![
         TraceRow::Can(CanFrame {
             t_us: 4_000,
             channel: 0,
@@ -459,14 +463,60 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             flags: 0,
             name: Some("ChassisStatus".to_string()),
         }),
-        TraceRow::FrSig {
-            t_us: 5_000,
-            slot: 3,
-            signal: "WheelSpeedFL".to_string(),
-            value: "3.5 km/h  (7h)".to_string(),
-        },
-    ]
-    .into();
+    ];
+    // The child rows an expanded window actually holds: an index into the
+    // description, with the value text produced while drawing. So the slot,
+    // cycle and payload here have to be one the bundled description decodes,
+    // or the draw below never gets past the "cannot resolve" path.
+    let mut decoded = 0usize;
+    if described {
+        let db = app.fr_db(0).expect("loaded above");
+        let payload = vec![0x5Au8; 48];
+        if let Some((frame_ix, frame)) = db
+            .frames
+            .iter()
+            .enumerate()
+            .find(|(ix, _)| !db.decode(*ix, &payload).is_empty())
+        {
+            let row = crate::trace::FrRow {
+                bus: 0,
+                t_us: 6_000,
+                ab: 1,
+                slot: frame.triggering.slot_id as u16,
+                cycle: frame.triggering.base_cycle as u8,
+                payload,
+                header_crc: 0,
+                flags: 0,
+                name: Some(frame.name.clone()),
+            };
+            rows.push(TraceRow::Fr(row.clone()));
+            // The same walk a refresh uses, so these are the child rows the
+            // window would have been handed.
+            rows.extend(db.frame_values(frame_ix, &row.payload).map(
+                |(child_ix, raw, phys)| {
+                    decoded += 1;
+                    TraceRow::FrSig {
+                        t_us: row.t_us,
+                        bus: row.bus,
+                        slot: row.slot,
+                        frame_ix: frame_ix as u32,
+                        child_ix,
+                        raw,
+                        phys,
+                    }
+                },
+            ));
+        }
+    }
+    if described {
+        assert!(
+            decoded > 0,
+            "the bundled description offers no decodable frame: the expanded draw path is not covered"
+        );
+    } else {
+        println!("assets/arxml/PowerTrain.arxml absent -- only the unresolved child path ran");
+    }
+    app.trace_windows[0].rows = rows.into();
     frames(&mut app, &mut ctx, 5);
 }
 

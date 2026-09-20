@@ -1221,10 +1221,10 @@ impl App {
                 // signals -- through the very index this row was keyed by, so
                 // the name shown and the layout decoded are the same frame's.
                 let db = self.fr_db(agg.bus);
-                let frame = agg
+                let frame_ix = agg
                     .occupant
                     .frame_ix()
-                    .and_then(|i| db.and_then(|db| db.frame_index(i)));
+                    .filter(|&i| db.is_some_and(|db| db.frame_index(i).is_some()));
                 let name = Self::fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)
@@ -1250,8 +1250,8 @@ impl App {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join("  ");
-                let signals = match (db, frame) {
-                    (Some(db), Some(frame)) => db.decode(frame, &agg.payload),
+                let signals = match (db, frame_ix) {
+                    (Some(db), Some(frame_ix)) => db.decode(frame_ix, &agg.payload),
                     _ => Vec::new(),
                 };
                 // Which of the three reasons it is: no description for this
@@ -1261,7 +1261,7 @@ impl App {
                     None
                 } else if db.is_none() {
                     Some(format!("（FR{} 未加载集群描述）", agg.bus))
-                } else if frame.is_none() {
+                } else if frame_ix.is_none() {
                     Some(format!(
                         "（FR{} 的描述里 slot {} 不排这一帧）",
                         agg.bus, agg.slot
@@ -1300,18 +1300,20 @@ impl App {
 
     /// Refreshes Trace window `i`'s filtered row cache on the text gate.
     ///
-    /// A steady run only *prepends*: when the lens, the expansion setting and
-    /// both rings are unchanged since the last build and no column sort has
-    /// reordered the cache, the walk covers just the rows that arrived after
-    /// the build point. Walking the whole ring every gate tick cost 7 ms on a
-    /// 50 000-row FlexRay replay and 70 ms with the FR signal expansion on
-    /// (measured, `--release`, see [`crate::headless_tests::perf_flexray_readouts_under_load`])
-    /// against a 10 Hz text gate -- most of it spent re-decoding frames nobody
-    /// had asked about again.
+    /// A steady run only *prepends*: when the filter, the expansion setting, the
+    /// cluster descriptions and both rings are unchanged since the last build
+    /// and no column sort has reordered the cache, the walk covers just the rows
+    /// that arrived after the build point. Walking the whole ring every gate tick
+    /// cost 7 ms on a 50 000-row FlexRay replay and 70 ms with the FR signal
+    /// expansion on (measured, `--release`, see
+    /// [`crate::headless_tests::perf_flexray_readouts_under_load`]) against a 10
+    /// Hz text gate.
     ///
-    /// Anything else -- an edited filter, a sorted column, a cleared or
-    /// restarted run -- drops the cache and walks the whole revealed ring once,
-    /// exactly as before.
+    /// Anything else -- an edited filter, a sorted column, a description swapped
+    /// onto a FlexRay bus, a cleared or restarted run -- drops the cache and
+    /// walks the whole revealed ring once, exactly as before. That rebuild now
+    /// costs 20 ms where it cost 51, because a decoded child row carries its
+    /// value rather than its text: see [`TraceRow::FrSig`].
     pub(crate) fn sync_trace_rows(&mut self, i: usize) {
         if !self.text_fresh {
             return;
@@ -1332,8 +1334,15 @@ impl App {
         self.trace_windows[i].shown_count = can_len;
         let flt = self.trace_windows[i].filter_lens();
         let fr_expand = self.trace_windows[i].fr_expand;
+        // Which description each FlexRay bus resolved its rows against: an
+        // expanded child row is an index into it, so a swap means a rebuild.
+        let fr_dbs: Vec<(u8, usize)> = self
+            .fr_buses
+            .iter()
+            .map(|(b, c)| (*b, std::sync::Arc::as_ptr(&c.db) as usize))
+            .collect();
         let since = match (&self.trace_windows[i].rows_build, self.trace_windows[i].rows_sorted) {
-            (Some(b), false) if b.extends_to(&flt, fr_expand, can_len, fr_len, top) => {
+            (Some(b), false) if b.extends_to(&flt, fr_expand, can_len, fr_len, top, &fr_dbs) => {
                 Some(b.through())
             }
             _ => None,
@@ -1345,7 +1354,7 @@ impl App {
         }
         self.walk_rows(i, &flt, fr_expand, since, &mut rows);
         let w = &mut self.trace_windows[i];
-        w.rows_build = Some(RowsBuild::new(&flt, fr_expand, top, can_len, fr_len));
+        w.rows_build = Some(RowsBuild::new(&flt, fr_expand, top, can_len, fr_len, &fr_dbs));
         // The walk produced this list; the cache is it, in the same order.
         w.rows_sorted = false;
         w.shown_count = rows.len();
@@ -1390,36 +1399,32 @@ impl App {
         let mut merged: Vec<TraceRow> = Vec::with_capacity(1_024);
         let (mut ci, mut fi) = (0usize, 0usize);
         while merged.len() < MAX_CACHED_ROWS {
-            match (can.get(ci), fr.get(fi)) {
+            // Whichever ring still has a row, and of the two the more recent --
+            // both lists are newest first, so this merge is linear in the kept
+            // rows.
+            let take_can = match (can.get(ci), fr.get(fi)) {
                 (None, None) => break,
-                (Some(_), None) => {
-                    merged.push(TraceRow::Can(*can[ci]));
-                    ci += 1;
-                }
-                (None, Some(_)) => {
-                    merged.push(TraceRow::Fr((*fr[fi]).clone()));
-                    fi += 1;
-                }
-                (Some(c), Some(r)) => {
-                    if c.t_us >= r.t_us {
-                        merged.push(TraceRow::Can(**c));
-                        ci += 1;
-                    } else {
-                        merged.push(TraceRow::Fr((*r).clone()));
-                        fi += 1;
-                    }
-                }
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (Some(c), Some(r)) => c.t_us >= r.t_us,
+            };
+            if take_can {
+                merged.push(TraceRow::Can(*can[ci]));
+                ci += 1;
+                continue;
             }
+            let row = (*fr[fi]).clone();
+            fi += 1;
             // A FlexRay frame row expands into its decoded signal child rows,
             // the CANoe trace shape, when the window asks and that bus's
             // description database is loaded.
-            if fr_expand {
-                let kids = match merged.last() {
-                    Some(TraceRow::Fr(row)) => self.fr_child_rows(row),
-                    _ => Vec::new(),
-                };
-                merged.extend(kids);
-            }
+            let kids = if fr_expand {
+                self.fr_child_rows(&row)
+            } else {
+                Vec::new()
+            };
+            merged.push(TraceRow::Fr(row));
+            merged.extend(kids);
         }
         if since.is_some() {
             // Newest first on both sides: prepend the fresh batch by walking it
@@ -1435,25 +1440,66 @@ impl App {
         }
     }
 
-    /// The decoded signal child rows for one FlexRay frame row: empty when the
-    /// bus has no description or its schedule has no frame in this slot at this
-    /// cycle.
+    /// The decoded signal child rows for one FlexRay frame row: the **values**,
+    /// not their text -- see [`TraceRow::FrSig`] for why the two are split
+    /// apart. Empty when the bus has no description or its schedule has no frame
+    /// in this slot at this cycle.
     fn fr_child_rows(&self, row: &crate::trace::FrRow) -> Vec<TraceRow> {
         let Some(db) = self.fr_db(row.bus) else {
             return Vec::new();
         };
-        let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab) else {
+        let Some(frame_ix) = db.frame_ix_at(row.slot, row.cycle, row.ab) else {
             return Vec::new();
         };
-        db.decode(frame, &row.payload)
-            .into_iter()
-            .map(|(signal, value)| TraceRow::FrSig {
+        db.frame_values(frame_ix, &row.payload)
+            // The value is read out here, where the payload is already in hand;
+            // the text waits for the draw. One walk decides which signals this
+            // payload carries, so the rows reserved and the rows resolved are
+            // the same rows.
+            .map(|(child_ix, raw, phys)| TraceRow::FrSig {
                 t_us: row.t_us,
+                bus: row.bus,
                 slot: row.slot,
-                signal,
-                value,
+                frame_ix: frame_ix as u32,
+                child_ix,
+                raw,
+                phys,
             })
             .collect()
+    }
+
+    /// The `(signal, value)` pair an expanded FlexRay child row prints,
+    /// formatted for the row being drawn. `None` when the description the cache
+    /// was built against is gone -- see [`RowsBuild::fr_dbs`].
+    pub(crate) fn fr_child_text(&self, row: &TraceRow) -> Option<(String, String)> {
+        let &TraceRow::FrSig {
+            bus,
+            frame_ix,
+            child_ix,
+            raw,
+            phys,
+            ..
+        } = row
+        else {
+            return None;
+        };
+        self.fr_db(bus)?
+            .child_text(frame_ix as usize, child_ix, raw, phys)
+    }
+
+    /// The signal name an expanded child row would print, without its value:
+    /// the Name column sorts on this.
+    pub(crate) fn fr_child_name(&self, row: &TraceRow) -> Option<&str> {
+        let &TraceRow::FrSig {
+            bus,
+            frame_ix,
+            child_ix,
+            ..
+        } = row
+        else {
+            return None;
+        };
+        self.fr_db(bus)?.child_name(frame_ix as usize, child_ix)
     }
 
     /// Trace window `w`'s revealed frames, newest first: the whole buffer

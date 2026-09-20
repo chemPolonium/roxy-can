@@ -1598,12 +1598,16 @@ impl BusCore {
         // nothing, which is the same "watch-only" outcome as before.
         if !self.subs.is_empty() {
             let db = self.fr_dbs.get(&row.bus);
-            let frame = ix.and_then(|i| db?.frame_index(i));
-            if let (Some(db), Some(frame)) = (db, frame) {
+            // The frame this row resolved to, by index: the decoders take that
+            // index instead of re-finding the declaration.
+            let decoded = db.zip(ix).and_then(|(db, i)| {
+                db.frame_index(i)
+                    .map(|f| (db, i, f.triggering.slot_id as u16))
+            });
+            if let Some((db, frame_ix, slot)) = decoded {
                 let stride = self.applied_stride_us;
-                let slot = frame.triggering.slot_id as u16;
                 let t_us = row.t_us;
-                for d in db.decode_signals(frame, &row.payload) {
+                for d in db.decode_signals(frame_ix, &row.payload) {
                     let key = crate::app::fr_signal_key(row.bus, slot, &d.name);
                     let Some(entry) = self.subs.get_mut(&key) else {
                         continue;
@@ -3782,9 +3786,9 @@ impl BusCore {
                             continue; // no description for this cluster
                         };
                         match db
-                            .frame_at(row.slot, row.cycle, row.ab)
-                            .and_then(|frame| {
-                                db.decode_signals(frame, &row.payload)
+                            .frame_ix_at(row.slot, row.cycle, row.ab)
+                            .and_then(|frame_ix| {
+                                db.decode_signals(frame_ix, &row.payload)
                                     .into_iter()
                                     .find(|d| d.name == *signal)
                             }) {

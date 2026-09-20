@@ -185,7 +185,7 @@
 - **改完的同一台机器、同一个探针**：稳定态 **0.7 µs/次**（只列帧）、**0.8 µs/次**（展开 FR 信号）；**重建**那一次仍在，只是不再是每次：只列帧 5.2 ms、展开 FR 信号 51 ms、刚改过过滤器 12 ms。**也就是说键入过滤词时仍会有一跳**（50 000 行重走 + 50 000 次解码），比原来好了但仍显眼——留给"按可见区间再解码子行"那一步（见下）。
 - **回归**：`the_trace_row_cache_extends_in_place_without_losing_rows`（分批喂帧、每批刷新一次，最后与"强制全量重建"的结果逐行比对——真两路资产、开着 FR 展开，所以解码子行也在比对范围内）与 `an_edited_filter_or_a_cleared_trace_rebuilds_the_row_cache`（改过滤器→缓存必须缩水到只剩匹配的；清空过滤器→整条环一次找齐；手动把缓存逆序 + 置 `rows_sorted`→刷新必须回到时间序；`ClearTrace`→缓存空）。**两条都做了破坏性验证**：把扩展路的下界条件写死成"总是真"→ 两条当场失败（缓存里出现整段重复行）；把 `rows_sorted` 判据摘掉→排序那条失败（新行插在被逆序的缓存头上）。两条都恢复即绿：全量 **620 通过 / 0 失败**，clippy 干净。
 - **顺带**：`fr_description_targets` 少了个二次排序——空闲索引是**第一个缺号**，当回放里出现 bus 4 而配置只有 0/1 时，它会被追加到末尾，下拉就排成 `[0,1,4,2]`（是新增的 `a_description_lands_on_the_bus_it_is_pointed_at` 里 bus 4 那条断言抓到的）。
-- **还没做的下一条（有数字了，按需再动）**：把 FR 解码子行改成**只给可见区间解码**（缓存里放占位行），过滤器键入时的 51 ms 就会跟着消失；代价是行号与排序要改成"父行带子行"的结构。`MAX_CACHED_ROWS` 撞顶（展开时 50 000 帧就满 200 000 行）也是同一件事的另一面。
+- **下一条已做**：FR 解码子行改成"缓存里放值、绘制时才出文本"，见下面《展开的 FlexRay 子行不再整环格式化》。`MAX_CACHED_ROWS` 撞顶（展开时 50 000 帧就满 200 000 行）仍在，且是同一件事的另一面 —— 记在新那节末尾。
 
 ### 2026-09-20：FlexRay 的 Messages/Statistics 改成**按帧**跟踪（名字不再每来一帧就变）
 
@@ -208,6 +208,22 @@
 - **顺带**：`dbc::fmt_signal_value` 无条件拼 `" [{type_tag}]"`，FlexRay 没有类型标记 → 每行白印一对空 `[]`（截图里的 `0 [] (正常`），既占宽又像缺陷；现在缺的部分不印（测试名 `the_value_cell_joins_only_the_parts_that_exist` 本来就是这个契约），DBC 里没写 genMsgType 的信号一起受益。
 - **验证边界（别当已验收）**：无头 ui_tests **走不到** Messages 的展开分支（树节点默认关闭，控件点击不在这套覆盖里，见"备注"），Trace 那条只被"不 panic"覆盖。所以**要看界面**：展开一条 FR 行确认值完整、不被边框压、向下滚不越界、信号名在 Name 列。**全量 625 通过 + clippy 干净只证明没弄坏别处。**
 - **如果父行标签也想要跨列**：现在 Message 列不裁剪，父行标签过长会盖住 Bus 文字（后画的通道赢）。自带的名字都短于列宽所以没露馅；真出现就调 `SIG_VALUE_X`/列宽，或把父行标签裁断（`ellipsize`）—— 等看到再说。
+
+### 2026-09-20：展开的 FlexRay 子行不再整环格式化（重建 51 ms → 20 ms）
+
+- **为什么要单独动它**：上一批把稳定态降到 0.7 µs 之后，剩下的开销只在**重建**那一次：改过滤器、点列头排序、清屏、换描述。实测（`perf_flexray_readouts_under_load`，`--release`，满环 50 000 FR 帧）只列帧 6.7 ms、**勾上"FR 信号" 51 ms**。51 ms 对 16 ms 的帧预算就是"键入一个字母跳一下"。
+- **先量再改（`perf_flexray_child_build_split`）**：把展开重建拆成四段分别计时，结论是**解码不是瓶颈，格式化才是**：
+  - 判定每行是哪一帧（`frame_ix_at`）：50 000 行 **1.1 ms**；
+  - 再把 216 661 个信号从载荷里抠出来并算物理值：**5.4 ms**；
+  - 再把它们变成缓存里的行（88 B/行的 `TraceRow` 入表）：**8.6 ms**；
+  - 最后一步——把值**格式化成文本**（`"2.54 Mpa (正常)  (1Fh)"`，每行两个 `String`）：**56 ms**。
+  即展开重建里 ~90% 是在给**屏幕上根本没有的行**印字。这个探针每轮都把读到的值折进一个会被打印的 sink：不加的话 LLVM 把算术整段删掉，有一次它就"测出"整条 walk 只花 4 ns/行。
+- **改法**：`TraceRow::FrSig` 从 `{t_us, slot, signal: String, value: String}` 换成 `{t_us, bus, slot, frame_ix, child_ix, raw, phys}` —— **值照旧在入表时算好（payload 就在手边），文本推迟到绘制**（`ui/trace.rs` 那一格调 `App::fr_child_text` → `FrDb::child_text`）。一条子行存的是"**帧索引 + 该帧声明列表里的第几个信号**"，不是"第几个能放下的信号"：`FrDb::frame_values` 与 `decode` 共用同一处判据（`bits_fit`），所以"预留了几行"与"每行解出什么信号"不可能各说各话（`a_partial_payload_resolves_children_by_their_declared_index` 用"第一个声明的信号恰好放不下"这一形状钉住）。
+- **`FrDb` 的解码入口一起换成按帧索引**：`decode`/`decode_signals`/`signal_names` 以前收 `&FrFrameDb`，各自再走一遍"按 PDU 名查表 + 减基"。现在这些在 `assemble` 里一次算成 `children: Vec<Vec<FrChild>>`（`(pdu_ix, sig_ix, bit)`，类型与字段都私有），三条读法都从它出发 —— 顺带把 `decode` 与 `decode_signals` 里那两段几乎重复的遍历合成一处。**逐帧输出与旧实现一致**（真资产那条精确文本断言 `decodes_a_signal_from_the_real_arxml` 未改即过）。
+- **推迟出来的索引必须有主人**：子行里的 `frame_ix` 只对"建缓存那一刻该 bus 挂的那份描述"有意义，所以 `RowsBuild` 多带一项 `fr_dbs: Vec<(u8, Arc 地址)>`，换描述 = 指纹变 = 全量重建。这条判据单独验过：把 `extends_to` 里那一行摘掉，`a_new_cluster_description_rebuilds_the_expanded_rows` 当场失败（旧缓存只给一行 `One`，新描述本该给两行）。用 `Arc` 地址而不是版本号计数，是因为**版本号要每个改动点都记得加**，测试里直接 `app.fr_buses.insert(..)` 就会漏；地址是"换了就是换了"的事实本身（新 Arc 必在旧 Arc 还活着时分配，故不会撞址）。
+- **结果（同一台机器、同一个探针）**：展开重建 **51 ms → 20 ms**，只列帧 6.7 ms 不变，稳定态 1.5 µs 不变。**顺带的内存账**：200 000 行缓存里不再有 ~43 万个 `String`（旧格式下每条子行两个），重建时也就没有 43 万次 malloc/free。
+- **剩下的 20 ms 不是解码**：50 000 父行 + 216 661 子行 = 266 661 条 88 B 的行，光"入表 + 搬进 `VecDeque` + 丢弃旧的"就是十几毫秒。要再把展开拉到与只列帧同一档，得让缓存**不再把子行摊平进同一条列表**（父行带子行数、绘制时按前缀和映射可见区间），那会顺手改掉滚动映射与"排序会把子行从父行旁边拆开"这个旧毛病 —— **一次动得太多，留着**。`MAX_CACHED_ROWS = 200 000` 把子行也算数，所以展开视图会在 50 000 帧处撞顶、更早的帧从表里消失（同一件事的另一面：上限该按父行计）。
+- **回归**：`a_deferred_child_row_prints_what_the_eager_decoder_prints`（推迟路径与急解码逐字相同 + 空载荷/越界索引）、`a_partial_payload_resolves_children_by_their_declared_index`（索引口径）、`a_new_cluster_description_rebuilds_the_expanded_rows`（描述换人必须重建）。`cache_shape` 现在把子行**解析成文本**再比较，所以"分批扩展 vs 一次全走"那条等价性测的是用户看得见的字，不只是索引。ui_tests 里注入的 FR 子行改成从真资产现算（`frame_values`），否则"能画"就等于没画过解码那条分支。**全量 628 通过 / 0 失败**，clippy 干净。**可见形状没有改动**：值、单位、枚举标签、`(Nh)` 尾巴与挪到 Name 列的信号名都和上一批一致，那些要看界面的项（跨列、不越界）仍待用户复验。
 
 ## 结构待办（零散）
 

@@ -6782,8 +6782,8 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
 
 /// The shape of a Trace window's row cache, as far as a test is concerned: the
 /// order, which ring each row came from, its address, and for a decoded
-/// FlexRay child the signal it holds. Two caches with the same shape drew the
-/// same table.
+/// FlexRay child the signal and value text it would draw. Two caches with the
+/// same shape drew the same table.
 fn cache_shape(app: &App) -> Vec<(u64, u8, u32, String)> {
     app.trace_windows[0]
         .rows
@@ -6791,12 +6791,13 @@ fn cache_shape(app: &App) -> Vec<(u64, u8, u32, String)> {
         .map(|r| match r {
             TraceRow::Can(f) => (f.t_us, 0, f.id, String::new()),
             TraceRow::Fr(f) => (f.t_us, 1, f.slot as u32, String::new()),
-            TraceRow::FrSig {
-                t_us,
-                slot,
-                signal,
-                ..
-            } => (*t_us, 2, *slot as u32, signal.clone()),
+            r @ TraceRow::FrSig { slot, .. } => {
+                // Resolved the way the window resolves it, so the deferred
+                // decoding is what this compares, not just the indices behind
+                // it.
+                let (signal, value) = app.fr_child_text(r).unwrap_or_default();
+                (r.t_us(), 2, u32::from(*slot), format!("{signal}={value}"))
+            }
         })
         .collect()
 }
@@ -6823,8 +6824,9 @@ fn the_trace_row_cache_extends_in_place_without_losing_rows() {
     let drive: Vec<(u16, u8)> = db
         .frames
         .iter()
-        .filter(|f| !db.decode(f, &[0u8; 48]).is_empty())
-        .map(|f| (f.triggering.slot_id as u16, f.triggering.base_cycle as u8))
+        .enumerate()
+        .filter(|(ix, _)| !db.decode(*ix, &[0u8; 48]).is_empty())
+        .map(|(_, f)| (f.triggering.slot_id as u16, f.triggering.base_cycle as u8))
         .take(3)
         .collect();
     assert!(
@@ -6952,6 +6954,116 @@ fn an_edited_filter_or_a_cleared_trace_rebuilds_the_row_cache() {
         app.trace_windows[0].rows.is_empty(),
         "clearing the trace empties the cache: {:?}",
         cache_shape(&app)
+    );
+    app.stop();
+}
+
+/// A one-slot FlexRay description whose frame declares exactly these signals.
+/// Enough to pin how many child rows a frame row owns, and which name each one
+/// prints.
+fn one_slot_db(signals: &[&str]) -> std::sync::Arc<crate::fr_db::FrDb> {
+    use crate::fr_db::{FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+    let sig = |name: &str| FrSignal {
+        name: name.into(),
+        start_bit: 0,
+        length_bits: 8,
+        big_endian: false,
+        signed: false,
+        factor: 1.0,
+        offset: 0.0,
+        min: 0.0,
+        max: 255.0,
+        unit: String::new(),
+        comment: String::new(),
+        value_descriptions: vec![],
+    };
+    FrDb::assemble(
+        FrClusterParams::default(),
+        vec![],
+        vec![FrPdu {
+            name: "P".into(),
+            length: 1,
+            dynamic: false,
+            comment: String::new(),
+            signals: signals.iter().map(|s| sig(s)).collect(),
+        }],
+        vec![FrFrameDb {
+            name: "F".into(),
+            length: 1,
+            payload_preamble: false,
+            triggering: FrTriggering {
+                channel: FrChannel::Both,
+                slot_id: 5,
+                base_cycle: 0,
+                cycle_repetition: 1,
+                startup: false,
+            },
+            pdus: vec![("P".into(), 0u32)],
+            comment: String::new(),
+        }],
+    )
+    .into()
+}
+
+/// What must also throw the expanded cache away: the cluster description a
+/// child row was indexed against. An expanded FlexRay row stores `(frame,
+/// child)` indices into that description, so when the bus gets a different one
+/// the old rows mean something else -- here the new frame declares a signal the
+/// old one has no row for, and a cache that kept extending would go on showing
+/// one child where the walk now yields two.
+#[test]
+fn a_new_cluster_description_rebuilds_the_expanded_rows() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let describe = |app: &mut App, signals: &[&str]| {
+        app.fr_buses.insert(
+            0,
+            crate::app::FrBusCfg {
+                path: "synthetic".into(),
+                db: one_slot_db(signals),
+            },
+        );
+        app.push_fr_db_to_core();
+    };
+    describe(&mut app, &["One"]);
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    app.trace_windows[0].fr_expand = true;
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    app.refresh_snapshot();
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    let kids = |app: &App| {
+        cache_shape(app)
+            .into_iter()
+            .filter(|(_, kind, ..)| *kind == 2)
+            .map(|(.., text)| text)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kids(&app),
+        vec!["One=42  (2Ah)"],
+        "the first description's one child row"
+    );
+
+    // The swap, with no new traffic: the filter, the rings and every timestamp
+    // still say "extend", so only the description can be what rebuilds.
+    describe(&mut app, &["One", "Two"]);
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert_eq!(
+        kids(&app),
+        vec!["One=42  (2Ah)", "Two=42  (2Ah)"],
+        "rebuilt against the description the bus has now"
     );
     app.stop();
 }

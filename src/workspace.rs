@@ -25,13 +25,30 @@ pub enum SigScope {
 pub enum TraceRow {
     Can(crate::can::frame::CanFrame),
     Fr(crate::trace::FrRow),
+    /// A decoded signal child row under its FR frame row: the value worked out,
+    /// the **text** left to the draw (only while the window's FR expansion is
+    /// on).
+    ///
+    /// The split is the whole point. A 50 000-row FlexRay ring expands into some
+    /// 217 000 of these, and formatting every one of them cost 51 ms per rebuild
+    /// of the cache, against the 5.4 ms it takes to find each frame and read all
+    /// its signals out (measured, `--release`,
+    /// [`crate::headless_tests::perf_flexray_child_build_split`]) -- for a table
+    /// that draws a few dozen rows at a time.
+    ///
+    /// `frame_ix` indexes the cluster description of `bus` as it was when the
+    /// row was built; [`RowsBuild::fr_dbs`] throws the cache out when a bus gets
+    /// a different description, so the indices cannot outlive what they mean.
     FrSig {
-        /// The frame row's timestamp, so time sorting keeps children
-        /// adjacent to their parent.
+        /// The frame row's own timestamp and slot, so sorting keeps children
+        /// next to their parent's address without a borrow of the parent.
         t_us: u64,
+        bus: u8,
         slot: u16,
-        signal: String,
-        value: String,
+        frame_ix: u32,
+        child_ix: u32,
+        raw: u64,
+        phys: f64,
     },
 }
 
@@ -249,6 +266,13 @@ pub struct RowsBuild {
     /// Whether FlexRay rows were expanded into signal child rows, which the
     /// lens does not carry.
     fr_expand: bool,
+    /// Which cluster description each FlexRay bus was resolved against, as
+    /// `(bus, Arc address)`. An expanded child row stores an index into *that*
+    /// description's frame table, so a bus that gets a different description --
+    /// or loses one -- invalidates the cache even though nothing about the
+    /// filter or the rings changed. The new `Arc` is allocated while the old one
+    /// is still alive, so a reused address cannot hide a swap.
+    fr_dbs: Vec<(u8, usize)>,
 }
 
 impl RowsBuild {
@@ -259,6 +283,7 @@ impl RowsBuild {
         through_us: u64,
         can_len: usize,
         fr_len: usize,
+        fr_dbs: &[(u8, usize)],
     ) -> Self {
         Self {
             lens: lens.clone(),
@@ -266,12 +291,14 @@ impl RowsBuild {
             can_len,
             fr_len,
             fr_expand,
+            fr_dbs: fr_dbs.to_vec(),
         }
     }
 
     /// Whether a cache built here can be extended by a refresh with the given
-    /// lens and rings: same filter, same expansion, and both rings still hold
-    /// everything this build saw (a cleared or restarted run does not).
+    /// lens and rings: same filter, same expansion, the same description behind
+    /// every FlexRay bus, and both rings still holding everything this build saw
+    /// (a cleared or restarted run does not).
     pub(crate) fn extends_to(
         &self,
         flt: &TraceFilter,
@@ -279,9 +306,11 @@ impl RowsBuild {
         can_len: usize,
         fr_len: usize,
         top_us: u64,
+        fr_dbs: &[(u8, usize)],
     ) -> bool {
         self.lens == *flt
             && self.fr_expand == fr_expand
+            && self.fr_dbs == fr_dbs
             && top_us >= self.through_us
             && can_len >= self.can_len
             && fr_len >= self.fr_len

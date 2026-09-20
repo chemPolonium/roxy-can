@@ -696,7 +696,11 @@ fn emit_fr_batch(
             *skipped += 1;
             continue;
         };
-        let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab) else {
+        let Some(frame_ix) = db.frame_ix_at(row.slot, row.cycle, row.ab) else {
+            *skipped += 1;
+            continue;
+        };
+        let Some(frame) = db.frame_index(frame_ix) else {
             *skipped += 1;
             continue;
         };
@@ -717,7 +721,7 @@ fn emit_fr_batch(
                 _ => "",
             }
         );
-        for d in db.decode_signals(frame, &row.payload) {
+        for d in db.decode_signals(frame_ix, &row.payload) {
             *rows += 1;
             write_line(
                 w,

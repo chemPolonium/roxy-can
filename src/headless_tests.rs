@@ -915,14 +915,27 @@ fn perf_snapshot_publish_under_load() {
 ///
 /// ```text
 ///                    rebuild   steady
-/// frames only         5.2 ms    0.7 us
-/// FR signals expanded 51 ms     0.8 us
-/// filter just edited  12 ms     1.2 us
+/// frames only         6.7 ms    1.5 us
+/// FR signals expanded 20 ms     1.6 us
+/// filter just edited  5.9 ms    1.5 us
 /// ```
 ///
-/// Before the cache could extend itself every column was the rebuild figure:
-/// 7 ms and 70 ms per refresh, i.e. a FlexRay replay with the signal expansion
-/// open spent most of every 100 ms gate re-decoding 50 000 frames.
+/// Three changes sit behind those numbers, each measured against the one
+/// before it. Before the row cache could extend itself, every column was the
+/// rebuild figure at 7 ms / 70 ms per refresh -- a FlexRay replay with the
+/// signal expansion open spent most of every 100 ms gate re-walking the ring.
+/// Then the expanded rebuild came down from 51 ms to 20 ms when a child row
+/// stopped carrying formatted text and started carrying its value: that text
+/// alone measures 56 ms for the ring's 216 000 child rows
+/// ([`crate::headless_tests::perf_flexray_child_build_split`]), and a table
+/// draws a few dozen rows at a time.
+///
+/// What the 20 ms is now: the ring's 50 000 frame rows expand into 216 000
+/// child rows, and those are 266 000 entries of an 88-byte `TraceRow` --
+/// resolved and read out in ~5 ms, then pushed, moved into the deque and
+/// dropped for the rest. Making the expanded view as cheap as the plain one
+/// means the row list stops being a flat materialized thing (see the note in
+/// `TODO.md`); the decoding is no longer what costs.
 #[test]
 #[ignore = "measurement probe"]
 fn perf_flexray_readouts_under_load() {
@@ -1011,6 +1024,147 @@ fn perf_flexray_readouts_under_load() {
     );
     eprintln!("Messages             :   (rebuild n/a)  | {msgs:8.1} us  ({n_msgs} rows)");
     eprintln!("Statistics           :   (rebuild n/a)  | {stats:8.1} us  ({n_stats} rows)");
+}
+
+/// Where an expanded Trace rebuild's time goes, so the fix can be aimed rather
+/// than guessed: resolving which frame each row carries, reading the signal
+/// values out of the payloads, materializing the child rows in the cache, and
+/// formatting their text. Not a pass/fail test -- run it and read the numbers:
+///
+/// `cargo test --release perf_flexray_child_build_split -- --ignored --nocapture`
+///
+/// Every round folds something out of the values it read into a printed sink.
+/// Without that, LLVM deletes the arithmetic and the line reports the cost of
+/// the loop counter alone -- which is how one run of this probe claimed the
+/// whole walk cost 4 ns a row. Measured here (`--release`, 50 000-row ring,
+/// 216 661 child rows, 88 B per cached row):
+///
+/// ```text
+/// resolve frames:     1.1 ms   which frame each row carries
+/// read values    :    5.4 ms   + every signal's bits and physical value
+/// build rows     :    8.6 ms   + the child rows in the cache's row list
+/// format text    :   56.1 ms   + the value text nobody had asked to see
+/// ```
+///
+/// The first three are what an expanded rebuild pays now (20 ms, against the
+/// 51 ms all four used to cost -- see
+/// [`crate::headless_tests::perf_flexray_readouts_under_load`]); the last is
+/// left to the rows actually drawn.
+#[test]
+#[ignore = "measurement probe"]
+fn perf_flexray_child_build_split() {
+    use std::cell::Cell;
+    use std::time::Instant;
+    use crate::workspace::TraceRow;
+    let blf = std::path::Path::new("assets/fibex/Logging.blf");
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let fibex = "assets/fibex/PowerTrain_v2.xml";
+    if !blf.exists() {
+        eprintln!("assets absent -- skipped");
+        return;
+    }
+    let mut app = App::headless();
+    app.load_cluster_description(arxml, Some(0));
+    app.load_cluster_description(fibex, Some(1));
+    app.log_path = blf.to_string_lossy().to_string();
+    app.replay();
+    let mut now = 0u64;
+    for _ in 0..52_000 {
+        now += 1_000;
+        step(&mut app, now);
+    }
+    let ring: Vec<_> = app.snap.fr_trace.iter().collect();
+    eprintln!("ring {} rows", ring.len());
+    let sink = Cell::new(0u64);
+    let kids = Cell::new(0usize);
+    let frames = Cell::new(0usize);
+    let rounds = |f: &mut dyn FnMut()| -> f64 {
+        let t = Instant::now();
+        f();
+        t.elapsed().as_micros() as f64
+    };
+    let resolve = rounds(&mut || {
+        let (mut acc, mut n) = (0u64, 0usize);
+        for r in &ring {
+            let d = app.fr_db(r.bus).unwrap();
+            if let Some(ix) = d.frame_ix_at(r.slot, r.cycle, r.ab) {
+                acc += ix as u64;
+                n += 1;
+            }
+        }
+        sink.set(acc);
+        frames.set(n);
+    });
+    // What the deferred walk costs: the same frame lookups plus every signal's
+    // bits read out of its payload, no text.
+    let values = rounds(&mut || {
+        let (mut acc, mut n) = (0u64, 0usize);
+        for r in &ring {
+            let d = app.fr_db(r.bus).unwrap();
+            let Some(ix) = d.frame_ix_at(r.slot, r.cycle, r.ab) else {
+                continue;
+            };
+            for (child_ix, raw, phys) in d.frame_values(ix, &r.payload) {
+                acc += raw ^ phys.to_bits() ^ child_ix as u64;
+                n += 1;
+            }
+        }
+        sink.set(acc);
+        kids.set(n);
+    });
+    // The same walk, with each child turned into a cache row -- i.e. what the
+    // rebuild pays for the row list itself.
+    let mut rows: Vec<TraceRow> = Vec::with_capacity(400_000);
+    let build = rounds(&mut || {
+        rows.clear();
+        let mut acc = 0u64;
+        for r in &ring {
+            let d = app.fr_db(r.bus).unwrap();
+            let Some(ix) = d.frame_ix_at(r.slot, r.cycle, r.ab) else {
+                continue;
+            };
+            rows.extend(d.frame_values(ix, &r.payload).map(|(child_ix, raw, phys)| {
+                acc += raw;
+                TraceRow::FrSig {
+                    t_us: r.t_us,
+                    bus: r.bus,
+                    slot: r.slot,
+                    frame_ix: ix as u32,
+                    child_ix,
+                    raw,
+                    phys,
+                }
+            }));
+        }
+        if let Some(TraceRow::FrSig { raw, .. }) = rows.last() {
+            acc += *raw;
+        }
+        sink.set(acc);
+        kids.set(rows.len());
+    });
+    // The text, which is what the rebuild used to do for all of them.
+    let decode = rounds(&mut || {
+        let mut acc = 0u64;
+        for r in &ring {
+            let d = app.fr_db(r.bus).unwrap();
+            if let Some(ix) = d.frame_ix_at(r.slot, r.cycle, r.ab) {
+                for (name, text) in d.decode(ix, &r.payload) {
+                    acc += (name.len() + text.len()) as u64;
+                }
+            }
+        }
+        sink.set(acc);
+    });
+    eprintln!(
+        "resolve frames: {resolve:9.1} us ({} of {} rows)",
+        frames.get(),
+        ring.len()
+    );
+    eprintln!("read values   : {values:9.1} us ({} child rows)", kids.get());
+    eprintln!("build rows    : {build:9.1} us ({} child rows, {} B each)", kids.get(), std::mem::size_of::<TraceRow>());
+    eprintln!("format text   : {decode:9.1} us ({} child rows)", kids.get());
+    eprintln!("sink (kept so nothing above is optimised out): {}", sink.get());
+    app.stop();
 }
 
 /// The Bus Statistics window reads its rollups from the snapshot like every

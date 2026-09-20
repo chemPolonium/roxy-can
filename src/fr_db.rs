@@ -58,6 +58,22 @@ pub struct FrSignal {
     pub value_descriptions: Vec<(i64, String)>,
 }
 
+/// One signal a frame can carry, already resolved to a place in that frame's
+/// payload: `pdus[pdu_ix].signals[sig_ix]` starts at bit `bit`.
+///
+/// [`FrDb::assemble`] works this out once per frame because every step of it
+/// (looking the PDU name up, rebasing the PDU's start position onto the frame's
+/// first PDU) gives the same answer for every arrival of that frame, and a
+/// Trace rebuild asks for every row of a 50 000-row ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrChild {
+    pdu_ix: usize,
+    sig_ix: usize,
+    /// Bit offset into the logged payload, which begins at the frame's first
+    /// PDU -- see [`FrDb::child_value`].
+    bit: u32,
+}
+
 /// One PDU: a payload chunk with its signal layout.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrPdu {
@@ -195,6 +211,11 @@ pub struct FrDb {
     /// `slot id -> indices into `frames``, document order. `frame_at` scanned
     /// every frame of the database for every arriving FlexRay row.
     slot_ix: HashMap<u32, Vec<usize>>,
+    /// `frame index -> the signals that frame can carry`, in payload order.
+    /// Built by [`Self::assemble`] from the same walk the decoders used to do
+    /// per call: decoding one frame resolved its PDU names and rebased their
+    /// start positions again for every arrival.
+    children: Vec<Vec<FrChild>>,
 }
 
 impl FrDb {
@@ -214,6 +235,7 @@ impl FrDb {
             frames,
             pdu_ix: HashMap::new(),
             slot_ix: HashMap::new(),
+            children: Vec::new(),
         };
         for (i, p) in db.pdus.iter().enumerate() {
             // First declaration wins, as `iter().find` did.
@@ -222,7 +244,40 @@ impl FrDb {
         for (i, f) in db.frames.iter().enumerate() {
             db.slot_ix.entry(f.triggering.slot_id).or_default().push(i);
         }
+        db.children = db
+            .frames
+            .iter()
+            .map(|f| Self::frame_children(f, &db.pdu_ix, &db.pdus))
+            .collect();
         db
+    }
+
+    /// A frame's signals in payload order: every signal of every PDU it maps,
+    /// with the PDU's start position rebased onto the frame's first PDU -- the
+    /// logged payload begins there, while AUTOSAR START-POSITIONs are measured
+    /// from the frame head. A PDU name the database does not declare is skipped,
+    /// exactly as the decoders that resolve names at call time skipped it.
+    fn frame_children(frame: &FrFrameDb, pdu_ix: &HashMap<String, usize>, pdus: &[FrPdu]) -> Vec<FrChild> {
+        let base = frame.pdus.iter().map(|(_, b)| *b).min().unwrap_or(0);
+        frame
+            .pdus
+            .iter()
+            .filter_map(|(name, start)| {
+                let &pdu_ix = pdu_ix.get(name.as_str())?;
+                Some(
+                    pdus[pdu_ix]
+                        .signals
+                        .iter()
+                        .enumerate()
+                        .map(move |(sig_ix, s)| FrChild {
+                            pdu_ix,
+                            sig_ix,
+                            bit: start - base + s.start_bit,
+                        }),
+                )
+            })
+            .flatten()
+            .collect()
     }
 
     /// The PDU named `name`.
@@ -325,50 +380,114 @@ impl FrDb {
         self.frame_index(self.frame_ix_at(slot, cycle, ab)?)
     }
 
-    /// Decodes a frame payload into `(signal, text)` pairs: physical
-    /// values with units, enumeration labels where the database has
-    /// them. PDU start offsets shift each signal's absolute bit.
-    pub fn decode(&self, frame: &FrFrameDb, payload: &[u8]) -> Vec<(String, String)> {
-        let mut out = Vec::new();
-        let total_bits = payload.len() * 8;
-        // The logged payload begins at the frame's first PDU; AUTOSAR PDU
-        // START-POSITIONs are measured from the frame head, so subtract the
-        // lowest one to align them with the bytes actually recorded.
-        let base = frame.pdus.iter().map(|(_, b)| *b).min().unwrap_or(0);
-        for (pdu_name, pdu_start_bit) in &frame.pdus {
-            let Some(pdu) = self.pdu_of(pdu_name) else {
-                continue;
-            };
-            for sig in &pdu.signals {
-                let abs_bit = (*pdu_start_bit - base) as usize + sig.start_bit as usize;
-                let len = sig.length_bits as usize;
-                if abs_bit + len > total_bits {
-                    continue;
+    /// The signals `frame_ix` carries, in payload order, each with the bit it
+    /// starts at. Empty for an index this database does not have.
+    fn children_of(&self, frame_ix: usize) -> &[FrChild] {
+        self.children.get(frame_ix).map_or(&[], Vec::as_slice)
+    }
+
+    /// The declaration a resolved child points at.
+    fn sig_of(&self, child: &FrChild) -> Option<&FrSignal> {
+        self.pdus.get(child.pdu_ix)?.signals.get(child.sig_ix)
+    }
+
+    /// The declaration of child `child_ix` of `frame_ix`.
+    fn child_signal_at(&self, frame_ix: usize, child_ix: u32) -> Option<&FrSignal> {
+        self.sig_of(self.children_of(frame_ix).get(child_ix as usize)?)
+    }
+
+    /// Whether a child's bits lie inside a payload of `bytes` bytes: the one
+    /// rule for "this signal is in the part that was recorded". Both the row
+    /// cache's walk ([`Self::frame_values`]) and the curve fold go through it, so
+    /// the child rows a frame row reserves and the text the draw resolves for
+    /// them cannot disagree.
+    fn bits_fit(child: &FrChild, sig: &FrSignal, bytes: usize) -> bool {
+        child.bit as usize + sig.length_bits as usize <= bytes * 8
+    }
+
+    /// Every child of `frame_ix` that `payload` carries, as
+    /// `(its index under [`Self::children_of`], its raw bits, its physical
+    /// value)`, in payload order.
+    ///
+    /// The index travels with the value because it is what a Trace row stores:
+    /// the arithmetic happens on the way in, where the payload is already in
+    /// hand, and the *text* waits for the rows actually drawn -- see
+    /// [`Self::child_text`].
+    pub(crate) fn frame_values<'d>(
+        &'d self,
+        frame_ix: usize,
+        payload: &'d [u8],
+    ) -> impl Iterator<Item = (u32, u64, f64)> + 'd {
+        self.children_of(frame_ix)
+            .iter()
+            .enumerate()
+            .filter_map(move |(child_ix, c)| {
+                let sig = self.sig_of(c)?;
+                if !Self::bits_fit(c, sig, payload.len()) {
+                    return None;
                 }
-                let raw = crate::decode::extract_raw(
-                    payload,
-                    abs_bit as u64,
-                    len as u64,
-                    sig.big_endian,
-                );
+                let raw =
+                    crate::decode::extract_raw(payload, c.bit as u64, sig.length_bits as u64, sig.big_endian);
                 let phys = crate::decode::to_physical(
                     raw,
-                    len as u64,
+                    sig.length_bits as u64,
                     sig.signed,
                     sig.factor,
                     sig.offset,
                 );
-                let label = sig
-                    .value_descriptions
-                    .iter()
-                    .find(|(v, _)| *v as f64 == phys)
-                    .map(|(_, t)| t.clone());
-                let mut text = crate::dbc::fmt_signal_value(phys, &sig.unit, "", label.as_deref());
-                text.push_str(&format!("  ({raw:X}h)"));
-                out.push((sig.name.clone(), text));
-            }
-        }
-        out
+                Some((child_ix as u32, raw, phys))
+            })
+    }
+
+    fn label_of(sig: &FrSignal, phys: f64) -> Option<String> {
+        sig.value_descriptions
+            .iter()
+            .find(|(v, _)| *v as f64 == phys)
+            .map(|(_, t)| t.clone())
+    }
+
+    /// The cell text of a value already read out: physical value with its unit,
+    /// the enumeration label where the database has one, and the raw bits in
+    /// hex. FlexRay declares no per-signal message type, so the type tag is
+    /// empty -- see [`crate::dbc::fmt_signal_value`], which leaves out whatever a
+    /// signal has not got.
+    fn signal_text(sig: &FrSignal, raw: u64, phys: f64) -> String {
+        let label = Self::label_of(sig, phys);
+        let mut text = crate::dbc::fmt_signal_value(phys, &sig.unit, "", label.as_deref());
+        text.push_str(&format!("  ({raw:X}h)"));
+        text
+    }
+
+    /// The `(name, text)` pair of one child, from the value a Trace row already
+    /// carries. Formatting is deliberately the part left to the draw: the 217 000
+    /// child rows of a full ring measure 56 ms to format against the 5.4 ms it
+    /// takes to walk and read them out
+    /// ([`crate::headless_tests::perf_flexray_child_build_split`], `--release`),
+    /// and a table shows a few dozen at a time.
+    pub(crate) fn child_text(
+        &self,
+        frame_ix: usize,
+        child_ix: u32,
+        raw: u64,
+        phys: f64,
+    ) -> Option<(String, String)> {
+        let sig = self.child_signal_at(frame_ix, child_ix)?;
+        Some((sig.name.clone(), Self::signal_text(sig, raw, phys)))
+    }
+
+    /// The name of child `child_ix` of `frame_ix` -- what [`Self::child_text`]
+    /// prints first, without formatting the value. A column sort keys on this.
+    pub(crate) fn child_name(&self, frame_ix: usize, child_ix: u32) -> Option<&str> {
+        Some(self.child_signal_at(frame_ix, child_ix)?.name.as_str())
+    }
+
+    /// Decodes a frame payload into `(signal, text)` pairs: physical
+    /// values with units, enumeration labels where the database has
+    /// them. Takes the frame by index -- see [`Self::frame_ix_at`].
+    pub fn decode(&self, frame_ix: usize, payload: &[u8]) -> Vec<(String, String)> {
+        self.frame_values(frame_ix, payload)
+            .filter_map(|(child_ix, raw, phys)| self.child_text(frame_ix, child_ix, raw, phys))
+            .collect()
     }
 
     /// Numeric sibling of [`Self::decode`]: the physical value, the raw
@@ -377,61 +496,32 @@ impl FrDb {
     /// the display text `decode` returns.
     pub fn decode_signals(
         &self,
-        frame: &FrFrameDb,
+        frame_ix: usize,
         payload: &[u8],
     ) -> Vec<crate::dbc::DecodedSignal> {
-        let mut out = Vec::new();
-        let total_bits = payload.len() * 8;
-        // See [`Self::decode`]: align AUTOSAR PDU positions with the logged
-        // payload, which begins at the frame's first PDU.
-        let base = frame.pdus.iter().map(|(_, b)| *b).min().unwrap_or(0);
-        for (pdu_name, pdu_start_bit) in &frame.pdus {
-            let Some(pdu) = self.pdu_of(pdu_name) else {
-                continue;
-            };
-            for sig in &pdu.signals {
-                let abs_bit = (*pdu_start_bit - base) as usize + sig.start_bit as usize;
-                let len = sig.length_bits as usize;
-                if abs_bit + len > total_bits {
-                    continue;
-                }
-                let raw = crate::decode::extract_raw(
-                    payload,
-                    abs_bit as u64,
-                    len as u64,
-                    sig.big_endian,
-                );
-                let phys =
-                    crate::decode::to_physical(raw, len as u64, sig.signed, sig.factor, sig.offset);
-                let label = sig
-                    .value_descriptions
-                    .iter()
-                    .find(|(v, _)| *v as f64 == phys)
-                    .map(|(_, t)| t.clone());
-                out.push(crate::dbc::DecodedSignal {
+        self.frame_values(frame_ix, payload)
+            .filter_map(|(child_ix, raw, phys)| {
+                let sig = self.child_signal_at(frame_ix, child_ix)?;
+                Some(crate::dbc::DecodedSignal {
                     name: sig.name.clone(),
                     phys,
                     raw: raw as i64,
                     unit: sig.unit.clone(),
                     type_tag: String::new(),
-                    label,
-                });
-            }
-        }
-        out
+                    label: Self::label_of(sig, phys),
+                })
+            })
+            .collect()
     }
 
     /// The signal names a frame carries, in payload order. The selection
     /// tree lists a FlexRay frame's signals from this, so a picker entry and
     /// a decoded value share one source of truth and cannot drift apart.
-    pub fn signal_names(&self, frame: &FrFrameDb) -> Vec<String> {
-        let mut names = Vec::new();
-        for (pdu_name, _) in &frame.pdus {
-            if let Some(pdu) = self.pdu_of(pdu_name) {
-                names.extend(pdu.signals.iter().map(|s| s.name.clone()));
-            }
-        }
-        names
+    pub fn signal_names(&self, frame_ix: usize) -> Vec<String> {
+        self.children_of(frame_ix)
+            .iter()
+            .filter_map(|c| Some(self.sig_of(c)?.name.clone()))
+            .collect()
     }
 
     /// The declaration of signal `name` in **any** frame that holds `slot`.
@@ -455,8 +545,8 @@ impl FrDb {
     /// collapsing them to one entry hid every occupant but the first.
     pub fn slot_signals(&self) -> Vec<(u16, String, Vec<String>)> {
         let mut out = Vec::new();
-        for f in &self.frames {
-            let names = self.signal_names(f);
+        for (ix, f) in self.frames.iter().enumerate() {
+            let names = self.signal_names(ix);
             if names.is_empty() {
                 continue;
             }
@@ -1835,6 +1925,122 @@ mod tests {
         }
     }
 
+    /// The Trace window's deferred path -- [`FrDb::frame_values`] on the way in,
+    /// the text on the way out -- hands back exactly what the eager decoder
+    /// prints, including the index round trip: a child row stores `(frame,
+    /// child)` and nothing else, so those two have to land on the same signal
+    /// the row was made from.
+    #[test]
+    fn a_deferred_child_row_prints_what_the_eager_decoder_prints() {
+        let db = two_frames_one_slot_db(10);
+        let payload = [0x2Au8; 8];
+        assert_eq!(
+            db.decode(0, &payload),
+            vec![("Amp".to_string(), "42 u  (2Ah)".to_string())],
+            "42 raw at factor 1, its unit, and the raw hex the cell appends"
+        );
+        for frame_ix in 0..db.frames.len() {
+            let deferred: Vec<_> = db
+                .frame_values(frame_ix, &payload)
+                .filter_map(|(child_ix, raw, phys)| {
+                    db.child_text(frame_ix, child_ix, raw, phys)
+                })
+                .collect();
+            assert_eq!(
+                deferred,
+                db.decode(frame_ix, &payload),
+                "frame {frame_ix}: the walk and the draw agree"
+            );
+        }
+        // A signal outside the recorded payload is in neither walk, and an index
+        // past the frame's children resolves to nothing rather than a neighbour.
+        assert!(
+            db.frame_values(0, &[]).next().is_none(),
+            "an 8-bit signal is not in a payload that holds no bytes"
+        );
+        assert!(db.child_text(0, 9, 0, 0.0).is_none(), "no such child");
+        assert!(db.child_name(1, 0).is_some(), "FB's own first signal");
+        assert_eq!(db.child_name(1, 0), Some("Bmp"));
+    }
+
+    /// A one-frame database whose PDU carries these signals (name, start bit,
+    /// length) -- the shape that tells whether a deferred child row indexes the
+    /// frame's declared list or merely the signals that happened to fit.
+    fn one_frame_db(signals: &[(&str, u32, u32)]) -> FrDb {
+        FrDb::assemble(
+            FrClusterParams::default(),
+            vec![],
+            vec![FrPdu {
+                name: "P".into(),
+                length: 8,
+                dynamic: false,
+                comment: String::new(),
+                signals: signals
+                    .iter()
+                    .map(|(name, bit, len)| FrSignal {
+                        name: (*name).into(),
+                        start_bit: *bit,
+                        length_bits: *len,
+                        big_endian: false,
+                        signed: false,
+                        factor: 1.0,
+                        offset: 0.0,
+                        min: 0.0,
+                        max: 255.0,
+                        unit: "u".into(),
+                        comment: String::new(),
+                        value_descriptions: vec![],
+                    })
+                    .collect(),
+            }],
+            vec![FrFrameDb {
+                name: "F".into(),
+                length: 8,
+                payload_preamble: false,
+                triggering: FrTriggering {
+                    channel: FrChannel::Both,
+                    slot_id: 5,
+                    base_cycle: 0,
+                    cycle_repetition: 1,
+                    startup: false,
+                },
+                pdus: vec![("P".into(), 0u32)],
+                comment: String::new(),
+            }],
+        )
+    }
+
+    /// The index a deferred child row stores is the signal's place in the
+    /// frame's **declared** list, not its place among the signals this payload
+    /// happens to carry. Here the first declared signal is the one that does
+    /// not fit a one-byte payload, so an index counted while walking would
+    /// resolve every row to its neighbour.
+    #[test]
+    fn a_partial_payload_resolves_children_by_their_declared_index() {
+        let db = one_frame_db(&[("Late", 8, 8), ("Early", 0, 8)]);
+        let two_bytes = [0x2Au8, 0xB5];
+        assert_eq!(
+            db.decode(0, &two_bytes).len(),
+            2,
+            "both declared signals fit two bytes"
+        );
+        let one_byte = [0x2Au8];
+        assert_eq!(
+            db.decode(0, &one_byte),
+            vec![("Early".to_string(), "42 u  (2Ah)".to_string())],
+            "only the second declared signal is inside one byte"
+        );
+        let deferred: Vec<_> = db
+            .frame_values(0, &one_byte)
+            .filter_map(|(child_ix, raw, phys)| db.child_text(0, child_ix, raw, phys))
+            .collect();
+        assert_eq!(
+            deferred,
+            db.decode(0, &one_byte),
+            "the row's index lands on the same signal the eager decoder printed"
+        );
+    }
+
     /// The user's real network files. They are read at runtime (they may
     /// move around), and the tests skip with a message when absent.
     const POWERTRAIN_ARXML: &str = "assets/arxml/PowerTrain.arxml";
@@ -1939,7 +2145,11 @@ mod tests {
         assert!((car.factor - 0.5).abs() < 1e-9, "COMPU-METHOD factor parsed");
         // (2)+(3): a payload whose CarSpeed bits read 236 must decode to 118
         // at the frame's first PDU (base 7 subtracted).
-        let f13 = db.frames.iter().find(|f| f.name == "Frame_13_0_2").unwrap();
+        let f13 = db
+            .frames
+            .iter()
+            .position(|f| f.name == "Frame_13_0_2")
+            .expect("Frame_13_0_2");
         let cs = db
             .decode_signals(f13, &[0x00, 0xEC, 0x00, 0x00, 0x00, 0x00])
             .into_iter()
@@ -1949,17 +2159,18 @@ mod tests {
         assert_eq!(cs.phys, 118.0, "CarSpeed physical = raw * factor");
         // (2) EngineData sits at bit 71 of Frame_25_0_2; its signals must
         // decode rather than be skipped for "exceeding" the payload.
-        let frame = db
+        let f25 = db
             .frames
             .iter()
-            .find(|f| f.name == "Frame_25_0_2")
+            .position(|f| f.name == "Frame_25_0_2")
             .expect("Frame_25_0_2");
+        let frame = db.frame_index(f25).expect("Frame_25_0_2");
         assert!(
             frame.pdus.iter().any(|(n, b)| n == "EngineData" && *b == 71),
             "EngineData placed at bit 71: {:?}",
             frame.pdus
         );
-        let decoded = db.decode_signals(frame, &[0xFF; 26]);
+        let decoded = db.decode_signals(f25, &[0xFF; 26]);
         let names: Vec<String> = decoded.iter().map(|d| d.name.clone()).collect();
         assert!(
             decoded.iter().any(|d| d.name == "EngSpeed" && d.raw != 0),
@@ -1978,7 +2189,7 @@ mod tests {
         };
         let db = FrDb::parse(&text).expect("PowerTrain_v2.xml parses");
         assert_eq!(db.frames.len(), 6, "the demo schedules six static frames");
-        let absinfo = db.frames.iter().find(|f| f.name == "ABSInfo");
+        let absinfo = db.frames.iter().position(|f| f.name == "ABSInfo");
         assert!(absinfo.is_some(), "ABSInfo is among the frames");
         assert!(
             db.frames.iter().any(|f| f.triggering.slot_id == 13),
@@ -1986,9 +2197,9 @@ mod tests {
         );
         // Signal-directly-on-frame: the synthesized PDU carries the
         // frame's signals, so decode works without a PDU layer.
-        let frame = absinfo.expect("checked above");
+        let frame_ix = absinfo.expect("checked above");
         assert!(
-            db.decode(frame, &[0xFF; 16])
+            db.decode(frame_ix, &[0xFF; 16])
                 .iter()
                 .any(|(_, v)| !v.is_empty()),
             "frame signals decode"
@@ -2038,17 +2249,18 @@ mod tests {
             return;
         };
         let db = FrDb::parse(&text).unwrap();
-        let (frame, pdu_name, sig) = db
+        let (frame_ix, frame, pdu_name, sig) = db
             .frames
             .iter()
-            .find_map(|f| {
+            .enumerate()
+            .find_map(|(ix, f)| {
                 f.pdus.iter().find_map(|(pdu, pdu_start)| {
                     let pdu = db.pdus.iter().find(|p| p.name == *pdu)?;
                     let s = pdu.signals.first()?;
                     // The signal's extent must fit the frame the db
                     // declares, or decode() would (correctly) skip it.
                     let end = pdu_start * 8 + s.start_bit + s.length_bits;
-                    (end <= f.length * 8).then(|| (f, pdu.name.clone(), s))
+                    (end <= f.length * 8).then(|| (ix, f, pdu.name.clone(), s))
                 })
             })
             .expect("the cluster declares at least one signal");
@@ -2056,7 +2268,7 @@ mod tests {
 
         let raw_max = (1u64 << sig.length_bits.min(32)) - 1;
         let payload = vec![0xFFu8; frame.length.max(1) as usize];
-        let decoded = db.decode(frame, &payload);
+        let decoded = db.decode(frame_ix, &payload);
         let (_name, value) = &decoded[0];
         // decode() annotates every value with its raw hex.
         let expected = format!(

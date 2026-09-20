@@ -411,19 +411,22 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 }
                 can_ctx = None;
             }
-            TraceRow::FrSig {
-                signal, value, ..
-            } => {
+            TraceRow::FrSig { .. } => {
                 // A decoded signal child under its FR frame row. The name goes
                 // in the Name column, not the 68 px ID one: FlexRay signal
                 // names are as long as any message name ("Drive_Attitude_
                 // Alarm_Valid") and were cut to a fragment where a CAN row's
                 // message name has room. The └ stays in ID, under the slot
                 // address of the frame it belongs to.
+                //
+                // The text is produced right here, for the rows on screen: the
+                // cache holds a quarter of a million of them and formatting all
+                // was what a rebuild used to cost (see [`TraceRow::FrSig`]).
                 ui.table_next_row();
                 if !ui.table_next_column() {
                     continue;
                 }
+                let (signal, value) = app.fr_child_text(row).unwrap_or_default();
                 ui.text("-");
                 ui.table_next_column();
                 ui.text("-");
@@ -547,7 +550,7 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
     let addr = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.id,
         TraceRow::Fr(r) => r.slot as u32,
-        TraceRow::FrSig { slot, .. } => *slot as u32,
+        TraceRow::FrSig { slot, .. } => u32::from(*slot),
     };
     let name = |r: &TraceRow| match r {
         TraceRow::Can(f) => app
@@ -555,7 +558,7 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
             .unwrap_or_default()
             .to_string(),
         TraceRow::Fr(_) => String::new(),
-        TraceRow::FrSig { signal, .. } => signal.clone(),
+        TraceRow::FrSig { .. } => app.fr_child_name(r).unwrap_or_default().to_string(),
     };
     let len = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.len as usize,
