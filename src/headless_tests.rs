@@ -900,6 +900,119 @@ fn perf_snapshot_publish_under_load() {
     );
 }
 
+/// The same kind of probe on the FlexRay side: what one refresh of the Trace /
+/// Messages / Statistics readouts costs with a full FlexRay ring behind it.
+/// Not a pass/fail test -- run it and read the numbers:
+///
+/// `cargo test --release perf_flexray_readouts_under_load -- --ignored --nocapture`
+///
+/// The load is the real two-cluster recording `assets/fibex/Logging.blf`
+/// replayed the way the screen replays it (60 072 frames over 50.6 s, both
+/// cluster descriptions loaded), so the ring sits at its cap like a long run
+/// would. Each Trace shape is timed twice: the refresh that rebuilds the row
+/// cache from scratch, and the ones after it -- which is what a running replay
+/// pays per gate tick. Measured here (`--release`, 10 Hz text gate):
+///
+/// ```text
+///                    rebuild   steady
+/// frames only         5.2 ms    0.7 us
+/// FR signals expanded 51 ms     0.8 us
+/// filter just edited  12 ms     1.2 us
+/// ```
+///
+/// Before the cache could extend itself every column was the rebuild figure:
+/// 7 ms and 70 ms per refresh, i.e. a FlexRay replay with the signal expansion
+/// open spent most of every 100 ms gate re-decoding 50 000 frames.
+#[test]
+#[ignore = "measurement probe"]
+fn perf_flexray_readouts_under_load() {
+    use std::time::Instant;
+    let blf = std::path::Path::new("assets/fibex/Logging.blf");
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let fibex = "assets/fibex/PowerTrain_v2.xml";
+    if !blf.exists() || !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists()
+    {
+        eprintln!("assets absent -- skipped");
+        return;
+    }
+    let mut app = App::headless();
+    assert_eq!(app.load_cluster_description(arxml, Some(0)), Some(0));
+    assert_eq!(app.load_cluster_description(fibex, Some(1)), Some(1));
+    // Drive it the way the screen does: a replay of the real two-cluster
+    // recording, one millisecond per core lap. Feeding `ingest_fr_row` by hand
+    // would leave the published ring view behind, and the readouts read that
+    // view.
+    app.log_path = blf.to_string_lossy().to_string();
+    app.replay();
+    let t0 = Instant::now();
+    let mut now = 0u64;
+    for _ in 0..52_000 {
+        now += 1_000;
+        step(&mut app, now);
+    }
+    let replay_ms = t0.elapsed().as_millis() as f64;
+    let (fed, ring, aggs) = (
+        app.snap.frame_counter as usize,
+        app.snap.fr_trace.len(),
+        app.snap.fr_aggs.len(),
+    );
+    const ROUNDS: f64 = 40.0;
+
+    // The first refresh after the ring stopped growing walks everything; the
+    // ones behind it are the steady state a running replay actually lives in,
+    // so they are timed apart -- their difference is what the incremental
+    // cache buys.
+    let timed = |app: &mut App, f: fn(&mut App)| -> (f64, f64) {
+        app.text_fresh = true;
+        let t0 = Instant::now();
+        f(app);
+        let first = t0.elapsed().as_micros() as f64;
+        let t1 = Instant::now();
+        for _ in 1..ROUNDS as u32 {
+            app.text_fresh = true;
+            f(app);
+        }
+        (first, t1.elapsed().as_micros() as f64 / (ROUNDS - 1.0))
+    };
+    let (trace_first, trace_plain) = timed(&mut app, |a| a.sync_trace_rows(0));
+    let n_plain = app.trace_windows[0].rows.len();
+    app.trace_windows[0].fr_expand = true;
+    let (expand_first, trace_expand) = timed(&mut app, |a| a.sync_trace_rows(0));
+    let n_expand = app.trace_windows[0].rows.len();
+    app.trace_windows[0].fr_expand = false;
+    app.trace_windows[0].filter = "zz-nothing-matches".to_string();
+    // A filter edit is a rebuild by design: the first number is that walk over
+    // the whole ring, the second the steady state behind it.
+    let (trace_filter_first, trace_none) = timed(&mut app, |a| a.sync_trace_rows(0));
+    app.trace_windows[0].filter = String::new();
+
+    let (_, msgs) = timed(&mut app, |a| a.sync_msg_text(0));
+    let n_msgs = app.msg_windows[0].text_rows.len();
+    let (_, stats) = timed(&mut app, |a| a.sync_stats_text(0));
+    let n_stats = app.stats_windows[0].text_rows.len();
+
+    eprintln!();
+    eprintln!(
+        "=== FlexRay readouts under load ({fed} frames replayed in {replay_ms:.0} ms of wall clock, ring {ring} rows, {aggs} slot tallies) ==="
+    );
+    eprintln!(
+        "first refresh rebuilds the cache; the rest is what a running replay pays per gate tick ({} Hz):",
+        app.text_rate_hz
+    );
+    eprintln!(
+        "Trace, frames only   : {trace_first:9.1} us first | {trace_plain:8.1} us  ({} rows cached)",
+        n_plain
+    );
+    eprintln!(
+        "Trace, FR signals on : {expand_first:9.1} us first | {trace_expand:8.1} us  ({n_expand} rows cached)"
+    );
+    eprintln!(
+        "Trace, filter edited : {trace_filter_first:9.1} us first | {trace_none:8.1} us  (nothing matched)"
+    );
+    eprintln!("Messages             :   (rebuild n/a)  | {msgs:8.1} us  ({n_msgs} rows)");
+    eprintln!("Statistics           :   (rebuild n/a)  | {stats:8.1} us  ({n_stats} rows)");
+}
+
 /// The Bus Statistics window reads its rollups from the snapshot like every
 /// other window: traffic on a bus must show up as per-class totals and a
 /// nonzero load figure without touching live bus state.

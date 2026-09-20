@@ -157,6 +157,11 @@ impl FrTraceView {
         self.tail.get(off)
     }
 
+    /// The newest row, the way [`TraceView::last`] gives the newest frame.
+    pub fn last(&self) -> Option<&FrRow> {
+        self.get(self.total.saturating_sub(1))
+    }
+
     pub fn iter(&self) -> FrTraceIter<'_> {
         let mut front_segs: Vec<&[FrRow]> = Vec::with_capacity(self.chunks.len() + 1);
         let mut back_segs: Vec<&[FrRow]> = Vec::with_capacity(self.chunks.len() + 1);

@@ -6719,6 +6719,182 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     app.stop();
 }
 
+/// The shape of a Trace window's row cache, as far as a test is concerned: the
+/// order, which ring each row came from, its address, and for a decoded
+/// FlexRay child the signal it holds. Two caches with the same shape drew the
+/// same table.
+fn cache_shape(app: &App) -> Vec<(u64, u8, u32, String)> {
+    app.trace_windows[0]
+        .rows
+        .iter()
+        .map(|r| match r {
+            TraceRow::Can(f) => (f.t_us, 0, f.id, String::new()),
+            TraceRow::Fr(f) => (f.t_us, 1, f.slot as u32, String::new()),
+            TraceRow::FrSig {
+                t_us,
+                slot,
+                signal,
+                ..
+            } => (*t_us, 2, *slot as u32, signal.clone()),
+        })
+        .collect()
+}
+
+/// A steady run only prepends to the Trace row cache. Getting that wrong shows
+/// up as duplicated or missing rows, so the check is against the thing it
+/// replaces: extending the cache batch after batch has to end with exactly the
+/// list one walk of the whole ring gives -- here with FlexRay frames expanded
+/// into their decoded signal children, the shape where a stale row is easiest
+/// to lose.
+#[test]
+fn the_trace_row_cache_extends_in_place_without_losing_rows() {
+    use std::sync::Arc;
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let Ok(bytes) = std::fs::read(arxml) else {
+        println!("{arxml} not present -- skipped");
+        return;
+    };
+    let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
+    // Slots whose frame actually declares signals, with the cycle that frame is
+    // scheduled in: those rows are the ones that grow children under.
+    let drive: Vec<(u16, u8)> = db
+        .frames
+        .iter()
+        .filter(|f| !db.decode(f, &[0u8; 48]).is_empty())
+        .map(|f| (f.triggering.slot_id as u16, f.triggering.base_cycle as u8))
+        .take(3)
+        .collect();
+    assert!(
+        !drive.is_empty(),
+        "the asset has no static frame with signals to expand"
+    );
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: Arc::new(db),
+        },
+    );
+    app.push_fr_db_to_core();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    app.trace_windows[0].fr_expand = true;
+    for (round, (slot, cycle)) in drive.iter().enumerate() {
+        use crate::hw::vector::flexray::FrFrame;
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot: *slot,
+            cycle: *cycle,
+            // Long enough for the signals the selection above counted: a
+            // payload that does not reach a signal decodes to nothing.
+            payload: vec![0; 48],
+            header_crc: 0,
+            flags: 0,
+        });
+        let t = (round as u64 + 1) * 20_000;
+        app.advance_clock(t);
+        app.tick(t);
+        app.refresh_snapshot();
+        app.text_fresh = true;
+        app.sync_trace_rows(0);
+    }
+    let extended = cache_shape(&app);
+    assert_eq!(
+        extended.len(),
+        app.trace_windows[0].rows.len(),
+        "the cache is not empty, or this proves nothing"
+    );
+    assert!(
+        extended.iter().any(|(_, kind, ..)| *kind == 2),
+        "FlexRay children are in the cache: {extended:?}"
+    );
+    assert!(
+        extended.windows(2).all(|w| w[0].0 >= w[1].0),
+        "newest first: {extended:?}"
+    );
+    // The same traffic, walked once from scratch.
+    app.trace_windows[0].rows_build = None;
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert_eq!(
+        cache_shape(&app),
+        extended,
+        "batch by batch and all at once have to agree"
+    );
+    app.stop();
+}
+
+/// What must throw the incremental cache away: an edited filter (rows that no
+/// longer match have to leave), a column sort (a sorted cache is no longer
+/// time-ordered, so there is nothing to prepend to), and a cleared trace (the
+/// rows under the build point are gone from the ring). Each case ends with the
+/// cache describing the ring as it is now.
+#[test]
+fn an_edited_filter_or_a_cleared_trace_rebuilds_the_row_cache() {
+    let mut app = quiet_app();
+    for round in 0..3u64 {
+        feed_rpm(&mut app, &[(round * 30_000 + 10_000, 100.0)]);
+    }
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 3);
+
+    // The filter text narrows, so every row is tested again: the cache shrinks
+    // to what matches instead of keeping the old rows plus the new ones.
+    app.trace_windows[0].filter = "no-such-frame-name".to_string();
+    feed_rpm(&mut app, &[(120_000, 110.0)]);
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert!(
+        app.trace_windows[0].rows.is_empty(),
+        "a filter edit rebuilds: {:?}",
+        cache_shape(&app)
+    );
+    // Back to no filter: the whole ring is in again, in one refresh.
+    app.trace_windows[0].filter.clear();
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert_eq!(
+        app.trace_windows[0].rows.len(),
+        4,
+        "and the rebuild finds the whole ring"
+    );
+
+    // A sorted cache is no longer time-ordered, so a refresh has to rebuild it
+    // rather than prepend: turned oldest-first here, where prepending the new
+    // row would leave a list that runs backwards right after the newest row.
+    app.trace_windows[0]
+        .rows
+        .make_contiguous()
+        .reverse();
+    app.trace_windows[0].rows_sorted = true;
+    feed_rpm(&mut app, &[(150_000, 120.0)]);
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    let shape = cache_shape(&app);
+    assert_eq!(shape.len(), 5);
+    assert!(
+        shape.windows(2).all(|w| w[0].0 >= w[1].0),
+        "back in time order: {shape:?}"
+    );
+    assert!(
+        !app.trace_windows[0].rows_sorted,
+        "the flag is consumed by the rebuild"
+    );
+
+    // A cleared trace: the ring is empty, so the cache has to be too.
+    app.send(crate::bus::BusCommand::ClearTrace);
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    assert!(
+        app.trace_windows[0].rows.is_empty(),
+        "clearing the trace empties the cache: {:?}",
+        cache_shape(&app)
+    );
+    app.stop();
+}
+
 /// The trace text filter matches FlexRay frame names from the watch's
 /// description database (and slot numbers), instead of hiding FR rows
 /// wholesale. Value conditions still exclude them.
@@ -7263,6 +7439,19 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     assert_eq!(sig(&app, 1), on_first, "the live 路 kept its file");
     // The 路 the picker offers: both configured ones plus the next free index.
     assert_eq!(app.fr_description_targets(), [0, 1, 2]);
+    // A 路 that exists only as replayed rows is a target too -- it still needs
+    // a description, and that is the case the picker exists for. The fresh
+    // index is the first *gap*, so it is listed in bus order, not appended.
+    app.fr_aggs.insert(
+        (4, 13),
+        crate::aggregate::FrSlotAgg {
+            bus: 4,
+            slot: 13,
+            ..Default::default()
+        },
+    );
+    app.refresh_snapshot();
+    assert_eq!(app.fr_description_targets(), [0, 1, 2, 4]);
     app.stop();
 }
 

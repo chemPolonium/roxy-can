@@ -465,7 +465,8 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             signal: "WheelSpeedFL".to_string(),
             value: "3.5 km/h  (7h)".to_string(),
         },
-    ];
+    ]
+    .into();
     frames(&mut app, &mut ctx, 5);
 }
 

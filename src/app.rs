@@ -83,7 +83,8 @@ pub use crate::observe::{
 };
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
-    Desktop, MsgWin, PopupTarget, SigScope, StatsWin, TraceRow, TraceWin, WindowKind,
+    Desktop, MsgWin, PopupTarget, RowsBuild, SigScope, StatsWin, TraceFilter, TraceRow, TraceWin,
+    WindowKind,
 };
 
 /// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot
@@ -1300,82 +1301,162 @@ impl App {
         win.text_header = format!("{} messages", win.text_rows.len());
     }
 
-    /// Advances Trace window `i`'s reveal watermark on text frames: the rows
-    /// already on screen never change, so the throttle decides how quickly
-    /// *new* rows may appear. A run restart re-stamps frames below the
-    /// watermark, and [`App::trace_revealed`] shows those immediately -- only
-    /// the fresh tail is batched.
-    /// Rebuilds Trace window `i`'s filtered row cache on the text gate:
-    /// the whole revealed ring is walked once against the window's filter
-    /// and the matches become the row cache the clipper draws from. The
-    /// newest tail stays hidden until the gate fires, like every readout.
+    /// Refreshes Trace window `i`'s filtered row cache on the text gate.
+    ///
+    /// A steady run only *prepends*: when the lens, the expansion setting and
+    /// both rings are unchanged since the last build and no column sort has
+    /// reordered the cache, the walk covers just the rows that arrived after
+    /// the build point. Walking the whole ring every gate tick cost 7 ms on a
+    /// 50 000-row FlexRay replay and 70 ms with the FR signal expansion on
+    /// (measured, `--release`, see [`crate::headless_tests::perf_flexray_readouts_under_load`])
+    /// against a 10 Hz text gate -- most of it spent re-decoding frames nobody
+    /// had asked about again.
+    ///
+    /// Anything else -- an edited filter, a sorted column, a cleared or
+    /// restarted run -- drops the cache and walks the whole revealed ring once,
+    /// exactly as before.
     pub(crate) fn sync_trace_rows(&mut self, i: usize) {
         if !self.text_fresh {
             return;
         }
         let newest = self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX);
+        let (can_len, fr_len) = (self.snap.trace.len(), self.snap.fr_trace.len());
+        // The point a new walk starts above: the newest row of either ring at
+        // the last build. A CAN-empty run never advances `newest`, which is why
+        // the FlexRay ring counts here too.
+        let top = self
+            .snap
+            .trace
+            .last()
+            .map(|f| f.t_us)
+            .unwrap_or(0)
+            .max(self.snap.fr_trace.last().map(|r| r.t_us).unwrap_or(0));
         self.trace_windows[i].shown_t_us = newest;
-        self.trace_windows[i].shown_count = self.snap.trace.len();
+        self.trace_windows[i].shown_count = can_len;
         let flt = self.trace_windows[i].filter_lens();
         let fr_expand = self.trace_windows[i].fr_expand;
-        // CAN and FlexRay rows interleave in one table, CANoe's Trace
-        // shape: walk both newest-first lists taking whichever frame is
-        // the more recent, so the merge is linear in the kept rows.
+        let since = match (&self.trace_windows[i].rows_build, self.trace_windows[i].rows_sorted) {
+            (Some(b), false) if b.extends_to(&flt, fr_expand, can_len, fr_len, top) => {
+                Some(b.through())
+            }
+            _ => None,
+        };
+        let mut rows = std::mem::take(&mut self.trace_windows[i].rows);
+        if since.is_none() {
+            // Keep the allocation; only the contents are stale.
+            rows.clear();
+        }
+        self.walk_rows(i, &flt, fr_expand, since, &mut rows);
+        let w = &mut self.trace_windows[i];
+        w.rows_build = Some(RowsBuild::new(&flt, fr_expand, top, can_len, fr_len));
+        // The walk produced this list; the cache is it, in the same order.
+        w.rows_sorted = false;
+        w.shown_count = rows.len();
+        w.rows = rows;
+    }
+
+    /// Merges the two rings into the window's row list, newest first, CANoe's
+    /// Trace shape: walk both newest-first lists taking whichever frame is the
+    /// more recent, so the merge is linear in the kept rows. `since` bounds the
+    /// walk to rows strictly newer than that timestamp (see
+    /// [`App::sync_trace_rows`]); the result is prepended to `rows` in that
+    /// case, and becomes the whole list otherwise.
+    fn walk_rows(
+        &self,
+        i: usize,
+        flt: &TraceFilter,
+        fr_expand: bool,
+        since: Option<u64>,
+        rows: &mut std::collections::VecDeque<TraceRow>,
+    ) {
+        // Both lists newest first, cut at the window's reveal watermark and at
+        // `since`, so an extending walk looks at the rows that arrived since
+        // the last build and nothing else. `since` is that build's newest
+        // timestamp; a full walk has no lower bound.
+        let above = |t_us: u64| match since {
+            Some(t) => t_us > t,
+            None => true,
+        };
         let can: Vec<_> = self
             .trace_revealed(&self.trace_windows[i])
-            .filter(|f| self.trace_match_lens(&flt, f))
+            .take_while(|f| above(f.t_us))
+            .filter(|f| self.trace_match_lens(flt, f))
             .collect();
         let fr: Vec<_> = self
             .snap
             .fr_trace
             .iter()
             .rev()
-            .filter(|r| self.trace_fr_match(&flt, r))
+            .take_while(|r| above(r.t_us))
+            .filter(|r| self.trace_fr_match(flt, r))
             .collect();
-        let mut rows: Vec<TraceRow> = Vec::with_capacity(1_024);
+        let mut merged: Vec<TraceRow> = Vec::with_capacity(1_024);
         let (mut ci, mut fi) = (0usize, 0usize);
-        while rows.len() < MAX_CACHED_ROWS {
+        while merged.len() < MAX_CACHED_ROWS {
             match (can.get(ci), fr.get(fi)) {
                 (None, None) => break,
                 (Some(_), None) => {
-                    rows.push(TraceRow::Can(*can[ci]));
+                    merged.push(TraceRow::Can(*can[ci]));
                     ci += 1;
                 }
                 (None, Some(_)) => {
-                    rows.push(TraceRow::Fr((*fr[fi]).clone()));
+                    merged.push(TraceRow::Fr((*fr[fi]).clone()));
                     fi += 1;
                 }
                 (Some(c), Some(r)) => {
                     if c.t_us >= r.t_us {
-                        rows.push(TraceRow::Can(**c));
+                        merged.push(TraceRow::Can(**c));
                         ci += 1;
                     } else {
-                        rows.push(TraceRow::Fr((*r).clone()));
+                        merged.push(TraceRow::Fr((*r).clone()));
                         fi += 1;
                     }
                 }
             }
-            // A FlexRay frame row expands into its decoded signal child
-            // rows, the CANoe trace shape, when the window asks and that
-            // bus's description database is loaded.
-            if fr_expand
-                && let Some(TraceRow::Fr(row)) = rows.last().cloned()
-                && let Some(db) = self.fr_db(row.bus)
-                && let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab)
-            {
-                for (name, value) in db.decode(frame, &row.payload) {
-                    rows.push(TraceRow::FrSig {
-                        t_us: row.t_us,
-                        slot: row.slot,
-                        signal: name,
-                        value,
-                    });
-                }
+            // A FlexRay frame row expands into its decoded signal child rows,
+            // the CANoe trace shape, when the window asks and that bus's
+            // description database is loaded.
+            if fr_expand {
+                let kids = match merged.last() {
+                    Some(TraceRow::Fr(row)) => self.fr_child_rows(row),
+                    _ => Vec::new(),
+                };
+                merged.extend(kids);
             }
         }
-        let w = &mut self.trace_windows[i];
-        w.shown_count = rows.len();
-        w.rows = rows;
+        if since.is_some() {
+            // Newest first on both sides: prepend the fresh batch by walking it
+            // back to front, so the older cached rows stay where they are.
+            for r in merged.into_iter().rev() {
+                rows.push_front(r);
+            }
+            if rows.len() > MAX_CACHED_ROWS {
+                rows.truncate(MAX_CACHED_ROWS);
+            }
+        } else {
+            rows.extend(merged);
+        }
+    }
+
+    /// The decoded signal child rows for one FlexRay frame row: empty when the
+    /// bus has no description or its schedule has no frame in this slot at this
+    /// cycle.
+    fn fr_child_rows(&self, row: &crate::trace::FrRow) -> Vec<TraceRow> {
+        let Some(db) = self.fr_db(row.bus) else {
+            return Vec::new();
+        };
+        let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab) else {
+            return Vec::new();
+        };
+        db.decode(frame, &row.payload)
+            .into_iter()
+            .map(|(signal, value)| TraceRow::FrSig {
+                t_us: row.t_us,
+                slot: row.slot,
+                signal,
+                value,
+            })
+            .collect()
     }
 
     /// Trace window `w`'s revealed frames, newest first: the whole buffer

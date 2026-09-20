@@ -375,6 +375,10 @@ impl App {
         if let Some(fresh) = (0..=u8::MAX).find(|b| !buses.contains(b)) {
             buses.push(fresh);
         }
+        // Sorted again: the fresh index is the first *gap*, which sits below a
+        // cluster that only exists as replayed rows (bus 4 of a log with
+        // nothing configured on 2 or 3), and an unsorted combo reads as a bug.
+        buses.sort_unstable();
         buses
     }
 

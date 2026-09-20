@@ -292,14 +292,17 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
 
     // Newest first (the default order); sorted when a column header is
     // clicked, back to default on the third click (tri-state). The row
-    // cache is the app's; a sort re-orders it in place.
+    // cache is the app's; a sort re-orders it in place -- and a sorted cache
+    // is no longer time-ordered, which is what the next refresh's incremental
+    // walk depends on, so it says so and rebuilds instead.
     if let Some(mut specs) = ui.table_get_sort_specs()
         && let Some(s) = specs.iter().next()
     {
         let col = s.column_index.get();
         let asc = s.sort_direction == SortDirection::Ascending;
-        rows.sort_by(|a, b| sort_frame(app, col, a, b, asc));
+        rows.make_contiguous().sort_by(|a, b| sort_frame(app, col, a, b, asc));
         specs.clear_dirty(ui);
+        app.trace_windows[i].rows_sorted = true;
     }
 
     // Virtual scrolling: the clipper submits only the visible slice of

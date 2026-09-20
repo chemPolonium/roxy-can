@@ -1220,7 +1220,9 @@ impl Config {
                     time_to: String::new(),
                     filters_open: false,
                     fr_expand: false,
-                    rows: Vec::new(),
+                    rows: std::collections::VecDeque::new(),
+                    rows_build: None,
+                    rows_sorted: false,
                     shown_t_us: u64::MAX,
                     shown_count: 0,
                 })
