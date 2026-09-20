@@ -973,11 +973,13 @@ impl App {
             return;
         }
         // FlexRay slots share the table, so they count in its denominator too.
-        // A CAN-scoped window (one channel, a hand-picked id list) stays
-        // CAN-only: a slot number is not a CAN id and a FlexRay cluster is not
-        // a CAN channel. A cluster scope does the mirror image -- that cluster
-        // alone -- and the percentage is then that cluster's own traffic.
-        let fr_aggs: Vec<&crate::aggregate::FrSlotAgg> = self
+        // One row per frame the run carried: a slot scheduled by cycle
+        // repetition belongs to several frames, and their traffic, names and
+        // periods are separate things. A CAN-scoped window (one channel, a
+        // hand-picked id list) stays CAN-only -- a slot number is not a CAN id
+        // and a FlexRay cluster is not a CAN channel -- while a cluster scope
+        // shows that cluster's frames and the percentage is its own traffic.
+        let fr_aggs: Vec<&crate::aggregate::FrFrameAgg> = self
             .snap
             .fr_aggs
             .iter()
@@ -1032,7 +1034,7 @@ impl App {
             });
         }
         for agg in fr_aggs {
-            let name = self.fr_frame_name(agg);
+            let name = Self::fr_frame_name(agg);
             rows.push(StatsRowText {
                 label: if name.is_empty() {
                     format!("slot {}", agg.slot)
@@ -1071,20 +1073,13 @@ impl App {
         );
     }
 
-    /// The name a FlexRay slot's last frame goes by, in a table or an export:
-    /// the loaded cluster description of its own bus wins (that is the
-    /// cluster's own definition), then the name the log carried, then nothing.
-    /// `frame_at` resolves a slot that several frames share by the cycle the
-    /// frame arrived in.
-    pub(crate) fn fr_frame_name<'a>(
-        &'a self,
-        agg: &'a crate::aggregate::FrSlotAgg,
-    ) -> &'a str {
-        self.fr_db(agg.bus)
-            .and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab))
-            .map(|f| f.name.as_str())
-            .or(agg.name.as_deref())
-            .unwrap_or("")
+    /// The frame an FlexRay aggregate row counts, in a table or an export. The
+    /// row was keyed by that frame when the first arrival resolved it -- either
+    /// through this bus's cluster description, or through the name the log
+    /// carried -- so the name is stored, not re-resolved: re-resolving is what
+    /// used to let a slot's row change frames as the cycles ran by.
+    pub(crate) fn fr_frame_name(agg: &crate::aggregate::FrFrameAgg) -> &str {
+        agg.name.as_deref().unwrap_or("")
     }
 
     /// The same precedence for a Trace row, which carries its own name column.
@@ -1212,8 +1207,8 @@ impl App {
                 empty_note,
             });
         }
-        // FlexRay rows ride the same table, after the CAN rows: one row
-        // per slot the watch has seen. The same scope/DBC/text rules
+        // FlexRay rows ride the same table, after the CAN rows: one row per
+        // frame the run carried, not per slot. The same scope/DBC/text rules
         // apply as in the Trace window -- a CAN channel or Manual id scope
         // and DBC-only keep the table on CAN, a cluster scope keeps just that
         // cluster, and the decimal filter text also matches a slot number.
@@ -1222,13 +1217,15 @@ impl App {
                 if !App::scope_match_fr(scope, agg.bus) {
                     continue;
                 }
-                // The description of the bus this slot arrived on, when the
-                // watch came with one, names its frame and decodes the
-                // signals. The cycle the last frame arrived in picks the right
-                // frame when several share a slot across repetitions.
+                // The description of the bus this frame arrived on decodes its
+                // signals -- through the very index this row was keyed by, so
+                // the name shown and the layout decoded are the same frame's.
                 let db = self.fr_db(agg.bus);
-                let frame = db.and_then(|db| db.frame_at(agg.slot, agg.last_cycle, agg.ab));
-                let name = self.fr_frame_name(agg);
+                let frame = agg
+                    .occupant
+                    .frame_ix()
+                    .and_then(|i| db.and_then(|db| db.frame_index(i)));
+                let name = Self::fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)
                     && !agg.slot.to_string().contains(&filter)
@@ -1258,16 +1255,16 @@ impl App {
                     _ => Vec::new(),
                 };
                 // Which of the three reasons it is: no description for this
-                // cluster, a description that has no frame for this slot and
-                // cycle, or a frame that declares no signals.
+                // cluster, a description that does not schedule this slot's
+                // frame, or a frame that declares no signals.
                 let empty_note = if !signals.is_empty() {
                     None
                 } else if db.is_none() {
                     Some(format!("（FR{} 未加载集群描述）", agg.bus))
                 } else if frame.is_none() {
                     Some(format!(
-                        "（FR{} 的描述里 slot {} 在周期 {} 没有帧）",
-                        agg.bus, agg.slot, agg.last_cycle
+                        "（FR{} 的描述里 slot {} 不排这一帧）",
+                        agg.bus, agg.slot
                     ))
                 } else {
                     Some("（该帧不声明信号）".to_string())

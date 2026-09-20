@@ -624,7 +624,7 @@ pub struct Snapshot {
     pub aggs: Vec<MessageAgg>,
     /// One record per FlexRay slot seen this run, slot-sorted -- the
     /// Messages window's FR rows.
-    pub fr_aggs: Vec<crate::aggregate::FrSlotAgg>,
+    pub fr_aggs: Vec<crate::aggregate::FrFrameAgg>,
     /// One entry per live subscription: the scalar stats the Data window
     /// draws and the sampled history the curves read.
     pub subs: Vec<SubView>,
@@ -842,7 +842,10 @@ pub struct BusCore {
     /// The FR ring as of the last publish, shared with snapshots.
     pub(crate) published_fr: Arc<crate::trace::FrTraceView>,
     /// Per-(bus, slot) FlexRay tallies behind the Messages window's FR rows.
-    pub(crate) fr_aggs: HashMap<(u8, u16), crate::aggregate::FrSlotAgg>,
+    /// Per FlexRay **frame**, not per slot -- see
+    /// [`crate::aggregate::FrFrameAgg`] for why a slot is not the unit.
+    pub(crate) fr_aggs:
+        HashMap<(u8, u16, crate::aggregate::FrOccupant), crate::aggregate::FrFrameAgg>,
     /// The parsed FlexRay descriptions, one per bus, when the project has
     /// loaded them. Held here (not only in the frontend) so an arriving
     /// FlexRay frame can be decoded against *its own cluster's* description and
@@ -1278,7 +1281,13 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
-            BusCommand::SetFrDbs(dbs) => self.fr_dbs = dbs,
+            BusCommand::SetFrDbs(dbs) => {
+                self.fr_dbs = dbs;
+                // Which frame an arrival was cannot be worked out later from
+                // the slot alone, so a description that appears or disappears
+                // mid-run re-tallies the rows that are on screen.
+                self.rebuild_fr_aggs();
+            }
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
                 // `next_t_us` still sits at the last slot before the entry
@@ -1565,7 +1574,7 @@ impl BusCore {
 
     /// One FlexRay frame lands: stamped against the sim clock when the
     /// source had no time of its own, then into the FR ring and the
-    /// per-slot aggregates. Kept apart from [`BusCore::ingest`] -- FR
+    /// per-frame aggregates. Kept apart from [`BusCore::ingest`] -- FR
     /// rows skip the CAN aggregates and load rollups, but when a FlexRay
     /// description database is loaded their decoded signals fold into
     /// subscriptions so the observers can plot them.
@@ -1580,8 +1589,62 @@ impl BusCore {
         if self.recorder.recording {
             self.recorder.write_fr(&row);
         }
-        let agg = self.fr_aggs.entry((row.bus, row.slot)).or_default();
+        let ix = self.tally_fr_row(&row);
+        // Fold the frame's FlexRay signals into their subscriptions so the
+        // Graphics / Data / State / Monitor observers can plot live values,
+        // mirroring [`BusCore::ingest`]'s CAN fold. The row's own cluster
+        // supplies the description, because a slot number means nothing on
+        // another one; rows for a slot its database has no frame for decode to
+        // nothing, which is the same "watch-only" outcome as before.
+        if !self.subs.is_empty() {
+            let db = self.fr_dbs.get(&row.bus);
+            let frame = ix.and_then(|i| db?.frame_index(i));
+            if let (Some(db), Some(frame)) = (db, frame) {
+                let stride = self.applied_stride_us;
+                let slot = frame.triggering.slot_id as u16;
+                let t_us = row.t_us;
+                for d in db.decode_signals(frame, &row.payload) {
+                    let key = crate::app::fr_signal_key(row.bus, slot, &d.name);
+                    let Some(entry) = self.subs.get_mut(&key) else {
+                        continue;
+                    };
+                    entry.latest = d.phys;
+                    entry.last_raw = d.raw;
+                    entry.unit = d.unit;
+                    entry.type_tag = d.type_tag;
+                    entry.label = d.label;
+                    entry.last_update_us = t_us;
+                    if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
+                        entry.push_sample(t_us, d.phys, stride);
+                    }
+                }
+            }
+        }
+        self.fr_trace.push(row, self.trace_limit);
+    }
+
+    /// Folds one arrival into the tally of the **frame** it carried, and
+    /// returns the description index that resolved it. A static slot is
+    /// scheduled per cycle phase and can belong to several frames in turn, so
+    /// `(bus, slot)` alone would mix them into a row whose name changes with
+    /// the last arrival and whose period belongs to no frame at all.
+    fn tally_fr_row(&mut self, row: &crate::trace::FrRow) -> Option<usize> {
+        let db = self.fr_dbs.get(&row.bus);
+        let ix = db.and_then(|db| db.frame_ix_at(row.slot, row.cycle, row.ab));
+        let occupant = match (ix, row.name.as_deref()) {
+            (Some(i), _) => crate::aggregate::FrOccupant::Frame(i),
+            (None, Some(logical)) => {
+                crate::aggregate::FrOccupant::Logged(logical.to_owned().into_boxed_str())
+            }
+            (None, None) => crate::aggregate::FrOccupant::Unknown,
+        };
+        let agg = self
+            .fr_aggs
+            .entry((row.bus, row.slot, occupant.clone()))
+            .or_default();
         agg.bus = row.bus;
+        agg.slot = row.slot;
+        agg.occupant = occupant;
         // Only a strictly later timestamp marks a real cycle (seek /
         // out-of-order rows), and the smoothing mirrors the CAN path.
         if agg.count > 0 && row.t_us > agg.last_t_us {
@@ -1607,45 +1670,36 @@ impl BusCore {
                 agg.max_us = dt;
             }
         }
-        agg.slot = row.slot;
         agg.count += 1;
         agg.last_t_us = row.t_us;
         agg.ab = row.ab;
-        agg.last_cycle = row.cycle;
-        if row.name.is_some() {
-            agg.name = row.name.clone();
+        // The name follows from the occupant, so the first arrival of this row
+        // fixes it for good -- nothing about later frames can make it flip.
+        if agg.name.is_none() {
+            agg.name = db
+                .zip(ix)
+                .and_then(|(db, i)| db.frame_index(i))
+                .map(|f| f.name.clone())
+                .or_else(|| row.name.clone());
         }
         agg.payload = row.payload.clone();
-        // Fold the frame's FlexRay signals into their subscriptions so the
-        // Graphics / Data / State / Monitor observers can plot live values,
-        // mirroring [`BusCore::ingest`]'s CAN fold. The row's own cluster
-        // supplies the description, because a slot number means nothing on
-        // another one; rows for a slot its database has no frame for decode to
-        // nothing, which is the same "watch-only" outcome as before.
-        if !self.subs.is_empty()
-            && let Some(db) = self.fr_dbs.get(&row.bus)
-            && let Some(frame) = db.frame_at(row.slot, row.cycle, row.ab)
-        {
-            let stride = self.applied_stride_us;
-            let slot = frame.triggering.slot_id as u16;
-            let t_us = row.t_us;
-            for d in db.decode_signals(frame, &row.payload) {
-                let key = crate::app::fr_signal_key(row.bus, slot, &d.name);
-                let Some(entry) = self.subs.get_mut(&key) else {
-                    continue;
-                };
-                entry.latest = d.phys;
-                entry.last_raw = d.raw;
-                entry.unit = d.unit;
-                entry.type_tag = d.type_tag;
-                entry.label = d.label;
-                entry.last_update_us = t_us;
-                if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
-                    entry.push_sample(t_us, d.phys, stride);
-                }
-            }
+        ix
+    }
+
+    /// Re-runs the FlexRay tally over the rows still in the ring. Which frame
+    /// an arrival carried is decided by the description of its own cluster at
+    /// the moment it is counted, so a description loaded or dropped mid-run has
+    /// to redo the tallies it did not see -- otherwise the traffic from before
+    /// the file stayed in one unnamed row while the same frame started a second
+    /// one below it.
+    fn rebuild_fr_aggs(&mut self) {
+        // The published view is the ring without the tail copy a re-collect
+        // would need; holding it keeps the tally loop from borrowing `self`.
+        let rows = self.fr_trace.publish();
+        self.fr_aggs.clear();
+        for row in rows.iter() {
+            self.tally_fr_row(row);
         }
-        self.fr_trace.push(row, self.trace_limit);
     }
 
     /// Republishes the load rollups after a step (or a channel add/remove)
@@ -2125,9 +2179,18 @@ impl BusCore {
             status: None,
             aggs: self.aggs.values().copied().collect(),
             fr_aggs: {
-                let mut rows: Vec<crate::aggregate::FrSlotAgg> =
+                let mut rows: Vec<crate::aggregate::FrFrameAgg> =
                     self.fr_aggs.values().cloned().collect();
-                rows.sort_by_key(|a| (a.bus, a.slot));
+                // Frame order within a slot, so two occupants of one slot keep
+                // the same positions between publishes: a HashMap's iteration
+                // order alone would shuffle the rows under the reader's eyes.
+                rows.sort_by(|a, b| {
+                    (a.bus, a.slot, a.name.as_deref().unwrap_or("")).cmp(&(
+                        b.bus,
+                        b.slot,
+                        b.name.as_deref().unwrap_or(""),
+                    ))
+                });
                 rows
             },
             subs: self
@@ -4062,9 +4125,9 @@ mod tests {
         }
     }
 
-    /// Per-slot tallies behind the Messages FR rows: count, the EMA
-    /// cycle from real arrivals, and the last frame's cycle number (so
-    /// slots shared across repetitions resolve their frame name).
+    /// Per-frame tallies behind the Messages FR rows: count and the EMA cycle
+    /// from real arrivals. The row is the frame, not the slot -- see
+    /// [`a_slot_held_by_two_frames_counts_two_rows`].
     #[test]
     fn fr_slot_aggregates_track_arrivals() {
         let mut core = BusCore::new(Vec::new());
@@ -4077,12 +4140,92 @@ mod tests {
 
         core.publish_trace();
         let snap = core.snapshot();
-        assert_eq!(snap.fr_aggs.len(), 1);
+        assert_eq!(snap.fr_aggs.len(), 1, "no description: one unnamed row");
         let agg = &snap.fr_aggs[0];
         assert_eq!(agg.slot, 10);
         assert_eq!(agg.count, 2);
-        assert_eq!(agg.last_cycle, 4, "the name lookup cycle follows arrivals");
+        assert!(agg.name.is_none(), "nothing named this frame");
         assert_eq!(agg.cycle_us, 5000.0, "first interval seeds the EMA");
+    }
+
+    /// A description that gives one static slot to two frames in alternate
+    /// A description that arrives mid-run re-tallies the rows already in the
+    /// ring: frames counted before the file was loaded belong to the same
+    /// frames as the ones after it, so they must not sit in a nameless row
+    /// beside them. (`crate::fr_db::two_frames_one_slot_db` builds the
+    /// description: one slot, two frames, alternate cycles.)
+    #[test]
+    fn loading_a_description_re_tallies_the_rows_on_screen() {
+        let mut core = BusCore::new(Vec::new());
+        // Both phases of the repeated slot, before any description exists: at
+        // this point the tool cannot tell them apart, and counts them as one.
+        for (i, cycle) in [0u8, 1, 2, 3].iter().enumerate() {
+            let mut r = fr_row(1_000_000 + (i as u64) * 1_000_000, 10);
+            r.cycle = *cycle;
+            core.ingest_fr_row(r);
+        }
+        core.publish_trace();
+        let snap = core.snapshot();
+        assert_eq!(snap.fr_aggs.len(), 1, "unnamed until something can name it");
+        assert!(snap.fr_aggs[0].name.is_none());
+        assert_eq!(snap.fr_aggs[0].count, 4);
+
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, crate::fr_db::two_frames_one_slot_db(10));
+        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        let snap = core.snapshot();
+        let mut got: Vec<(&str, u64)> = snap
+            .fr_aggs
+            .iter()
+            .map(|a| (a.name.as_deref().unwrap_or(""), a.count))
+            .collect();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            [("FA", 2), ("FB", 2)],
+            "the four arrivals belong to two occupants, two cycles each"
+        );
+    }
+
+    /// The regression the Messages window needed: one tally per `(bus, slot)`
+    /// merged the two occupants of a repeated slot into a single row whose
+    /// frame name changed with whichever arrival came last, and whose period
+    /// was the slot's rather than any frame's. A slot held by two frames is now
+    /// two rows, each with its own name, count and 2 ms period.
+    #[test]
+    fn a_slot_held_by_two_frames_counts_two_rows() {
+        let mut core = BusCore::new(Vec::new());
+        core.fr_dbs.insert(0, crate::fr_db::two_frames_one_slot_db(10));
+        for (i, cycle) in [0u8, 2, 4, 6].iter().enumerate() {
+            let mut r = fr_row(1_000_000 + (i as u64) * 2_000_000, 10);
+            r.cycle = *cycle;
+            core.ingest_fr_row(r);
+        }
+        for (i, cycle) in [1u8, 3, 5, 7].iter().enumerate() {
+            let mut r = fr_row(2_000_000 + (i as u64) * 2_000_000, 10);
+            r.cycle = *cycle;
+            core.ingest_fr_row(r);
+        }
+        core.publish_trace();
+        let snap = core.snapshot();
+        let rows: Vec<(String, u64, f64)> = snap
+            .fr_aggs
+            .iter()
+            .map(|a| (a.name.clone().unwrap_or_default(), a.count, a.cycle_us))
+            .collect();
+        assert_eq!(rows.len(), 2, "one row per occupant: {rows:?}");
+        assert!(
+            rows.iter().all(|(_, c, _)| *c == 4),
+            "each frame counted on its own: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .all(|(_, _, cy)| (*cy - 2_000_000.0).abs() < 1.0),
+            "the period is the frame's, not the slot's: {rows:?}"
+        );
+        let mut names: Vec<&str> = rows.iter().map(|(n, _, _)| n.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["FA", "FB"], "stable names, one per row");
     }
 
     /// Slot numbers repeat across clusters, so the tally is keyed by bus and

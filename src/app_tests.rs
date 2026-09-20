@@ -6151,6 +6151,63 @@ fn two_flexray_watches_feed_their_own_buses() {
     app.stop();
 }
 
+/// The regression as the user sees it. Slot 71 of the bundled ARXML is
+/// scheduled to six different frames, one per cycle phase, so a Messages row
+/// keyed on the slot changed its frame name on almost every arrival -- the
+/// name "would not hold still". The table now holds one row per occupant, each
+/// with its own count.
+#[test]
+fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
+    use crate::hw::vector::flexray::FrFrame;
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let Ok(bytes) = std::fs::read(arxml) else {
+        println!("{arxml} not present -- skipped");
+        return;
+    };
+    let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    app.push_fr_db_to_core();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    for (i, cycle) in (0..6u8).enumerate() {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot: 71,
+            cycle,
+            payload: vec![0; 8],
+            header_crc: 0,
+            flags: 0,
+        });
+        let t = (i as u64 + 1) * 1_000_000;
+        app.advance_clock(t);
+        app.tick(t);
+        app.refresh_snapshot();
+    }
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    let rows: Vec<(String, String)> = app.msg_windows[0]
+        .text_rows
+        .iter()
+        .filter(|r| r.bus == "FR0")
+        .map(|r| (r.label.clone(), r.count.clone()))
+        .collect();
+    assert_eq!(rows.len(), 6, "one row per occupant: {rows:?}");
+    assert!(
+        rows.iter().all(|(_, c)| c == "1"),
+        "each frame counted on its own, not six into one: {rows:?}"
+    );
+    let labels: std::collections::BTreeSet<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels.len(), 6, "six distinct names: {labels:?}");
+    app.stop();
+}
+
 /// The empty FlexRay child row has to say *which* empty it is: a cluster with
 /// no description loaded, a description that has no frame for that slot and
 /// cycle, and a frame that declares no signals are three different things to
@@ -6180,6 +6237,10 @@ fn an_empty_flexray_message_row_names_its_reason() {
             db: std::sync::Arc::new(db),
         },
     );
+    // The row's frame is resolved where the row is counted, so the core needs
+    // the description too -- a frontend-only copy used to be enough because the
+    // name was re-resolved at draw time.
+    app.push_fr_db_to_core();
     let q0 = app.hw.attach_fr_mock(0, 5);
     let q1 = app.hw.attach_fr_mock(1, 6);
     app.start_virtual();
@@ -6210,7 +6271,7 @@ fn an_empty_flexray_message_row_names_its_reason() {
     };
     assert_eq!(
         note("FR0", 4_095).as_deref(),
-        Some("（FR0 的描述里 slot 4095 在周期 0 没有帧）"),
+        Some("（FR0 的描述里 slot 4095 不排这一帧）"),
         "a slot the description resolves no frame for says so"
     );
     assert_eq!(
@@ -7001,12 +7062,12 @@ fn the_trace_text_filter_matches_a_log_carried_fr_frame_name() {
 /// name a row that has no name.
 #[test]
 fn an_analysis_window_can_be_scoped_to_one_flexray_cluster() {
-    use crate::aggregate::FrSlotAgg;
+    use crate::aggregate::{FrFrameAgg, FrOccupant};
     let mut app = App::headless();
     for (bus, slot) in [(0u8, 13u16), (0, 24), (1, 13)] {
         app.fr_aggs.insert(
-            (bus, slot),
-            FrSlotAgg {
+            (bus, slot, FrOccupant::Unknown),
+            FrFrameAgg {
                 bus,
                 slot,
                 count: 10,
@@ -7443,8 +7504,8 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     // a description, and that is the case the picker exists for. The fresh
     // index is the first *gap*, so it is listed in bus order, not appended.
     app.fr_aggs.insert(
-        (4, 13),
-        crate::aggregate::FrSlotAgg {
+        (4, 13, crate::aggregate::FrOccupant::Unknown),
+        crate::aggregate::FrFrameAgg {
             bus: 4,
             slot: 13,
             ..Default::default()

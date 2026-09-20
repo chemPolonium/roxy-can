@@ -13,7 +13,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// FlexRay transmission channel. A / B / both at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -269,10 +269,16 @@ impl FrDb {
         }
     }
 
-    /// The frame scheduled in `slot` and active on communication cycle
-    /// `cycle`, *preferring* one whose channel declaration matches `ab`
-    /// (0 = A, 1 = B, 2 = unknown). Several frames may share a slot across
-    /// repetitions; the first whose schedule covers the cycle wins.
+    /// The **index** of the frame scheduled in `slot` and active on
+    /// communication cycle `cycle`, *preferring* one whose channel declaration
+    /// matches `ab` (0 = A, 1 = B, 2 = unknown).
+    ///
+    /// The index is the point: a slot held by cycle repetition belongs to
+    /// several frames -- the bundled ARXML puts `Frame_71_0_8` ..
+    /// `Frame_71_5_8` in slot 71, one per cycle phase -- so the *occupant*,
+    /// not the slot, is what a name, a count or a period has to be tracked
+    /// against. [`Self::frame_at`] is this with the lookup applied, and
+    /// [`Self::frame_index`] resolves a stored index back to the declaration.
     ///
     /// The channel is a preference, not a requirement, for two reasons. What
     /// the cluster schedule actually fixes is `(slot, cycle)`; and a live frame
@@ -282,31 +288,41 @@ impl FrDb {
     /// export, a frame logged on both channels) leaving the replay to decode
     /// nothing. The check still breaks the tie between frames that share a slot
     /// and cycle and differ only by channel.
-    pub fn frame_at(&self, slot: u16, cycle: u8, ab: u8) -> Option<&FrFrameDb> {
+    pub fn frame_ix_at(&self, slot: u16, cycle: u8, ab: u8) -> Option<usize> {
         let want = match ab {
             0 => Some(FrChannel::A),
             1 => Some(FrChannel::B),
             _ => None,
         };
-        let cands = self.slot_ix.get(&(slot as u32));
-        let scheduled =
-            |f: &FrFrameDb| f.triggering.slot_id == u32::from(slot)
-                && f.triggering.is_active_at_cycle(u32::from(cycle));
-        let lookup = |prefer_channel: bool| {
-            cands
-                .into_iter()
-                .flatten()
-                .filter_map(|&i| self.frames.get(i))
-                .find(|f| {
-                    scheduled(f)
-                        && (!prefer_channel
-                            || match want {
-                                Some(w) => f.triggering.channel.covers(w),
-                                None => true,
-                            })
-                })
+        let fits = |i: &usize, prefer_channel: bool| {
+            let Some(f) = self.frames.get(*i) else {
+                return false;
+            };
+            f.triggering.slot_id == u32::from(slot)
+                && f.triggering.is_active_at_cycle(u32::from(cycle))
+                && (!prefer_channel
+                    || match want {
+                        Some(w) => f.triggering.channel.covers(w),
+                        None => true,
+                    })
         };
-        lookup(true).or_else(|| lookup(false))
+        let cands = self.slot_ix.get(&(slot as u32))?;
+        cands
+            .iter()
+            .find(|i| fits(i, true))
+            .or_else(|| cands.iter().find(|i| fits(i, false)))
+            .copied()
+    }
+
+    /// The frame declaration a stored [`Self::frame_ix_at`] index named.
+    pub fn frame_index(&self, ix: usize) -> Option<&FrFrameDb> {
+        self.frames.get(ix)
+    }
+
+    /// The frame scheduled in `slot` and active on communication cycle
+    /// `cycle`, preferring the channel match -- see [`Self::frame_ix_at`].
+    pub fn frame_at(&self, slot: u16, cycle: u8, ab: u8) -> Option<&FrFrameDb> {
+        self.frame_index(self.frame_ix_at(slot, cycle, ab)?)
     }
 
     /// Decodes a frame payload into `(signal, text)` pairs: physical
@@ -418,32 +434,28 @@ impl FrDb {
         names
     }
 
-    /// The declaration of signal `name` in the frame that holds `slot`.
-    /// Slots shared by several frames (cycle repetition) resolve to the
-    /// first, as [`Self::slot_signals`] lists it, so a curve and the picker
-    /// that offered it read the same layout. A signal's declared range does
-    /// not depend on which cycle the frame is active in, so unlike
-    /// [`Self::frame_at`] this ignores the schedule.
+    /// The declaration of signal `name` in **any** frame that holds `slot`.
+    /// A static slot can belong to several frames by cycle phase, and a
+    /// signal's declared range does not depend on which cycle the frame is
+    /// active in -- so unlike [`Self::frame_at`] this ignores the schedule and
+    /// searches the slot's occupants, first declaration wins.
     pub fn slot_signal(&self, slot: u16, name: &str) -> Option<&FrSignal> {
-        let &i = self.slot_ix.get(&(slot as u32))?.first()?;
-        let frame = self.frames.get(i)?;
-        frame.pdus.iter().find_map(|(pdu_name, _)| {
-            self.pdu_of(pdu_name)
-                .and_then(|pdu| pdu.signals.iter().find(|s| s.name == name))
+        let cands = self.slot_ix.get(&(slot as u32))?;
+        cands.iter().find_map(|&i| {
+            self.frames.get(i)?.pdus.iter().find_map(|(pdu_name, _)| {
+                self.pdu_of(pdu_name)
+                    .and_then(|pdu| pdu.signals.iter().find(|s| s.name == name))
+            })
         })
     }
 
-    /// One entry per distinct static slot: the slot id, a representative
-    /// frame name and that frame's signal names. Frames sharing a slot
-    /// (cycle repetition) collapse to the first, matching [`Self::frame_at`]
-    /// so a curve keyed by the slot sees the layout it will decode against.
+    /// One entry per frame that declares signals: the slot id, the frame name
+    /// and that frame's signal names. Several frames can hold one slot in
+    /// different cycles, and each of them has signals worth offering --
+    /// collapsing them to one entry hid every occupant but the first.
     pub fn slot_signals(&self) -> Vec<(u16, String, Vec<String>)> {
-        let mut seen: HashSet<u32> = HashSet::new();
         let mut out = Vec::new();
         for f in &self.frames {
-            if !seen.insert(f.triggering.slot_id) {
-                continue;
-            }
             let names = self.signal_names(f);
             if names.is_empty() {
                 continue;
@@ -1746,9 +1758,82 @@ fn dedup_frame_names(frames: &mut Vec<FrFrameDb>) {
     frames.retain(|f| seen.insert(f.name.clone()));
 }
 
+/// A two-occupant slot for tests: `FA` (with signal `Amp`) is scheduled in
+/// `slot` on even cycles, `FB` (signal `Bmp`) on odd ones -- what cycle
+/// repetition 2 with base cycles 0 and 1 means. Real files do exactly this
+/// (`Frame_71_0_8` .. `Frame_71_5_8` in the bundled ARXML); this one is small
+/// enough to assert against.
+#[cfg(test)]
+pub(crate) fn two_frames_one_slot_db(slot: u16) -> std::sync::Arc<FrDb> {
+    let signal = |name: &str| FrSignal {
+        name: name.into(),
+        start_bit: 0,
+        length_bits: 8,
+        big_endian: false,
+        signed: false,
+        factor: 1.0,
+        offset: 0.0,
+        min: 0.0,
+        max: 255.0,
+        unit: "u".into(),
+        comment: String::new(),
+        value_descriptions: vec![],
+    };
+    let pdu = |name: &str, sig: &str| FrPdu {
+        name: name.into(),
+        length: 8,
+        dynamic: false,
+        comment: String::new(),
+        signals: vec![signal(sig)],
+    };
+    let frame = |name: &str, pdu_name: &str, base: u32| FrFrameDb {
+        name: name.into(),
+        length: 8,
+        payload_preamble: false,
+        triggering: FrTriggering {
+            channel: FrChannel::Both,
+            slot_id: u32::from(slot),
+            base_cycle: base,
+            cycle_repetition: 2,
+            startup: false,
+        },
+        pdus: vec![(pdu_name.into(), 0u32)],
+        comment: String::new(),
+    };
+    std::sync::Arc::new(FrDb::assemble(
+        FrClusterParams::default(),
+        vec![],
+        vec![pdu("PA", "Amp"), pdu("PB", "Bmp")],
+        vec![frame("FA", "PA", 0), frame("FB", "PB", 1)],
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A slot scheduled by two frames offers both, per occupant: collapsing it
+    /// to "the first frame of the slot" hid `FB`'s signal from the picker and
+    /// left `slot_signal` unable to find `Bmp` at all.
+    #[test]
+    fn every_occupant_of_a_slot_offers_its_signals() {
+        let db = two_frames_one_slot_db(10);
+        let entries = db.slot_signals();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(slot, frame, sigs)| (*slot, frame.as_str(), sigs.join(",")))
+                .collect::<Vec<_>>(),
+            vec![(10, "FA", "Amp".to_string()), (10, "FB", "Bmp".to_string())],
+            "one entry per occupant, with its own signals"
+        );
+        for sig in ["Amp", "Bmp"] {
+            assert!(
+                db.slot_signal(10, sig).is_some(),
+                "{sig} is declared in this slot, whichever frame holds it"
+            );
+        }
+    }
 
     /// The user's real network files. They are read at runtime (they may
     /// move around), and the tests skip with a message when absent.
@@ -1758,6 +1843,47 @@ mod tests {
     fn read_asset(path: &str) -> Option<String> {
         let bytes = std::fs::read(path).ok()?;
         Some(crate::dbc::text_from_bytes(bytes))
+    }
+
+    /// What a static slot actually is, from the bundled ARXML: slot 71 belongs
+    /// to six frames in turn (`Frame_71_0_8` .. `Frame_71_5_8`, cycle
+    /// repetition 8, one per phase; phases 6 and 7 are scheduled by nobody),
+    /// and slot 141 to four with repetition 4. This is why a count, a name or a
+    /// period has to be tracked per **frame**: resolving slot 71 cycle by cycle
+    /// walks through all six occupants, so anything keyed on the slot alone
+    /// changes identity every cycle.
+    #[test]
+    fn one_static_slot_belongs_to_several_frames_in_turn() {
+        use std::collections::BTreeSet;
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            println!("{POWERTRAIN_ARXML} not present -- skipped");
+            return;
+        };
+        let db = FrDb::parse(&text).expect("the asset parses");
+        let occupants: BTreeSet<String> = (0..8u8)
+            .filter_map(|c| db.frame_at(71, c, 2).map(|f| f.name.clone()))
+            .collect();
+        assert_eq!(
+            occupants.len(),
+            6,
+            "one frame per scheduled phase: {occupants:?}"
+        );
+        assert!(
+            db.frame_at(71, 6, 2).is_none() && db.frame_at(71, 7, 2).is_none(),
+            "the two unscheduled phases resolve to nothing"
+        );
+        // The index is the identity a tally keys on, and it names the same
+        // frame the cycle resolved.
+        let ix0 = db.frame_ix_at(71, 0, 2).expect("phase 0 is scheduled");
+        assert_eq!(
+            db.frame_index(ix0).map(|f| f.name.clone()),
+            db.frame_at(71, 0, 2).map(|f| f.name.clone())
+        );
+        assert_ne!(
+            ix0,
+            db.frame_ix_at(71, 1, 2).expect("phase 1 is scheduled"),
+            "the next phase is a different frame"
+        );
     }
 
     /// The real AUTOSAR cluster export (GBK, no BOM): after the UTF-8 →

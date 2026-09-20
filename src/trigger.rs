@@ -248,16 +248,23 @@ impl App {
 
     /// Signal names the cluster description declares in `slot` on `bus`, for
     /// the editor's FlexRay signal picker; empty when the bus has no
-    /// description or the slot declares no signals.
+    /// description or the slot declares no signals. A slot held by several
+    /// frames lists the union of their signals (a name two of them declare
+    /// appears once), because a rule is armed by `(bus, slot, signal)` and the
+    /// cycle it fires on decides which frame it read.
     pub fn fr_signal_names(&self, bus: u8, slot: u16) -> Vec<String> {
-        self.fr_db(bus)
-            .and_then(|db| {
-                db.slot_signals()
-                    .into_iter()
-                    .find(|(s, _, _)| *s == slot)
-                    .map(|(_, _, names)| names)
-            })
-            .unwrap_or_default()
+        let Some(db) = self.fr_db(bus) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = db
+            .slot_signals()
+            .into_iter()
+            .filter(|(s, _, _)| *s == slot)
+            .flat_map(|(_, _, n)| n)
+            .collect();
+        names.sort();
+        names.dedup();
+        names
     }
 
     pub fn add_signal_trigger(&mut self) {

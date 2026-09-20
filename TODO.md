@@ -187,6 +187,17 @@
 - **顺带**：`fr_description_targets` 少了个二次排序——空闲索引是**第一个缺号**，当回放里出现 bus 4 而配置只有 0/1 时，它会被追加到末尾，下拉就排成 `[0,1,4,2]`（是新增的 `a_description_lands_on_the_bus_it_is_pointed_at` 里 bus 4 那条断言抓到的）。
 - **还没做的下一条（有数字了，按需再动）**：把 FR 解码子行改成**只给可见区间解码**（缓存里放占位行），过滤器键入时的 51 ms 就会跟着消失；代价是行号与排序要改成"父行带子行"的结构。`MAX_CACHED_ROWS` 撞顶（展开时 50 000 帧就满 200 000 行）也是同一件事的另一面。
 
+### 2026-09-20：FlexRay 的 Messages/Statistics 改成**按帧**跟踪（名字不再每来一帧就变）
+
+- **用户报的现象**：Messages 窗口里同一槽、同一 A/B 通道后面的帧名"经常会变"。两种可能里正确的是**设计**：FlexRay 静态槽按**周期相位**排帧（cycle repetition），一个槽可以属于好几个帧，轮流占用。而聚合键是 `(bus, slot)`，行名又是拿 `last_cycle` 现算的 `frame_at(...)` → 每来一帧名字就换一次，**计数、周期、末帧载荷也是几个帧的混合**（周期更不是任何一个帧的真正周期）。
+- **不是解析 bug 的证据（一次性普查）**：`assets/arxml/PowerTrain.arxml` 48 帧落在 40 个槽里 —— **slot 71 有 6 个帧**（`Frame_71_0_8`..`Frame_71_5_8`，`cycle_repetition=8`，`base_cycle=0..5`，6/7 两相无人用）、**slot 141 有 4 个**（rep 4）。这些名字本身就写着 `(槽, 相位, 重复)`，与解析无关。这份资产现在由 `one_static_slot_belongs_to_several_frames_in_turn` 钉住（不再只是打印）。
+- **改法**：聚合单位换成**帧**。`FrSlotAgg` → **`FrFrameAgg`**，身份 `FrOccupant { Frame(ix) | Logged(name) | Unknown }`，键 `(bus, slot, occupant)`：`Frame(ix)` 用描述里那帧的**索引**（同槽不同相位天然分开、且不依赖名字唯一），描述解不到但日志自带名字的用 `Logged(name)`（CANoe ASC 有名），两样都没有的 `Unknown` 一槽一行。**名字在第一次到达时就固定**（不再每帧现算），解码/显示一律用 `occupant.frame_ix()` → `FrDb::frame_index` 拿**同一帧**，行名与解码布局不可能各说各话。`FrDb` 侧为此把 `frame_at` 拆成 `frame_ix_at`（返回索引）+ 薄封装，`frame_at` 语义一字未改。
+- **数字跟着变对**：slot 71 的 6 个帧变成 6 行、各算各的计数与周期（回归 `the_messages_window_lists_each_occupant_of_a_repeated_slot`，用真资产喂 0..5 六个相位 → 六行、六个不同标签、各 count=1）。`a_slot_held_by_two_frames_counts_two_rows` 用合成两相位描述钉住计数与"周期是帧的、不是槽的"。
+- **中途换描述要重算**：一帧是什么只在**到达时**能判定，所以 `SetFrDbs` 之后用环里现有的行重跑一遍 tally（`rebuild_fr_aggs`，走发布视图的迭代器不复制整条环；描述加载/移除是人手一次的动作，不是每帧）。不这么做的话，加载描述之前那段会留在一条无名行里、和同一帧的新行并排显示两条。回归 `loading_a_description_re_tallies_the_rows_on_screen`。
+- **同一个坑的另外三处**：`FrDb::slot_signals()` 原来"一个槽只列第一个帧"，于是同槽其它相位的信号**在选点树里根本看不到** → 改成**一个有信号的帧一条**（`every_occupant_of_a_slot_offers_its_signals`）；`slot_signal(slot,name)` 原来只查第一个帧 → 改成搜该槽**全部**占用者（曲线的量程/枚举标签查得到自己那一帧）；触发器编辑框的 `App::fr_signal_names` 改成同槽占用者的**并集去重**；选点树控件 id 加上帧名（两帧同槽不再是同一个 ImGui id）。
+- **已知残留（没动）**：信号订阅键还是 `(bus, slot, 信号名)`。同一槽的两个占用者若声明**同名**信号，它们共用一条曲线/一个勾选框（两行勾选会互相跟着亮），且 `decode` 按到达那一帧的布局走。要真正分开得把键换成 `(bus, 帧, 信号名)`，那是工程文件里 SigKey 的一次迁移 —— 等出现这种描述再谈，别为假设的需求改持久格式。
+- **回归的守卫是破坏性验过的**：把 tally 的 `occupant` 强制成"一律 Unknown"（=退回旧行为），三条新测试当场失败（`left: 1, right: 2`、`[("FA",4)]` vs `[("FA",2),("FB",2)]`、`left: 1, right: 6`），改回即绿。全量 **625 通过 / 0 失败**，clippy 干净。
+
 ## 结构待办（零散）
 
 - **外部仿真元件动态库加载**：进程内注册表已就绪（`script::register_extern`），动态库 C ABI 插件约定与加载器另议（含沙箱边界）。

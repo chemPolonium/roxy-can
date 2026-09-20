@@ -495,7 +495,10 @@ fn emitted_section(
 /// grouped by bus, static slot and frame name below the derived-signal
 /// section. A FlexRay signal joins the same subscription space as CAN signals
 /// under its own `SigKey::Fr` identity, so selecting one plots its live values
-/// exactly like a DBC signal. Hidden until a FlexRay database loads.
+/// exactly like a DBC signal. One row per frame that declares signals -- a slot
+/// scheduled to several frames by cycle phase lists each of them, since the
+/// first one alone would hide the rest of the cluster. Hidden until a FlexRay
+/// database loads.
 fn flexray_section(
     app: &mut App,
     ui: &Ui,
@@ -506,8 +509,10 @@ fn flexray_section(
     if app.fr_buses.is_empty() {
         return;
     }
-    // One entry per (bus, slot): the same slot number on two clusters names two
-    // different frames, so the bus is part of the identity everywhere here.
+    // One entry per (bus, slot, frame): the same slot number on two clusters
+    // names two different frames, and one slot on one cluster can be scheduled
+    // for several frames in alternate cycles -- the bus is part of the identity
+    // everywhere here, and the frame is what the entry documents.
     let hits: Vec<(u8, u16, String, Vec<String>)> = app
         .fr_buses
         .iter()
@@ -546,7 +551,10 @@ fn flexray_section(
         let keys: Vec<_> = sigs.iter().map(|s| key(*bus, *slot, s)).collect();
         let m_sel = keys.iter().filter(|k| sel.contains(k)).count();
         let mut msg_on = m_sel == keys.len() && !keys.is_empty();
-        if ui.checkbox(format!("##frmsgchk{bus}_{slot}"), &mut msg_on) {
+        // The frame is part of the widget id: a slot scheduled to several
+        // frames lists one row per occupant, and two rows sharing an id would
+        // make ImGui draw the same checkbox twice.
+        if ui.checkbox(format!("##frmsgchk{bus}_{slot}_{frame}"), &mut msg_on) {
             for k in &keys {
                 actions.push((k.clone(), msg_on));
             }
@@ -563,7 +571,7 @@ fn flexray_section(
         if mtoken.is_some() {
             for (s, k) in sigs.iter().zip(&keys) {
                 let mut son = sel.contains(k);
-                if ui.checkbox(format!("{s}##frsig{bus}_{slot}"), &mut son) {
+                if ui.checkbox(format!("{s}##frsig{bus}_{slot}_{frame}"), &mut son) {
                     actions.push((k.clone(), son));
                 }
             }

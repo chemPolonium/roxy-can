@@ -162,7 +162,7 @@ impl App {
             .iter()
             .filter(|a| Self::scope_match_fr(scope, a.bus))
         {
-            let name = self.fr_frame_name(a);
+            let name = Self::fr_frame_name(a);
             let (cmin, cavg, cmax) = if a.count > 1 {
                 (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
             } else {
@@ -253,7 +253,7 @@ impl App {
                 if !Self::scope_match_fr(scope, agg.bus) {
                     continue;
                 }
-                let name = self.fr_frame_name(agg);
+                let name = Self::fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)
                     && !agg.slot.to_string().contains(&filter)
