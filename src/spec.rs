@@ -76,14 +76,34 @@ pub struct Latch {
 /// previous step to measure an interval. Both tables key on
 /// `(bus, id, extended, kind)` so a standard and an extended message that
 /// share one numeric id never convict each other.
+///
+/// FlexRay verdicts live in a **second table**, keyed by
+/// `(cluster, slot, frame index)`: a CAN channel index and a FlexRay cluster
+/// index are two numbering spaces that share integers -- `(0, 5)` is both
+/// CAN0's id 5 and FR0's slot 5 -- and one map keyed that way would let either
+/// accuse the other. They meet only where a row is listed
+/// ([`Spec::fr_rows`](Spec::fr_rows) is read beside [`Spec::rows`](Spec::rows)).
 #[derive(Clone, Debug, Default)]
 pub struct Spec {
     pub rows: BTreeMap<(u8, u32, bool, Kind), Latch>,
+    pub fr_rows: BTreeMap<(FrSubject, Kind), Latch>,
     /// `last_t_us` of each message as of the previous step. Kept here rather
     /// than added to [`crate::app::MessageAgg`], which is the observers' shared
     /// ledger and should not grow a field for one consumer.
     previous: HashMap<(u8, u32, bool), u64>,
+    /// The same for one FlexRay frame: `(cluster, slot, index into its
+    /// description's frame list)`. Only resolved frames have an interval to
+    /// measure, so the key needs no `Option`.
+    fr_previous: HashMap<(u8, u16, usize), u64>,
 }
+
+/// A FlexRay verdict's subject: the cluster, the slot, and the frame the
+/// description resolved for the arrivals in it -- `None` when it resolved
+/// nothing, which is itself the finding (`Kind::Unknown`). The CAN table is
+/// keyed `(channel, id, extended)` and those two numbering spaces overlap on
+/// arbitrary integers, so they stay separate maps and meet only where a row is
+/// listed.
+pub type FrSubject = (u8, u16, Option<usize>);
 
 impl Spec {
     /// The last time we saw this message, as recorded on the previous step.
@@ -96,6 +116,28 @@ impl Spec {
         self.previous.insert(key, last_t_us);
     }
 
+    /// The FlexRay side of [`Self::previous`].
+    pub fn fr_previous(&self, key: (u8, u16, usize)) -> Option<u64> {
+        self.fr_previous.get(&key).copied()
+    }
+
+    pub fn note_fr(&mut self, key: (u8, u16, usize), last_t_us: u64) {
+        self.fr_previous.insert(key, last_t_us);
+    }
+
+    pub fn record_fr(
+        &mut self,
+        key: FrSubject,
+        kind: Kind,
+        now_us: u64,
+        declared: f64,
+        measured: f64,
+    ) {
+        latch(&mut self.fr_rows, (key, kind), now_us, declared, measured);
+    }
+
+    /// Latches one verdict: the first occurrence opens the record, later ones
+    /// deepen the count and move the "last seen" mark.
     pub fn record(
         &mut self,
         key: (u8, u32, bool, Kind),
@@ -103,27 +145,22 @@ impl Spec {
         declared: f64,
         measured: f64,
     ) {
-        let row = self.rows.entry(key).or_insert(Latch {
-            count: 0,
-            first_t_us: now_us,
-            last_t_us: now_us,
-            declared,
-            measured,
-        });
-        row.count += 1;
-        row.last_t_us = now_us;
-        row.declared = declared;
-        row.measured = measured;
+        latch(&mut self.rows, key, now_us, declared, measured);
     }
 
     pub fn clear(&mut self) {
+        // Only the report: the interval memory has to survive, or the step
+        // after a clear would measure across the gap the clear just hid.
         self.rows.clear();
+        self.fr_rows.clear();
     }
 
     /// Follow a bus deletion: this bus's rows go, and the ones above it shift
     /// down. Both maps are keyed by channel, and every other channel-keyed
     /// structure gets the same treatment -- a row left at an old index would
-    /// accuse a different bus of the deleted one's mistakes.
+    /// accuse a different bus of the deleted one's mistakes. The FlexRay tables
+    /// are deliberately untouched: their first coordinate is a cluster index,
+    /// which a CAN channel being added or removed does not renumber.
     pub fn drop_channel(&mut self, ch: u8) {
         let remap = |c: u8| -> Option<u8> {
             match (c as usize).cmp(&(ch as usize)) {
@@ -141,6 +178,46 @@ impl Spec {
             .filter_map(|((c, id, ext), t)| remap(c).map(|nc| ((nc, id, ext), t)))
             .collect();
     }
+}
+
+/// One latched verdict as a report line: which bus, which address, which frame
+/// or message, the rule it broke, and the numbers. The two storage tables are
+/// keyed differently on purpose; a report lists them together, so they meet
+/// here ([`crate::app::App::spec_rows`]).
+pub struct SpecRow {
+    pub bus: String,
+    /// What identifies the subject on that bus: a CAN id, or a FlexRay slot.
+    pub addr: String,
+    pub name: String,
+    pub kind: Kind,
+    pub declared: f64,
+    pub measured: f64,
+    pub count: u64,
+    pub first_t_us: u64,
+    pub last_t_us: u64,
+}
+
+/// Latches one verdict into a report table: the first occurrence opens the
+/// record, later ones deepen the count and move the "last seen" mark. Nothing
+/// closes a row but a new run or an explicit clear -- a report is a history.
+fn latch<V: Ord + Copy>(
+    rows: &mut BTreeMap<V, Latch>,
+    key: V,
+    now_us: u64,
+    declared: f64,
+    measured: f64,
+) {
+    let row = rows.entry(key).or_insert(Latch {
+        count: 0,
+        first_t_us: now_us,
+        last_t_us: now_us,
+        declared,
+        measured,
+    });
+    row.count += 1;
+    row.last_t_us = now_us;
+    row.declared = declared;
+    row.measured = measured;
 }
 
 /// Is this interval outside the declared period by more than `tol_pct`?

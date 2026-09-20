@@ -7161,6 +7161,122 @@ fn a_node_script_reads_a_flexray_signal() {
     app.stop();
 }
 
+/// The spec monitor's rules have FlexRay counterparts, because the description
+/// makes the same kind of promises: which slot a frame occupies, in which cycle
+/// phase, how often it repeats and how long it is. Four verdicts from one
+/// scripted run -- a payload short of its declared length (Dlc), an arrival off
+/// the declared period (Cycle), a frame that then fell silent (Missing), and a
+/// slot the schedule does not name at all (Unknown).
+#[test]
+fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
+    use crate::hw::vector::flexray::FrFrame;
+    use crate::spec::Kind;
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let Ok(bytes) = std::fs::read(arxml) else {
+        println!("{arxml} not present -- skipped");
+        return;
+    };
+    let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
+    // The declared period comes out of the schedule itself, so the test states
+    // the same promise the monitor checks against rather than a number picked
+    // to make an assertion pass.
+    let (ix, slot, cycle, declared_us) = {
+        let (i, f) = db
+            .frames
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.length >= 8)
+            .expect("the asset declares a frame at least 8 bytes long");
+        let rep = f.triggering.cycle_repetition.max(1);
+        (
+            i,
+            f.triggering.slot_id as u16,
+            f.triggering.base_cycle as u8,
+            rep as u64 * (db.params.cycle_time_ms * 1e3) as u64,
+        )
+    };
+    assert!(declared_us > 0, "the cluster declares a cycle time");
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: db.into(),
+        },
+    );
+    app.push_fr_db_to_core();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    let arrive = |app: &mut App, slot: u16, payload: Vec<u8>, at_us: u64| {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot,
+            cycle,
+            payload,
+            header_crc: 0,
+            flags: 0,
+        });
+        app.advance_clock(at_us);
+        app.tick(at_us);
+        app.refresh_snapshot();
+    };
+    // A short payload, then the same frame five periods later: both a length and
+    // a timing violation in two arrivals.
+    arrive(&mut app, slot, vec![0u8; 2], 1);
+    let t = declared_us * 5;
+    arrive(&mut app, slot, vec![0u8; 2], t);
+    // Silence past the grace window (the gap since the last arrival, not the
+    // time since the run started), then a slot the schedule names no frame for.
+    let t = declared_us * (app.spec_grace + 10);
+    app.advance_clock(t);
+    app.tick(t);
+    app.refresh_snapshot();
+    arrive(&mut app, 2000, vec![0u8; 2], t + 1);
+
+    let kinds = |app: &App, slot: u16| -> Vec<Kind> {
+        app.snap
+            .spec
+            .fr_rows
+            .iter()
+            .filter(|(k, _)| k.0 .0 == 0 && k.0 .1 == slot)
+            .map(|(k, _)| k.1)
+            .collect()
+    };
+    let judged = kinds(&app, slot);
+    for want in [Kind::Dlc, Kind::Cycle, Kind::Missing] {
+        assert!(
+            judged.contains(&want),
+            "{slot} was judged {judged:?}, expected {want:?} too"
+        );
+    }
+    assert!(
+        kinds(&app, 2000).contains(&Kind::Unknown),
+        "an unscheduled slot is the same finding as an id outside the DBC"
+    );
+    // The report line names the frame from the same description the verdict came
+    // out of, and says which cluster and slot it is on.
+    let rows = app.spec_rows();
+    let fr = rows
+        .iter()
+        .find(|r| r.bus == "FR0" && r.addr == format!("slot {slot}"))
+        .expect("the FlexRay row is in the report");
+    assert_eq!(
+        fr.name,
+        app.fr_db(0).unwrap().frame_index(ix).unwrap().name,
+        "the frame's own name, not an index"
+    );
+    assert_eq!(
+        app.spec_rows()
+            .iter()
+            .filter(|r| r.bus == "FR0" && r.addr == "slot 2000")
+            .map(|r| r.name.as_str())
+            .next(),
+        Some("not in the schedule"),
+        "the unresolved slot says so"
+    );
+    app.stop();
+}
+
 /// The Messages window's Clear resets the FlexRay tallies as well: they are rows
 /// of that table now, and leaving them to run up from their old counts made the
 /// button lie about half of what it shows.

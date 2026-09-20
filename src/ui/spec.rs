@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::spec::{Kind, Latch};
+use crate::spec::Kind;
 use dear_imgui_rs::{
     Condition, Drag, NumericFormat, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy,
     Ui,
@@ -77,13 +77,10 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.separator();
 
-    let rows: Vec<((u8, u32, bool, Kind), Latch)> = app
-        .snap
-        .spec
-        .rows
-        .iter()
-        .filter(|((_, _, _, kind), _)| app.spec_show[kind.index()])
-        .map(|(k, l)| (*k, *l))
+    let rows: Vec<crate::spec::SpecRow> = app
+        .spec_rows()
+        .into_iter()
+        .filter(|r| app.spec_show[r.kind.index()])
         .collect();
     if rows.is_empty() {
         ui.text_colored([0.5, 0.55, 0.6, 1.0], "no violations");
@@ -114,27 +111,18 @@ fn content(app: &mut App, ui: &Ui) {
     }
     ui.table_headers_row();
 
-    for ((ch, id, ext, kind), l) in rows {
+    for r in &rows {
         ui.table_next_row();
         ui.table_next_column();
-        let name = app
-            .channel_dbc(ch)
-            .and_then(|db| db.message_name_of((id, ext)))
-            .unwrap_or("not in database");
-        let id_text = if ext {
-            format!("{id:X} ext")
-        } else {
-            format!("{id:X}")
-        };
-        ui.text(format!("{name} ({id_text})"));
+        ui.text(format!("{} ({})", r.name, r.addr));
         for column in [
-            app.channel_name(ch),
-            kind.label().to_string(),
-            crate::spec::qty(kind, l.declared),
-            crate::spec::qty(kind, l.measured),
-            format!("{}", l.count),
-            secs(l.first_t_us),
-            secs(l.last_t_us),
+            r.bus.clone(),
+            r.kind.label().to_string(),
+            crate::spec::qty(r.kind, r.declared),
+            crate::spec::qty(r.kind, r.measured),
+            format!("{}", r.count),
+            secs(r.first_t_us),
+            secs(r.last_t_us),
         ] {
             ui.table_next_column();
             ui.text(column);

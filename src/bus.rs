@@ -3669,11 +3669,85 @@ impl BusCore {
                 ));
             }
         }
+        // The FlexRay sweep. The description declares each frame's slot, cycle
+        // phase, cycle repetition and payload length, so the same questions can
+        // be asked of it: does an arrival name a frame the schedule knows at all
+        // (Unknown), is it at least as long as declared (Dlc), does it come as
+        // often as its repetition says (Cycle), and did one that was coming stop
+        // (Missing). A FlexRay period is stated in cycles rather than
+        // microseconds, so the declared interval is `cycle_repetition × the
+        // cluster's cycle time`.
+        let mut fr_hits: Vec<(crate::spec::FrSubject, Kind, f64, f64)> = Vec::new();
+        let mut fr_seen: Vec<((u8, u16, usize), u64)> = Vec::with_capacity(self.fr_aggs.len());
+        for ((bus, slot, occupant), agg) in &self.fr_aggs {
+            // No description on this cluster: no opinion, not a clean bill.
+            let Some(db) = self.fr_dbs.get(bus) else {
+                continue;
+            };
+            let Some(frame_ix) = occupant.frame_ix() else {
+                // The arrival's slot and phase name no frame in this cluster's
+                // schedule -- the same fact an id outside the DBC states.
+                fr_hits.push(((*bus, *slot, None), Kind::Unknown, 0.0, 0.0));
+                continue;
+            };
+            let Some(f) = db.frame_index(frame_ix) else {
+                continue;
+            };
+            let key = (*bus, *slot, frame_ix);
+            let subject = (*bus, *slot, Some(frame_ix));
+            fr_seen.push((key, agg.last_t_us));
+            // Shorter than declared cannot be a complete frame. Longer is no
+            // verdict: a FlexRay slot carries a fixed payload, and a logger that
+            // records the whole slot leaves padding past the frame's own length
+            // -- unlike CAN, where the frame *is* the thing on the wire.
+            if agg.payload.len() < f.length as usize {
+                fr_hits.push((
+                    subject,
+                    Kind::Dlc,
+                    f64::from(f.length),
+                    agg.payload.len() as f64,
+                ));
+            }
+            let declared = if db.params.cycle_time_ms > 0.0 {
+                (f.triggering.cycle_repetition.max(1) as f64 * db.params.cycle_time_ms * 1e3) as u64
+            } else {
+                0
+            };
+            // The interval since the previous step, exactly as on the CAN side:
+            // the aggregate's smoothed period would read a five-fold stall as
+            // 1.4x and hide the violation it is meant to report.
+            let elapsed = self
+                .spec
+                .fr_previous(key)
+                .and_then(|from| agg.last_t_us.checked_sub(from))
+                .filter(|i| *i > 0);
+            if declared > 0 {
+                if let Some(interval) = elapsed
+                    && cycle_offender(interval, declared, tol_pct)
+                {
+                    fr_hits.push((subject, Kind::Cycle, declared as f64, interval as f64));
+                }
+                if live && missing_offender(now, agg.last_t_us, declared, grace) {
+                    fr_hits.push((
+                        subject,
+                        Kind::Missing,
+                        declared as f64,
+                        now.saturating_sub(agg.last_t_us) as f64,
+                    ));
+                }
+            }
+        }
         for (key, declared, measured) in hits {
             self.spec.record(key, now, declared, measured);
         }
         for (key, last_t_us) in seen {
             self.spec.note(key, last_t_us);
+        }
+        for (subject, kind, declared, measured) in fr_hits {
+            self.spec.record_fr(subject, kind, now, declared, measured);
+        }
+        for (key, last_t_us) in fr_seen {
+            self.spec.note_fr(key, last_t_us);
         }
     }
 

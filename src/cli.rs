@@ -522,7 +522,7 @@ fn merge_dbc_files(paths: &[String]) -> Result<Option<crate::dbc::SymbolTable>, 
 
 /// Quotes a CSV field only when it would otherwise need it (a comma, quote,
 /// or line break), doubling embedded quotes per RFC 4180.
-fn csv_field(s: &str) -> String {
+pub(crate) fn csv_field(s: &str) -> String {
     if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {

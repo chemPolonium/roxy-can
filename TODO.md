@@ -82,7 +82,7 @@
 
 **B. 不用拍板、可以直接做的（按价值排序）**
 
-3. **规格监视（Spec）纳入 FlexRay** —— CAN 有四条判据（`spec.rs:23` Unknown/Dlc/Cycle/Missing，键 `(bus,id,ext,Kind)`），FlexRay 一条都没有：`Spec::check` 只看 CAN `aggs`（bus.rs:3600-3652）。而 FlexRay 的判据其实**更硬**：描述直接声明每帧的槽、周期相位与重复因子，期望周期 = `cycle_repetition × cycle_time_ms`，四条全能对上——`Unknown`＝"这一路的描述里没有这个槽/这一相"（就是 Messages 里那条"无名"行）、`Dlc`＝`FrFrameDb.length` vs 实到载荷、`Cycle`＝实测周期 vs 声明、`Missing`＝声明过的帧静默超过宽限。要做的是把 `Spec.rows` 的键换成 `SpecKey { Can{..} | Fr{bus,slot,frame_ix} }`（不能复用 `(u32,bool)` 塞槽号：两套总线编号会互相定罪），`ui/spec.rs` 与 CSV 导出跟着分节。
+3. ~~**规格监视（Spec）纳入 FlexRay**~~ ✅（同日做完，见下面《FlexRay 也进规格监视》一节）。
 4. **录制白名单不管 FlexRay**（recorder.rs:65-77 的 `write_fr` 明确不受 `admits` 约束，因为过滤器是 CAN id 列表）——与 A2 同一个 `Pick` 类型问题，等 A2 的迁移一起做。
 5. **回放块的 id 白名单是 `HashSet<(u8,u32)>`（bus.rs:820，CAN 通道+id）**，FlexRay 槽不在其列；同上，等 `Pick`。
 6. **`dbc_only`（"仅 DBC"）对 FlexRay 的口径混了两件事**：它按"名字是否为 `-`"隐藏行，而 FR 的"没挂描述"与"挂了但这一相不排这一帧"是两种不同的事实（app.rs:135-139 已注明）。要么让它只管"有没有数据库/描述"，要么给 FR 一个独立开关——**别继续用名字判**。
@@ -265,6 +265,14 @@
 - **顺带修掉一个真 bug**：`clear_aggregates`（Messages/Statistics 的 Clear 按钮）以前只清 `self.aggs`，**没清 `fr_aggs`** —— FR 行如今与 CAN 同表并列，Clear 之后 FR 计数继续从旧值往上爬，等于按钮对一半表格说谎。现在两者一起清，状态行的计数也是两者之和（回归 `clearing_the_message_counters_clears_the_flexray_tallies_too`）。
 - **界面**：Bus Statistics 窗口每个有流量的 FlexRay cluster 一节（`FR{n}（cluster 名 / 无描述）`），行是 静态段占用 [%] / Frames [n/s] / Frames [total] / Slot wire time [µs]，节标题的 tooltip 写明口径与"动态段不计入"。
 - **回归**：`a_flexray_cluster_is_charged_one_slot_per_arrival`（100 帧 × 40 µs = 0.4 %，逐位精确）、`the_flexray_window_prunes_and_ignores_a_seek_back`（倒退的一帧计入总数但不进窗口——与 `BusLoad` 同一条纪律）、`an_untimed_cluster_counts_frames_without_a_load`、`slot_wire_time_comes_from_the_cluster_parameters`（0 槽时长 / 0 宏周期都返回 `None`），加两条走完整核心的 `app_tests`。**全量 637 通过 / 0 失败**，clippy 干净。**要看界面**：Bus Statistics 里 FR 那节的数字与 `-` 的分支（无描述那条路）。
+
+### 2026-09-20：FlexRay 也进规格监视（四条判据按调度表判定）
+
+- **为什么现在能做**：CAN 的四条判据（Unknown/Dlc/Cycle/Missing）一直只吃 CAN `aggs`。FlexRay 的"应该怎样"写在描述里更硬的地方——每帧声明自己占哪个槽、哪个周期相位、重复几次、载荷多长，所以期望周期直接是 `cycle_repetition × 宏周期`，不必像 DBC 那样靠 `GenMsgCycleTime` 猜。
+- **形状**：`Spec` 加**第二张表** `fr_rows: BTreeMap<((cluster, slot, Option<帧索引>), Kind), Latch>` 与 `fr_previous`，而不是把 CAN 的 `(channel,id,ext)` 键扩成能塞槽号——`(0,5)` 同时是 CAN0 的 id 5 与 FR0 的槽 5，一张表会让两者互相定罪（`drop_channel` 因此只动 CAN 表：增删 CAN 通道不该重编号 cluster 索引）。报告与 CSV 走新的 `App::spec_rows()`，两表在那里合并成统一的 `{bus, addr, name, kind, declared, measured, count, first, last}`，窗口与导出里各自的键格式化随之删掉。
+- **四条判据里 FlexRay 特有的两点**：① **Dlc 只判"短于声明"**——槽的载荷是定长的，日志把整槽记下来时帧边界之外本来就有填充，长于声明不是错（CAN 那边帧就是线上的东西，等号判据是对的）；② **Unknown 的主体是"排不出帧"**：`FrOccupant` 解不出帧索引时键里的帧位是 `None`，这正是 Messages 里那条"无名"行，两个视图说的是同一件事。
+- **回归**：`the_spec_monitor_judges_flexray_frames_against_their_schedule` 用真 ARXML 一次跑全四条（短载荷→Dlc；隔 5×声明周期再来一帧→Cycle；再静默 `grace+10` 周期→Missing；槽 2000 到达→Unknown），期望周期**从描述算出来**而不是挑一个能过的数。破坏性验过：短路掉 Dlc 条件，断言当场报 `was judged [Cycle, Missing], expected Dlc too`。改动中还有一条旧断言救了场——`clear()` 只该清报告、不该清 `previous`（"清了报告就把时钟也忘了，下一步会跨着刚被抹掉的空档量周期"），我顺手一起清时被它顶回来。CSV 头部新增 `# flexray,FR{n},<描述路径>`：判定前提是那份调度表，缺了报告就无法复核。
+- **全量 642 通过 / 0 失败**，clippy 干净。**要看界面**：Specification 窗口里 FR 行的显示（bus 列 `FR{n}`、id 列 `slot N`、name 列帧名或 `not in the schedule`）。
 
 ## 结构待办（零散）
 

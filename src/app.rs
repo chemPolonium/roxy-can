@@ -1097,6 +1097,66 @@ impl App {
         self.fr_buses.get(&bus).map(|c| &*c.db)
     }
 
+    /// Every latched spec violation, CAN and FlexRay alike: what the report
+    /// window lists and what its CSV writes. The two buses keep separate
+    /// storage because their identities do not share a key (see
+    /// [`crate::spec::Spec`]); a report reads both.
+    pub(crate) fn spec_rows(&self) -> Vec<crate::spec::SpecRow> {
+        let mut out = Vec::new();
+        for ((ch, id, ext, kind), l) in &self.snap.spec.rows {
+            let name = self
+                .channel_dbc(*ch)
+                .and_then(|db| db.message_name_of((*id, *ext)))
+                .unwrap_or("not in database");
+            out.push(crate::spec::SpecRow {
+                bus: self.channel_name(*ch).to_string(),
+                addr: if *ext {
+                    format!("{id:X} ext")
+                } else {
+                    format!("{id:X}")
+                },
+                name: name.to_string(),
+                kind: *kind,
+                declared: l.declared,
+                measured: l.measured,
+                count: l.count,
+                first_t_us: l.first_t_us,
+                last_t_us: l.last_t_us,
+            });
+        }
+        for (((bus, slot, frame), kind), l) in &self.snap.spec.fr_rows {
+            // The frame the schedule resolved -- or the absence of one, which is
+            // itself the finding. The name comes from the same description the
+            // verdict was judged against.
+            let name = match frame {
+                Some(ix) => self
+                    .fr_db(*bus)
+                    .and_then(|db| db.frame_index(*ix))
+                    .map(|f| {
+                        if f.name.is_empty() {
+                            format!("slot {slot} 的帧 {ix}")
+                        } else {
+                            f.name.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| "描述里已无此帧".to_string()),
+                None => "not in the schedule".to_string(),
+            };
+            out.push(crate::spec::SpecRow {
+                bus: format!("FR{bus}"),
+                addr: format!("slot {slot}"),
+                name,
+                kind: *kind,
+                declared: l.declared,
+                measured: l.measured,
+                count: l.count,
+                first_t_us: l.first_t_us,
+                last_t_us: l.last_t_us,
+            });
+        }
+        out
+    }
+
     /// What one static slot of this cluster occupies of the medium, in
     /// microseconds -- the unit the occupancy figure is built from. `None` when
     /// the bus has no description or its carries no slot timing, which the

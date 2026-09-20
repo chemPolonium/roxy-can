@@ -491,6 +491,14 @@ impl App {
             };
             s.push_str(&format!("# database,{},{dbc}\n", c.name));
         }
+        // Which description each FlexRay verdict was judged against: the
+        // schedule is the promise, so a report without it cannot be re-checked.
+        for (bus, cfg) in &self.fr_buses {
+            s.push_str(&format!(
+                "# flexray,FR{bus},{}\n",
+                crate::cli::csv_field(&cfg.path)
+            ));
+        }
         s.push_str(&format!("# tolerance,+/-{}%\n", self.spec_tol_pct));
         s.push_str(&format!("# grace,{}x declared period\n", self.spec_grace));
         let periodic: usize = self
@@ -507,27 +515,18 @@ impl App {
             .sum();
         s.push_str(&format!("# periodic messages declared,{periodic}\n"));
         s.push_str("bus,id,name,rule,declared,measured,count,first_s,last_s\n");
-        for ((ch, id, ext, kind), l) in &self.snap.spec.rows {
-            let name = self
-                .channel_dbc(*ch)
-                .and_then(|db| db.message_name_of((*id, *ext)))
-                .unwrap_or("not in database");
-            let id_text = if *ext {
-                format!("{id:X} ext")
-            } else {
-                format!("{id:X}")
-            };
+        for r in self.spec_rows() {
             s.push_str(&format!(
                 "{},{},{},{},{},{},{},{:.3},{:.3}\n",
-                self.channel_name(*ch),
-                id_text,
-                name,
-                kind.label(),
-                crate::spec::qty(*kind, l.declared),
-                crate::spec::qty(*kind, l.measured),
-                l.count,
-                l.first_t_us as f64 / 1e6,
-                l.last_t_us as f64 / 1e6,
+                crate::cli::csv_field(&r.bus),
+                crate::cli::csv_field(&r.addr),
+                crate::cli::csv_field(&r.name),
+                r.kind.label(),
+                crate::spec::qty(r.kind, r.declared),
+                crate::spec::qty(r.kind, r.measured),
+                r.count,
+                r.first_t_us as f64 / 1e6,
+                r.last_t_us as f64 / 1e6,
             ));
         }
         self.write_export(path, s);
