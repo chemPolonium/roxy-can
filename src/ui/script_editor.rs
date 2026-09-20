@@ -500,6 +500,7 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("总线控制", "send", "send(0x000, 0x00);"),
     ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
     ("总线控制", "sig", "sig(0x000, \"Signal\")"),
+    ("总线控制", "fr_sig", "fr_sig(0, 0, \"Signal\")"),
     ("总线控制", "$信号", "$Message::Signal"),
     ("总线控制", "set_sig", "set_sig(buf, 0x000, \"Signal\", 0)"),
     ("总线控制", "emit_value", "emit_value(\"Name\", 0)"),
@@ -658,6 +659,37 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
                     .build()
                 {
                     insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                }
+            }
+        }
+    }
+
+    // The FlexRay side of the same convenience. `fr_sig` takes a cluster index,
+    // a slot and a signal name, and none of the three is something a script
+    // author should have to look up in another window -- the list comes from the
+    // loaded descriptions, each slot named alongside the frame scheduled in it,
+    // since one slot is held by several frames in turn.
+    let fr_items: Vec<(u8, u16, String, Vec<String>)> = app
+        .fr_buses
+        .iter()
+        .flat_map(|(bus, cfg)| {
+            cfg.db
+                .slot_signals()
+                .into_iter()
+                .map(move |(slot, frame, sigs)| (*bus, slot, frame, sigs))
+        })
+        .collect();
+    if !fr_items.is_empty() {
+        ui.separator();
+        ui.text_disabled("FlexRay 信号（读）");
+        for (bus, slot, frame, sigs) in &fr_items {
+            ui.text_disabled(format!("FR{bus} slot {slot} · {frame}"));
+            for sig in sigs {
+                if ui
+                    .selectable_config(format!("  {sig}##frsig{bus}_{slot}_{frame}_{sig}"))
+                    .build()
+                {
+                    insert(app, id, &format!("fr_sig({bus}, {slot}, \"{sig}\")"));
                 }
             }
         }
