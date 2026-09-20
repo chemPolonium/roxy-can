@@ -84,10 +84,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     // No *table-level* NO_CLIP here: this table freezes its header row, and a
     // frozen-row table needs its per-cell clip rects -- with clipping switched
     // off wholesale the body rows keep the first cell's rect and every column
-    // after "Message" vanishes (that was 0616fdc). The per-column flag on
-    // "Message" below is a different mechanism: the table's own clip stays in
-    // force and only the narrowing of that column's merged draw channel is
-    // skipped, so its text can run right without escaping the table.
+    // after "Message" vanishes (that was 0616fdc). The per-column flag on "Bus"
+    // below is a different mechanism: the table's own clip stays in force and
+    // only the narrowing of that column's merged draw channel is skipped, so its
+    // text can run right without escaping the table.
     let tbl_flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
@@ -97,9 +97,25 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, opts) else {
         return;
     };
-    ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NO_CLIP, 1.0);
+    // An expanded row reads `signal name` then `value`, one per column: the name
+    // gets the wider share, and the value's column is the unclipped one, because
+    // a decoded FlexRay value ("2.54 Mpa (正常)  (1Fh)", "2 (完成)  (2h)") needs
+    // the five columns to its right -- all of them empty on a child row. "Bus"
+    // keeps its 60 px width for the parent rows; the flag only lets a child's
+    // text run past it.
+    //
+    // "Message" is deliberately *not* unclipped: when both the name and the
+    // value were drawn in that one cell, at a fixed offset for the value, a long
+    // name printed straight through its reading ("...OrderStat" under "(1h)").
+    // Clipped, an over-long name stops at the column edge -- widen the column by
+    // dragging its header, which is what RESIZABLE is for.
+    ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NONE, 2.0);
+    ui.table_setup_column(
+        "Bus",
+        TableColumnFlags::NO_CLIP,
+        Some(dear_imgui_rs::TableColumnWidth::fixed(60.0)),
+    );
     for (label, w) in [
-        ("Bus", 60.0),
         ("Dir", 34.0),
         ("Count", 55.0),
         ("Cycle (ms)", 72.0),
@@ -139,33 +155,22 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_row();
                 ui.table_next_column();
                 // The sync pass worked out *why* there is nothing here; the
-                // window only prints it. The sentence is longer than one cell,
-                // which is what the unclipped column is for.
-                ui.text(format!(
-                    "   {}",
-                    row.empty_note.as_deref().unwrap_or("(no signals)")
-                ));
+                // window only prints it. It goes in the value's cell because the
+                // sentence is longer than the name column, and that cell's column
+                // is the one set up to run past its own width.
+                if ui.table_next_column() {
+                    ui.text(row.empty_note.as_deref().unwrap_or("(no signals)"));
+                }
             } else {
                 for (name, value) in &row.signals {
                     ui.table_next_row();
                     ui.table_next_column();
                     ui.text(format!("   {name}"));
-                    // The value at a fixed offset, so the readings line up in a
-                    // column of their own instead of being chased by the length
-                    // of each name. It starts past the "Message" cell, and this
-                    // table sets that column up unclipped so the text can run
-                    // into the five columns a child row leaves empty -- a
-                    // decoded FlexRay value ("2.54 Mpa (正常)  (1Fh)") never fit
-                    // the 60 px Bus cell it used to be pushed into.
-                    ui.same_line_with_pos(SIG_VALUE_X);
-                    ui.text(value);
+                    if ui.table_next_column() {
+                        ui.text(value);
+                    }
                 }
             }
         }
     }
 }
-
-/// Where an expanded row's value starts, measured from the window's content
-/// left edge: wide enough for the longest signal names the descriptions
-/// declare, and everything to its right is empty on a child row anyway.
-const SIG_VALUE_X: f32 = 260.0;
