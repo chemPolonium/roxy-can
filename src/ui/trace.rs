@@ -414,7 +414,12 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             TraceRow::FrSig {
                 signal, value, ..
             } => {
-                // A decoded signal child under its FR frame row.
+                // A decoded signal child under its FR frame row. The name goes
+                // in the Name column, not the 68 px ID one: FlexRay signal
+                // names are as long as any message name ("Drive_Attitude_
+                // Alarm_Valid") and were cut to a fragment where a CAN row's
+                // message name has room. The └ stays in ID, under the slot
+                // address of the frame it belongs to.
                 ui.table_next_row();
                 if !ui.table_next_column() {
                     continue;
@@ -424,10 +429,8 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.text("-");
                 ui.table_next_column();
                 ui.text("  └");
-                ui.same_line();
-                ui.text_colored([0.55, 0.8, 1.0, 1.0], signal);
                 ui.table_next_column();
-                ui.text("-");
+                ui.text_colored([0.55, 0.8, 1.0, 1.0], signal);
                 ui.table_next_column();
                 ui.text("-");
                 ui.table_next_column();

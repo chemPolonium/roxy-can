@@ -81,10 +81,13 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
-    // No NO_CLIP here: this table freezes its header row, and a frozen-row
-    // table needs its per-cell clip rects -- with clipping switched off the
-    // body rows keep the first cell's rect, so every column after "Message"
-    // vanishes from the rows while the header still shows them.
+    // No *table-level* NO_CLIP here: this table freezes its header row, and a
+    // frozen-row table needs its per-cell clip rects -- with clipping switched
+    // off wholesale the body rows keep the first cell's rect and every column
+    // after "Message" vanishes (that was 0616fdc). The per-column flag on
+    // "Message" below is a different mechanism: the table's own clip stays in
+    // force and only the narrowing of that column's merged draw channel is
+    // skipped, so its text can run right without escaping the table.
     let tbl_flags = TableFlags::BORDERS_INNER
         | TableFlags::ROW_BG
         | TableFlags::RESIZABLE
@@ -94,7 +97,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, opts) else {
         return;
     };
-    ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NONE, 1.0);
+    ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NO_CLIP, 1.0);
     for (label, w) in [
         ("Bus", 60.0),
         ("Dir", 34.0),
@@ -136,38 +139,33 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_row();
                 ui.table_next_column();
                 // The sync pass worked out *why* there is nothing here; the
-                // window only prints it. The note is a whole sentence, so it
-                // gets the row, not the width of one column.
-                span_row_text(
-                    ui,
-                    &format!(
-                        "   {}",
-                        row.empty_note.as_deref().unwrap_or("(no signals)")
-                    ),
-                );
+                // window only prints it. The sentence is longer than one cell,
+                // which is what the unclipped column is for.
+                ui.text(format!(
+                    "   {}",
+                    row.empty_note.as_deref().unwrap_or("(no signals)")
+                ));
             } else {
                 for (name, value) in &row.signals {
                     ui.table_next_row();
                     ui.table_next_column();
                     ui.text(format!("   {name}"));
-                    ui.table_set_column_index(1);
-                    span_row_text(ui, value);
+                    // The value at a fixed offset, so the readings line up in a
+                    // column of their own instead of being chased by the length
+                    // of each name. It starts past the "Message" cell, and this
+                    // table sets that column up unclipped so the text can run
+                    // into the five columns a child row leaves empty -- a
+                    // decoded FlexRay value ("2.54 Mpa (正常)  (1Fh)") never fit
+                    // the 60 px Bus cell it used to be pushed into.
+                    ui.same_line_with_pos(SIG_VALUE_X);
+                    ui.text(value);
                 }
             }
         }
     }
 }
 
-/// One line of text, allowed to run into the empty columns to its right.
-///
-/// A table clips every cell to its own column, and the value column here is
-/// the 60 px "Bus" one -- so a FlexRay reading like `2.54 Mpa [正常] (0x1F)`
-/// was cut mid-unit, which is the one thing the expanded row exists to show.
-/// Only this item's clip rect is widened; the table keeps clipping every other
-/// cell, which a frozen-header table needs (see the note on `tbl_flags`).
-fn span_row_text(ui: &Ui, text: &str) {
-    let [x, y] = ui.cursor_screen_pos();
-    let right = x + ui.content_region_avail_width();
-    let _clip = ui.push_clip_rect([x, y], [right, y + ui.text_line_height()], false);
-    ui.text(text);
-}
+/// Where an expanded row's value starts, measured from the window's content
+/// left edge: wide enough for the longest signal names the descriptions
+/// declare, and everything to its right is empty on a child row anyway.
+const SIG_VALUE_X: f32 = 260.0;
