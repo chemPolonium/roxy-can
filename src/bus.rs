@@ -1692,6 +1692,11 @@ impl BusCore {
     /// to redo the tallies it did not see -- otherwise the traffic from before
     /// the file stayed in one unnamed row while the same frame started a second
     /// one below it.
+    ///
+    /// The price: rows already evicted from the ring cannot be re-sorted, so
+    /// loading a description after replaying more than a ring's worth of frames
+    /// recounts only what is still on screen. That is the smaller wrong -- the
+    /// alternative is a count that mixes two frames' traffic forever.
     fn rebuild_fr_aggs(&mut self) {
         // The published view is the ring without the tail copy a re-collect
         // would need; holding it keeps the tally loop from borrowing `self`.
