@@ -224,6 +224,14 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
 
     // `if let`, not `let else { return }`: a collapsed group must not hide the
     // groups after it.
+    // How many frames each ECU is the declared sender of -- counted once here
+    // because the frame rows below want the same answer per frame, and looking
+    // it up twice per row re-walks the bindings for nothing.
+    let mut tx_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let senders: Vec<Option<&str>> = (0..db.frames.len()).map(|i| db.frame_sender(i)).collect();
+    for s in senders.iter().flatten() {
+        *tx_counts.entry(s).or_insert(0) += 1;
+    }
     if !db.ecus.is_empty()
         && let Some(_e) = ui
             .tree_node_config(format!("ECU ({})##frecu{bus}", db.ecus.len()))
@@ -231,7 +239,12 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
             .push()
     {
         for ecu in &db.ecus {
-            ui.bullet_text(ecu.as_str());
+            // Only a non-zero count is printed: the description binding no frame
+            // to an ECU is not the same claim as binding it none.
+            match tx_counts.get(ecu.as_str()) {
+                Some(n) => ui.bullet_text(format!("{ecu} · 发 {n} 帧")),
+                None => ui.bullet_text(ecu.as_str()),
+            }
         }
     }
 
@@ -299,8 +312,17 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
                         Some((c, _)) => format!(" · {c} 帧"),
                         None => " · 未收到".to_string(),
                     };
+                    // The declared sender, last: the name is what identifies the
+                    // row and this panel clips whatever falls off its right edge,
+                    // so the optional fact goes where losing it costs least. An
+                    // unbound frame prints nothing rather than a dash that would
+                    // read as "declared to have no sender".
+                    let who = match senders.get(ix).copied().flatten() {
+                        Some(s) => format!(" · 发送 {s}"),
+                        None => String::new(),
+                    };
                     let leaf = format!(
-                        "{name} · 相 {}/{} · {} · {} B{live}",
+                        "{name} · 相 {}/{} · {} · {} B{who}{live}",
                         t.base_cycle,
                         t.cycle_repetition,
                         t.channel.label(),

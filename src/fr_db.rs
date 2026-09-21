@@ -13,7 +13,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// FlexRay transmission channel. A / B / both at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -222,6 +222,12 @@ pub struct FrDb {
     /// the frame's children to give -- and a Trace rebuild wants the count for
     /// every row of a 50 000-row ring, not the values.
     child_ends: Vec<Vec<u32>>,
+    /// `PDU name -> the ECU that transmits it`, from the description's ECU →
+    /// PDU-group bindings whose `COMMUNICATION-DIRECTION` is OUT. Only the
+    /// ARXML path fills it: a FIBEX cluster export carries no ECU-to-PDU
+    /// reference at all (neither bundled one does), and an absent entry means
+    /// "the description does not say", never "nobody sends it".
+    pdu_senders: BTreeMap<String, String>,
 }
 
 impl FrDb {
@@ -243,6 +249,7 @@ impl FrDb {
             slot_ix: HashMap::new(),
             children: Vec::new(),
             child_ends: Vec::new(),
+            pdu_senders: BTreeMap::new(),
         };
         for (i, p) in db.pdus.iter().enumerate() {
             // First declaration wins, as `iter().find` did.
@@ -269,6 +276,27 @@ impl FrDb {
             })
             .collect();
         db
+    }
+
+    /// Attaches the ECU → transmitted-PDU bindings. Separate from
+    /// [`Self::assemble`] because only one of the two document formats carries
+    /// them: leaving the map empty is the honest answer for the other.
+    pub(crate) fn with_pdu_senders(mut self, senders: BTreeMap<String, String>) -> Self {
+        self.pdu_senders = senders;
+        self
+    }
+
+    /// Which ECU transmits this frame, when the description says so. A frame
+    /// carries PDUs, and a PDU belongs to some ECU's outbound group; the first
+    /// of the frame's PDUs that has such an owner answers for the frame. `None`
+    /// means the description binds no sender -- no ECU list at all (a cluster
+    /// export), or PDUs that appear in no outbound group.
+    pub fn frame_sender(&self, frame_ix: usize) -> Option<&str> {
+        self.frames
+            .get(frame_ix)?
+            .pdus
+            .iter()
+            .find_map(|(name, _)| self.pdu_senders.get(name).map(|s| s.as_str()))
     }
 
     /// A frame's signals in payload order: every signal of every PDU it maps,
@@ -724,16 +752,45 @@ fn text_of(node: &roxmltree::Node, tags: &[&str]) -> Option<String> {
     tags.iter().find_map(|t| first_text(node, t))
 }
 
+/// Every reference under `tag` inside the subtree, document order -- the
+/// multi-valued twin of [`ref_of`], for the elements that hold several of them
+/// (a PDU group lists its PDUs, an ECU lists its groups). Both spellings are
+/// accepted, as in [`ref_of`]: `ID-REF` attribute or element text.
+fn refs_in(node: &roxmltree::Node, tag: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_refs(node, tag, &mut out);
+    out
+}
+
+fn collect_refs(node: &roxmltree::Node, tag: &str, out: &mut Vec<String>) {
+    if node.is_element()
+        && node.tag_name().name() == tag
+        && let Some(r) = ref_value(node)
+    {
+        out.push(r);
+    }
+    for child in node.children() {
+        collect_refs(&child, tag, out);
+    }
+}
+
+/// A reference element's target: `ID-REF` attribute first, element text as
+/// the fallback. The two spellings coexist across FIBEX versions and exports.
+fn ref_value(node: &roxmltree::Node) -> Option<String> {
+    if let Some(id_ref) = node.attribute("ID-REF") {
+        return Some(id_ref.to_string());
+    }
+    node.text()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 /// A child element's reference: ID-REF attribute first, element text as
 /// the fallback.
 fn ref_of(node: &roxmltree::Node, tag: &str) -> Option<String> {
-    let child = node
-        .children()
-        .find(|n| n.is_element() && n.tag_name().name() == tag)?;
-    if let Some(id_ref) = child.attribute("ID-REF") {
-        return Some(id_ref.to_string());
-    }
-    child.text().map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+    node.children()
+        .find(|n| n.is_element() && n.tag_name().name() == tag)
+        .and_then(|n| ref_value(&n))
 }
 
 fn parse_u32(s: &str) -> Option<u32> {
@@ -1841,10 +1898,41 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         params.p_samples_per_microtick = v;
     }
 
-    // 6. ECUs.
+    // 6. ECUs, and who transmits what.
     let ecu_nodes = index.nodes("ECU-INSTANCE");
     let mut ecus: Vec<String> = ecu_nodes.iter().map(short_name).collect();
     ecus.retain(|n| !n.is_empty() && n != "Unnamed");
+    // An ECU binds to PDU *groups* by reference, and a group carries its own
+    // `COMMUNICATION-DIRECTION` -- OUT means the binding ECU transmits those
+    // PDUs. That direction field is the whole answer, so nothing here reads a
+    // name convention (`..._Tx` shows up in port short-names too, and a name is
+    // not a declaration). Groups are matched by short name because the ref is a
+    // path (`/IPDUGroup/BLU_oPowerTrain_Rx`) and the group has no ID attribute.
+    let groups = index.nodes("I-SIGNAL-I-PDU-GROUP");
+    let mut pdu_senders: BTreeMap<String, String> = BTreeMap::new();
+    for ecu in ecu_nodes {
+        let ecu_name = short_name(ecu);
+        if ecu_name.is_empty() {
+            continue;
+        }
+        for group_ref in refs_in(ecu, "ASSOCIATED-COM-I-PDU-GROUP-REF") {
+            let want = ref_short_name(&group_ref);
+            let Some(group) = groups.iter().find(|g| short_name(g) == want) else {
+                continue;
+            };
+            if text_of(group, &["COMMUNICATION-DIRECTION"]).as_deref() != Some("OUT") {
+                continue;
+            }
+            for pdu_ref in refs_in(group, "I-SIGNAL-I-PDU-REF") {
+                // First binding wins: two ECUs both marked OUT for one PDU is a
+                // broken document, and picking a winner silently is worse than
+                // picking the first one visibly.
+                pdu_senders
+                    .entry(ref_short_name(&pdu_ref).to_string())
+                    .or_insert_with(|| ecu_name.clone());
+            }
+        }
+    }
 
     // 7. Assemble.
     let mut pdus: Vec<FrPdu> = Vec::new();
@@ -1895,7 +1983,9 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
     dedup_frame_names(&mut frames);
     // Index after the dedup: the tables hold positions in `frames`.
-    Ok(FrDb::assemble(params, ecus, pdus, frames))
+    Ok(
+        FrDb::assemble(params, ecus, pdus, frames).with_pdu_senders(pdu_senders),
+    )
 }
 
 /// Keeps the first frame of each name; duplicates only confuse the
@@ -2168,6 +2258,77 @@ mod tests {
     fn read_asset(path: &str) -> Option<String> {
         let bytes = std::fs::read(path).ok()?;
         Some(crate::dbc::text_from_bytes(bytes))
+    }
+
+    /// An ECU's outbound PDU group makes it the sender of the frames carrying
+    /// those PDUs, and its inbound group makes it not: `BackLightInfo` is in
+    /// `BSC_oPowerTrain_Tx` (OUT) and in `BLU_oPowerTrain_Rx` (IN), so BSC sends
+    /// it and BLU only listens. The reference chain is the declaration -- the
+    /// `_Tx` / `_Rx` suffix in the group name is not read for anything.
+    #[test]
+    fn the_arxml_ecu_bindings_name_a_frames_sender() {
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            panic!("{POWERTRAIN_ARXML} is committed");
+        };
+        let db = FrDb::parse(&text).expect("the asset parses");
+        let car = |pdu: &str| -> Vec<String> {
+            db.frames
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.pdus.iter().any(|(n, _)| n == pdu))
+                .filter_map(|(i, _)| db.frame_sender(i).map(str::to_string))
+                .collect()
+        };
+        let senders = car("BackLightInfo");
+        assert!(
+            !senders.is_empty(),
+            "some frame carries the PDU the bindings name"
+        );
+        assert!(
+            senders.iter().all(|s| s == "BSC"),
+            "the OUT group's ECU, never the IN one: {senders:?}"
+        );
+        // Every named sender is an ECU the same document lists, and coverage is
+        // reported because a partially-bound export is the normal case, not an
+        // error: what has no owner shows as "the description does not say".
+        let named: usize = (0..db.frames.len())
+            .filter(|&i| db.frame_sender(i).is_some())
+            .count();
+        for i in 0..db.frames.len() {
+            if let Some(s) = db.frame_sender(i) {
+                assert!(db.ecus.iter().any(|e| e == s), "{s} is not an ECU");
+            }
+        }
+        println!(
+            "{} of {} frames in {POWERTRAIN_ARXML} name a sending ECU ({} ECUs)",
+            named,
+            db.frames.len(),
+            db.ecus.len()
+        );
+        assert!(
+            named > 0 && named < db.frames.len(),
+            "partial coverage is the expectation here: got {named}"
+        );
+    }
+
+    /// A cluster export with no ECU bindings answers "nobody knows", not
+    /// "nobody sends": both bundled FIBEX files list ECUs nowhere, so every
+    /// frame is `None` and the display must not turn that into an owner.
+    #[test]
+    fn a_fibex_without_ecu_bindings_names_no_sender() {
+        for asset in ["assets/fibex/PowerTrain_v2.xml", "assets/fibex/PowerTrain2_v2.xml"] {
+            let Some(text) = read_asset(asset) else {
+                continue;
+            };
+            let db = FrDb::parse(&text).expect("the asset parses");
+            assert!(
+                db.frames
+                    .iter()
+                    .enumerate()
+                    .all(|(i, _)| db.frame_sender(i).is_none()),
+                "{asset} binds no ECU to a PDU group"
+            );
+        }
     }
 
     /// What a static slot actually is, from the bundled ARXML: slot 71 belongs
