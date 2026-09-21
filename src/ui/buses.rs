@@ -62,11 +62,12 @@ fn file_name(p: &str) -> String {
 /// What a bus's loaded description says its cluster is called, plus how many
 /// frames it schedules. The one piece of identity a description file carries
 /// that a recording does not -- with two networks in one log it is how the
-/// user checks he put the right file on the right 路.
+/// user checks the right file landed on the right 路. Short by intent: it
+/// shares the cell's width with nothing, but the column is not wide either.
 fn fr_cluster_tag(app: &App, bus: u8) -> String {
     match app.fr_db(bus) {
         Some(db) if !db.params.name.is_empty() => {
-            format!(" · cluster {}（{} 帧）", db.params.name, db.frames.len())
+            format!("声明 {}（{} 帧）", db.params.name, db.frames.len())
         }
         _ => String::new(),
     }
@@ -344,7 +345,7 @@ fn content(app: &mut App, ui: &Ui) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "移除这条 CAN 总线；后面的总线号依次前移，挂在被移除总线上的曲线、监控行与手选条目随之删除或重编号。",
+                    "移除这条总线；后面的总线号依次前移，挂在它上面的曲线与条目随之删除或重编号。",
                 );
             }
         }
@@ -387,9 +388,7 @@ fn content(app: &mut App, ui: &Ui) {
         app.add_flexray_bus();
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text(
-            "添加一条 FlexRay 路：先为它选择集群描述文件，选完这一路就出现在下面的表里。取消选择则不添加任何路。",
-        );
+        ui.tooltip_text("添加一条 FlexRay 路：先为它选择集群描述（取消则不添加）。");
     }
     ui.same_line();
     ui.text(format!("{} 路", rows.len()));
@@ -468,48 +467,35 @@ fn content(app: &mut App, ui: &Ui) {
             } else {
                 file_name(&path)
             });
-            // The full path and the cluster the file declares, on the name
-            // itself: what follows the name on the same line is clipped by the
-            // column edge, and a name cut in half is no use for checking that
-            // the right file landed on the right 路.
+            // The full path and the declared cluster name, on hover: the cell
+            // cannot hold either in full, and a name cut in half is no use for
+            // checking the right file landed on the right 路.
             if !path.is_empty() && ui.is_item_hovered() {
-                let full = fr_cluster_tag(app, bus);
-                ui.tooltip_text(format!("{path}\n{}", full.trim_start_matches(" · ")));
+                ui.tooltip_text(format!("{path}\n{tag}"));
             }
-            // Value on the first line, actions on the second. A real file name
-            // ("FR_Cluster_DP_30t_1209.xml") already fills the cell, and
-            // anything after it is clipped by the column edge -- visible-but-
-            // unreachable is the failure the CAN 硬件 column two-line layout
-            // exists to avoid, so the button does not ride on the name's line.
-            let load_label = if path.is_empty() {
-                "加载描述…"
-            } else {
-                "更换描述…"
-            };
-            if ui.button(format!("{load_label}##frload{bus}")) {
+            // Same verb as the CAN row's button for the same action -- pick the
+            // file this row decodes against -- and the same one-line help. The
+            // file name owns the first line, the button the second, the
+            // declared cluster the third: anything side by side here is clipped
+            // by the column edge (the CAN 硬件 column's two-line layout already
+            // wrote down that lesson).
+            if ui.button(format!("Open...##frload{bus}")) {
                 load_for = Some(bus);
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "为本行这路 FlexRay 总线选择 FIBEX/ARXML 集群描述文件。帧名、信号解码与静态段占用率都按这份文件解释。\n\
-                     描述只归属于本行这一路，不会按文件内容自动改挂到别的路：选错文件时本行的槽号会按另一路的调度表解释，\
-                     得到的帧名与物理值看似合理但都是错的，所以按钮下方印出该文件声明的 cluster 名以供核对。\n\
-                     只加载描述不会打开硬件端口；回放含 FlexRay 帧的日志只需加载描述。",
+                    "换这路的集群描述文件（帧名与信号解码以它为先）；只加载描述，不打开端口。",
                 );
             }
-            // On its own third line: after the button there is no room left in
-            // the cell, and this is the one text the user needs whole.
             if !tag.is_empty() {
-                ui.text_disabled(tag.trim_start_matches(" · "));
+                ui.text_disabled(&tag);
             }
             ui.table_next_column();
             match timing {
                 Some((kbps, cycle)) => {
                     ui.text(format!("{kbps} / {cycle:.2}"));
                     if ui.is_item_hovered() {
-                        ui.tooltip_text(
-                            "该路描述声明的比特率与宏周期（周期时间由两者算出）。此列只读：FlexRay 的位时参数写在集群描述文件里，改它要改文件。",
-                        );
+                        ui.tooltip_text("描述声明的比特率与宏周期；此列只读——要改得改描述文件。");
                     }
                 }
                 None => ui.text_disabled("-"),
@@ -537,10 +523,9 @@ fn content(app: &mut App, ui: &Ui) {
                         detach = Some(bus);
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text(format!(
-                            "关闭这路的接收端口，并把这路从表里移除——它的集群描述一并移除（端口参数本来就取自那份描述）。\
-                             只想换一份描述：用描述列的 {load_label}。"
-                        ));
+                        ui.tooltip_text(
+                            "关闭这路的接收端口并移除这路（它的集群描述一并移除）。",
+                        );
                     }
                 }
                 None => match &listed {
@@ -562,7 +547,7 @@ fn content(app: &mut App, ui: &Ui) {
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "为本行这路挂上只收监听（Vector 端口），选中即挂。这行需要先有集群描述：端口参数取自该描述，没有描述时挂接会直接报错。",
+                                "挂上只收监听（Vector 端口），选中即挂；这行需要先有集群描述。",
                             );
                         }
                     }
@@ -581,7 +566,7 @@ fn content(app: &mut App, ui: &Ui) {
                 }
                 if ui.is_item_hovered() {
                     ui.tooltip_text(format!(
-                        "移除这行的集群描述，不影响其他路。正在监听时不能单独移除描述——先点本行的{}。",
+                        "移除这行的集群描述（正在监听时先点本行的{}）。",
                         crate::channel::FR_DETACH_LABEL
                     ));
                 }

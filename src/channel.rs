@@ -468,7 +468,7 @@ impl App {
             Some(want) => {
                 if self.snap.fr_watches.iter().any(|w| w.bus == want) {
                     self.status = format!(
-                        "{} 正在监听：换描述前先点本行的“{FR_DETACH_LABEL}”（关闭端口并撤下这路），再重新加载描述",
+                        "{} 正在监听：先点本行的“{FR_DETACH_LABEL}”，再加载新描述",
                         self.fr_bus_label(want)
                     );
                     return None;
