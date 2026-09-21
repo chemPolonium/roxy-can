@@ -7545,16 +7545,131 @@ fn a_new_cluster_description_rebuilds_the_expanded_rows() {
     app.stop();
 }
 
+/// "仅 DBC" asks one question of every row in a mixed table: does a database
+/// account for *this arrival*? A FlexRay frame the cluster description schedules
+/// answers yes and stays -- the old reading dropped the entire FlexRay side,
+/// which threw away precisely the rows the checkbox exists to keep. What has to
+/// go is what no database describes, and there are two distinct kinds of that: a
+/// slot this cluster's schedule holds no frame for, and any row on a bus with no
+/// description at all.
+#[test]
+fn dbc_only_keeps_the_flexray_rows_a_description_covers() {
+    use crate::aggregate::{FrFrameAgg, FrOccupant};
+    let mut app = quiet_app();
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let text = read_fr_asset(arxml);
+    let db = crate::fr_db::FrDb::parse(&text).expect("the asset parses");
+    let (slot, cycle) = {
+        let f = &db.frames[0];
+        (
+            f.triggering.slot_id as u16,
+            f.triggering.base_cycle as u8,
+        )
+    };
+    let ix = db
+        .frame_ix_at(slot, cycle, 0)
+        .expect("the first frame resolves at its own slot and phase");
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    let row = |bus: u8, at: u16| crate::trace::FrRow {
+        bus,
+        t_us: 1_000,
+        ab: 0,
+        slot: at,
+        cycle,
+        payload: vec![1],
+        header_crc: 0,
+        flags: 0,
+        name: None,
+    };
+    let flt = |app: &App, dbc_only: bool| {
+        let mut w = app.trace_windows[0].clone();
+        w.dbc_only = dbc_only;
+        w.filter_lens()
+    };
+    assert!(
+        app.trace_fr_match(&flt(&app, true), &row(0, slot)),
+        "the description schedules this frame: the row stays"
+    );
+    assert!(
+        !app.trace_fr_match(&flt(&app, true), &row(0, 4095)),
+        "no frame is scheduled in that slot"
+    );
+    assert!(
+        !app.trace_fr_match(&flt(&app, true), &row(1, slot)),
+        "FR1 has no description at all"
+    );
+    assert!(
+        app.trace_fr_match(&flt(&app, false), &row(1, slot)),
+        "unticked, an undescribed row is table material again"
+    );
+
+    // Messages asks the same question, because its CSV must match its table.
+    // The tally carries its occupant in the row as well as in the map key --
+    // that field is what "described" is read from.
+    app.fr_aggs.insert(
+        (0, slot, FrOccupant::Frame(ix)),
+        FrFrameAgg {
+            bus: 0,
+            slot,
+            count: 3,
+            ab: 0,
+            occupant: FrOccupant::Frame(ix),
+            ..Default::default()
+        },
+    );
+    app.fr_aggs.insert(
+        (1, slot, FrOccupant::Unknown),
+        FrFrameAgg {
+            bus: 1,
+            slot,
+            count: 3,
+            ab: 0,
+            occupant: FrOccupant::Unknown,
+            ..Default::default()
+        },
+    );
+    app.refresh_snapshot();
+    app.msg_windows[0].dbc_only = true;
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    let buses: Vec<String> = app.msg_windows[0]
+        .text_rows
+        .iter()
+        .map(|r| r.bus.clone())
+        .collect();
+    assert!(
+        buses.iter().any(|b| b == "FR0"),
+        "the described cluster's row is still listed: {buses:?}"
+    );
+    assert!(
+        !buses.iter().any(|b| b == "FR1"),
+        "the row no description covers is not: {buses:?}"
+    );
+    app.stop();
+}
+
+/// Reads a bundled cluster description the way the product does. The real ARXML
+/// export is GBK, so `read_to_string` fails on it -- and a test written as
+/// "skip when the read fails" then silently never runs. These assets are
+/// committed, so a failure here is a broken test, not a stripped checkout.
+fn read_fr_asset(path: &str) -> String {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{path} is committed: {e}"));
+    crate::dbc::text_from_bytes(bytes)
+}
+
 /// The trace text filter matches FlexRay frame names from the watch's
 /// description database (and slot numbers), instead of hiding FR rows
 /// wholesale. Value conditions still exclude them.
 #[test]
 fn the_trace_text_filter_matches_fr_frame_names() {
     let mut app = quiet_app();
-    let Some(text) = std::fs::read_to_string("assets/arxml/PowerTrain.arxml").ok() else {
-        println!("assets/arxml/PowerTrain.arxml not present -- skipped");
-        return;
-    };
+    let text = read_fr_asset("assets/arxml/PowerTrain.arxml");
     let db = crate::fr_db::FrDb::parse(&text).expect("PowerTrain.arxml parses");
     app.fr_buses.insert(
         0,

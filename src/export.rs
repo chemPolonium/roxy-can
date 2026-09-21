@@ -247,10 +247,15 @@ impl App {
             ));
         }
         // FlexRay slots ride the same CSV, after the CAN rows, matching
-        // the on-screen table (window text filter matches names/slots).
-        if !dbc_only {
+        // the on-screen table (window text filter matches names/slots, and
+        // "仅 DBC" is the same per-row question -- see
+        // [`App::fr_described_frame`]).
+        {
             for agg in &self.snap.fr_aggs {
                 if !Self::scope_match_fr(scope, manual, agg.bus, agg.slot) {
+                    continue;
+                }
+                if dbc_only && self.fr_described_frame(agg).is_none() {
                     continue;
                 }
                 let name = Self::fr_frame_name(agg);

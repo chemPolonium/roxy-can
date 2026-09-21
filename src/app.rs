@@ -1090,6 +1090,31 @@ impl App {
             .or(row.name.as_deref())
     }
 
+    /// The frame a FlexRay tally row was keyed by, when that row's own cluster
+    /// description still holds it. `None` means "not described", and it covers
+    /// both ways a row can be undescribed: no description loaded on this bus, or
+    /// one that does not schedule this slot's cycle phase. The Messages window
+    /// and its CSV export gate "仅 DBC" on this, so the file matches the table.
+    pub(crate) fn fr_described_frame(
+        &self,
+        agg: &crate::aggregate::FrFrameAgg,
+    ) -> Option<usize> {
+        self.fr_db(agg.bus)
+            .and_then(|db| agg.occupant.frame_ix().filter(|&i| db.frame_index(i).is_some()))
+    }
+
+    /// Does this row's own cluster description account for the arrival -- that
+    /// is, does it schedule a frame for this slot *in this cycle phase*? The
+    /// "仅 DBC" gate asks this rather than "is it a FlexRay row": a described
+    /// cluster's frame is described by a database exactly as a DBC message is,
+    /// and the two failure kinds stay distinct -- no description on the bus
+    /// gives no frame for any row, a description that does not schedule this
+    /// phase gives none for this one.
+    pub fn fr_row_described(&self, row: &crate::trace::FrRow) -> bool {
+        self.fr_db(row.bus)
+            .is_some_and(|db| db.frame_ix_at(row.slot, row.cycle, row.ab).is_some())
+    }
+
     /// The cluster description loaded for one FlexRay bus. `None` means the
     /// bus is watched without a description: rows still reach the Trace
     /// window, they just stay undecoded.
@@ -1277,11 +1302,15 @@ impl App {
             });
         }
         // FlexRay rows ride the same table, after the CAN rows: one row per
-        // frame the run carried, not per slot. The same scope/DBC/text rules
-        // apply as in the Trace window -- a CAN channel or Manual id scope
-        // and DBC-only keep the table on CAN, a cluster scope keeps just that
-        // cluster, and the decimal filter text also matches a slot number.
-        if !dbc_only {
+        // frame the run carried, not per slot. The same scope/text rules apply
+        // as in the Trace window -- a CAN channel scope drops them, a cluster
+        // scope keeps just that cluster, and the filter text also matches a slot
+        // number. "仅 DBC" is decided per row below, not for the section: a frame
+        // the cluster description schedules is described by a database exactly
+        // as a DBC message is, which is the question the checkbox asks; what it
+        // must not paper over is the other two cases -- no description on this
+        // bus, or one that does not schedule this phase's frame.
+        {
             for agg in &self.snap.fr_aggs {
                 if !App::scope_match_fr(scope, &manual, agg.bus, agg.slot) {
                     continue;
@@ -1290,10 +1319,10 @@ impl App {
                 // signals -- through the very index this row was keyed by, so
                 // the name shown and the layout decoded are the same frame's.
                 let db = self.fr_db(agg.bus);
-                let frame_ix = agg
-                    .occupant
-                    .frame_ix()
-                    .filter(|&i| db.is_some_and(|db| db.frame_index(i).is_some()));
+                let frame_ix = self.fr_described_frame(agg);
+                if dbc_only && frame_ix.is_none() {
+                    continue;
+                }
                 let name = Self::fr_frame_name(agg);
                 if !filter.is_empty()
                     && !format!("slot {}", agg.slot).contains(&filter)

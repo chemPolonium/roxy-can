@@ -965,17 +965,23 @@ impl App {
 
     /// The FlexRay side of the same filter lens. FR rows carry no id,
     /// direction or frame kind, so those filters hide them rather than
-    /// half-match: a CAN channel scope, `Tx`, DBC only and a frame-kind pick
-    /// all restrict the table to CAN, a FlexRay cluster scope keeps that
+    /// half-match: a CAN channel scope, `Tx` and a frame-kind pick all
+    /// restrict the table to CAN, a FlexRay cluster scope keeps that
     /// cluster's rows and drops CAN, and a Manual scope admits exactly the
-    /// slots the window hand-picked. The text filter matches the frame name the
+    /// slots the window hand-picked. "DBC only" asks whether this row's own
+    /// cluster description schedules the arriving frame
+    /// ([`App::fr_row_described`]) -- the same question the CAN side asks, not
+    /// "is this a FlexRay row". The text filter matches the frame name the
     /// row shows (its cluster's description, else the name the log carried) or
     /// the slot number; payload search and the time range apply as on CAN.
     pub fn trace_fr_match(&self, flt: &TraceFilter, r: &crate::trace::FrRow) -> bool {
         if !Self::scope_match_fr(flt.scope, &flt.manual, r.bus, r.slot) {
             return false;
         }
-        if flt.dir == 2 || flt.dbc_only || flt.flags_kind != 0 {
+        if flt.dir == 2 || flt.flags_kind != 0 {
+            return false;
+        }
+        if flt.dbc_only && !self.fr_row_described(r) {
             return false;
         }
         // Value conditions (`Signal>10`) are CAN-only: FR rows leave.
