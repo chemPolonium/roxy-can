@@ -639,6 +639,88 @@ impl FrDb {
         }
         out
     }
+
+    /// The frame a slot holds as its first occupant. The generator edits one
+    /// slot's payload against this frame's signals; which occupant is actually
+    /// there at a given cycle is resolved again when the frame goes out.
+    pub fn frame_ix_of_slot(&self, slot: u16) -> Option<usize> {
+        self.slot_ix.get(&(slot as u32)).and_then(|c| c.first()).copied()
+    }
+
+    /// `frame_ix`'s signals as the generator needs them to edit a value:
+    /// position in the payload, encoding and range, in payload order.
+    pub fn edit_signals(&self, frame_ix: usize) -> Vec<FrEditSignal> {
+        self.children_of(frame_ix)
+            .iter()
+            .filter_map(|c| {
+                let sig = self.sig_of(c)?;
+                Some(FrEditSignal {
+                    name: sig.name.clone(),
+                    bit: u64::from(c.bit),
+                    size: u64::from(sig.length_bits),
+                    big_endian: sig.big_endian,
+                    signed: sig.signed,
+                    factor: sig.factor,
+                    offset: sig.offset,
+                    min: sig.min,
+                    max: sig.max,
+                    unit: sig.unit.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Writes `phys` into `payload` as signal `name` of `frame_ix`, the inverse
+    /// of [`Self::frame_values`]. False -- payload left alone -- when that frame
+    /// has no such signal or the bytes do not reach it: a value that cannot be
+    /// stored is not sent at all, rather than sent as whatever the old bytes
+    /// happened to hold.
+    pub fn encode_signal(&self, frame_ix: usize, name: &str, phys: f64, payload: &mut [u8]) -> bool {
+        let Some(child) = self
+            .children_of(frame_ix)
+            .iter()
+            .find(|c| self.sig_of(c).is_some_and(|s| s.name == name))
+        else {
+            return false;
+        };
+        let Some(sig) = self.sig_of(child) else {
+            return false;
+        };
+        if !Self::bits_fit(child, sig, payload.len()) {
+            return false;
+        }
+        let raw = crate::decode::from_physical(
+            phys,
+            sig.length_bits as u64,
+            sig.signed,
+            sig.factor,
+            sig.offset,
+        );
+        crate::decode::pack_raw(
+            payload,
+            u64::from(child.bit),
+            sig.length_bits as u64,
+            sig.big_endian,
+            raw,
+        );
+        true
+    }
+}
+
+/// One generator-editable FlexRay signal: the drag handle's inputs, already
+/// resolved to a bit offset inside the frame payload.
+#[derive(Clone, Debug)]
+pub struct FrEditSignal {
+    pub name: String,
+    pub bit: u64,
+    pub size: u64,
+    pub big_endian: bool,
+    pub signed: bool,
+    pub factor: f64,
+    pub offset: f64,
+    pub min: f64,
+    pub max: f64,
+    pub unit: String,
 }
 
 // ----------------------------------------------------------------------
@@ -2049,12 +2131,42 @@ pub(crate) fn two_frames_one_slot_db(slot: u16) -> std::sync::Arc<FrDb> {
 mod tests {
     use super::*;
 
+    /// The generator writes values back into a payload, so `encode_signal` has
+    /// to be the exact inverse of what the decoder reads out of the same frame:
+    /// encode a value, decode the frame, and that number comes back.
+    #[test]
+    fn an_encoded_signal_reads_back_from_the_same_frame() {
+        let db = two_frames_one_slot_db(10);
+        let mut payload = [0u8; 8];
+        assert!(db.encode_signal(0, "Amp", 77.0, &mut payload));
+        assert_eq!(
+            db.decode(0, &payload),
+            vec![("Amp".to_string(), "77 u  (4Dh)".to_string())],
+            "what the frame decodes back is what went in"
+        );
+        assert!(
+            !db.encode_signal(0, "Bmp", 1.0, &mut payload),
+            "FB's signal is not FA's, and a wrong frame encodes nothing"
+        );
+        assert!(!db.encode_signal(0, "NoSuch", 1.0, &mut payload));
+        let mut empty: [u8; 0] = [];
+        assert!(
+            !db.encode_signal(0, "Amp", 5.0, &mut empty),
+            "bytes that do not reach the signal are left alone rather than truncated"
+        );
+    }
+
     /// A slot scheduled by two frames offers both, per occupant: collapsing it
     /// to "the first frame of the slot" hid `FB`'s signal from the picker and
     /// left `slot_signal` unable to find `Bmp` at all.
     #[test]
     fn every_occupant_of_a_slot_offers_its_signals() {
         let db = two_frames_one_slot_db(10);
+        assert_eq!(
+            db.frame_ix_of_slot(10),
+            Some(0),
+            "the generator edits the slot against its first occupant"
+        );
         let entries = db.slot_signals();
         assert_eq!(
             entries

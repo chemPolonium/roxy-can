@@ -175,6 +175,18 @@ impl Default for MonitorRow {
     }
 }
 
+/// Which generator row a dialog is drafting. The Interactive Generator holds
+/// two lists keyed differently -- CAN entries by `(channel, id)`, FlexRay
+/// entries by `(bus, slot)` -- and an index alone cannot say which one it came
+/// from, so the dialogs that serve both carry one of these.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GenRow {
+    /// Index into `Snapshot::tx`.
+    Can(usize),
+    /// Index into `Snapshot::fr_tx`.
+    Fr(usize),
+}
+
 pub struct App {
     /// Where the bus actually lives. `Threaded` -- the production drive:
     /// the core runs on its own thread and only commands and snapshots
@@ -334,12 +346,15 @@ pub struct App {
     pub profile_delete_arm: bool,
     pub net_selected: usize,
     pub tx_pick: usize,
+    /// Which slot the FlexRay add line's combo is pointing at, per 路. Session
+    /// state, like `tx_pick`.
+    pub fr_tx_pick: std::collections::BTreeMap<u8, usize>,
     /// The generator overview's add-by-id draft: the bus row being typed
     /// in plus its hex text, committed to the model on Add. Session state.
     pub gen_add_buf: Option<(u8, String)>,
     /// Generator row whose value-source parameters the modal is editing:
     /// index into `tx_list` plus the DBC signal name.
-    pub src_edit: Option<(usize, String)>,
+    pub src_edit: Option<(GenRow, String)>,
     /// Edit buffer for the step sequence, kept on `App` so the text box keeps
     /// its caret and partial input across frames.
     pub src_seq_buf: String,
@@ -353,7 +368,7 @@ pub struct App {
     /// Generator row whose send period the cycle dialog is drafting. The value
     /// stays a draft until the dialog confirms it: as an inline number box it
     /// applied every keystroke, so dialing in 100 sent at 1 ms first.
-    pub tx_cycle_edit: Option<usize>,
+    pub tx_cycle_edit: Option<GenRow>,
     /// Draft period in whole milliseconds for that row.
     pub tx_cycle_buf: String,
     /// The generator's editable data box while it has focus: row index plus
@@ -361,6 +376,9 @@ pub struct App {
     /// bus only sees the parsed payload once the edit commits (via
     /// `SetEntryHex`).
     pub tx_data_edit: Option<(usize, String)>,
+    /// The same draft box for a FlexRay row's payload, kept apart so a CAN row
+    /// and a FlexRay row with the same index never read each other's text.
+    pub fr_data_edit: Option<(usize, String)>,
     /// Buses-window rename draft: `(row, text)` while the field has
     /// focus, committed as a `SetChannelConfig` command on focus loss.
     pub bus_name_edit: Option<(usize, String)>,
@@ -550,6 +568,7 @@ impl App {
             profile_delete_arm: false,
             net_selected: 0,
             tx_pick: 0,
+            fr_tx_pick: Default::default(),
             gen_add_buf: None,
             src_edit: None,
             src_seq_buf: String::new(),
@@ -558,6 +577,7 @@ impl App {
             tx_cycle_edit: None,
             tx_cycle_buf: String::new(),
             tx_data_edit: None,
+            fr_data_edit: None,
             // Buses-window rename draft: (row, text) while the field is
             // being typed in, committed as a command on focus loss.
             bus_name_edit: None,

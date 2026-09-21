@@ -188,8 +188,9 @@ fn fr_buses(app: &App) -> Vec<u8> {
 /// Statistics.
 ///
 /// It is a declaration view, not an editor: a FlexRay node has no role to set
-/// and no generator row until the bus can transmit, so nothing here pretends
-/// otherwise. The ECU group opens by default, as the CAN sections do.
+/// (roles are the DBC node concept) and no generator row here -- the slots this
+/// tool fills are edited in the Interactive Generator window, not per ECU. The
+/// ECU group opens by default, as the CAN sections do.
 fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
     let label = match app.fr_db(bus) {
         Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),

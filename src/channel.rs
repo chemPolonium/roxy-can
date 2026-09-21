@@ -202,6 +202,18 @@ impl App {
             .unwrap_or_else(|| format!("FR{bus}"))
     }
 
+    /// The period the cluster description gives the frame occupying this slot:
+    /// how many cycles between its arrivals, times the cluster cycle length.
+    /// `None` when the bus has no description, or it schedules nothing there --
+    /// the generator's cycle dialog shows it as a hint, not as a value to guess.
+    pub fn fr_declared_period_us(&self, bus: u8, slot: u16) -> Option<u64> {
+        let db = self.fr_db(bus)?;
+        let f = db.frame_index(db.frame_ix_of_slot(slot)?)?;
+        let rep = f.triggering.cycle_repetition.max(1) as f64;
+        let us = (db.params.cycle_time_ms * rep * 1_000.0).round() as u64;
+        (us > 0).then_some(us)
+    }
+
     /// The bus a signal key lives on, spelled the way the tables and legends
     /// name it. A FlexRay key's index is not a CAN channel, so it must not be
     /// looked up in the channel list.

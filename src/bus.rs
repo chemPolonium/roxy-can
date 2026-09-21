@@ -15,7 +15,7 @@ use crate::app::{Mode, SAMPLE_INTERVAL_US, TRACE_LIMIT};
 use crate::can::frame::{CanFrame, Direction};
 use crate::channel::{Channel, NodeRole};
 use crate::dbc::DecodedSignal;
-use crate::generator::TxMsg;
+use crate::generator::{FrTxMsg, TxMsg};
 use crate::observe::{SigKey, Subscription};
 use crate::script::HostInput;
 use crate::source::FrameSource;
@@ -211,6 +211,56 @@ pub enum BusCommand {
         id: u32,
         name: String,
         phys: f64,
+    },
+    /// The FlexRay twin of the entry commands above, keyed by `(bus, slot)`:
+    /// one entry per slot per cluster, the same identity a window's hand-picked
+    /// set and `fr_sig` use. A slot is addressed, not identified by a message
+    /// id, so the two keying spaces stay apart.
+    AddFrEntry {
+        bus: u8,
+        slot: u16,
+    },
+    /// Drop the entry, payload, sources and schedule with it.
+    RemoveFrEntry {
+        bus: u8,
+        slot: u16,
+    },
+    SetFrEntryActive {
+        bus: u8,
+        slot: u16,
+        on: bool,
+    },
+    /// Send period in µs; 0 = only on `SendFrNow`.
+    SetFrEntryCycle {
+        bus: u8,
+        slot: u16,
+        cycle_us: u64,
+    },
+    SetFrEntryHex {
+        bus: u8,
+        slot: u16,
+        text: String,
+    },
+    SetFrEntrySource {
+        bus: u8,
+        slot: u16,
+        src: crate::sim::ValueSrc,
+    },
+    ClearFrEntrySource {
+        bus: u8,
+        slot: u16,
+        name: String,
+    },
+    PinFrEntrySignal {
+        bus: u8,
+        slot: u16,
+        name: String,
+        phys: f64,
+    },
+    /// One frame from this entry, off the schedule.
+    SendFrNow {
+        bus: u8,
+        slot: u16,
     },
     /// Start caching one signal: a fresh subscription gets the next
     /// palette color and the database's display type. An existing
@@ -639,6 +689,8 @@ pub struct Snapshot {
     /// One entry per generator row: display state plus the bytes that
     /// actually go out at this frame's sim time.
     pub tx: Vec<TxView>,
+    /// The same for the FlexRay slots this tool fills.
+    pub fr_tx: Vec<FrTxView>,
     /// The trace ring, published once per step that ingested frames and
     /// shared by Arc: cloning the snapshot copies a pointer, not 50k
     /// frames. Read-only for the frontend.
@@ -754,6 +806,32 @@ pub struct TxView {
     pub muted: bool,
 }
 
+/// One FlexRay generator entry as the frontend sees it. The twin of
+/// [`TxView`] without the CAN-only parts: a slot has no transmitter role to
+/// gate it, no FD flag, and its payload is however long the frame is.
+#[derive(Clone, Debug)]
+pub struct FrTxView {
+    pub bus: u8,
+    pub slot: u16,
+    pub name: String,
+    pub active: bool,
+    pub cycle_us: u64,
+    /// Base payload as hex text -- what the row's box edits.
+    pub data_text: String,
+    /// The payload of the frame that last went out, or the base if none has.
+    pub sent_text: String,
+    /// The same bytes, for the signal handles that read their displayed value
+    /// back out of what actually goes out.
+    pub sent_data: Vec<u8>,
+    pub srcs: Vec<crate::sim::ValueSrc>,
+    /// The replayed log carries this slot itself, so the entry stands down for
+    /// the run.
+    pub muted: bool,
+    /// The bus's cluster description schedules no frame for this slot, so the
+    /// payload goes out as typed and nothing decodes it.
+    pub undescribed: bool,
+}
+
 /// One subscribed signal as the frontend sees it this frame. The
 /// run-internal sampler bookkeeping (`sum`/`n`/`last_sample_us`) stays
 /// on the bus; this is the display-facing projection.
@@ -781,13 +859,40 @@ pub struct SubView {
 /// Every (channel, id) the log file carries -- the twin-silencing set for
 /// replay. A plain full read of a temporary stream: parsing is the cost of
 /// one open, paid once per replay, never per frame.
-fn scan_log_ids(path: &std::path::Path) -> Option<std::collections::HashSet<(u8, u32)>> {
+/// What a log carries, so a generator entry whose traffic the replay itself
+/// provides stands down for the run -- replaying a recording of this very
+/// simulation used to interleave two senders of one signal. CAN by
+/// `(channel, id)`, FlexRay by `(bus, slot)`; the two numbering spaces stay
+/// apart, because `(0, 5)` means both a CAN id and a slot.
+/// What a log carries, each numbering space on its own terms: CAN by
+/// `(channel, id)`, FlexRay by `(bus, slot)`.
+type LogIds = (
+    std::collections::HashSet<(u8, u32)>,
+    std::collections::HashSet<(u8, u16)>,
+);
+
+fn scan_log_ids(path: &std::path::Path) -> Option<LogIds> {
     let mut stream = crate::log::open_stream(path).ok()?;
     let mut ids = std::collections::HashSet::new();
+    let mut fr_ids = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    let mut take_rows = |stream: &mut dyn crate::source::FrameStream, rows: &mut Vec<_>| {
+        stream.poll_fr_rows(u64::MAX, rows);
+        for r in rows.drain(..) {
+            fr_ids.insert((r.bus, r.slot));
+        }
+    };
     while let Some(f) = stream.next_frame() {
         ids.insert((f.channel, f.id));
+        // Drained as the walk goes rather than once at the end: a FlexRay-heavy
+        // log would otherwise pile every row into memory beside the ring the
+        // replay itself is already holding.
+        if rows.len() >= 4_096 {
+            take_rows(&mut *stream, &mut rows);
+        }
     }
-    Some(ids)
+    take_rows(&mut *stream, &mut rows);
+    Some((ids, fr_ids))
 }
 
 /// Status-line note about the FD state of a fresh hardware attach: active
@@ -818,11 +923,17 @@ pub struct BusCore {
     /// of one signal. Filled by [`App::replay`], consulted only in Replay
     /// mode, never persisted.
     pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
+    /// The `(bus, slot)` pairs the loaded log carries, for the same reason
+    /// [`Self::replay_ids`] exists: a FlexRay entry filling a slot the replayed
+    /// log fills too would put two senders of one signal into every view.
+    pub(crate) replay_fr_ids: std::collections::HashSet<(u8, u16)>,
     pub(crate) channels: Vec<Channel>,
     /// Counter for naming new buses (CAN3, CAN4, ...).
     pub(crate) bus_counter: usize,
     /// The interactive generator's entries: what this tool transmits as.
     pub(crate) tx_list: Vec<TxMsg>,
+    /// The same, for the FlexRay slots this tool fills.
+    pub(crate) fr_tx_list: Vec<FrTxMsg>,
     /// Simulation clock: accumulates only while measuring and unpaused.
     /// Generator frames are stamped on it and their signal values are
     /// evaluated from it, so a pause freezes the bus in place instead of
@@ -874,6 +985,8 @@ pub struct BusCore {
     /// next step. Kept apart from `buf` because `step` clears `buf` before
     /// polling its source.
     pub(crate) injected: Vec<(u8, u32)>,
+    /// The same "one frame now" intent for a FlexRay slot.
+    pub(crate) injected_fr: Vec<(u8, u16)>,
     /// The load rollups as of the last publish. Rebuilt only when a step
     /// (or a channel add/remove) touched them; the Bus Statistics window
     /// reads this, never the live state. FlexRay's rollups ride the same
@@ -985,9 +1098,11 @@ impl BusCore {
             run_mode: Mode::Virtual,
             source: Box::new(crate::source::virtual_source::VirtualSource::new()),
             replay_ids: std::collections::HashSet::new(),
+            replay_fr_ids: std::collections::HashSet::new(),
             channels: Vec::new(),
             bus_counter: 2,
             tx_list: Vec::new(),
+            fr_tx_list: Vec::new(),
             sim_t_us: 0,
             sim_prev_us: 0,
             color_counter: 0,
@@ -1004,6 +1119,7 @@ impl BusCore {
             bus_loads,
             fr_loads: Default::default(),
             injected: Vec::new(),
+            injected_fr: Vec::new(),
             published_loads,
             published_fr_loads: Arc::new(Default::default()),
             loads_dirty: false,
@@ -1355,6 +1471,51 @@ impl BusCore {
             BusCommand::PinEntrySignal { ch, id, name, phys } => {
                 self.pin_entry_signal(ch, id, &name, phys);
             }
+            BusCommand::AddFrEntry { bus, slot } => self.add_fr_entry(bus, slot),
+            BusCommand::RemoveFrEntry { bus, slot } => {
+                self.fr_tx_list.retain(|t| !(t.bus == bus && t.slot == slot));
+            }
+            BusCommand::SetFrEntryActive { bus, slot, on } => {
+                // Same anchoring as the CAN entry: re-enabling starts from now,
+                // so the catch-up loop never re-emits the off period.
+                let sim = self.sim_t_us;
+                if let Some(tx) = self.fr_entry_mut(bus, slot) {
+                    tx.active = on;
+                    if on {
+                        tx.next_t_us = sim;
+                    }
+                }
+            }
+            BusCommand::SetFrEntryCycle { bus, slot, cycle_us } => {
+                if let Some(tx) = self.fr_entry_mut(bus, slot) {
+                    tx.cycle_us = cycle_us;
+                    tx.next_t_us = 0;
+                }
+            }
+            BusCommand::SetFrEntryHex { bus, slot, text } => {
+                self.set_fr_entry_hex(bus, slot, &text);
+            }
+            BusCommand::SetFrEntrySource { bus, slot, src } => {
+                if let Some(tx) = self.fr_entry_mut(bus, slot) {
+                    match tx.srcs.iter_mut().find(|s| s.name == src.name) {
+                        Some(held) => *held = src,
+                        None => tx.srcs.push(src),
+                    }
+                }
+            }
+            BusCommand::ClearFrEntrySource { bus, slot, name } => {
+                if let Some(tx) = self.fr_entry_mut(bus, slot) {
+                    tx.srcs.retain(|s| s.name != name);
+                }
+            }
+            BusCommand::PinFrEntrySignal { bus, slot, name, phys } => {
+                self.pin_fr_entry_signal(bus, slot, &name, phys);
+            }
+            BusCommand::SendFrNow { bus, slot } => {
+                if self.measuring {
+                    self.injected_fr.push((bus, slot));
+                }
+            }
             BusCommand::Subscribe { key } => self.subscribe_signal(key),
             BusCommand::Unsubscribe { key } => {
                 self.subs.remove(&key);
@@ -1589,6 +1750,28 @@ impl BusCore {
     /// per-identifier classes -- but when a FlexRay description database is
     /// loaded their decoded signals fold into subscriptions so the observers
     /// can plot them.
+    /// One FlexRay arrival through the whole receive path: triggers first (a
+    /// FlexRay edge that starts a recording still captures the frame that fired
+    /// it), then the ring and aggregates, then the script handlers waiting on
+    /// that slot. Every source of a row -- a replayed log, a watched port, a
+    /// generator entry -- goes through here, so none of them can be seen by half
+    /// the session.
+    fn accept_fr_row(
+        &mut self,
+        row: crate::trace::FrRow,
+        now_us: u64,
+        listeners: bool,
+        queued: &mut Vec<CanFrame>,
+        status: &mut String,
+    ) {
+        self.eval_fr_triggers(&row, status);
+        let for_nodes = listeners.then(|| row.clone());
+        self.ingest_fr_row(row);
+        if let Some(row) = for_nodes {
+            self.dispatch_fr_nodes(&row, now_us, queued);
+        }
+    }
+
     pub(crate) fn ingest_fr_row(&mut self, mut row: crate::trace::FrRow) {
         if row.t_us == 0 {
             row.t_us = self.sim_t_us;
@@ -2372,6 +2555,36 @@ impl BusCore {
                     }
                 })
                 .collect(),
+            fr_tx: self
+                .fr_tx_list
+                .iter()
+                .map(|t| {
+                    // The row reads back what went out; before the first
+                    // emission, what the base bytes say.
+                    let sent = if t.last_sent.is_empty() {
+                        &t.data
+                    } else {
+                        &t.last_sent
+                    };
+                    FrTxView {
+                        bus: t.bus,
+                        slot: t.slot,
+                        name: t.name.clone(),
+                        active: t.active,
+                        cycle_us: t.cycle_us,
+                        data_text: t.data_text.clone(),
+                        sent_text: crate::generator::hex_of(sent),
+                        sent_data: sent.clone(),
+                        srcs: t.srcs.clone(),
+                        muted: matches!(self.mode, Mode::Replay)
+                            && self.replay_fr_ids.contains(&(t.bus, t.slot)),
+                        undescribed: !self
+                            .fr_dbs
+                            .get(&t.bus)
+                            .is_some_and(|db| db.frame_ix_of_slot(t.slot).is_some()),
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -2387,9 +2600,11 @@ impl BusCore {
             }
         };
         // Collect the log's ids once at open, from a temporary second
-        // stream, so the generators can stand down for the ids the replay
+        // stream, so the generators can stand down for the traffic the replay
         // itself covers. Draining here, never per frame.
-        self.replay_ids = scan_log_ids(std::path::Path::new(path)).unwrap_or_default();
+        let (ids, fr_ids) = scan_log_ids(std::path::Path::new(path)).unwrap_or_default();
+        self.replay_ids = ids;
+        self.replay_fr_ids = fr_ids;
         let info = stream.describe();
         self.recorder.close();
         // Replay just re-emits an existing log; recording it would only
@@ -3177,6 +3392,97 @@ impl BusCore {
         true
     }
 
+    /// Adds the FlexRay generator entry `(bus, slot)` unless it exists. Name,
+    /// payload length and period come from that bus's cluster description when it
+    /// schedules a frame for the slot; with no description the entry is a
+    /// byte-level filler for the slot and starts on the default period.
+    fn add_fr_entry(&mut self, bus: u8, slot: u16) {
+        if self.fr_tx_list.iter().any(|t| t.bus == bus && t.slot == slot) {
+            return;
+        }
+        let (name, len, period_us) = self
+            .fr_dbs
+            .get(&bus)
+            .and_then(|db| Some((db, db.frame_ix_of_slot(slot)?)))
+            .and_then(|(db, ix)| {
+                let f = db.frame_index(ix)?;
+                // The schedule's own cadence for this frame: how many cycles
+                // between its arrivals, times the cluster cycle.
+                let rep = f.triggering.cycle_repetition.max(1) as f64;
+                Some((
+                    if f.name.is_empty() {
+                        format!("slot {slot}")
+                    } else {
+                        f.name.clone()
+                    },
+                    (f.length as usize).clamp(1, crate::generator::MAX_FR_PAYLOAD_LEN),
+                    (db.params.cycle_time_ms * rep * 1_000.0).round() as u64,
+                ))
+            })
+            .unwrap_or_else(|| (format!("slot {slot}"), 8, 0));
+        let data = vec![0u8; len];
+        self.fr_tx_list.push(FrTxMsg {
+            bus,
+            slot,
+            name,
+            data_text: crate::generator::hex_of(&data),
+            len,
+            data,
+            cycle_us: match period_us {
+                0 => crate::app::DEFAULT_TX_CYCLE_US,
+                n => n,
+            },
+            active: false,
+            next_t_us: 0,
+            srcs: Vec::new(),
+            last_sent: Vec::new(),
+        });
+    }
+
+    /// The FlexRay generator entry `(bus, slot)`, if present.
+    fn fr_entry_mut(&mut self, bus: u8, slot: u16) -> Option<&mut FrTxMsg> {
+        self.fr_tx_list
+            .iter_mut()
+            .find(|t| t.bus == bus && t.slot == slot)
+    }
+
+    /// Replaces a FlexRay entry's base payload from its hex box.
+    fn set_fr_entry_hex(&mut self, bus: u8, slot: u16, text: &str) -> bool {
+        let Some(bytes) =
+            crate::generator::parse_hex_limited(text, crate::generator::MAX_FR_PAYLOAD_LEN)
+        else {
+            return false;
+        };
+        let Some(tx) = self.fr_entry_mut(bus, slot) else {
+            return false;
+        };
+        crate::generator::set_fr_tx_base(tx, bytes);
+        true
+    }
+
+    /// Writes a physical value into a FlexRay entry's base payload and drops only
+    /// that signal's source. False -- nothing changed -- when the bus has no
+    /// description, the slot holds no frame in it, the frame has no such signal,
+    /// or the entry's bytes do not reach it.
+    fn pin_fr_entry_signal(&mut self, bus: u8, slot: u16, name: &str, phys: f64) -> bool {
+        let Some(mut data) = self.fr_entry_mut(bus, slot).map(|t| t.data.clone()) else {
+            return false;
+        };
+        let Some(db) = self.fr_dbs.get(&bus) else {
+            return false;
+        };
+        let Some(ix) = db.frame_ix_of_slot(slot) else {
+            return false;
+        };
+        if !db.encode_signal(ix, name, phys, &mut data) {
+            return false;
+        }
+        let tx = self.fr_entry_mut(bus, slot).expect("entry checked above");
+        tx.srcs.retain(|s| s.name != name);
+        crate::generator::set_fr_tx_base(tx, data);
+        true
+    }
+
     /// Fresh virtual run: new source, blank run state, wall-clock
     /// measuring.
     fn start_virtual(&mut self, status: &mut String) {
@@ -3251,7 +3557,11 @@ impl BusCore {
         // Send-now intents recorded while the old run was winding down
         // belong to it, not to the fresh one.
         self.injected.clear();
+        self.injected_fr.clear();
         for tx in &mut self.tx_list {
+            tx.next_t_us = 0;
+        }
+        for tx in &mut self.fr_tx_list {
             tx.next_t_us = 0;
         }
         for sub in self.subs.values_mut() {
@@ -3544,14 +3854,7 @@ impl BusCore {
         let fr_listeners = self.nodes.iter().any(|n| n.waits_on_flexray());
         let mut fr_queued: Vec<CanFrame> = Vec::new();
         for row in fr_replay {
-            // Judged before the ingest, like a CAN frame: a FlexRay edge that
-            // starts a recording still captures the frame that fired it.
-            self.eval_fr_triggers(&row, status);
-            let for_nodes = fr_listeners.then(|| row.clone());
-            self.ingest_fr_row(row);
-            if let Some(row) = for_nodes {
-                self.dispatch_fr_nodes(&row, now_us, &mut fr_queued);
-            }
+            self.accept_fr_row(row, now_us, fr_listeners, &mut fr_queued, status);
         }
 
         // Replay blocks stream their recorded traffic onto the same sim
@@ -3580,13 +3883,87 @@ impl BusCore {
             if !fr_rx.is_empty() {
                 fr_landed = true;
                 for row in fr_rx {
-                    self.eval_fr_triggers(&row, status);
-                    let for_nodes = fr_listeners.then(|| row.clone());
-                    self.ingest_fr_row(row);
-                    if let Some(row) = for_nodes {
-                        self.dispatch_fr_nodes(&row, now_us, &mut fr_queued);
-                    }
+                    self.accept_fr_row(row, now_us, fr_listeners, &mut fr_queued, status);
                 }
+            }
+        }
+        // FlexRay generator entries fill their slot on the same clock and with
+        // the same catch-up discipline as the CAN ones, and stand down for a slot
+        // the replayed log carries itself. Their rows enter through the receive
+        // path like any other arrival: the watched port is receive-only, so what
+        // an entry drives is this session -- Trace, Messages, the spec check, the
+        // scripts and the recording -- not the wire.
+        let inject = std::mem::take(&mut self.injected_fr);
+        let mut fr_gen: Vec<crate::trace::FrRow> = Vec::new();
+        let dbs = &self.fr_dbs;
+        let replaying = matches!(self.mode, Mode::Replay);
+        for tx in &mut self.fr_tx_list {
+            if replaying && tx.next_t_us == 0 {
+                // Log time has no slot zero: an entry picked up mid-log starts at
+                // the playhead rather than emitting one frame dated the epoch.
+                tx.next_t_us = sim;
+            }
+            let muted = replaying && self.replay_fr_ids.contains(&(tx.bus, tx.slot));
+            let mut budget = MAX_TX_CATCHUP;
+            while budget > 0
+                && tx.active
+                && !muted
+                && tx.cycle_us != 0
+                && tx.next_t_us <= sim
+            {
+                budget -= 1;
+                // Values are read at the slot's own stamp, exactly as on the CAN
+                // side: a frame dated `at` must carry the waveform at `at`.
+                let at = tx.next_t_us;
+                tx.next_t_us += tx.cycle_us;
+                let payload = crate::generator::fr_tx_payload(dbs, tx, at);
+                tx.last_sent = payload.clone();
+                let cycle = dbs.get(&tx.bus).map_or(0, |db| {
+                    crate::generator::fr_cycle_at(db, at)
+                });
+                fr_gen.push(crate::trace::FrRow {
+                    bus: tx.bus,
+                    t_us: at,
+                    // Not a reception on a channel: 2 is the "unknown" the log
+                    // readers already use for a row that answers that question
+                    // nowhere.
+                    ab: 2,
+                    slot: tx.slot,
+                    cycle,
+                    payload,
+                    header_crc: 0,
+                    flags: 0,
+                    name: None,
+                });
+            }
+        }
+        for (bus, slot) in inject {
+            let Some(tx) = self.fr_tx_list.iter_mut().find(|t| t.bus == bus && t.slot == slot)
+            else {
+                continue;
+            };
+            let payload = crate::generator::fr_tx_payload(&self.fr_dbs, tx, sim);
+            tx.last_sent = payload.clone();
+            let cycle = self
+                .fr_dbs
+                .get(&bus)
+                .map_or(0, |db| crate::generator::fr_cycle_at(db, sim));
+            fr_gen.push(crate::trace::FrRow {
+                bus,
+                t_us: sim,
+                ab: 2,
+                slot,
+                cycle,
+                payload,
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            });
+        }
+        if !fr_gen.is_empty() {
+            fr_landed = true;
+            for row in fr_gen {
+                self.accept_fr_row(row, now_us, fr_listeners, &mut fr_queued, status);
             }
         }
         // Frames an `on fr slot` handler sent join this same step's walk, so a

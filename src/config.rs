@@ -443,6 +443,23 @@ pub struct TxCfg {
     pub srcs: Vec<SrcCfg>,
 }
 
+/// One FlexRay generator entry: which slot of which 路 it fills, and what it
+/// puts there. The payload travels as the hex text the row's box shows, since a
+/// FlexRay frame is however long the description says it is.
+#[derive(Serialize, Deserialize)]
+pub struct FrTxCfg {
+    pub bus: u8,
+    pub slot: u16,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub data_text: String,
+    #[serde(default = "cycle_default")]
+    pub cycle_us: u64,
+    #[serde(default)]
+    pub srcs: Vec<SrcCfg>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DesktopCfg {
     #[serde(default)]
@@ -686,6 +703,10 @@ pub struct Config {
     pub sysvars: Vec<crate::bus::SysVarDef>,
     #[serde(default)]
     pub tx: Vec<TxCfg>,
+    /// The FlexRay generator entries. Absent in projects saved before they
+    /// existed, which then load with none.
+    #[serde(default)]
+    pub fr_tx: Vec<FrTxCfg>,
     #[serde(default)]
     pub counters: Counters,
     #[serde(default)]
@@ -1052,6 +1073,19 @@ impl Config {
                     data: crate::generator::parse_hex_bytes(&t.data_text).unwrap_or_default(),
                     cycle_us: t.cycle_us,
                     fd: t.fd,
+                    srcs: t.srcs.iter().map(src_cfg).collect(),
+                })
+                .collect(),
+            fr_tx: app
+                .snap
+                .fr_tx
+                .iter()
+                .map(|t| FrTxCfg {
+                    bus: t.bus,
+                    slot: t.slot,
+                    active: t.active,
+                    data_text: t.data_text.clone(),
+                    cycle_us: t.cycle_us,
                     srcs: t.srcs.iter().map(src_cfg).collect(),
                 })
                 .collect(),
@@ -1565,6 +1599,55 @@ impl Config {
         // state, so a replay or a watch attach finds them where the user left
         // them -- no lazy re-push at the moment of use.
         app.push_fr_db_to_core();
+        // The FlexRay generator entries are rebuilt *after* the descriptions
+        // land, because their name, payload length and send period are read out
+        // of the description: restored earlier, every entry would come back as a
+        // raw 8-byte filler.
+        let stale_fr: Vec<(u8, u16)> = app
+            .snap
+            .fr_tx
+            .iter()
+            .map(|t| (t.bus, t.slot))
+            .collect();
+        for (bus, slot) in stale_fr {
+            app.send(crate::bus::BusCommand::RemoveFrEntry { bus, slot });
+        }
+        let fr_slots: Vec<(u8, u16)> = self
+            .fr_tx
+            .iter()
+            .map(|t| (t.bus, t.slot))
+            .collect();
+        for (bus, slot) in fr_slots {
+            app.add_fr_tx(bus, slot);
+        }
+        app.settle();
+        for t in self.fr_tx {
+            let cycle_us = if t.cycle_us == 0 { 0 } else { t.cycle_us.max(1_000) };
+            app.send(crate::bus::BusCommand::SetFrEntryCycle {
+                bus: t.bus,
+                slot: t.slot,
+                cycle_us,
+            });
+            if !t.data_text.is_empty() {
+                app.send(crate::bus::BusCommand::SetFrEntryHex {
+                    bus: t.bus,
+                    slot: t.slot,
+                    text: t.data_text,
+                });
+            }
+            for src in t.srcs.into_iter().filter_map(value_src) {
+                app.send(crate::bus::BusCommand::SetFrEntrySource {
+                    bus: t.bus,
+                    slot: t.slot,
+                    src,
+                });
+            }
+            app.send(crate::bus::BusCommand::SetFrEntryActive {
+                bus: t.bus,
+                slot: t.slot,
+                on: t.active,
+            });
+        }
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
         app.recent_log = self.recent_log;
@@ -1751,6 +1834,54 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty()
+    }
+
+    /// A FlexRay generator entry is a stimulus setup the user built: slot,
+    /// period, bytes and driven signals all come back through the project file.
+    /// And a file written before the key existed still loads -- with no entries,
+    /// rather than failing or inventing one.
+    #[test]
+    fn a_flexray_generator_entry_round_trips_through_a_project() {
+        use crate::app::GenRow;
+        use crate::sim::{SrcKind, ValueSrc};
+        let mut app = App::headless();
+        app.add_fr_tx(1, 40);
+        app.set_fr_tx_hex(1, 40, "AA 55");
+        app.set_fr_tx_cycle(1, 40, 20_000);
+        app.set_gen_source(
+            GenRow::Fr(0),
+            ValueSrc::new("Torque", SrcKind::Ramp, 0.0, 100.0),
+        );
+        app.set_fr_tx_active(1, 40, true);
+        app.settle();
+        assert_eq!(app.fr_tx_list.len(), 1, "the entry exists to be saved");
+        let srcs = app.fr_tx_list[0].srcs.clone();
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.fr_tx_list.len(), 1);
+        let tx = &restored.fr_tx_list[0];
+        assert_eq!((tx.bus, tx.slot), (1, 40), "the slot keeps its 路");
+        assert_eq!(tx.cycle_us, 20_000, "and its period");
+        assert!(tx.active, "and the On state");
+        assert_eq!(tx.data_text, "AA 55", "and the bytes");
+        assert_eq!(tx.srcs, srcs, "and the driven signal");
+
+        // The same file with the key removed is the older project: it loads.
+        let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        doc.as_object_mut().unwrap().remove("fr_tx");
+        assert!(!doc.to_string().contains("fr_tx"), "the file really is older");
+        let mut legacy = App::headless();
+        serde_json::from_value::<Config>(doc)
+            .expect("a file without the new key loads")
+            .apply(&mut legacy);
+        assert!(
+            legacy.fr_tx_list.is_empty(),
+            "and carries no FlexRay entries"
+        );
     }
 
     /// A project written before FlexRay picks existed has no `fr_manual` key at

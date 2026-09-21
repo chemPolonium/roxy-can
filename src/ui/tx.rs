@@ -1,4 +1,4 @@
-use crate::app::{App, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
+use crate::app::{App, GenRow, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::dbc::SignalInfo;
 use crate::sim::{KINDS, SrcKind, ValueSrc};
 use crate::ui::help::popup_is_open;
@@ -16,9 +16,59 @@ fn kind_labels() -> Vec<String> {
     v
 }
 
-/// Usable drag range for a signal: DBC min/max when sane, otherwise the raw
-/// bit-range scaled by factor/offset.
-fn sig_range(s: &SignalInfo) -> (f32, f32) {
+/// One signal as the generator's row draws it: position, encoding and declared
+/// range. The two databases spell their fields differently, and the row code
+/// should not have to know which bus it is editing.
+struct SigRow {
+    name: String,
+    bit: u64,
+    size: u64,
+    big_endian: bool,
+    signed: bool,
+    factor: f64,
+    offset: f64,
+    min: f64,
+    max: f64,
+    unit: String,
+}
+
+impl From<&SignalInfo> for SigRow {
+    fn from(s: &SignalInfo) -> Self {
+        Self {
+            name: s.name.clone(),
+            bit: s.start_bit,
+            size: s.size,
+            big_endian: s.big_endian,
+            signed: s.signed,
+            factor: s.factor,
+            offset: s.offset,
+            min: s.min,
+            max: s.max,
+            unit: s.unit.clone(),
+        }
+    }
+}
+
+impl From<crate::fr_db::FrEditSignal> for SigRow {
+    fn from(s: crate::fr_db::FrEditSignal) -> Self {
+        Self {
+            name: s.name,
+            bit: s.bit,
+            size: s.size,
+            big_endian: s.big_endian,
+            signed: s.signed,
+            factor: s.factor,
+            offset: s.offset,
+            min: s.min,
+            max: s.max,
+            unit: s.unit,
+        }
+    }
+}
+
+/// Usable drag range for a signal: declared min/max when sane, otherwise the
+/// raw bit-range scaled by factor/offset.
+fn sig_range(s: &SigRow) -> (f32, f32) {
     if s.min.is_finite() && s.max.is_finite() && s.min < s.max {
         return (s.min as f32, s.max as f32);
     }
@@ -141,6 +191,8 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
 
             let tx = app.snap.tx.clone();
             render_rows(app, ui, &tx, &kinds, &Scope::Unassigned);
+            ui.separator();
+            fr_section(app, ui, &kinds);
         });
     open
 }
@@ -351,7 +403,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
             format!("{} ms", cycle / 1000)
         };
         if ui.button_with_size(format!("{cyc}##cyc{i}"), [84.0, 0.0]) {
-            app.tx_cycle_edit = Some(i);
+            app.tx_cycle_edit = Some(GenRow::Can(i));
             app.tx_cycle_buf = (cycle / 1000).to_string();
         }
         ui.same_line();
@@ -432,109 +484,332 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
         // these, so what you see is what the bus sees --
         // byte-width truncation and all. The raw computed number
         // never reaches the wire.
-        let data = view.sent_data;
-        for s in &sigs {
-            let held = view.srcs.iter().find(|x| x.name == s.name).cloned();
-            let raw = crate::decode::extract_raw(&data, s.start_bit, s.size, s.big_endian);
-            let cur = crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset);
-            let (lo, hi) = sig_range(s);
-            // A driven row shows the live value, so the handle rides
-            // the wave. The value belongs to the source, so there
-            // the handle is disabled: grabbing it used to pin the
-            // signal and silently drop the source, which read like
-            // the wave simply breaking. Un-drive through the kind
-            // combo's "Constant" instead.
-            let model_shown = match held.as_ref() {
-                Some(_) => {
-                    let raw = crate::decode::extract_raw(&data, s.start_bit, s.size, s.big_endian);
-                    crate::decode::to_physical(raw, s.size, s.signed, s.factor, s.offset) as f32
-                }
-                None => cur as f32,
-            };
-            // Pinning rewrites the base payload and clears this
-            // signal's source, so doing it per keystroke would let a
-            // half-typed 100 encode as 1 and cut the wave off with
-            // it. The draft carries the preview; the model waits.
-            let key = format!("sig{i}{}", s.name);
-            let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
-            ui.set_next_item_width(180.0);
-            let mut v = shown;
-            let _read_only = held.is_some().then(|| ui.begin_disabled_with_cond(true));
-            let sig_fmt = NumericFormat::new("%g").expect("static format");
-            let moved = Drag::new(format!("{}##sig{i}_{}", s.name, s.name))
-                .display_format(sig_fmt)
-                .speed(((hi - lo) / 200.0).max(0.01))
-                .range(lo, hi)
-                .build(ui, &mut v);
-            let ends = ui.is_item_deactivated();
-            let committed = app.num_draft.step(
-                &key,
-                v as f64,
-                moved,
-                ui.is_item_deactivated_after_edit(),
-                ends,
-            );
-            drop(_read_only);
-            if let Some(val) = committed {
-                // Fire-and-forget from the UI: whether the
-                // database can encode the value is the bus's
-                // call, and a failed pin simply changes nothing.
-                app.send(crate::bus::BusCommand::PinEntrySignal {
-                    ch,
-                    id,
-                    name: s.name.clone(),
-                    phys: val,
-                });
-                shown = val as f32;
-            }
-            ui.same_line();
-            ui.set_next_item_width(80.0);
-            let mut pick = match held.as_ref() {
-                None => 0,
-                Some(h) => 1 + KINDS.iter().position(|k| *k == h.kind).unwrap_or(0),
-            };
-            if ui.combo_simple_string(format!("##src{i}_{}", s.name), &mut pick, kinds) {
-                if pick == 0 {
-                    app.send(crate::bus::BusCommand::ClearEntrySource {
-                        ch,
-                        id,
-                        name: s.name.clone(),
-                    });
-                } else {
-                    let kind = KINDS[pick - 1];
-                    // Enabling snapshots lo/hi from the DBC range;
-                    // changing shape afterwards keeps whatever the
-                    // user has since edited in the modal.
-                    let src = match held.as_ref() {
-                        Some(h) => ValueSrc { kind, ..h.clone() },
-                        None => ValueSrc::new(&s.name, kind, lo as f64, hi as f64),
-                    };
-                    app.send(crate::bus::BusCommand::SetEntrySource { ch, id, src });
-                }
-            }
-            if let Some(h) = &held {
-                ui.same_line();
-                if ui.button(format!("…##pp{i}_{}", s.name)) {
-                    app.src_edit = Some((i, s.name.clone()));
-                    app.src_draft = Some(h.clone());
-                    app.src_seq_buf = h
-                        .seq
-                        .iter()
-                        .map(|v| format!("{v}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                }
-                ui.same_line();
-                ui.text(format!("{shown} {}", s.unit));
-            } else {
-                ui.same_line();
-                ui.text(format!("{} {}", cur, s.unit));
-            }
-        }
+        // The bytes that actually go out this instant: base with every
+        // driven source laid over them, from the snapshot.
+        let rows: Vec<SigRow> = sigs.iter().map(SigRow::from).collect();
+        signal_rows(
+            app,
+            ui,
+            GenRow::Can(i),
+            "c",
+            kinds,
+            RowSignals {
+                sigs: &rows,
+                data: &view.sent_data,
+                srcs: &view.srcs,
+            },
+        );
         ui.unindent();
     }
     if let Some((ch, id)) = remove {
         app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
+    }
+}
+
+/// What the signal handles of one row work from: the signals the database
+/// declares, the payload actually going out, and the sources driving it.
+struct RowSignals<'a> {
+    sigs: &'a [SigRow],
+    data: &'a [u8],
+    srcs: &'a [ValueSrc],
+}
+
+/// The signal handles of one generator row: the drag that pins a value into the
+/// base payload, the shape combo that drives it over time, and the params
+/// button. Shared by the CAN and FlexRay halves because the whole draft/commit
+/// discipline -- and the failure it prevents -- is the same in both: a value
+/// that cannot be encoded must never reach the wire as a partial one.
+///
+/// `tag` keeps the two lists' widget ids apart (`c3` and `f3` are different
+/// rows); `data` is the payload actually going out, so a driven row reads its
+/// displayed value back out of the bytes the bus will send, truncation and all.
+fn signal_rows(app: &mut App, ui: &Ui, row: GenRow, tag: &str, kinds: &[String], s: RowSignals<'_>) {
+    let RowSignals { sigs, data, srcs } = s;
+    let id = row_index(row);
+    for sig in sigs {
+        let name = sig.name.as_str();
+        let held = srcs.iter().find(|x| x.name == name).cloned();
+        let raw = crate::decode::extract_raw(data, sig.bit, sig.size, sig.big_endian);
+        let cur =
+            crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
+        let (lo, hi) = sig_range(sig);
+        // What the handle shows is the value in the bytes going out this
+        // instant. For a driven signal that is the wave's own value, so the
+        // handle is disabled: grabbing it used to pin the signal and silently
+        // drop the source, which read like the wave simply breaking. Un-drive
+        // through the kind combo's "Constant" instead.
+        let model_shown = cur as f32;
+        // Pinning rewrites the base payload and clears this signal's source, so
+        // doing it per keystroke would let a half-typed 100 encode as 1 and cut
+        // the wave off with it. The draft carries the preview; the model waits.
+        let key = format!("sig{tag}{id}{name}");
+        let mut shown = app.num_draft.shown(&key, model_shown as f64) as f32;
+        ui.set_next_item_width(180.0);
+        let mut v = shown;
+        let _read_only = held.is_some().then(|| ui.begin_disabled_with_cond(true));
+        let sig_fmt = NumericFormat::new("%g").expect("static format");
+        let moved = Drag::new(format!("{name}##sig{tag}{id}_{name}"))
+            .display_format(sig_fmt)
+            .speed(((hi - lo) / 200.0).max(0.01))
+            .range(lo, hi)
+            .build(ui, &mut v);
+        let ends = ui.is_item_deactivated();
+        let committed = app.num_draft.step(
+            &key,
+            v as f64,
+            moved,
+            ui.is_item_deactivated_after_edit(),
+            ends,
+        );
+        drop(_read_only);
+        if let Some(val) = committed {
+            // Fire-and-forget from the UI: whether the database can encode the
+            // value is the bus's call, and a failed pin simply changes nothing.
+            app.pin_gen_signal(row, name, val);
+            shown = val as f32;
+        }
+        ui.same_line();
+        ui.set_next_item_width(80.0);
+        let mut pick = match held.as_ref() {
+            None => 0,
+            Some(h) => 1 + KINDS.iter().position(|k| *k == h.kind).unwrap_or(0),
+        };
+        if ui.combo_simple_string(format!("##src{tag}{id}_{name}"), &mut pick, kinds) {
+            if pick == 0 {
+                app.clear_gen_source(row, name);
+            } else {
+                let kind = KINDS[pick - 1];
+                // Enabling snapshots lo/hi from the declared range; changing
+                // shape afterwards keeps whatever the user has since edited in
+                // the modal.
+                let src = match held.as_ref() {
+                    Some(h) => ValueSrc { kind, ..h.clone() },
+                    None => ValueSrc::new(name, kind, lo as f64, hi as f64),
+                };
+                app.set_gen_source(row, src);
+            }
+        }
+        if let Some(h) = &held {
+            ui.same_line();
+            if ui.button(format!("…##pp{tag}{id}_{name}")) {
+                app.src_edit = Some((row, name.to_string()));
+                app.src_draft = Some(h.clone());
+                app.src_seq_buf = h
+                    .seq
+                    .iter()
+                    .map(|v| format!("{v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            ui.same_line();
+            ui.text(format!("{shown} {}", sig.unit));
+        } else {
+            ui.same_line();
+            ui.text(format!("{} {}", cur, sig.unit));
+        }
+    }
+}
+
+/// The index part of a generator row's widget id.
+fn row_index(row: GenRow) -> usize {
+    match row {
+        GenRow::Can(i) | GenRow::Fr(i) => i,
+    }
+}
+
+/// The FlexRay half of the Interactive Generator. A FlexRay frame is addressed
+/// by slot, so the add line offers the slots the 路's schedule knows about
+/// instead of a typed number: a slot nothing describes decodes as nothing, and
+/// the row would have no name and no signal handle to offer.
+fn fr_section(app: &mut App, ui: &Ui, kinds: &[String]) {
+    ui.text_disabled("FlexRay（端口只收：这些帧进入本会话，不上线缆）");
+    let buses: Vec<u8> = app.fr_buses.keys().copied().collect();
+    if buses.is_empty() {
+        ui.text_disabled("（未加载集群描述，无槽可选：先在 Buses 窗口给这路 Open 一份描述）");
+    }
+    for bus in buses {
+        let slots = match app.fr_db(bus) {
+            Some(db) => db.scheduled_slots(),
+            None => Vec::new(),
+        };
+        ui.same_line();
+        ui.text(app.fr_bus_name(bus));
+        ui.same_line();
+        if slots.is_empty() {
+            ui.text_disabled("（描述里没有调度的槽）");
+            continue;
+        }
+        let labels: Vec<String> = slots
+            .iter()
+            .map(|(slot, frames)| format!("slot {slot}  {}", frames.join("/")))
+            .collect();
+        let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let mut pick = app
+            .fr_tx_pick
+            .get(&bus)
+            .copied()
+            .unwrap_or(0)
+            .min(labels.len() - 1);
+        ui.set_next_item_width(260.0);
+        if ui.combo_simple_string(format!("##frslot{bus}"), &mut pick, &refs) {
+            app.fr_tx_pick.insert(bus, pick);
+        }
+        ui.same_line();
+        if ui.button(format!("Add##fradd{bus}")) {
+            app.add_fr_tx(bus, slots[pick].0);
+        }
+    }
+    let rows = app.snap.fr_tx.clone();
+    render_fr_rows(app, ui, &rows, kinds);
+}
+
+/// One row per FlexRay slot entry: the same ON/OFF/MUTE scan, the same cycle
+/// dialog, payload box and signal handles a CAN row has. The widget ids are
+/// prefixed -- both lists live in one window, and `On##3` cannot mean two rows.
+fn render_fr_rows(app: &mut App, ui: &Ui, rows: &[crate::bus::FrTxView], kinds: &[String]) {
+    let query = app.gen_search.trim().to_ascii_lowercase();
+    let mut remove: Option<(u8, u16)> = None;
+    for (i, view) in rows.iter().enumerate() {
+        let (bus, slot) = (view.bus, view.slot);
+        let bus_name = app.fr_bus_name(bus);
+        let hay = format!("{bus_name} slot {slot} {}", view.name).to_ascii_lowercase();
+        if !query.is_empty() && !hay.contains(&query) {
+            continue;
+        }
+        let (chip, color, hint) = if !view.active {
+            (
+                "OFF",
+                [0.55, 0.58, 0.65, 1.0],
+                "未发送：条目生成开关未勾选。",
+            )
+        } else if view.muted {
+            (
+                "MUTE",
+                [1.0, 0.65, 0.2, 1.0],
+                "本次回放期间静音：日志里这一路本来就带这个槽的帧，再发一份会让同一条信号有两个发送者，混进每个视图。On 勾选框保持原样——退出回放后照常发车。",
+            )
+        } else {
+            (
+                "ON",
+                [0.4, 0.95, 0.5, 1.0],
+                "正在发出：条目已勾选，没有被任何机制抑制。端口只收，所以这些帧进的是本会话（Trace、统计、规格、脚本、录制），不是总线线缆。",
+            )
+        };
+        ui.text_colored(color, format!("{chip:<4}"));
+        if ui.is_item_hovered() {
+            ui.tooltip_text(hint);
+        }
+        ui.same_line();
+        let badge = if view.srcs.is_empty() {
+            String::new()
+        } else {
+            format!("  {} driven", view.srcs.len())
+        };
+        // `###` restarts imgui's id hash, so the badge and the frame name can
+        // change without collapsing the row out from under whoever edits it --
+        // the same reason the CAN header spells its identity that way.
+        let header =
+            format!("{bus_name}  slot {slot}  {}{badge}###frgen{bus}_{slot}", view.name);
+        if !ui.collapsing_header(header, TreeNodeFlags::empty()) {
+            continue;
+        }
+        ui.indent();
+        let mut act = view.active;
+        if ui.checkbox(format!("On##fron{i}"), &mut act) {
+            app.send(crate::bus::BusCommand::SetFrEntryActive {
+                bus,
+                slot,
+                on: act,
+            });
+        }
+        ui.same_line();
+        let cycle = view.cycle_us;
+        let cyc = if cycle == 0 {
+            "event".to_string()
+        } else {
+            format!("{} ms", cycle / 1000)
+        };
+        if ui.button_with_size(format!("{cyc}##frcyc{i}"), [84.0, 0.0]) {
+            app.tx_cycle_edit = Some(GenRow::Fr(i));
+            app.tx_cycle_buf = (cycle / 1000).to_string();
+        }
+        ui.same_line();
+        if ui.button(format!("Send now##frnow{i}")) {
+            app.send(crate::bus::BusCommand::SendFrNow { bus, slot });
+        }
+        // Only when the two disagree, exactly like the CAN row's button: one
+        // click puts the slot back on the period its own schedule declares
+        // after a bout of experimenting.
+        let off = app.fr_declared_period_us(bus, slot).filter(|d| *d != cycle);
+        if let Some(declared) = off {
+            ui.same_line();
+            let label = if declared == 0 {
+                "描述 event".to_string()
+            } else {
+                format!("描述 {}ms", declared / 1000)
+            };
+            if ui.button(format!("{label}##frdbc{i}")) {
+                app.send(crate::bus::BusCommand::SetFrEntryCycle {
+                    bus,
+                    slot,
+                    cycle_us: declared,
+                });
+            }
+        }
+        ui.same_line();
+        if ui.button(format!("x##frrm{i}")) {
+            remove = Some((bus, slot));
+        }
+        let sigs: Vec<SigRow> = app
+            .fr_db(bus)
+            .and_then(|db| Some((db, db.frame_ix_of_slot(slot)?)))
+            .map(|(db, ix)| db.edit_signals(ix).into_iter().map(SigRow::from).collect())
+            .unwrap_or_default();
+        if sigs.is_empty() {
+            // Nothing describes this slot's payload, so the bytes are the whole
+            // edit -- the same rule as a CAN message with no DBC signals.
+            let editing = matches!(&app.fr_data_edit, Some((r, _)) if *r == i);
+            let mut buf = match &app.fr_data_edit {
+                Some((r, s)) if *r == i => s.clone(),
+                _ => view.data_text.clone(),
+            };
+            ui.set_next_item_width(260.0);
+            ui.input_text(format!("##frdata{i}"), &mut buf).build();
+            if ui.is_item_active() {
+                app.fr_data_edit = Some((i, buf.clone()));
+            }
+            if ui.is_item_deactivated_after_edit() {
+                app.fr_data_edit = None;
+                app.send(crate::bus::BusCommand::SetFrEntryHex {
+                    bus,
+                    slot,
+                    text: buf,
+                });
+            } else if editing && !ui.is_item_active() {
+                app.fr_data_edit = None;
+            }
+        } else {
+            ui.text_disabled(&view.sent_text);
+        }
+        if view.undescribed {
+            ui.text_disabled("该路没有集群描述、或描述未调度这个槽：载荷按原样发出，无人解码它。");
+        }
+        signal_rows(
+            app,
+            ui,
+            GenRow::Fr(i),
+            "f",
+            kinds,
+            RowSignals {
+                sigs: &sigs,
+                data: &view.sent_data,
+                srcs: &view.srcs,
+            },
+        );
+        ui.unindent();
+    }
+    if let Some((bus, slot)) = remove {
+        app.send(crate::bus::BusCommand::RemoveFrEntry { bus, slot });
     }
 }
 
@@ -566,15 +841,39 @@ fn row_header(ch: u8, bus: &str, name: &str, id: u32, driven: usize) -> String {
 /// there. Nothing here touches the schedule until Apply.
 fn cycle_modal(app: &mut App, ui: &Ui) {
     const ID: &str = "Send cycle##cycmodal";
-    let Some(row) = app.tx_cycle_edit else {
+    let Some(target) = app.tx_cycle_edit else {
         return;
     };
-    let Some(tx) = app.snap.tx.get(row) else {
-        app.tx_cycle_edit = None;
-        return;
+    // What the dialog shows and what Apply writes, read out of whichever list
+    // the row came from: the two halves of the window share this dialog.
+    let (title, current, declared, declared_by) = match target {
+        GenRow::Can(row) => {
+            let Some(tx) = app.snap.tx.get(row) else {
+                app.tx_cycle_edit = None;
+                return;
+            };
+            let (ch, id, cycle_us, name) = (tx.channel, tx.id, tx.cycle_us, tx.name.clone());
+            let (declared, bus) = (app.dbc_cycle_us(ch, id), app.channel_name(ch));
+            (format!("{name}  {id:X}  on {bus}"), cycle_us, declared, "DBC")
+        }
+        GenRow::Fr(row) => {
+            let Some(tx) = app.snap.fr_tx.get(row) else {
+                app.tx_cycle_edit = None;
+                return;
+            };
+            let (bus, slot, cycle_us, name) = (tx.bus, tx.slot, tx.cycle_us, tx.name.clone());
+            let (declared, bus_name) = (
+                app.fr_declared_period_us(bus, slot),
+                app.fr_bus_name(bus),
+            );
+            (
+                format!("{name}  slot {slot}  on {bus_name}"),
+                cycle_us,
+                declared,
+                "描述",
+            )
+        }
     };
-    let (ch, id, current, name) = (tx.channel, tx.id, tx.cycle_us, tx.name.clone());
-    let declared = app.dbc_cycle_us(ch, id);
     if !popup_is_open(ui, ID) {
         ui.open_popup(ID);
     }
@@ -585,7 +884,7 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
     let mut confirmed: Option<u64> = None;
     let min = ui.push_style_var(StyleVar::WindowMinSize([420.0, 0.0]));
     ui.modal_popup_with_opened(ID, &mut open, || {
-        ui.text(format!("{}  {:X}  on {}", name, id, app.channel_name(ch)));
+        ui.text(&title);
         ui.separator();
         // Focus and select on open, so click the row, type, Enter is the whole
         // gesture; the old value is highlighted rather than left to delete.
@@ -622,9 +921,9 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         }
         if let Some(d) = declared.filter(|d| *d != current) {
             ui.text(format!(
-                "DBC declares {}",
+                "{declared_by} 声明的周期：{}",
                 if d == 0 {
-                    "event".to_string()
+                    "event（无周期）".to_string()
                 } else {
                     format!("{} ms", d / 1000)
                 }
@@ -651,11 +950,28 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
     });
     min.pop();
     if let Some(us) = confirmed {
-        app.send(crate::bus::BusCommand::SetEntryCycle {
-            ch,
-            id,
-            cycle_us: us,
-        });
+        match target {
+            GenRow::Can(row) => {
+                if let Some(tx) = app.snap.tx.get(row) {
+                    let (ch, id) = (tx.channel, tx.id);
+                    app.send(crate::bus::BusCommand::SetEntryCycle {
+                        ch,
+                        id,
+                        cycle_us: us,
+                    });
+                }
+            }
+            GenRow::Fr(row) => {
+                if let Some(tx) = app.snap.fr_tx.get(row) {
+                    let (bus, slot) = (tx.bus, tx.slot);
+                    app.send(crate::bus::BusCommand::SetFrEntryCycle {
+                        bus,
+                        slot,
+                        cycle_us: us,
+                    });
+                }
+            }
+        }
     }
     if !open || dismissed || confirmed.is_some() {
         app.tx_cycle_edit = None;
@@ -671,12 +987,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     };
     let mut src = match app.src_draft.clone() {
         Some(d) if d.name == sig => d,
-        _ => match app
-            .snap
-            .tx
-            .get(row)
-            .and_then(|t| t.srcs.iter().find(|s| s.name == sig).cloned())
-        {
+        _ => match app.gen_source(row, &sig) {
             Some(h) => h,
             None => {
                 app.src_edit = None;
@@ -685,13 +996,14 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
             }
         },
     };
-    let desc = app.snap.tx.get(row).and_then(|t| {
-        app.channel_dbc(t.channel)
-            .and_then(|db| db.message_of(t.id))
-            .and_then(|m| m.signals.iter().find(|s| s.name == sig))
-            .map(|s| (t.name.clone(), t.id, s.unit.clone()))
-    });
-    let (msg_name, msg_id, unit) = desc.unwrap_or_else(|| (String::new(), 0, String::new()));
+    let (title, unit) = match app.gen_title(row) {
+        Some((title, _)) => (title, app.gen_signal_unit(row, &sig)),
+        None => {
+            app.src_edit = None;
+            app.src_draft = None;
+            return;
+        }
+    };
 
     if !popup_is_open(ui, ID) {
         ui.open_popup(ID);
@@ -705,7 +1017,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     let min = ui.push_style_var(StyleVar::WindowMinSize([520.0, 240.0]));
     ui.modal_popup_with_opened(ID, &mut open, || {
         applied = true;
-        ui.text(format!("{msg_name}  {msg_id:X}  /  {sig} {unit}"));
+        ui.text(format!("{title}  /  {sig} {unit}"));
         ui.separator();
         ui.set_next_item_width(240.0);
         let mut pick = KINDS.iter().position(|k| *k == src.kind).unwrap_or(0);
@@ -817,7 +1129,7 @@ fn params_modal(app: &mut App, ui: &Ui, kinds: &[String]) {
     });
     min.pop();
     if confirmed {
-        app.set_source(row, src);
+        app.set_gen_source(row, src);
         app.src_edit = None;
         app.src_draft = None;
     } else if !open || dismissed {

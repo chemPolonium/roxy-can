@@ -577,6 +577,69 @@ fn the_message_picker_offers_flexray_slots() {
     );
 }
 
+/// The Interactive Generator's FlexRay half: one entry per slot, with the same
+/// cycle dialog, payload box and signal handles a CAN row has. Drawing it is
+/// the point -- the two lists share the window, both modals and the draft state,
+/// so a colliding widget id or a row that only misbehaves when expanded shows up
+/// here rather than on the user's screen.
+#[test]
+fn the_generator_window_draws_a_flexray_slot() {
+    use crate::app::GenRow;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    let slot = 13;
+    app.add_fr_tx(0, slot);
+    app.settle();
+    assert_eq!(app.snap.fr_tx.len(), 1, "the slot has an entry");
+    let edit = app
+        .fr_db(0)
+        .and_then(|db| db.frame_ix_of_slot(slot).and_then(|ix| db.edit_signals(ix).into_iter().next()));
+    if described {
+        assert!(
+            edit.is_some(),
+            "slot 13 of the bundled description carries no signal: the handles are not covered"
+        );
+    }
+    app.show_tx = true;
+    // Collapsed first, so the header line and the add rows draw.
+    frames(&mut app, &mut ctx, 2);
+    app.start_virtual();
+    app.set_fr_tx_active(0, slot, true);
+    app.send(crate::bus::BusCommand::SendFrNow { bus: 0, slot });
+    app.settle();
+    if let Some(e) = &edit {
+        let mid = e.min + (e.max - e.min) / 2.0;
+        app.pin_gen_signal(GenRow::Fr(0), &e.name, mid);
+        app.set_gen_source(
+            GenRow::Fr(0),
+            crate::sim::ValueSrc::new(&e.name, crate::sim::SrcKind::Sine, e.min, e.max),
+        );
+        app.settle();
+        // The row's expanded body, the cycle dialog and the params dialog, all
+        // pointing at the FlexRay row.
+        app.tx_cycle_edit = Some(GenRow::Fr(0));
+        app.tx_cycle_buf = "5".to_string();
+        app.src_edit = Some((GenRow::Fr(0), e.name.clone()));
+        app.src_draft = app.gen_source(GenRow::Fr(0), &e.name);
+        app.src_seq_buf = "0, 1".to_string();
+    }
+    frames(&mut app, &mut ctx, 3);
+    // What this harness can prove: the row's commands were accepted and came
+    // back in the snapshot, and both dialogs drew over a FlexRay row (they
+    // close on their Apply button, which nothing here clicks). Whether the
+    // frames reach the bus is the headless tests' job --
+    // `a_generated_flexray_slot_fills_the_session_on_its_schedule` drives the
+    // clock instead of the wall.
+    let view = &app.snap.fr_tx[0];
+    assert!(view.active, "the On checkbox reached the entry");
+    assert!(
+        !view.srcs.is_empty(),
+        "the driven source the params dialog edits is on the entry"
+    );
+}
+
 /// The script editor's FlexRay tab lists the slots a script can read from every
 /// loaded cluster description. It is a tab of its own now, and a tab body only
 /// draws while selected -- which no headless frame can arrange -- so the list

@@ -32,11 +32,44 @@ pub struct TxMsg {
     pub last_len: u8,
 }
 
+/// One FlexRay generator entry: the slot it fills, the bytes it puts there and
+/// the schedule it emits on. The twin of [`TxMsg`] for a bus whose frames are
+/// addressed by slot rather than id, and deliberately without the CAN entry's
+/// `node`/`fd`/`extended` fields -- a slot belongs to the cluster schedule, not
+/// to a DBC transmitter, and there is no FD mode to opt into.
+pub struct FrTxMsg {
+    pub bus: u8,
+    pub slot: u16,
+    /// The frame name the bus's description gives this slot, for the row header.
+    pub name: String,
+    /// Payload length in bytes; the base buffer is exactly this long.
+    pub len: usize,
+    pub data: Vec<u8>,
+    pub data_text: String,
+    /// Emission period in µs. 0 is meaningful: the frame goes out only when the
+    /// row's "Send now" is pressed.
+    pub cycle_us: u64,
+    pub active: bool,
+    pub next_t_us: u64,
+    /// Signals generated over time rather than held at what `data` says, applied
+    /// on top of the base payload at emit time -- see [`crate::sim`].
+    pub srcs: Vec<ValueSrc>,
+    /// The payload of the last frame that went out, for the row's readout.
+    /// Empty until the first emission.
+    pub last_sent: Vec<u8>,
+}
+
 /// Whitespace-separated hex bytes, as typed in the generator's data box.
 /// Returns None on an empty, over-long or non-hex string.
 pub(crate) fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
+    parse_hex_limited(s, MAX_CAN_FD_LEN)
+}
+
+/// The same box for a payload of any length: a FlexRay slot carries up to 254
+/// bytes, so the cap travels with the caller rather than the parser.
+pub(crate) fn parse_hex_limited(s: &str, max: usize) -> Option<Vec<u8>> {
     let toks: Vec<&str> = s.split_whitespace().collect();
-    if toks.is_empty() || toks.len() > MAX_CAN_FD_LEN {
+    if toks.is_empty() || toks.len() > max {
         return None;
     }
     let mut out = Vec::with_capacity(toks.len());
@@ -47,8 +80,12 @@ pub(crate) fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn hex_text(data: &[u8; MAX_CAN_FD_LEN], len: u8) -> String {
-    data[..len.min(MAX_CAN_FD_LEN as u8) as usize]
-        .iter()
+    hex_of(&data[..len.min(MAX_CAN_FD_LEN as u8) as usize])
+}
+
+/// The generator's display form of any payload.
+pub(crate) fn hex_of(data: &[u8]) -> String {
+    data.iter()
         .map(|b| format!("{b:02X}"))
         .collect::<Vec<_>>()
         .join(" ")
@@ -306,6 +343,43 @@ impl App {
         self.send(crate::bus::BusCommand::AddEntry { ch: channel, id });
     }
 
+    /// Adds the FlexRay generator entry `(bus, slot)` unless it exists. The
+    /// entry's name, payload length and send period come from that bus's cluster
+    /// description, so a 路 with no description loaded still gets an entry -- it
+    /// just carries raw bytes.
+    pub fn add_fr_tx(&mut self, bus: u8, slot: u16) {
+        self.send(crate::bus::BusCommand::AddFrEntry { bus, slot });
+    }
+
+    /// Replaces a FlexRay entry's base payload from hex text.
+    /// Test convenience: the UI sends [`crate::bus::BusCommand::SetFrEntryHex`].
+    #[cfg(test)]
+    pub fn set_fr_tx_hex(&mut self, bus: u8, slot: u16, text: &str) {
+        self.send(crate::bus::BusCommand::SetFrEntryHex {
+            bus,
+            slot,
+            text: text.to_string(),
+        });
+    }
+
+    /// Ticks one FlexRay entry's On checkbox. Test convenience: the UI sends
+    /// [`crate::bus::BusCommand::SetFrEntryActive`].
+    #[cfg(test)]
+    pub fn set_fr_tx_active(&mut self, bus: u8, slot: u16, on: bool) {
+        self.send(crate::bus::BusCommand::SetFrEntryActive { bus, slot, on });
+    }
+
+    /// Sets a FlexRay entry's send period in µs (0 = only on demand). Test
+    /// convenience: the UI sends [`crate::bus::BusCommand::SetFrEntryCycle`].
+    #[cfg(test)]
+    pub fn set_fr_tx_cycle(&mut self, bus: u8, slot: u16, cycle_us: u64) {
+        self.send(crate::bus::BusCommand::SetFrEntryCycle {
+            bus,
+            slot,
+            cycle_us,
+        });
+    }
+
     /// Adds or replaces the source driving `src.name` on generator `i`.
     pub fn set_source(&mut self, i: usize, src: ValueSrc) {
         let Some(tx) = self.snap.tx.get(i) else {
@@ -313,6 +387,145 @@ impl App {
         };
         let (ch, id) = (tx.channel, tx.id);
         self.send(crate::bus::BusCommand::SetEntrySource { ch, id, src });
+    }
+
+    /// The source driving `sig` on this generator row, from this frame's
+    /// snapshot. `None` means the base bytes are in charge of that signal.
+    pub fn gen_source(&self, row: crate::app::GenRow, sig: &str) -> Option<ValueSrc> {
+        let srcs = match row {
+            crate::app::GenRow::Can(i) => self.snap.tx.get(i).map(|t| t.srcs.clone()),
+            crate::app::GenRow::Fr(i) => self.snap.fr_tx.get(i).map(|t| t.srcs.clone()),
+        };
+        srcs?
+            .into_iter()
+            .find(|s| s.name == sig)
+    }
+
+    /// Applies a drafted source to whichever row it belongs to.
+    pub fn set_gen_source(&mut self, row: crate::app::GenRow, src: ValueSrc) {
+        match row {
+            crate::app::GenRow::Can(i) => self.set_source(i, src),
+            crate::app::GenRow::Fr(i) => {
+                let Some(tx) = self.snap.fr_tx.get(i) else {
+                    return;
+                };
+                let (bus, slot) = (tx.bus, tx.slot);
+                self.send(crate::bus::BusCommand::SetFrEntrySource { bus, slot, src });
+            }
+        }
+    }
+
+    /// Stops driving `sig`; the base bytes take over again.
+    pub fn clear_gen_source(&mut self, row: crate::app::GenRow, sig: &str) {
+        match row {
+            crate::app::GenRow::Can(i) => {
+                let Some(tx) = self.snap.tx.get(i) else {
+                    return;
+                };
+                let (ch, id) = (tx.channel, tx.id);
+                self.send(crate::bus::BusCommand::ClearEntrySource {
+                    ch,
+                    id,
+                    name: sig.to_string(),
+                });
+            }
+            crate::app::GenRow::Fr(i) => {
+                let Some(tx) = self.snap.fr_tx.get(i) else {
+                    return;
+                };
+                let (bus, slot) = (tx.bus, tx.slot);
+                self.send(crate::bus::BusCommand::ClearFrEntrySource {
+                    bus,
+                    slot,
+                    name: sig.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Writes a physical value into the row's base payload and drops only that
+    /// signal's source. Whether the database can encode it is the bus's call; a
+    /// failed pin simply changes nothing.
+    pub fn pin_gen_signal(&mut self, row: crate::app::GenRow, sig: &str, phys: f64) {
+        match row {
+            crate::app::GenRow::Can(i) => {
+                let Some(tx) = self.snap.tx.get(i) else {
+                    return;
+                };
+                let (ch, id) = (tx.channel, tx.id);
+                self.send(crate::bus::BusCommand::PinEntrySignal {
+                    ch,
+                    id,
+                    name: sig.to_string(),
+                    phys,
+                });
+            }
+            crate::app::GenRow::Fr(i) => {
+                let Some(tx) = self.snap.fr_tx.get(i) else {
+                    return;
+                };
+                let (bus, slot) = (tx.bus, tx.slot);
+                self.send(crate::bus::BusCommand::PinFrEntrySignal {
+                    bus,
+                    slot,
+                    name: sig.to_string(),
+                    phys,
+                });
+            }
+        }
+    }
+
+    /// A generator row's title and the bus it lives on, for the dialogs that
+    /// serve both halves of the window. `None` when the row is gone.
+    pub fn gen_title(&self, row: crate::app::GenRow) -> Option<(String, String)> {
+        match row {
+            crate::app::GenRow::Can(i) => {
+                let t = self.snap.tx.get(i)?;
+                Some((
+                    format!("{}  {:X}", t.name, t.id),
+                    self.channel_name(t.channel),
+                ))
+            }
+            crate::app::GenRow::Fr(i) => {
+                let t = self.snap.fr_tx.get(i)?;
+                Some((
+                    format!("{}  slot {}", t.name, t.slot),
+                    self.fr_bus_name(t.bus),
+                ))
+            }
+        }
+    }
+
+    /// The unit `sig` is declared with on this row's frame, for the dialog
+    /// header. Empty when neither the row nor its database knows the signal.
+    pub fn gen_signal_unit(&self, row: crate::app::GenRow, sig: &str) -> String {
+        match row {
+            crate::app::GenRow::Can(i) => self
+                .snap
+                .tx
+                .get(i)
+                .and_then(|t| self.channel_dbc(t.channel)?.message_of(t.id))
+                .and_then(|m| m.signals.iter().find(|s| s.name == sig))
+                .map(|s| s.unit.clone())
+                .unwrap_or_default(),
+            crate::app::GenRow::Fr(i) => {
+                let Some(t) = self.snap.fr_tx.get(i) else {
+                    return String::new();
+                };
+                let (bus, slot) = (t.bus, t.slot);
+                let Some(db) = self.fr_db(bus) else {
+                    return String::new();
+                };
+                let Some(ix) = db.frame_ix_of_slot(slot) else {
+                    return String::new();
+                };
+                db.edit_signals(ix)
+                    .into_iter()
+                    .find(|s| s.name == sig)
+                    .map(|s| s.unit)
+                    .unwrap_or_default()
+            }
+        }
     }
 
     /// Stops driving `name`, which leaves the base bytes in charge again.
@@ -385,4 +598,55 @@ pub(crate) fn set_tx_base(tx: &mut TxMsg, data: [u8; MAX_CAN_FD_LEN], len: u8) {
         tx.flags = tx.flags.union(FrameFlags::FD);
     }
     tx.data_text = hex_text(&data, len);
+}
+
+/// Largest payload a FlexRay frame can carry (the protocol's own ceiling).
+pub const MAX_FR_PAYLOAD_LEN: usize = 254;
+
+/// The communication cycle a timestamp falls in, as a FlexRay cycle number.
+/// The cluster's own cycle length comes from its description; without one there
+/// is nothing to count against, and cycle 0 is the honest answer rather than a
+/// made-up phase.
+pub(crate) fn fr_cycle_at(db: &crate::fr_db::FrDb, at_us: u64) -> u8 {
+    let cycle_us = (db.params.cycle_time_ms * 1000.0).round() as u64;
+    if cycle_us == 0 {
+        return 0;
+    }
+    ((at_us / cycle_us) % 64) as u8
+}
+
+/// The payload one generated FlexRay frame carries: the base bytes with every
+/// driven signal laid over them at `at_us`, encoded against the frame the
+/// schedule actually puts in this slot at this cycle. Never mutates `tx`.
+///
+/// The frame is resolved rather than assumed because a static slot can hold
+/// several frames by cycle phase -- writing `Amp` where the cycle carries `Bmp`
+/// would put a value the decoder then reads as something else.
+pub(crate) fn fr_tx_payload(
+    fr_dbs: &std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>,
+    tx: &FrTxMsg,
+    at_us: u64,
+) -> Vec<u8> {
+    let mut data = tx.data.clone();
+    let Some(db) = fr_dbs.get(&tx.bus) else {
+        return data;
+    };
+    let Some(frame_ix) = db.frame_ix_at(tx.slot, fr_cycle_at(db, at_us), 2) else {
+        return data;
+    };
+    for src in &tx.srcs {
+        // A signal this frame does not carry, or a payload too short to hold it,
+        // leaves the bytes alone -- the same refusal as the CAN side, where a
+        // value that cannot be encoded must not reach the wire as a partial one.
+        let _ = db.encode_signal(frame_ix, &src.name, eval_phys(src, at_us), &mut data);
+    }
+    data
+}
+
+/// Installs a FlexRay entry's base payload and keeps its length and hex text in
+/// step with it.
+pub(crate) fn set_fr_tx_base(tx: &mut FrTxMsg, data: Vec<u8>) {
+    tx.len = data.len();
+    tx.data_text = hex_of(&data);
+    tx.data = data;
 }

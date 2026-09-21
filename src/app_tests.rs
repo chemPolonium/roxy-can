@@ -7362,6 +7362,222 @@ fn replaying_a_flexray_log_drives_the_slot_handlers() {
     assert_eq!(agg.data[0], 3, "the last one carried the last cycle");
 }
 
+/// The FlexRay half of the interactive generator. An entry fills one slot on
+/// the period that slot's own schedule declares, and the frame it puts there
+/// goes through the whole receive path -- the tally, the frame count, the
+/// payload the views decode -- like a frame that arrived on a watched port.
+/// Pinning a signal has to survive that trip: the value written in is the value
+/// read back out of the bytes that actually went out.
+#[test]
+fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let db = crate::fr_db::FrDb::parse(&read_fr_asset(arxml)).expect("parses");
+    // The first slot the schedule names that carries a signal, with the period
+    // the schedule promises for it -- stated from the asset, not from the code
+    // under test, so the assertion means "as declared" rather than "as computed".
+    let (slot, sig, declared_us) = db
+        .scheduled_slots()
+        .iter()
+        .find_map(|(slot, _)| {
+            let ix = db.frame_ix_of_slot(*slot)?;
+            let first = db.edit_signals(ix).into_iter().next()?;
+            let f = db.frame_index(ix)?;
+            let rep = f.triggering.cycle_repetition.max(1) as u64;
+            Some((
+                *slot,
+                first,
+                (db.params.cycle_time_ms * rep as f64 * 1_000.0).round() as u64,
+            ))
+        })
+        .expect("the asset schedules a slot that carries signals");
+    let sig_name = sig.name.clone();
+    // Values stated in units of the signal's own step, so they are exactly
+    // representable whatever the coding's declared range happens to say (this
+    // asset's CarSpeed declares no min/max at all).
+    let step = sig.factor.abs().max(1e-9);
+    let (want, one_lsb) = (sig.min + step * 5.0, step * 1.5);
+    assert!(declared_us > 0, "the cluster declares a cycle time");
+    let db = std::sync::Arc::new(db);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: std::sync::Arc::clone(&db),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.settle();
+
+    app.add_fr_tx(0, slot);
+    app.settle();
+    assert_eq!(app.snap.fr_tx.len(), 1, "one entry for the slot");
+    assert_eq!(
+        app.snap.fr_tx[0].cycle_us, declared_us,
+        "the entry starts on the schedule's own period"
+    );
+    assert!(!app.snap.fr_tx[0].undescribed, "this slot is described");
+
+    app.start_virtual();
+    app.set_fr_tx_active(0, slot, true);
+    app.settle();
+    let before = app.snap.frame_counter;
+    for n in 1..=3u64 {
+        app.advance_clock(declared_us * n);
+        app.tick(declared_us * n);
+    }
+    app.refresh_snapshot();
+    let agg = app
+        .fr_aggs
+        .values()
+        .find(|a| a.bus == 0 && a.slot == slot)
+        .expect("the generated frames are tallied like any arrival");
+    assert!(
+        agg.count >= 3,
+        "three periods passed, the slot filled each time: {}",
+        agg.count
+    );
+    assert_eq!(
+        app.snap.frame_counter - before,
+        agg.count,
+        "a generated frame counts as a frame, not as a special case"
+    );
+    assert_eq!(
+        app.snap.fr_tx[0].sent_text.split_whitespace().count(),
+        agg.payload.len(),
+        "the row shows the bytes that went out"
+    );
+
+    // Pin one signal and the next frame must carry it, read back through the
+    // same description the decoder uses.
+    app.pin_gen_signal(crate::app::GenRow::Fr(0), &sig_name, want);
+    app.settle();
+    app.advance_clock(declared_us * 4);
+    app.tick(declared_us * 4);
+    app.refresh_snapshot();
+    let agg = app
+        .fr_aggs
+        .values()
+        .find(|a| a.bus == 0 && a.slot == slot)
+        .expect("the slot is still tallied");
+    let ix = db.frame_ix_of_slot(slot).expect("described above");
+    let got = db
+        .decode_signals(ix, &agg.payload)
+        .into_iter()
+        .find(|d| d.name == sig_name)
+        .expect("the pinned signal is in the frame");
+    assert!(
+        (got.phys - want).abs() <= one_lsb,
+        "{sig_name} reads back as {want}, got {} (raw {}), one LSB being {one_lsb}",
+        got.phys,
+        got.raw
+    );
+
+    // And a *driven* signal rides its own waveform: the value in each frame is
+    // the source's value at that frame's stamp, laid over the base bytes the pin
+    // just wrote. A Step over the slot's period hits both ends of its range, so
+    // the set of values read back is exactly {lo, hi} -- never the pinned one.
+    let (lo, hi) = (sig.min, sig.min + step * 10.0);
+    let mut src = crate::sim::ValueSrc::new(&sig_name, crate::sim::SrcKind::Step, lo, hi);
+    // Four slot periods end to end: sampled once per slot period, the wave
+    // would otherwise land on the same phase every frame and read as a
+    // constant -- which is the aliasing, not a missing source.
+    src.period_us = declared_us * 4;
+    app.set_gen_source(crate::app::GenRow::Fr(0), src);
+    app.settle();
+    let mut seen = Vec::new();
+    for n in 5..9u64 {
+        app.advance_clock(declared_us * n);
+        app.tick(declared_us * n);
+        app.refresh_snapshot();
+        let agg = app
+            .fr_aggs
+            .values()
+            .find(|a| a.bus == 0 && a.slot == slot)
+            .expect("the slot is still tallied");
+        let got = db
+            .decode_signals(ix, &agg.payload)
+            .into_iter()
+            .find(|d| d.name == sig_name)
+            .expect("the driven signal is in the frame");
+        seen.push(got.phys);
+    }
+    assert!(
+        seen.iter().any(|v| (v - lo).abs() <= one_lsb),
+        "{sig_name} rode down to its lo: {seen:?}"
+    );
+    assert!(
+        seen.iter().any(|v| (v - hi).abs() <= one_lsb),
+        "{sig_name} rode up to its hi: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|v| (v - want).abs() > one_lsb),
+        "the driven value replaced the pinned {want}, not the other way round: {seen:?}"
+    );
+    app.stop();
+}
+
+/// A FlexRay entry whose description went away keeps filling its slot with the
+/// bytes it holds: the entry is the user's, and losing the file that named its
+/// signals must not silently delete the stimulus they built. The row says so
+/// rather than showing an empty signal list.
+#[test]
+fn a_flexray_entry_outlives_the_description_it_came_from() {
+    let mut app = quiet_app();
+    let slot = 13;
+    app.add_fr_tx(0, slot);
+    app.settle();
+    assert_eq!(app.snap.fr_tx.len(), 1);
+    assert!(
+        app.snap.fr_tx[0].undescribed,
+        "no description on bus 0, so nothing decodes this slot"
+    );
+    app.set_fr_tx_hex(0, slot, "11 22 33");
+    app.set_fr_tx_cycle(0, slot, 10_000);
+    app.set_fr_tx_active(0, slot, true);
+    app.start_virtual();
+    app.settle();
+    for n in 1..=2u64 {
+        app.advance_clock(n * 10_000);
+        app.tick(n * 10_000);
+    }
+    app.refresh_snapshot();
+    let agg = app
+        .fr_aggs
+        .values()
+        .find(|a| a.bus == 0 && a.slot == slot)
+        .expect("the raw bytes still reach the tally");
+    assert_eq!(agg.payload, vec![0x11, 0x22, 0x33], "typed as hex, sent as hex");
+    app.stop();
+}
+
+/// The same standing-down rule the CAN generator follows while a log is being
+/// replayed: if the replayed traffic carries this slot, a second sender of the
+/// same signals would mix two values into every curve, count and verdict.
+#[test]
+fn a_generated_slot_stands_down_while_the_replayed_log_carries_it() {
+    let mut app = quiet_app();
+    app.add_fr_tx(0, 13);
+    app.settle();
+    app.set_fr_tx_cycle(0, 13, 1_000);
+    app.set_fr_tx_active(0, 13, true);
+    app.settle();
+    let src = write_mixed_fr_asc("roxy_can_fr_gen_mute", 4);
+    replay_to_the_end(&mut app, &src);
+    assert!(app.snap.fr_tx[0].muted, "the row says why it is quiet");
+    let agg = app
+        .fr_aggs
+        .values()
+        .find(|a| a.bus == 0 && a.slot == 13)
+        .expect("the log's own arrivals are tallied");
+    assert_eq!(
+        agg.count, 4,
+        "only the log's four frames, not four plus a generator each millisecond"
+    );
+    std::fs::remove_file(&src).ok();
+}
+
 /// The spec monitor's rules have FlexRay counterparts, because the description
 /// makes the same kind of promises: which slot a frame occupies, in which cycle
 /// phase, how often it repeats and how long it is. Four verdicts from one
