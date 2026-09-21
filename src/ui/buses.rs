@@ -1,5 +1,18 @@
 use crate::app::App;
-use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, Ui};
+use dear_imgui_rs::{Condition, StyleColor, StyleVar, TableColumnFlags, TableFlags, Ui};
+
+/// A text field that reads as plain text until it is hovered or focused, so the
+/// CAN rows look like the FlexRay rows beside them -- the value is the point,
+/// the box is only there when it is being used. `FrameBg` is the idle colour;
+/// the hovered and active ones are left alone, which is what makes the field
+/// announce itself under the mouse. Wrap each such field in a block with these
+/// two guards so they pop the moment the field is drawn.
+macro_rules! quiet_field {
+    ($ui:expr) => {{
+        let _bg = $ui.push_style_color(StyleColor::FrameBg, [0.0, 0.0, 0.0, 0.0]);
+        let _border = $ui.push_style_var(StyleVar::FrameBorderSize(0.0));
+    }};
+}
 
 /// Bus management: rename buses, load a DBC per bus, add/remove buses.
 pub fn render(app: &mut App, ui: &Ui) {
@@ -127,8 +140,14 @@ fn content(app: &mut App, ui: &Ui) {
                 Some((r, s)) if *r == i => s.clone(),
                 _ => name,
             };
-            ui.input_text(format!("##busname{i}"), &mut name_buf)
-                .build();
+            {
+                quiet_field!(ui);
+                ui.input_text(format!("##busname{i}"), &mut name_buf)
+                    .build();
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("点击改名");
+            }
             if ui.is_item_active() {
                 app.bus_name_edit = Some((i, name_buf.clone()));
             }
@@ -160,9 +179,10 @@ fn content(app: &mut App, ui: &Ui) {
             if ui.button(format!("Open...##busdbc{i}")) {
                 app.pick_dbc_for(i);
             }
-            // Extra attached databases: one row each with a detach button.
+            // Extra attached databases: one row each with a detach button, dim
+            // like the metadata line a FlexRay row puts under its file name.
             for (e, extra) in extras.iter().enumerate() {
-                ui.text(file_name(extra));
+                ui.text_disabled(file_name(extra));
                 ui.same_line();
                 if ui.button(format!("x##busdbx{i}_{e}")) {
                     app.detach_dbc_extra(i, e);
@@ -181,13 +201,19 @@ fn content(app: &mut App, ui: &Ui) {
             // bus being analysed, not device settings. Each field is a plain
             // "type the number" box: the draft lives in App while the field
             // has focus, the parsed value commits when the edit ends, and an
-            // unparsable text simply reverts to the model.
+            // unparsable text simply reverts to the model. Quiet like the
+            // FlexRay row's read-only numbers -- the pair reads as `250 2000`,
+            // and the frame only shows when the field is used.
             let mut arb = match &app.bus_arb_edit {
                 Some((r, s)) if *r == i => s.clone(),
                 _ => arb_kbps.to_string(),
             };
             ui.set_next_item_width(70.0);
-            if ui.input_text(format!("##busarb{i}"), &mut arb).build() || ui.is_item_active() {
+            {
+                quiet_field!(ui);
+                ui.input_text(format!("##busarb{i}"), &mut arb).build();
+            }
+            if ui.is_item_active() {
                 app.bus_arb_edit = Some((i, arb.clone()));
             }
             if ui.is_item_deactivated_after_edit() {
@@ -212,7 +238,11 @@ fn content(app: &mut App, ui: &Ui) {
                 _ => data_kbps.to_string(),
             };
             ui.set_next_item_width(70.0);
-            if ui.input_text(format!("##busdata{i}"), &mut data).build() || ui.is_item_active() {
+            {
+                quiet_field!(ui);
+                ui.input_text(format!("##busdata{i}"), &mut data).build();
+            }
+            if ui.is_item_active() {
                 app.bus_data_edit = Some((i, data.clone()));
             }
             if ui.is_item_deactivated_after_edit() {
@@ -290,7 +320,7 @@ fn content(app: &mut App, ui: &Ui) {
                                 .map(|c| format!("[{}] ch{}: {}", c.driver.tag(), c.index, c.name))
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-                            ui.set_next_item_width(150.0);
+                            ui.set_next_item_width(110.0);
                             let mut pick = 0usize;
                             if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
                                 let info = &channels[pick];
@@ -401,9 +431,6 @@ fn content(app: &mut App, ui: &Ui) {
             } else {
                 file_name(&path)
             });
-            if !tag.is_empty() {
-                ui.text_disabled(tag.trim_start_matches(" · "));
-            }
             ui.same_line();
             let load_label = if path.is_empty() { "加载…" } else { "换…" };
             if ui.button(format!("{load_label}##frload{bus}")) {
@@ -413,6 +440,12 @@ fn content(app: &mut App, ui: &Ui) {
                 ui.tooltip_text(
                     "挑一份这路 cluster 的 FIBEX/ARXML 描述：帧名、信号解码、占用率都按它来。放错路是静默的错（一路的槽会按另一路的调度去解名），所以按钮长在哪一行就归哪一路，不替你猜。\n只加载描述不开端口——回放两路录下来的日志用的就是这个。",
                 );
+            }
+            // Metadata on its own line, dim: a long file name plus a long
+            // cluster name do not fit one cell, and a button that falls off the
+            // right edge is worse than no button at all.
+            if !tag.is_empty() {
+                ui.text_disabled(tag.trim_start_matches(" · "));
             }
             ui.table_next_column();
             match timing {
