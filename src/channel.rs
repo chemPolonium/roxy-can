@@ -323,18 +323,6 @@ impl App {
         }
     }
 
-    /// Opens a FIBEX/ARXML cluster-description picker; a pick parses the
-    /// database, keeps it against the first FlexRay bus without one, and
-    /// attaches the FlexRay RX-only watch to the Vector channel.
-    pub fn pick_fibex_for(&mut self, channel_index: i32) {
-        let Some(path) = Self::pick_cluster_file() else {
-            return;
-        };
-        if let Some(bus) = self.load_cluster_description(&path, None) {
-            self.set_fr_watch(bus, Some(channel_index), &path);
-        }
-    }
-
     /// Loads a cluster description **without** attaching a watch: a replayed
     /// recording can hold two clusters (BLF states which one each frame came
     /// from), and the second one needs its own description to be named or

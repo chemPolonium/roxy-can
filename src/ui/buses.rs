@@ -323,12 +323,16 @@ fn content(app: &mut App, ui: &Ui) {
         app.remove_channel(i);
     }
 
-    // FlexRay buses: one row each for every bus the tool knows -- watched (a
-    // Vector port configured from its own FIBEX/ARXML cluster description),
-    // described only (loaded so a replay of a two-cluster recording can name
-    // that cluster's frames), or both. Watches are RX-only: received frames
-    // land in the Trace window's FlexRay section, nothing ever transmits and no
-    // CAN bus is touched.
+    // FlexRay buses: the same table shape as the CAN one above -- one row per
+    // 路, the same columns in the same order, because the questions are the
+    // same: which bus is this, which description describes it, what timing does
+    // it declare, which port feeds it. Two differences, and both come from the
+    // protocol rather than from here: the timing is *read* out of the
+    // description instead of typed (a FlexRay cluster's bit time is its
+    // schedule, so changing it means editing the description), and a watch only
+    // receives -- there is no transmit path yet. The schedule itself is not
+    // listed: reading a slot/cycle table is a FIBEX/ARXML editor's job, and a
+    // copy of it here would be a worse, staler one.
     ui.separator();
     ui.text_colored([0.55, 0.8, 1.0, 1.0], "FlexRay");
     let watches = app.snap.fr_watches.clone();
@@ -343,121 +347,149 @@ fn content(app: &mut App, ui: &Ui) {
             .collect(),
         Err(_) => Vec::new(),
     };
-    let mut buses: Vec<u8> = watches.iter().map(|w| w.bus).collect();
-    buses.extend(app.fr_buses.keys().copied());
-    buses.sort_unstable();
-    buses.dedup();
+    // One row per 路 the tool knows about: watched, described, or only seen in
+    // the log being replayed (a recording numbers its clusters and nothing
+    // else), plus the first free index so another network can be added -- the
+    // FlexRay twin of CAN's "+ Add bus", as a row that has nothing on it yet.
+    let targets = app.fr_description_targets();
     let mut detach = None;
     let mut forget = None;
-    let mut attach = None;
-    for bus in buses {
-        match watches.iter().find(|w| w.bus == bus) {
-            Some(w) => {
-                ui.text(format!(
-                    "FR{} · [V] ch{} · {}{}（只收）",
-                    w.bus,
-                    w.channel_index,
-                    file_name(&w.fibex_path),
-                    fr_cluster_tag(app, bus),
-                ));
-                if !app.snap.real_bus {
-                    ui.same_line();
-                    ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
-                    if ui.is_item_hovered() {
-                        ui.tooltip_text(
-                            "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
-                        );
-                    }
-                }
-                ui.same_line();
-                if ui.button(format!("断开##frdet{bus}")) {
-                    detach = Some(w.bus);
-                }
+    let mut attach: Option<(u8, i32)> = None;
+    let mut load_for: Option<u8> = None;
+    {
+        let fr_opts = dear_imgui_rs::TableOptions::from(TableFlags::RESIZABLE)
+            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
+        let Some(_t) = ui.begin_table_with_flags("fr_table", 5, fr_opts) else {
+            return;
+        };
+        ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_column_stretch_weight("FIBEX/ARXML", TableColumnFlags::NONE, 1.6);
+        ui.table_setup_column_fixed_width("kbit/s · 周期 ms", TableColumnFlags::NONE, 150.0);
+        ui.table_setup_column_fixed_width("硬件", TableColumnFlags::NONE, 140.0);
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
+        ui.table_headers_row();
+        for bus in targets {
+            // Everything the row shows is read into owned values first: the
+            // widgets below need `app` to themselves.
+            let watch = watches.iter().find(|w| w.bus == bus).cloned();
+            let path = app
+                .fr_buses
+                .get(&bus)
+                .map(|c| c.path.clone())
+                .unwrap_or_default();
+            let timing = app
+                .fr_db(bus)
+                .map(|db| (db.params.speed_kbps, db.params.cycle_time_ms));
+            let tag = fr_cluster_tag(app, bus);
+            ui.table_next_row();
+            if !ui.table_next_column() {
+                continue;
             }
-            None => {
-                let path = app.fr_buses.get(&bus).map(|c| c.path.as_str()).unwrap_or("");
-                ui.text(format!(
-                    "FR{bus} · 仅描述 {}{}",
-                    file_name(path),
-                    fr_cluster_tag(app, bus)
-                ));
-                if !free.is_empty() {
-                    ui.same_line();
-                    if ui.button(format!("挂接监听…##fratt{bus}")) {
-                        attach = Some((bus, free[app.fr_pick.min(free.len() - 1)].index));
-                    }
+            ui.text(format!("FR{bus}"));
+            if path.is_empty() && watch.is_none() {
+                // The row exists because a log showed traffic on it, or because
+                // it is the slot a new network would take. Say which, rather
+                // than leaving a bus with nothing on it looking like a bug.
+                ui.same_line();
+                ui.text_disabled("（未配置）");
+            }
+            ui.table_next_column();
+            // The description this 路 decodes against, and the one button that
+            // changes it -- where CAN puts "Open...".
+            ui.text(if path.is_empty() {
+                "(none)".to_string()
+            } else {
+                file_name(&path)
+            });
+            if !tag.is_empty() {
+                ui.text_disabled(tag.trim_start_matches(" · "));
+            }
+            ui.same_line();
+            let load_label = if path.is_empty() { "加载…" } else { "换…" };
+            if ui.button(format!("{load_label}##frload{bus}")) {
+                load_for = Some(bus);
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text(
+                    "挑一份这路 cluster 的 FIBEX/ARXML 描述：帧名、信号解码、占用率都按它来。放错路是静默的错（一路的槽会按另一路的调度去解名），所以按钮长在哪一行就归哪一路，不替你猜。\n只加载描述不开端口——回放两路录下来的日志用的就是这个。",
+                );
+            }
+            ui.table_next_column();
+            match timing {
+                Some((kbps, cycle)) => {
+                    ui.text(format!("{kbps} / {cycle:.2}"));
                     if ui.is_item_hovered() {
                         ui.tooltip_text(
-                            "用下面下拉选中的空闲通道打开这一路的只收监听：描述已经加载，不必再挑文件",
+                            "描述声明的速率与宏周期算出的周期时间。不像 CAN 那一列可以在这里改：FlexRay 的位时就是调度表本身，要改得改描述文件。",
                         );
                     }
                 }
-                ui.same_line();
-                if ui.button(format!("移除描述##frfor{bus}")) {
+                None => ui.text_disabled("-"),
+            }
+            ui.table_next_column();
+            match &watch {
+                Some(w) => {
+                    ui.text(format!("[V] ch{}", w.channel_index));
+                    ui.same_line();
+                    ui.text_disabled("（只收）");
+                    if !app.snap.real_bus {
+                        ui.same_line();
+                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(
+                                "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
+                            );
+                        }
+                    }
+                    ui.same_line();
+                    if ui.button(format!("断开##frdet{bus}")) {
+                        detach = Some(bus);
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("关掉这端的接收并撤下它的配置（描述一并撤；只想撤描述就先断开再用行末的 x）");
+                    }
+                }
+                None => match &listed {
+                    Ok(_) if free.is_empty() => ui.text_disabled("无空闲 FlexRay 通道"),
+                    Err(e) => ui.text_disabled(e.as_str()),
+                    Ok(_) => {
+                        // Picking a port from the combo is the attach, exactly
+                        // like a CAN row: no second button to press.
+                        let labels: Vec<String> = free
+                            .iter()
+                            .map(|c| format!("[V] ch{}: {}", c.index, c.name))
+                            .collect();
+                        let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                        ui.set_next_item_width(110.0);
+                        let mut pick = 0usize;
+                        if ui.combo_simple_string(format!("##frch{bus}"), &mut pick, &refs) {
+                            let idx = free[pick.min(free.len() - 1)].index;
+                            attach = Some((bus, idx));
+                        }
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(
+                                "给这路挂上只收监听（Vector 端口）：需要这行已经有集群描述——通道拿不到集群参数就收不到帧，没描述会先报出来。",
+                            );
+                        }
+                    }
+                },
+            }
+            ui.table_next_column();
+            // The row's removal is the description's: a watch has its own
+            // "断开" one column to the left. With nothing loaded there is
+            // nothing to take away, so the cell stays empty rather than offering
+            // an x that would silently do nothing.
+            if path.is_empty() {
+                ui.text("");
+            } else {
+                if ui.button(format!("x##frrm{bus}")) {
                     forget = Some(bus);
                 }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("撤下这行的集群描述（不动别的路）。正在监听时先断开。");
+                }
             }
         }
-    }
-    if !free.is_empty() {
-        let labels: Vec<String> = free
-            .iter()
-            .map(|c| format!("[V] ch{}: {}", c.index, c.name))
-            .collect();
-        let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-        ui.set_next_item_width(170.0);
-        ui.combo_simple_string("##frch", &mut app.fr_pick, &refs);
-        ui.same_line();
-        if ui.button("挑描述并挂接…##frfib") {
-            let idx = free[app.fr_pick.min(free.len() - 1)].index;
-            app.pick_fibex_for(idx);
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip_text(
-                "挂接新的一路 FlexRay 只收监听：选通道后挑选该 cluster 的 FIBEX/ARXML 描述文件，收到的帧显示在 Trace 窗口的 FlexRay 区",
-            );
-        }
-    } else {
-        match &listed {
-            Ok(list) if list.is_empty() => ui.text_disabled("无 FlexRay 通道"),
-            Err(e) => ui.text_disabled(e),
-            _ => ui.text_disabled("无空闲 FlexRay 通道"),
-        }
-    }
-    // A description for a cluster no port is opened for: a recording can hold
-    // two clusters, and the second one needs its own description before its
-    // frames can be named or decoded -- which has nothing to do with hardware.
-    // Which 路 a file describes is the user's call: a recording numbers its
-    // clusters 0/1 with no names, a file only carries a name, and the order
-    // files happen to be picked in must not decide which network gets which
-    // schedule -- that mistake names every frame of one cluster with the
-    // other cluster's slots, which reads as plausible data.
-    let targets = app.fr_description_targets();
-    if app.fr_db_pick >= targets.len() {
-        app.fr_db_pick = 0;
-    }
-    let labels: Vec<String> = targets
-        .iter()
-        .map(|b| {
-            format!(
-                "FR{b}{}",
-                if app.fr_buses.contains_key(b) { "*" } else { "" }
-            )
-        })
-        .collect();
-    let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-    ui.text_disabled("给这路");
-    ui.same_line();
-    ui.set_next_item_width(80.0);
-    ui.combo_simple_string("##frdbbus", &mut app.fr_db_pick, &refs);
-    ui.same_line();
-    if ui.button("加载集群描述...##frdbonly") {
-        app.pick_cluster_description(targets[app.fr_db_pick.min(targets.len() - 1)]);
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text(
-            "给下拉选中的那条 FlexRay 路加载 FIBEX/ARXML 集群描述：只用于解码（回放或监听），不开端口。\n带 * 的路已有描述，选中它就是把这份换上去（正在监听的路要先断开）。",
-        );
     }
     if let Some(bus) = detach {
         app.detach_fr_watch(bus);
@@ -465,82 +497,10 @@ fn content(app: &mut App, ui: &Ui) {
     if let Some(bus) = forget {
         app.forget_cluster_description(bus);
     }
+    if let Some(bus) = load_for {
+        app.pick_cluster_description(bus);
+    }
     if let Some((bus, channel_index)) = attach {
         app.attach_fr_watch_on(bus, channel_index);
-    }
-
-    // The schedule table: every loaded description's slot/cycle layout, the
-    // ground truth each watch receives against. Slot numbers repeat across
-    // clusters, so the bus is a column of its own.
-    if app.fr_buses.is_empty() {
-        return;
-    }
-    let mut frames: Vec<(u8, &crate::fr_db::FrFrameDb)> = app
-        .fr_buses
-        .iter()
-        .flat_map(|(bus, cfg)| cfg.db.frames.iter().map(move |f| (*bus, f)))
-        .collect();
-    let open = ui.collapsing_header(
-        format!(
-            "调度表（{} 帧）##frsched",
-            frames.len()
-        ),
-        dear_imgui_rs::TreeNodeFlags::empty(),
-    );
-    if !open {
-        return;
-    }
-    let tbl_flags = TableFlags::BORDERS_INNER
-        | TableFlags::ROW_BG
-        | TableFlags::RESIZABLE
-        | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y;
-    let opts = dear_imgui_rs::TableOptions::from(tbl_flags)
-        .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
-    let Some(_table) = ui.begin_table_with_flags("fr_schedule", 6, opts) else {
-        return;
-    };
-    for (label, w) in [
-        ("Bus", 52.0),
-        ("Slot", 46.0),
-        ("周期", 46.0),
-        ("重复", 40.0),
-        ("通道", 46.0),
-    ] {
-        ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, w);
-    }
-    ui.table_setup_column_stretch_weight("帧", TableColumnFlags::NONE, 1.0);
-    ui.table_setup_scroll_freeze(0, 1);
-    ui.table_headers_row();
-
-    frames.sort_by_key(|(bus, f)| (*bus, f.triggering.slot_id, f.triggering.base_cycle));
-    for (bus, f) in frames {
-        ui.table_next_row();
-        if !ui.table_next_column() {
-            continue;
-        }
-        ui.text(format!("FR{bus}"));
-        ui.table_next_column();
-        ui.text(format!("{}", f.triggering.slot_id));
-        ui.table_next_column();
-        ui.text(format!("{}", f.triggering.base_cycle));
-        ui.table_next_column();
-        ui.text(format!("x{}", f.triggering.cycle_repetition));
-        ui.table_next_column();
-        ui.text(f.triggering.channel.label());
-        ui.table_next_column();
-        if f.triggering.startup {
-            // Startup frames participate in cluster cold-start: worth
-            // noticing on a real bus.
-            ui.text_colored([0.55, 0.8, 1.0, 1.0], &f.name);
-            if ui.is_item_hovered() {
-                ui.tooltip_text("启动帧（startup frame）");
-            }
-        } else {
-            ui.text(&f.name);
-        }
-        if ui.is_item_hovered() && !f.comment.is_empty() {
-            ui.tooltip_text(&f.comment);
-        }
     }
 }

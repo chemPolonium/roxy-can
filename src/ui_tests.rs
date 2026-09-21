@@ -615,12 +615,12 @@ fn the_flexray_tab_lists_the_slots_a_script_can_read() {
     let _ = ctx.render_legacy();
 }
 
-/// The Buses window's FlexRay section is a list now: two watched clusters,
-/// each with its own row, its own parked marker and its own detach, above the
-/// combo that offers only the channels still free. Drawing it is the point --
-/// a view shaped like the old single `Option<FrWatch>` panics right where a
-/// user looks for their second bus, and the schedule table below has to carry
-/// two clusters' frames in two different rows.
+/// The Buses window lists FlexRay 路 in a table shaped like the CAN one above
+/// it: two watched clusters, each its own row with its own port, parked marker
+/// and 断开; a third row that has a description and no port; and only the
+/// channels still free offered in any row's 硬件 column. Drawing it is the point
+/// -- a view shaped like the old single `Option<FrWatch>` panics right where a
+/// user looks for their second bus.
 #[test]
 fn the_buses_window_draws_two_flexray_watches() {
     let _ui_lock = UI_LOCK.lock().unwrap();

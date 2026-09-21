@@ -311,11 +311,6 @@ pub struct App {
     /// through the bus the row arrived on. The core is handed the same `Arc`s,
     /// so no file is read or parsed twice.
     pub fr_buses: std::collections::BTreeMap<u8, FrBusCfg>,
-    /// The picked row in the FR channel combo.
-    pub fr_pick: usize,
-    /// The picked row in the "which FlexRay 路 does this description file
-    /// describe" combo. Session state, like the one above.
-    pub fr_db_pick: usize,
     /// Profile names from the project's `profiles/` directory, listed
     /// once on first need (`Err` = driver/unavailable? no — parse or IO
     /// failure of the directory scan). Session cache; refresh via
@@ -572,11 +567,10 @@ impl App {
             // Toolbar combo: 0 = ASC, 1 = BLF. Decides the extension
             // `toggle_record` stamps onto the draft stem.
             record_format: 0,
-            // FlexRay watch drafts: cached FR channel enumeration (the
-            // Vector probe is a real driver call) and the combo pick.
+            // FlexRay watch drafts: the cached FR channel enumeration (the
+            // Vector probe is a real driver call). The combo pick is not
+            // cached -- each row's 硬件 column picks its own port, per frame.
             fr_channels: None,
-            fr_pick: 0,
-            fr_db_pick: 0,
             fr_buses: Default::default(),
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
