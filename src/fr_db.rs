@@ -2211,6 +2211,54 @@ mod tests {
         );
     }
 
+    /// The one case a `(bus, slot, signal)` subscription key cannot express:
+    /// two frames sharing a static slot that declare the **same signal name**,
+    /// which would then plot as one curve and take one of the two ranges. Every
+    /// bundled description avoids it -- 40 slots with 8 slots held by a second
+    /// frame, and no name shared between occupants -- so the persisted key stays
+    /// as it is. This test is the trigger to revisit that: a new cluster
+    /// description that fails it is the one where the frame name has to join the
+    /// key (and the project-file migration with it).
+    #[test]
+    fn no_two_occupants_of_a_slot_share_a_signal_name() {
+        let mut assets = 0usize;
+        let mut collisions = Vec::new();
+        let mut occupants = 0usize;
+        for asset in [POWERTRAIN_ARXML, "assets/fibex/PowerTrain_v2.xml"] {
+            let Some(text) = read_asset(asset) else {
+                continue;
+            };
+            assets += 1;
+            let db = FrDb::parse(&text).expect("the asset parses");
+            for (slot, frames) in db.scheduled_slots() {
+                occupants += frames.len().saturating_sub(1);
+                let mut seen: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                for fname in &frames {
+                    let Some(ix) = db.frames.iter().position(|f| &f.name == fname) else {
+                        continue;
+                    };
+                    for name in db.signal_names(ix) {
+                        match seen.get(&name) {
+                            Some(other) if other != fname => {
+                                collisions.push(format!("{asset}: slot {slot} {name}"));
+                            }
+                            _ => {
+                                seen.insert(name, fname.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(assets > 0, "no bundled cluster description to check");
+        assert!(
+            occupants > 0,
+            "the assets no longer have a shared slot, so this guard proves nothing"
+        );
+        assert!(collisions.is_empty(), "{collisions:?}");
+    }
+
     /// The real AUTOSAR cluster export (GBK, no BOM): after the UTF-8 →
     /// GBK text fallback it parses completely -- 10 Mbit/s, 5 ms cycle,
     /// 10 static slots, 48 scheduled frames with names.
