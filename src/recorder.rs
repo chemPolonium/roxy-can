@@ -11,6 +11,44 @@ enum Backend {
     Blf(BlfWriter),
 }
 
+/// Which traffic the file is allowed to contain, in the two numbering spaces a
+/// mixed session has. Empty on both sides records everything. A CAN entry is
+/// `(id, extended)` -- the record filter has never distinguished channels, and
+/// a FlexRay entry is `(bus, slot)`, because that is how every table in here
+/// names a FlexRay arrival.
+///
+/// The two halves stay apart on purpose: `13` is a CAN id and a slot number at
+/// once, so a filter that folded them would let a CAN entry admit a FlexRay row
+/// (or drop one) with no way to tell the user which bus it decided on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecordFilter {
+    pub can: Vec<(u32, bool)>,
+    pub fr: Vec<(u8, u16)>,
+}
+
+impl RecordFilter {
+    /// A CAN-only whitelist: the shape this filter had before it could name a
+    /// FlexRay slot, and what a caller that only cares about CAN still wants.
+    #[cfg(test)]
+    pub fn can(ids: Vec<(u32, bool)>) -> Self {
+        Self {
+            can: ids,
+            fr: Vec::new(),
+        }
+    }
+
+    pub fn admits_can(&self, id: u32, extended: bool) -> bool {
+        // A filter that names only FlexRay slots says nothing about CAN frames:
+        // it is a whitelist of what to record, not a switch that mutes the
+        // other bus -- ticking "FR0:13" must not silently lose the CAN trace.
+        self.can.is_empty() || self.can.contains(&(id, extended))
+    }
+
+    pub fn admits_fr(&self, bus: u8, slot: u16) -> bool {
+        self.fr.is_empty() || self.fr.contains(&(bus, slot))
+    }
+}
+
 /// Owns the open file while recording. The checkbox intent
 /// (`recording`) is deliberately separate from the open file (`writer`):
 /// ticking Record while stopped only arms the intent -- the file itself is
@@ -23,11 +61,9 @@ pub struct Recorder {
     pub record_path: String,
     /// The dated path of the most recent recording, kept as a replay source.
     pub last_record: String,
-    /// Optional id whitelist for the file: empty records everything, a
-    /// non-empty list records only those `(id, extended)` frames. The
-    /// filter gates the file's contents only -- trace, aggregates, and
-    /// the spec always see the whole bus.
-    pub ids: Vec<(u32, bool)>,
+    /// Optional whitelist for the file. The filter gates the file's contents
+    /// only -- trace, aggregates, and the spec always see the whole bus.
+    pub filter: RecordFilter,
 }
 
 impl Recorder {
@@ -37,13 +73,13 @@ impl Recorder {
             recording: false,
             record_path: String::new(),
             last_record: String::new(),
-            ids: Vec::new(),
+            filter: RecordFilter::default(),
         }
     }
 
     /// Whether a frame belongs in the file under the current filter.
     pub fn admits(&self, f: &CanFrame) -> bool {
-        self.ids.is_empty() || self.ids.contains(&(f.id, f.extended))
+        self.filter.admits_can(f.id, f.extended)
     }
 
     /// Writes one frame if a recording is open and the frame passes the
@@ -62,12 +98,15 @@ impl Recorder {
         };
     }
 
-    /// FlexRay rows for the open recording. The record-id whitelist is a list
-    /// of CAN `(id, extended)` pairs, so it cannot express a FlexRay slot and
-    /// deliberately does not gate these. A row that has no frame name loses it
-    /// in ASC, and every row comes back on bus 0 -- the log has no place for
-    /// either, exactly as in BLF.
+    /// FlexRay rows for the open recording, gated by the same filter as the CAN
+    /// frames -- which it now can be, since a filter entry names its bus
+    /// ([`RecordFilter`]). A row that has no frame name loses it in ASC, and
+    /// every row comes back on bus 0 -- the log has no place for either, exactly
+    /// as in BLF.
     pub fn write_fr(&mut self, r: &crate::trace::FrRow) {
+        if !self.filter.admits_fr(r.bus, r.slot) {
+            return;
+        }
         match &mut self.writer {
             Some(Backend::Asc(w)) => {
                 w.write_fr(r).ok();

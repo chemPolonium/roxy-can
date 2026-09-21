@@ -69,7 +69,7 @@ fn the_record_filter_limits_the_file_but_not_the_bus() {
     let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_record_filtered.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
-    app.set_record_filter(vec![(0x100, false)]);
+    app.set_record_filter(crate::recorder::RecordFilter::can(vec![(0x100, false)]));
     app.toggle_record();
     // motbus on CAN2: activate one entry whose id is NOT in the whitelist.
     app.add_tx(1, 0x999);
@@ -107,6 +107,63 @@ fn the_record_filter_limits_the_file_but_not_the_bus() {
     std::fs::remove_file(&actual).ok();
 }
 
+/// The record filter can name a FlexRay slot, and it still gates only the
+/// file: three arrivals, one of them on the whitelist, and the Trace ring keeps
+/// all three. The CAN side of the same recording is untouched by a slot-only
+/// whitelist -- the filter lists what to keep, it does not mute the other bus.
+#[test]
+fn a_record_filter_can_keep_only_some_flexray_slots() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = App::headless();
+    let path = std::env::temp_dir().join("roxy_can_record_fr_filtered.asc");
+    app.record_path_buf = path.to_string_lossy().to_string();
+    app.set_record_filter(crate::recorder::RecordFilter {
+        can: vec![],
+        fr: vec![(0, 13)],
+    });
+    app.toggle_record();
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    let q1 = app.hw.attach_fr_mock(1, 6);
+    app.start_virtual();
+    let frame = |slot: u16| FrFrame {
+        slot,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    };
+    {
+        let mut g = q0.lock().expect("mock lock");
+        g.push_back(frame(13));
+        g.push_back(frame(14));
+    }
+    q1.lock().expect("mock lock").push_back(frame(13));
+    for t in (10_000u64..=60_000).step_by(10_000) {
+        app.advance_clock(t);
+        app.tick(t);
+    }
+    app.stop();
+    let actual = app.recorder.last_record.clone();
+    let text = std::fs::read_to_string(&actual).expect("the recording exists");
+    let (_, rows) = crate::log::asc::parse_asc_full(&text);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.bus, r.slot))
+            .collect::<Vec<_>>(),
+        vec![(0, 13)],
+        "only the whitelisted cluster+slot landed in the file"
+    );
+    // The two filtered-out arrivals are still in the session: the ring saw them,
+    // and so did the per-frame tallies.
+    assert_eq!(
+        app.snap.fr_trace.len(),
+        3,
+        "the filter gates the file, never the trace"
+    );
+    assert_eq!(app.snap.fr_aggs.len(), 3, "one tally per arrival");
+    std::fs::remove_file(&actual).ok();
+}
+
 /// The filter holds for trigger-started recordings too: the pre-trigger
 /// context the trigger drains into the file only ever held whitelisted
 /// frames, so a filtered recording stays clean end to end.
@@ -115,7 +172,7 @@ fn a_trigger_started_recording_follows_the_record_filter() {
     let mut app = App::headless();
     let path = std::env::temp_dir().join("roxy_can_trig_filtered.asc");
     app.record_path_buf = path.to_string_lossy().to_string();
-    app.set_record_filter(vec![(0x100, false)]);
+    app.set_record_filter(crate::recorder::RecordFilter::can(vec![(0x100, false)]));
     app.toggle_record();
     app.triggers.push(Trigger::new(
         TriggerCond::IdPresent { ch: 0, id: 0x100 },

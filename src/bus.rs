@@ -259,12 +259,12 @@ pub enum BusCommand {
     /// The dated ASC file the recorder derives its name from. Only read
     /// when recording actually arms.
     SetRecordPath(String),
-    /// Id whitelist for recorded files: only these `(id, extended)` frames
-    /// land in the ASC (empty list = record everything). Gates the file,
-    /// the pre-trigger context, and post-roll counting; never the trace,
-    /// aggregates, or the spec.
+    /// Whitelist for recorded files: the CAN `(id, extended)` frames and the
+    /// FlexRay `(bus, slot)` arrivals that land in the log (both halves empty =
+    /// record everything). Gates the file, the pre-trigger context, and post-roll
+    /// counting; never the trace, aggregates, or the spec.
     SetRecordFilter {
-        ids: Vec<(u32, bool)>,
+        filter: crate::recorder::RecordFilter,
     },
     /// The trace ring's retention in frames, clamped core-side. Takes
     /// effect on the next ingest; already-dropped frames stay gone.
@@ -1373,7 +1373,7 @@ impl BusCore {
             BusCommand::LoadDbc { ch, paths } => self.load_dbc(ch, paths, status),
             BusCommand::SetBusCounter(n) => self.bus_counter = n,
             BusCommand::SetRecordPath(path) => self.recorder.record_path = path,
-            BusCommand::SetRecordFilter { ids } => self.recorder.ids = ids,
+            BusCommand::SetRecordFilter { filter } => self.recorder.filter = filter,
             BusCommand::SetTraceLimit { frames } => {
                 self.trace_limit = frames.clamp(1_000, 5_000_000)
             }

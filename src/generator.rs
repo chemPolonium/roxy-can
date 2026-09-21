@@ -246,10 +246,10 @@ impl App {
         self.send(crate::bus::BusCommand::RemoveReplayBlock { id });
     }
 
-    /// Sets the record filter: only these `(id, extended)` frames land in
-    /// the recorded ASC; an empty list records everything.
-    pub fn set_record_filter(&mut self, ids: Vec<(u32, bool)>) {
-        self.send(crate::bus::BusCommand::SetRecordFilter { ids });
+    /// Sets the record filter: only the CAN frames and FlexRay slots it names
+    /// land in the recorded file; both halves empty records everything.
+    pub fn set_record_filter(&mut self, filter: crate::recorder::RecordFilter) {
+        self.send(crate::bus::BusCommand::SetRecordFilter { filter });
     }
 
     /// Sets the trace ring's retention in frames.

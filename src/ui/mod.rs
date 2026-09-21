@@ -99,6 +99,42 @@ pub struct BlockDraft {
     pub ids_text: String,
 }
 
+/// The record filter's own parse, over the same text the box holds: a token
+/// prefixed `FR<n>:` (case-insensitive, e.g. `FR0:13`) is a FlexRay slot on
+/// cluster `n` -- the same `FR{n}` spelling every table prints -- and anything
+/// else goes through [`parse_id_filter`] as a CAN id.
+///
+/// The prefix is not decoration. `13` is a CAN id *and* a slot number, so a box
+/// that let one token name both would record or drop a bus the user never
+/// mentioned; and a slot needs its cluster for the same reason one slot number
+/// on two clusters is two different arrivals.
+pub(crate) fn parse_record_filter(text: &str) -> crate::recorder::RecordFilter {
+    let mut filter = crate::recorder::RecordFilter::default();
+    let mut can = Vec::new();
+    for raw in text.split([',', ' ', ';']) {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match token.strip_prefix(['f', 'F']).and_then(|t| t.strip_prefix(['r', 'R'])) {
+            Some(rest) => {
+                // `FR0:13` -- bus before the colon, slot after. Decimal on both
+                // sides, because that is how the schedule and the Trace address
+                // column print them (`slot 13`, not `slot D`).
+                let Some((bus, slot)) = rest.split_once(':') else {
+                    continue;
+                };
+                if let (Ok(b), Ok(s)) = (bus.trim().parse::<u8>(), slot.trim().parse::<u16>()) {
+                    filter.fr.push((b, s));
+                }
+            }
+            None => can.extend(parse_id_filter(token)),
+        }
+    }
+    filter.can = can;
+    filter
+}
+
 /// Parses an id filter text shared by the record filter and replay
 /// blocks: comma- or space-separated hex ids, an `x` suffix marks an
 /// extended frame. Empty text = no filter; unparsable tokens yield id 0,
@@ -163,6 +199,37 @@ impl Draft {
 #[cfg(test)]
 mod tests {
     use super::Draft;
+
+    /// The record filter's box holds two numbering spaces, and the prefix is
+    /// what keeps them apart: `13` stays a CAN id, `FR0:13` is a slot, and
+    /// naming a slot says nothing about which CAN frames to record.
+    #[test]
+    fn the_record_filter_sorts_its_tokens_by_bus() {
+        let f = super::parse_record_filter("100, 3F4x FR0:13, fr1:20");
+        assert_eq!(f.can, vec![(0x100, false), (0x3F4, true)]);
+        assert_eq!(f.fr, vec![(0, 13), (1, 20)]);
+
+        let only_fr = super::parse_record_filter("FR0:13");
+        assert!(
+            only_fr.can.is_empty(),
+            "no CAN entry, so the CAN side records all: the filter is a whitelist \
+             of what to keep, not a mute switch for the bus the user did not mention"
+        );
+        assert!(only_fr.admits_can(0x999, false));
+        assert!(only_fr.admits_fr(0, 13));
+        assert!(
+            !only_fr.admits_fr(1, 13),
+            "the same slot on another cluster is another arrival"
+        );
+        assert!(only_fr.admits_fr(0, 13));
+
+        // A bare number is never a slot, and a malformed `FR` token is dropped
+        // rather than guessed at -- guessing here would record a bus the user
+        // asked nothing about.
+        let plain = super::parse_record_filter("13, FR13, FR:5, FRx:5, FR0:abc");
+        assert_eq!(plain.can, vec![(0x13, false)]);
+        assert!(plain.fr.is_empty(), "{:?}", plain.fr);
+    }
 
     /// The whole point of the draft: a moving handle must not touch the model,
     /// or a half-typed number would go out on the bus.

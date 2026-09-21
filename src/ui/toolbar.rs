@@ -382,21 +382,24 @@ pub fn render(app: &mut App, ui: &Ui) {
                 if ui.is_item_hovered() {
                     ui.tooltip_text("录制格式：文件名自动加日期后缀");
                 }
-                // The id filter commits on edit end: only matching frames
-                // land in the file; trace and statistics stay whole-bus.
+                // The filter commits on edit end: only matching traffic lands in
+                // the file; trace and statistics stay whole-bus.
                 ui.same_line();
                 ui.set_next_item_width(110.0);
                 if ui
                     .input_text("##recordfilter", &mut app.record_filter_text)
-                    .hint("id filter")
+                    .hint("id / FR slot filter")
                     .build()
                 {
-                    app.set_record_filter(crate::ui::parse_id_filter(
+                    app.set_record_filter(crate::ui::parse_record_filter(
                         &app.record_filter_text,
                     ));
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("只录制这些 id（如 100, 3F4x；留空 = 全部）");
+                    ui.tooltip_text(
+                        "只录制这些条目：CAN 写 id（100, 3F4x = 扩展帧），FlexRay 写 FR<路>:<槽>（如 FR0:13）；留空 = 全部。\n\
+                         只管文件内容——Trace、统计、规格监视照旧看全总线。",
+                    );
                 }
             }
             if matches!(app.snap.run_mode, Mode::Replay) {
