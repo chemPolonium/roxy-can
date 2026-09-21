@@ -331,6 +331,19 @@
 17. **`grep -c $'\r'` 查行尾是假绿灯**（✅ 已纠正，2026-09-20）：本轮 Edit 工具把 README.md 整个翻成 CRLF 并进了提交（`git diff --numstat` 109/109 才暴露），而我提交前的检查 `grep -c "$(printf '\r')"` 对一个含 109 个 CR 的文件返回 **0**；`$'\r'` 形式在这个 shell 里更糟——它退化成空模式，于是"每个文件都有满行 CR"。正确写法：**`tr -cd '\r' < file | wc -c`**（数字是 CR 字节数，期望 0），改完再用 `git diff --ignore-cr-at-eol --numstat` 证明内容没动。教训：**校验命令必须先用已知为真的样本测一次它会不会报错**——一条永不报警的检查比没有检查更危险。
 18. **"全局一份"的模型是延时炸弹**（✅ 已纠正，2026-09-20）：FlexRay 侧三处"全局唯一"（一份 `FrDb`、一个 `FrWatch`、一个 `Option<String>` 工程字段）在只有一路时看不出问题，但每一处都在第二路出现时静默出错：帧名去别的 cluster 表里查、第二个端口的流量并进第一路、工程只存得下第一份描述。同批还有 `TriggerCond::bus()` 把 CAN 通道号与 FR 总线索引混成同一个整数（`remove_bus` 会照着 CAN 的删改规则挪走 FR 规则）。纠正：键里带实体（`fr_buses`/`fr_watches` 按 bus、`can_bus()`/`fr_bus()` 分开）。教训：**加"第二种实体"之前先把隐式全局做成按键集合**，别等它和第二个实例一起上线；返回裸 `u8` 表示"某个总线索引"的 API 必须说明是哪套编号空间。
 
+19. **"文件读不到就跳过"的资产测试是假绿灯**（✅ 已纠正，2026-09-21）：`the_trace_text_filter_matches_fr_frame_names` 用 `std::fs::read_to_string("assets/arxml/PowerTrain.arxml")`，而**那份 ARXML 是 GBK**——read_to_string 对非 UTF-8 一律 Err，于是这个测试从写下起每次都是"打印一句 skip 然后 ok"，主体一次也没跑过。今天给 dbc_only 写测试时照抄了这个形状，**破测（把新分支退回旧写法）居然仍然通过**才暴露：`--nocapture` 一看，"not present -- skipped"。逐个验过自带资产的编码：只有 `PowerTrain.arxml` 不是合法 UTF-8（`Logging.asc`、两份 FIBEX、两份 DBC 都是），所以只有它中招。修法：测试侧 `read_fr_asset`（`fs::read` + `dbc::text_from_bytes`，与产品同一条解码缝），并且**提交进仓库的资产读不到就 panic**，不再"跳过"。教训：**任何 skip-on-unreadable 的资产测试都要先证明它上一次真的跑起来过**（`--nocapture` 看有没有那句 skip）；新写的行为测试必须做一次破测，通过了才叫覆盖——这一条今天救了两回（同一晚还有一次：`Pick` 的持久化测试靠"把 JSON 里的新键删掉"当旧文件读，如果那个删键没生效，测试也是假绿）。
+
+### 2026-09-21：FlexRay 与 CAN 齐平的另一批（手选、事件、口径、发送者、菜单）
+
+七次提交，全部由"用户已拍板的两件"+"第二轮盘点 B 类"推出来；细节与破测记录在 A/B 两处对应条目里（A1 `on fr slot`、A2 `Pick`、B4 录制白名单、B6 仅 DBC、B8 发送者）。今天新增的、盘点里没有的两件：**dbc_only 逐行问"有没有数据库说明这条到达"**（见 B6，这是行为变化）与 **Trace 的 FlexRay 行右键菜单补上 CAN 那一侧的动作为 "Watch FR{n} slot N" + "Clear filter"**（走 A2 的 `Pick`，加进本窗口 Manual 集合并切作用域；**故意做成增补而不是替换**——一键不该悄悄丢掉用户自己勾好的其他条目）。
+
+**要看界面（无头跑不到，全量 660 通过只证明没弄坏别处）**：
+1. Trace 里**右键一条 FlexRay 行**：标题应是 `FR0 slot 13.2 · 帧名`，菜单四项（Watch / Clear filter / Copy payload / Copy slot.cycle），点 Watch 之后该窗只剩这个槽（连同已勾过的），左上作用域变成 `Manual (n)`。CAN 行的菜单没动。
+2. **Messages/Trace 勾"仅 DBC"**：挂着描述的那一路，被调度的 FR 行现在**留在表里**（以前整列 FlexRay 一起消失）；"这一路没描述"和"这一相不排这一帧"两种行仍然出去，展开行里那句说明会点明是哪一种。
+3. Network 树 FlexRay 节：**ECU 行带"发 N 帧"**、帧行尾部带"· 发送 X"（自带 PowerTrain 描述 48 帧里只有 12 帧绑得到发送方，其余尾部什么都没有——这不是 bug，是文档没写）。
+4. 工具栏录制过滤框写 `FR0:13` 再录一段混合流量：文件里应只剩这一路的这个槽（Trace/统计仍看全部），CAN 帧不受影响（框里没写 CAN id 时 CAN 侧全录）。
+5. 之前欠的：脚本编辑器右栏的 FlexRay 一节、Network 按槽分组的树、Bus Statistics 的 FR 节、Specification 窗口的 FR 行、`on fr slot` 脚本在回放 BLF 时的反应（`examples/flexray_gateway.rxcan` 可直接挂）。
+
 ## 备注
 
 - UI 无 imgui 自动化测试床：部分补齐（`src/ui_tests.rs` 无头冒烟床——imgui 不接渲染器也能逐帧跑真实绘制路径，全窗口齐开/脚本编辑器/控件交互等场景由测试守护）。控件交互（点击、选区、输入法）仍靠人工验收，判定逻辑用无头测试自动证明。
