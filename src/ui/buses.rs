@@ -5,13 +5,17 @@ use dear_imgui_rs::{Condition, StyleColor, StyleVar, TableColumnFlags, TableFlag
 /// CAN rows look like the FlexRay rows beside them -- the value is the point,
 /// the box is only there when it is being used. `FrameBg` is the idle colour;
 /// the hovered and active ones are left alone, which is what makes the field
-/// announce itself under the mouse. Wrap each such field in a block with these
-/// two guards so they pop the moment the field is drawn.
+/// announce itself under the mouse.
+///
+/// Expands to bare `let` statements on purpose: wrapped in a block of its own,
+/// the two guards would drop before the field is ever drawn, and the row would
+/// silently keep its boxes. Call it inside the block that draws the field, so
+/// the pop happens when that block ends.
 macro_rules! quiet_field {
-    ($ui:expr) => {{
-        let _bg = $ui.push_style_color(StyleColor::FrameBg, [0.0, 0.0, 0.0, 0.0]);
-        let _border = $ui.push_style_var(StyleVar::FrameBorderSize(0.0));
-    }};
+    ($ui:expr) => {
+        let _quiet_bg = $ui.push_style_color(StyleColor::FrameBg, [0.0, 0.0, 0.0, 0.0]);
+        let _quiet_border = $ui.push_style_var(StyleVar::FrameBorderSize(0.0));
+    };
 }
 
 /// Bus management: rename buses, load a DBC per bus, add/remove buses.
@@ -165,9 +169,6 @@ fn content(app: &mut App, ui: &Ui) {
                 app.bus_name_edit = None;
             }
             ui.table_next_column();
-            // No baseline alignment: the small button is text-height, so
-            // label and button sit level on their own, and aligning would
-            // push the `same_line` button a step below the row.
             let path = paths.first().cloned().unwrap_or_default();
             let extras: Vec<String> = paths.iter().skip(1).cloned().collect();
             ui.text(if path.trim().is_empty() {
@@ -175,18 +176,15 @@ fn content(app: &mut App, ui: &Ui) {
             } else {
                 file_name(&path)
             });
-            ui.same_line();
+            // Same two lines as the FlexRay rows below: the value first, the
+            // actions underneath, so a long file name can never push a button
+            // out of the cell. No baseline alignment either -- the small
+            // buttons are text-height, so they sit level on their own line.
             if ui.button(format!("Open...##busdbc{i}")) {
                 app.pick_dbc_for(i);
             }
-            // Extra attached databases: one row each with a detach button, dim
-            // like the metadata line a FlexRay row puts under its file name.
-            for (e, extra) in extras.iter().enumerate() {
-                ui.text_disabled(file_name(extra));
-                ui.same_line();
-                if ui.button(format!("x##busdbx{i}_{e}")) {
-                    app.detach_dbc_extra(i, e);
-                }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("换这条总线的主 DBC 文件（解码与查名以它为先）");
             }
             ui.same_line();
             if ui.button(format!("+##busdbadd{i}")) {
@@ -194,6 +192,14 @@ fn content(app: &mut App, ui: &Ui) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text("附加更多 DBC 文件到该总线");
+            }
+            // Extra attached databases: one line each with a detach button.
+            for (e, extra) in extras.iter().enumerate() {
+                ui.text_disabled(file_name(extra));
+                ui.same_line();
+                if ui.button(format!("x##busdbx{i}_{e}")) {
+                    app.detach_dbc_extra(i, e);
+                }
             }
             ui.table_next_column();
             // The load view divides wire bits by these; there is no hardware
@@ -431,7 +437,11 @@ fn content(app: &mut App, ui: &Ui) {
             } else {
                 file_name(&path)
             });
-            ui.same_line();
+            // Value on the first line, actions on the second. A real file name
+            // ("FR_Cluster_DP_30t_1209.xml") already fills the cell, and
+            // anything after it is clipped by the column edge -- visible-but-
+            // unreachable is the failure the CAN 硬件 column two-line layout
+            // exists to avoid, so the button does not ride on the name's line.
             let load_label = if path.is_empty() { "加载…" } else { "换…" };
             if ui.button(format!("{load_label}##frload{bus}")) {
                 load_for = Some(bus);
@@ -441,10 +451,8 @@ fn content(app: &mut App, ui: &Ui) {
                     "挑一份这路 cluster 的 FIBEX/ARXML 描述：帧名、信号解码、占用率都按它来。放错路是静默的错（一路的槽会按另一路的调度去解名），所以按钮长在哪一行就归哪一路，不替你猜。\n只加载描述不开端口——回放两路录下来的日志用的就是这个。",
                 );
             }
-            // Metadata on its own line, dim: a long file name plus a long
-            // cluster name do not fit one cell, and a button that falls off the
-            // right edge is worse than no button at all.
             if !tag.is_empty() {
+                ui.same_line();
                 ui.text_disabled(tag.trim_start_matches(" · "));
             }
             ui.table_next_column();
