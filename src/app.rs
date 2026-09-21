@@ -975,10 +975,11 @@ impl App {
         // FlexRay slots share the table, so they count in its denominator too.
         // One row per frame the run carried: a slot scheduled by cycle
         // repetition belongs to several frames, and their traffic, names and
-        // periods are separate things. A CAN-scoped window (one channel, a
-        // hand-picked id list) stays CAN-only -- a slot number is not a CAN id
-        // and a FlexRay cluster is not a CAN channel -- while a cluster scope
-        // shows that cluster's frames and the percentage is its own traffic.
+        // periods are separate things. A CAN channel scope keeps this side out
+        // (a FlexRay cluster is not a CAN channel), a cluster scope shows that
+        // cluster's frames so the percentage is its own traffic, and a Manual
+        // scope admits exactly the slots hand-picked for this window -- the same
+        // rule the Trace and Messages tables apply.
         let fr_aggs: Vec<&crate::aggregate::FrFrameAgg> = self
             .snap
             .fr_aggs
