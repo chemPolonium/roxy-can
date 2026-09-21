@@ -428,17 +428,17 @@ fn content(app: &mut App, ui: &Ui) {
             if !ui.table_next_column() {
                 continue;
             }
-            // The name, editable exactly like a CAN row's. The `#n` behind it is
-            // the cluster index, and it stays visible on purpose: the record
-            // filter (`FR0:13`) and a script's `fr_sig(0, ..)` are numbered by
-            // that index, so renaming a 路 must not lose the only place that
-            // says which number to type.
+            // The name, editable exactly like a CAN row's -- same fill width, so
+            // the two tables' cells line up. The cluster index goes on the line
+            // under the box: the record filter (`FR0:13`) and a script's
+            // `fr_sig(0, ..)` are numbered by that index, so renaming a 路 must
+            // not lose the only place on screen that says which number to type.
             let editing = matches!(&app.fr_name_edit, Some((r, _)) if *r == bus);
             let mut name_buf = match &app.fr_name_edit {
                 Some((r, s)) if *r == bus => s.clone(),
                 _ => app.fr_bus_name(bus),
             };
-            ui.set_next_item_width(120.0);
+            ui.set_next_item_width(-1.0);
             ui.input_text(format!("##frname{bus}"), &mut name_buf)
                 .build();
             if ui.is_item_active() {
@@ -450,16 +450,15 @@ fn content(app: &mut App, ui: &Ui) {
             } else if editing && !ui.is_item_active() {
                 app.fr_name_edit = None;
             }
-            ui.same_line();
-            ui.text_disabled(format!("#{bus}"));
+            let mut meta = format!("#{bus}");
             if path.is_empty() && watch.is_none() {
                 // Not a bus the user added: the log being replayed carries this
                 // cluster's frames, and they stay nameless until a description
                 // lands here. Say so -- an unnamed row with "(none)" in it reads
                 // as a half-added bus.
-                ui.same_line();
-                ui.text_disabled("（日志里有这路流量）");
+                meta.push_str(" · 日志里有这路流量");
             }
+            ui.text_disabled(meta);
             ui.table_next_column();
             // The description this 路 decodes against, and the one button that
             // changes it -- where CAN puts "Open...".
