@@ -386,8 +386,8 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.text_colored(
                     [0.55, 0.8, 1.0, 1.0],
                     format!(
-                        "FR{}{}",
-                        fr.bus,
+                        "{}{}",
+                        app.fr_bus_name(fr.bus),
                         match fr.ab {
                             0 => " A",
                             1 => " B",
@@ -481,7 +481,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         // description's, else the one the log carried.
         let name = app.fr_row_name(&r).unwrap_or("-");
         let addr = format!("{}.{}", r.slot, r.cycle);
-        ui.text(format!("FR{} slot {addr} · {name}", r.bus));
+        ui.text(format!("{} slot {addr} · {name}", app.fr_bus_label(r.bus)));
         ui.separator();
         let label = format!("Watch FR{} slot {}", r.bus, r.slot);
         if ui.menu_item(label.clone()) {

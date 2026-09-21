@@ -168,7 +168,10 @@ fn content(app: &mut App, ui: &Ui) {
             .fr_db(bus)
             .map(|db| db.params.name.as_str())
             .unwrap_or("无描述");
-        ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("FR{bus} ({cluster})"));
+        ui.text_colored(
+            [0.55, 0.8, 1.0, 1.0],
+            format!("{} ({cluster})", app.fr_bus_name(bus)),
+        );
         if ui.is_item_hovered() {
             ui.tooltip_text(
                 "占用率口径：一帧占用的介质时间 = gstaticSlot × gmacrotick，与载荷长短无关；\

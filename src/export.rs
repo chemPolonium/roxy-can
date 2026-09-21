@@ -169,8 +169,8 @@ impl App {
                 (0.0, 0.0, 0.0)
             };
             s.push_str(&format!(
-                "FR{},{},{name},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{}\n",
-                a.bus,
+                "{},{},{name},{},{cmin:.3},{cavg:.3},{cmax:.3},{},{}\n",
+                self.fr_bus_name(a.bus),
                 a.slot,
                 a.count,
                 a.payload.len(),
@@ -278,8 +278,8 @@ impl App {
                     .collect::<Vec<_>>()
                     .join(" ");
                 s.push_str(&format!(
-                    "FR{},{},{},{},{},{cycle:.3},{},{},{}\n",
-                    agg.bus,
+                    "{},{},{},{},{},{cycle:.3},{},{},{}\n",
+                    self.fr_bus_name(agg.bus),
                     agg.slot,
                     name,
                     "Rx",
@@ -500,7 +500,8 @@ impl App {
         // schedule is the promise, so a report without it cannot be re-checked.
         for (bus, cfg) in &self.fr_buses {
             s.push_str(&format!(
-                "# flexray,FR{bus},{}\n",
+                "# flexray,{},{}\n",
+                self.fr_bus_name(*bus),
                 crate::cli::csv_field(&cfg.path)
             ));
         }

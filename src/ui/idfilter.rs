@@ -41,7 +41,7 @@ pub fn scope_combo(
         kinds.push(SigScope::Bus(ch as u8));
     }
     for bus in app.fr_scope_buses(scope) {
-        items.push(format!("FlexRay: FR{bus}"));
+        items.push(format!("FlexRay: {}", app.fr_bus_name(bus)));
         kinds.push(SigScope::FrBus(bus));
     }
     let n = app.win_manual(target).map(|m| m.len()).unwrap_or(0);
@@ -306,9 +306,14 @@ fn message_content(app: &mut App, ui: &Ui) {
                 slot: *slot,
             };
             let mut on = app.win_manual(target).is_some_and(|m| m.contains(&key));
-            if ui
-                .checkbox(format!("FR{bus} slot {slot}  {frames}##frsel{bus}_{slot}"), &mut on)
-            {
+            // Labelled with the 路's name, keyed by its index: the widget id
+            // must not follow a rename, or the checkbox loses its state as soon
+            // as the user names the bus.
+            let label = format!(
+                "{} slot {slot}  {frames}##frsel{bus}_{slot}",
+                app.fr_bus_name(*bus)
+            );
+            if ui.checkbox(label, &mut on) {
                 if let Some(m) = app.win_manual_mut(target) {
                     if on {
                         m.insert(key);
@@ -620,7 +625,11 @@ fn flexray_section(
         let mtoken = ui
             .tree_node_config(format!(
                 "{}slot {slot}  {frame} ({m_sel}/{})",
-                if multi { format!("FR{bus}  ") } else { String::new() },
+                if multi {
+                    format!("{}  ", app.fr_bus_name(*bus))
+                } else {
+                    String::new()
+                },
                 keys.len()
             ))
             .default_open(!q.is_empty())

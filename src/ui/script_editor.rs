@@ -705,7 +705,9 @@ pub(crate) fn fr_tab(app: &mut App, ui: &Ui, id: u64) {
         return;
     }
     for (bus, slot, frame, sigs) in &fr_items {
-        ui.text_disabled(format!("FR{bus} slot {slot} · {frame}"));
+        // The index stays visible next to a user-chosen name: this is the tab
+        // whose entries end up typed as `fr_sig(bus, slot, ..)`.
+        ui.text_disabled(format!("{} slot {slot} · {frame}", app.fr_bus_label(*bus)));
         for sig in sigs {
             if ui
                 .selectable_config(format!("  {sig}##frsig{bus}_{slot}_{frame}_{sig}"))

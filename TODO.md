@@ -345,7 +345,8 @@
 2. **Messages/Trace 勾"仅 DBC"**：挂着描述的那一路，被调度的 FR 行现在**留在表里**（以前整列 FlexRay 一起消失）；"这一路没描述"和"这一相不排这一帧"两种行仍然出去，展开行里那句说明会点明是哪一种。
 3. Network 树 FlexRay 节**现在只剩 ECU 一组**（同一天里先做了按槽分组的调度表、随后被用户定掉，见下面"分工"）：展开应只有 `ECU (n)`，绑定得出发送方的行带"发 N 帧"（自带 PowerTrain 描述 48 帧里 12 帧绑得到）；加载一份 FIBEX 时那组显示"描述未声明 ECU"那句话。
 4. 工具栏录制过滤框写 `FR0:13` 再录一段混合流量：文件里应只剩这一路的这个槽（Trace/统计仍看全部），CAN 帧不受影响（框里没写 CAN id 时 CAN 侧全录）。
-5. 之前欠的：脚本编辑器右栏的 **FlexRay tab**（已从"函数"下面挪出来单独成页）、Bus Statistics 的 FR 节、Specification 窗口的 FR 行、`on fr slot` 脚本在回放 BLF 时的反应（`examples/flexray_gateway.rxcan` 可直接挂）。
+5. Buses 窗口把某一路 FlexRay 改个名（例如"动力总成"）：Trace 的 Bus 列、Messages/Statistics 的行、作用域下拉、Bus Statistics 节标题、规格监视报告与两种 CSV 的 `bus` 列**都应跟着改名**（CAN 侧本来就是这个名字，FlexRay 现在同一条路）；行名后面的灰字 `#n` 不变，右键菜单标题与触发器的 Bus 下拉写的是 `名字 (FRn)`——录制过滤的 `FR0:13` 与脚本的 `fr_sig(0, ..)` 认的仍是这个 n。清空那格或原样打回 `FRn` = 没名字，保存的工程文件里不写这一条。
+6. 之前欠的：脚本编辑器右栏的 **FlexRay tab**（已从"函数"下面挪出来单独成页）、Bus Statistics 的 FR 节、Specification 窗口的 FR 行、`on fr slot` 脚本在回放 BLF 时的反应（`examples/flexray_gateway.rxcan` 可直接挂）。
 
 **分工（用户 2026-09-21 定，别再往回做）**：**Network 只列拓扑与 ECU，不排帧不排槽**——"具体看调度等信息是别的软件的事情，就像 CANoe 和 Fibex Explorer 的组合一样"。同一天里 `draw_flexray_section` 先按"参数行 / ECU / 帧按槽分组（带实测计数与周期）"做完并被提交（`11d5665`→`add0833` 一路），随后按这条删回只剩 ECU 一组；`FrDb::frame_sender` 留着，因为它现在服务的是 **ECU 行上的"发 N 帧"**（ECU 属性，不是调度表）。以后想再往 Network 里加"每槽有什么"之前先重读这条。**Buses 窗口同日一并收掉（用户第二句："让 Bus 中 FlexRay 的展示和 CAN 的一样，不用展示调度表"）**：底部那份"调度表"（各路全部帧的 slot/周期/重复/通道、启动帧高亮）删除，FlexRay 区改成**与上面 CAN 那张表同构的表格**——Name / FIBEX-ARXML / kbit/s·周期（**只读**：FlexRay 的位时就是调度表本身，改它得改描述文件）/ 硬件（选中空闲端口即挂，与 CAN 行同一动作形状；已挂的行是 `[V] ch{n}（只收）`+断开）/ 行末撤下描述。顺带清掉的：全局"给这路 [FR0*] 加载集群描述…"下拉、"挑描述并挂接…"合并按钮（两列各管各的，正是 CAN 的形状）、`App::fr_pick`/`App::fr_db_pick` 两个会话字段、`App::pick_fibex_for`（那个"替你挑第一个没描述的路"的入口本来就是"不替你猜"的反面）。行集合 = `fr_description_targets()`（已描述 ∪ 已监听 ∪ 日志里出现过的 ∪ 第一个空位），所以纯回放两路日志时第二条路就有一行、可以直接给它挂描述；既无描述又无监听的行标"（未配置）"。这条与上面 Network 那条是同一个分工判断，不是两次独立的删减。
 

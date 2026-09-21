@@ -619,6 +619,12 @@ pub struct Config {
     /// watch/replay decoding, stored like the DBC paths.
     #[serde(default)]
     pub fr_buses: Vec<FrBusFile>,
+    /// What the user named each FlexRay 路, as `(bus, name)` pairs. Separate
+    /// from `fr_buses` because a name is not a description: a cluster that only
+    /// a replayed log carries can be named too. Absent means the `FR{n}`
+    /// default, so an older project file reads unchanged.
+    #[serde(default)]
+    pub fr_names: Vec<(u8, String)>,
     /// Legacy: the single description file from before FlexRay got a bus
     /// index. It loads as bus 0, which is the only bus a project of that
     /// shape could have watched; new files write `fr_buses` and drop this.
@@ -847,6 +853,11 @@ impl Config {
                     bus: *bus,
                     path: c.path.clone(),
                 })
+                .collect(),
+            fr_names: app
+                .fr_names
+                .iter()
+                .map(|(bus, name)| (*bus, name.clone()))
                 .collect(),
             // Written only by the legacy loader; a save drops it in favour of
             // `fr_buses` above.
@@ -1545,6 +1556,11 @@ impl Config {
                 Err(e) => app.status = format!("FlexRay 描述加载失败: {e}"),
             }
         }
+        // Names come back before anything that labels a bus, and they survive a
+        // description that failed to load: a name is the user's, not the file's.
+        for (bus, name) in &self.fr_names {
+            app.set_flexray_name(*bus, name);
+        }
         // The descriptions move to the core with the rest of the restored bus
         // state, so a replay or a watch attach finds them where the user left
         // them -- no lazy re-push at the moment of use.
@@ -1682,6 +1698,59 @@ mod tests {
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert_eq!(restored.channels.len(), app.channels.len());
+    }
+
+    /// A FlexRay 路 name is the user's opinion, so it survives a save the way a
+    /// CAN channel name does -- and it survives a bus that has no description
+    /// at all, which is the case for a cluster only a replayed log carries.
+    /// The cluster index stays readable beside it because the places a *number*
+    /// is typed (the record filter's `FR0:13`, a script's `fr_sig(0, ..)`) are
+    /// numbered by index, not by name.
+    #[test]
+    fn a_flexray_bus_name_round_trips_and_blank_clears_it() {
+        let mut app = App::headless();
+        app.set_flexray_name(1, "动力总成");
+        assert_eq!(app.fr_bus_name(1), "动力总成");
+        assert_eq!(app.fr_bus_label(1), "动力总成 (FR1)");
+        assert_eq!(app.fr_bus_name(0), "FR0", "another 路 is untouched");
+        assert_eq!(
+            app.sig_bus_label(&crate::observe::SigKey::Fr {
+                bus: 1,
+                slot: 13,
+                name: "DriveTorque".to_string(),
+            }),
+            "动力总成",
+            "the legends a FlexRay signal appears in follow the name"
+        );
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .expect("a file with the new key loads")
+            .apply(&mut restored);
+        assert_eq!(restored.fr_bus_name(1), "动力总成");
+        assert_eq!(restored.fr_bus_label(1), "动力总成 (FR1)");
+
+        // Typing the index back, or blanking the box, is "no name": nothing is
+        // stored, so a project whose buses were never renamed stays as clean as
+        // it was before the field existed.
+        app.set_flexray_name(1, "FR1");
+        assert_eq!(app.fr_bus_name(1), "FR1");
+        assert!(
+            unnamed(&app),
+            "a 路 called by its own index stores no name"
+        );
+        app.set_flexray_name(1, "   ");
+        assert_eq!(app.fr_bus_name(1), "FR1");
+        assert!(unnamed(&app), "a blank box stores no name");
+    }
+
+    /// True when `app` would write no FlexRay names into its project file.
+    fn unnamed(app: &App) -> bool {
+        serde_json::to_value(Config::from_app(app, None)).expect("serialises")["fr_names"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     }
 
     /// A project written before FlexRay picks existed has no `fr_manual` key at

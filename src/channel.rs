@@ -156,13 +156,53 @@ impl App {
             .unwrap_or_else(|| format!("CAN{}", ch + 1))
     }
 
+    /// Like [`Self::fr_bus_name`], but keeps the index visible when the two
+    /// differ. Use it wherever the user has to *type* that number -- a script's
+    /// `fr_sig(0, 13, "Speed")`, `on fr 0 slot 13`, the record filter's
+    /// `FR0:13` -- because a renamed bus whose number is nowhere on screen
+    /// leaves them guessing which cluster they mean.
+    pub fn fr_bus_label(&self, bus: u8) -> String {
+        let name = self.fr_bus_name(bus);
+        let index = format!("FR{bus}");
+        if name == index {
+            name
+        } else {
+            format!("{name} ({index})")
+        }
+    }
+
+    /// Names one FlexRay 路. Blank clears the name back to the `FR{n}` default
+    /// rather than storing an empty string, so the project file carries only
+    /// the names the user actually chose.
+    pub fn set_flexray_name(&mut self, bus: u8, name: &str) {
+        let name = name.trim();
+        if name.is_empty() || name == format!("FR{bus}") {
+            self.fr_names.remove(&bus);
+        } else {
+            self.fr_names.insert(bus, name.to_string());
+        }
+    }
+
+    /// What a FlexRay 路 is called: the user's name if they gave one, else the
+    /// index spelled the way every table has always spelled it. The index stays
+    /// available in the Buses row (`#n`) because the places where a *number* is
+    /// typed -- the record filter's `FR0:13`, a script's `fr_sig(0, ..)` -- are
+    /// numbered by cluster index, not by name.
+    pub fn fr_bus_name(&self, bus: u8) -> String {
+        self.fr_names
+            .get(&bus)
+            .filter(|n| !n.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("FR{bus}"))
+    }
+
     /// The bus a signal key lives on, spelled the way the tables and legends
     /// name it. A FlexRay key's index is not a CAN channel, so it must not be
     /// looked up in the channel list.
     pub fn sig_bus_label(&self, key: &SigKey) -> String {
         match key {
             SigKey::Can { ch, .. } => self.channel_name(*ch),
-            SigKey::Fr { bus, .. } => format!("FR{bus}"),
+            SigKey::Fr { bus, .. } => self.fr_bus_name(*bus),
         }
     }
 
@@ -340,8 +380,10 @@ impl App {
                 .fr_db(bus)
                 .map(|db| db.params.name.as_str())
                 .unwrap_or("");
-            self.status =
-                format!("已加载 FR{bus} 集群描述（{name}，未挂监听，供回放解码）: {path}");
+            self.status = format!(
+                "已加载 {} 集群描述（{name}，未挂监听，供回放解码）: {path}",
+                self.fr_bus_label(bus)
+            );
         }
     }
 
@@ -419,8 +461,10 @@ impl App {
         let bus = match bus {
             Some(want) => {
                 if self.snap.fr_watches.iter().any(|w| w.bus == want) {
-                    self.status =
-                        format!("FR{want} 正在监听：请先断开监听，再给它换集群描述");
+                    self.status = format!(
+                        "{} 正在监听：请先断开监听，再给它换集群描述",
+                        self.fr_bus_label(want)
+                    );
                     return None;
                 }
                 want
@@ -493,12 +537,15 @@ impl App {
     /// no longer explain. "断开" is the action for that.
     pub fn forget_cluster_description(&mut self, bus: u8) {
         if self.snap.fr_watches.iter().any(|w| w.bus == bus) {
-            self.status = format!("FR{bus} 正在监听：请先断开监听再移除描述");
+            self.status = format!(
+                "{} 正在监听：请先断开监听再移除描述",
+                self.fr_bus_label(bus)
+            );
             return;
         }
         self.fr_buses.remove(&bus);
         self.push_fr_db_to_core();
-        self.status = format!("已移除 FR{bus} 集群描述");
+        self.status = format!("已移除 {} 集群描述", self.fr_bus_label(bus));
     }
 
     /// Opens a watch for a bus whose description is already loaded, taking the
@@ -506,7 +553,7 @@ impl App {
     /// no second file picker.
     pub fn attach_fr_watch_on(&mut self, bus: u8, channel_index: i32) {
         let Some(path) = self.fr_buses.get(&bus).map(|c| c.path.clone()) else {
-            self.status = format!("FR{bus} 没有集群描述，无法挂接");
+            self.status = format!("{} 没有集群描述，无法挂接", self.fr_bus_label(bus));
             return;
         };
         self.set_fr_watch(bus, Some(channel_index), &path);

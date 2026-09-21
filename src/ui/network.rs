@@ -192,8 +192,8 @@ fn fr_buses(app: &App) -> Vec<u8> {
 /// otherwise. The ECU group opens by default, as the CAN sections do.
 fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
     let label = match app.fr_db(bus) {
-        Some(db) => format!("FR{bus} · {}", db.params.name),
-        None => format!("FR{bus}（无描述）"),
+        Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
+        None => format!("{}（无描述）", app.fr_bus_name(bus)),
     };
     let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
         return;

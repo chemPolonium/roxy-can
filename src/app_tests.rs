@@ -7959,6 +7959,39 @@ fn an_analysis_window_can_be_scoped_to_one_flexray_cluster() {
         ],
         "unscoped, all 35 frames of the run are shared out"
     );
+
+    // And that number is a *name* once the user gives the 路 one: every table
+    // that says which bus a row came from follows it, so a renamed cluster does
+    // not reappear as an anonymous FR0 two windows down.
+    app.set_flexray_name(0, "动力总成");
+    app.msg_windows[0].scope = SigScope::FrBus(0);
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    assert_eq!(
+        shown(&app),
+        vec![
+            ("动力总成".to_string(), "slot 13".to_string()),
+            ("动力总成".to_string(), "slot 24".to_string())
+        ],
+        "the Messages Bus column prints the name"
+    );
+    app.stats_windows[0].scope = SigScope::All;
+    app.text_fresh = true;
+    app.sync_stats_text(0);
+    assert!(
+        app.stats_windows[0]
+            .text_rows
+            .iter()
+            .filter(|r| r.bus == "动力总成")
+            .count()
+            == 2,
+        "both of cluster 0's slots, and no other row: {:?}",
+        app.stats_windows[0]
+            .text_rows
+            .iter()
+            .map(|r| (r.bus.clone(), r.label.clone()))
+            .collect::<Vec<_>>()
+    );
     app.stop();
 }
 

@@ -226,9 +226,10 @@ impl App {
         match self.snap.triggers.get(i) {
             Some(t) => {
                 // The two bus spaces name differently: a FlexRay rule reads
-                // `FR1`, a CAN one keeps its channel name.
+                // its 路's name (`FR1` until the user renames it), a CAN one
+                // keeps its channel name.
                 let bus = match t.cond.fr_bus() {
-                    Some(b) => format!("FR{b}"),
+                    Some(b) => self.fr_bus_name(b),
                     None => self.channel_name(t.cond.can_bus().unwrap_or(0)),
                 };
                 format!("{bus}  {}", t.cond.short())

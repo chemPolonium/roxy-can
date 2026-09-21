@@ -270,7 +270,11 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                 if !buses.contains(&fr_bus) {
                     buses.insert(0, fr_bus);
                 }
-                let names: Vec<String> = buses.iter().map(|b| format!("FR{b}")).collect();
+                // The index rides along in parentheses: a rule stores a cluster
+                // *index*, and two 路 the user named alike must still be
+                // distinguishable in the list they pick from.
+                let names: Vec<String> =
+                    buses.iter().map(|b| app.fr_bus_label(*b)).collect();
                 let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
                 let mut pick = buses.iter().position(|b| *b == fr_bus).unwrap_or(0);
                 ui.set_next_item_width(-1.0);

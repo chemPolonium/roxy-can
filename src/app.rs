@@ -311,6 +311,14 @@ pub struct App {
     /// through the bus the row arrived on. The core is handed the same `Arc`s,
     /// so no file is read or parsed twice.
     pub fr_buses: std::collections::BTreeMap<u8, FrBusCfg>,
+    /// What the user calls each FlexRay 路. Apart from [`Self::fr_buses`] on
+    /// purpose: a name is not a description, so a cluster seen only in a
+    /// replayed log -- which is exactly the case where `FR0`/`FR1` say nothing
+    /// -- can still be named. Unnamed 路 fall back to `FR{n}`.
+    pub fr_names: std::collections::BTreeMap<u8, String>,
+    /// FlexRay name draft: the 路 whose Name box has focus, plus its text.
+    /// Mirrors `bus_name_edit` for the CAN rows.
+    pub fr_name_edit: Option<(u8, String)>,
     /// Profile names from the project's `profiles/` directory, listed
     /// once on first need (`Err` = driver/unavailable? no — parse or IO
     /// failure of the directory scan). Session cache; refresh via
@@ -566,6 +574,8 @@ impl App {
             // cached -- each row's 硬件 column picks its own port, per frame.
             fr_channels: None,
             fr_buses: Default::default(),
+            fr_names: Default::default(),
+            fr_name_edit: None,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -1030,7 +1040,7 @@ impl App {
                 } else {
                     format!("slot {}  {name}", agg.slot)
                 },
-                bus: format!("FR{}", agg.bus),
+                bus: self.fr_bus_name(agg.bus),
                 count: agg.count.to_string(),
                 min: if agg.count >= 2 {
                     ms_text(agg.min_us)
@@ -1157,7 +1167,7 @@ impl App {
                 None => "not in the schedule".to_string(),
             };
             out.push(crate::spec::SpecRow {
-                bus: format!("FR{bus}"),
+                bus: self.fr_bus_name(*bus),
                 addr: format!("slot {slot}"),
                 name,
                 kind: *kind,
@@ -1347,18 +1357,19 @@ impl App {
                 let empty_note = if !signals.is_empty() {
                     None
                 } else if db.is_none() {
-                    Some(format!("（FR{} 未加载集群描述）", agg.bus))
+                    Some(format!("（{} 未加载集群描述）", self.fr_bus_name(agg.bus)))
                 } else if frame_ix.is_none() {
                     Some(format!(
-                        "（FR{} 的描述里 slot {} 不排这一帧）",
-                        agg.bus, agg.slot
+                        "（{} 的描述里 slot {} 不排这一帧）",
+                        self.fr_bus_name(agg.bus),
+                        agg.slot
                     ))
                 } else {
                     Some("（该帧不声明信号）".to_string())
                 };
                 rows.push(MsgRowText {
                     label,
-                    bus: format!("FR{}", agg.bus),
+                    bus: self.fr_bus_name(agg.bus),
                     dir: "Rx",
                     count: agg.count.to_string(),
                     cycle: if agg.count > 1 {

@@ -418,7 +418,30 @@ fn content(app: &mut App, ui: &Ui) {
             if !ui.table_next_column() {
                 continue;
             }
-            ui.text(format!("FR{bus}"));
+            // The name, editable exactly like a CAN row's. The `#n` behind it is
+            // the cluster index, and it stays visible on purpose: the record
+            // filter (`FR0:13`) and a script's `fr_sig(0, ..)` are numbered by
+            // that index, so renaming a 路 must not lose the only place that
+            // says which number to type.
+            let editing = matches!(&app.fr_name_edit, Some((r, _)) if *r == bus);
+            let mut name_buf = match &app.fr_name_edit {
+                Some((r, s)) if *r == bus => s.clone(),
+                _ => app.fr_bus_name(bus),
+            };
+            ui.set_next_item_width(120.0);
+            ui.input_text(format!("##frname{bus}"), &mut name_buf)
+                .build();
+            if ui.is_item_active() {
+                app.fr_name_edit = Some((bus, name_buf.clone()));
+            }
+            if ui.is_item_deactivated_after_edit() {
+                app.fr_name_edit = None;
+                app.set_flexray_name(bus, &name_buf);
+            } else if editing && !ui.is_item_active() {
+                app.fr_name_edit = None;
+            }
+            ui.same_line();
+            ui.text_disabled(format!("#{bus}"));
             if path.is_empty() && watch.is_none() {
                 // Not a bus the user added: the log being replayed carries this
                 // cluster's frames, and they stay nameless until a description
