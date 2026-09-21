@@ -30,6 +30,10 @@ on extended message 0x50 { }    // 显式扩展帧（数值可 ≤ 0x7FF）
 
 on message * { }        // 任意帧（嗅探/网关）
 
+on fr slot 13 { }       // FlexRay 槽 13 有帧到达（所有路）
+
+on fr 0 slot 13 { }     // 只有 FR0 的槽 13
+
 on errorFrame { }       // 错误帧
 
 on timer 100 { }        // 周期定时器
@@ -190,6 +194,38 @@ on extended message 0x50 {
 }
 ```
 
+### on fr slot \<槽号\> / on fr \<路\> slot \<槽号\>
+
+FlexRay 帧到达时触发。**寻址用槽而不是帧名**：一个静态槽按周期相位可以轮流排好几帧，
+"到达"这件事发生在槽上，所以 `on fr slot 13` 会为该槽实际到达的**每一帧**跑一次
+（哪一帧在跑，就按哪一帧的布局解码）。路号可选——槽号在两路 cluster 上会重复，
+所以 `on fr 0 slot 13` 只看 FR0，`on fr slot 13` 看所有已配置的路。节点本身绑在
+一条 CAN 通道上，FlexRay 帧没有 CAN 通道可匹配，因此**路号是唯一的过滤条件**
+（不写就是全部路）。
+
+处理器里的帧上下文是这次到达本身：
+
+| 内建 | 在 `on fr slot` 里的含义 |
+|------|--------------------------|
+| `frame_id()` | 槽号（**不是** CAN id） |
+| `frame_dlc()` | 载荷字节数 |
+| `frame_byte(i)` | 载荷第 i 字节 |
+| `fr_cycle()` | 该帧到达时的通信周期号（0..63，非 FlexRay 事件里为 0） |
+
+```c
+on fr 0 slot 13 {
+    // 读到这一帧刚带回的信号值（ingest 先于派发，所以不会读到上一拍）
+    let speed = fr_sig(0, 13, "CarSpeed");
+    print("slot", frame_id(), "cycle", fr_cycle(), "speed", speed);
+    send(0x320, speed * 0.075);   // 应答走节点的 CAN 通道
+}
+```
+
+写方向仍然只有 CAN：FlexRay 发车（静态/动态槽发送）尚未实现，所以这个处理器能
+"听 FlexRay、答 CAN"（网关形状），但没有 `fr_send`/`set_fr_sig`。
+`send(frame_id())` 在这种处理器里是**编译错误**——把槽号当 CAN id 发出去正是
+两套编号混用最容易犯的错，静态检查直接拦下。
+
 ### on errorFrame
 
 收到错误帧时触发。此时 `frame_dlc()` 为 0，`frame_byte(n)` 会越界报错。
@@ -285,8 +321,8 @@ emit_value("SpeedKmh", speed * 0.075);
 CAN 通道，没有"本节点所在的那一路"可推断。
 
 写方向目前没有：FlexRay 发车（静态/动态槽发送）尚未实现，所以没有
-`set_fr_sig`/`fr_send`，也不会有 `on fr slot` 事件处理器——等发送路径落地再补，
-不在这里承诺一个不存在的语法。
+`set_fr_sig`/`fr_send`。读的方向除了随手查值，也能被到达唤醒：见
+`on fr slot`，处理器里 `fr_sig(路, 槽, "Name")` 读到的就是刚到的那一帧。
 
 ### set_sig(buffer, id, "Name", value)
 
@@ -345,7 +381,12 @@ on timer 50 {
 |------|------|
 | `frame_byte(n)` | 触发帧的第 n 字节（越界报错） |
 | `frame_dlc()` | 触发帧的数据长度 |
-| `frame_id()` | 触发帧的 ID（通配处理器里可据此过滤/转发/防自环） |
+| `frame_id()` | 触发帧的 ID（通配处理器里可据此过滤/转发/防自环）；在 `on fr slot` 里是**槽号** |
+| `fr_cycle()` | `on fr slot` 处理器里这次到达的通信周期号；其他处理器里为 0 |
+
+帧访问内建在 FlexRay 处理器里同样可用，只是含义换成"这一帧"的（见
+"事件处理器"一节的 `on fr slot`）；两套编号共用 `frame_id()` 这个数字，所以
+`send(frame_id())` 在 `on fr slot` 里被编译期拒绝。
 
 ## 数学内建
 

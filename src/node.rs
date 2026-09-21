@@ -407,31 +407,130 @@ impl ScriptNode {
             .map(|h| h.chunk)
             .collect();
         for chunk in matches {
-            rt.vm.reset_budget(NODE_HANDLER_BUDGET);
-            rt.vm.host_input = input.clone();
-            if let Err(e) = rt.vm.run_handler(chunk) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,format!("[error] {e}"));
-                self.errored = true;
-                return out;
-            }
-            Self::drain_vm(
+            let r = Self::run_chunk(
                 rt,
                 &mut self.log,
                 &mut self.log_dirty,
                 &mut self.pending_lines,
+                chunk,
+                input,
+                &mut out,
             );
-            // Named one-shot ops stay meaningful from any handler. The
-            // running-timer ops (`set_period`/`stop_timer`) name no slot
-            // here and are dropped.
-            let ops: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
-            for op in ops {
-                if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                    Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
-                }
+            if r.is_err() {
+                self.errored = true;
+                return out;
             }
-            out.append(&mut rt.vm.outbox);
         }
         out
+    }
+
+    /// Does this node listen for any FlexRay arrival? The bus asks once per
+    /// step: a FlexRay-heavy log must not pay a dispatch scan (let alone a
+    /// `build_node_inputs`) while no script has an `on fr slot` handler.
+    pub fn waits_on_flexray(&self) -> bool {
+        self.enabled && !self.errored && self.runtime.as_ref().is_some_and(|rt| {
+            rt.handlers
+                .iter()
+                .any(|h| matches!(h.kind, HandlerKind::FrSlot { .. }))
+        })
+    }
+
+    /// Delivers one FlexRay arrival to this node's `on fr slot` handlers.
+    ///
+    /// A node binds to a CAN channel, and an arrival has no CAN channel to
+    /// match against, so the cluster written in the handler is the only filter
+    /// there is: `on fr slot 13` fires on slot 13 of every cluster,
+    /// `on fr 0 slot 13` on FR0's alone. The frame context is the arrival
+    /// itself -- `frame_id()` reads the slot, `frame_dlc()`/`frame_byte()` the
+    /// payload, `fr_cycle()` the cycle it came in. Sends still leave on the
+    /// node's CAN channel: FlexRay has no send path yet, so a handler can
+    /// react to a FlexRay frame with CAN traffic, which is what a gateway does.
+    pub fn dispatch_fr_row(
+        &mut self,
+        bus: u8,
+        slot: u16,
+        cycle: u8,
+        payload: &[u8],
+        input: &HostInput,
+    ) -> Vec<(u32, bool, Vec<u8>)> {
+        let mut out = Vec::new();
+        let Some(rt) = self.runtime.as_mut() else {
+            return out;
+        };
+        if !self.enabled || self.errored {
+            return out;
+        }
+        rt.vm.frame_bytes = payload.to_vec();
+        rt.vm.frame_id = u32::from(slot);
+        rt.vm.fr_cycle = cycle;
+        let matches: Vec<u16> = rt
+            .handlers
+            .iter()
+            .filter(|h| {
+                let HandlerKind::FrSlot {
+                    bus: want,
+                    slot: want_slot,
+                } = &h.kind
+                else {
+                    return false;
+                };
+                *want_slot == slot && want.is_none_or(|b| b == bus)
+            })
+            .map(|h| h.chunk)
+            .collect();
+        for chunk in matches {
+            let r = Self::run_chunk(
+                rt,
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+                chunk,
+                input,
+                &mut out,
+            );
+            if r.is_err() {
+                self.errored = true;
+                return out;
+            }
+        }
+        out
+    }
+
+    /// Runs one handler chunk and takes out what the run left behind: log
+    /// lines, emitted values, sysvar writes, timer ops, queued sends. Shared
+    /// by the CAN and the FlexRay delivery -- the two differ in which handlers
+    /// match and what the frame context holds, never in what a run produces.
+    /// `Err` is a failed handler; the caller marks the node errored and stops.
+    fn run_chunk(
+        rt: &mut NodeRuntime,
+        log: &mut VecDeque<String>,
+        log_dirty: &mut bool,
+        pending_lines: &mut Vec<String>,
+        chunk: u16,
+        input: &HostInput,
+        out: &mut Vec<(u32, bool, Vec<u8>)>,
+    ) -> Result<(), ()> {
+        // The handler's clock is the input's, not the step's: both deliveries
+        // publish `now_s` from the same value they stamp their frames with.
+        let now_us = (input.now_s.max(0.0) * 1e6) as u64;
+        rt.vm.reset_budget(NODE_HANDLER_BUDGET);
+        rt.vm.host_input = input.clone();
+        if let Err(e) = rt.vm.run_handler(chunk) {
+            Self::push_log_into(log, log_dirty, pending_lines, format!("[error] {e}"));
+            return Err(());
+        }
+        Self::drain_vm(rt, log, log_dirty, pending_lines);
+        // Named one-shot ops stay meaningful from any handler. The
+        // running-timer ops (`set_period`/`stop_timer`) name no slot
+        // here and are dropped.
+        let ops: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
+        for op in ops {
+            if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
+                Self::push_log_into(log, log_dirty, pending_lines, warn);
+            }
+        }
+        out.append(&mut rt.vm.outbox);
+        Ok(())
     }
 
     /// Fires due timer handlers. A timer armed lazily at `start` gets its
@@ -1627,7 +1726,123 @@ BO_ 256 Real: 2 ECU
         );
     }
 
-    /// The sysvar sugar compiles down to sys_get / sys_set: the write
+    /// `on fr slot` wakes on a FlexRay arrival, and the frame context inside it
+    /// *is* that arrival: `frame_id()` the slot, `frame_dlc()`/`frame_byte()`
+    /// the payload, `fr_cycle()` the cycle. The reaction leaves on the node's
+    /// CAN channel -- the gateway shape, and the only direction we can send.
+    #[test]
+    fn a_flexray_arrival_wakes_its_slot_handler() {
+        let mut n = node(
+            r#"
+                on fr slot 13 {
+                    print(frame_id(), fr_cycle(), frame_dlc(), frame_byte(0));
+                    send(0x300, frame_byte(0));
+                }
+            "#,
+        );
+        n.start(None);
+        assert!(
+            n.waits_on_flexray(),
+            "the declaration alone is what the bus gates on"
+        );
+        let out = n.dispatch_fr_row(0, 13, 4, &[0x2A, 0x00], &HostInput::default());
+        assert_eq!(n.log_snapshot(), ["13 4 2 42"]);
+        assert_eq!(out.len(), 1, "the handler's send queued");
+        assert_eq!(out[0].0, 0x300);
+        assert_eq!(out[0].2[0], 0x2A, "the payload byte came through");
+        // Another slot's arrival does not wake it.
+        assert!(
+            n.dispatch_fr_row(0, 14, 4, &[], &HostInput::default())
+                .is_empty(),
+            "slot 14 is not slot 13"
+        );
+        // A node that never declared one is not even asked.
+        let mut idle = node("on start { }");
+        idle.start(None);
+        assert!(!idle.waits_on_flexray());
+        // ...and an errored node stops listening, like every other event.
+        let mut bad = node("on fr slot 13 { print(1 / 0); }");
+        bad.start(None);
+        bad.dispatch_fr_row(0, 13, 0, &[], &HostInput::default());
+        assert!(bad.errored());
+        assert!(!bad.waits_on_flexray(), "a dead node stays quiet");
+    }
+
+    /// The cluster is part of the address, and a slot number is not a CAN id:
+    /// `on fr 0 slot 13` stays quiet for FR1's slot 13, the any-cluster form
+    /// answers both, and `on message 0xD` -- the same number in the other
+    /// numbering space -- answers neither.
+    #[test]
+    fn a_flexray_handler_can_name_its_cluster() {
+        let mut n = node(
+            r#"
+                on fr 0 slot 13 { print("fr0"); }
+                on fr slot 20 { print("any"); }
+                on message 0xD { print("can13"); }
+            "#,
+        );
+        n.start(None);
+        n.dispatch_fr_row(1, 13, 0, &[], &HostInput::default());
+        assert_eq!(
+            n.log_snapshot(),
+            Vec::<String>::new(),
+            "FR1's slot 13 is not FR0's"
+        );
+        n.dispatch_fr_row(0, 13, 0, &[], &HostInput::default());
+        n.dispatch_fr_row(1, 20, 0, &[], &HostInput::default());
+        n.dispatch_fr_row(0, 20, 0, &[], &HostInput::default());
+        assert_eq!(
+            n.log_snapshot(),
+            ["fr0", "any", "any"],
+            "the named cluster once, the any-cluster form on both buses"
+        );
+    }
+
+    /// `fr_cycle()` is the arrival's own cycle, and 0 outside a FlexRay event:
+    /// a CAN frame has no cycle to hand over, and a silent zero there must not
+    /// look like cycle 0 of a real one.
+    #[test]
+    fn fr_cycle_reads_the_arrival_and_nothing_else() {
+        let mut n = node(
+            r#"
+                on message 0x100 { print("can", fr_cycle()); }
+                on fr slot 5 { print("fr", fr_cycle()); }
+            "#,
+        );
+        n.start(None);
+        n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        n.dispatch_fr_row(0, 5, 3, &[], &HostInput::default());
+        assert_eq!(
+            n.log_snapshot(),
+            ["can 0", "fr 3"],
+            "the cycle belongs to the FlexRay arrival"
+        );
+    }
+
+    /// A handler failure inside an `on fr slot` run stops the node, exactly as
+    /// on the CAN side -- one bad loop must not spam the log every macrotick.
+    #[test]
+    fn a_failing_flexray_handler_parks_the_node() {
+        let mut n = node(
+            r#"
+                let hits = 0;
+                on fr slot 5 { hits = hits + 1; print(fr_sig(0, 5, "Nope")); }
+            "#,
+        );
+        n.start(None);
+        n.dispatch_fr_row(0, 5, 0, &[], &HostInput::default());
+        let log = n.log_snapshot();
+        assert!(
+            log.last().is_some_and(|l| l.starts_with("[error]")),
+            "an unseen signal is a runtime error, not a silent zero: {log:?}"
+        );
+        assert!(n.errored());
+        assert!(
+            n.dispatch_fr_row(0, 5, 0, &[], &HostInput::default())
+                .is_empty(),
+            "a parked node answers no further arrival"
+        );
+    }
     /// form queues exactly the key and value the plain form would.
     #[test]
     fn the_at_sysvar_write_lands_in_sys_sets() {

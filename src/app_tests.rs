@@ -7208,6 +7208,103 @@ fn a_node_script_reads_a_flexray_signal() {
     app.stop();
 }
 
+/// A FlexRay arrival wakes a running node's `on fr slot` handler, and the
+/// reaction lands on the node's CAN channel in the same step. The read inside
+/// the handler is the point of the ordering: `fr_sig` must see the value this
+/// very frame carried, so the ingest runs first and the dispatch after -- had
+/// the dispatch come first, this script would error on an unseen signal.
+#[test]
+fn a_flexray_arrival_drives_a_script_reaction() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gw".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on fr slot 5 { send(0x320, fr_sig(0, 5, \"One\")); }".to_string(),
+    });
+    app.settle();
+    let q = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 3,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    app.refresh_snapshot();
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(
+        !node.errored,
+        "the handler read the value its own arrival carried: {:?}",
+        node.log
+    );
+    let agg = app
+        .aggs
+        .get(&(0, 0x320, false))
+        .expect("the reaction frame reached the CAN bus");
+    assert_eq!(agg.data[0], 42, "the decoded physical value, truncated to a byte");
+    assert_eq!(agg.count, 1, "one arrival, one reaction");
+    app.stop();
+}
+
+/// Replaying a FlexRay log drives the `on fr slot` handlers off the file's own
+/// timeline: one run per arrival, in the log's order, with that arrival's slot,
+/// cycle and payload as the frame context. This is the shape a user actually
+/// tests -- replay a recording and watch a simulated ECU answer it -- and the
+/// replay path is a separate call site from the live watch, so it earns its own
+/// check.
+#[test]
+fn replaying_a_flexray_log_drives_the_slot_handlers() {
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "resp".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on fr 0 slot 13 { print(frame_id(), fr_cycle(), frame_byte(1)); send(0x320, fr_cycle()); }"
+            .to_string(),
+    });
+    app.settle();
+    let src = write_mixed_fr_asc("roxy_can_fr_handler", 4);
+    replay_to_the_end(&mut app, &src);
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(!node.errored, "the handler ran clean: {:?}", node.log);
+    assert_eq!(
+        node.log,
+        ["13 0 0", "13 1 1", "13 2 2", "13 3 3"],
+        "one run per arrival, each with its own cycle and payload byte"
+    );
+    let agg = app
+        .aggs
+        .get(&(0, 0x320, false))
+        .expect("the reactions reached the CAN bus");
+    assert_eq!(agg.count, 4, "one CAN frame per FlexRay arrival");
+    assert_eq!(agg.data[0], 3, "the last one carried the last cycle");
+}
+
 /// The spec monitor's rules have FlexRay counterparts, because the description
 /// makes the same kind of promises: which slot a frame occupies, in which cycle
 /// phase, how often it repeats and how long it is. Four verdicts from one

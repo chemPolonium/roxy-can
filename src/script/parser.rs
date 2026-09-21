@@ -57,6 +57,12 @@ pub enum OnKind {
     /// A named one-shot: idle until `set_timer(name, ms)` arms it from
     /// any handler, then fires once on its handler.
     Oneshot { name: String },
+    /// A FlexRay frame arrived in this slot (`on fr slot 13`), optionally on
+    /// one named cluster (`on fr 0 slot 13`). The slot is the address because
+    /// it is what the schedule and the received row agree on: a static slot is
+    /// held by several frames in turn, so a frame name would fire on only some
+    /// of the arrivals the user can see in Trace.
+    FrSlot { bus: Option<u8>, slot: u16 },
 }
 
 #[derive(Debug)]
@@ -290,7 +296,7 @@ impl P {
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::On, "'on'")?;
-        let word = self.ident("'start', 'message', 'timer', 'extended' or 'errorFrame'")?;
+        let word = self.ident("'start', 'message', 'timer', 'extended', 'errorFrame' or 'fr'")?;
         let kind = match word.as_str() {
             "start" => OnKind::Start,
             "extended" => {
@@ -326,9 +332,35 @@ impl P {
                 }
             }
             "errorframe" | "errorFrame" => OnKind::ErrorFrame,
+            "fr" => {
+                // `on fr slot 13` / `on fr 0 slot 13`. The cluster is optional
+                // because a one-cluster setup is the common case, but it has to
+                // be writable: slot 13 on two clusters is two different
+                // arrivals, and a node sits on a CAN channel, so there is no
+                // "its own FlexRay side" to infer.
+                let bus = match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+                    Some(Tok::Int(n)) if (0..=255).contains(&n) => {
+                        self.advance();
+                        Some(n as u8)
+                    }
+                    Some(Tok::Int(n)) => {
+                        return self.err(&format!("cluster index {n} out of range (0..255)"));
+                    }
+                    _ => None,
+                };
+                let word = self.ident("'slot'")?;
+                if word != "slot" {
+                    return self
+                        .err("expected 'slot' after 'fr' (on fr slot 13 / on fr 0 slot 13)");
+                }
+                OnKind::FrSlot {
+                    bus,
+                    slot: self.slot_literal()?,
+                }
+            }
             other => {
                 return self.err(&format!(
-                    "unknown event '{other}' (start, message, extended message, timer, errorFrame)"
+                    "unknown event '{other}' (start, message, extended message, timer, errorFrame, fr slot)"
                 ));
             }
         };
@@ -361,6 +393,27 @@ impl P {
                 msg: format!("id {n:#x} out of the 29-bit extended range"),
             }),
             _ => self.err("expected a message id"),
+        }
+    }
+
+    /// A FlexRay slot number, as `on fr slot` addresses one. Bounded by what a
+    /// row carries (u16), not by a schedule: the compiler never sees the
+    /// description, and a slot the cluster never uses simply never fires.
+    fn slot_literal(&mut self) -> Result<u16, ScriptError> {
+        let at = self.toks.get(self.pos);
+        let line = at.map_or(1, |t| t.line);
+        let col = at.map_or(1, |t| t.col);
+        match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+            Some(Tok::Int(n)) if (0..=u16::MAX as i64).contains(&n) => {
+                self.advance();
+                Ok(n as u16)
+            }
+            Some(Tok::Int(n)) => Err(ScriptError {
+                line,
+                col: Some(col),
+                msg: format!("slot {n} out of range (0..{})", u16::MAX),
+            }),
+            _ => self.err("expected a FlexRay slot number"),
         }
     }
 

@@ -150,13 +150,14 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
     };
     for (i, raw) in src.lines().enumerate() {
         let line = raw.trim_start();
-        const PREFIXES: [&str; 6] = [
+        const PREFIXES: [&str; 7] = [
             // Extended before plain: both are `starts_with` matches.
             "on extended message",
             "on message",
             "on timer",
             "on start",
             "on errorFrame",
+            "on fr",
             "fn ",
         ];
         let label = PREFIXES
@@ -496,6 +497,8 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("事件处理器", "on errorFrame", "on errorFrame {\n    \n}"),
     ("事件处理器", "on timer", "on timer 100 {\n    \n}"),
     ("事件处理器", "on timer \"name\"", "on timer \"name\" {\n    \n}"),
+    ("事件处理器", "on fr slot", "on fr slot 0 {\n    \n}"),
+    ("事件处理器", "on fr 0 slot", "on fr 0 slot 0 {\n    \n}"),
     ("控制流", "switch/case", "switch (value) {\n    case 1: {\n        \n    }\n    case 2: {\n        \n    }\n    default: {\n        \n    }\n}"),
     ("总线控制", "send", "send(0x000, 0x00);"),
     ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
@@ -510,6 +513,7 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("帧数据", "frame_byte", "frame_byte(0)"),
     ("帧数据", "frame_dlc", "frame_dlc()"),
     ("帧数据", "frame_id", "frame_id()"),
+    ("帧数据", "fr_cycle", "fr_cycle()"),
     ("定时器", "set_timer", "set_timer(\"name\", 100)"),
     ("定时器", "cancel_timer", "cancel_timer()"),
     ("定时器", "set_period", "set_period(100)"),

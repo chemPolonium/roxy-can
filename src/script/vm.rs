@@ -97,6 +97,10 @@ pub struct Vm {
     /// The triggering frame's identifier, set alongside `frame_bytes`.
     /// What `frame_id()` reads; 0 outside of frame events.
     pub frame_id: u32,
+    /// The communication cycle of a FlexRay arrival, set for `on fr slot`
+    /// handlers only. What `fr_cycle()` reads; 0 outside those -- a CAN frame
+    /// has no cycle number to give it.
+    pub fr_cycle: u8,
     /// xorshift64 state for `random()`; re-seedable via `srand`.
     pub rng: u64,
     /// Message name → id, injected by the host from its database for
@@ -124,6 +128,7 @@ impl Vm {
             timer_ops: Vec::new(),
             frame_bytes: Vec::new(),
             frame_id: 0,
+            fr_cycle: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
             named_messages: std::collections::HashMap::new(),
         }
@@ -910,8 +915,17 @@ impl Vm {
             }
             "frame_id" => {
                 // The triggering frame's own identifier: what a wildcard
-                // `on message *` handler needs to filter or forward.
+                // `on message *` handler needs to filter or forward. In an
+                // `on fr slot` handler it is the slot number -- the arrival
+                // that woke the handler, addressed the way FlexRay addresses.
                 self.stack.push(Value::Int(self.frame_id as i64));
+                return Ok(());
+            }
+            "fr_cycle" => {
+                // The cycle number the FlexRay cluster carried on the frame
+                // that woke this handler. Outside an `on fr slot` handler it
+                // is 0, because there is no arrival to read it from.
+                self.stack.push(Value::Int(self.fr_cycle as i64));
                 return Ok(());
             }
             "random" => {

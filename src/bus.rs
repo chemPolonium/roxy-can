@@ -1964,6 +1964,75 @@ impl BusCore {
         out
     }
 
+    /// Delivers one FlexRay arrival to every node's `on fr slot` handlers --
+    /// the receiving half of what [`Self::dispatch_node_frame`] is for a CAN
+    /// frame. Called after the row's ingest, so `fr_sig()` inside a handler
+    /// reads the values this very frame carried, the same ordering the CAN walk
+    /// uses for `sig()`.
+    ///
+    /// A node's own CAN channel is not a filter here: an arrival has none, and
+    /// the cluster the handler names is the only address that means anything.
+    /// What a handler sends still leaves on that channel, which is the gateway
+    /// shape -- FlexRay in, CAN out -- and the only direction our hardware
+    /// path supports today. Queued frames come back for the caller to put on
+    /// the internal bus, stamped with the arrival's own time.
+    fn dispatch_fr_nodes(
+        &mut self,
+        row: &crate::trace::FrRow,
+        now_us: u64,
+        queued: &mut Vec<CanFrame>,
+    ) {
+        let inputs = self.build_node_inputs(now_us);
+        let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
+        let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
+        let mut node_lines: Vec<(String, String)> = Vec::new();
+        for node in &mut self.nodes {
+            if !node.waits_on_flexray() {
+                continue;
+            }
+            // The same role gate as the CAN path: a script bound to a DBC node
+            // whose ECU is not simulated does not get to answer either bus.
+            let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
+                self.channels
+                    .get(*ach as usize)
+                    .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+            });
+            let input = inputs
+                .get(&node.channel)
+                .cloned()
+                .unwrap_or_default();
+            let node_out =
+                node.dispatch_fr_row(row.bus, row.slot, row.cycle, &row.payload, &input);
+            for (id, ext, data) in &node_out {
+                let frame = Self::node_frame(node.channel, *id, *ext, data, row.t_us);
+                if script_allowed {
+                    self.hw.write_if_live(node.channel, &frame);
+                }
+                queued.push(frame);
+            }
+            for (name, v) in node.take_emitted() {
+                derived.push((node.channel, node.id, node.name.clone(), name, v));
+            }
+            for (key, v) in node.take_sys_sets() {
+                sys_writes.push((node.id, key, v));
+            }
+            let node_name = node.name.clone();
+            for line in node.take_new_lines() {
+                node_lines.push((node_name.clone(), line));
+            }
+            if node.take_log_if_dirty().is_some() {
+                self.nodes_dirty = true;
+            }
+        }
+        for (ch, node_id, node_name, name, v) in derived {
+            self.ingest_emitted(ch, node_id, &node_name, &name, v);
+        }
+        self.apply_sys_writes(sys_writes);
+        for (node_name, line) in node_lines {
+            self.write_node_line(&node_name, &line);
+        }
+    }
+
     /// Applies the system variable writes a handler run queued: clamp
     /// against the definition, publish to the observers, and report an
     /// undefined key to the writing node's log.
@@ -3469,11 +3538,20 @@ impl BusCore {
         // Steps that only received FlexRay frames publish too, or the FR
         // section would freeze until the next CAN arrival.
         let mut fr_landed = fr_replayed;
+        // A FlexRay log delivers a frame every macrotick, and a row clone is
+        // what keeping the arrival around for its handlers costs -- so the copy
+        // happens only when some node actually declared `on fr slot`.
+        let fr_listeners = self.nodes.iter().any(|n| n.waits_on_flexray());
+        let mut fr_queued: Vec<CanFrame> = Vec::new();
         for row in fr_replay {
             // Judged before the ingest, like a CAN frame: a FlexRay edge that
             // starts a recording still captures the frame that fired it.
             self.eval_fr_triggers(&row, status);
+            let for_nodes = fr_listeners.then(|| row.clone());
             self.ingest_fr_row(row);
+            if let Some(row) = for_nodes {
+                self.dispatch_fr_nodes(&row, now_us, &mut fr_queued);
+            }
         }
 
         // Replay blocks stream their recorded traffic onto the same sim
@@ -3503,9 +3581,18 @@ impl BusCore {
                 fr_landed = true;
                 for row in fr_rx {
                     self.eval_fr_triggers(&row, status);
+                    let for_nodes = fr_listeners.then(|| row.clone());
                     self.ingest_fr_row(row);
+                    if let Some(row) = for_nodes {
+                        self.dispatch_fr_nodes(&row, now_us, &mut fr_queued);
+                    }
                 }
             }
+        }
+        // Frames an `on fr slot` handler sent join this same step's walk, so a
+        // FlexRay arrival reacts on the tick it arrived -- not one later.
+        if !fr_queued.is_empty() {
+            self.buf.extend(fr_queued);
         }
 
         // Node timers fire before the ingest walk so the frames they

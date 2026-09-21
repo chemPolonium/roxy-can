@@ -70,6 +70,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     let mut seen_wildcard = false;
     let mut seen_error = false;
     let mut seen_ext_ids: HashSet<u32> = HashSet::new();
+    let mut seen_fr: HashSet<(Option<u8>, u16)> = HashSet::new();
     for item in &program.items {
         if let Item::On(on) = item {
             match &on.kind {
@@ -117,6 +118,21 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                             on.line,
                             on.col,
                             &format!("duplicate handler for timer \"{name}\""),
+                        );
+                    }
+                }
+                // One handler per addressed arrival. `on fr slot 13` and
+                // `on fr 0 slot 13` are different addresses -- the first is
+                // the any-cluster form and fires alongside the second on FR0,
+                // exactly as a wildcard `on message *` fires alongside
+                // `on message 0x100`.
+                OnKind::FrSlot { bus, slot } => {
+                    if !seen_fr.insert((*bus, *slot)) {
+                        let want = bus.map_or(String::new(), |b| format!("{b} "));
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for fr {want}slot {slot}"),
                         );
                     }
                 }
@@ -209,6 +225,25 @@ struct Comp {
     /// R2 静态事实表 -- 接收集：`on message <id>` / `on extended message
     /// <id>` 声明监听的 `(id, extended)`。
     recv_refs: Vec<(u32, bool)>,
+}
+
+/// The static label one handler carries -- in the `--check-script` report, in
+/// the send/timer attribution, and in the assembly warnings. Two handlers of
+/// the same kind differ only by this string, so the wording lives in one place:
+/// a FlexRay handler repeats the cluster only when the script named one, so
+/// `<on fr slot 13>` and `<on fr 0 slot 13>` stay distinguishable.
+fn handler_label(kind: &HandlerKind) -> String {
+    match kind {
+        HandlerKind::Start => "<on start>".to_string(),
+        HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+        HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
+        HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
+        HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
+        HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
+        HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
+        HandlerKind::FrSlot { bus: None, slot } => format!("<on fr slot {slot}>"),
+        HandlerKind::FrSlot { bus: Some(bus), slot } => format!("<on fr {bus} slot {slot}>"),
+    }
 }
 
 impl Comp {
@@ -655,6 +690,17 @@ impl Comp {
                                 HandlerKind::AnyMessage => self.opaque_sends.push(format!(
                                     "{from}: wildcard forward (frame_id), set = received set"
                                 )),
+                                // `frame_id()` here is a slot number. Deriving a
+                                // CAN send from it would put a frame on the
+                                // node's CAN channel whose id happens to be the
+                                // slot -- exactly the mistake the static send
+                                // set exists to catch, so it names itself.
+                                HandlerKind::FrSlot { .. } => {
+                                    return self.err(
+                                        &from,
+                                        "frame_id() is a FlexRay slot here; send() would put it on the CAN wire as an id",
+                                    );
+                                }
                                 _ => {
                                     return self.err(&from, "frame_id outside a frame event");
                                 }
@@ -688,19 +734,7 @@ impl Comp {
                         && let Some((kind, _)) = self.cur_handler.clone()
                         && let Expr::Str(tname) = &args[0]
                     {
-                        let label = match &kind {
-                            HandlerKind::Start => "<on start>".to_string(),
-                            HandlerKind::Message { id } => format!("<on message {id:#x}>"),
-                            HandlerKind::ExtendedMessage { id } => {
-                                format!("<on extended message {id:#x}>")
-                            }
-                            HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
-                            HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
-                            HandlerKind::Timer { period_ms } => {
-                                format!("<on timer {period_ms}>")
-                            }
-                            HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
-                        };
+                        let label = handler_label(&kind);
                         self.timer_arms.push((label, tname.clone()));
                     }
                     self.emit(Op::CallHost(id, args.len() as u8));
@@ -842,6 +876,7 @@ impl Comp {
                 period_ms: *period_ms,
             },
             OnKind::Oneshot { name } => HandlerKind::Oneshot { name: name.clone() },
+            OnKind::FrSlot { bus, slot } => HandlerKind::FrSlot { bus: *bus, slot: *slot },
         };
         // 接收集（R2 静态事实表）：帧事件 handler 声明监听的 id。
         match &on.kind {
@@ -864,15 +899,7 @@ impl Comp {
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
         let saved_handler = self.cur_handler.take();
-        let label = match &kind {
-            HandlerKind::Start => "<on start>".to_string(),
-            HandlerKind::Message { id } => format!("<on message {id:#x}>"),
-            HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
-            HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
-            HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
-            HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
-            HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
-        };
+        let label = handler_label(&kind);
         self.code = Vec::new();
         self.cur_line = 0;
         self.in_fn = true;

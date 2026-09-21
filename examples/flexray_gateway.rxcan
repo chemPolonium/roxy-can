@@ -1,0 +1,34 @@
+// FlexRay → CAN 网关节点：FlexRay 槽到达唤醒，读这一帧解出的信号，
+// 应答走本节点自己的 CAN 通道。
+//
+// 需要：Buses 窗口给那一路 cluster 挂上 FIBEX/ARXML 描述——信号是按
+// **实际到达那一帧**的布局解出来的，没有描述就只能读裸字节。
+//
+// 行为：
+//   - FR0 的槽 13 每来一帧跑一次，把 CarSpeed 折算后发成 CAN 报文 0x320
+//   - 不限路的 `on fr slot 5` 打印到达本身：槽号、周期号、载荷长度
+//
+// 注意两点：
+//   1. 槽号在两条 cluster 上会重复，所以想要"就这一路"必须写路号；
+//      不写就是所有已配置的路都算。
+//   2. `on fr slot` 里 frame_id() 是**槽号**不是 CAN id——
+//      `send(frame_id())` 会被编译期拒绝（那等于把槽号发上 CAN）。
+//      FlexRay 侧的发送（静态/动态槽发车）目前还没实现，所以这是单向网关。
+
+on fr 0 slot 13 {
+    let speed = fr_sig(0, 13, "CarSpeed");
+    send(0x320, speed * 0.075);
+}
+
+on fr slot 5 {
+    print(
+        "slot",
+        frame_id(),
+        "cycle",
+        fr_cycle(),
+        "dlc",
+        frame_dlc(),
+        "head",
+        frame_byte(0)
+    );
+}

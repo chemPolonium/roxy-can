@@ -247,6 +247,16 @@ pub enum HandlerKind {
     Oneshot {
         name: String,
     },
+    /// A FlexRay frame arrived in this slot (`on fr slot 13`), on any cluster
+    /// or on the one named (`on fr 0 slot 13`). Inside the handler `frame_id()`
+    /// is the slot, `frame_dlc()`/`frame_byte()` read the payload, and
+    /// `fr_cycle()` the cycle it arrived in. The node keeps its own CAN
+    /// channel, so `send` from this handler is a CAN frame: FlexRay has no
+    /// send path yet.
+    FrSlot {
+        bus: Option<u8>,
+        slot: u16,
+    },
 }
 
 /// The static label every `on message *` handler carries in the send
@@ -383,6 +393,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("frame_byte", 1, 1),
     ("frame_dlc", 0, 0),
     ("frame_id", 0, 0),
+    ("fr_cycle", 0, 0),
     ("random", 2, 2),
     ("srand", 1, 1),
     ("ramp", 3, 3),
@@ -895,6 +906,70 @@ mod tests {
             vm.run_handler(chunk).unwrap();
         }
         assert_eq!(vm.output, ["start", "eng", "tick"]);
+    }
+
+    /// `on fr slot` is the receiving half of FlexRay programmability, and the
+    /// cluster is part of its address: the two spellings compile to two
+    /// different kinds, and neither is a CAN handler wearing a slot number.
+    #[test]
+    fn flexray_handlers_compile_to_their_slot_address() {
+        let script = compile(
+            r#"
+                on fr slot 13 { print("any bus"); }
+                on fr 0 slot 13 { print("fr0 only"); }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            script
+                .handlers
+                .iter()
+                .map(|h| h.kind.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                HandlerKind::FrSlot {
+                    bus: None,
+                    slot: 13
+                },
+                HandlerKind::FrSlot {
+                    bus: Some(0),
+                    slot: 13
+                },
+            ]
+        );
+        // Neither declares a CAN receive, so a slot number can never read as a
+        // message id in the assembly checks that run on `recv_refs`.
+        assert!(script.recv_refs.is_empty());
+        let mut vm = Vm::new(script);
+        for chunk in 1..=2u16 {
+            vm.run_handler(chunk).unwrap();
+        }
+        assert_eq!(vm.output, ["any bus", "fr0 only"]);
+    }
+
+    /// The same address twice is a typo, not a second listener; and forwarding
+    /// `frame_id()` from a FlexRay handler would put a frame on the CAN wire
+    /// whose id happens to be the slot -- exactly the confusion the two
+    /// spellings exist to prevent, so it names itself at compile time.
+    #[test]
+    fn flexray_handlers_get_the_same_sanity_checks() {
+        let dup = compile("on fr slot 13 { }\n on fr slot 13 { }")
+            .expect_err("one address, one handler");
+        assert!(dup.msg.contains("duplicate"), "{dup}");
+
+        let fwd = compile("on fr slot 13 { send(frame_id()); }")
+            .expect_err("a slot is not a CAN id");
+        assert!(fwd.msg.contains("slot"), "{fwd}");
+
+        assert!(
+            compile("on fr slot x { }").is_err(),
+            "a slot has to be a number"
+        );
+        assert!(
+            compile("on fr 0 frame 3 { }").is_err(),
+            "only the slot form exists: a frame name would fire on part of the \
+             arrivals a slot can carry"
+        );
     }
 
     #[test]
