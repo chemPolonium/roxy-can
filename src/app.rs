@@ -983,7 +983,7 @@ impl App {
             .snap
             .fr_aggs
             .iter()
-            .filter(|a| App::scope_match_fr(scope, a.bus))
+            .filter(|a| App::scope_match_fr(scope, &manual, a.bus, a.slot))
             .collect();
         let total: u64 = aggs
             .iter()
@@ -1283,7 +1283,7 @@ impl App {
         // cluster, and the decimal filter text also matches a slot number.
         if !dbc_only {
             for agg in &self.snap.fr_aggs {
-                if !App::scope_match_fr(scope, agg.bus) {
+                if !App::scope_match_fr(scope, &manual, agg.bus, agg.slot) {
                     continue;
                 }
                 // The description of the bus this frame arrived on decodes its

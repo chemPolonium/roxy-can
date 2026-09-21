@@ -569,6 +569,33 @@ impl FrDb {
         })
     }
 
+    /// Every static slot the schedule uses, with the frames that hold it in
+    /// some cycle phase, by slot number. Unlike [`Self::slot_signals`] this
+    /// includes a frame that declares no signals at all: a window's hand-picked
+    /// selection admits rows *per slot*, so a slot has to be pickable whether or
+    /// not anything under it is plottable.
+    pub fn scheduled_slots(&self) -> Vec<(u16, Vec<String>)> {
+        let mut slots: Vec<u32> = self.slot_ix.keys().copied().collect();
+        slots.sort_unstable();
+        slots
+            .into_iter()
+            .map(|slot| {
+                let frames = self.slot_ix[&slot]
+                    .iter()
+                    .filter_map(|&i| self.frames.get(i))
+                    .map(|f| {
+                        if f.name.is_empty() {
+                            format!("slot{slot}")
+                        } else {
+                            f.name.clone()
+                        }
+                    })
+                    .collect();
+                (slot as u16, frames)
+            })
+            .collect()
+    }
+
     /// One entry per frame that declares signals: the slot id, the frame name
     /// and that frame's signal names. Several frames can hold one slot in
     /// different cycles, and each of them has signals worth offering --
@@ -1991,6 +2018,33 @@ mod tests {
         assert!(db.child_text(0, 9, 0, 0.0).is_none(), "no such child");
         assert!(db.child_name(1, 0).is_some(), "FB's own first signal");
         assert_eq!(db.child_name(1, 0), Some("Bmp"));
+    }
+
+    /// The window's hand-picked selection admits rows **per slot**, so every
+    /// scheduled slot has to be listable -- including a frame that declares no
+    /// signals, which [`FrDb::slot_signals`] exists to skip. And the frames
+    /// sharing one slot by cycle phase collapse onto one entry, because they
+    /// are not separately pickable.
+    #[test]
+    fn every_scheduled_slot_is_pickable_even_without_signals() {
+        let bare = one_frame_db(&[]);
+        assert_eq!(
+            bare.slot_signals().len(),
+            0,
+            "the frame declares no signals, so the signal list is empty"
+        );
+        assert_eq!(
+            bare.scheduled_slots(),
+            vec![(5, vec!["F".to_string()])],
+            "its slot is still on the schedule and still a row the window can admit"
+        );
+
+        let shared = two_frames_one_slot_db(10);
+        assert_eq!(
+            shared.scheduled_slots(),
+            vec![(10, vec!["FA".to_string(), "FB".to_string()])],
+            "one entry for slot 10, naming both of its occupants"
+        );
     }
 
     /// A one-frame database whose PDU carries these signals (name, start bit,

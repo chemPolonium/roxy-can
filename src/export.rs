@@ -160,7 +160,7 @@ impl App {
             .snap
             .fr_aggs
             .iter()
-            .filter(|a| Self::scope_match_fr(scope, a.bus))
+            .filter(|a| Self::scope_match_fr(scope, manual, a.bus, a.slot))
         {
             let name = Self::fr_frame_name(a);
             let (cmin, cavg, cmax) = if a.count > 1 {
@@ -250,7 +250,7 @@ impl App {
         // the on-screen table (window text filter matches names/slots).
         if !dbc_only {
             for agg in &self.snap.fr_aggs {
-                if !Self::scope_match_fr(scope, agg.bus) {
+                if !Self::scope_match_fr(scope, manual, agg.bus, agg.slot) {
                     continue;
                 }
                 let name = Self::fr_frame_name(agg);

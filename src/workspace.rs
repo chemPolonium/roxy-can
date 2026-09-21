@@ -16,6 +16,21 @@ pub enum SigScope {
     Manual,
 }
 
+/// What one analysis window's hand-picked selection set can name.
+///
+/// A type rather than the `(bus, index)` tuple it grew out of because the two
+/// numbering spaces overlap on arbitrary integers: `(0, 5)` is both CAN channel
+/// 0 with id 5 *and* FlexRay cluster 0 with slot 5. One tuple-keyed set would
+/// let a CAN pick admit a FlexRay row and vice versa; naming the bus kind in the
+/// element makes that impossible, and it also says which of them a CAN channel
+/// being added or removed may renumber (only `Can` -- a cluster index is not a
+/// channel index).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Pick {
+    Can { ch: u8, id: u32 },
+    Fr { bus: u8, slot: u16 },
+}
+
 /// One Trace row: a CAN frame or a FlexRay frame. The two share the
 /// Trace window's table, interleaved by time -- CANoe's Trace shape --
 /// while their storage and the rest of the CAN pipeline stay apart.
@@ -107,7 +122,7 @@ pub enum PopupTarget {
 #[derive(Clone, PartialEq)]
 pub struct TraceFilter {
     pub scope: SigScope,
-    pub manual: HashSet<(u8, u32)>,
+    pub manual: HashSet<Pick>,
     /// The search text, trimmed and uppercased; `None` when there is nothing
     /// to search for (empty box, or a `Name>10` value condition instead).
     pub query: Option<String>,
@@ -185,7 +200,7 @@ pub struct TraceWin {
     pub name: String,
     pub opened: bool,
     pub scope: SigScope,
-    pub manual: HashSet<(u8, u32)>,
+    pub manual: HashSet<Pick>,
     pub filter: String,
     pub dir: usize,
     pub dbc_only: bool,
@@ -355,7 +370,7 @@ pub struct MsgWin {
     pub name: String,
     pub opened: bool,
     pub scope: SigScope,
-    pub manual: HashSet<(u8, u32)>,
+    pub manual: HashSet<Pick>,
     pub filter: String,
     pub dbc_only: bool,
     /// Message rows as of the last throttled text refresh (see
@@ -371,7 +386,7 @@ pub struct StatsWin {
     pub name: String,
     pub opened: bool,
     pub scope: SigScope,
-    pub manual: HashSet<(u8, u32)>,
+    pub manual: HashSet<Pick>,
     /// Message Statistics rows as of the last throttled text refresh (see
     /// [`crate::app::App::sync_stats_text`]). Session state only.
     pub(crate) text_keys: Vec<(u8, u32)>,
@@ -775,24 +790,29 @@ impl App {
     /// Scope check shared by all analysis windows: All passes everything,
     /// Bus passes one CAN channel, Manual uses that window's own selection
     /// set, FrBus passes nothing on this side of the table.
-    pub fn scope_match(scope: SigScope, manual: &HashSet<(u8, u32)>, channel: u8, id: u32) -> bool {
+    pub fn scope_match(scope: SigScope, manual: &HashSet<Pick>, channel: u8, id: u32) -> bool {
         match scope {
             SigScope::All => true,
             SigScope::Bus(ch) => channel == ch,
             SigScope::FrBus(_) => false,
-            SigScope::Manual => manual.contains(&(channel, id)),
+            SigScope::Manual => manual.contains(&Pick::Can { ch: channel, id }),
         }
     }
 
     /// The FlexRay side of [`Self::scope_match`]: `FrBus` keeps one
-    /// cluster's rows, anything CAN-shaped (a channel pick, a hand-picked
-    /// id list) drops them -- a slot number is not a CAN id and a cluster
-    /// is not a CAN channel.
-    pub fn scope_match_fr(scope: SigScope, bus: u8) -> bool {
+    /// cluster's rows, `Bus` (a CAN channel pick) drops them, and `Manual`
+    /// admits exactly the slots hand-picked for this window.
+    pub fn scope_match_fr(
+        scope: SigScope,
+        manual: &HashSet<Pick>,
+        bus: u8,
+        slot: u16,
+    ) -> bool {
         match scope {
             SigScope::All => true,
             SigScope::FrBus(b) => b == bus,
-            SigScope::Bus(_) | SigScope::Manual => false,
+            SigScope::Bus(_) => false,
+            SigScope::Manual => manual.contains(&Pick::Fr { bus, slot }),
         }
     }
 
@@ -820,7 +840,7 @@ impl App {
 
     /// Manual selection set of the window named by `t` (None for
     /// Graphics/Data, which filter at the signal level).
-    pub fn win_manual(&self, t: PopupTarget) -> Option<&HashSet<(u8, u32)>> {
+    pub fn win_manual(&self, t: PopupTarget) -> Option<&HashSet<Pick>> {
         match t {
             PopupTarget::Trace(i) => self.trace_windows.get(i).map(|w| &w.manual),
             PopupTarget::Messages(i) => self.msg_windows.get(i).map(|w| &w.manual),
@@ -829,7 +849,7 @@ impl App {
         }
     }
 
-    pub fn win_manual_mut(&mut self, t: PopupTarget) -> Option<&mut HashSet<(u8, u32)>> {
+    pub fn win_manual_mut(&mut self, t: PopupTarget) -> Option<&mut HashSet<Pick>> {
         match t {
             PopupTarget::Trace(i) => self.trace_windows.get_mut(i).map(|w| &mut w.manual),
             PopupTarget::Messages(i) => self.msg_windows.get_mut(i).map(|w| &mut w.manual),
@@ -945,14 +965,14 @@ impl App {
 
     /// The FlexRay side of the same filter lens. FR rows carry no id,
     /// direction or frame kind, so those filters hide them rather than
-    /// half-match: a CAN channel or Manual id scope, `Tx`, DBC only and a
-    /// frame-kind pick all restrict the table to CAN, while a FlexRay cluster
-    /// scope keeps that cluster's rows and drops CAN. The text filter matches
-    /// the frame name the row shows (its cluster's description, else the name
-    /// the log carried) or the slot number; payload search and the time range
-    /// apply as on CAN.
+    /// half-match: a CAN channel scope, `Tx`, DBC only and a frame-kind pick
+    /// all restrict the table to CAN, a FlexRay cluster scope keeps that
+    /// cluster's rows and drops CAN, and a Manual scope admits exactly the
+    /// slots the window hand-picked. The text filter matches the frame name the
+    /// row shows (its cluster's description, else the name the log carried) or
+    /// the slot number; payload search and the time range apply as on CAN.
     pub fn trace_fr_match(&self, flt: &TraceFilter, r: &crate::trace::FrRow) -> bool {
-        if !Self::scope_match_fr(flt.scope, r.bus) {
+        if !Self::scope_match_fr(flt.scope, &flt.manual, r.bus, r.slot) {
             return false;
         }
         if flt.dir == 2 || flt.dbc_only || flt.flags_kind != 0 {

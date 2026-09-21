@@ -1621,7 +1621,7 @@ fn trace_filter_matches_by_name_id_and_direction() {
     assert!(!app.trace_match(&w, &rx_ch1), "Bus scope drops other buses");
 
     w.scope = SigScope::Manual;
-    w.manual.insert((0, 0x320));
+    w.manual.insert(crate::workspace::Pick::Can { ch: 0, id: 0x320 });
     assert!(
         !app.trace_match(&w, &rx),
         "Manual selection drops unselected IDs"
@@ -1671,7 +1671,14 @@ fn channels_can_be_added_removed_and_renamed() {
             flags: FrameFlags::NONE,
         },
     );
-    app.trace_windows[0].manual.insert((2, 0x200));
+    app.trace_windows[0]
+        .manual
+        .insert(crate::workspace::Pick::Can { ch: 2, id: 0x200 });
+    // A hand-picked FlexRay slot in the same window: a cluster index is not a
+    // channel index, so removing a CAN channel must leave it alone.
+    app.trace_windows[0]
+        .manual
+        .insert(crate::workspace::Pick::Fr { bus: 2, slot: 71 });
     app.trace_windows[0].scope = SigScope::Bus(2);
     // A FlexRay cluster scope on another window: cluster indices are their own
     // numbering space, so removing a CAN channel must not renumber it -- the
@@ -1687,8 +1694,16 @@ fn channels_can_be_added_removed_and_renamed() {
         "agg remapped 1 -> 0"
     );
     assert!(
-        app.trace_windows[0].manual.contains(&(1, 0x200)),
+        app.trace_windows[0]
+            .manual
+            .contains(&crate::workspace::Pick::Can { ch: 1, id: 0x200 }),
         "filter remapped 2 -> 1"
+    );
+    assert!(
+        app.trace_windows[0]
+            .manual
+            .contains(&crate::workspace::Pick::Fr { bus: 2, slot: 71 }),
+        "the FlexRay pick is not a channel index and did not shift"
     );
     assert_eq!(w.scope, SigScope::Bus(2), "cloned window is untouched");
     assert_eq!(
@@ -6778,6 +6793,38 @@ fn trace_rows_reveal_in_batches_on_the_text_gate() {
     assert_eq!(app.trace_revealed(&app.trace_windows[0]).count(), 3);
     assert_eq!(app.trace_windows[0].rows.len(), 3);
     app.stop();
+}
+
+/// A window's hand-picked set now speaks both numbering spaces. Picking a
+/// FlexRay slot admits that slot's rows and no others, and the two spaces share
+/// arbitrary integers -- `(0, 5)` is CAN channel 0's id 5 *and* cluster 0's slot
+/// 5 -- so a pick must not read as the other kind.
+#[test]
+fn a_hand_picked_flexray_slot_admits_only_that_slot() {
+    use crate::workspace::Pick;
+    let manual: std::collections::HashSet<Pick> =
+        [Pick::Fr { bus: 0, slot: 5 }, Pick::Can { ch: 1, id: 5 }]
+            .into_iter()
+            .collect();
+    assert!(App::scope_match_fr(SigScope::Manual, &manual, 0, 5));
+    assert!(
+        !App::scope_match_fr(SigScope::Manual, &manual, 1, 5),
+        "another cluster's slot 5 is a different pick"
+    );
+    assert!(!App::scope_match_fr(SigScope::Manual, &manual, 0, 6));
+    assert!(App::scope_match(SigScope::Manual, &manual, 1, 5));
+    assert!(
+        !App::scope_match(SigScope::Manual, &manual, 0, 5),
+        "the FlexRay pick must not admit CAN channel 0's id 5"
+    );
+    // The other scopes behave as before.
+    assert!(App::scope_match_fr(SigScope::All, &manual, 3, 99));
+    assert!(App::scope_match_fr(SigScope::FrBus(0), &manual, 0, 6));
+    assert!(
+        !App::scope_match_fr(SigScope::Bus(1), &manual, 0, 5),
+        "a CAN channel scope still restricts the table to CAN"
+    );
+    assert!(!App::scope_match(SigScope::FrBus(0), &manual, 0, 5));
 }
 
 /// The shape of a Trace window's cache as the table would draw it: the order,

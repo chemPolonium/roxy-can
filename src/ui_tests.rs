@@ -540,6 +540,43 @@ fn flexray_signal_picker_draws_without_panicking() {
     frames(&mut app, &mut ctx, 3);
 }
 
+/// The message-level selection popup renders its FlexRay section -- one
+/// checkbox per scheduled slot, labelled with the frames that hold it -- against
+/// a real cluster description without panicking, and the pick it stores is a
+/// `Pick::Fr`: the same number as a CAN id must not admit the other bus's rows.
+#[test]
+fn the_message_picker_offers_flexray_slots() {
+    use crate::app::PopupTarget;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
+        let slots = app.fr_db(0).expect("the bus has a description").scheduled_slots();
+        assert!(
+            slots.iter().any(|(_, f)| !f.is_empty()),
+            "the bundled description offers no slot to pick: the section is not covered"
+        );
+    }
+    // A pick already in place, of each kind, so both checkbox arms read a set
+    // that holds them.
+    app.trace_windows[0]
+        .manual
+        .insert(crate::workspace::Pick::Fr { bus: 0, slot: 71 });
+    app.trace_windows[0]
+        .manual
+        .insert(crate::workspace::Pick::Can { ch: 0, id: 0x100 });
+    app.trace_windows[0].scope = crate::app::SigScope::Manual;
+    app.settle();
+    app.popup_target = Some(PopupTarget::Trace(0));
+    app.show_id_filter = true;
+    frames(&mut app, &mut ctx, 3);
+    assert!(
+        app.trace_windows[0]
+            .manual
+            .contains(&crate::workspace::Pick::Fr { bus: 0, slot: 71 })
+    );
+}
+
 /// The Buses window's FlexRay section is a list now: two watched clusters,
 /// each with its own row, its own parked marker and its own detach, above the
 /// combo that offers only the channels still free. Drawing it is the point --

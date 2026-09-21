@@ -196,10 +196,18 @@ impl App {
                 Some(c - 1)
             }
         };
-        let remap_set = |set: &mut HashSet<(u8, u32)>| {
+        // Only a CAN pick carries a CAN channel number. A FlexRay pick names a
+        // cluster, which adding or removing a CAN channel does not renumber --
+        // it is kept as it is, exactly like a FlexRay curve's key.
+        let remap_set = |set: &mut HashSet<crate::workspace::Pick>| {
             *set = set
                 .drain()
-                .filter_map(|(c, id)| remap(c).map(|nc| (nc, id)))
+                .filter_map(|p| match p {
+                    crate::workspace::Pick::Can { ch, id } => {
+                        remap(ch).map(|nc| crate::workspace::Pick::Can { ch: nc, id })
+                    }
+                    fr @ crate::workspace::Pick::Fr { .. } => Some(fr),
+                })
                 .collect();
         };
         for w in &mut self.trace_windows {

@@ -150,13 +150,60 @@ fn default_fd_data_bitrate() -> u32 {
     crate::app::Channel::DEFAULT_FD_DATA_KBPS
 }
 
+/// One window's hand-picked subjects as the file stores them: the two buses
+/// each get their own key, so each half is its own list of tuples.
+type CanPicks = Vec<(u8, u32)>;
+type FrPicks = Vec<(u8, u16)>;
+
+/// A window's hand-picked subjects, split for the project file: CAN ids in
+/// `manual`, FlexRay slots in `fr_manual`. Sorted so re-saving an unchanged
+/// project does not shuffle the lists (a `HashSet` has no order of its own).
+fn split_picks(
+    picks: &std::collections::HashSet<crate::workspace::Pick>,
+) -> (CanPicks, FrPicks) {
+    let mut can: Vec<_> = picks
+        .iter()
+        .filter_map(|p| match *p {
+            crate::workspace::Pick::Can { ch, id } => Some((ch, id)),
+            crate::workspace::Pick::Fr { .. } => None,
+        })
+        .collect();
+    let mut fr: Vec<_> = picks
+        .iter()
+        .filter_map(|p| match *p {
+            crate::workspace::Pick::Fr { bus, slot } => Some((bus, slot)),
+            crate::workspace::Pick::Can { .. } => None,
+        })
+        .collect();
+    can.sort_unstable();
+    fr.sort_unstable();
+    (can, fr)
+}
+
+/// ...and merged back on load.
+fn merge_picks(can: CanPicks, fr: FrPicks) -> std::collections::HashSet<crate::workspace::Pick> {
+    can.into_iter()
+        .map(|(ch, id)| crate::workspace::Pick::Can { ch, id })
+        .chain(
+            fr.into_iter()
+                .map(|(bus, slot)| crate::workspace::Pick::Fr { bus, slot }),
+        )
+        .collect()
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct TraceCfg {
     pub name: String,
     pub opened: bool,
     pub scope: SigScope,
+    /// The window's hand-picked CAN ids. Kept as two lists (rather than one
+    /// list of a `Pick` enum) so an existing project file reads unchanged: a
+    /// FlexRay slot pick goes in `fr_manual` beside it, and a file written by
+    /// this version still loads in an older one -- it just ignores the new key.
     #[serde(default)]
-    pub manual: Vec<(u8, u32)>,
+    pub manual: CanPicks,
+    #[serde(default)]
+    pub fr_manual: FrPicks,
     #[serde(default)]
     pub filter: String,
     #[serde(default)]
@@ -175,7 +222,9 @@ pub struct MsgCfg {
     pub opened: bool,
     pub scope: SigScope,
     #[serde(default)]
-    pub manual: Vec<(u8, u32)>,
+    pub manual: CanPicks,
+    #[serde(default)]
+    pub fr_manual: FrPicks,
     #[serde(default)]
     pub filter: String,
     #[serde(default)]
@@ -188,7 +237,9 @@ pub struct StatsCfg {
     pub opened: bool,
     pub scope: SigScope,
     #[serde(default)]
-    pub manual: Vec<(u8, u32)>,
+    pub manual: CanPicks,
+    #[serde(default)]
+    pub fr_manual: FrPicks,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -823,38 +874,50 @@ impl Config {
             trace_windows: app
                 .trace_windows
                 .iter()
-                .map(|w| TraceCfg {
-                    name: w.name.clone(),
-                    opened: w.opened,
-                    scope: w.scope,
-                    manual: w.manual.iter().copied().collect(),
-                    filter: w.filter.clone(),
-                    dir: w.dir,
-                    dbc_only: w.dbc_only,
-                    payload: w.payload.clone(),
-                    flags_kind: w.flags_kind,
+                .map(|w| {
+                    let (manual, fr_manual) = split_picks(&w.manual);
+                    TraceCfg {
+                        name: w.name.clone(),
+                        opened: w.opened,
+                        scope: w.scope,
+                        manual,
+                        fr_manual,
+                        filter: w.filter.clone(),
+                        dir: w.dir,
+                        dbc_only: w.dbc_only,
+                        payload: w.payload.clone(),
+                        flags_kind: w.flags_kind,
+                    }
                 })
                 .collect(),
             msg_windows: app
                 .msg_windows
                 .iter()
-                .map(|w| MsgCfg {
-                    name: w.name.clone(),
-                    opened: w.opened,
-                    scope: w.scope,
-                    manual: w.manual.iter().copied().collect(),
-                    filter: w.filter.clone(),
-                    dbc_only: w.dbc_only,
+                .map(|w| {
+                    let (manual, fr_manual) = split_picks(&w.manual);
+                    MsgCfg {
+                        name: w.name.clone(),
+                        opened: w.opened,
+                        scope: w.scope,
+                        manual,
+                        fr_manual,
+                        filter: w.filter.clone(),
+                        dbc_only: w.dbc_only,
+                    }
                 })
                 .collect(),
             stats_windows: app
                 .stats_windows
                 .iter()
-                .map(|w| StatsCfg {
-                    name: w.name.clone(),
-                    opened: w.opened,
-                    scope: w.scope,
-                    manual: w.manual.iter().copied().collect(),
+                .map(|w| {
+                    let (manual, fr_manual) = split_picks(&w.manual);
+                    StatsCfg {
+                        name: w.name.clone(),
+                        opened: w.opened,
+                        scope: w.scope,
+                        manual,
+                        fr_manual,
+                    }
                 })
                 .collect(),
             graphics: app
@@ -1210,7 +1273,7 @@ impl Config {
                     name: w.name,
                     opened: w.opened,
                     scope: w.scope,
-                    manual: w.manual.into_iter().collect(),
+                    manual: merge_picks(w.manual, w.fr_manual),
                     filter: w.filter,
                     dir: w.dir.min(2),
                     dbc_only: w.dbc_only,
@@ -1237,7 +1300,7 @@ impl Config {
                     name: w.name,
                     opened: w.opened,
                     scope: w.scope,
-                    manual: w.manual.into_iter().collect(),
+                    manual: merge_picks(w.manual, w.fr_manual),
                     filter: w.filter,
                     dbc_only: w.dbc_only,
                     text_keys: Vec::new(),
@@ -1254,7 +1317,7 @@ impl Config {
                     name: w.name,
                     opened: w.opened,
                     scope: w.scope,
-                    manual: w.manual.into_iter().collect(),
+                    manual: merge_picks(w.manual, w.fr_manual),
                     text_keys: Vec::new(),
                     text_header: String::new(),
                     text_rows: Vec::new(),
@@ -1582,7 +1645,14 @@ mod tests {
         app.replay_speed = 2.0;
         app.trace_windows[0].filter = "Motor".to_string();
         app.trace_windows[0].scope = SigScope::Bus(1);
-        app.trace_windows[0].manual.insert((1, 0x123));
+        app.trace_windows[0]
+            .manual
+            .insert(crate::workspace::Pick::Can { ch: 1, id: 0x123 });
+        // A hand-picked FlexRay slot rides along too, and lands in its own
+        // list in the file (`fr_manual`) so an older reader keeps the CAN half.
+        app.trace_windows[0]
+            .manual
+            .insert(crate::workspace::Pick::Fr { bus: 2, slot: 71 });
         // A FlexRay cluster scope is its own numbering space and its own
         // variant, so a project can hold one of each without either moving.
         app.stats_windows[0].scope = SigScope::FrBus(2);
@@ -1601,10 +1671,61 @@ mod tests {
         assert_eq!(restored.trace_windows[0].filter, "Motor");
         assert_eq!(restored.trace_windows[0].scope, SigScope::Bus(1));
         assert_eq!(restored.stats_windows[0].scope, SigScope::FrBus(2));
-        assert!(restored.trace_windows[0].manual.contains(&(1, 0x123)));
+        assert!(restored.trace_windows[0].manual.contains(&crate::workspace::Pick::Can {
+            ch: 1,
+            id: 0x123
+        }));
+        assert!(restored.trace_windows[0].manual.contains(&crate::workspace::Pick::Fr {
+            bus: 2,
+            slot: 71
+        }));
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert_eq!(restored.channels.len(), app.channels.len());
+    }
+
+    /// A project written before FlexRay picks existed has no `fr_manual` key at
+    /// all. It reads as the CAN-only set it always was -- the new list is
+    /// additive, so nothing is renumbered, reinterpreted or dropped.
+    #[test]
+    fn a_project_file_without_flexray_picks_reads_as_can_only() {
+        let mut app = App::headless();
+        app.trace_windows[0]
+            .manual
+            .insert(crate::workspace::Pick::Can { ch: 1, id: 0x123 });
+        app.trace_windows[0]
+            .manual
+            .insert(crate::workspace::Pick::Fr { bus: 0, slot: 13 });
+        app.refresh_snapshot();
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // All three window kinds gained the key, so an old file lacks it in all
+        // three -- stripping one and leaving the others would not be the file
+        // this test claims to read.
+        for kind in ["trace_windows", "msg_windows", "stats_windows"] {
+            for w in doc[kind].as_array_mut().unwrap() {
+                w.as_object_mut().unwrap().remove("fr_manual");
+            }
+        }
+        assert!(
+            !doc.to_string().contains("fr_manual"),
+            "the edited file really looks like an old one"
+        );
+
+        let mut restored = App::headless();
+        serde_json::from_value::<Config>(doc)
+            .expect("a file without the new key loads")
+            .apply(&mut restored);
+        assert!(
+            restored.trace_windows[0]
+                .manual
+                .contains(&crate::workspace::Pick::Can { ch: 1, id: 0x123 })
+        );
+        assert_eq!(
+            restored.trace_windows[0].manual.len(),
+            1,
+            "only the CAN pick an old file could have meant"
+        );
     }
 
     /// A waveform that does not survive a save comes back flat, which is the

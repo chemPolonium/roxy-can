@@ -73,20 +73,22 @@
 
 本轮已落地（不再列为差距）：**S4 收尾**——静态段占用率（`load::FrLoad`，口径见《总线统计与规格监视》）；**Network 视图**列出每路 cluster 的调度表（参数行 / ECU / 帧按槽与相位排序 + 实测计数与周期，`ui/network.rs::draw_flexray_section`）；**脚本读数** `fr_sig(cluster, slot, "Name")`（`HostInput.fr_signals`，从 `fr_aggs` 现解，无节点时零开销）；**State 窗口枚举标签**走描述自己的 VALUE 表（`ui/state.rs::table_label` 的 Fr 分支）。
 
+2026-09-21 追加落地：**Trace 展开子行不再摊平进行列表**（父行只带一个子行计数，文本推迟到绘制时生成——同一次刷新从 70 ms → 7.9 ms，与不展开的 6.2 ms 同档；顺带修掉两个潜伏错误：子行占用 200k 缓存额度、排序把子行打散）；**Messages/Trace 展开行的信号名与值分列**（名在第 1 列、值在第 2 列走**列级** `NO_CLIP`，见《FlexRay 的显示》）；**脚本编辑器右栏列出 FlexRay 槽与信号**（点一条插入 `fr_sig(...)`）；**窗口手选集合 `Pick` 化**（A2）。
+
 剩下的差距，按"要不要用户拍板"分两类：
 
-**A. 需要拍板的两件（我已给出建议，等一句话就能做）**
+**A. 需要拍板的两件（2026-09-21 已拍板，两件都按建议做）**
 
-1. **`on fr slot` 事件处理器**（脚本的"反应"半边）。读数有了，唤醒还没有：`HandlerKind`（script/mod.rs:228-250）只有 CAN 的 `Message{id}/ExtendedMessage/AnyMessage/ErrorFrame`，派发只有 `dispatch_node_frame(&CanFrame)`（bus.rs:1913）。建议语法：`on fr slot 13 { }` = 任意一路的槽 13，`on fr 0 slot 13 { }` = 只看 FR0 —— 槽号在两路 cluster 上会重复，所以路号必须可写；节点属于 CAN 通道，没有"它自己那一路"可推断。**要拍板的是处理器里的取值语义**：建议 `frame_id()` 返回槽号、`frame_dlc()` 返回载荷字节数、`frame_byte(i)` 读载荷，另加 `fr_cycle()` 给通信周期号（FlexRay 独有、且 `on fr` 里最常被问的就是"这是第几拍"）。不拍板就不动语言——语法加错了收不回来。
-2. **窗口"手选"能不能选 FlexRay 帧**。`manual: HashSet<(u8,u32)>`（workspace.rs:110/188/358/374）是 CAN 的 `(通道, id)`，`scope_match_fr`（:790）在 Manual 下一律丢弃 FR 行——也就是说 Trace/Messages/Statistics 的手选过滤器对 FlexRay 完全不起作用（Graphics/Data/State 那侧没这个洞，它们选的是 `SigKey`，FlexRay 信号早就能勾）。改法：`Pick { Can{ch,id} | Fr{bus,slot} }` 枚举，`(0,5)` 不再同时是"CAN0 的 id 5"和"FR0 的槽 5"。**代价在这里而不在那 15 处代码**：`manual` 是**随工程保存**的（config.rs:830/845/857 写、1213/1240/1257 读，旧格式是无标签 `(u8,u32)` 数组），所以要一次格式迁移（规则：无标签一律当 CAN，因为今天根本存不进 FR 选择）；`channel.rs:206 remap_set` 的通道增删重映射必须只作用于 `Can` 分支（cluster 索引不是通道索引——这正是枚举化能顺手堵掉的一类错）。
+1. ~~**`on fr slot` 事件处理器**~~ → 已批准，本轮在做（任务 #27）。读数有了，唤醒还没有：`HandlerKind`（script/mod.rs:228-250）只有 CAN 的 `Message{id}/ExtendedMessage/AnyMessage/ErrorFrame`，派发只有 `dispatch_node_frame(&CanFrame)`（bus.rs:1913）。定下的语法：`on fr slot 13 { }` = 任意一路的槽 13，`on fr 0 slot 13 { }` = 只看 FR0 —— 槽号在两路 cluster 上会重复，所以路号必须可写；节点属于 CAN 通道，没有"它自己那一路"可推断。取值语义：`frame_id()` 返回槽号、`frame_dlc()` 返回载荷字节数、`frame_byte(i)` 读载荷，另加 `fr_cycle()` 给通信周期号（FlexRay 独有、且 `on fr` 里最常被问的就是"这是第几拍"）。
+2. ~~**窗口"手选"能不能选 FlexRay 帧**~~ ✅（2026-09-21）。`manual: HashSet<(u8,u32)>` 换成 `Pick { Can{ch,id} | Fr{bus,slot} }`，`(0,5)` 不再同时是"CAN0 的 id 5"和"FR0 的槽 5"；`scope_match_fr` 在 Manual 下按 `(bus,slot)` 收放，Message Selection 弹窗多出一段 FlexRay 槽清单，"Select all matching" 两边都推。**落地的迁移方案与盘点时设想的不同一点**：没有把 `Pick` 直接序列化进行文件，而是 `TraceCfg/MsgCfg/StatsCfg` 各加一条 `fr_manual: Vec<(u8,u16)>`（`#[serde(default)]`），保存时 `split_picks` 拆两半、读取时 `merge_picks` 合回来——旧工程一字节不改照样读，新工程在旧版本里只是丢掉 FlexRay 那半（`a_project_file_without_flexray_picks_reads_as_can_only` 把"删掉 fr_manual 的 JSON"当成旧文件读）。`channel.rs::remap_set` 只重编号 `Pick::Can`，`Pick::Fr` 原样留下（cluster 索引不是通道索引）。
 
 **B. 不用拍板、可以直接做的（按价值排序）**
 
 3. ~~**规格监视（Spec）纳入 FlexRay**~~ ✅（同日做完，见下面《FlexRay 也进规格监视》一节）。
-4. **录制白名单不管 FlexRay**（recorder.rs:65-77 的 `write_fr` 明确不受 `admits` 约束，因为过滤器是 CAN id 列表）——与 A2 同一个 `Pick` 类型问题，等 A2 的迁移一起做。
-5. **回放块的 id 白名单是 `HashSet<(u8,u32)>`（bus.rs:820，CAN 通道+id）**，FlexRay 槽不在其列；同上，等 `Pick`。
+4. **录制白名单不管 FlexRay**（recorder.rs:65-77 的 `write_fr` 明确不受 `admits` 约束，因为过滤器是 CAN id 列表）——`Pick` 类型已经有了（A2），这一条现在只差把工具栏那个 id 框的解析扩出 FlexRay 写法（`FR0:13`？）以及决定 UI；**注意语义**：窗口白名单管显示，录制白名单管文件，两者共用 `Pick` 但不要共用同一个集合。
+5. **回放块的 id 白名单是 `Vec<(u32,bool)>`（CAN id + 扩展位）**，FlexRay 槽不在其列；`Pick` 已可用，但回放块本身是 CAN 通道实体（`channel: u8`），要放 FR 帧得先决定"块挂在哪一路"——比 4 大一号，别顺手做。
 6. **`dbc_only`（"仅 DBC"）对 FlexRay 的口径混了两件事**：它按"名字是否为 `-`"隐藏行，而 FR 的"没挂描述"与"挂了但这一相不排这一帧"是两种不同的事实（app.rs:135-139 已注明）。要么让它只管"有没有数据库/描述"，要么给 FR 一个独立开关——**别继续用名字判**。
-7. **脚本编辑器的右栏只列 CAN 报文/信号**，`fr_sig` 的参数目前只能从 Network 树里抄。加一节 FlexRay（`slot_signals()` 已有，与选点树同源）。
+7. ~~**脚本编辑器的右栏只列 CAN 报文/信号**~~ ✅（2026-09-21，任务 #29）：加了"FlexRay 信号（读）"一节，槽与信号名来自各路 `slot_signals()`，行上带着该槽当前占用的帧名（一个槽按相位轮着排好几帧），点一条即插入 `fr_sig(bus, slot, "Name")`；侧栏命令表补 `fr_sig`。
 8. **`FrDb::ecus` 之外没有 ECU↔帧 关系**：ARXML 里帧挂在 ECU 的 PDU group 上，解析时丢掉了（`FrFrameDb` 无 sender 字段），所以 Network 的 FR 节只能列 ECU 名单、列不出"谁发这一帧"。要补就得回到 `parse_arxml_doc`/`parse_fibex_doc` 把 FLEXRAY-FRAME-TRIGGERING 的 `associated-frame-*` 引用接上——**先确认手上的文件里真有这个引用**（自带的两份是 DaVinci/CANoe demo，别为假设的字段写解析）。
 - 明细见对应任务与 git log。
 

@@ -178,17 +178,25 @@ fn message_content(app: &mut App, ui: &Ui) {
         .build();
     if ui.button("Select all matching") {
         let q = app.id_filter_search.trim().to_ascii_uppercase();
-        let mut keys: Vec<(u8, u32)> = Vec::new();
+        let mut keys: Vec<crate::workspace::Pick> = Vec::new();
         for (ch, channel) in app.snap.channels.iter().enumerate() {
             let Some(db) = &channel.dbc else {
                 continue;
             };
             for &(id, _) in &db.order {
                 if msg_matches(db.message_name(id), id, &q) {
-                    keys.push((ch as u8, id));
+                    keys.push(crate::workspace::Pick::Can { ch: ch as u8, id });
                 }
             }
         }
+        // The FlexRay slots whose frame names match the same query: one slot per
+        // pick, because that is what the window's Manual scope admits or drops
+        // (a slot held by several frames is picked as a slot).
+        keys.extend(
+            fr_slot_hits(app, &q)
+                .into_iter()
+                .map(|(bus, slot, _)| crate::workspace::Pick::Fr { bus, slot }),
+        );
         if let Some(m) = app.win_manual_mut(target) {
             for k in keys {
                 m.insert(k);
@@ -205,7 +213,7 @@ fn message_content(app: &mut App, ui: &Ui) {
     }
     ui.same_line();
     let n_sel = app.win_manual(target).map(|m| m.len()).unwrap_or(0);
-    ui.text(format!("{n_sel} message(s) selected"));
+    ui.text(format!("{n_sel} message(s) / slot(s) selected"));
     ui.separator();
 
     let q = app.id_filter_search.trim().to_ascii_uppercase();
@@ -263,7 +271,10 @@ fn message_content(app: &mut App, ui: &Ui) {
             if !msg_matches(Some(&e.name), e.id, &q) && !sig_match {
                 continue;
             }
-            let key = (ch as u8, e.id);
+            let key = crate::workspace::Pick::Can {
+                ch: ch as u8,
+                id: e.id,
+            };
             let mut on = app.win_manual(target).is_some_and(|m| m.contains(&key));
             // ID includes the bus: the same DBC on two buses would otherwise
             // produce identical labels and colliding widget IDs.
@@ -280,6 +291,52 @@ fn message_content(app: &mut App, ui: &Ui) {
             }
         }
     }
+
+    // The FlexRay slots the same query offers. The pick is the **slot**, because
+    // that is the unit a window admits or drops rows by, so the frames sharing
+    // one slot by cycle phase are named together on one line instead of
+    // pretending to be separate choices.
+    let fr_rows = fr_slot_hits(app, &q);
+    if !fr_rows.is_empty() {
+        ui.separator();
+        ui.text_colored([0.55, 0.8, 1.0, 1.0], "FlexRay");
+        for (bus, slot, frames) in &fr_rows {
+            let key = crate::workspace::Pick::Fr {
+                bus: *bus,
+                slot: *slot,
+            };
+            let mut on = app.win_manual(target).is_some_and(|m| m.contains(&key));
+            if ui
+                .checkbox(format!("FR{bus} slot {slot}  {frames}##frsel{bus}_{slot}"), &mut on)
+            {
+                if let Some(m) = app.win_manual_mut(target) {
+                    if on {
+                        m.insert(key);
+                    } else {
+                        m.remove(&key);
+                    }
+                }
+                set_target_scope(app, SigScope::Manual);
+            }
+        }
+    }
+}
+
+/// The FlexRay slots a query offers, as `(bus, slot, frame names)`. Both the
+/// checkbox list and "Select all matching" read this, so the two cannot drift
+/// into admitting different slots. A slot matches on its number or on any frame
+/// that holds it in some cycle phase; names are joined for the label, which is
+/// also why they are listed rather than a single frame being named.
+fn fr_slot_hits(app: &App, q: &str) -> Vec<(u8, u16, String)> {
+    app.fr_buses
+        .iter()
+        .flat_map(|(bus, cfg)| cfg.db.scheduled_slots().into_iter().map(move |s| (*bus, s)))
+        .filter_map(|(bus, (slot, frames))| {
+            let hit = frames.iter().any(|f| f.to_ascii_uppercase().contains(q))
+                || slot.to_string() == q;
+            hit.then(|| (bus, slot, frames.join(" / ")))
+        })
+        .collect()
 }
 
 /// Signal-level selection for one Graphics/Data window: a message → signal
