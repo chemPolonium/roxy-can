@@ -140,6 +140,41 @@ pub struct TraceFilter {
     /// Signal-value conditions parsed from the filter text
     /// (`Name>10`, `Name<=5`, ...).
     pub value_conds: Vec<ValueCond>,
+    /// An exact address written as `id:1ABCDEF[x]` or `slot:13`. The plain text
+    /// is a *substring* search -- which is what makes it handy to type and what
+    /// makes `13` match slot 113 as well. These two prefixes are how you ask
+    /// for one address and nothing else, and the Trace row menu writes one.
+    /// A colon rather than `=`: the box already reads `Name=3` as a signal
+    /// condition, and a DBC signal really can be called `Slot` or `ID`.
+    pub exact: Option<ExactAddr>,
+}
+
+/// One exact address in the filter box: a CAN id with its frame class, or a
+/// FlexRay slot. The two are separate because the numbers live in different
+/// spaces -- `id:13` is CAN 13, `slot:13` is cluster slot 13, and neither says
+/// anything the other does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExactAddr {
+    Can { id: u32, ext: bool },
+    Fr(u16),
+}
+
+/// Parses the exact-address forms. `None` for any other text, including a bare
+/// hex id -- that stays the substring search it always was. The trailing `x`
+/// means "extended frame", the same spelling the ID column and the record
+/// filter use; it cannot be confused with a hex digit because `X` is not one.
+fn parse_exact_addr(text: &str) -> Option<ExactAddr> {
+    let t = text.trim().to_ascii_uppercase();
+    if let Some(hex) = t.strip_prefix("ID:") {
+        let (hex, ext) = match hex.strip_suffix('X') {
+            Some(h) => (h, true),
+            None => (hex, false),
+        };
+        let id = u32::from_str_radix(hex, 16).ok()?;
+        return Some(ExactAddr::Can { id, ext });
+    }
+    let slot = t.strip_prefix("SLOT:")?.parse().ok()?;
+    Some(ExactAddr::Fr(slot))
 }
 
 /// One signal-value condition from the filter text: `Name>10`,
@@ -259,8 +294,10 @@ impl TraceWin {
         // search.
         let value_conds: Vec<ValueCond> =
             parse_value_cond(&self.filter).into_iter().collect();
-        let query = value_conds
-            .is_empty()
+        // So is an exact address: `id=1AB` says which rows to keep, and searching
+        // the text "ID=1AB" through the table as a substring would match nothing.
+        let exact = parse_exact_addr(&self.filter);
+        let query = (value_conds.is_empty() && exact.is_none())
             .then(|| self.filter.trim().to_ascii_uppercase())
             .filter(|q| !q.is_empty());
         TraceFilter {
@@ -274,6 +311,7 @@ impl TraceWin {
             from_s: self.time_from.trim().parse().ok(),
             to_s: self.time_to.trim().parse().ok(),
             value_conds,
+            exact,
         }
     }
 }
@@ -888,6 +926,15 @@ impl App {
         if flt.dbc_only && name.is_none() {
             return false;
         }
+        // An exact CAN address, class and all: standard 0x1AB and extended 0x1AB
+        // are different rows. A `slot:` text names no CAN frame at all, so every
+        // CAN row leaves -- the two numbering spaces do not translate into
+        // each other here either.
+        match flt.exact {
+            Some(ExactAddr::Can { id, ext }) if f.id != id || f.extended != ext => return false,
+            Some(ExactAddr::Fr(_)) => return false,
+            Some(ExactAddr::Can { .. }) | None => {}
+        }
         // With a value condition present the filter text IS the condition
         // (e.g. `EngineSpeed>100`), so the id/name search is skipped.
         if flt.value_conds.is_empty()
@@ -987,6 +1034,14 @@ impl App {
         // Value conditions (`Signal>10`) are CAN-only: FR rows leave.
         if !flt.value_conds.is_empty() {
             return false;
+        }
+        // `id:` names a CAN frame, so FlexRay rows leave. `slot:13` is the
+        // address a `13` substring search cannot isolate -- it matches 113 and
+        // 130 too -- and this is the row that answers it exactly.
+        match flt.exact {
+            Some(ExactAddr::Can { .. }) => return false,
+            Some(ExactAddr::Fr(want)) if r.slot != want => return false,
+            Some(ExactAddr::Fr(_)) | None => {}
         }
         // The filter text is a name/number search for these rows: match the
         // name the row actually *displays* -- the cluster description's, or the

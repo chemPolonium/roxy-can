@@ -214,6 +214,18 @@ pub struct TraceCfg {
     pub payload: String,
     #[serde(default)]
     pub flags_kind: usize,
+    /// The time-range bounds and the row that holds them. They travel with the
+    /// rest of the filter because a saved window that drops rows outside a range
+    /// the user cannot see reads as a broken table, not as a remembered filter.
+    #[serde(default)]
+    pub time_from: String,
+    #[serde(default)]
+    pub time_to: String,
+    #[serde(default)]
+    pub filters_open: bool,
+    /// Whether the FlexRay rows are expanded into their decoded signals.
+    #[serde(default)]
+    pub fr_expand: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -919,6 +931,10 @@ impl Config {
                         dbc_only: w.dbc_only,
                         payload: w.payload.clone(),
                         flags_kind: w.flags_kind,
+                        time_from: w.time_from.clone(),
+                        time_to: w.time_to.clone(),
+                        filters_open: w.filters_open,
+                        fr_expand: w.fr_expand,
                     }
                 })
                 .collect(),
@@ -1212,7 +1228,13 @@ impl Config {
     /// works once the core runs on its own thread); the handful of
     /// mid-restore reads go through the snapshot, settling first on the
     /// threaded drive so the reads see applied commands.
-    pub fn apply(self, app: &mut App) {
+    /// Restores a saved workspace into `app`. The returned strings are the
+    /// parts it could not restore -- a saved file that moved or broke -- which
+    /// the caller has to report: `apply` cannot say it itself, because the load
+    /// path writes its own "project loaded" over the bar the moment this
+    /// returns.
+    pub fn apply(self, app: &mut App) -> Vec<String> {
+        let mut problems: Vec<String> = Vec::new();
         if !self.channels.is_empty() {
             // Grow or shrink the fresh app's two default buses to the
             // saved count, then overlay the saved declarations on top.
@@ -1324,10 +1346,10 @@ impl Config {
                     dbc_only: w.dbc_only,
                     payload: w.payload,
                     flags_kind: w.flags_kind,
-                    time_from: String::new(),
-                    time_to: String::new(),
-                    filters_open: false,
-                    fr_expand: false,
+                    time_from: w.time_from,
+                    time_to: w.time_to,
+                    filters_open: w.filters_open,
+                    fr_expand: w.fr_expand,
                     rows: std::collections::VecDeque::new(),
                     rows_build: None,
                     row_ends: Vec::new(),
@@ -1587,7 +1609,7 @@ impl Config {
                         },
                     );
                 }
-                Err(e) => app.status = format!("FlexRay 描述加载失败: {e}"),
+                Err(e) => problems.push(format!("FlexRay 描述加载失败: {e}")),
             }
         }
         // Names come back before anything that labels a bus, and they survive a
@@ -1712,6 +1734,7 @@ impl Config {
         }
         let target = app.desktops[app.active_desktop].clone();
         app.apply_desktop(&target);
+        problems
     }
 }
 
@@ -1724,10 +1747,11 @@ impl App {
         };
         match serde_json::from_str::<Config>(&text) {
             Ok(cfg) => {
-                cfg.apply(self);
+                let problems = cfg.apply(self);
                 self.mark_clean();
+                self.report_load_problems(problems);
             }
-            Err(e) => self.status = format!("config ignored: {e}"),
+            Err(e) => self.fail(format!("config ignored: {e}")),
         }
     }
 }
@@ -2437,6 +2461,61 @@ mod tests {
         assert!(
             plain.contains(&format!(r#""trace_limit":{}"#, crate::app::TRACE_LIMIT)),
             "the default capacity is written too"
+        );
+    }
+
+    /// The time-range bounds, the expanded-filter row and the FlexRay signal
+    /// expansion are filter state, so they survive a save like the rest of the
+    /// row does: a window that hides everything outside 1.0–2.5 s has to show
+    /// those boxes filled, or it reads as a broken table rather than as a
+    /// remembered filter.
+    #[test]
+    fn the_trace_time_range_and_expansion_round_trip() {
+        let mut app = App::headless();
+        let w = &mut app.trace_windows[0];
+        w.time_from = "1.0".to_string();
+        w.time_to = "2.5".to_string();
+        w.filters_open = true;
+        w.fr_expand = true;
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        let w = &restored.trace_windows[0];
+        assert_eq!(
+            (w.time_from.as_str(), w.time_to.as_str()),
+            ("1.0", "2.5"),
+            "the bounds come back"
+        );
+        assert!(
+            w.filters_open && w.fr_expand,
+            "and the rows that hold them are open"
+        );
+        let flt = w.filter_lens();
+        assert_eq!(
+            (flt.from_s, flt.to_s),
+            (Some(1.0), Some(2.5)),
+            "and they still filter"
+        );
+
+        // A file written before these keys existed reads as it always did.
+        let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for w in doc["trace_windows"].as_array_mut().unwrap() {
+            let obj = w.as_object_mut().unwrap();
+            for key in ["time_from", "time_to", "filters_open", "fr_expand"] {
+                obj.remove(key);
+            }
+        }
+        let mut legacy = App::headless();
+        serde_json::from_value::<Config>(doc)
+            .expect("an older file still loads")
+            .apply(&mut legacy);
+        let w = &legacy.trace_windows[0];
+        assert!(
+            w.time_from.is_empty() && w.time_to.is_empty() && !w.fr_expand,
+            "and carries no time bounds"
         );
     }
 

@@ -465,14 +465,14 @@ impl App {
     /// set a failure status if it did not.
     pub fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         let Ok(bytes) = std::fs::read(path) else {
-            self.status = format!("FIBEX 读取失败: {path}");
+            self.fail(format!("FIBEX 读取失败: {path}"));
             return None;
         };
         let text = crate::dbc::text_from_bytes(bytes);
         let db = match crate::fr_db::FrDb::parse(&text) {
             Ok(db) => db,
             Err(e) => {
-                self.status = format!("FlexRay 描述解析失败: {e}");
+                self.fail(format!("FlexRay 描述解析失败: {e}"));
                 return None;
             }
         };

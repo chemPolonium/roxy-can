@@ -83,7 +83,7 @@ impl App {
                     self.snap.fr_trace.len(),
                 );
             }
-            Err(e) => self.status = format!("export failed: {e}"),
+            Err(e) => self.fail(format!("export failed: {e}")),
         }
     }
 
@@ -110,7 +110,7 @@ impl App {
     fn write_export(&mut self, path: &str, content: String) {
         match std::fs::write(path, content) {
             Ok(()) => self.status = format!("exported to {path}"),
-            Err(e) => self.status = format!("export failed: {e}"),
+            Err(e) => self.fail(format!("export failed: {e}")),
         }
     }
 

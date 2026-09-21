@@ -686,6 +686,45 @@ impl App {
         }
     }
 
+    /// Writes a line into the Write ring, where it stays. The status bar holds
+    /// one message and whatever writes next erases it, so anything the user may
+    /// need to find again -- a failed export, a refused operation, half a
+    /// project load -- goes through here as well as onto the bar.
+    pub fn log_status(&mut self, kind: crate::bus::WriteKind, text: impl Into<String>) {
+        self.send(crate::bus::BusCommand::LogStatus {
+            kind,
+            text: text.into(),
+        });
+    }
+
+    /// Reports a failure: the line goes on the bar and into the Write ring.
+    /// Errors that carry a reason -- an OS error, a parser message, the path it
+    /// happened to -- are exactly what the user needs a minute later, and the
+    /// bar holds one line until the next action erases it.
+    pub fn fail(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        self.log_status(crate::bus::WriteKind::Error, text.clone());
+        self.status = text;
+    }
+
+    /// Records what a project load could not restore. Each problem goes to the
+    /// Write ring in full and the bar gets the count: the load reports "project
+    /// loaded" immediately afterwards, which would otherwise erase the only
+    /// notice that anything was missing. Call it *after* that line is set.
+    pub fn report_load_problems(&mut self, problems: Vec<String>) {
+        if problems.is_empty() {
+            return;
+        }
+        for p in &problems {
+            self.log_status(crate::bus::WriteKind::Error, p.clone());
+        }
+        self.status = format!(
+            "{} · {} 项未能载入（Write 窗口有明细）",
+            self.status,
+            problems.len()
+        );
+    }
+
     /// The mailbox read as a pure lookup: the newest snapshot, or `None`
     /// when the writer holds the lock or nothing has been published since
     /// `current`. Split out so the never-blocks rule is testable under a
@@ -880,7 +919,7 @@ impl App {
                 };
                 self.push_recent_log(path.to_string());
             }
-            Err(e) => self.status = format!("log load failed [{path}]: {e}"),
+            Err(e) => self.fail(format!("log load failed [{path}]: {e}")),
         }
     }
 

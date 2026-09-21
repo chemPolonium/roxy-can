@@ -1698,6 +1698,119 @@ fn trace_filter_matches_by_name_id_and_direction() {
     assert!(app.trace_match(&w, &rx), "All scope passes everything");
 }
 
+/// The row menu's "Filter this ID" has to leave on screen the row it was opened
+/// on -- and nothing else. The box's plain text is a substring search, so the
+/// old `1AB` also kept `1AB0` and `21AB`; the menu now writes the exact form,
+/// with the `x` suffix a 29-bit frame's row needs because the frame class is
+/// part of its address.
+#[test]
+fn the_trace_row_menu_filters_to_the_row_it_was_opened_on() {
+    let mut app = App::headless();
+    let mut ext = frame_at(1_000, 0x1ABCDEF, 8, Direction::Rx);
+    ext.extended = true;
+    let std_frame = frame_at(2_000, 0x1AB, 8, Direction::Rx);
+    let longer_std = frame_at(3_000, 0x1AB0, 8, Direction::Rx);
+
+    crate::ui::trace::filter_to_id(&mut app, 0, &ext);
+    let w = app.trace_windows[0].clone();
+    assert!(
+        app.trace_match(&w, &ext),
+        "the extended row survives its own menu (filter {:?})",
+        app.trace_windows[0].filter
+    );
+    assert!(
+        !app.trace_match(&w, &std_frame),
+        "and it names one frame class, not every frame holding those digits"
+    );
+
+    // A standard frame: the exact form, and the over-match the prefix exists to
+    // stop.
+    crate::ui::trace::filter_to_id(&mut app, 0, &std_frame);
+    assert_eq!(app.trace_windows[0].filter, "id:1AB");
+    let w = app.trace_windows[0].clone();
+    assert!(app.trace_match(&w, &std_frame));
+    assert!(!app.trace_match(&w, &ext), "now the extended twin is the one out");
+    let loose = {
+        let mut win = app.trace_windows[0].clone();
+        win.filter = "1AB".to_string();
+        win
+    };
+    assert!(
+        app.trace_match(&loose, &longer_std),
+        "the substring search is still a substring search"
+    );
+    assert!(
+        !app.trace_match(&w, &longer_std),
+        "and `id:` is what you ask for one id and nothing else"
+    );
+}
+
+/// `slot:13` is the address the plain text cannot express: a `13` search also
+/// matches slot 113, slot 130 and any frame name holding those digits. The two
+/// numbering spaces stay apart -- an id names no slot and a slot names no CAN
+/// frame -- because translating between them is exactly the confusion the
+/// filters exist to avoid.
+#[test]
+fn the_trace_filter_takes_an_exact_slot_or_id() {
+    let app = quiet_app();
+    let row = |slot: u16| crate::trace::FrRow {
+        bus: 0,
+        t_us: 1_000,
+        ab: 0,
+        slot,
+        cycle: 0,
+        payload: vec![1],
+        header_crc: 0,
+        flags: 0,
+        name: None,
+    };
+    let mk = |app: &App, filter: &str| {
+        let mut w = app.trace_windows[0].clone();
+        w.filter = filter.to_string();
+        w.filter_lens()
+    };
+    let flt = mk(&app, "13");
+    assert!(app.trace_fr_match(&flt, &row(13)));
+    assert!(
+        app.trace_fr_match(&flt, &row(113)),
+        "the substring search is still a substring search"
+    );
+    let flt = mk(&app, "slot:13");
+    assert!(app.trace_fr_match(&flt, &row(13)), "slot 13 stays");
+    assert!(!app.trace_fr_match(&flt, &row(113)), "slot 113 leaves");
+    assert!(!app.trace_fr_match(&flt, &row(130)), "and so does slot 130");
+    let can = frame_at(1_000, 0x13, 8, Direction::Rx);
+    assert!(
+        !app.trace_match_lens(&flt, &can),
+        "a slot is not a CAN id, so the CAN rows leave"
+    );
+
+    let flt = mk(&app, "id:13");
+    assert!(app.trace_match_lens(&flt, &can));
+    assert!(
+        !app.trace_fr_match(&flt, &row(13)),
+        "and an id is not a slot, so the FlexRay rows leave"
+    );
+    // The frame class is part of a CAN address here, as it is in the ID column.
+    let mut ext = frame_at(2_000, 0x13, 8, Direction::Rx);
+    ext.extended = true;
+    assert!(
+        !app.trace_match_lens(&flt, &ext),
+        "id:13 means the standard frame"
+    );
+    let flt = mk(&app, "id:13x");
+    assert!(
+        app.trace_match_lens(&flt, &ext),
+        "id:13x means the extended one"
+    );
+    assert!(!app.trace_match_lens(&flt, &can));
+    // A signal really can be named `Slot`, and `Slot=3` must stay the value
+    // condition it has always been -- which is why the exact form uses a colon.
+    let flt = mk(&app, "Slot=3");
+    assert_eq!(flt.exact, None, "an `=` text is a condition, not an address");
+    assert!(!flt.value_conds.is_empty());
+}
+
 #[test]
 fn channels_can_be_added_removed_and_renamed() {
     let mut app = App::headless();
@@ -5603,6 +5716,104 @@ fn the_write_ring_collects_node_and_command_lines() {
     app.settle();
     assert!(app.snap.write.is_empty(), "Clear empties the ring");
     app.stop();
+}
+
+/// What the bar cannot keep, the ring must. A message produced *inside* a step
+/// -- a replay reaching the end of its log, a trigger firing, a post-roll
+/// ending -- is replaced by the next frame's news, which in a running
+/// measurement is a few milliseconds later. The line the operator was reading
+/// is gone before they finished it, so it joins the Write ring on its way past
+/// the bar.
+#[test]
+fn a_step_message_stays_in_the_write_window() {
+    let mut app = App::headless();
+    let src = write_mixed_fr_asc("roxy_can_step_news", 4, 13);
+    replay_to_the_end(&mut app, &src);
+    std::fs::remove_file(&src).ok();
+    assert!(
+        app.snap.write.iter().any(|l| {
+            l.kind == crate::bus::WriteKind::Info && l.text.starts_with("replay finished")
+        }),
+        "the message the step produced is still readable: {:?}",
+        app.snap.write
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A project whose files moved loads the parts it can and says so -- but the
+/// half that failed used to be written to the bar and then overwritten by the
+/// "project loaded" line two statements later, so the user never saw it at all.
+/// Each problem now stays in the Write ring, and the bar carries the count.
+#[test]
+fn a_project_load_problem_outlives_the_loaded_line() {
+    let asset = "assets/arxml/PowerTrain.arxml";
+    if !std::path::Path::new(asset).exists() {
+        println!("asset absent -- skipped");
+        return;
+    }
+    let mut app = App::headless();
+    assert_eq!(app.load_cluster_description(asset, Some(0)), Some(0));
+    let path = std::env::temp_dir().join(format!(
+        "roxy_can_half_loaded_{}.rxproj",
+        std::process::id()
+    ));
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+
+    // The description is the part that went missing between sessions.
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    doc["config"]["fr_buses"][0]["path"] = "assets/no-such-cluster.xml".into();
+    std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+
+    let mut restored = App::headless();
+    restored.open_project_path(&path);
+    restored.settle();
+    assert!(
+        restored.status.contains("project loaded") && restored.status.contains("1 项未能载入"),
+        "the bar says both what worked and how much did not: {}",
+        restored.status
+    );
+    assert!(
+        restored.snap.write.iter().any(|l| {
+            l.kind == crate::bus::WriteKind::Error && l.text.contains("FlexRay 描述加载失败")
+        }),
+        "and the reason is still there to read: {:?}",
+        restored
+            .snap
+            .write
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// The frontend's own failures carry a reason the operator may need after the
+/// bar has moved on -- an OS error, a parser message, the path it happened to.
+/// A refused project open is the case where there is nothing else on screen to
+/// explain why clicking the file did nothing.
+#[test]
+fn a_refused_project_open_is_still_readable() {
+    let mut app = App::headless();
+    let missing = std::env::temp_dir().join(format!(
+        "roxy_can_not_a_project_{}.rxproj",
+        std::process::id()
+    ));
+    app.open_project_path(&missing);
+    app.settle();
+    assert!(
+        app.status.starts_with("project read failed"),
+        "{}",
+        app.status
+    );
+    assert!(
+        app.snap.write.iter().any(|l| {
+            l.kind == crate::bus::WriteKind::Error && l.text.starts_with("project read failed")
+        }),
+        "the refusal outlives the one line on the bar"
+    );
 }
 
 /// The Write export writes the ring as plain text in display order and

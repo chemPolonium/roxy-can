@@ -169,7 +169,7 @@ impl App {
                 true
             }
             Err(e) => {
-                self.status = format!("project save failed: {e}");
+                self.fail(format!("project save failed: {e}"));
                 false
             }
         }
@@ -180,7 +180,7 @@ impl App {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
             Err(e) => {
-                self.status = format!("project read failed: {e}");
+                self.fail(format!("project read failed: {e}"));
                 return;
             }
         };
@@ -189,7 +189,7 @@ impl App {
                 self.reset_to_defaults();
                 let mut cfg = proj.config;
                 cfg.resolve_paths(path.parent());
-                cfg.apply(self);
+                let problems = cfg.apply(self);
                 self.project_path = Some(path.to_path_buf());
                 self.retarget_record_draft();
                 if !proj.layout.is_empty() {
@@ -198,8 +198,12 @@ impl App {
                 self.baseline = self.config_snapshot();
                 self.push_recent_project(path.to_string_lossy().to_string());
                 self.status = format!("project loaded: {}", path.display());
+                // After the "loaded" line: a half-restored project has to say
+                // so on the bar the user is looking at, and keep the detail
+                // where it can still be read.
+                self.report_load_problems(problems);
             }
-            Err(e) => self.status = format!("project ignored: {e}"),
+            Err(e) => self.fail(format!("project ignored: {e}")),
         }
     }
 
@@ -259,13 +263,14 @@ impl App {
             .and_then(|p| p.parent());
         let mut cfg = proj.config;
         cfg.resolve_paths(base);
-        cfg.apply(self);
+        let problems = cfg.apply(self);
         self.project_path = proj.project.map(PathBuf::from);
         if !proj.layout.is_empty() {
             self.pending_layout = Some(proj.layout);
         }
         self.mark_clean();
         self.status = "restored autosave".to_string();
+        self.report_load_problems(problems);
         true
     }
 

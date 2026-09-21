@@ -102,19 +102,25 @@ impl CoreLoop {
         }
     }
 
+    /// Puts one news line on the bar *and* in the Write ring. The bar shows a
+    /// single message and the next one erases it, so anything the user may need
+    /// to find again -- a trigger that fired, a replay that finished, a load
+    /// that half-worked -- has to be recorded as it is announced.
+    fn note(&mut self, kind: crate::bus::WriteKind, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        self.core.write_push(kind, text.clone());
+        self.pending_status = Some(text);
+    }
+
     /// Applies one command; `true` when it restarted the run's clock
     /// (the threaded lap re-anchors its wall-clock zero on that).
     fn apply(&mut self, cmd: BusCommand) -> bool {
         let clock_reset = matches!(cmd, BusCommand::StartVirtual);
         let mut status = String::new();
         self.core.handle(cmd, &mut status);
-        if !status.is_empty() {
-            // Command news also lands in the Write window (the status bar
-            // shows each line once; the Write ring keeps them).
-            self.core
-                .write_push(crate::bus::WriteKind::Info, status.clone());
-            self.pending_status = Some(status);
-        }
+        self.note(crate::bus::WriteKind::Info, status);
         clock_reset
     }
 
@@ -148,9 +154,9 @@ impl CoreLoop {
         self.drain();
         let mut status = String::new();
         self.core.step(now_us, stride, tol_pct, grace, &mut status);
-        if !status.is_empty() {
-            self.pending_status = Some(status);
-        }
+        // News from inside a step -- a trigger firing, a post-roll ending, a
+        // replay finishing -- is what the bar loses on the next frame.
+        self.note(crate::bus::WriteKind::Info, status);
         self.publish();
     }
 }
@@ -217,7 +223,7 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                 if last_dbc_sweep.elapsed() >= Duration::from_secs(2) {
                     last_dbc_sweep = Instant::now();
                     if let Some(status) = lane.core.maybe_reload_changed_dbcs() {
-                        lane.pending_status = Some(status);
+                        lane.note(crate::bus::WriteKind::Info, status);
                         any = true;
                     }
                 }
@@ -239,9 +245,7 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                     if panicked {
                         lane.halt_after_internal_error("测量步进");
                     }
-                    if !status.is_empty() {
-                        lane.pending_status = Some(status);
-                    }
+                    lane.note(crate::bus::WriteKind::Info, status);
                     lane.publish();
                 } else if lane.core.measuring {
                     if paused_at.is_none() {
@@ -283,9 +287,10 @@ impl CoreLoop {
     /// servicing commands and idles rather than hot-looping on the
     /// state that tripped it.
     fn halt_after_internal_error(&mut self, what: &str) {
-        self.pending_status = Some(format!(
-            "[core] 内部错误（panic）：{what}——测量已停止；请保存现场并反馈复现步骤"
-        ));
+        self.note(
+            crate::bus::WriteKind::Error,
+            format!("[core] 内部错误（panic）：{what}——测量已停止；请保存现场并反馈复现步骤"),
+        );
         self.core.measuring = false;
         self.core.recorder.close();
         self.core.recorder.recording = false;

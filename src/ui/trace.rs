@@ -62,6 +62,15 @@ fn fmt_id(f: &CanFrame) -> String {
     }
 }
 
+/// The row menu's "Filter this ID": the window is left showing the row the menu
+/// was opened on, and only that row. The plain text is a substring search, so
+/// `1AB` also matches `1AB0` and `0x1AB...`; the `id:` prefix is the exact form,
+/// and the `x` suffix has to travel with a 29-bit id because the frame class is
+/// part of the address.
+pub(crate) fn filter_to_id(app: &mut App, win: usize, f: &CanFrame) {
+    app.trace_windows[win].filter = format!("id:{}", fmt_id(f));
+}
+
 fn fmt_data(f: &CanFrame) -> String {
     f.payload().iter().map(|b| format!("{b:02X} ")).collect()
 }
@@ -152,6 +161,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     ui.same_line();
     ui.set_next_item_width(120.0);
     ui.input_text(format!("##tfilter{i}"), &mut app.trace_windows[i].filter)
+        .hint("名称 / hex 子串 · id:1AB · slot:13")
         .build();
     ui.same_line();
     ui.set_next_item_width(52.0);
@@ -530,7 +540,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         ));
         ui.separator();
         if ui.menu_item(format!("Filter this ID ({})", fmt_id(&f))) {
-            app.trace_windows[i].filter = format!("{:03X}", f.id);
+            filter_to_id(app, i, &f);
         }
         if ui.menu_item("Clear filter") {
             let w = &mut app.trace_windows[i];

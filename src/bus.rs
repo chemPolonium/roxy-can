@@ -265,6 +265,16 @@ pub enum BusCommand {
         bus: u8,
         slot: u16,
     },
+    /// Adds one line to the Write ring without touching the status bar. The
+    /// frontend's own news -- a failed export, a refused operation, a project
+    /// that half-loaded -- has no other way into the log, and one line on the
+    /// bar is the only place it currently appears: whatever writes next erases
+    /// it, and a message produced during a synchronous load is never drawn at
+    /// all.
+    LogStatus {
+        kind: WriteKind,
+        text: String,
+    },
     /// Start caching one signal: a fresh subscription gets the next
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
@@ -1523,6 +1533,7 @@ impl BusCore {
                 }
             }
             BusCommand::Subscribe { key } => self.subscribe_signal(key),
+            BusCommand::LogStatus { kind, text } => self.write_push(kind, text),
             BusCommand::Unsubscribe { key } => {
                 self.subs.remove(&key);
             }
