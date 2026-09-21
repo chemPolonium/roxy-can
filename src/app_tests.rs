@@ -6343,7 +6343,7 @@ fn an_empty_flexray_message_row_names_its_reason() {
     };
     assert_eq!(
         note("FR0", 4_095).as_deref(),
-        Some("（FR0 的描述里 slot 4095 不排这一帧）"),
+        Some("（FR0 的描述未在 slot 4095 调度此帧）"),
         "a slot the description resolves no frame for says so"
     );
     assert_eq!(
@@ -8290,7 +8290,11 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     let _q = app.hw.attach_fr_mock(1, 5);
     app.refresh_snapshot();
     assert_eq!(app.load_cluster_description(second, Some(1)), None);
-    assert!(app.status.contains("请先断开监听"), "{}", app.status);
+    assert!(
+        app.status.contains(crate::channel::FR_DETACH_LABEL),
+        "the refusal names the button that can do it: {}",
+        app.status
+    );
     assert_eq!(sig(&app, 1), on_first, "the live 路 kept its file");
     // The rows the Buses table lists: the 路 that exist as state -- the two
     // configured ones. No placeholder for "the next free index"; a bus nobody
@@ -8303,7 +8307,7 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     );
     // A 路 that exists only as traffic in the log being replayed is a row: its
     // frames cannot be named until a description lands on it, and that is what
-    // its `加载…` button is for. Listed in bus order, not appended.
+    // its `加载描述…` button is for. Listed in bus order, not appended.
     app.fr_loads.insert(4, crate::load::FrLoad::default());
     // The rollups are only re-published when they changed; a hand-inserted load
     // has to say so, which is what a step does on every arrival.
@@ -8351,7 +8355,11 @@ fn a_described_bus_can_be_attached_or_forgot() {
     app.hw.attach_fr_mock(0, 5);
     app.refresh_snapshot();
     app.forget_cluster_description(0);
-    assert!(app.status.contains("请先断开监听"), "{}", app.status);
+    assert!(
+        app.status.contains(crate::channel::FR_DETACH_LABEL),
+        "the refusal names the button that can do it: {}",
+        app.status
+    );
     assert!(
         app.fr_buses.contains_key(&0),
         "a watched bus keeps the file its port runs from"

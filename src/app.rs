@@ -1163,7 +1163,7 @@ impl App {
                             f.name.clone()
                         }
                     })
-                    .unwrap_or_else(|| "描述里已无此帧".to_string()),
+                    .unwrap_or_else(|| "当前描述已无此帧".to_string()),
                 None => "not in the schedule".to_string(),
             };
             out.push(crate::spec::SpecRow {
@@ -1360,7 +1360,7 @@ impl App {
                     Some(format!("（{} 未加载集群描述）", self.fr_bus_name(agg.bus)))
                 } else if frame_ix.is_none() {
                     Some(format!(
-                        "（{} 的描述里 slot {} 不排这一帧）",
+                        "（{} 的描述未在 slot {} 调度此帧）",
                         self.fr_bus_name(agg.bus),
                         agg.slot
                     ))

@@ -124,6 +124,12 @@ use std::collections::HashSet;
 use crate::app::App;
 use crate::observe::{GfxSignal, SigKey};
 use crate::workspace::SigScope;
+
+/// The FlexRay row's "close the port and forget this 路" button, spelled in one
+/// place: the refusals in this file tell the user to press it by name, so a
+/// message must not drift away from the label on screen.
+pub const FR_DETACH_LABEL: &str = "断开并移除";
+
 impl App {
     /// The bus's database, from this frame's snapshot. This inherent method
     /// shadows the live-table lookup on `BusCore` for every `App` receiver,
@@ -424,7 +430,7 @@ impl App {
     /// placeholder made the table look like it had buses the user never added.
     /// A cluster that only the log names is different -- it is real traffic that
     /// cannot be named yet, and giving it a description is what its row's
-    /// `加载…` is for.
+    /// `加载描述…` is for.
     pub fn fr_bus_rows(&self) -> Vec<u8> {
         let mut buses: Vec<u8> = self
             .fr_buses
@@ -462,7 +468,7 @@ impl App {
             Some(want) => {
                 if self.snap.fr_watches.iter().any(|w| w.bus == want) {
                     self.status = format!(
-                        "{} 正在监听：请先断开监听，再给它换集群描述",
+                        "{} 正在监听：换描述前先点本行的“{FR_DETACH_LABEL}”（关闭端口并撤下这路），再重新加载描述",
                         self.fr_bus_label(want)
                     );
                     return None;
@@ -534,11 +540,13 @@ impl App {
     /// description loaded for a replay, which never opened a port to begin with.
     /// A watched bus refuses -- its port was configured from that file, and
     /// forgetting it would leave a port running on a configuration the tool can
-    /// no longer explain. "断开" is the action for that.
+    /// no longer explain. The row's "断开并移除" is the action for that, and it
+    /// says so in its own name: there is no way to keep the port and drop the
+    /// description it was built from.
     pub fn forget_cluster_description(&mut self, bus: u8) {
         if self.snap.fr_watches.iter().any(|w| w.bus == bus) {
             self.status = format!(
-                "{} 正在监听：请先断开监听再移除描述",
+                "{} 正在监听：不能单独移除集群描述，请用本行的“{FR_DETACH_LABEL}”",
                 self.fr_bus_label(bus)
             );
             return;

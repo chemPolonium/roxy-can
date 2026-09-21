@@ -167,16 +167,16 @@ fn content(app: &mut App, ui: &Ui) {
         let cluster = app
             .fr_db(bus)
             .map(|db| db.params.name.as_str())
-            .unwrap_or("无描述");
+            .unwrap_or("未加载描述");
         ui.text_colored(
             [0.55, 0.8, 1.0, 1.0],
             format!("{} ({cluster})", app.fr_bus_name(bus)),
         );
         if ui.is_item_hovered() {
             ui.tooltip_text(
-                "占用率口径：一帧占用的介质时间 = gstaticSlot × gmacrotick，与载荷长短无关；\
-                 窗口内到达帧的占用之和 / 窗口时长。动态段不计入（被动监听只报静态槽），\
-                 没有描述或描述里没有槽时长时只数帧、不报占用率。",
+                "占用率的计算方式：一帧占用的介质时间 = gstaticSlot × gmacrotick，与载荷长度无关；\
+                 占用率 = 窗口内到达帧的占用时间之和 / 窗口时长。动态段不计入（被动监听只上报静态槽）；\
+                 未加载描述、或描述未声明槽时长时只统计帧数，不给出占用率。",
             );
         }
         for _ in 1..5 {

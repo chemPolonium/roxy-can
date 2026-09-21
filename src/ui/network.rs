@@ -193,7 +193,7 @@ fn fr_buses(app: &App) -> Vec<u8> {
 fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
     let label = match app.fr_db(bus) {
         Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
-        None => format!("{}（无描述）", app.fr_bus_name(bus)),
+        None => format!("{}（未加载描述）", app.fr_bus_name(bus)),
     };
     let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
         return;
@@ -205,9 +205,9 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
             .get(&bus)
             .map_or(0, |l| l.frames);
         ui.text_disabled(if seen > 0 {
-            "该路在收帧，但没有集群描述：ECU 与帧归属无从显示"
+            "该路正在接收帧，但未加载集群描述，ECU 与帧归属无法显示"
         } else {
-            "该路已配置，尚无帧到达，也没有集群描述"
+            "该路已配置，尚无帧到达，且未加载集群描述"
         });
         return;
     };
@@ -215,7 +215,7 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
         // An empty ECU list is a property of the document, not of the session:
         // a cluster export carries no ECUs at all (both bundled FIBEX files are
         // one), and saying so beats a group that looks like it failed to load.
-        ui.text_disabled("描述未声明 ECU（集群参数导出里没有 ECUs 一节）");
+        ui.text_disabled("描述未声明 ECU（该文件是集群参数导出，不含 ECUs 一节）");
         return;
     }
     // How many frames each ECU is the declared sender of -- an ECU attribute,

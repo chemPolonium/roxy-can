@@ -617,7 +617,7 @@ fn the_flexray_tab_lists_the_slots_a_script_can_read() {
 
 /// The Buses window lists FlexRay 路 in a table shaped like the CAN one above
 /// it: two watched clusters, each its own row with its own port, parked marker
-/// and 断开; a third row that has a description and no port; and only the
+/// and 断开并移除; a third row that has a description and no port; and only the
 /// channels still free offered in any row's 硬件 column. Drawing it is the point
 /// -- a view shaped like the old single `Option<FrWatch>` panics right where a
 /// user looks for their second bus.
