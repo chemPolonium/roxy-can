@@ -577,6 +577,44 @@ fn the_message_picker_offers_flexray_slots() {
     );
 }
 
+/// The script editor's FlexRay tab lists the slots a script can read from every
+/// loaded cluster description. It is a tab of its own now, and a tab body only
+/// draws while selected -- which no headless frame can arrange -- so the list
+/// function is drawn directly, against a real description, and must not panic.
+#[test]
+fn the_flexray_tab_lists_the_slots_a_script_can_read() {
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
+        assert!(
+            app.fr_db(0)
+                .expect("the bus has a description")
+                .slot_signals()
+                .iter()
+                .any(|(_, _, s)| !s.is_empty()),
+            "the bundled description offers nothing for the tab to list"
+        );
+    }
+    let a = &mut app;
+    for _ in 0..3 {
+        let ui = ctx.frame();
+        ui.window("fr tab probe")
+            .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
+            .build(|| crate::ui::script_editor::fr_tab(a, ui, 0));
+        let _ = ctx.render_legacy();
+    }
+    // Empty on purpose too: the tab has to say why it is empty rather than
+    // render a blank panel when no description is loaded.
+    let mut bare = App::headless();
+    let b = &mut bare;
+    let ui = ctx.frame();
+    ui.window("fr tab bare")
+        .size([320.0, 200.0], dear_imgui_rs::Condition::Always)
+        .build(|| crate::ui::script_editor::fr_tab(b, ui, 0));
+    let _ = ctx.render_legacy();
+}
+
 /// The Buses window's FlexRay section is a list now: two watched clusters,
 /// each with its own row, its own parked marker and its own detach, above the
 /// combo that offers only the channels still free. Drawing it is the point --

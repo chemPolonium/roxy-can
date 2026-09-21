@@ -565,9 +565,10 @@ fn left_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     }
 }
 
-/// The right column: insertable functions, system variables and every
-/// message the bus's databases declare -- click one to push it into the
-/// source at the editor cursor.
+/// The right column: insertable functions, system variables, every message the
+/// bus's databases declare, and the FlexRay signals the loaded cluster
+/// descriptions decode -- click one to push it into the source at the editor
+/// cursor.
 fn palette_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
         return;
@@ -586,6 +587,11 @@ fn palette_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
         ui.child_window(format!("##esbscroll{id}b"))
             .size([0.0, 0.0])
             .build(ui, || bus_tab(app, ui, id, node));
+    }
+    if let Some(_t) = ui.tab_item("FlexRay") {
+        ui.child_window(format!("##esbscroll{id}r"))
+            .size([0.0, 0.0])
+            .build(ui, || fr_tab(app, ui, id));
     }
 }
 
@@ -667,12 +673,23 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
             }
         }
     }
+}
 
-    // The FlexRay side of the same convenience. `fr_sig` takes a cluster index,
-    // a slot and a signal name, and none of the three is something a script
-    // author should have to look up in another window -- the list comes from the
-    // loaded descriptions, each slot named alongside the frame scheduled in it,
-    // since one slot is held by several frames in turn.
+/// The FlexRay signals every loaded cluster description offers to read.
+/// `fr_sig` takes a cluster index, a slot and a signal name, and none of the
+/// three is something a script author should have to look up in another window
+/// -- so the list carries them: one group per slot, named alongside the frame
+/// scheduled in it, since one slot is held by several frames in turn.
+///
+/// Its own tab rather than a section under 函数: it is a list of *this
+/// project's* signals, like 报文 is for CAN, and it is the long one -- a real
+/// cluster has hundreds of slots, and burying that under the templates pushed
+/// the templates off the panel.
+///
+/// `pub(crate)` for the smoke test only: a tab body draws just while its tab is
+/// selected, which no headless frame can arrange, so the list is drawn directly
+/// the way the siglist probe draws its table.
+pub(crate) fn fr_tab(app: &mut App, ui: &Ui, id: u64) {
     let fr_items: Vec<(u8, u16, String, Vec<String>)> = app
         .fr_buses
         .iter()
@@ -683,18 +700,18 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
                 .map(move |(slot, frame, sigs)| (*bus, slot, frame, sigs))
         })
         .collect();
-    if !fr_items.is_empty() {
-        ui.separator();
-        ui.text_disabled("FlexRay 信号（读）");
-        for (bus, slot, frame, sigs) in &fr_items {
-            ui.text_disabled(format!("FR{bus} slot {slot} · {frame}"));
-            for sig in sigs {
-                if ui
-                    .selectable_config(format!("  {sig}##frsig{bus}_{slot}_{frame}_{sig}"))
-                    .build()
-                {
-                    insert(app, id, &format!("fr_sig({bus}, {slot}, \"{sig}\")"));
-                }
+    if fr_items.is_empty() {
+        ui.text_disabled("（未加载 FlexRay 集群描述）");
+        return;
+    }
+    for (bus, slot, frame, sigs) in &fr_items {
+        ui.text_disabled(format!("FR{bus} slot {slot} · {frame}"));
+        for sig in sigs {
+            if ui
+                .selectable_config(format!("  {sig}##frsig{bus}_{slot}_{frame}_{sig}"))
+                .build()
+            {
+                insert(app, id, &format!("fr_sig({bus}, {slot}, \"{sig}\")"));
             }
         }
     }

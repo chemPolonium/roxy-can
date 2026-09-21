@@ -178,15 +178,18 @@ fn fr_buses(app: &App) -> Vec<u8> {
     buses
 }
 
-/// One FlexRay cluster as a tree section: the schedule its description declares
-/// -- cluster timing, the ECUs on it, and every frame with the slot, cycle phase
-/// and channel it is scheduled in, annotated with what has actually arrived.
+/// One FlexRay cluster as a tree section: which cluster this is, and the ECUs
+/// its description declares. Nothing else -- the schedule (which frame holds
+/// which slot in which cycle phase, with what repetition) is a different tool's
+/// job, the same split as CANoe against a FIBEX/ARXML editor: this view answers
+/// "who is on this bus", and a copy of the schedule here would be a worse,
+/// staler duplicate of the document. What has actually arrived is in
+/// Trace/Messages, the declared timing behind the occupancy figure in Bus
+/// Statistics.
 ///
 /// It is a declaration view, not an editor: a FlexRay node has no role to set
 /// and no generator row until the bus can transmit, so nothing here pretends
-/// otherwise. The groups open by default, as the CAN sections do -- the point of
-/// the view is to see what is on the bus without hunting through clicks; only
-/// one frame's signal list stays collapsed.
+/// otherwise. The ECU group opens by default, as the CAN sections do.
 fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
     let label = match app.fr_db(bus) {
         Some(db) => format!("FR{bus} · {}", db.params.name),
@@ -202,41 +205,31 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
             .get(&bus)
             .map_or(0, |l| l.frames);
         ui.text_disabled(if seen > 0 {
-            "该路在收帧，但没有集群描述：槽、周期与信号无从显示"
+            "该路在收帧，但没有集群描述：ECU 与帧归属无从显示"
         } else {
             "该路已配置，尚无帧到达，也没有集群描述"
         });
         return;
     };
-    // The cluster's own timing, which is also what the occupancy figure divides
-    // by -- stated here so a load number can be checked against it by hand.
-    let slot_us = crate::load::fr_slot_wire_us(&db.params);
-    ui.text_disabled(format!(
-        "{} kbit/s · 宏周期 {:.2} ms · 静态槽 {} × {} · 静态载荷 {} B",
-        db.params.speed_kbps,
-        db.params.cycle_time_ms,
-        db.params.number_of_static_slots,
-        slot_us
-            .map(|v| format!("{v:.2} µs"))
-            .unwrap_or_else(|| "槽时长未声明".to_string()),
-        db.params.payload_length_static,
-    ));
-
-    // `if let`, not `let else { return }`: a collapsed group must not hide the
-    // groups after it.
-    // How many frames each ECU is the declared sender of -- counted once here
-    // because the frame rows below want the same answer per frame, and looking
-    // it up twice per row re-walks the bindings for nothing.
-    let mut tx_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let senders: Vec<Option<&str>> = (0..db.frames.len()).map(|i| db.frame_sender(i)).collect();
-    for s in senders.iter().flatten() {
-        *tx_counts.entry(s).or_insert(0) += 1;
+    if db.ecus.is_empty() {
+        // An empty ECU list is a property of the document, not of the session:
+        // a cluster export carries no ECUs at all (both bundled FIBEX files are
+        // one), and saying so beats a group that looks like it failed to load.
+        ui.text_disabled("描述未声明 ECU（集群参数导出里没有 ECUs 一节）");
+        return;
     }
-    if !db.ecus.is_empty()
-        && let Some(_e) = ui
-            .tree_node_config(format!("ECU ({})##frecu{bus}", db.ecus.len()))
-            .default_open(true)
-            .push()
+    // How many frames each ECU is the declared sender of -- an ECU attribute,
+    // so it stays; the frames themselves do not appear here.
+    let mut tx_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for ix in 0..db.frames.len() {
+        if let Some(s) = db.frame_sender(ix) {
+            *tx_counts.entry(s).or_insert(0) += 1;
+        }
+    }
+    if let Some(_e) = ui
+        .tree_node_config(format!("ECU ({})##frecu{bus}", db.ecus.len()))
+        .default_open(true)
+        .push()
     {
         for ecu in &db.ecus {
             // Only a non-zero count is printed: the description binding no frame
@@ -244,97 +237,6 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
             match tx_counts.get(ecu.as_str()) {
                 Some(n) => ui.bullet_text(format!("{ecu} · 发 {n} 帧")),
                 None => ui.bullet_text(ecu.as_str()),
-            }
-        }
-    }
-
-    // The schedule read the way a schedule is written: by slot, and within a
-    // slot by cycle phase. A flat list of the bundled cluster's 220 frames is
-    // both unreadable and the wrong index -- the question this view answers
-    // first is "what sits in slot 13", and a slot is held by several frames in
-    // turn, which grouping shows and a list hides.
-    let mut order: Vec<usize> = (0..db.frames.len()).collect();
-    order.sort_by_key(|&i| {
-        let t = db.frames[i].triggering;
-        (t.slot_id, t.base_cycle, t.channel as u8, i)
-    });
-    let mut groups: Vec<(u32, Vec<usize>)> = Vec::new();
-    for ix in order {
-        let slot = db.frames[ix].triggering.slot_id;
-        match groups.last_mut() {
-            Some((s, frames)) if *s == slot => frames.push(ix),
-            _ => groups.push((slot, vec![ix])),
-        }
-    }
-    // What has arrived, indexed by the frame rather than the slot: a count that
-    // mixed a slot's several occupants would belong to none of them.
-    let mut seen: std::collections::HashMap<usize, (u64, f64)> = std::collections::HashMap::new();
-    for a in app.snap.fr_aggs.iter().filter(|a| a.bus == bus) {
-        if let Some(ix) = a.occupant.frame_ix() {
-            seen.insert(ix, (a.count, a.cycle_us / 1000.0));
-        }
-    }
-    if let Some(_f) = ui
-        .tree_node_config(format!(
-            "帧 ({} 帧 / {} 槽)##frf{bus}",
-            db.frames.len(),
-            groups.len()
-        ))
-        .default_open(true)
-        .push()
-    {
-        for (slot, frames) in &groups {
-            // Liveness at the slot level, so a collapsed row still says whether
-            // anything is coming through this slot at all.
-            let total: u64 = frames
-                .iter()
-                .map(|ix| seen.get(ix).map_or(0, |(c, _)| *c))
-                .sum();
-            let head = if total > 0 {
-                format!("slot {slot} · {} 帧 · 收到 {total}", frames.len())
-            } else {
-                format!("slot {slot} · {} 帧 · 静默", frames.len())
-            };
-            if let Some(_s) = ui.tree_node_config(format!("{head}##frslot{bus}_{slot}")).push() {
-                for &ix in frames {
-                    let f = &db.frames[ix];
-                    let t = f.triggering;
-                    // The frame name leads the row: it is what identifies it, and
-                    // the tree panel is narrow enough that whatever sits behind
-                    // the name gets clipped.
-                    let name = if f.name.is_empty() {
-                        format!("槽{slot}帧{ix}")
-                    } else {
-                        f.name.clone()
-                    };
-                    let live = match seen.get(&ix) {
-                        Some((c, cycle)) if *c >= 2 => format!(" · {c} 帧 ~{cycle:.1} ms"),
-                        Some((c, _)) => format!(" · {c} 帧"),
-                        None => " · 未收到".to_string(),
-                    };
-                    // The declared sender, last: the name is what identifies the
-                    // row and this panel clips whatever falls off its right edge,
-                    // so the optional fact goes where losing it costs least. An
-                    // unbound frame prints nothing rather than a dash that would
-                    // read as "declared to have no sender".
-                    let who = match senders.get(ix).copied().flatten() {
-                        Some(s) => format!(" · 发送 {s}"),
-                        None => String::new(),
-                    };
-                    let leaf = format!(
-                        "{name} · 相 {}/{} · {} · {} B{who}{live}",
-                        t.base_cycle,
-                        t.cycle_repetition,
-                        t.channel.label(),
-                        f.length,
-                    );
-                    if let Some(_n) = ui.tree_node_config(format!("{leaf}##frframe{bus}_{ix}")).push()
-                    {
-                        for sig in db.signal_names(ix) {
-                            ui.bullet_text(sig.as_str());
-                        }
-                    }
-                }
             }
         }
     }
@@ -496,8 +398,8 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
 
                 // 左右分栏：左边树形拓扑，右边所选节点的详情。两栏各自
-                // 滚动——树的长度与详情的长度互不挤占。宽度要装得下
-                // FlexRay 的帧名行（名字打头，后面才是相位与载荷）。
+                // 滚动——树的长度与详情的长度互不挤占。宽度按树里最长的
+                // 一行取（DBC 节点名与 FlexRay 的 cluster 标题同一量级）。
                 const TREE_W: f32 = 320.0;
                 ui.child_window("net_tree")
                     .size([TREE_W, 0.0])
@@ -529,7 +431,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         if app.fr_buses.is_empty() && app.snap.fr_loads.is_empty() {
                             ui.text("no DBC nodes to display");
                         } else {
-                            ui.text("没有 DBC 节点；左侧的 FlexRay 集群展开即可看它的调度表");
+                            ui.text("没有 DBC 节点；左侧的 FlexRay 集群展开即可看它声明的 ECU");
                         }
                         return;
                     }
