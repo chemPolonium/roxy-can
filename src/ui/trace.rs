@@ -470,13 +470,45 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     w.row_ends = ends;
     w.rows = rows;
 
-    // The FlexRay row menu: the slot address and the payload, copied.
+    // The FlexRay row menu: what the row is, the window's own view narrowed to
+    // it, and the payload copied.
     if let Some(_p) = ui.begin_popup(format!("trace_fr_ctx{i}"))
         && let Some((pi, r)) = CTX_FR.lock().unwrap().clone()
         && pi == i
     {
-        ui.text(format!("FR slot {}.{}", r.slot, r.cycle));
+        // Identified the way the CAN menu identifies its row: the cluster, the
+        // address the table prints, and the name that table shows -- the
+        // description's, else the one the log carried.
+        let name = app.fr_row_name(&r).unwrap_or("-");
+        let addr = format!("{}.{}", r.slot, r.cycle);
+        ui.text(format!("FR{} slot {addr} · {name}", r.bus));
         ui.separator();
+        let label = format!("Watch FR{} slot {}", r.bus, r.slot);
+        if ui.menu_item(label.clone()) {
+            // The FlexRay twin of "Filter this ID", through the window's own
+            // pick set rather than the text box: a bare "13" in there also
+            // matches CAN id 13 and slot 113, while a `Pick::Fr` says which bus
+            // it means. Additive, not a replacement -- the window's other picks
+            // stay, so this can never quietly discard a curated selection.
+            let w = &mut app.trace_windows[i];
+            w.manual.insert(crate::workspace::Pick::Fr {
+                bus: r.bus,
+                slot: r.slot,
+            });
+            w.scope = SigScope::Manual;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text(format!(
+                "把这个槽加进本窗口的 Manual 选择并切到该作用域（已选的其他条目保留），只列出选中行：{label}"
+            ));
+        }
+        if ui.menu_item("Clear filter") {
+            let w = &mut app.trace_windows[i];
+            w.filter.clear();
+            w.dir = 0;
+            w.dbc_only = false;
+            w.scope = SigScope::All;
+        }
         let hex: String = r.payload.iter().map(|b| format!("{b:02X} ")).collect();
         if ui.menu_item("Copy payload") {
             crate::clipboard::Clipboard.set(hex.trim_end());
