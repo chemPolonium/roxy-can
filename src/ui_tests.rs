@@ -577,54 +577,61 @@ fn the_message_picker_offers_flexray_slots() {
     );
 }
 
-/// The Interactive Generator's FlexRay half: one entry per slot, with the same
-/// cycle dialog, payload box and signal handles a CAN row has. Drawing it is
-/// the point -- the two lists share the window, both modals and the draft state,
-/// so a colliding widget id or a row that only misbehaves when expanded shows up
-/// here rather than on the user's screen.
+/// A FlexRay ECU's generator panel in the Network detail: the same cycle dialog,
+/// payload box and signal handles a CAN node's panel has, reached by selecting
+/// the ECU in the tree. Drawing it is the point -- the two panels share the
+/// modals and the draft state, so a colliding widget id or a row that only
+/// misbehaves when expanded shows up here rather than on the user's screen.
 #[test]
-fn the_generator_window_draws_a_flexray_slot() {
+fn the_network_view_draws_a_flexray_generator_row() {
     use crate::app::GenRow;
     let _ui_lock = UI_LOCK.lock().unwrap();
     let mut ctx = harness();
     let mut app = App::headless();
     let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
-    let slot = 13;
-    app.add_fr_tx(0, slot);
-    app.settle();
-    assert_eq!(app.snap.fr_tx.len(), 1, "the slot has an entry");
-    let edit = app
+    // The slot and ECU the description itself pairs up -- an entry cannot exist
+    // for any other combination.
+    let (slot, ecu, edit) = app
         .fr_db(0)
-        .and_then(|db| db.frame_ix_of_slot(slot).and_then(|ix| db.edit_signals(ix).into_iter().next()));
-    if described {
-        assert!(
-            edit.is_some(),
-            "slot 13 of the bundled description carries no signal: the handles are not covered"
-        );
-    }
-    app.show_tx = true;
-    // Collapsed first, so the header line and the add rows draw.
+        .and_then(|db| {
+            (0..db.frames.len()).find_map(|ix| {
+                let ecu = db.frame_sender(ix).map(str::to_string)?;
+                let sig = db.edit_signals(ix).into_iter().next()?;
+                let slot = db.frame_index(ix)?.triggering.slot_id as u16;
+                Some((slot, ecu, sig))
+            })
+        })
+        .expect("the bundled description binds a slot with signals to a sending ECU");
+    assert!(described);
+    app.show_network = true;
+    app.net_fr_sel = Some((0, ecu.clone()));
     frames(&mut app, &mut ctx, 2);
+    app.add_fr_tx(0, slot);
     app.start_virtual();
+    app.settle();
+    assert_eq!(app.snap.fr_tx.len(), 1, "the Add line built the entry");
+    assert_eq!(app.snap.fr_tx[0].node, ecu, "under the ECU that owns it");
     app.set_fr_tx_active(0, slot, true);
     app.send(crate::bus::BusCommand::SendFrNow { bus: 0, slot });
+    let mid = edit.offset + edit.factor;
+    app.pin_gen_signal(GenRow::Fr(0), &edit.name, mid);
+    app.set_gen_source(
+        GenRow::Fr(0),
+        crate::sim::ValueSrc::new(
+            &edit.name,
+            crate::sim::SrcKind::Sine,
+            edit.offset,
+            edit.offset + edit.factor * 10.0,
+        ),
+    );
     app.settle();
-    if let Some(e) = &edit {
-        let mid = e.min + (e.max - e.min) / 2.0;
-        app.pin_gen_signal(GenRow::Fr(0), &e.name, mid);
-        app.set_gen_source(
-            GenRow::Fr(0),
-            crate::sim::ValueSrc::new(&e.name, crate::sim::SrcKind::Sine, e.min, e.max),
-        );
-        app.settle();
-        // The row's expanded body, the cycle dialog and the params dialog, all
-        // pointing at the FlexRay row.
-        app.tx_cycle_edit = Some(GenRow::Fr(0));
-        app.tx_cycle_buf = "5".to_string();
-        app.src_edit = Some((GenRow::Fr(0), e.name.clone()));
-        app.src_draft = app.gen_source(GenRow::Fr(0), &e.name);
-        app.src_seq_buf = "0, 1".to_string();
-    }
+    // The row's expanded body, the cycle dialog and the params dialog, all
+    // pointing at the FlexRay row.
+    app.tx_cycle_edit = Some(GenRow::Fr(0));
+    app.tx_cycle_buf = "5".to_string();
+    app.src_edit = Some((GenRow::Fr(0), edit.name.clone()));
+    app.src_draft = app.gen_source(GenRow::Fr(0), &edit.name);
+    app.src_seq_buf = format!("{}, {}", edit.offset, edit.offset + edit.factor * 10.0);
     frames(&mut app, &mut ctx, 3);
     // What this harness can prove: the row's commands were accepted and came
     // back in the snapshot, and both dialogs drew over a FlexRay row (they

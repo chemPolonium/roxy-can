@@ -1378,8 +1378,10 @@ fn export_trace_writes_parseable_asc() {
 
 /// A mixed log: one CAN frame and one FlexRay row per 2 ms step, the row a
 /// millisecond after its frame. Both sides therefore have `rows` arrivals at a
-/// 2 ms cadence, and the file's line order interleaves the two buses.
-fn write_mixed_fr_asc(name: &str, rows: u64) -> std::path::PathBuf {
+/// 2 ms cadence, and the file's line order interleaves the two buses. The
+/// FlexRay slot is the caller's, so a test can put the traffic where its own
+/// description says a frame belongs.
+fn write_mixed_fr_asc(name: &str, rows: u64, slot: u16) -> std::path::PathBuf {
     use crate::trace::FrRow;
     let path = std::env::temp_dir()
         .join(format!("{name}_{}.asc", std::process::id()));
@@ -1401,7 +1403,7 @@ fn write_mixed_fr_asc(name: &str, rows: u64) -> std::path::PathBuf {
             bus: 0,
             t_us: i * 2_000 + 1_000,
             ab: 0,
-            slot: 13,
+            slot,
             cycle: i as u8,
             payload: vec![0xF0, i as u8],
             header_crc: 0,
@@ -1431,7 +1433,7 @@ fn replay_to_the_end(app: &mut App, path: &std::path::Path) {
 #[test]
 fn the_trace_export_carries_flexray_rows() {
     let mut app = App::headless();
-    let src = write_mixed_fr_asc("roxy_can_export_fr_in", 4);
+    let src = write_mixed_fr_asc("roxy_can_export_fr_in", 4, 13);
     replay_to_the_end(&mut app, &src);
     assert_eq!(app.snap.fr_trace.len(), 4, "the replay fed the FR ring");
 
@@ -1456,7 +1458,7 @@ fn the_trace_export_carries_flexray_rows() {
 #[test]
 fn the_statistics_window_lists_flexray_slots() {
     let mut app = App::headless();
-    let src = write_mixed_fr_asc("roxy_can_stats_fr_in", 4);
+    let src = write_mixed_fr_asc("roxy_can_stats_fr_in", 4, 13);
     replay_to_the_end(&mut app, &src);
     std::fs::remove_file(&src).ok();
 
@@ -7345,7 +7347,7 @@ fn replaying_a_flexray_log_drives_the_slot_handlers() {
             .to_string(),
     });
     app.settle();
-    let src = write_mixed_fr_asc("roxy_can_fr_handler", 4);
+    let src = write_mixed_fr_asc("roxy_can_fr_handler", 4, 13);
     replay_to_the_end(&mut app, &src);
     let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
     assert!(!node.errored, "the handler ran clean: {:?}", node.log);
@@ -7374,30 +7376,37 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let db = crate::fr_db::FrDb::parse(&read_fr_asset(arxml)).expect("parses");
-    // The first slot the schedule names that carries a signal, with the period
-    // the schedule promises for it -- stated from the asset, not from the code
-    // under test, so the assertion means "as declared" rather than "as computed".
-    let (slot, sig, declared_us) = db
-        .scheduled_slots()
-        .iter()
-        .find_map(|(slot, _)| {
-            let ix = db.frame_ix_of_slot(*slot)?;
-            let first = db.edit_signals(ix).into_iter().next()?;
+    // The first slot the ECU bindings give a sender to *and* that carries a
+    // signal: what a generator entry can exist for at all. The period comes from
+    // the asset rather than from the code under test, so the assertion below
+    // means "as declared" and not "as computed".
+    let (slot, ecu, sig, declared_us) = (0..db.frames.len())
+        .find_map(|ix| {
+            let ecu = db.frame_sender(ix).map(str::to_string)?;
             let f = db.frame_index(ix)?;
+            // Wide enough that the raw numbers below are all representable.
+            let sig = db
+                .edit_signals(ix)
+                .into_iter()
+                .find(|s| s.size >= 4)?;
             let rep = f.triggering.cycle_repetition.max(1) as u64;
             Some((
-                *slot,
-                first,
+                f.triggering.slot_id as u16,
+                ecu,
+                sig,
                 (db.params.cycle_time_ms * rep as f64 * 1_000.0).round() as u64,
             ))
         })
-        .expect("the asset schedules a slot that carries signals");
+        .expect("the asset binds a slot with a wide enough signal to a sending ECU");
     let sig_name = sig.name.clone();
-    // Values stated in units of the signal's own step, so they are exactly
-    // representable whatever the coding's declared range happens to say (this
-    // asset's CarSpeed declares no min/max at all).
-    let step = sig.factor.abs().max(1e-9);
-    let (want, one_lsb) = (sig.min + step * 5.0, step * 1.5);
+    // Values named in raw code words and converted with the signal's own
+    // encoding, so every one of them is exactly representable whatever the
+    // coding's factor, offset, sign or declared range says.
+    let phys = |raw: u64| {
+        crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset)
+    };
+    let (lo, hi, want) = (phys(0), phys(10), phys(5));
+    let one_lsb = (phys(1) - phys(0)).abs() * 1.5;
     assert!(declared_us > 0, "the cluster declares a cycle time");
     let db = std::sync::Arc::new(db);
     app.fr_buses.insert(
@@ -7413,6 +7422,10 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     app.add_fr_tx(0, slot);
     app.settle();
     assert_eq!(app.snap.fr_tx.len(), 1, "one entry for the slot");
+    assert_eq!(
+        app.snap.fr_tx[0].node, ecu,
+        "the entry belongs to the ECU the description names as the sender"
+    );
     assert_eq!(
         app.snap.fr_tx[0].cycle_us, declared_us,
         "the entry starts on the schedule's own period"
@@ -7478,7 +7491,6 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     // the source's value at that frame's stamp, laid over the base bytes the pin
     // just wrote. A Step over the slot's period hits both ends of its range, so
     // the set of values read back is exactly {lo, hi} -- never the pinned one.
-    let (lo, hi) = (sig.min, sig.min + step * 10.0);
     let mut src = crate::sim::ValueSrc::new(&sig_name, crate::sim::SrcKind::Step, lo, hi);
     // Four slot periods end to end: sampled once per slot period, the wave
     // would otherwise land on the same phase every frame and read as a
@@ -7518,24 +7530,52 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     app.stop();
 }
 
+/// Puts the bundled ARXML on bus 0 the way the Buses window does, and returns
+/// the first slot its ECU bindings give a sender to together with that ECU's
+/// name -- the only kind of slot a generator entry can be built for.
+fn fr_bound_slot(app: &mut App) -> (u16, String) {
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let db = crate::fr_db::FrDb::parse(&read_fr_asset(arxml)).expect("parses");
+    let found = (0..db.frames.len()).find_map(|ix| {
+        let ecu = db.frame_sender(ix).map(str::to_string)?;
+        db.edit_signals(ix).into_iter().next()?;
+        Some((db.frame_index(ix)?.triggering.slot_id as u16, ecu))
+    });
+    let (slot, ecu) = found.expect("the asset binds a slot with signals to a sending ECU");
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.settle();
+    (slot, ecu)
+}
+
 /// A FlexRay entry whose description went away keeps filling its slot with the
-/// bytes it holds: the entry is the user's, and losing the file that named its
-/// signals must not silently delete the stimulus they built. The row says so
-/// rather than showing an empty signal list.
+/// bytes it holds and keeps its ECU row: the entry is the user's, and losing the
+/// file that named its signals must neither delete the stimulus they built nor
+/// hide it behind a tree the document no longer supports. The row says what is
+/// missing instead of showing an empty signal list.
 #[test]
 fn a_flexray_entry_outlives_the_description_it_came_from() {
     let mut app = quiet_app();
-    let slot = 13;
+    let (slot, ecu) = fr_bound_slot(&mut app);
     app.add_fr_tx(0, slot);
-    app.settle();
-    assert_eq!(app.snap.fr_tx.len(), 1);
-    assert!(
-        app.snap.fr_tx[0].undescribed,
-        "no description on bus 0, so nothing decodes this slot"
-    );
     app.set_fr_tx_hex(0, slot, "11 22 33");
     app.set_fr_tx_cycle(0, slot, 10_000);
     app.set_fr_tx_active(0, slot, true);
+    app.settle();
+    assert_eq!(app.snap.fr_tx.len(), 1, "the entry was built from a slot");
+    app.forget_cluster_description(0);
+    app.settle();
+    assert!(
+        app.snap.fr_tx[0].undescribed,
+        "nothing decodes the slot any more, and the row says so"
+    );
+    assert_eq!(app.snap.fr_tx[0].node, ecu, "and it is still the same row");
     app.start_virtual();
     app.settle();
     for n in 1..=2u64 {
@@ -7552,27 +7592,71 @@ fn a_flexray_entry_outlives_the_description_it_came_from() {
     app.stop();
 }
 
+/// Which node sends which frame is what the FIBEX/ARXML declares, and the
+/// generator does not clean up after a document that fails to: a slot whose
+/// frame no ECU is bound to gets no entry at all, and the status line names the
+/// missing fact. The same for a bus with no description -- no invented owner,
+/// no floating row to be edited somewhere off the tree.
+#[test]
+fn a_flexray_slot_the_description_leaves_unowned_gets_no_entry() {
+    let mut app = App::headless();
+    app.add_fr_tx(3, 13);
+    app.settle();
+    assert!(
+        app.snap.fr_tx.is_empty(),
+        "nothing owns the slot, so nothing was added"
+    );
+    assert!(app.status.contains("没有集群描述"), "{}", app.status);
+
+    let (bound, _ecu) = fr_bound_slot(&mut app);
+    let unowned = {
+        let db = app.fr_db(0).expect("installed above");
+        (0..db.frames.len())
+            .find_map(|ix| {
+                if db.frame_sender(ix).is_some() {
+                    return None;
+                }
+                Some(db.frame_index(ix)?.triggering.slot_id as u16)
+            })
+            .expect("the asset leaves some frames unbound")
+    };
+    assert_ne!(unowned, bound, "the test needs both kinds of slot");
+    app.add_fr_tx(0, unowned);
+    app.settle();
+    assert!(app.snap.fr_tx.is_empty(), "an unowned slot gets no entry");
+    assert!(
+        app.status.contains("没有说明") && app.status.contains(&format!("slot {unowned}")),
+        "{}",
+        app.status
+    );
+}
+
 /// The same standing-down rule the CAN generator follows while a log is being
 /// replayed: if the replayed traffic carries this slot, a second sender of the
 /// same signals would mix two values into every curve, count and verdict.
 #[test]
 fn a_generated_slot_stands_down_while_the_replayed_log_carries_it() {
     let mut app = quiet_app();
-    app.add_fr_tx(0, 13);
+    let (slot, _ecu) = fr_bound_slot(&mut app);
+    app.add_fr_tx(0, slot);
+    app.set_fr_tx_cycle(0, slot, 1_000);
+    app.set_fr_tx_active(0, slot, true);
     app.settle();
-    app.set_fr_tx_cycle(0, 13, 1_000);
-    app.set_fr_tx_active(0, 13, true);
-    app.settle();
-    let src = write_mixed_fr_asc("roxy_can_fr_gen_mute", 4);
+    let src = write_mixed_fr_asc("roxy_can_fr_gen_mute", 4, slot);
     replay_to_the_end(&mut app, &src);
     assert!(app.snap.fr_tx[0].muted, "the row says why it is quiet");
-    let agg = app
+    // Summed over the slot's occupants: with a description loaded, the tally
+    // splits the log's four arrivals by which frame the schedule puts in the
+    // slot at each cycle -- which is exactly what a generator adding frames of
+    // its own would have inflated.
+    let total: u64 = app
         .fr_aggs
         .values()
-        .find(|a| a.bus == 0 && a.slot == 13)
-        .expect("the log's own arrivals are tallied");
+        .filter(|a| a.bus == 0 && a.slot == slot)
+        .map(|a| a.count)
+        .sum();
     assert_eq!(
-        agg.count, 4,
+        total, 4,
         "only the log's four frames, not four plus a generator each millisecond"
     );
     std::fs::remove_file(&src).ok();

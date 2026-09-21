@@ -215,10 +215,13 @@ pub enum BusCommand {
     /// The FlexRay twin of the entry commands above, keyed by `(bus, slot)`:
     /// one entry per slot per cluster, the same identity a window's hand-picked
     /// set and `fr_sig` use. A slot is addressed, not identified by a message
-    /// id, so the two keying spaces stay apart.
+    /// id, so the two keying spaces stay apart. `node` is the ECU the frontend
+    /// resolved from the description as this frame's sender -- the grouping the
+    /// Network tree edits under.
     AddFrEntry {
         bus: u8,
         slot: u16,
+        node: String,
     },
     /// Drop the entry, payload, sources and schedule with it.
     RemoveFrEntry {
@@ -814,6 +817,9 @@ pub struct FrTxView {
     pub bus: u8,
     pub slot: u16,
     pub name: String,
+    /// The ECU the description declares as this frame's sender; the Network
+    /// window lists the row under it, as a CAN row sits under its transmitter.
+    pub node: String,
     pub active: bool,
     pub cycle_us: u64,
     /// Base payload as hex text -- what the row's box edits.
@@ -1471,7 +1477,7 @@ impl BusCore {
             BusCommand::PinEntrySignal { ch, id, name, phys } => {
                 self.pin_entry_signal(ch, id, &name, phys);
             }
-            BusCommand::AddFrEntry { bus, slot } => self.add_fr_entry(bus, slot),
+            BusCommand::AddFrEntry { bus, slot, node } => self.add_fr_entry(bus, slot, node),
             BusCommand::RemoveFrEntry { bus, slot } => {
                 self.fr_tx_list.retain(|t| !(t.bus == bus && t.slot == slot));
             }
@@ -2570,6 +2576,7 @@ impl BusCore {
                         bus: t.bus,
                         slot: t.slot,
                         name: t.name.clone(),
+                        node: t.node.clone(),
                         active: t.active,
                         cycle_us: t.cycle_us,
                         data_text: t.data_text.clone(),
@@ -3392,11 +3399,13 @@ impl BusCore {
         true
     }
 
-    /// Adds the FlexRay generator entry `(bus, slot)` unless it exists. Name,
-    /// payload length and period come from that bus's cluster description when it
-    /// schedules a frame for the slot; with no description the entry is a
-    /// byte-level filler for the slot and starts on the default period.
-    fn add_fr_entry(&mut self, bus: u8, slot: u16) {
+    /// Adds the FlexRay generator entry `(bus, slot)` for `node`, unless it
+    /// exists. The caller -- the frontend, which owns the cluster names -- has
+    /// already resolved which ECU the description declares as the frame's
+    /// sender, because that is the question the Network tree groups by. Name,
+    /// payload length and period come from the description when this bus has one
+    /// here; without it the entry is the raw filler its row says it is.
+    fn add_fr_entry(&mut self, bus: u8, slot: u16, node: String) {
         if self.fr_tx_list.iter().any(|t| t.bus == bus && t.slot == slot) {
             return;
         }
@@ -3425,6 +3434,7 @@ impl BusCore {
             bus,
             slot,
             name,
+            node,
             data_text: crate::generator::hex_of(&data),
             len,
             data,

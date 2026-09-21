@@ -345,6 +345,11 @@ pub struct App {
     /// the second click within the session deletes the file.
     pub profile_delete_arm: bool,
     pub net_selected: usize,
+    /// The FlexRay ECU the Network detail pane is showing: `(cluster index,
+    /// ECU name)`. Kept apart from `net_selected` on purpose -- a DBC node index
+    /// and a cluster's ECU are different things in different numbering spaces,
+    /// and only one of them owns the detail pane at a time.
+    pub net_fr_sel: Option<(u8, String)>,
     pub tx_pick: usize,
     /// Which slot the FlexRay add line's combo is pointing at, per 路. Session
     /// state, like `tx_pick`.
@@ -567,6 +572,7 @@ impl App {
             profile_draft_name: String::new(),
             profile_delete_arm: false,
             net_selected: 0,
+            net_fr_sel: None,
             tx_pick: 0,
             fr_tx_pick: Default::default(),
             gen_add_buf: None,

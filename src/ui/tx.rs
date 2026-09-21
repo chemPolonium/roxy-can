@@ -191,8 +191,6 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
 
             let tx = app.snap.tx.clone();
             render_rows(app, ui, &tx, &kinds, &Scope::Unassigned);
-            ui.separator();
-            fr_section(app, ui, &kinds);
         });
     open
 }
@@ -617,31 +615,64 @@ fn row_index(row: GenRow) -> usize {
     }
 }
 
-/// The FlexRay half of the Interactive Generator. A FlexRay frame is addressed
-/// by slot, so the add line offers the slots the 路's schedule knows about
-/// instead of a typed number: a slot nothing describes decodes as nothing, and
-/// the row would have no name and no signal handle to offer.
-fn fr_section(app: &mut App, ui: &Ui, kinds: &[String]) {
-    ui.text_disabled("FlexRay（端口只收：这些帧进入本会话，不上线缆）");
-    let buses: Vec<u8> = app.fr_buses.keys().copied().collect();
-    if buses.is_empty() {
-        ui.text_disabled("（未加载集群描述，无槽可选：先在 Buses 窗口给这路 Open 一份描述）");
+/// One FlexRay ECU's generator panel, in the Network detail: the frames the
+/// description binds to this ECU as its sender, this node's entries, and the
+/// same row controls a CAN node's panel has. Grouping by sender is the whole
+/// point -- which node owns which frame is what the FIBEX/ARXML declares, so
+/// what it does not declare gets no entry anywhere rather than a floating one
+/// the tool would have to invent an owner for.
+///
+/// No role switch either: a role is the DBC node's gate and the FlexRay side has
+/// none, so the entry's own On is the only switch (besides the replay's MUTE).
+pub fn render_fr_ecu_generator(app: &mut App, ui: &Ui, bus: u8, ecu: &str) {
+    let kinds = kind_labels();
+    let all = app.snap.fr_tx.clone();
+    let mine: Vec<(usize, crate::bus::FrTxView)> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.bus == bus && t.node == ecu)
+        .map(|(i, t)| (i, t.clone()))
+        .collect();
+    let active_n = mine.iter().filter(|(_, t)| t.active).count();
+    ui.text(format!("生成器：{active_n}/{} 发送中", mine.len()));
+    if ui.is_item_hovered() {
+        ui.tooltip_text("端口只收：这些帧进入本会话（Trace、统计、规格、脚本、录制），不上线缆。");
     }
-    for bus in buses {
-        let slots = match app.fr_db(bus) {
-            Some(db) => db.scheduled_slots(),
-            None => Vec::new(),
-        };
-        ui.same_line();
-        ui.text(app.fr_bus_name(bus));
-        ui.same_line();
-        if slots.is_empty() {
-            ui.text_disabled("（描述里没有调度的槽）");
-            continue;
+    ui.separator();
+
+    // Add: the slots this ECU is the declared sender of.
+    let mut slots: Vec<(u16, String)> = Vec::new();
+    if let Some(db) = app.fr_db(bus) {
+        for ix in 0..db.frames.len() {
+            if db.frame_sender(ix) != Some(ecu) {
+                continue;
+            }
+            let Some(f) = db.frame_index(ix) else {
+                continue;
+            };
+            let slot = f.triggering.slot_id as u16;
+            let label = if f.name.is_empty() {
+                format!("slot{slot}")
+            } else {
+                f.name.clone()
+            };
+            match slots.iter_mut().find(|(s, _)| *s == slot) {
+                Some((_, names)) => {
+                    if !names.split('/').any(|n| n == label) {
+                        names.push('/');
+                        names.push_str(&label);
+                    }
+                }
+                None => slots.push((slot, label)),
+            }
         }
+    }
+    if slots.is_empty() {
+        ui.text_disabled("描述没有把这路里的任何帧绑定给这个 ECU 发送：这里没有可加的条目");
+    } else {
         let labels: Vec<String> = slots
             .iter()
-            .map(|(slot, frames)| format!("slot {slot}  {}", frames.join("/")))
+            .map(|(slot, names)| format!("slot {slot}  {names}"))
             .collect();
         let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
         let mut pick = app
@@ -659,158 +690,158 @@ fn fr_section(app: &mut App, ui: &Ui, kinds: &[String]) {
             app.add_fr_tx(bus, slots[pick].0);
         }
     }
-    let rows = app.snap.fr_tx.clone();
-    render_fr_rows(app, ui, &rows, kinds);
-}
-
-/// One row per FlexRay slot entry: the same ON/OFF/MUTE scan, the same cycle
-/// dialog, payload box and signal handles a CAN row has. The widget ids are
-/// prefixed -- both lists live in one window, and `On##3` cannot mean two rows.
-fn render_fr_rows(app: &mut App, ui: &Ui, rows: &[crate::bus::FrTxView], kinds: &[String]) {
-    let query = app.gen_search.trim().to_ascii_lowercase();
     let mut remove: Option<(u8, u16)> = None;
-    for (i, view) in rows.iter().enumerate() {
-        let (bus, slot) = (view.bus, view.slot);
-        let bus_name = app.fr_bus_name(bus);
-        let hay = format!("{bus_name} slot {slot} {}", view.name).to_ascii_lowercase();
-        if !query.is_empty() && !hay.contains(&query) {
-            continue;
+    for (i, view) in &mine {
+        if let Some(key) = fr_row(app, ui, *i, view, &kinds) {
+            remove = Some(key);
         }
-        let (chip, color, hint) = if !view.active {
-            (
-                "OFF",
-                [0.55, 0.58, 0.65, 1.0],
-                "未发送：条目生成开关未勾选。",
-            )
-        } else if view.muted {
-            (
-                "MUTE",
-                [1.0, 0.65, 0.2, 1.0],
-                "本次回放期间静音：日志里这一路本来就带这个槽的帧，再发一份会让同一条信号有两个发送者，混进每个视图。On 勾选框保持原样——退出回放后照常发车。",
-            )
-        } else {
-            (
-                "ON",
-                [0.4, 0.95, 0.5, 1.0],
-                "正在发出：条目已勾选，没有被任何机制抑制。端口只收，所以这些帧进的是本会话（Trace、统计、规格、脚本、录制），不是总线线缆。",
-            )
-        };
-        ui.text_colored(color, format!("{chip:<4}"));
-        if ui.is_item_hovered() {
-            ui.tooltip_text(hint);
-        }
-        ui.same_line();
-        let badge = if view.srcs.is_empty() {
-            String::new()
-        } else {
-            format!("  {} driven", view.srcs.len())
-        };
-        // `###` restarts imgui's id hash, so the badge and the frame name can
-        // change without collapsing the row out from under whoever edits it --
-        // the same reason the CAN header spells its identity that way.
-        let header =
-            format!("{bus_name}  slot {slot}  {}{badge}###frgen{bus}_{slot}", view.name);
-        if !ui.collapsing_header(header, TreeNodeFlags::empty()) {
-            continue;
-        }
-        ui.indent();
-        let mut act = view.active;
-        if ui.checkbox(format!("On##fron{i}"), &mut act) {
-            app.send(crate::bus::BusCommand::SetFrEntryActive {
-                bus,
-                slot,
-                on: act,
-            });
-        }
-        ui.same_line();
-        let cycle = view.cycle_us;
-        let cyc = if cycle == 0 {
-            "event".to_string()
-        } else {
-            format!("{} ms", cycle / 1000)
-        };
-        if ui.button_with_size(format!("{cyc}##frcyc{i}"), [84.0, 0.0]) {
-            app.tx_cycle_edit = Some(GenRow::Fr(i));
-            app.tx_cycle_buf = (cycle / 1000).to_string();
-        }
-        ui.same_line();
-        if ui.button(format!("Send now##frnow{i}")) {
-            app.send(crate::bus::BusCommand::SendFrNow { bus, slot });
-        }
-        // Only when the two disagree, exactly like the CAN row's button: one
-        // click puts the slot back on the period its own schedule declares
-        // after a bout of experimenting.
-        let off = app.fr_declared_period_us(bus, slot).filter(|d| *d != cycle);
-        if let Some(declared) = off {
-            ui.same_line();
-            let label = if declared == 0 {
-                "描述 event".to_string()
-            } else {
-                format!("描述 {}ms", declared / 1000)
-            };
-            if ui.button(format!("{label}##frdbc{i}")) {
-                app.send(crate::bus::BusCommand::SetFrEntryCycle {
-                    bus,
-                    slot,
-                    cycle_us: declared,
-                });
-            }
-        }
-        ui.same_line();
-        if ui.button(format!("x##frrm{i}")) {
-            remove = Some((bus, slot));
-        }
-        let sigs: Vec<SigRow> = app
-            .fr_db(bus)
-            .and_then(|db| Some((db, db.frame_ix_of_slot(slot)?)))
-            .map(|(db, ix)| db.edit_signals(ix).into_iter().map(SigRow::from).collect())
-            .unwrap_or_default();
-        if sigs.is_empty() {
-            // Nothing describes this slot's payload, so the bytes are the whole
-            // edit -- the same rule as a CAN message with no DBC signals.
-            let editing = matches!(&app.fr_data_edit, Some((r, _)) if *r == i);
-            let mut buf = match &app.fr_data_edit {
-                Some((r, s)) if *r == i => s.clone(),
-                _ => view.data_text.clone(),
-            };
-            ui.set_next_item_width(260.0);
-            ui.input_text(format!("##frdata{i}"), &mut buf).build();
-            if ui.is_item_active() {
-                app.fr_data_edit = Some((i, buf.clone()));
-            }
-            if ui.is_item_deactivated_after_edit() {
-                app.fr_data_edit = None;
-                app.send(crate::bus::BusCommand::SetFrEntryHex {
-                    bus,
-                    slot,
-                    text: buf,
-                });
-            } else if editing && !ui.is_item_active() {
-                app.fr_data_edit = None;
-            }
-        } else {
-            ui.text_disabled(&view.sent_text);
-        }
-        if view.undescribed {
-            ui.text_disabled("该路没有集群描述、或描述未调度这个槽：载荷按原样发出，无人解码它。");
-        }
-        signal_rows(
-            app,
-            ui,
-            GenRow::Fr(i),
-            "f",
-            kinds,
-            RowSignals {
-                sigs: &sigs,
-                data: &view.sent_data,
-                srcs: &view.srcs,
-            },
-        );
-        ui.unindent();
     }
     if let Some((bus, slot)) = remove {
         app.send(crate::bus::BusCommand::RemoveFrEntry { bus, slot });
     }
+}
+
+/// One FlexRay slot entry: the ON/OFF/MUTE header a CAN row has, then On, the
+/// cycle dialog's button, Send now, the payload, and the signal handles. The
+/// header's identity is `###`-suffixed with `(bus, slot)` so a changing badge or
+/// frame name cannot collapse the row mid-edit.
+fn fr_row(
+    app: &mut App,
+    ui: &Ui,
+    i: usize,
+    view: &crate::bus::FrTxView,
+    kinds: &[String],
+) -> Option<(u8, u16)> {
+    let (bus, slot) = (view.bus, view.slot);
+    let (chip, color, hint) = if !view.active {
+        (
+            "OFF",
+            [0.55, 0.58, 0.65, 1.0],
+            "未发送：条目生成开关未勾选。",
+        )
+    } else if view.muted {
+        (
+            "MUTE",
+            [1.0, 0.65, 0.2, 1.0],
+            "本次回放期间静音：日志里这一路本来就带这个槽的帧，再发一份会让同一条信号有两个发送者，混进每个视图。On 勾选框保持原样——退出回放后照常发车。",
+        )
+    } else {
+        (
+            "ON",
+            [0.4, 0.95, 0.5, 1.0],
+            "正在发出：条目已勾选，没有被任何机制抑制。端口只收，所以这些帧进的是本会话（Trace、统计、规格、脚本、录制），不是总线线缆。",
+        )
+    };
+    ui.text_colored(color, format!("{chip:<4}"));
+    if ui.is_item_hovered() {
+        ui.tooltip_text(hint);
+    }
+    ui.same_line();
+    let badge = if view.srcs.is_empty() {
+        String::new()
+    } else {
+        format!("  {} driven", view.srcs.len())
+    };
+    let header = format!("slot {slot}  {}{badge}###frgen{bus}_{slot}", view.name);
+    if !ui.collapsing_header(header, TreeNodeFlags::empty()) {
+        return None;
+    }
+    ui.indent();
+    let mut act = view.active;
+    if ui.checkbox(format!("On##fron{i}"), &mut act) {
+        app.send(crate::bus::BusCommand::SetFrEntryActive {
+            bus,
+            slot,
+            on: act,
+        });
+    }
+    ui.same_line();
+    let cycle = view.cycle_us;
+    let cyc = if cycle == 0 {
+        "event".to_string()
+    } else {
+        format!("{} ms", cycle / 1000)
+    };
+    if ui.button_with_size(format!("{cyc}##frcyc{i}"), [84.0, 0.0]) {
+        app.tx_cycle_edit = Some(GenRow::Fr(i));
+        app.tx_cycle_buf = (cycle / 1000).to_string();
+    }
+    ui.same_line();
+    if ui.button(format!("Send now##frnow{i}")) {
+        app.send(crate::bus::BusCommand::SendFrNow { bus, slot });
+    }
+    // Only when the two disagree, exactly like the CAN row's button: one click
+    // puts the slot back on the period its own schedule declares.
+    let off = app.fr_declared_period_us(bus, slot).filter(|d| *d != cycle);
+    if let Some(declared) = off {
+        ui.same_line();
+        let label = if declared == 0 {
+            "描述 event".to_string()
+        } else {
+            format!("描述 {}ms", declared / 1000)
+        };
+        if ui.button(format!("{label}##frdbc{i}")) {
+            app.send(crate::bus::BusCommand::SetFrEntryCycle {
+                bus,
+                slot,
+                cycle_us: declared,
+            });
+        }
+    }
+    ui.same_line();
+    let remove = if ui.button(format!("x##frrm{i}")) {
+        Some((bus, slot))
+    } else {
+        None
+    };
+    let sigs: Vec<SigRow> = app
+        .fr_db(bus)
+        .and_then(|db| Some((db, db.frame_ix_of_slot(slot)?)))
+        .map(|(db, ix)| db.edit_signals(ix).into_iter().map(SigRow::from).collect())
+        .unwrap_or_default();
+    if sigs.is_empty() {
+        // Nothing describes this slot's payload, so the bytes are the whole
+        // edit -- the same rule as a CAN message with no DBC signals.
+        let editing = matches!(&app.fr_data_edit, Some((r, _)) if *r == i);
+        let mut buf = match &app.fr_data_edit {
+            Some((r, s)) if *r == i => s.clone(),
+            _ => view.data_text.clone(),
+        };
+        ui.set_next_item_width(260.0);
+        ui.input_text(format!("##frdata{i}"), &mut buf).build();
+        if ui.is_item_active() {
+            app.fr_data_edit = Some((i, buf.clone()));
+        }
+        if ui.is_item_deactivated_after_edit() {
+            app.fr_data_edit = None;
+            app.send(crate::bus::BusCommand::SetFrEntryHex {
+                bus,
+                slot,
+                text: buf,
+            });
+        } else if editing && !ui.is_item_active() {
+            app.fr_data_edit = None;
+        }
+    } else {
+        ui.text_disabled(&view.sent_text);
+    }
+    if view.undescribed {
+        ui.text_disabled("该路没有集群描述、或描述未调度这个槽：载荷按原样发出，无人解码它。");
+    }
+    signal_rows(
+        app,
+        ui,
+        GenRow::Fr(i),
+        "f",
+        kinds,
+        RowSignals {
+            sigs: &sigs,
+            data: &view.sent_data,
+            srcs: &view.srcs,
+        },
+    );
+    ui.unindent();
+    remove
 }
 
 /// One row's header.

@@ -35,13 +35,21 @@ pub struct TxMsg {
 /// One FlexRay generator entry: the slot it fills, the bytes it puts there and
 /// the schedule it emits on. The twin of [`TxMsg`] for a bus whose frames are
 /// addressed by slot rather than id, and deliberately without the CAN entry's
-/// `node`/`fd`/`extended` fields -- a slot belongs to the cluster schedule, not
-/// to a DBC transmitter, and there is no FD mode to opt into.
+/// `fd`/`extended` fields.
+///
+/// `node` is the ECU the description names as the frame's sender: an entry is
+/// edited under that node in the Network window, exactly like a CAN entry under
+/// its DBC transmitter. It is derived at add time and never typed, and there is
+/// no entry without it -- which node owns which frame is the document's to say,
+/// and a generator that invented one would be papering over a description that
+/// does not answer the question.
 pub struct FrTxMsg {
     pub bus: u8,
     pub slot: u16,
     /// The frame name the bus's description gives this slot, for the row header.
     pub name: String,
+    /// The ECU declared as this frame's sender; what the row is grouped under.
+    pub node: String,
     /// Payload length in bytes; the base buffer is exactly this long.
     pub len: usize,
     pub data: Vec<u8>,
@@ -344,11 +352,28 @@ impl App {
     }
 
     /// Adds the FlexRay generator entry `(bus, slot)` unless it exists. The
-    /// entry's name, payload length and send period come from that bus's cluster
-    /// description, so a 路 with no description loaded still gets an entry -- it
-    /// just carries raw bytes.
+    /// entry belongs to the ECU the description names as that slot's frame's
+    /// sender, so a slot whose sender the document does not state gets no entry
+    /// and the status line says which fact is missing: which node sends which
+    /// frame is the FIBEX/ARXML's to declare, and an owner invented here would
+    /// be a guess the Network tree then presents as fact.
     pub fn add_fr_tx(&mut self, bus: u8, slot: u16) {
-        self.send(crate::bus::BusCommand::AddFrEntry { bus, slot });
+        let label = self.fr_bus_label(bus);
+        let Some(db) = self.fr_db(bus) else {
+            self.status = format!("{label} 没有集群描述：条目按描述声明的发送者归属，先加载描述");
+            return;
+        };
+        let Some(ix) = db.frame_ix_of_slot(slot) else {
+            self.status = format!("{label} 的描述未调度 slot {slot}：没有帧可归属，加不了条目");
+            return;
+        };
+        let Some(node) = db.frame_sender(ix) else {
+            self.status =
+                format!("{label} 的描述没有说明 slot {slot} 的帧由哪个 ECU 发送：加不了条目");
+            return;
+        };
+        let node = node.to_string();
+        self.send(crate::bus::BusCommand::AddFrEntry { bus, slot, node });
     }
 
     /// Replaces a FlexRay entry's base payload from hex text.

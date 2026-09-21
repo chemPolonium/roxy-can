@@ -69,10 +69,13 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
             ui.same_line();
             if ui
                 .selectable_config(format!("{}##net{ch}_{i}", ni.name))
-                .selected(app.net_selected == flat_base + i)
+                .selected(app.net_fr_sel.is_none() && app.net_selected == flat_base + i)
                 .build()
             {
                 app.net_selected = flat_base + i;
+                // One selection at a time across the two trees: a CAN node and a
+                // FlexRay ECU cannot both own the detail pane.
+                app.net_fr_sel = None;
             }
             // 绑定到该节点的脚本作为下一层树叶挂在节点下：点击打开
             // 该脚本的编辑器。
@@ -187,10 +190,10 @@ fn fr_buses(app: &App) -> Vec<u8> {
 /// Trace/Messages, the declared timing behind the occupancy figure in Bus
 /// Statistics.
 ///
-/// It is a declaration view, not an editor: a FlexRay node has no role to set
-/// (roles are the DBC node concept) and no generator row here -- the slots this
-/// tool fills are edited in the Interactive Generator window, not per ECU. The
-/// ECU group opens by default, as the CAN sections do.
+/// An ECU leaf is selectable, and its detail is the generator panel for the
+/// slots this ECU is the declared sender of -- the same node-centred editing a
+/// CAN node gets. There is no role switch: a role is the DBC node's gate, and
+/// the description says who sends, not who is simulated.
 fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
     let label = match app.fr_db(bus) {
         Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
@@ -199,6 +202,19 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
     let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
         return;
     };
+    // The rows are the ECUs the description declares plus any name an existing
+    // entry carries: swap the description out from under a stimulus setup and
+    // its entries must still have a row to be reached through, rather than
+    // vanish into a list the document no longer supports.
+    let mut nodes: Vec<String> = match app.fr_db(bus) {
+        Some(db) => db.ecus.clone(),
+        None => Vec::new(),
+    };
+    for t in app.snap.fr_tx.iter().filter(|t| t.bus == bus) {
+        if !nodes.contains(&t.node) {
+            nodes.push(t.node.clone());
+        }
+    }
     let Some(db) = app.fr_db(bus) else {
         let seen: u64 = app
             .snap
@@ -210,35 +226,54 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
         } else {
             "该路已配置，尚无帧到达，且未加载集群描述"
         });
+        if !nodes.is_empty() {
+            draw_ecu_leaves(app, ui, bus, &nodes, &[]);
+        }
         return;
     };
-    if db.ecus.is_empty() {
+    if nodes.is_empty() {
         // An empty ECU list is a property of the document, not of the session:
         // a cluster export carries no ECUs at all (both bundled FIBEX files are
         // one), and saying so beats a group that looks like it failed to load.
         ui.text_disabled("描述未声明 ECU（该文件是集群参数导出，不含 ECUs 一节）");
         return;
     }
-    // How many frames each ECU is the declared sender of -- an ECU attribute,
-    // so it stays; the frames themselves do not appear here.
+    // How many frames each ECU is the declared sender of, so a leaf says what
+    // its generator panel will be able to offer.
     let mut tx_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for ix in 0..db.frames.len() {
         if let Some(s) = db.frame_sender(ix) {
             *tx_counts.entry(s).or_insert(0) += 1;
         }
     }
+    let counts: Vec<usize> = nodes
+        .iter()
+        .map(|n| tx_counts.get(n.as_str()).copied().unwrap_or(0))
+        .collect();
     if let Some(_e) = ui
-        .tree_node_config(format!("ECU ({})##frecu{bus}", db.ecus.len()))
+        .tree_node_config(format!("ECU ({})##frecu{bus}", nodes.len()))
         .default_open(true)
         .push()
     {
-        for ecu in &db.ecus {
-            // Only a non-zero count is printed: the description binding no frame
-            // to an ECU is not the same claim as binding it none.
-            match tx_counts.get(ecu.as_str()) {
-                Some(n) => ui.bullet_text(format!("{ecu} · 发 {n} 帧")),
-                None => ui.bullet_text(ecu.as_str()),
-            }
+        draw_ecu_leaves(app, ui, bus, &nodes, &counts);
+    }
+}
+
+/// The ECU leaves of one cluster. `counts` is the declared frame count per leaf;
+/// an empty slice means the description is gone and nothing can be claimed, so
+/// no count is printed -- which is not the same statement as "sends none".
+fn draw_ecu_leaves(app: &mut App, ui: &Ui, bus: u8, nodes: &[String], counts: &[usize]) {
+    for (i, ecu) in nodes.iter().enumerate() {
+        let text = match counts.get(i) {
+            Some(0) | None => ecu.clone(),
+            Some(n) => format!("{ecu} · 发 {n} 帧"),
+        };
+        if ui
+            .selectable_config(format!("{text}##freculeaf{bus}_{i}"))
+            .selected(app.net_fr_sel.as_ref().is_some_and(|(b, e)| *b == bus && e == ecu))
+            .build()
+        {
+            app.net_fr_sel = Some((bus, ecu.clone()));
         }
     }
 }
@@ -424,6 +459,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // remaining space), so long content never adds a scrollbar to the
                 // outer window and shifts the topology sections.
                 ui.child_window("node_details").size([0.0, 0.0]).build(ui, || {
+                    if let Some((bus, ecu)) = app.net_fr_sel.clone() {
+                        ui.text_colored(
+                            [0.30, 0.80, 1.00, 1.0],
+                            format!("{} / {}  —  FlexRay 发送方", app.fr_bus_label(bus), ecu),
+                        );
+                        ui.separator();
+                        crate::ui::tx::render_fr_ecu_generator(app, ui, bus, &ecu);
+                        return;
+                    }
                     if total_dbc == 0 {
                         // The FlexRay side has no selection model yet (no roles,
                         // no generator: the bus cannot transmit), so an empty CAN
@@ -432,7 +476,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         if app.fr_buses.is_empty() && app.snap.fr_loads.is_empty() {
                             ui.text("no DBC nodes to display");
                         } else {
-                            ui.text("没有 DBC 节点；左侧的 FlexRay 集群展开即可看它声明的 ECU");
+                            ui.text("没有 DBC 节点；点左侧 FlexRay 一节里的 ECU，这里就是它的生成器");
                         }
                         return;
                     }

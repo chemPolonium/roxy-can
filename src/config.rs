@@ -1836,7 +1836,7 @@ mod tests {
             .is_empty()
     }
 
-    /// A FlexRay generator entry is a stimulus setup the user built: slot,
+    /// A FlexRay generator entry is a stimulus setup the user built: slot, ECU,
     /// period, bytes and driven signals all come back through the project file.
     /// And a file written before the key existed still loads -- with no entries,
     /// rather than failing or inventing one.
@@ -1845,17 +1845,41 @@ mod tests {
         use crate::app::GenRow;
         use crate::sim::{SrcKind, ValueSrc};
         let mut app = App::headless();
-        app.add_fr_tx(1, 40);
-        app.set_fr_tx_hex(1, 40, "AA 55");
-        app.set_fr_tx_cycle(1, 40, 20_000);
+        // An entry can only exist for a slot the description binds to a sending
+        // ECU, so the project under test needs its description on disk too --
+        // which is also why the restore loads descriptions before entries.
+        let arxml = "assets/arxml/PowerTrain.arxml";
+        let text = crate::dbc::text_from_bytes(
+            std::fs::read(arxml).expect("the asset is committed"),
+        );
+        let db = crate::fr_db::FrDb::parse(&text).expect("parses");
+        let slot = (0..db.frames.len())
+            .find_map(|ix| {
+                db.frame_sender(ix)?;
+                Some(db.frame_index(ix)?.triggering.slot_id as u16)
+            })
+            .expect("the asset binds a slot to a sending ECU");
+        app.fr_buses.insert(
+            0,
+            crate::app::FrBusCfg {
+                path: arxml.into(),
+                db: std::sync::Arc::new(db),
+            },
+        );
+        app.push_fr_db_to_core();
+        app.add_fr_tx(0, slot);
+        app.set_fr_tx_hex(0, slot, "AA 55");
+        app.set_fr_tx_cycle(0, slot, 20_000);
         app.set_gen_source(
             GenRow::Fr(0),
             ValueSrc::new("Torque", SrcKind::Ramp, 0.0, 100.0),
         );
-        app.set_fr_tx_active(1, 40, true);
+        app.set_fr_tx_active(0, slot, true);
         app.settle();
         assert_eq!(app.fr_tx_list.len(), 1, "the entry exists to be saved");
         let srcs = app.fr_tx_list[0].srcs.clone();
+        let node = app.fr_tx_list[0].node.clone();
+        assert!(!node.is_empty(), "the entry carries its declared sender");
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
@@ -1864,11 +1888,16 @@ mod tests {
             .apply(&mut restored);
         assert_eq!(restored.fr_tx_list.len(), 1);
         let tx = &restored.fr_tx_list[0];
-        assert_eq!((tx.bus, tx.slot), (1, 40), "the slot keeps its 路");
+        assert_eq!((tx.bus, tx.slot), (0, slot), "the slot keeps its 路");
+        assert_eq!(tx.node, node, "and its ECU row");
         assert_eq!(tx.cycle_us, 20_000, "and its period");
         assert!(tx.active, "and the On state");
         assert_eq!(tx.data_text, "AA 55", "and the bytes");
         assert_eq!(tx.srcs, srcs, "and the driven signal");
+        assert!(
+            !restored.snap.fr_tx[0].undescribed,
+            "the description came back too, so the slot still decodes"
+        );
 
         // The same file with the key removed is the older project: it loads.
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
