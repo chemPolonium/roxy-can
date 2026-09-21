@@ -62,12 +62,13 @@ fn file_name(p: &str) -> String {
 /// What a bus's loaded description says its cluster is called, plus how many
 /// frames it schedules. The one piece of identity a description file carries
 /// that a recording does not -- with two networks in one log it is how the
-/// user checks the right file landed on the right 路. Short by intent: it
-/// shares the cell's width with nothing, but the column is not wide either.
+/// user checks the right file landed on the right 路. The name stands alone
+/// (no "cluster:" label): the cell is already under the FIBEX/ARXML header, on
+/// the row that file is named in.
 fn fr_cluster_tag(app: &App, bus: u8) -> String {
     match app.fr_db(bus) {
         Some(db) if !db.params.name.is_empty() => {
-            format!("声明 {}（{} 帧）", db.params.name, db.frames.len())
+            format!("{}（{} 帧）", db.params.name, db.frames.len())
         }
         _ => String::new(),
     }
