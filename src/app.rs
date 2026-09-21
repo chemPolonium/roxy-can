@@ -329,10 +329,6 @@ pub struct App {
     /// The generator overview's add-by-id draft: the bus row being typed
     /// in plus its hex text, committed to the model on Add. Session state.
     pub gen_add_buf: Option<(u8, String)>,
-    /// Bitrate drafts in the Buses window: row plus the text being typed,
-    /// committed to the model when the edit ends. Session state.
-    pub bus_arb_edit: Option<(usize, String)>,
-    pub bus_data_edit: Option<(usize, String)>,
     /// Generator row whose value-source parameters the modal is editing:
     /// index into `tx_list` plus the DBC signal name.
     pub src_edit: Option<(usize, String)>,
@@ -547,8 +543,6 @@ impl App {
             net_selected: 0,
             tx_pick: 0,
             gen_add_buf: None,
-            bus_arb_edit: None,
-            bus_data_edit: None,
             src_edit: None,
             src_seq_buf: String::new(),
             src_draft: None,

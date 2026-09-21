@@ -354,27 +354,45 @@ impl App {
         Some(p.to_string_lossy().into_owned())
     }
 
-    /// The FlexRay 路 a description can be placed on: every 路 the tool knows
-    /// is in play (described, watched, or carrying rows in the current run)
-    /// plus the first index with none of those, which is how a first
-    /// description gets a 路 and a third cluster gets one to be added under.
-    pub fn fr_description_targets(&self) -> Vec<u8> {
+    /// The FlexRay twin of "+ Add bus". A FlexRay 路 *is* its cluster
+    /// description -- there is no such thing as an empty one -- so adding a bus
+    /// means picking that file, and it lands on the first index that carries
+    /// nothing. The port stays closed until the new row's 硬件 column picks one,
+    /// exactly the two steps a fresh CAN bus takes (add row, then attach).
+    /// Cancelling the picker adds nothing, which is also why no placeholder row
+    /// is needed.
+    pub fn add_flexray_bus(&mut self) {
+        let Some(bus) = self.next_flexray_bus() else {
+            self.status = "FlexRay 总线索引已用尽（256 路）".to_string();
+            return;
+        };
+        self.pick_cluster_description(bus);
+    }
+
+    /// The index a new FlexRay 路 takes: the first one with no description on
+    /// it. Kept apart from [`Self::add_flexray_bus`] because that one opens a
+    /// file dialog and this is the part worth asserting.
+    pub fn next_flexray_bus(&self) -> Option<u8> {
+        (0..=u8::MAX).find(|b| !self.fr_buses.contains_key(b))
+    }
+
+    /// The rows the Buses table lists: every 路 that exists as state --
+    /// described, watched, or carrying traffic in the log being replayed. No
+    /// speculative row: an index with nothing on it is not a bus, and a
+    /// placeholder made the table look like it had buses the user never added.
+    /// A cluster that only the log names is different -- it is real traffic that
+    /// cannot be named yet, and giving it a description is what its row's
+    /// `加载…` is for.
+    pub fn fr_bus_rows(&self) -> Vec<u8> {
         let mut buses: Vec<u8> = self
             .fr_buses
             .keys()
             .copied()
             .chain(self.snap.fr_watches.iter().map(|w| w.bus))
-            .chain(self.snap.fr_aggs.iter().map(|a| a.bus))
+            .chain(self.snap.fr_loads.keys().copied())
             .collect();
         buses.sort_unstable();
         buses.dedup();
-        if let Some(fresh) = (0..=u8::MAX).find(|b| !buses.contains(b)) {
-            buses.push(fresh);
-        }
-        // Sorted again: the fresh index is the first *gap*, which sits below a
-        // cluster that only exists as replayed rows (bus 4 of a log with
-        // nothing configured on 2 or 3), and an unsorted combo reads as a bug.
-        buses.sort_unstable();
         buses
     }
 

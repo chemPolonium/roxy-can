@@ -1,21 +1,37 @@
 use crate::app::App;
-use dear_imgui_rs::{Condition, StyleColor, StyleVar, TableColumnFlags, TableFlags, Ui};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, Ui};
 
-/// A text field that reads as plain text until it is hovered or focused, so the
-/// CAN rows look like the FlexRay rows beside them -- the value is the point,
-/// the box is only there when it is being used. `FrameBg` is the idle colour;
-/// the hovered and active ones are left alone, which is what makes the field
-/// announce itself under the mouse.
-///
-/// Expands to bare `let` statements on purpose: wrapped in a block of its own,
-/// the two guards would drop before the field is ever drawn, and the row would
-/// silently keep its boxes. Call it inside the block that draws the field, so
-/// the pop happens when that block ends.
-macro_rules! quiet_field {
-    ($ui:expr) => {
-        let _quiet_bg = $ui.push_style_color(StyleColor::FrameBg, [0.0, 0.0, 0.0, 0.0]);
-        let _quiet_border = $ui.push_style_var(StyleVar::FrameBorderSize(0.0));
-    };
+/// The arbitration bit rates a CAN bus is wired for in practice. A pick list,
+/// not a typed number: a wrong bit rate does not fail, it silently mis-decodes
+/// every frame on the wire, so the choices are the standard ones -- plus the
+/// value a project already carries, which stays listed so opening an old
+/// project never "fixes" a rate the user chose on purpose.
+const CAN_ARB_KBPS: &[u32] = &[10, 50, 100, 125, 250, 500, 800, 1000];
+
+/// CAN FD data-phase rates. `0` means the bus has no data phase, which is the
+/// common case for a classic-CAN project and has to be reachable, not merely
+/// the absence of a number.
+const CAN_DATA_KBPS: &[u32] = &[0, 1000, 2000, 4000, 5000, 8000];
+
+/// One bit-rate pick list: the standard values with `current` folded in, and
+/// the labels to show them by.
+fn rate_choices(standards: &[u32], current: u32, zero_label: &str) -> (Vec<u32>, Vec<String>) {
+    let mut vals: Vec<u32> = standards.to_vec();
+    if !vals.contains(&current) {
+        vals.push(current);
+        vals.sort_unstable();
+    }
+    let labels = vals
+        .iter()
+        .map(|v| {
+            if *v == 0 && !zero_label.is_empty() {
+                zero_label.to_string()
+            } else {
+                v.to_string()
+            }
+        })
+        .collect();
+    (vals, labels)
 }
 
 /// Bus management: rename buses, load a DBC per bus, add/remove buses.
@@ -111,7 +127,7 @@ fn content(app: &mut App, ui: &Ui) {
         };
         ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
         ui.table_setup_column_stretch_weight("DBC", TableColumnFlags::NONE, 1.6);
-        ui.table_setup_column_fixed_width("kbit/s (arb / FD data)", TableColumnFlags::NONE, 150.0);
+        ui.table_setup_column_fixed_width("kbit/s (arb / FD data)", TableColumnFlags::NONE, 190.0);
         ui.table_setup_column_fixed_width("硬件", TableColumnFlags::NONE, 140.0);
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
@@ -144,14 +160,7 @@ fn content(app: &mut App, ui: &Ui) {
                 Some((r, s)) if *r == i => s.clone(),
                 _ => name,
             };
-            {
-                quiet_field!(ui);
-                ui.input_text(format!("##busname{i}"), &mut name_buf)
-                    .build();
-            }
-            if ui.is_item_hovered() {
-                ui.tooltip_text("点击改名");
-            }
+            ui.input_text(format!("##busname{i}"), &mut name_buf).build();
             if ui.is_item_active() {
                 app.bus_name_edit = Some((i, name_buf.clone()));
             }
@@ -204,68 +213,48 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             // The load view divides wire bits by these; there is no hardware
             // behind the simulation, so the values are declarations about the
-            // bus being analysed, not device settings. Each field is a plain
-            // "type the number" box: the draft lives in App while the field
-            // has focus, the parsed value commits when the edit ends, and an
-            // unparsable text simply reverts to the model. Quiet like the
-            // FlexRay row's read-only numbers -- the pair reads as `250 2000`,
-            // and the frame only shows when the field is used.
-            let mut arb = match &app.bus_arb_edit {
-                Some((r, s)) if *r == i => s.clone(),
-                _ => arb_kbps.to_string(),
-            };
-            ui.set_next_item_width(70.0);
-            {
-                quiet_field!(ui);
-                ui.input_text(format!("##busarb{i}"), &mut arb).build();
-            }
-            if ui.is_item_active() {
-                app.bus_arb_edit = Some((i, arb.clone()));
-            }
-            if ui.is_item_deactivated_after_edit() {
-                if let Ok(v) = arb.trim().parse::<u32>() {
-                    app.send(crate::bus::BusCommand::SetChannelConfig {
-                        ch: i as u8,
-                        name: None,
-                        dbc_path: None,
-                        bitrate_kbps: Some(v.max(1)),
-                        fd_data_kbps: None,
-                        node_roles: None,
-                    });
-                }
-                app.bus_arb_edit = None;
+            // bus being analysed, not device settings. Picks, not typed
+            // numbers: a wrong bit rate never complains, it just mis-decodes
+            // the wire, so the list is the standard set (plus whatever this
+            // project already carries, which stays selectable).
+            let (arb_vals, arb_labels) = rate_choices(CAN_ARB_KBPS, arb_kbps, "");
+            let arb_refs: Vec<&str> = arb_labels.iter().map(|s| s.as_str()).collect();
+            let arb_at = arb_vals.iter().position(|v| *v == arb_kbps).unwrap_or(0);
+            let mut arb_pick = arb_at;
+            ui.set_next_item_width(76.0);
+            if ui.combo_simple_string(format!("##busarb{i}"), &mut arb_pick, &arb_refs) {
+                app.send(crate::bus::BusCommand::SetChannelConfig {
+                    ch: i as u8,
+                    name: None,
+                    dbc_path: None,
+                    bitrate_kbps: Some(arb_vals[arb_pick.min(arb_vals.len() - 1)].max(1)),
+                    fd_data_kbps: None,
+                    node_roles: None,
+                });
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("仲裁比特率 kbit/s，直接输入数字");
+                ui.tooltip_text("仲裁段比特率 kbit/s（选一个，选中即下发）");
             }
             ui.same_line();
-            let mut data = match &app.bus_data_edit {
-                Some((r, s)) if *r == i => s.clone(),
-                _ => data_kbps.to_string(),
-            };
-            ui.set_next_item_width(70.0);
-            {
-                quiet_field!(ui);
-                ui.input_text(format!("##busdata{i}"), &mut data).build();
-            }
-            if ui.is_item_active() {
-                app.bus_data_edit = Some((i, data.clone()));
-            }
-            if ui.is_item_deactivated_after_edit() {
-                if let Ok(v) = data.trim().parse::<u32>() {
-                    app.send(crate::bus::BusCommand::SetChannelConfig {
-                        ch: i as u8,
-                        name: None,
-                        dbc_path: None,
-                        bitrate_kbps: None,
-                        fd_data_kbps: Some(v.max(1)),
-                        node_roles: None,
-                    });
-                }
-                app.bus_data_edit = None;
+            let (data_vals, data_labels) = rate_choices(CAN_DATA_KBPS, data_kbps, "0（无 FD 段）");
+            let data_refs: Vec<&str> = data_labels.iter().map(|s| s.as_str()).collect();
+            let data_at = data_vals.iter().position(|v| *v == data_kbps).unwrap_or(0);
+            let mut data_pick = data_at;
+            ui.set_next_item_width(96.0);
+            if ui.combo_simple_string(format!("##busdata{i}"), &mut data_pick, &data_refs) {
+                app.send(crate::bus::BusCommand::SetChannelConfig {
+                    ch: i as u8,
+                    name: None,
+                    dbc_path: None,
+                    bitrate_kbps: None,
+                    fd_data_kbps: Some(data_vals[data_pick.min(data_vals.len() - 1)]),
+                    node_roles: None,
+                });
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("CAN FD 数据段比特率 kbit/s，直接输入数字");
+                ui.tooltip_text(
+                    "CAN FD 数据段比特率 kbit/s。0 = 这条总线没有 FD 数据段（经典 CAN 就选它）。",
+                );
             }
             ui.table_next_column();
             // Hardware attachment: one adapter per bus, enumerated from
@@ -370,7 +359,6 @@ fn content(app: &mut App, ui: &Ui) {
     // listed: reading a slot/cycle table is a FIBEX/ARXML editor's job, and a
     // copy of it here would be a worse, staler one.
     ui.separator();
-    ui.text_colored([0.55, 0.8, 1.0, 1.0], "FlexRay");
     let watches = app.snap.fr_watches.clone();
     // A channel already feeding a watch is not offered again: the second open
     // would fail in the driver, and two watches on one port are never what
@@ -383,11 +371,18 @@ fn content(app: &mut App, ui: &Ui) {
             .collect(),
         Err(_) => Vec::new(),
     };
-    // One row per 路 the tool knows about: watched, described, or only seen in
-    // the log being replayed (a recording numbers its clusters and nothing
-    // else), plus the first free index so another network can be added -- the
-    // FlexRay twin of CAN's "+ Add bus", as a row that has nothing on it yet.
-    let targets = app.fr_description_targets();
+    // The same header line CAN has: add a bus, and how many there are. A
+    // FlexRay 路 *is* its cluster description, so "add" opens that picker and
+    // the row appears with the file on it -- which is also why there is no
+    // placeholder row for a bus nobody has added: cancelling the picker adds
+    // nothing, exactly as cancelling CAN's DBC dialog leaves the bus empty
+    // rather than inventing one.
+    let rows = app.fr_bus_rows();
+    if ui.button("+ Add FlexRay") {
+        app.add_flexray_bus();
+    }
+    ui.same_line();
+    ui.text(format!("{} 路", rows.len()));
     let mut detach = None;
     let mut forget = None;
     let mut attach: Option<(u8, i32)> = None;
@@ -400,11 +395,13 @@ fn content(app: &mut App, ui: &Ui) {
         };
         ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
         ui.table_setup_column_stretch_weight("FIBEX/ARXML", TableColumnFlags::NONE, 1.6);
-        ui.table_setup_column_fixed_width("kbit/s · 周期 ms", TableColumnFlags::NONE, 150.0);
+        // Same widths as the CAN table, so the two line up column for column --
+        // 190 because CAN's cell holds two combos side by side.
+        ui.table_setup_column_fixed_width("kbit/s · 周期 ms", TableColumnFlags::NONE, 190.0);
         ui.table_setup_column_fixed_width("硬件", TableColumnFlags::NONE, 140.0);
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
-        for bus in targets {
+        for bus in rows {
             // Everything the row shows is read into owned values first: the
             // widgets below need `app` to themselves.
             let watch = watches.iter().find(|w| w.bus == bus).cloned();
@@ -423,11 +420,12 @@ fn content(app: &mut App, ui: &Ui) {
             }
             ui.text(format!("FR{bus}"));
             if path.is_empty() && watch.is_none() {
-                // The row exists because a log showed traffic on it, or because
-                // it is the slot a new network would take. Say which, rather
-                // than leaving a bus with nothing on it looking like a bug.
+                // Not a bus the user added: the log being replayed carries this
+                // cluster's frames, and they stay nameless until a description
+                // lands here. Say so -- an unnamed row with "(none)" in it reads
+                // as a half-added bus.
                 ui.same_line();
-                ui.text_disabled("（未配置）");
+                ui.text_disabled("（日志里有这路流量）");
             }
             ui.table_next_column();
             // The description this 路 decodes against, and the one button that

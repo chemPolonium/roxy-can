@@ -8259,21 +8259,24 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     assert_eq!(app.load_cluster_description(second, Some(1)), None);
     assert!(app.status.contains("请先断开监听"), "{}", app.status);
     assert_eq!(sig(&app, 1), on_first, "the live 路 kept its file");
-    // The 路 the picker offers: both configured ones plus the next free index.
-    assert_eq!(app.fr_description_targets(), [0, 1, 2]);
-    // A 路 that exists only as replayed rows is a target too -- it still needs
-    // a description, and that is the case the picker exists for. The fresh
-    // index is the first *gap*, so it is listed in bus order, not appended.
-    app.fr_aggs.insert(
-        (4, 13, crate::aggregate::FrOccupant::Unknown),
-        crate::aggregate::FrFrameAgg {
-            bus: 4,
-            slot: 13,
-            ..Default::default()
-        },
+    // The rows the Buses table lists: the 路 that exist as state -- the two
+    // configured ones. No placeholder for "the next free index"; a bus nobody
+    // added is not a bus, and "+ Add FlexRay" is what adds one.
+    assert_eq!(app.fr_bus_rows(), [0, 1]);
+    assert_eq!(
+        app.next_flexray_bus(),
+        Some(2),
+        "the add button would place the next description on the first empty index"
     );
+    // A 路 that exists only as traffic in the log being replayed is a row: its
+    // frames cannot be named until a description lands on it, and that is what
+    // its `加载…` button is for. Listed in bus order, not appended.
+    app.fr_loads.insert(4, crate::load::FrLoad::default());
+    // The rollups are only re-published when they changed; a hand-inserted load
+    // has to say so, which is what a step does on every arrival.
+    app.loads_dirty = true;
     app.refresh_snapshot();
-    assert_eq!(app.fr_description_targets(), [0, 1, 2, 4]);
+    assert_eq!(app.fr_bus_rows(), [0, 1, 4]);
     app.stop();
 }
 
