@@ -235,6 +235,12 @@ pub(crate) fn zoom_offset(
 /// empty ground never steals a cursor the user was about to double-click past.
 const CURSOR_GRAB_PX: f32 = 6.0;
 
+/// The plot rect of the first Graphics window, as of the last frame that drew
+/// it -- so a headless test can put the pointer where the user would.
+#[cfg(test)]
+pub(crate) static LAST_PLOT: std::sync::Mutex<Option<[f32; 4]>> =
+    std::sync::Mutex::new(None);
+
 /// The time under a pointer x. The same mapping `draw_plot` lays curves out
 /// with, so a cursor placed where the pointer was sits exactly there.
 fn t_at_x(mx: f32, x0: f32, w: f32, t_left: f64, tw: f64) -> f64 {
@@ -314,13 +320,20 @@ impl PointerClaim {
 }
 
 fn cursor_claim(
+    dragging: Option<usize>,
     held: bool,
     double_clicked: bool,
     mx: f32,
     xs: [Option<f32>; 2],
 ) -> PointerClaim {
-    if let Some(n) = held.then(|| grab_cursor(mx, xs)).flatten() {
-        return PointerClaim::Drag(n);
+    if held {
+        // The press that took a line owns it until the button lets go. Re-testing
+        // the grab radius each lap instead drops the line as soon as the hand
+        // moves further than 6 px between two frames -- the cursor sticks, the
+        // view jumps, and the drag the user is doing becomes two gestures.
+        if let Some(n) = dragging.or_else(|| grab_cursor(mx, xs)) {
+            return PointerClaim::Drag(n);
+        }
     }
     if double_clicked {
         return PointerClaim::Place(place_cursor(mx, xs));
@@ -540,27 +553,41 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     // Curves are inset so the axis labels sit outside them; the pointer maths
     // has to use the same rect draw_plot works in.
     let (ix0, iy0, iw, _ih) = axis_inset(x0, y0, w, h);
+    #[cfg(test)]
+    if i == 0 {
+        // The bed has no window manager to ask, so a test that drives the mouse
+        // over the plot reads the rect back from the frame that just drew it.
+        *LAST_PLOT.lock().unwrap() = Some([ix0, iy0, iw, h]);
+    }
     let hover = mx >= ix0 && mx <= ix0 + iw && my >= iy0 && my <= iy0 + h;
     let t_left = t_now - app.graphics[i].t_offset_s - tw;
-    // What the pointer is asking for this frame, decided from the button state
-    // and the two lines' positions alone: a held grab drags, a double-click on
-    // empty ground places. A drag is also what keeps the pan from taking the
-    // same gesture -- one drag, one thing moved.
-    let claim = if app.graphics[i].show_cursor && hover {
-        cursor_claim(
-            ui.is_mouse_down(MouseButton::Left),
+    // What the pointer is asking for this frame. A drag that already started owns
+    // the gesture wherever the pointer goes; a new grab or a placement needs the
+    // plot under it. Without the first half a fast hand outruns the 6 px grab
+    // window, the line is dropped mid-drag, and the pan takes the same gesture.
+    let held = ui.is_mouse_down(MouseButton::Left);
+    let dragging = app.graphics[i].cursor_drag.filter(|_| held);
+    let mut owns_line = false;
+    if dragging.is_some() || (app.graphics[i].show_cursor && hover) {
+        let claim = cursor_claim(
+            dragging,
+            held,
             ui.is_mouse_double_clicked(MouseButton::Left),
             mx,
             cursor_xs(&app.graphics[i].cursor_s, ix0, iw, t_left, tw),
-        )
+        );
+        if let Some(n) = claim.cursor() {
+            app.graphics[i].cursor_s[n] = Some(t_at_x(mx, ix0, iw, t_left, tw));
+        }
+        app.graphics[i].cursor_drag = match claim {
+            PointerClaim::Drag(n) => Some(n),
+            PointerClaim::None | PointerClaim::Place(_) => None,
+        };
+        owns_line = matches!(claim, PointerClaim::Drag(_));
     } else {
-        PointerClaim::None
-    };
-    if let Some(n) = claim.cursor() {
-        app.graphics[i].cursor_s[n] = Some(t_at_x(mx, ix0, iw, t_left, tw));
+        app.graphics[i].cursor_drag = None;
     }
-    let dragging = matches!(claim, PointerClaim::Drag(_));
-    if hover && app.graphics[i].zoom_enabled && !dragging {
+    if hover && app.graphics[i].zoom_enabled && !owns_line {
         if io.mouse_down(MouseButton::Left) && io.mouse_delta()[0] != 0.0 {
             let dt = tw as f32 * io.mouse_delta()[0] / iw;
             let off = &mut app.graphics[i].t_offset_s;
@@ -1202,24 +1229,36 @@ mod tests {
     fn a_press_owns_a_cursor_only_when_it_grabs_or_double_clicks_it() {
         let on_b = [Some(100.0), Some(300.0)];
         assert_eq!(
-            cursor_claim(true, false, 302.0, on_b),
+            cursor_claim(None, true, false, 302.0, on_b),
             PointerClaim::Drag(1),
             "held on B: B follows the pointer, the view does not"
         );
         assert_eq!(
-            cursor_claim(true, false, 200.0, on_b),
+            cursor_claim(None, true, false, 200.0, on_b),
             PointerClaim::None,
             "held on empty ground: that is the pan"
         );
         assert_eq!(
-            cursor_claim(false, true, 200.0, [None, None]),
+            cursor_claim(None, false, true, 200.0, [None, None]),
             PointerClaim::Place(0),
             "a double-click on empty ground places A"
         );
         assert_eq!(
-            cursor_claim(true, true, 302.0, on_b),
+            cursor_claim(None, true, true, 302.0, on_b),
             PointerClaim::Drag(1),
             "and a grab wins over the place, so a double-click on a line never jumps to the other one"
+        );
+        // The stutter this used to cause: a hand that covers more than the grab
+        // window between two laps must keep the line it took.
+        assert_eq!(
+            cursor_claim(Some(1), true, false, 500.0, on_b),
+            PointerClaim::Drag(1),
+            "mid-drag, the press keeps its cursor wherever the pointer went"
+        );
+        assert_eq!(
+            cursor_claim(Some(1), false, false, 500.0, on_b),
+            PointerClaim::None,
+            "and lets go with the button"
         );
     }
 

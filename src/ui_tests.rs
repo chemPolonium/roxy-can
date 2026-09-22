@@ -411,6 +411,73 @@ fn the_graphics_window_draws_a_cursor_pair() {
     assert_eq!(app.graphics[0].cursor_s, [Some(0.4), None]);
 }
 
+/// Dragging a cursor has to survive a fast pointer: the press that took the line
+/// owns the whole gesture until the button lets go. Re-testing the grab radius
+/// every frame instead hands the drag to the pan as soon as the pointer covers
+/// more than the line's width in one lap -- which is the stutter: the line
+/// sticks, the view jumps, the line comes back.
+#[test]
+fn a_fast_drag_keeps_its_cursor_and_leaves_the_view_alone() {
+    use crate::app::PopupTarget;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_graphics_window();
+    let key = SigKey::can(0, 0x100, false, "Alpha");
+    app.subscribe(key.clone());
+    app.set_win_signal(PopupTarget::Graphics(0), key, true);
+    app.start_virtual();
+    // A positive playhead, so the view spans [10, 20] s with the cursor at 12 s
+    // comfortably inside it.
+    app.advance_clock(20_000_000);
+    app.tick(20_000_000);
+    let g = &mut app.graphics[0];
+    g.show_cursor = true;
+    g.zoom_enabled = true;
+    g.time_window_s = 10.0;
+    g.t_offset_s = 0.0;
+    g.cursor_s = [Some(12.0), None];
+    let tw = app.graphics[0].time_window_s;
+    let t_now = app.plot_now_s();
+    assert!(t_now >= 20.0, "the playhead has to reach the cursor: {t_now}");
+
+    frames(&mut app, &mut ctx, 1);
+    let [ix0, iy0, iw, ih] = crate::ui::graphics::LAST_PLOT
+        .lock()
+        .unwrap()
+        .expect("the plot drew a frame");
+    assert!(iw > 150.0, "wide enough to drag across: {iw}px");
+    let t_left = t_now - app.graphics[0].t_offset_s - tw;
+    let x_a = ix0 + iw * ((12.0 - t_left) / tw) as f32;
+    let y = iy0 + ih * 0.5;
+    let hold = |app: &mut App, ctx: &mut Context, mx: f32, down: bool| {
+        ctx.io_mut().add_mouse_pos_event([mx, y]);
+        ctx.io_mut()
+            .add_mouse_button_event(dear_imgui_rs::MouseButton::Left, down);
+        let ui = ctx.frame();
+        crate::ui::graphics::render(app, ui);
+        let _ = ctx.render_legacy();
+    };
+
+    // Press on the line, then flick 40 px in the next lap.
+    hold(&mut app, &mut ctx, x_a, true);
+    hold(&mut app, &mut ctx, x_a + 40.0, true);
+    let after = app.graphics[0].cursor_s[0].expect("A is still placed");
+    let want = f64::from(40.0 / iw) * tw;
+    assert!(
+        (after - 12.0 - want).abs() < 0.05 * want,
+        "the cursor followed the pointer: it moved {:.3}s over a view spanning \
+         {tw}s, expected {want:.3}s",
+        after - 12.0
+    );
+    assert_eq!(
+        app.graphics[0].t_offset_s, 0.0,
+        "and the pan did not take the gesture mid-drag"
+    );
+    hold(&mut app, &mut ctx, x_a + 40.0, false);
+    app.stop();
+}
+
 /// The script editor hosts the CTE text widget plus the fact sidebar:
 /// run it with source that compiles and with source that fails, over
 /// several frames so the fact cache and the marker refresh both run.
@@ -889,11 +956,20 @@ fn a_plot_window_never_starves_the_replay() {
     );
     app.push_fr_db_to_core();
     app.new_graphics_window();
-    app.set_win_signal(
-        PopupTarget::Graphics(0),
-        crate::app::fr_signal_key(0, slot, &sigs[0]),
-        true,
-    );
+    // Six curves, not one: the cursor readout costs a value lookup per curve
+    // per lap, and a plot with a handful of signals is what it is measured
+    // against.
+    for s in sigs.iter().take(6) {
+        app.set_win_signal(
+            PopupTarget::Graphics(0),
+            crate::app::fr_signal_key(0, slot, s),
+            true,
+        );
+    }
+    // Both cursors inside the view, moved every lap -- that is the hot path a
+    // drag runs on, not a parked pair.
+    app.graphics[0].show_cursor = true;
+    app.graphics[0].zoom_enabled = true;
     app.replay();
 
     let start = Instant::now();
@@ -903,6 +979,8 @@ fn a_plot_window_never_starves_the_replay() {
         std::thread::sleep(Duration::from_millis(5));
         let t = Instant::now();
         app.update();
+        let now = app.plot_now_s();
+        app.graphics[0].cursor_s = [Some(now - 8.0), Some(now - 2.0)];
         {
             let ui = ctx.frame();
             crate::ui::render(&mut app, ui);
@@ -912,6 +990,11 @@ fn a_plot_window_never_starves_the_replay() {
         laps += 1;
     }
     let wall = start.elapsed().as_secs_f64();
+    println!(
+        "6 curves + a dragged cursor pair: {laps} laps in {wall:.2} s, worst lap \
+         {worst_lap:?} (mean {:.2} ms)",
+        wall * 1e3 / laps.max(1) as f64
+    );
     let (pos, dur) = app.replay_position().expect("a replay timeline");
     assert!(
         app.snap.measuring,

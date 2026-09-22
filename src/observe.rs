@@ -513,6 +513,12 @@ pub struct GraphicsWindow {
     /// measurement empties that ring -- a restored time would name ground
     /// nobody is standing on any more.
     pub cursor_s: [Option<f64>; 2],
+    /// Which cursor the current mouse press owns, for as long as it holds it.
+    /// Without this the grab radius is re-tested every lap, and a pointer that
+    /// covers more than 6 px between two frames drops the line mid-drag and hands
+    /// the same gesture to the pan -- the cursor sticks, the view jumps. Session
+    /// state: it describes one press, nothing else.
+    pub cursor_drag: Option<usize>,
     pub zoom_enabled: bool,
     /// Draw a dot on each sample when the visible points are sparse enough to
     /// read individually.

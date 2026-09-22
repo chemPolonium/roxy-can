@@ -1405,6 +1405,7 @@ impl Config {
                     t_offset_s: 0.0,
                     show_cursor: g.show_cursor,
                     cursor_s: [None, None],
+                    cursor_drag: None,
                     zoom_enabled: g.zoom_enabled,
                     show_markers: g.show_markers,
                     y_locks: HashMap::new(),
