@@ -71,6 +71,26 @@ pub(crate) fn filter_to_id(app: &mut App, win: usize, f: &CanFrame) {
     app.trace_windows[win].filter = format!("id:{}", fmt_id(f));
 }
 
+/// The cursor pair's rows in every row menu, offered identically for CAN and
+/// FlexRay: a cursor is an instant, and an instant does not care which cable the
+/// row came off. Setting one that exists moves it; the clear only appears once
+/// there is something to clear.
+fn cursor_menu(app: &mut App, ui: &Ui, win: usize, t_us: u64) {
+    for (n, label) in [(0, "Set cursor A"), (1, "Set cursor B")] {
+        if ui.menu_item(label) {
+            app.trace_windows[win].mark_us[n] = Some(t_us);
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("表头读出 A、B 两点与它们的 Δt；这一行会底色标出");
+        }
+    }
+    if app.trace_windows[win].mark_us.iter().any(Option::is_some)
+        && ui.menu_item("Clear cursors")
+    {
+        app.trace_windows[win].mark_us = [None, None];
+    }
+}
+
 /// "Clear filter" as both row menus offer it, in one place so the CAN and
 /// FlexRay menus cannot drift again. Every condition the operator typed or
 /// ticked goes: the text box, the payload search, the frame kind, 仅 DBC, the
@@ -87,6 +107,23 @@ pub(crate) fn clear_filter(app: &mut App, win: usize) {
     w.flags_kind = 0;
     w.dbc_only = false;
     w.scope = SigScope::All;
+}
+
+/// The cursor pair's row tint, in the plot's two colours at background
+/// strength: a marked row is findable at a glance, and the row is still
+/// readable through it.
+const MARK_COLOR: [[f32; 4]; 2] = [
+    [0.95, 0.85, 0.40, 0.22],
+    [0.45, 0.80, 0.95, 0.22],
+];
+
+/// Which cursor tints this row, if any. A cursor is an instant, so a row that
+/// carries both (only possible at the same microsecond) reads as A.
+fn mark_tint(mark_us: [Option<u64>; 2], t_us: u64) -> Option<[f32; 4]> {
+    mark_us
+        .iter()
+        .position(|m| *m == Some(t_us))
+        .map(|n| MARK_COLOR[n])
 }
 
 fn fmt_data(f: &CanFrame) -> String {
@@ -143,6 +180,21 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             format!("· FlexRay {} 帧", app.snap.fr_trace.len())
         };
         ui.text_colored([0.55, 0.8, 1.0, 1.0], fr_note);
+    }
+    // The cursor pair, worded as the plot words it -- to the microsecond here,
+    // because that is what separates two rows. Only once something is marked:
+    // an empty readout next to the frame count reads as a broken counter.
+    let mark_us = app.trace_windows[i].mark_us;
+    if mark_us.iter().any(Option::is_some) {
+        ui.same_line();
+        ui.text_colored(
+            [0.95, 0.85, 0.4, 1.0],
+            crate::ui::cursor_head(
+                mark_us[0].map(|t| t as f64 / 1e6),
+                mark_us[1].map(|t| t as f64 / 1e6),
+                6,
+            ),
+        );
     }
     // Head trims are accounted either way: with the archive they are
     // merely moved to disk (the export still covers them), without it
@@ -379,6 +431,10 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 } else if f.is_remote() {
                     ui.table_set_row_bg1_color([0.35, 0.22, 0.55, 0.25]);
                 }
+                // Last, so a marked error row is still recognisably both.
+                if let Some(tint) = mark_tint(mark_us, f.t_us) {
+                    ui.table_set_row_bg1_color(tint);
+                }
                 if !ui.table_next_column() {
                     continue;
                 }
@@ -423,6 +479,9 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 // A distinct cool tint keeps the FR stream readable inside
                 // the CAN rows; the reception channel rides the Bus cell.
                 ui.table_set_row_bg1_color([0.15, 0.35, 0.55, 0.20]);
+                if let Some(tint) = mark_tint(mark_us, fr.t_us) {
+                    ui.table_set_row_bg1_color(tint);
+                }
                 if !ui.table_next_column() {
                     continue;
                 }
@@ -548,6 +607,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 "把这个槽加进本窗口的 Manual 选择并切到该作用域（已选的其他条目保留），只列出选中行：{label}"
             ));
         }
+        cursor_menu(app, ui, i, r.t_us);
         if ui.menu_item("Clear filter") {
             clear_filter(app, i);
         }
@@ -574,6 +634,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         if ui.menu_item(format!("Filter this ID ({})", fmt_id(&f))) {
             filter_to_id(app, i, &f);
         }
+        cursor_menu(app, ui, i, f.t_us);
         if ui.menu_item("Clear filter") {
             clear_filter(app, i);
         }
@@ -672,4 +733,32 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
         _ => dir(a).cmp(&dir(b)),
     };
     if asc { ord } else { ord.reverse() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mark_tint;
+
+    /// A cursor is an instant, so the tint is decided by the row's timestamp and
+    /// nothing else -- not by its position in a table that reorders itself as
+    /// frames arrive. Unset marks tint no row at all.
+    #[test]
+    fn a_cursor_tints_the_row_at_its_instant_on_either_bus() {
+        let none = [None, None];
+        assert_eq!(mark_tint(none, 4_000), None, "nothing marked");
+        let a_at_4 = [Some(4_000), None];
+        assert!(mark_tint(a_at_4, 4_000).is_some(), "the marked CAN row");
+        assert_eq!(mark_tint(a_at_4, 5_000), None, "its neighbour is not");
+        // A is the first colour, so a row carrying both reads as A rather than
+        // picking one at random.
+        assert_eq!(
+            mark_tint([Some(4_000), Some(4_000)], 4_000),
+            mark_tint([Some(4_000), None], 4_000)
+        );
+        assert_eq!(
+            mark_tint([None, Some(5_000)], 5_000),
+            Some(super::MARK_COLOR[1]),
+            "B keeps its own colour"
+        );
+    }
 }

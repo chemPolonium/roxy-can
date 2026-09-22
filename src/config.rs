@@ -1350,6 +1350,7 @@ impl Config {
                     time_to: w.time_to,
                     filters_open: w.filters_open,
                     fr_expand: w.fr_expand,
+                    mark_us: [None, None],
                     rows: std::collections::VecDeque::new(),
                     rows_build: None,
                     row_ends: Vec::new(),

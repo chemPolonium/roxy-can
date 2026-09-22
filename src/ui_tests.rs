@@ -540,6 +540,9 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
         println!("assets/arxml/PowerTrain.arxml absent -- only the unresolved child path ran");
     }
     app.trace_windows[0].rows = rows.into();
+    // Both cursors sit on rows that are in the table -- one CAN, one FlexRay:
+    // each row kind takes the tint, and the header reads the interval.
+    app.trace_windows[0].mark_us = [Some(4_000), Some(5_000)];
     frames(&mut app, &mut ctx, 5);
 }
 

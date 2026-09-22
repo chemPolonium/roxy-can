@@ -255,6 +255,13 @@ pub struct TraceWin {
     /// Whether FlexRay rows expand into decoded signal child rows (needs
     /// the arriving row's own cluster description). Session state.
     pub fr_expand: bool,
+    /// The two measurement cursors, as the bus-clock microsecond of the row each
+    /// was set on (`[A, B]`, `None` = unset). Session state, like the plot's
+    /// pair: they point into the row ring, which a fresh measurement empties.
+    /// A row is named by its instant because the instant is what is being
+    /// measured -- two rows sharing a microsecond are simultaneous, and they
+    /// both take the mark.
+    pub mark_us: [Option<u64>; 2],
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only. A double-ended queue
@@ -771,6 +778,7 @@ impl App {
             time_to: String::new(),
             filters_open: false,
             fr_expand: false,
+            mark_us: [None, None],
             rows: std::collections::VecDeque::new(),
             rows_build: None,
             row_ends: Vec::new(),

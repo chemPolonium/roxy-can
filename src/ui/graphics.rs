@@ -328,41 +328,6 @@ fn cursor_claim(
     PointerClaim::None
 }
 
-/// A duration on the time axis in the unit that reads: µs below a
-/// millisecond, ms below a second, seconds beyond.
-fn fmt_dt(s: f64) -> String {
-    let (unit, scaled) = if !s.is_finite() {
-        ("", 0.0)
-    } else if s.abs() < 1e-3 {
-        ("µs", s * 1e6)
-    } else if s.abs() < 1.0 {
-        ("ms", s * 1e3)
-    } else {
-        ("s", s)
-    };
-    if unit.is_empty() {
-        return "-".to_string();
-    }
-    format!("{scaled:+.3} {unit}")
-}
-
-/// The cursor pair's header: both times, and the signed interval between them
-/// once both are placed. `A –` says plainly that a cursor is missing rather
-/// than showing a number that was never measured.
-fn cursor_head(a: Option<f64>, b: Option<f64>) -> String {
-    let cell = |v: Option<f64>| match v {
-        Some(t) => format!("{t:.3}s"),
-        None => "-".to_string(),
-    };
-    match (a, b) {
-        (Some(x), Some(y)) => format!("A {}  B {}  Δt {}", cell(a), cell(b), fmt_dt(y - x)),
-        // The mode is on and nothing placed yet: the box says so where the
-        // readings will appear, and names the gesture that fills it in.
-        (None, None) => "A -  B -  双击图面放置游标".to_string(),
-        _ => format!("A {}  B {}", cell(a), cell(b)),
-    }
-}
-
 /// One curve's line in the cursor readout: its value at A, at B, and the change
 /// between them. A sample that is not there prints `-`: a curve absent at that
 /// instant has no opinion, and a `0` there would be read as "it fell to zero".
@@ -1077,10 +1042,13 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         }
         // The block goes top-right: the legend owns the top-left corner, and
         // the axis labels own the bottom strip.
-        let mut rows: Vec<([f32; 4], String)> = vec![(
-            [0.90, 0.90, 0.95, 1.0],
-            cursor_head(cursors[0], cursors[1]),
-        )];
+        let mut head = super::cursor_head(cursors[0], cursors[1], 3);
+        if cursors == [None, None] {
+            // Nothing placed yet: say so and name the gesture, where the
+            // readings will appear -- not a placeholder row somewhere else.
+            head.push_str("  双击图面放置游标");
+        }
+        let mut rows: Vec<([f32; 4], String)> = vec![([0.90, 0.90, 0.95, 1.0], head)];
         if let (Some(a), Some(b)) = (cursors[0], cursors[1]) {
             for key in keys {
                 let Some(sub) = app.sub_view(key) else {
@@ -1129,9 +1097,8 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 mod tests {
     use super::{
         AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_SIDE_PX, MAX_CURVE_POINTS, axis_inset,
-        bucket_extremes, curve_runs, cursor_claim, cursor_head, cursor_row, cursor_xs,
-        dots_readable, fmt_dt, grab_cursor, place_cursor, t_at_x, x_at_t, zoom_offset, zoom_step,
-        PointerClaim,
+        bucket_extremes, curve_runs, cursor_claim, cursor_row, cursor_xs, dots_readable,
+        grab_cursor, place_cursor, t_at_x, x_at_t, zoom_offset, zoom_step, PointerClaim,
     };
 
     #[test]
@@ -1207,34 +1174,24 @@ mod tests {
         assert_eq!(place_cursor(398.0, [Some(100.0), Some(400.0)]), 0);
     }
 
-    /// The readout is the whole point of the pair: both times, the interval
-    /// between them, and each curve's value at both plus the change. What is
-    /// not there prints `-`: a time nobody placed, a curve with no sample at
-    /// that instant. A `0` in either place would be read as a measurement.
+    /// Each curve's line in the readout: the value at A, the value at B, and the
+    /// change. A sample that is not there prints `-`, never 0 -- a curve absent
+    /// at that instant has no opinion, and a 0 would be read as a drop.
     #[test]
-    fn the_cursor_readout_gives_both_values_and_the_change_between_them() {
-        assert_eq!(
-            cursor_head(None, None),
-            "A -  B -  双击图面放置游标",
-            "the mode is on and nothing placed: say what to do"
-        );
-        assert_eq!(cursor_head(Some(1.0), None), "A 1.000s  B -");
-        assert_eq!(
-            cursor_head(Some(1.0), Some(1.222)),
-            "A 1.000s  B 1.222s  Δt +222.000 ms"
-        );
-        assert_eq!(
-            cursor_head(Some(1.222), Some(1.0)),
-            "A 1.222s  B 1.000s  Δt -222.000 ms",
-            "B left of A reads negative: the direction is the answer"
-        );
-        assert_eq!(fmt_dt(0.000_123), "+123.000 µs");
-        assert_eq!(fmt_dt(-1.5), "-1.500 s");
+    fn one_cursor_line_gives_both_values_and_the_change() {
         assert_eq!(
             cursor_row("EngineSpeed", Some(1200.0), Some(1450.0)),
             "EngineSpeed  1200 → 1450  Δ +250.0"
         );
-        assert_eq!(cursor_row("Pressure", Some(2.5), None), "Pressure  2.50 → -  Δ -");
+        assert_eq!(
+            cursor_row("EngineSpeed", Some(1450.0), Some(1200.0)),
+            "EngineSpeed  1450 → 1200  Δ -250.0",
+            "B left of A reads negative: the direction is the answer"
+        );
+        assert_eq!(
+            cursor_row("Pressure", Some(2.5), None),
+            "Pressure  2.50 → -  Δ -"
+        );
         assert_eq!(cursor_row("Pressure", None, None), "Pressure  - → -  Δ -");
     }
 

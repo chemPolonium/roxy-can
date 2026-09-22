@@ -46,6 +46,38 @@ pub(crate) fn flags_color(flags: FrameFlags) -> [f32; 4] {
     }
 }
 
+/// A duration in the unit that reads: µs below a millisecond, ms below a
+/// second, seconds beyond. Signed, because "B is left of A" is an answer, not
+/// an error.
+pub(crate) fn fmt_dt(s: f64) -> String {
+    let (unit, scaled) = if !s.is_finite() {
+        return "-".to_string();
+    } else if s.abs() < 1e-3 {
+        ("µs", s * 1e6)
+    } else if s.abs() < 1.0 {
+        ("ms", s * 1e3)
+    } else {
+        ("s", s)
+    };
+    format!("{scaled:+.3} {unit}")
+}
+
+/// The cursor pair's header, in the one wording both windows that carry it use:
+/// `A 1.234s  B 1.456s  Δt +222.000 ms`. `dec` is the decimals on the absolute
+/// times -- the plot reads milliseconds off a curve, the Trace table counts
+/// microseconds between two frames, and neither should have to round the other's
+/// number. An unplaced cursor prints `-`, never 0.
+pub(crate) fn cursor_head(a_s: Option<f64>, b_s: Option<f64>, dec: usize) -> String {
+    let cell = |v: Option<f64>| match v {
+        Some(t) => format!("{:.*}s", dec, t),
+        None => "-".to_string(),
+    };
+    match (a_s, b_s) {
+        (Some(x), Some(y)) => format!("A {}  B {}  Δt {}", cell(a_s), cell(b_s), fmt_dt(y - x)),
+        _ => format!("A {}  B {}", cell(a_s), cell(b_s)),
+    }
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     // The status bar takes `&App`, so its throttled counters refresh here;
     // every other window syncs inside its own draw path.
@@ -229,6 +261,36 @@ mod tests {
         let plain = super::parse_record_filter("13, FR13, FR:5, FRx:5, FR0:abc");
         assert_eq!(plain.can, vec![(0x13, false)]);
         assert!(plain.fr.is_empty(), "{:?}", plain.fr);
+    }
+
+    /// The cursor pair's header, worded once for both windows that carry it. The
+    /// decimals differ because the quantities do: a plot is read in ms, a Trace
+    /// row is a microsecond apart from its neighbour.
+    #[test]
+    fn the_cursor_header_reads_the_same_in_both_windows() {
+        assert_eq!(
+            super::cursor_head(Some(1.0), Some(1.222), 3),
+            "A 1.000s  B 1.222s  Δt +222.000 ms"
+        );
+        assert_eq!(
+            super::cursor_head(Some(1.0), Some(1.000123), 6),
+            "A 1.000000s  B 1.000123s  Δt +123.000 µs",
+            "the table's times keep the resolution its Time column shows"
+        );
+        assert_eq!(
+            super::cursor_head(Some(1.222), Some(1.0), 3),
+            "A 1.222s  B 1.000s  Δt -222.000 ms",
+            "B left of A reads negative: the direction is the answer"
+        );
+        assert_eq!(super::cursor_head(None, None, 3), "A -  B -");
+        assert_eq!(
+            super::cursor_head(Some(1.0), None, 3),
+            "A 1.000s  B -",
+            "a cursor nobody placed is not a 0.000s one"
+        );
+        assert_eq!(super::fmt_dt(0.000_123), "+123.000 µs");
+        assert_eq!(super::fmt_dt(-1.5), "-1.500 s");
+        assert_eq!(super::fmt_dt(0.222), "+222.000 ms");
     }
 
     /// The whole point of the draft: a moving handle must not touch the model,
