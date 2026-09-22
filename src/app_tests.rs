@@ -1809,6 +1809,19 @@ fn the_trace_filter_takes_an_exact_slot_or_id() {
     let flt = mk(&app, "Slot=3");
     assert_eq!(flt.exact, None, "an `=` text is a condition, not an address");
     assert!(!flt.value_conds.is_empty());
+    // A half-typed address falls back to the substring search it would have
+    // been: the table goes empty and the box still shows exactly what was
+    // typed. The alternative -- ignoring a filter that looks armed -- would
+    // hide the reason instead of stating it.
+    for typo in ["id:", "id:XYZ", "slot:", "slot:70000"] {
+        let flt = mk(&app, typo);
+        assert_eq!(flt.exact, None, "{typo} is not an address");
+        assert_eq!(
+            flt.query.as_deref(),
+            Some(typo.to_ascii_uppercase().as_str()),
+            "{typo} stays the text search it was"
+        );
+    }
 }
 
 /// The row menu's "Clear filter" has to lift *every* condition, including the
