@@ -294,8 +294,8 @@ impl TraceWin {
         // search.
         let value_conds: Vec<ValueCond> =
             parse_value_cond(&self.filter).into_iter().collect();
-        // So is an exact address: `id=1AB` says which rows to keep, and searching
-        // the text "ID=1AB" through the table as a substring would match nothing.
+        // So is an exact address: `id:1AB` says which rows to keep, and searching
+        // the text "ID:1AB" through the table as a substring would match nothing.
         let exact = parse_exact_addr(&self.filter);
         let query = (value_conds.is_empty() && exact.is_none())
             .then(|| self.filter.trim().to_ascii_uppercase())
@@ -313,6 +313,32 @@ impl TraceWin {
             value_conds,
             exact,
         }
+    }
+
+    /// The conditions that live in the collapsible 筛选 row *and actually
+    /// filter*: with that row closed they keep hiding rows while nothing on
+    /// screen says so, which reads as a broken table. Built on
+    /// [`TraceWin::filter_lens`], so text that parses to nothing ("zz" in the
+    /// payload box, "abc" in a time box) is not claimed as active -- the
+    /// answer is what hides rows, not what is filled in. The main row's own
+    /// controls (scope, text, direction) stay out because they are visible, and
+    /// so does `fr_expand`: it adds rows, it never hides one.
+    pub fn hidden_conds(&self) -> Vec<&'static str> {
+        let f = self.filter_lens();
+        let mut conds = Vec::new();
+        if f.needle.is_some() {
+            conds.push("payload");
+        }
+        if f.flags_kind != 0 {
+            conds.push("帧类型");
+        }
+        if f.dbc_only {
+            conds.push("仅 DBC");
+        }
+        if f.from_s.is_some() || f.to_s.is_some() {
+            conds.push("时间范围");
+        }
+        conds
     }
 }
 

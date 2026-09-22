@@ -1811,6 +1811,105 @@ fn the_trace_filter_takes_an_exact_slot_or_id() {
     assert!(!flt.value_conds.is_empty());
 }
 
+/// The row menu's "Clear filter" has to lift *every* condition, including the
+/// ones that live in the collapsed 筛选 row: it used to reset the text box, the
+/// direction, 仅 DBC and the scope, and quietly leave the payload search, the
+/// frame kind and the time range working. A button that names the whole filter
+/// and clears half of it is the same lie as a "Clear" that clears one of two
+/// tables -- and now that the time range is saved with the project, a reopened
+/// session can be hiding rows nothing on screen still shows.
+#[test]
+fn the_row_menu_clear_filter_lifts_every_condition() {
+    let mut app = App::headless();
+    let base = app.trace_windows[0].clone();
+    /// One filter condition and how to switch it on alone.
+    type Case = (&'static str, fn(&mut crate::workspace::TraceWin));
+    // One row every condition below can exclude by itself: unknown to the DBC,
+    // Rx, classic, empty payload, bus 0, at 9 s.
+    let f = frame_at(9_000_000, 0x777, 8, Direction::Rx);
+    let cases: [Case; 7] = [
+        ("the text box", |w| w.filter = "zzz".into()),
+        ("payload", |w| w.payload = "AA BB".into()),
+        ("帧类型", |w| w.flags_kind = 2),
+        ("仅 DBC", |w| w.dbc_only = true),
+        ("方向", |w| w.dir = 2),
+        (
+            "时间范围",
+            |w| {
+                w.time_from = "1.0".into();
+                w.time_to = "2.5".into();
+            },
+        ),
+        ("作用域", |w| w.scope = SigScope::Bus(1)),
+    ];
+    for (what, set) in cases {
+        let mut w = base.clone();
+        set(&mut w);
+        app.trace_windows[0] = w;
+        assert!(
+            !app.trace_match(&app.trace_windows[0], &f),
+            "{what} alone hides the row"
+        );
+        crate::ui::trace::clear_filter(&mut app, 0);
+        assert!(
+            app.trace_match(&app.trace_windows[0], &f),
+            "and the menu's Clear filter lifts {what}"
+        );
+    }
+
+    // What it must not touch: the window's Manual pick set is a list the
+    // operator built, not a condition they typed.
+    let mut w = base.clone();
+    w.scope = SigScope::Manual;
+    w.manual.insert(crate::workspace::Pick::Fr { bus: 0, slot: 13 });
+    app.trace_windows[0] = w;
+    crate::ui::trace::clear_filter(&mut app, 0);
+    assert_eq!(app.trace_windows[0].scope, SigScope::All);
+    assert!(
+        !app.trace_windows[0].manual.is_empty(),
+        "a one-key clear must not quietly eat the curated selection"
+    );
+}
+
+/// The other half of the same defect: a closed 筛选 row keeps filtering with
+/// nothing on screen to say so. The toggle now carries the count and names the
+/// conditions on hover, so the report is built from what actually filters --
+/// text that fails to parse hides nothing and must not be counted.
+#[test]
+fn a_closed_filter_row_names_the_conditions_still_working() {
+    let mut app = App::headless();
+    let w = &mut app.trace_windows[0];
+    assert!(w.hidden_conds().is_empty(), "an untouched window hides nothing");
+    // Filled in but not filtering: unparseable payload text, an unparsable
+    // second, a frame kind left on Any.
+    w.payload = "zz".to_string();
+    w.time_from = "abc".to_string();
+    assert!(
+        w.hidden_conds().is_empty(),
+        "text that does not filter is not reported as filtering: {:?}",
+        w.hidden_conds()
+    );
+    w.payload = "11 22".to_string();
+    w.time_from = "1.0".to_string();
+    w.flags_kind = 1;
+    w.dbc_only = true;
+    assert_eq!(
+        w.hidden_conds(),
+        ["payload", "帧类型", "仅 DBC", "时间范围"],
+        "every condition that is working while the row is closed"
+    );
+    // The main row's own controls are always visible, so they never join the
+    // list -- and neither does the FR expansion, which adds rows.
+    w.filter = "Motor".to_string();
+    w.dir = 1;
+    w.fr_expand = true;
+    assert_eq!(
+        w.hidden_conds(),
+        ["payload", "帧类型", "仅 DBC", "时间范围"],
+        "visible controls and row-expansion are not conditions in disguise"
+    );
+}
+
 #[test]
 fn channels_can_be_added_removed_and_renamed() {
     let mut app = App::headless();

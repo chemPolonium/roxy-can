@@ -71,6 +71,24 @@ pub(crate) fn filter_to_id(app: &mut App, win: usize, f: &CanFrame) {
     app.trace_windows[win].filter = format!("id:{}", fmt_id(f));
 }
 
+/// "Clear filter" as both row menus offer it, in one place so the CAN and
+/// FlexRay menus cannot drift again. Every condition the operator typed or
+/// ticked goes: the text box, the payload search, the frame kind, 仅 DBC, the
+/// time range, the direction, and the scope back to All. The window's Manual
+/// pick set stays -- that is a curated list, not a condition typed on a whim,
+/// and a one-key clear must not quietly eat it.
+pub(crate) fn clear_filter(app: &mut App, win: usize) {
+    let w = &mut app.trace_windows[win];
+    w.filter.clear();
+    w.payload.clear();
+    w.time_from.clear();
+    w.time_to.clear();
+    w.dir = 0;
+    w.flags_kind = 0;
+    w.dbc_only = false;
+    w.scope = SigScope::All;
+}
+
 fn fmt_data(f: &CanFrame) -> String {
     f.payload().iter().map(|b| format!("{b:02X} ")).collect()
 }
@@ -174,8 +192,26 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // this toggle: the main row stays short enough for a half-width
     // window, and the extras only take space when actually wanted.
     ui.same_line();
-    if ui.button(format!("筛选##tf{i}")) {
+    // Closed and still filtering: say so on the button, and name the
+    // conditions on hover. Otherwise the row is invisible while it works.
+    let hidden = if app.trace_windows[i].filters_open {
+        Vec::new()
+    } else {
+        app.trace_windows[i].hidden_conds()
+    };
+    let filter_label = if hidden.is_empty() {
+        "筛选".to_string()
+    } else {
+        format!("筛选 ·{}", hidden.len())
+    };
+    if ui.button(format!("{filter_label}##tf{i}")) {
         app.trace_windows[i].filters_open = !app.trace_windows[i].filters_open;
+    }
+    if !hidden.is_empty() && ui.is_item_hovered() {
+        ui.tooltip_text(format!(
+            "收起的过滤条件仍在生效：{}",
+            hidden.join(" · ")
+        ));
     }
     if app.trace_windows[i].filters_open {
         ui.same_line();
@@ -513,11 +549,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             ));
         }
         if ui.menu_item("Clear filter") {
-            let w = &mut app.trace_windows[i];
-            w.filter.clear();
-            w.dir = 0;
-            w.dbc_only = false;
-            w.scope = SigScope::All;
+            clear_filter(app, i);
         }
         let hex: String = r.payload.iter().map(|b| format!("{b:02X} ")).collect();
         if ui.menu_item("Copy payload") {
@@ -543,11 +575,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             filter_to_id(app, i, &f);
         }
         if ui.menu_item("Clear filter") {
-            let w = &mut app.trace_windows[i];
-            w.filter.clear();
-            w.dir = 0;
-            w.dbc_only = false;
-            w.scope = SigScope::All;
+            clear_filter(app, i);
         }
         let addable = !f.is_error() && !f.is_remote();
         if ui.menu_item_enabled_selected("Add to Interactive Generator", None::<&str>, false, addable)
