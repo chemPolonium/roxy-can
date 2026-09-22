@@ -818,6 +818,7 @@ impl App {
             opened: true,
             t_offset_s: 0.0,
             show_cursor: true,
+            cursor_s: [None, None],
             zoom_enabled: false,
             show_markers: true,
             y_locks: HashMap::new(),

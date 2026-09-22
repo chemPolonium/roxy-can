@@ -376,6 +376,41 @@ fn every_window_draws_without_panicking() {
     frames(&mut app, &mut ctx, 5);
 }
 
+/// The cursor pair shares the draw path with the curves, so what is worth
+/// proving without a screen is that a placed pair draws at all: overlay and
+/// one-plot-per-signal both, and with only one of the two placed, which is the
+/// state every session starts in. Whether a gesture lands a cursor where the
+/// pointer was is the pure helpers' job (`ui::graphics::tests`); the feel of it
+/// is the screen check.
+#[test]
+fn the_graphics_window_draws_a_cursor_pair() {
+    use crate::app::PopupTarget;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_graphics_window();
+    let key = SigKey::can(0, 0x100, false, "Alpha");
+    app.subscribe(key.clone());
+    app.set_win_signal(PopupTarget::Graphics(0), key, true);
+    app.graphics[0].show_cursor = true;
+    app.graphics[0].cursor_s = [Some(0.4), Some(1.2)];
+    frames(&mut app, &mut ctx, 3);
+    assert_eq!(
+        app.graphics[0].cursor_s,
+        [Some(0.4), Some(1.2)],
+        "drawing a pair leaves the measurement alone"
+    );
+    // Half placed: the block has to explain the missing one, not draw a line at
+    // time zero.
+    app.graphics[0].cursor_s = [Some(0.4), None];
+    app.graphics[0].stacked = true;
+    frames(&mut app, &mut ctx, 3);
+    // Off again: the times are kept, the lines are not drawn.
+    app.graphics[0].show_cursor = false;
+    frames(&mut app, &mut ctx, 2);
+    assert_eq!(app.graphics[0].cursor_s, [Some(0.4), None]);
+}
+
 /// The script editor hosts the CTE text widget plus the fact sidebar:
 /// run it with source that compiles and with source that fails, over
 /// several frames so the fact cache and the marker refresh both run.

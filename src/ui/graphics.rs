@@ -230,6 +230,163 @@ pub(crate) fn zoom_offset(
     (t_now - new_right).clamp(0.0, max_off)
 }
 
+/// How close to a cursor line the pointer has to sit to take hold of it. Wide
+/// enough to hit with a stylus on a bench laptop, narrow enough that a press in
+/// empty ground never steals a cursor the user was about to double-click past.
+const CURSOR_GRAB_PX: f32 = 6.0;
+
+/// The time under a pointer x. The same mapping `draw_plot` lays curves out
+/// with, so a cursor placed where the pointer was sits exactly there.
+fn t_at_x(mx: f32, x0: f32, w: f32, t_left: f64, tw: f64) -> f64 {
+    t_left + tw * f64::from(((mx - x0) / w).clamp(0.0, 1.0))
+}
+
+/// The x of a cursor time, unclamped: whether it is on screen at all is the
+/// caller's business, and clamping here would draw an off-view cursor as if it
+/// were parked at the edge.
+fn x_at_t(t: f64, x0: f32, w: f32, t_left: f64, tw: f64) -> f32 {
+    x0 + w * ((t - t_left) / tw) as f32
+}
+
+/// Where the two cursors stand on screen in this view -- the hit tests work on
+/// those x positions, the drawing maps them again from the times it is given.
+fn cursor_xs(
+    cursor_s: &[Option<f64>; 2],
+    x0: f32,
+    w: f32,
+    t_left: f64,
+    tw: f64,
+) -> [Option<f32>; 2] {
+    std::array::from_fn(|n| cursor_s[n].map(|t| x_at_t(t, x0, w, t_left, tw)))
+}
+
+/// Which cursor a drag takes hold of: the nearest line inside the grab radius,
+/// `None` when the pointer is on empty ground (and the gesture is a pan).
+fn grab_cursor(mx: f32, xs: [Option<f32>; 2]) -> Option<usize> {
+    let mut best: Option<(f32, usize)> = None;
+    for (n, x) in xs.iter().enumerate() {
+        let Some(x) = x else { continue };
+        let d = (x - mx).abs();
+        if d <= CURSOR_GRAB_PX && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, n));
+        }
+    }
+    best.map(|(_, n)| n)
+}
+
+/// Which cursor a double-click moves: a free slot first (A, then B), so the
+/// pair fills up; afterwards the **farther** line, because the near one is what
+/// dragging is for. Unambiguous either way -- one gesture, one target.
+fn place_cursor(mx: f32, xs: [Option<f32>; 2]) -> usize {
+    match (xs[0], xs[1]) {
+        (None, _) => 0,
+        (_, None) => 1,
+        (Some(a), Some(b)) => {
+            if (a - mx).abs() > (b - mx).abs() {
+                0
+            } else {
+                1
+            }
+        }
+    }
+}
+
+/// What the pointer asked of the cursors this frame. Separated from the drawing
+/// so the one-drag-one-thing rule is checkable without a window: `Drag` is also
+/// the answer that stops the pan from taking the same gesture.
+#[derive(Debug, PartialEq, Eq)]
+enum PointerClaim {
+    /// Nothing to do with a cursor: the ground is the pan's.
+    None,
+    /// The press holds line `n` and moves it with the pointer.
+    Drag(usize),
+    /// A double-click places a cursor at the pointer.
+    Place(usize),
+}
+
+impl PointerClaim {
+    fn cursor(&self) -> Option<usize> {
+        match self {
+            PointerClaim::None => None,
+            PointerClaim::Drag(n) | PointerClaim::Place(n) => Some(*n),
+        }
+    }
+}
+
+fn cursor_claim(
+    held: bool,
+    double_clicked: bool,
+    mx: f32,
+    xs: [Option<f32>; 2],
+) -> PointerClaim {
+    if let Some(n) = held.then(|| grab_cursor(mx, xs)).flatten() {
+        return PointerClaim::Drag(n);
+    }
+    if double_clicked {
+        return PointerClaim::Place(place_cursor(mx, xs));
+    }
+    PointerClaim::None
+}
+
+/// A duration on the time axis in the unit that reads: µs below a
+/// millisecond, ms below a second, seconds beyond.
+fn fmt_dt(s: f64) -> String {
+    let (unit, scaled) = if !s.is_finite() {
+        ("", 0.0)
+    } else if s.abs() < 1e-3 {
+        ("µs", s * 1e6)
+    } else if s.abs() < 1.0 {
+        ("ms", s * 1e3)
+    } else {
+        ("s", s)
+    };
+    if unit.is_empty() {
+        return "-".to_string();
+    }
+    format!("{scaled:+.3} {unit}")
+}
+
+/// The cursor pair's header: both times, and the signed interval between them
+/// once both are placed. `A –` says plainly that a cursor is missing rather
+/// than showing a number that was never measured.
+fn cursor_head(a: Option<f64>, b: Option<f64>) -> String {
+    let cell = |v: Option<f64>| match v {
+        Some(t) => format!("{t:.3}s"),
+        None => "-".to_string(),
+    };
+    match (a, b) {
+        (Some(x), Some(y)) => format!("A {}  B {}  Δt {}", cell(a), cell(b), fmt_dt(y - x)),
+        // The mode is on and nothing placed yet: the box says so where the
+        // readings will appear, and names the gesture that fills it in.
+        (None, None) => "A -  B -  双击图面放置游标".to_string(),
+        _ => format!("A {}  B {}", cell(a), cell(b)),
+    }
+}
+
+/// One curve's line in the cursor readout: its value at A, at B, and the change
+/// between them. A sample that is not there prints `-`: a curve absent at that
+/// instant has no opinion, and a `0` there would be read as "it fell to zero".
+fn cursor_row(name: &str, a: Option<f64>, b: Option<f64>) -> String {
+    let cell = |v: Option<f64>| match v {
+        Some(v) => fmt_val(v),
+        None => "-".to_string(),
+    };
+    let delta = match (a, b) {
+        (Some(x), Some(y)) => fmt_dt_rel(y - x),
+        _ => "-".to_string(),
+    };
+    format!("{name}  {} → {}  Δ {delta}", cell(a), cell(b))
+}
+
+/// A value difference, signed, in the same adaptive format the values use.
+fn fmt_dt_rel(d: f64) -> String {
+    if d < 0.0 {
+        format!("-{}", fmt_val(d.abs()))
+    } else {
+        format!("+{}", fmt_val(d))
+    }
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     let n = app.graphics.len();
     let disp_h = ui.io().display_size()[1];
@@ -307,7 +464,10 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     }
     app.graphics[i].stacked = stacked;
     ui.same_line();
-    ui.checkbox("Cursor", &mut app.graphics[i].show_cursor);
+    ui.checkbox("Cursors", &mut app.graphics[i].show_cursor);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("两条游标 A/B：双击图面放下一个，按住游标线拖动，读每条曲线两点的值与 Δ");
+    }
     wrap_same_line(ui, "Zoom");
     ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
     wrap_same_line(ui, "Dots");
@@ -361,7 +521,7 @@ fn wrap_same_line(ui: &Ui, text: &str) {
 
 /// Right area: draws plots directly on the draw list and reserves exactly
 /// the available space, so no scrollbar appears. Also handles mouse-wheel
-/// zoom, left-drag pan, and the measurement cursor.
+/// zoom, left-drag pan, and placing and dragging the two measurement cursors.
 fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     let avail = ui.content_region_avail();
     let w = avail[0].max(40.0);
@@ -416,7 +576,26 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     // has to use the same rect draw_plot works in.
     let (ix0, iy0, iw, _ih) = axis_inset(x0, y0, w, h);
     let hover = mx >= ix0 && mx <= ix0 + iw && my >= iy0 && my <= iy0 + h;
-    if hover && app.graphics[i].zoom_enabled {
+    let t_left = t_now - app.graphics[i].t_offset_s - tw;
+    // What the pointer is asking for this frame, decided from the button state
+    // and the two lines' positions alone: a held grab drags, a double-click on
+    // empty ground places. A drag is also what keeps the pan from taking the
+    // same gesture -- one drag, one thing moved.
+    let claim = if app.graphics[i].show_cursor && hover {
+        cursor_claim(
+            ui.is_mouse_down(MouseButton::Left),
+            ui.is_mouse_double_clicked(MouseButton::Left),
+            mx,
+            cursor_xs(&app.graphics[i].cursor_s, ix0, iw, t_left, tw),
+        )
+    } else {
+        PointerClaim::None
+    };
+    if let Some(n) = claim.cursor() {
+        app.graphics[i].cursor_s[n] = Some(t_at_x(mx, ix0, iw, t_left, tw));
+    }
+    let dragging = matches!(claim, PointerClaim::Drag(_));
+    if hover && app.graphics[i].zoom_enabled && !dragging {
         if io.mouse_down(MouseButton::Left) && io.mouse_delta()[0] != 0.0 {
             let dt = tw as f32 * io.mouse_delta()[0] / iw;
             let off = &mut app.graphics[i].t_offset_s;
@@ -434,11 +613,13 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
     }
 
     let t_right = t_now - app.graphics[i].t_offset_s;
-    let cursor = if hover && app.graphics[i].show_cursor {
-        let frac = ((mx - ix0) / iw) as f64;
-        Some((mx, t_right - tw * (1.0 - frac)))
+    // The cursors keep their own times; where they land on screen is this view's
+    // business, recomputed every frame, so panning and live advance move the
+    // lines while the point they mark stays put. Off means no lines at all.
+    let cursors = if app.graphics[i].show_cursor {
+        app.graphics[i].cursor_s
     } else {
-        None
+        [None, None]
     };
 
     // Every curve in this window writes the same draw list, so the budget is
@@ -479,7 +660,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                     // is enough -- per pane it collided with the next pane's top
                     // value label.
                     time_labels: k == last,
-                    cursor,
+                    cursors,
                 },
             );
         }
@@ -500,7 +681,7 @@ fn plot_area(app: &mut App, ui: &Ui, i: usize) {
                 y_range,
                 budget,
                 time_labels: true,
-                cursor,
+                cursors,
             },
         );
     }
@@ -576,7 +757,8 @@ struct PlotPane<'a> {
     y_range: (f64, f64),
     budget: CurveBudget,
     time_labels: bool,
-    cursor: Option<(f32, f64)>,
+    /// The two measurement cursors' times, `None` while unplaced.
+    cursors: [Option<f64>; 2],
 }
 
 /// The value range one pane draws against.
@@ -701,7 +883,7 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         y_range,
         budget,
         time_labels,
-        cursor,
+        cursors,
     } = pane;
     // Everything below works in the inset rect, leaving the gutter and bottom
     // strip free for the axis labels.
@@ -853,38 +1035,84 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         }
     }
 
-    if let Some((cx, ct)) = cursor {
-        dl.add_line([cx, y0], [cx, y0 + h], [0.95, 0.85, 0.4, 0.9])
-            .build();
-        let left_side = cx > x0 + w - 120.0;
-        let time_txt = format!("{:.3}s", ct);
-        let tx = if left_side {
-            cx - 8.0 - time_txt.len() as f32 * 6.5
-        } else {
-            cx + 6.0
-        };
-        dl.add_text([tx, y0 + h - 13.0], [0.95, 0.85, 0.4, 1.0], time_txt);
-        let t_us = ct * 1e6;
-        let mut row = 0;
-        for key in keys {
-            let Some(sub) = app.sub_view(key) else {
+    // The measurement cursors: two lines, the interval between them tinted, and
+    // one readout block giving every curve's value at each. A cursor whose time
+    // has left the view draws no line -- the time it holds stays in the block,
+    // which is where the reading comes from.
+    const CURSOR_COLOR: [[f32; 4]; 2] = [
+        [0.95, 0.85, 0.40, 0.95],
+        [0.45, 0.80, 0.95, 0.95],
+    ];
+    if cursors.iter().any(Option::is_some) {
+        if let (Some(a), Some(b)) = (cursors[0], cursors[1]) {
+            let (xa, xb) = (
+                x_at_t(a, x0, w, t_min, tw),
+                x_at_t(b, x0, w, t_min, tw),
+            );
+            let lo = xa.min(xb).clamp(x0, x0 + w);
+            let hi = xa.max(xb).clamp(x0, x0 + w);
+            if hi - lo > 0.5 {
+                dl.add_rect([lo, y0], [hi, y0 + h], [0.55, 0.65, 0.95, 0.10])
+                    .filled(true)
+                    .build();
+            }
+        }
+        for (n, (t, x)) in cursors.iter().zip(cursor_xs(&cursors, x0, w, t_min, tw)).enumerate() {
+            let (Some(t), Some(x)) = (t, x) else {
                 continue;
             };
-            let txt = match value_at(&sub.history, t_us) {
-                Some(v) => format!("{} = {}", key.name(), fmt_val(v)),
-                None => format!("{} = -", key.name()),
-            };
-            let lx = if left_side {
-                cx - 8.0 - txt.len() as f32 * 6.5
+            if x < x0 || x > x0 + w {
+                continue;
+            }
+            let color = CURSOR_COLOR[n];
+            dl.add_line([x, y0], [x, y0 + h], color).build();
+            dl.add_text([x + 3.0, y0 + 2.0], color, if n == 0 { "A" } else { "B" });
+            let time_txt = format!("{t:.3}s");
+            let lx = if x + 70.0 > x0 + w {
+                x - 4.0 - label_width(&time_txt)
             } else {
-                cx + 6.0
+                x + 3.0
             };
+            dl.add_text([lx, y0 + h - 13.0], color, time_txt);
+        }
+        // The block goes top-right: the legend owns the top-left corner, and
+        // the axis labels own the bottom strip.
+        let mut rows: Vec<([f32; 4], String)> = vec![(
+            [0.90, 0.90, 0.95, 1.0],
+            cursor_head(cursors[0], cursors[1]),
+        )];
+        if let (Some(a), Some(b)) = (cursors[0], cursors[1]) {
+            for key in keys {
+                let Some(sub) = app.sub_view(key) else {
+                    continue;
+                };
+                let c = PALETTE[sub.color % PALETTE.len()];
+                rows.push((
+                    [c[0], c[1], c[2], 1.0],
+                    cursor_row(
+                        key.name(),
+                        value_at(&sub.history, a * 1e6),
+                        value_at(&sub.history, b * 1e6),
+                    ),
+                ));
+            }
+        }
+        let wide = rows
+            .iter()
+            .map(|(_, text)| label_width(text))
+            .fold(0.0f32, f32::max);
+        let box_h = rows.len() as f32 * 13.0 + 6.0;
+        let rx1 = x0 + w - 2.0;
+        let rx0 = rx1 - wide - 8.0;
+        dl.add_rect([rx0, y0 + 2.0], [rx1, y0 + 2.0 + box_h], [0.10, 0.10, 0.14, 0.85])
+            .filled(true)
+            .build();
+        for (n, (color, text)) in rows.iter().enumerate() {
             dl.add_text(
-                [lx, y0 + 4.0 + row as f32 * 12.0],
-                PALETTE[sub.color % PALETTE.len()],
-                txt,
+                [rx0 + 4.0, y0 + 5.0 + n as f32 * 13.0],
+                *color,
+                text.clone(),
             );
-            row += 1;
         }
     }
 }
@@ -901,7 +1129,9 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 mod tests {
     use super::{
         AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_SIDE_PX, MAX_CURVE_POINTS, axis_inset,
-        bucket_extremes, curve_runs, dots_readable, zoom_offset, zoom_step,
+        bucket_extremes, curve_runs, cursor_claim, cursor_head, cursor_row, cursor_xs,
+        dots_readable, fmt_dt, grab_cursor, place_cursor, t_at_x, x_at_t, zoom_offset, zoom_step,
+        PointerClaim,
     };
 
     #[test]
@@ -915,6 +1145,124 @@ mod tests {
             (tiny_w, tiny_h),
             (20.0, 20.0),
             "a pane too small to pay both margins keeps a usable rect"
+        );
+    }
+
+    /// The two mappings are the plot's own, so the line a click leaves behind is
+    /// exactly where the pointer was -- and a cursor that is not on screen keeps
+    /// its time rather than being parked on the edge, which would read as a
+    /// measurement of the boundary.
+    #[test]
+    fn a_cursor_lands_where_the_pointer_was_and_keeps_its_time() {
+        let (x0, w, t_left, tw) = (100.0f32, 400.0f32, 10.0f64, 8.0f64);
+        assert_eq!(t_at_x(300.0, x0, w, t_left, tw), 14.0);
+        assert!((x_at_t(14.0, x0, w, t_left, tw) - 300.0).abs() < 1e-3);
+        assert_eq!(
+            t_at_x(-50.0, x0, w, t_left, tw),
+            t_left,
+            "a press left of the data places at the first instant, not before it"
+        );
+        assert_eq!(t_at_x(900.0, x0, w, t_left, tw), t_left + tw);
+        assert!(
+            x_at_t(9.0, x0, w, t_left, tw) < x0,
+            "a time before the view maps off the left edge, unclamped"
+        );
+        assert!(x_at_t(19.0, x0, w, t_left, tw) > x0 + w);
+        let xs = cursor_xs(&[Some(14.0), None], x0, w, t_left, tw);
+        assert!(xs[0].is_some() && xs[1].is_none(), "an unplaced cursor has no x");
+    }
+
+    /// A drag takes the nearest line, and only within a hand width: a press on
+    /// empty ground has to stay the pan it was, or one gesture would do two
+    /// things at once.
+    #[test]
+    fn a_drag_grabs_the_nearest_cursor_line_only_when_it_is_under_the_pointer() {
+        assert_eq!(grab_cursor(100.0, [Some(98.0), Some(140.0)]), Some(0));
+        assert_eq!(grab_cursor(100.0, [Some(140.0), Some(103.0)]), Some(1));
+        assert_eq!(
+            grab_cursor(100.0, [Some(90.0), Some(115.0)]),
+            None,
+            "both out of reach: the drag belongs to the pan"
+        );
+        assert_eq!(
+            grab_cursor(100.0, [None, Some(100.0)]),
+            Some(1),
+            "a cursor that was never placed cannot be grabbed"
+        );
+        assert_eq!(grab_cursor(100.0, [Some(100.0), Some(100.0)]), Some(0), "a tie takes the first");
+    }
+
+    /// A double-click fills the free slot first (A, then B); once the pair
+    /// exists it moves the **farther** line, because the near one is what
+    /// dragging is for. Either way one gesture has one unambiguous target.
+    #[test]
+    fn a_double_click_chooses_which_cursor_it_moves() {
+        assert_eq!(place_cursor(500.0, [None, None]), 0, "the pair starts with A");
+        assert_eq!(place_cursor(500.0, [Some(100.0), None]), 1, "then B");
+        assert_eq!(
+            place_cursor(102.0, [Some(100.0), Some(400.0)]),
+            1,
+            "a click by A moves B -- A was reachable by dragging it"
+        );
+        assert_eq!(place_cursor(398.0, [Some(100.0), Some(400.0)]), 0);
+    }
+
+    /// The readout is the whole point of the pair: both times, the interval
+    /// between them, and each curve's value at both plus the change. What is
+    /// not there prints `-`: a time nobody placed, a curve with no sample at
+    /// that instant. A `0` in either place would be read as a measurement.
+    #[test]
+    fn the_cursor_readout_gives_both_values_and_the_change_between_them() {
+        assert_eq!(
+            cursor_head(None, None),
+            "A -  B -  双击图面放置游标",
+            "the mode is on and nothing placed: say what to do"
+        );
+        assert_eq!(cursor_head(Some(1.0), None), "A 1.000s  B -");
+        assert_eq!(
+            cursor_head(Some(1.0), Some(1.222)),
+            "A 1.000s  B 1.222s  Δt +222.000 ms"
+        );
+        assert_eq!(
+            cursor_head(Some(1.222), Some(1.0)),
+            "A 1.222s  B 1.000s  Δt -222.000 ms",
+            "B left of A reads negative: the direction is the answer"
+        );
+        assert_eq!(fmt_dt(0.000_123), "+123.000 µs");
+        assert_eq!(fmt_dt(-1.5), "-1.500 s");
+        assert_eq!(
+            cursor_row("EngineSpeed", Some(1200.0), Some(1450.0)),
+            "EngineSpeed  1200 → 1450  Δ +250.0"
+        );
+        assert_eq!(cursor_row("Pressure", Some(2.5), None), "Pressure  2.50 → -  Δ -");
+        assert_eq!(cursor_row("Pressure", None, None), "Pressure  - → -  Δ -");
+    }
+
+    /// One drag, one thing moved: the test that a held grab is also what keeps
+    /// the pan off the same gesture, and that a plain press on empty ground
+    /// still belongs to the pan.
+    #[test]
+    fn a_press_owns_a_cursor_only_when_it_grabs_or_double_clicks_it() {
+        let on_b = [Some(100.0), Some(300.0)];
+        assert_eq!(
+            cursor_claim(true, false, 302.0, on_b),
+            PointerClaim::Drag(1),
+            "held on B: B follows the pointer, the view does not"
+        );
+        assert_eq!(
+            cursor_claim(true, false, 200.0, on_b),
+            PointerClaim::None,
+            "held on empty ground: that is the pan"
+        );
+        assert_eq!(
+            cursor_claim(false, true, 200.0, [None, None]),
+            PointerClaim::Place(0),
+            "a double-click on empty ground places A"
+        );
+        assert_eq!(
+            cursor_claim(true, true, 302.0, on_b),
+            PointerClaim::Drag(1),
+            "and a grab wins over the place, so a double-click on a line never jumps to the other one"
         );
     }
 

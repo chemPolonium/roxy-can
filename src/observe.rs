@@ -507,6 +507,12 @@ pub struct GraphicsWindow {
     pub opened: bool,
     pub t_offset_s: f64,
     pub show_cursor: bool,
+    /// The two measurement cursors' times in seconds on the plot's own axis
+    /// (`[A, B]`, `None` = not placed yet). Session state, and deliberately not
+    /// project state: a cursor points into the sample ring, and a fresh
+    /// measurement empties that ring -- a restored time would name ground
+    /// nobody is standing on any more.
+    pub cursor_s: [Option<f64>; 2],
     pub zoom_enabled: bool,
     /// Draw a dot on each sample when the visible points are sparse enough to
     /// read individually.
