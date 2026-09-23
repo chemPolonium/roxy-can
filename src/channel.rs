@@ -214,6 +214,25 @@ impl App {
         (us > 0).then_some(us)
     }
 
+    /// The cluster's cycle time in µs -- the unit a static slot's period is
+    /// actually counted in. `None` when the 路 has no description, which is what
+    /// makes the generator fall back to plain milliseconds for that entry rather
+    /// than inventing a cycle grid.
+    pub fn fr_cycle_time_us(&self, bus: u8) -> Option<u64> {
+        let ms = self.fr_db(bus)?.params.cycle_time_ms;
+        (ms > 0.0).then(|| (ms * 1_000.0).round() as u64)
+    }
+
+    /// How many bytes this slot's payload carries: the length the schedule
+    /// declares for the frame occupying it, `None` when nothing describes the slot
+    /// (then the entry's own length is all anyone knows). This is not a limit the
+    /// operator can move -- a FlexRay slot is that wide or it is not scheduled.
+    pub fn fr_declared_len(&self, bus: u8, slot: u16) -> Option<usize> {
+        let db = self.fr_db(bus)?;
+        let f = db.frame_index(db.frame_ix_of_slot(slot)?)?;
+        (f.length > 0).then_some(f.length as usize)
+    }
+
     /// The bus a signal key lives on, spelled the way the tables and legends
     /// name it. A FlexRay key's index is not a CAN channel, so it must not be
     /// looked up in the channel list.

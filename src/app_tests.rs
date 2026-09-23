@@ -7887,6 +7887,8 @@ fn a_flexray_entry_outlives_the_description_it_came_from() {
     let mut app = quiet_app();
     let (slot, ecu) = fr_bound_slot(&mut app);
     app.add_fr_tx(0, slot);
+    // The width the description gives this slot, read before anything is typed.
+    let wide = app.fr_tx_list[0].len;
     app.set_fr_tx_hex(0, slot, "11 22 33");
     app.set_fr_tx_cycle(0, slot, 10_000);
     app.set_fr_tx_active(0, slot, true);
@@ -7911,8 +7913,93 @@ fn a_flexray_entry_outlives_the_description_it_came_from() {
         .values()
         .find(|a| a.bus == 0 && a.slot == slot)
         .expect("the raw bytes still reach the tally");
-    assert_eq!(agg.payload, vec![0x11, 0x22, 0x33], "typed as hex, sent as hex");
+    // The slot's width came from the description and stays with the entry after
+    // it is gone: a FlexRay payload is as wide as the schedule says it is, so
+    // typing three bytes sets those three and pads the rest -- it does not
+    // shrink the frame the way a CAN DLC would.
+    assert_eq!(agg.payload.len(), wide, "the frame keeps the slot's width");
+    assert_eq!(
+        agg.payload[..3],
+        [0x11, 0x22, 0x33],
+        "typed bytes lead, zeros pad"
+    );
     app.stop();
+}
+
+/// A FlexRay payload is as wide as the schedule makes it, so the hex box is
+/// bounded by the slot's declared length: three bytes typed into a wider slot
+/// fill its head and pad the rest, and more bytes than the slot carries are
+/// refused with the number that made the refusal -- silently dropping the tail
+/// would send different bytes than the operator typed.
+#[test]
+fn a_flexray_payload_is_bounded_by_its_slot_width() {
+    let mut app = quiet_app();
+    let (slot, _) = fr_bound_slot(&mut app);
+    app.add_fr_tx(0, slot);
+    let wide = app.fr_tx_list[0].len;
+    assert!(wide > 3, "the asset needs a slot wider than 3 bytes: {wide}");
+
+    app.set_fr_tx_hex(0, slot, "11 22 33");
+    assert_eq!(
+        app.fr_tx_list[0].len, wide,
+        "typing fewer bytes does not shrink the slot"
+    );
+    assert_eq!(app.fr_tx_list[0].data[..3], [0x11, 0x22, 0x33]);
+    assert!(
+        app.fr_tx_list[0].data[3..].iter().all(|&b| b == 0),
+        "the rest is padding"
+    );
+
+    app.set_fr_tx_hex(0, slot, &vec!["AA"; wide + 1].join(" "));
+    assert_eq!(
+        app.fr_tx_list[0].data[0], 0x11,
+        "the refused edit changed nothing"
+    );
+    assert!(
+        app.status.contains(&format!("{wide} 字节")),
+        "the refusal names the width: {}",
+        app.status
+    );
+
+    app.set_fr_tx_hex(0, slot, "zz 11");
+    assert!(
+        app.status.contains("hex"),
+        "unreadable text gets its own reason: {}",
+        app.status
+    );
+}
+
+/// The FlexRay cycle box counts **cluster cycles**, not milliseconds: a static
+/// slot transmits when the schedule says, and 0 -- CAN's "event-triggered" -- is
+/// not a thing it can be. `cycles_of` is the same pair of facts read the other
+/// way, and it stays silent about a period that is not a whole number of cycles
+/// rather than rounding a row onto the grid it is not on.
+#[test]
+fn the_flexray_cycle_box_counts_cycles_and_refuses_event_fills() {
+    use crate::generator::{cycles_of, fr_cycle_draft};
+    let ct = 5_000; // a 5 ms cycle grid
+    assert_eq!(fr_cycle_draft("2", ct), Ok((2, 10_000)));
+    assert_eq!(fr_cycle_draft(" 12 ", ct), Ok((12, 60_000)));
+    assert_eq!(fr_cycle_draft("1", ct), Ok((1, 5_000)));
+    // CAN's event mode, refused with the reason and the alternative.
+    let zero = fr_cycle_draft("0", ct).expect_err("0 is not a period");
+    assert!(zero.contains("事件触发"), "{zero}");
+    assert!(zero.contains("On"), "{zero}");
+    assert!(fr_cycle_draft("", ct).is_err(), "an empty box is not a period");
+    assert!(fr_cycle_draft("abc", ct).is_err());
+    assert!(fr_cycle_draft("1e6", ct).is_err(), "and neither is scientific");
+    assert!(
+        fr_cycle_draft("60001", ct).is_err(),
+        "the same ceiling the ms box has, in cycles"
+    );
+    // No cycle time to count in -- an undescribed 路 -- is refused rather than
+    // guessed at, because any number here would be an invented grid.
+    assert!(fr_cycle_draft("2", 0).is_err());
+
+    assert_eq!(cycles_of(10_000, ct), Some(2));
+    assert_eq!(cycles_of(7_500, ct), None, "off the grid: no cycle count");
+    assert_eq!(cycles_of(0, ct), None, "never sending is not every 0 cycles");
+    assert_eq!(cycles_of(10_000, 0), None, "and no grid means no counting");
 }
 
 /// Which node sends which frame is what the FIBEX/ARXML declares, and the

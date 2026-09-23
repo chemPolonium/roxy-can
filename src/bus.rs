@@ -1509,7 +1509,11 @@ impl BusCore {
                 }
             }
             BusCommand::SetFrEntryHex { bus, slot, text } => {
-                self.set_fr_entry_hex(bus, slot, &text);
+                // A refusal goes on the bar (and into the Write ring) rather than
+                // leaving the box to snap back to what it held.
+                if let Some(why) = self.set_fr_entry_hex(bus, slot, &text) {
+                    *status = why;
+                }
             }
             BusCommand::SetFrEntrySource { bus, slot, src } => {
                 if let Some(tx) = self.fr_entry_mut(bus, slot) {
@@ -3468,17 +3472,32 @@ impl BusCore {
     }
 
     /// Replaces a FlexRay entry's base payload from its hex box.
-    fn set_fr_entry_hex(&mut self, bus: u8, slot: u16, text: &str) -> bool {
-        let Some(bytes) =
-            crate::generator::parse_hex_limited(text, crate::generator::MAX_FR_PAYLOAD_LEN)
-        else {
-            return false;
-        };
-        let Some(tx) = self.fr_entry_mut(bus, slot) else {
-            return false;
-        };
-        crate::generator::set_fr_tx_base(tx, bytes);
-        true
+    /// Writes a FlexRay entry's base payload. The slot's declared length bounds
+    /// it -- see [`crate::generator::set_fr_tx_base`] -- and the return value is
+    /// the sentence explaining a refusal, `None` when the bytes went in.
+    fn set_fr_entry_hex(&mut self, bus: u8, slot: u16, text: &str) -> Option<String> {
+        // The slot's width comes from the schedule when the description is there
+        // to say so; an undescribed slot keeps the length its entry already has.
+        let declared = self.fr_dbs.get(&bus).and_then(|db| {
+            let ix = db.frame_ix_of_slot(slot)?;
+            let f = db.frame_index(ix)?;
+            (f.length > 0).then_some(f.length as usize)
+        });
+        // No such entry: nothing to refuse, nothing to write.
+        let current = self
+            .fr_tx_list
+            .iter()
+            .find(|t| t.bus == bus && t.slot == slot)?;
+        let len = declared.unwrap_or(current.len);
+        if let Some(why) = crate::generator::fr_hex_refusal(text, len) {
+            return Some(why);
+        }
+        let bytes = crate::generator::parse_hex_limited(text, len)?;
+        let tx = self
+            .fr_entry_mut(bus, slot)
+            .expect("entry found a moment ago");
+        crate::generator::set_fr_tx_base(tx, bytes, len);
+        None
     }
 
     /// Writes a physical value into a FlexRay entry's base payload and drops only
@@ -3486,8 +3505,9 @@ impl BusCore {
     /// description, the slot holds no frame in it, the frame has no such signal,
     /// or the entry's bytes do not reach it.
     fn pin_fr_entry_signal(&mut self, bus: u8, slot: u16, name: &str, phys: f64) -> bool {
-        let Some(mut data) = self.fr_entry_mut(bus, slot).map(|t| t.data.clone()) else {
-            return false;
+        let (mut data, len) = match self.fr_entry_mut(bus, slot) {
+            Some(t) => (t.data.clone(), t.len),
+            None => return false,
         };
         let Some(db) = self.fr_dbs.get(&bus) else {
             return false;
@@ -3500,7 +3520,7 @@ impl BusCore {
         }
         let tx = self.fr_entry_mut(bus, slot).expect("entry checked above");
         tx.srcs.retain(|s| s.name != name);
-        crate::generator::set_fr_tx_base(tx, data);
+        crate::generator::set_fr_tx_base(tx, data, len);
         true
     }
 

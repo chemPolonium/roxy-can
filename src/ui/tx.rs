@@ -757,14 +757,41 @@ fn fr_row(
     }
     ui.same_line();
     let cycle = view.cycle_us;
-    let cyc = if cycle == 0 {
-        "event".to_string()
-    } else {
-        format!("{} ms", cycle / 1000)
+    // The period, in the unit the bus counts in: cycles for a scheduled slot,
+    // milliseconds for anything else. "不发" rather than CAN's "event" for a zero
+    // period, because a static slot has no event-triggered mode -- 0 there just
+    // means the entry never sends.
+    let cycle_time = app.fr_cycle_time_us(bus);
+    let cycles = crate::generator::cycles_of(cycle, cycle_time.unwrap_or(0));
+    let (cyc, cyc_hint) = match (cycle, cycles) {
+        (0, _) => (
+            "不发".to_string(),
+            "周期 0：这个条目不会自己发车（Send now 仍然可以送一帧）。要恢复正常，点这个按钮填周期数。".to_string(),
+        ),
+        (_, Some(n)) => (
+            format!("{n} 周期"),
+            format!(
+                "每 {n} 个通信周期发一帧 = {} ms。静态槽由调度表决定什么时候发，所以这里数的是周期，不是毫秒。",
+                cycle / 1000
+            ),
+        ),
+        _ => (
+            format!("{} ms", cycle / 1000),
+            match cycle_time {
+                Some(_) => "不在周期网格的整倍数上：这一路描述声明的周期数除不进这个值。".to_string(),
+                None => "这一路没有集群描述（或没声明周期时间），只能按毫秒发。".to_string(),
+            },
+        ),
     };
     if ui.button_with_size(format!("{cyc}##frcyc{i}"), [84.0, 0.0]) {
         app.tx_cycle_edit = Some(GenRow::Fr(i));
-        app.tx_cycle_buf = (cycle / 1000).to_string();
+        app.tx_cycle_buf = match cycles {
+            Some(n) => n.to_string(),
+            None => (cycle / 1000).to_string(),
+        };
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(cyc_hint);
     }
     ui.same_line();
     if ui.button(format!("Send now##frnow{i}")) {
@@ -775,10 +802,9 @@ fn fr_row(
     let off = app.fr_declared_period_us(bus, slot).filter(|d| *d != cycle);
     if let Some(declared) = off {
         ui.same_line();
-        let label = if declared == 0 {
-            "描述 event".to_string()
-        } else {
-            format!("描述 {}ms", declared / 1000)
+        let label = match crate::generator::cycles_of(declared, cycle_time.unwrap_or(0)) {
+            Some(n) => format!("描述 {n} 周期"),
+            None => format!("描述 {}ms", declared / 1000),
         };
         if ui.button(format!("{label}##frdbc{i}")) {
             app.send(crate::bus::BusCommand::SetFrEntryCycle {
@@ -809,6 +835,17 @@ fn fr_row(
         };
         ui.set_next_item_width(260.0);
         ui.input_text(format!("##frdata{i}"), &mut buf).build();
+        if ui.is_item_hovered() {
+            // The width is the schedule's, not the operator's: say so before the
+            // first refusal, not after. An undescribed slot falls back to the
+            // length its entry carries.
+            let wide = app.fr_declared_len(bus, slot).unwrap_or_else(|| {
+                crate::generator::hex_len_of(&view.data_text)
+            });
+            ui.tooltip_text(format!(
+                "载荷 {wide} 字节（这个槽的宽度由调度表规定）：不足补 0，多出来的不收"
+            ));
+        }
         if ui.is_item_active() {
             app.fr_data_edit = Some((i, buf.clone()));
         }
@@ -866,45 +903,84 @@ fn row_header(ch: u8, bus: &str, name: &str, id: u32, driven: usize) -> String {
     format!("{bus}  {name}  ({id:X}){badge}###tx{ch}_{id:X}")
 }
 
-/// Send period of one message, drafted rather than written in place. The row
-/// held an inline number box before, and those apply every keystroke, so
-/// dialing in 100 put the message on the wire at 1 ms and then 10 ms on the way
-/// there. Nothing here touches the schedule until Apply.
+/// Send period of one entry, drafted rather than written in place. The row held
+/// an inline number box before, and those apply every keystroke, so dialing in
+/// 100 put the message on the wire at 1 ms and then 10 ms on the way there.
+/// Nothing here touches the schedule until Apply.
+///
+/// The two buses are asked in **different units, because they keep time
+/// differently**: CAN counts milliseconds (it has no other clock -- any node may
+/// request a frame whenever the bus is free), while a FlexRay static slot
+/// transmits in the cycles the cluster schedule assigns it. Asking that slot for
+/// a millisecond figure invites the operator to fight a schedule that is not
+/// theirs to change, so its dialog counts cycles and shows the time each choice
+/// means. An entry whose 路 has no description has no cycle grid to count in, and
+/// falls back to milliseconds rather than inventing one.
 fn cycle_modal(app: &mut App, ui: &Ui) {
     const ID: &str = "Send cycle##cycmodal";
     let Some(target) = app.tx_cycle_edit else {
         return;
     };
-    // What the dialog shows and what Apply writes, read out of whichever list
-    // the row came from: the two halves of the window share this dialog.
-    let (title, current, declared, declared_by) = match target {
-        GenRow::Can(row) => {
-            let Some(tx) = app.snap.tx.get(row) else {
-                app.tx_cycle_edit = None;
-                return;
-            };
-            let (ch, id, cycle_us, name) = (tx.channel, tx.id, tx.cycle_us, tx.name.clone());
-            let (declared, bus) = (app.dbc_cycle_us(ch, id), app.channel_name(ch));
-            (format!("{name}  {id:X}  on {bus}"), cycle_us, declared, "DBC")
-        }
-        GenRow::Fr(row) => {
-            let Some(tx) = app.snap.fr_tx.get(row) else {
-                app.tx_cycle_edit = None;
-                return;
-            };
-            let (bus, slot, cycle_us, name) = (tx.bus, tx.slot, tx.cycle_us, tx.name.clone());
-            let (declared, bus_name) = (
-                app.fr_declared_period_us(bus, slot),
-                app.fr_bus_name(bus),
-            );
-            (
-                format!("{name}  slot {slot}  on {bus_name}"),
-                cycle_us,
-                declared,
-                "描述",
-            )
-        }
+    let Some(edit) = cycle_edit(app, target) else {
+        app.tx_cycle_edit = None;
+        return;
     };
+    let title = edit.title;
+    let (current, declared, declared_by, cycle_us) =
+        (edit.current_us, edit.declared_us, edit.declared_by, edit.cycle_us);
+    // The draft box's meaning, and the period Apply writes.
+    let draft = match cycle_us {
+        Some(ct) => crate::generator::fr_cycle_draft(&app.tx_cycle_buf, ct).ok().map(|(_, us)| us),
+        None => cycle_from_ms_text(&app.tx_cycle_buf),
+    };
+    let note = match cycle_us {
+        Some(ct) => match crate::generator::fr_cycle_draft(&app.tx_cycle_buf, ct) {
+            Ok((n, us)) => (format!("每 {n} 个通信周期 = {} ms", us / 1000), false),
+            Err(why) => (why.to_string(), true),
+        },
+        None => match draft {
+            Some(0) => (
+                "event-triggered: never sent on a timer".to_string(),
+                false,
+            ),
+            Some(us) => (
+                format!(
+                    "every {} ms  ({:.2} frames/s)",
+                    us / 1000,
+                    1_000_000.0 / us as f64
+                ),
+                false,
+            ),
+            None => (
+                format!("whole milliseconds, 1 to {TX_CYCLE_MAX_MS} -- or 0 for event"),
+                false,
+            ),
+        },
+    };
+    // What the schedule declares, in the unit this dialog edits.
+    let declared_line = declared
+        .filter(|d| *d != current)
+        .map(|d| match cycle_us {
+            Some(ct) => match crate::generator::cycles_of(d, ct) {
+                Some(n) => (format!("{declared_by} 声明的周期：每 {n} 周期（{} ms）", d / 1000), n.to_string()),
+                None => (
+                    format!("{declared_by} 声明的周期：{} ms", d / 1000),
+                    (d / 1000).to_string(),
+                ),
+            },
+            None => (
+                format!(
+                    "{declared_by} 声明的周期：{}",
+                    if d == 0 {
+                        "event（无周期）".to_string()
+                    } else {
+                        format!("{} ms", d / 1000)
+                    }
+                ),
+                (d / 1000).to_string(),
+            ),
+        });
+
     if !popup_is_open(ui, ID) {
         ui.open_popup(ID);
     }
@@ -924,44 +1000,26 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         }
         ui.set_next_item_width(120.0);
         let entered = ui
-            .input_text("ms", &mut app.tx_cycle_buf)
+            .input_text(
+                if cycle_us.is_some() { "周期" } else { "ms" },
+                &mut app.tx_cycle_buf,
+            )
             .flags(InputTextFlags::CHARS_DECIMAL | InputTextFlags::AUTO_SELECT_ALL)
             .enter_returns_true(true)
             .build();
-        let draft = cycle_from_ms_text(&app.tx_cycle_buf);
-        match draft {
-            Some(0) => {
-                ui.text_colored(
-                    [0.95, 0.70, 0.20, 1.0],
-                    "event-triggered: never sent on a timer",
-                );
-            }
-            Some(us) => {
-                ui.text(format!(
-                    "every {} ms  ({:.2} frames/s)",
-                    us / 1000,
-                    1_000_000.0 / us as f64
-                ));
-            }
-            None => {
-                ui.text_colored(
-                    [0.60, 0.60, 0.65, 1.0],
-                    format!("whole milliseconds, 1 to {TX_CYCLE_MAX_MS} -- or 0 for event"),
-                );
-            }
+        let (text, warn) = &note;
+        if *warn {
+            ui.same_line();
+            ui.text_colored([0.95, 0.70, 0.20, 1.0], text);
+        } else {
+            ui.same_line();
+            ui.text_disabled(text);
         }
-        if let Some(d) = declared.filter(|d| *d != current) {
-            ui.text(format!(
-                "{declared_by} 声明的周期：{}",
-                if d == 0 {
-                    "event（无周期）".to_string()
-                } else {
-                    format!("{} ms", d / 1000)
-                }
-            ));
+        if let Some((line, use_it)) = &declared_line {
+            ui.text(line);
             ui.same_line();
             if ui.button("use it") {
-                app.tx_cycle_buf = (d / 1000).to_string();
+                app.tx_cycle_buf = use_it.clone();
             }
         }
         ui.separator();
@@ -1006,6 +1064,47 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
     }
     if !open || dismissed || confirmed.is_some() {
         app.tx_cycle_edit = None;
+    }
+}
+
+/// Everything the cycle dialog shows, read out of whichever list the row came
+/// from: the two halves of the generator share this one dialog.
+struct CycleEdit {
+    title: String,
+    current_us: u64,
+    declared_us: Option<u64>,
+    declared_by: &'static str,
+    /// The cluster's cycle time: `Some` when this row is scheduled in cycles, and
+    /// then the box counts them.
+    cycle_us: Option<u64>,
+}
+
+fn cycle_edit(app: &App, target: GenRow) -> Option<CycleEdit> {
+    match target {
+        GenRow::Can(row) => {
+            let tx = app.snap.tx.get(row)?;
+            let (ch, id, cycle_us, name) = (tx.channel, tx.id, tx.cycle_us, tx.name.clone());
+            let (declared, bus) = (app.dbc_cycle_us(ch, id), app.channel_name(ch));
+            Some(CycleEdit {
+                title: format!("{name}  {id:X}  on {bus}"),
+                current_us: cycle_us,
+                declared_us: declared,
+                declared_by: "DBC",
+                cycle_us: None,
+            })
+        }
+        GenRow::Fr(row) => {
+            let tx = app.snap.fr_tx.get(row)?;
+            let (bus, slot, cycle_us, name) = (tx.bus, tx.slot, tx.cycle_us, tx.name.clone());
+            let (declared, bus_name) = (app.fr_declared_period_us(bus, slot), app.fr_bus_name(bus));
+            Some(CycleEdit {
+                title: format!("{name}  slot {slot}  on {bus_name}"),
+                current_us: cycle_us,
+                declared_us: declared,
+                declared_by: "描述",
+                cycle_us: app.fr_cycle_time_us(bus),
+            })
+        }
     }
 }
 

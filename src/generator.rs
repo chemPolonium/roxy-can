@@ -99,6 +99,12 @@ pub(crate) fn hex_of(data: &[u8]) -> String {
         .join(" ")
 }
 
+/// How many bytes a payload's hex text holds -- the length a row shows when the
+/// schedule does not state one.
+pub fn hex_len_of(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
 /// Ceiling of the period the cycle dialog accepts, in milliseconds.
 pub const TX_CYCLE_MAX_MS: u64 = 60_000;
 
@@ -109,6 +115,36 @@ pub const TX_CYCLE_MAX_MS: u64 = 60_000;
 pub fn cycle_from_ms_text(s: &str) -> Option<u64> {
     let ms: u64 = s.trim().parse().ok()?;
     (ms <= TX_CYCLE_MAX_MS).then_some(ms * 1_000)
+}
+
+/// Which cycle count a period means on this cluster: `None` when it is not a
+/// whole number of cycles, which is what keeps a row honest about a period it
+/// inherited from a project whose cycle time has since changed.
+pub fn cycles_of(period_us: u64, cycle_us: u64) -> Option<u64> {
+    (cycle_us > 0 && period_us > 0 && period_us.is_multiple_of(cycle_us))
+        .then(|| period_us / cycle_us)
+}
+
+/// The FlexRay cycle dialog's parse: a count of **cluster cycles**, at least one,
+/// and the period that makes. A static slot has no event-triggered mode -- the
+/// schedule decides when it transmits -- so 0 is refused with the reason rather
+/// than silently meaning "never" behind CAN's word for it. `Err` carries the
+/// sentence the dialog prints in place of the confirmation.
+pub fn fr_cycle_draft(text: &str, cycle_us: u64) -> Result<(u64, u64), &'static str> {
+    if cycle_us == 0 {
+        return Err("这一路没有声明周期时间：没有可数的周期");
+    }
+    let Ok(n) = text.trim().parse::<u64>() else {
+        return Err("整数周期数");
+    };
+    if n == 0 {
+        return Err("静态槽没有事件触发：至少 1 个周期；要它不发，用行上的 On 勾选框");
+    }
+    let max = TX_CYCLE_MAX_MS * 1_000 / cycle_us;
+    if n > max {
+        return Err("周期数太大");
+    }
+    Ok((n, n * cycle_us))
 }
 
 /// Payload for one generated frame: `tx`'s base bytes with every driven signal
@@ -668,10 +704,34 @@ pub(crate) fn fr_tx_payload(
     data
 }
 
-/// Installs a FlexRay entry's base payload and keeps its length and hex text in
-/// step with it.
-pub(crate) fn set_fr_tx_base(tx: &mut FrTxMsg, data: Vec<u8>) {
-    tx.len = data.len();
+/// Installs a FlexRay entry's base payload at the length its slot carries: short
+/// input is zero-padded, and the entry's length never moves -- a FlexRay slot
+/// holds exactly what the schedule says it holds, unlike a CAN frame whose DLC
+/// follows whatever the operator typed.
+pub(crate) fn set_fr_tx_base(tx: &mut FrTxMsg, mut data: Vec<u8>, len: usize) {
+    data.resize(len, 0);
+    tx.len = len;
     tx.data_text = hex_of(&data);
     tx.data = data;
+}
+
+/// Why a FlexRay payload edit is refused, if it is. Both refusals are loud
+/// rather than forgiving: silently dropping the extra bytes, or silently padding
+/// a typo'd token away, would put different bytes on the schedule than the ones
+/// the operator typed.
+pub fn fr_hex_refusal(text: &str, len: usize) -> Option<String> {
+    let toks: Vec<&str> = text.split_whitespace().collect();
+    if toks.is_empty() {
+        return Some(format!("载荷 {len} 字节：空的不能写入"));
+    }
+    if toks.len() > len {
+        return Some(format!(
+            "这个槽的载荷是 {len} 字节（调度表规定的），{n} 字节写不下；多出来的部分不会发出",
+            n = toks.len()
+        ));
+    }
+    if toks.iter().any(|t| u8::from_str_radix(t, 16).is_err()) {
+        return Some("载荷要写成 hex 字节对，例如 00 1A FF".to_string());
+    }
+    None
 }

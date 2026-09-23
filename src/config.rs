@@ -1895,6 +1895,9 @@ mod tests {
         );
         app.push_fr_db_to_core();
         app.add_fr_tx(0, slot);
+        // The width the schedule gives this slot, read before anything is typed
+        // into it: the payload must still be that wide after the save.
+        let wide = app.fr_tx_list[0].len;
         app.set_fr_tx_hex(0, slot, "AA 55");
         app.set_fr_tx_cycle(0, slot, 20_000);
         app.set_gen_source(
@@ -1919,7 +1922,17 @@ mod tests {
         assert_eq!(tx.node, node, "and its ECU row");
         assert_eq!(tx.cycle_us, 20_000, "and its period");
         assert!(tx.active, "and the On state");
-        assert_eq!(tx.data_text, "AA 55", "and the bytes");
+        assert!(
+            tx.data_text.starts_with("AA 55"),
+            "the typed bytes lead the payload: {}",
+            tx.data_text
+        );
+        assert_eq!(
+            tx.len, wide,
+            "the slot's own width survived the save -- a FlexRay payload is not a \
+             DLC the operator can shorten"
+        );
+        assert_eq!(tx.data_text.split_whitespace().count(), wide);
         assert_eq!(tx.srcs, srcs, "and the driven signal");
         assert!(
             !restored.snap.fr_tx[0].undescribed,
