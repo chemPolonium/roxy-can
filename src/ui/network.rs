@@ -671,10 +671,15 @@ pub fn render(app: &mut App, ui: &Ui) {
                             draft.path = d.path.clone();
                         }
                         // id 过滤（可选）：留空 = 该节点的全部报文。
-                        ui.set_next_item_width(140.0);
+                        const BLOCK_IDS_HINT: &str = "id 过滤，如 100, 3F4x";
+                        ui.set_next_item_width(crate::ui::hint_width(
+                            ui,
+                            BLOCK_IDS_HINT,
+                            140.0,
+                        ));
                         if ui
                             .input_text(format!("##blids{bid}"), &mut draft.ids_text)
-                            .hint("id 过滤，如 100, 3F4x")
+                            .hint(BLOCK_IDS_HINT)
                             .build()
                             && let Some(d) = app.block_drafts.get_mut(&bid)
                         {

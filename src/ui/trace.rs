@@ -229,9 +229,10 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     );
     app.trace_windows[i].scope = new_scope;
     ui.same_line();
-    ui.set_next_item_width(120.0);
+    const FILTER_HINT: &str = "名称 / hex 子串 · id:1AB · slot:13";
+    ui.set_next_item_width(crate::ui::hint_width(ui, FILTER_HINT, 120.0));
     ui.input_text(format!("##tfilter{i}"), &mut app.trace_windows[i].filter)
-        .hint("名称 / hex 子串 · id:1AB · slot:13")
+        .hint(FILTER_HINT)
         .build();
     ui.same_line();
     ui.set_next_item_width(52.0);
@@ -267,9 +268,10 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     }
     if app.trace_windows[i].filters_open {
         ui.same_line();
-        ui.set_next_item_width(84.0);
+        const PAYLOAD_HINT: &str = "payload 11 22";
+        ui.set_next_item_width(crate::ui::hint_width(ui, PAYLOAD_HINT, 84.0));
         ui.input_text(format!("##tpayload{i}"), &mut app.trace_windows[i].payload)
-            .hint("payload 11 22")
+            .hint(PAYLOAD_HINT)
             .build();
         if ui.is_item_hovered() {
             ui.tooltip_text("payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤");
@@ -300,17 +302,19 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         // unbounded on that side. Same parse semantics as the filter's
         // time-range check (blank/invalid = no bound).
         ui.same_line();
-        ui.set_next_item_width(52.0);
+        const FROM_HINT: &str = "从 s";
+        ui.set_next_item_width(crate::ui::hint_width(ui, FROM_HINT, 52.0));
         ui.input_text(format!("##tfrom{i}"), &mut app.trace_windows[i].time_from)
-            .hint("从 s")
+            .hint(FROM_HINT)
             .build();
         if ui.is_item_hovered() {
             ui.tooltip_text("时间范围下界（秒）：早于此的帧不显示；留空 = 不限");
         }
         ui.same_line();
-        ui.set_next_item_width(52.0);
+        const TO_HINT: &str = "到 s";
+        ui.set_next_item_width(crate::ui::hint_width(ui, TO_HINT, 52.0));
         ui.input_text(format!("##tto{i}"), &mut app.trace_windows[i].time_to)
-            .hint("到 s")
+            .hint(TO_HINT)
             .build();
         if ui.is_item_hovered() {
             ui.tooltip_text("时间范围上界（秒）：晚于此的帧不显示；留空 = 不限");

@@ -385,10 +385,18 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // The filter commits on edit end: only matching traffic lands in
                 // the file; trace and statistics stay whole-bus.
                 ui.same_line();
-                ui.set_next_item_width(110.0);
+                const REC_FILTER_HINT: &str = "id / FR slot filter";
+                // Last item on the row: take the rest of it rather than a fixed
+                // width that cuts its own hint in half (a clipped hint reads as
+                // the box's content, not as advice), and never less than the
+                // hint needs.
+                let room = ui.content_region_avail()[0];
+                ui.set_next_item_width(
+                    room.max(crate::ui::hint_width(ui, REC_FILTER_HINT, 110.0)),
+                );
                 if ui
                     .input_text("##recordfilter", &mut app.record_filter_text)
-                    .hint("id / FR slot filter")
+                    .hint(REC_FILTER_HINT)
                     .build()
                 {
                     app.set_record_filter(crate::ui::parse_record_filter(

@@ -197,6 +197,22 @@ pub enum CmpOp {
     Ne,
 }
 
+impl CmpOp {
+    /// The comparison itself, shared by the CAN and the FlexRay side of the
+    /// filter so one written condition cannot mean two things depending on which
+    /// cable the row came off.
+    pub fn holds(self, v: f64, want: f64) -> bool {
+        match self {
+            CmpOp::Gt => v > want,
+            CmpOp::Ge => v >= want,
+            CmpOp::Lt => v < want,
+            CmpOp::Le => v <= want,
+            CmpOp::Eq => v == want,
+            CmpOp::Ne => v != want,
+        }
+    }
+}
+
 /// Parses one `Name<op>number` condition. Operators longest-first so
 /// `>=` wins over `>`. `None` when the text is not a condition.
 pub fn parse_value_cond(text: &str) -> Option<ValueCond> {
@@ -1031,15 +1047,7 @@ impl App {
                 sig.big_endian,
             );
             let v = crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
-            let ok = match cond.op {
-                CmpOp::Gt => v > cond.value,
-                CmpOp::Ge => v >= cond.value,
-                CmpOp::Lt => v < cond.value,
-                CmpOp::Le => v <= cond.value,
-                CmpOp::Eq => v == cond.value,
-                CmpOp::Ne => v != cond.value,
-            };
-            if !ok {
+            if !cond.op.holds(v, cond.value) {
                 return false;
             }
         }
@@ -1067,9 +1075,30 @@ impl App {
         if flt.dbc_only && !self.fr_row_described(r) {
             return false;
         }
-        // Value conditions (`Signal>10`) are CAN-only: FR rows leave.
-        if !flt.value_conds.is_empty() {
-            return false;
+        // Signal-value conditions read the same way on both cables: the name is
+        // looked up among the signals the frame *this row carries* declares, and
+        // the comparison runs on the physical value the observers plot -- a row
+        // cannot pass the filter at one number and draw its curve at another. A
+        // row nothing decodes (no description, or a frame the schedule cannot
+        // resolve at its cycle) drops out, exactly as a CAN frame its DBC does not
+        // name does: a filtered table must not keep rows it cannot explain.
+        for cond in &flt.value_conds {
+            let Some(db) = self.fr_db(r.bus) else {
+                return false;
+            };
+            let Some(ix) = db.frame_ix_at(r.slot, r.cycle, r.ab) else {
+                return false;
+            };
+            let Some(sig) = db
+                .decode_signals(ix, &r.payload)
+                .into_iter()
+                .find(|s| s.name == cond.signal)
+            else {
+                return false;
+            };
+            if !cond.op.holds(sig.phys, cond.value) {
+                return false;
+            }
         }
         // `id:` names a CAN frame, so FlexRay rows leave. `slot:13` is the
         // address a `13` substring search cannot isolate -- it matches 113 and

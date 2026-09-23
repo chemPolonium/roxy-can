@@ -1923,6 +1923,93 @@ fn a_closed_filter_row_names_the_conditions_still_working() {
     );
 }
 
+/// `CarSpeed>60` is not a CAN-only question. A FlexRay row is filtered by the
+/// value its own frame carries -- the same physical number the curve plots and
+/// the expanded child row prints -- and a row nothing can decode leaves the
+/// table rather than sitting in it unexplained.
+#[test]
+fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = App::headless();
+    assert!(
+        app.load_cluster_description(arxml, Some(0)).is_some(),
+        "the bundled description loads"
+    );
+    // The first signal the description really decodes, with the value an
+    // all-zero payload reads as -- the number the row itself would print.
+    let (slot, cycle, ab, name, phys, payload) = {
+        let db = app.fr_db(0).expect("loaded above");
+        let mut found = None;
+        for ix in 0..db.frames.len() {
+            let Some(f) = db.frame_index(ix) else { continue };
+            let bytes = vec![0u8; (f.length as usize).max(1)];
+            if let Some(sig) = db.decode_signals(ix, &bytes).into_iter().next() {
+                found = Some((
+                    f.triggering.slot_id as u16,
+                    f.triggering.base_cycle as u8,
+                    2u8,
+                    sig.name,
+                    sig.phys,
+                    bytes,
+                ));
+                break;
+            }
+        }
+        found.expect("the bundled description decodes at least one signal")
+    };
+    let row = crate::trace::FrRow {
+        bus: 0,
+        t_us: 1_000,
+        ab,
+        slot,
+        cycle,
+        // The payload the value was read out of: a narrower one would drop the
+        // signal for running out of bytes, which is a different rule.
+        payload,
+        header_crc: 0,
+        flags: 0,
+        name: None,
+    };
+    let mk = |app: &App, filter: &str| {
+        let mut w = app.trace_windows[0].clone();
+        w.filter = filter.to_string();
+        w.filter_lens()
+    };
+    let probe = |app: &App, filter: &str| app.trace_fr_match(&mk(app, filter), &row);
+
+    assert!(
+        probe(&app, &format!("{name}>{}", phys - 1.0)),
+        "the row's own value clears a lower bound"
+    );
+    assert!(
+        !probe(&app, &format!("{name}>{}", phys)),
+        "and does not clear itself: `>` is strict"
+    );
+    assert!(probe(&app, &format!("{name}>={}", phys)));
+    assert!(
+        probe(&app, &format!("{name}=={phys}")),
+        "the compared number is the decoded one, printed or not"
+    );
+    assert!(
+        !probe(&app, "NoSuchSignal>0"),
+        "a signal this frame does not carry drops the row rather than passing it"
+    );
+
+    // A row on a bus with no description cannot be read at all, so a value
+    // condition has no opinion to keep it for.
+    let bare = crate::trace::FrRow {
+        bus: 7,
+        ..row.clone()
+    };
+    assert!(
+        !app.trace_fr_match(&mk(&app, &format!("{name}>-1e18")), &bare),
+        "undescribed: no decoding, no match"
+    );
+    // ...while the same row is still visible under a filter that asks nothing of
+    // its values -- the condition, not the missing file, is what hides it.
+    assert!(app.trace_fr_match(&mk(&app, ""), &bare), "no condition: it shows");
+}
+
 #[test]
 fn channels_can_be_added_removed_and_renamed() {
     let mut app = App::headless();

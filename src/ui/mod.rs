@@ -78,6 +78,21 @@ pub(crate) fn cursor_head(a_s: Option<f64>, b_s: Option<f64>, dec: usize) -> Str
     }
 }
 
+/// The least width an input box needs to show `hint` whole, given a `min` the
+/// layout already wants for it.
+///
+/// A hint that runs past the box is worse than no hint: cut in half it reads as
+/// the box's own content, and the advice -- which is the only place several of
+/// these spell out a syntax -- is the part that disappears. Measured with the
+/// live font, because a CJK glyph is not two ASCII characters wide at every
+/// size; the row is allowed to wrap rather than to clip.
+pub(crate) fn hint_width(ui: &Ui, hint: &str, min: f32) -> f32 {
+    // 12 px covers the frame's inner padding on both sides plus the pixel the
+    // box keeps clear of its border; measured text is the part that has to be
+    // right, not this.
+    (ui.calc_text_size(hint)[0] + 12.0).max(min)
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     // The status bar takes `&App`, so its throttled counters refresh here;
     // every other window syncs inside its own draw path.
