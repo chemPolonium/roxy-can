@@ -58,6 +58,10 @@ struct NodeRuntime {
     /// System variable writes queued by `sys_set` and not yet taken by
     /// the bus. Same lifecycle as `emitted`.
     pending_sys: Vec<(String, f64)>,
+    /// FlexRay slots queued by `fr_send`, same lifecycle as `emitted`.
+    fr_out: Vec<(u8, u16, Vec<u8>)>,
+    /// Signal writes queued by `set_fr_sig`, same lifecycle as `emitted`.
+    fr_sig: Vec<(u8, u16, String, f64)>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.
@@ -238,6 +242,8 @@ impl ScriptNode {
             handlers,
             emitted: Vec::new(),
             pending_sys: Vec::new(),
+            fr_out: Vec::new(),
+            fr_sig: Vec::new(),
             timers,
         };
         // `on start` handlers, in declaration order.
@@ -712,6 +718,8 @@ impl ScriptNode {
         }
         rt.emitted.append(&mut rt.vm.emitted);
         rt.pending_sys.append(&mut rt.vm.sys_sets);
+        rt.fr_out.append(&mut rt.vm.fr_outbox);
+        rt.fr_sig.append(&mut rt.vm.fr_sig_sets);
     }
 
     /// Hands the bus everything `emit_value` queued since the last call.
@@ -727,6 +735,23 @@ impl ScriptNode {
         self.runtime
             .as_mut()
             .map(|rt| std::mem::take(&mut rt.pending_sys))
+            .unwrap_or_default()
+    }
+
+    /// Hands the bus every `fr_send` queued since the last call: one FlexRay
+    /// slot address plus the payload as the script wrote it.
+    pub fn take_fr_out(&mut self) -> Vec<(u8, u16, Vec<u8>)> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.fr_out))
+            .unwrap_or_default()
+    }
+
+    /// Hands the bus every `set_fr_sig` queued since the last call.
+    pub fn take_fr_sig_sets(&mut self) -> Vec<(u8, u16, String, f64)> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.fr_sig))
             .unwrap_or_default()
     }
 

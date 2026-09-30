@@ -715,6 +715,34 @@ pub(crate) fn set_fr_tx_base(tx: &mut FrTxMsg, mut data: Vec<u8>, len: usize) {
     tx.data = data;
 }
 
+/// Writes one signal's physical value into a FlexRay entry's base payload,
+/// encoded through the cluster description that owns the slot -- the script's
+/// version of typing a value into the Network ECU panel. The entry keeps the
+/// width it carries, so a signal write can neither grow a slot nor leave a short
+/// frame behind. `Err` names the missing fact (this slot schedules no frame, the
+/// frame declares no such signal, or the payload does not reach it); nothing is
+/// written when it fails.
+pub(crate) fn fr_tx_set_signal(
+    tx: &mut FrTxMsg,
+    db: &crate::fr_db::FrDb,
+    name: &str,
+    phys: f64,
+) -> Result<(), String> {
+    let ix = db.frame_ix_of_slot(tx.slot).ok_or_else(|| {
+        format!("这一路的描述未在 slot {} 调度帧：没有信号可写", tx.slot)
+    })?;
+    let mut data = tx.data.clone();
+    if !db.encode_signal(ix, name, phys, &mut data) {
+        return Err(format!(
+            "slot {} 的帧不声明信号 {name:?}（或载荷长度不够它）",
+            tx.slot
+        ));
+    }
+    let len = tx.len;
+    set_fr_tx_base(tx, data, len);
+    Ok(())
+}
+
 /// Why a FlexRay payload edit is refused, if it is. Both refusals are loud
 /// rather than forgiving: silently dropping the extra bytes, or silently padding
 /// a typo'd token away, would put different bytes on the schedule than the ones

@@ -419,6 +419,10 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("clamp", 3, 3),
     // R2 语言增量：有界定长数组（元素为任意值，引用语义）。
     ("array", 1, 1),
+    // Appended last: the compiler resolves these names to ids by position, so an
+    // earlier entry moving would invalidate every stored script's bytecode.
+    ("fr_send", 3, 11),
+    ("set_fr_sig", 4, 4),
 ];
 
 /// One external simulation function, callable from any script once

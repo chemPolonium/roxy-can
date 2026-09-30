@@ -70,6 +70,15 @@ pub struct Vm {
     /// the standard range (`send_ext`); `send` leaves the choice to the
     /// id alone.
     pub outbox: Vec<(u32, bool, Vec<u8>)>,
+    /// FlexRay slots queued by `fr_send(路, 槽, ...)`: the cluster index, the
+    /// slot and the payload as typed. The FR twin of [`Vm::outbox`] -- the host
+    /// drains this after each handler run and decides what "send" means (here:
+    /// a row into the session, because no FlexRay port transmits yet).
+    pub fr_outbox: Vec<(u8, u16, Vec<u8>)>,
+    /// Signal writes queued by `set_fr_sig(路, 槽, "Name", 值)`. The host holds
+    /// the cluster description that says where the signal sits, so the encoding
+    /// happens there, not in the kernel.
+    pub fr_sig_sets: Vec<(u8, u16, String, f64)>,
     /// Values queued by `emit_value("Name", expr)`: derived signals the
     /// host publishes under this node's identity. The node runtime drains
     /// this after each handler run; the bus turns each emission into a
@@ -121,6 +130,8 @@ impl Vm {
             steps: 0,
             output: Vec::new(),
             outbox: Vec::new(),
+            fr_outbox: Vec::new(),
+            fr_sig_sets: Vec::new(),
             emitted: Vec::new(),
             sys_sets: Vec::new(),
             host_input: HostInput::default(),
@@ -680,6 +691,114 @@ impl Vm {
                     data
                 };
                 self.outbox.push((id, force_ext, data));
+            }
+            // `fr_send(bus, slot, b0, ...)` or `fr_send(bus, slot, buf)`: the
+            // FlexRay twin of `send`. Only the numbers and the payload's extent
+            // are checked here -- how wide this slot is, and what its bytes mean,
+            // belong to the cluster description, which only the host holds. The
+            // host also decides *when* the row enters the session (at a step's
+            // generator block, never inside the dispatch that queued it), which
+            // is what keeps a script that answers its own frame to one round per
+            // step.
+            "fr_send" => {
+                let (Value::Int(bus), Value::Int(slot)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "fr_send(bus, slot, ...) needs two ints before the payload".into(),
+                    ));
+                };
+                if !(0..=255).contains(bus) {
+                    return Err(VmError(format!("fr_send: bus {bus} out of range (0..255)")));
+                }
+                if !(0..=65_535).contains(slot) {
+                    return Err(VmError(format!(
+                        "fr_send: slot {slot} out of range (0..65535)"
+                    )));
+                }
+                let data = if args.len() == 3 && matches!(args[2], Value::Bytes(_)) {
+                    // Single-buffer form: the buffer IS the payload.
+                    let Value::Bytes(b) = &args[2] else {
+                        unreachable!()
+                    };
+                    b.lock().expect("buffer poisoned").clone()
+                } else {
+                    let mut data = Vec::with_capacity(args.len() - 2);
+                    for b in &args[2..] {
+                        // Floats truncate, exactly as in `send`.
+                        let n = match b {
+                            Value::Int(n) => *n,
+                            Value::Float(f) if f.is_finite() => f.trunc() as i64,
+                            other => {
+                                return Err(VmError(format!(
+                                    "fr_send: data byte must be 0..255, got {}",
+                                    kind(other)
+                                )));
+                            }
+                        };
+                        if !(0..=255).contains(&n) {
+                            return Err(VmError(format!(
+                                "fr_send: data byte must be 0..255, got {n}"
+                            )));
+                        }
+                        data.push(n as u8);
+                    }
+                    data
+                };
+                if data.is_empty() {
+                    return Err(VmError(format!(
+                        "fr_send: FR{bus} slot {slot} needs a payload -- a FlexRay slot is \
+                         as wide as its schedule says, so there is no empty frame to send"
+                    )));
+                }
+                if data.len() > crate::generator::MAX_FR_PAYLOAD_LEN {
+                    return Err(VmError(format!(
+                        "fr_send: payload up to {} bytes, got {}",
+                        crate::generator::MAX_FR_PAYLOAD_LEN,
+                        data.len()
+                    )));
+                }
+                self.fr_outbox.push((*bus as u8, *slot as u16, data));
+            }
+            // `set_fr_sig(bus, slot, "Name", value)`: write one signal into the
+            // generator entry that owns this slot, encoded through the cluster
+            // description -- the same two facts the ECU panel edits, from the
+            // script. It changes what the slot *carries from now on*, not a frame
+            // on the wire: an entry that is Off keeps its payload and sends
+            // nothing until it is switched on.
+            "set_fr_sig" => {
+                let (Value::Int(bus), Value::Int(slot), Value::Str(sig), v) =
+                    (&args[0], &args[1], &args[2], &args[3])
+                else {
+                    return Err(VmError(
+                        "set_fr_sig(bus, slot, \"Name\", value) needs two ints, a string \
+                         and a number"
+                            .into(),
+                    ));
+                };
+                if !(0..=255).contains(bus) {
+                    return Err(VmError(format!(
+                        "set_fr_sig: bus {bus} out of range (0..255)"
+                    )));
+                }
+                if !(0..=65_535).contains(slot) {
+                    return Err(VmError(format!(
+                        "set_fr_sig: slot {slot} out of range (0..65535)"
+                    )));
+                }
+                if sig.is_empty() {
+                    return Err(VmError("set_fr_sig: signal name must not be empty".into()));
+                }
+                let v = match v {
+                    Value::Float(f) if f.is_finite() => *f,
+                    Value::Int(n) => *n as f64,
+                    other => {
+                        return Err(VmError(format!(
+                            "set_fr_sig: value must be a number, got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                self.fr_sig_sets
+                    .push((*bus as u8, *slot as u16, sig.clone(), v));
             }
             "emit_value" => {
                 // emit_value("Name", value): publishes one derived-signal
@@ -1664,5 +1783,65 @@ mod tests {
         let mut vm = super::Vm::new(script);
         let e = vm.run().unwrap_err();
         assert!(e.to_string().contains("nil"), "{e}");
+    }
+
+    /// `fr_send` takes a cluster index, a slot and a payload, and nothing else:
+    /// how wide this slot is belongs to the cluster description, which the kernel
+    /// never sees, so the only limits checked here are the numbers themselves and
+    /// the 254-byte FlexRay payload ceiling. What the host does with the queue is
+    /// the bus's business (see the app-level FlexRay script tests).
+    #[test]
+    fn fr_send_queues_the_slot_address_and_payload() {
+        let mut vm = Vm::new(compile("fr_send(1, 20, 0x11, 0x22);").unwrap());
+        vm.run().unwrap();
+        assert_eq!(vm.fr_outbox, [(1, 20, vec![0x11, 0x22])]);
+
+        // The buffer form is the long-payload shape: a FlexRay slot carries far
+        // more than the eight bytes the literal form allows.
+        let mut vm = Vm::new(compile("let b = bytes(16); fr_send(0, 5, b);").unwrap());
+        vm.run().unwrap();
+        assert_eq!(vm.fr_outbox[0].2.len(), 16, "the buffer IS the payload");
+
+        for (src, want) in [
+            ("fr_send(300, 5, 1);", "bus 300 out of range"),
+            ("fr_send(0, 70000, 1);", "slot 70000 out of range"),
+            ("fr_send(0, 5, 300);", "must be 0..255"),
+            ("fr_send(\"a\", 5, 1);", "needs two ints"),
+            // A zero-length slot frame is not a thing: refuse rather than send a
+            // slot with no bytes behind it.
+            ("let b = bytes(0); fr_send(0, 5, b);", "needs a payload"),
+        ] {
+            let mut vm = Vm::new(compile(src).unwrap());
+            let e = vm.run().unwrap_err();
+            assert!(e.to_string().contains(want), "{src}: {e}");
+        }
+        // The literal form is one to eight bytes; zero args after the address is
+        // caught by the compiler's arity check, before any run.
+        let e = compile("fr_send(0, 5);").expect_err("no payload compiles");
+        assert!(e.to_string().contains("fr_send"), "{e}");
+    }
+
+    /// `set_fr_sig(路, 槽, "Name", 值)` queues the write for the host, which is
+    /// where the description that says where the signal sits lives.
+    #[test]
+    fn set_fr_sig_queues_the_write() {
+        let mut vm = Vm::new(compile("set_fr_sig(0, 13, \"CarSpeed\", 118);").unwrap());
+        vm.run().unwrap();
+        assert_eq!(
+            vm.fr_sig_sets,
+            [(0, 13, "CarSpeed".to_string(), 118.0)],
+            "the int value arrives as a physical number"
+        );
+
+        for (src, want) in [
+            ("set_fr_sig(0, 13, 5, 1);", "needs two ints"),
+            ("set_fr_sig(0, 13, \"\", 1);", "must not be empty"),
+            ("set_fr_sig(0, 13, \"N\", \"x\");", "must be a number"),
+            ("set_fr_sig(300, 13, \"N\", 1);", "bus 300 out of range"),
+        ] {
+            let mut vm = Vm::new(compile(src).unwrap());
+            let e = vm.run().unwrap_err();
+            assert!(e.to_string().contains(want), "{src}: {e}");
+        }
     }
 }

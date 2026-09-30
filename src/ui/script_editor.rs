@@ -504,6 +504,8 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_t
     ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
     ("总线控制", "sig", "sig(0x000, \"Signal\")"),
     ("总线控制", "fr_sig", "fr_sig(0, 0, \"Signal\")"),
+    ("总线控制", "fr_send", "fr_send(0, 0, 0x00);"),
+    ("总线控制", "set_fr_sig", "set_fr_sig(0, 0, \"Signal\", 0)"),
     ("总线控制", "$信号", "$Message::Signal"),
     ("总线控制", "set_sig", "set_sig(buf, 0x000, \"Signal\", 0)"),
     ("总线控制", "emit_value", "emit_value(\"Name\", 0)"),

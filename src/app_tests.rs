@@ -7742,6 +7742,298 @@ fn a_flexray_arrival_drives_a_script_reaction() {
     app.stop();
 }
 
+/// A script's `fr_send` puts a frame into the session through the same funnel a
+/// generator slot uses -- so Trace, the Messages tally and everything else that
+/// reads arrivals see it -- and it lands as soon as that step's generator block
+/// runs (a FlexRay arrival is drained before it, so the same step; a CAN-driven or
+/// timer-driven handler waits for the next one). Either way **one round per
+/// step** is the bound a script that answers its own frame runs into, instead of a
+/// loop inside a single step.
+#[test]
+fn a_script_frame_enters_the_session_like_any_arrival() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gw".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    // Slot 6 is not in this description at all: with no declared width, the
+    // frame goes out exactly as long as the script wrote it.
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on fr slot 5 { fr_send(0, 6, 0x11, 0x22); }".to_string(),
+    });
+    app.settle();
+    let rows = |app: &App| -> Vec<(u8, u16, usize)> {
+        (0..app.snap.fr_trace.len())
+            .filter_map(|i| app.snap.fr_trace.get(i))
+            .map(|r| (r.bus, r.slot, r.payload.len()))
+            .collect()
+    };
+    let q = app.hw.attach_fr_mock(0, 5);
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    app.refresh_snapshot();
+    assert_eq!(
+        rows(&app),
+        [(0, 5, 1), (0, 6, 2)],
+        "the FlexRay watch is drained before the generator block, so the script's \
+         frame joins this same step"
+    );
+    // A second step adds nothing: the row the script sent wakes handlers (slot 6
+    // here, which this script does not listen to), and whatever they queue waits
+    // for the next step's ingest -- one round per step is the bound a script that
+    // answers its own frame runs into, instead of a loop inside one step.
+    app.advance_clock(40_000);
+    app.tick(40_000);
+    app.refresh_snapshot();
+    assert_eq!(rows(&app), [(0, 5, 1), (0, 6, 2)], "no cascade");
+    let payload = (0..app.snap.fr_trace.len())
+        .filter_map(|i| app.snap.fr_trace.get(i))
+        .find(|r| r.slot == 6)
+        .map(|r| r.payload.clone())
+        .expect("the script row");
+    assert_eq!(payload, vec![0x11, 0x22], "the bytes as typed");
+    assert!(
+        app.fr_aggs
+            .values()
+            .any(|a| a.bus == 0 && a.slot == 6 && a.count == 1),
+        "and it is tallied in Messages like any arrival"
+    );
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(!node.errored, "the handler ran clean: {:?}", node.log);
+    app.stop();
+}
+
+/// A FlexRay slot is as wide as the schedule says, and a script cannot overfill
+/// it: a payload longer than the declared width is **dropped whole** with the
+/// reason in that node's log, rather than truncated into a frame nobody asked
+/// for. Silently sending different bytes than the script wrote is the failure
+/// this refuses.
+#[test]
+fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "wide".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    // Slot 5 declares one byte; the handler offers three.
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on fr slot 5 { fr_send(0, 5, 1, 2, 3); }".to_string(),
+    });
+    app.settle();
+    let q = app.hw.attach_fr_mock(0, 5);
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    for t in [20_000u64, 40_000, 60_000] {
+        app.advance_clock(t);
+        app.tick(t);
+    }
+    app.refresh_snapshot();
+    let lengths = (0..app.snap.fr_trace.len())
+        .filter_map(|i| app.snap.fr_trace.get(i))
+        .map(|r| r.payload.len())
+        .collect::<Vec<_>>();
+    assert!(
+        !lengths.contains(&3),
+        "no three-byte frame was ever admitted: {lengths:?}"
+    );
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(
+        node.log
+            .iter()
+            .any(|l| l.contains("fr_send") && l.contains("声明 1 字节")),
+        "the reason is in the node's log: {:?}",
+        node.log
+    );
+    assert!(!node.errored, "a dropped frame is advice, not a fault: {:?}", node.log);
+    app.stop();
+}
+
+/// `set_fr_sig` is the script's version of typing a value into the Network ECU
+/// panel: it encodes one signal into the generator entry that owns the slot,
+/// through the cluster description -- and `fr_send` to a described slot fills
+/// that slot with what the description declares, not with what felt convenient.
+/// The write lands in the entry, so an entry that is Off changes what it will
+/// carry and still sends nothing.
+#[test]
+fn a_script_writes_a_flexray_signal_into_its_entry() {
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    let Ok(bytes) = std::fs::read(arxml) else {
+        println!("{arxml} not present -- skipped");
+        return;
+    };
+    let parsed = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
+    let (slot, sig, declared_len) = (0..parsed.frames.len())
+        .find_map(|ix| {
+            parsed.frame_sender(ix)?;
+            let f = parsed.frame_index(ix)?;
+            let sig = parsed.edit_signals(ix).into_iter().find(|s| s.size >= 4)?;
+            Some((f.triggering.slot_id as u16, sig, f.length as usize))
+        })
+        .expect("the asset binds a described slot to a sending ECU");
+    let sig_name = sig.name.clone();
+    // Named in raw code words and converted through the signal's own coding, so
+    // the value written is exactly the value read back whatever the factor is --
+    // and wide enough that the raw number is representable at all.
+    let want = crate::decode::to_physical(5, sig.size, sig.signed, sig.factor, sig.offset);
+    let db = std::sync::Arc::new(parsed);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db: std::sync::Arc::clone(&db),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.add_fr_tx(0, slot);
+    app.settle();
+    let before = app.snap.fr_tx[0].data_text.clone();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "ecu".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: format!(
+            "on timer 10 {{ set_fr_sig(0, {slot}, {sig_name:?}, {want}); fr_send(0, {slot}, \
+             0x00); }}"
+        ),
+    });
+    app.settle();
+    for n in 1..=6u64 {
+        app.advance_clock(n * 10_000);
+        app.tick(n * 10_000);
+    }
+    app.refresh_snapshot();
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(!node.errored, "the handler ran clean: {:?}", node.log);
+    assert!(
+        node.log.iter().all(|l| !l.contains("set_fr_sig]")),
+        "nothing was refused: {:?}",
+        node.log
+    );
+    assert_ne!(
+        app.snap.fr_tx[0].data_text, before,
+        "the entry's base payload changed"
+    );
+    let ix = db.frame_ix_of_slot(slot).expect("described");
+    let got = db
+        .decode_signals(ix, &app.fr_tx_list[0].data)
+        .into_iter()
+        .find(|d| d.name == sig_name)
+        .expect("the signal is in this frame");
+    assert_eq!(got.phys, want, "the value the script wrote reads back");
+    // The same script's `fr_send` fills this slot with one byte typed into a
+    // frame the description says is `declared_len` wide.
+    let row = (0..app.snap.fr_trace.len())
+        .filter_map(|i| app.snap.fr_trace.get(i))
+        .find(|r| r.slot == slot)
+        .expect("the script's frame for this slot");
+    assert_eq!(
+        row.payload.len(),
+        declared_len,
+        "the slot keeps the width its schedule declares"
+    );
+    app.stop();
+}
+
+/// A script can only write a slot this tool is going to fill: `set_fr_sig` on a
+/// slot with no generator entry, or on a 路 with no cluster description, drops
+/// the write and says which fact is missing -- the value it computed is not sent
+/// as half a frame, and nothing silently lands in a slot nobody owns.
+#[test]
+fn a_flexray_signal_write_without_its_entry_is_refused() {
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "ghost".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 10 { set_fr_sig(0, 5, \"One\", 7); set_fr_sig(7, 5, \"One\", 7); }"
+            .to_string(),
+    });
+    app.settle();
+    for n in 1..=4u64 {
+        app.advance_clock(n * 10_000);
+        app.tick(n * 10_000);
+    }
+    app.refresh_snapshot();
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let lines: Vec<&String> = node.log.iter().filter(|l| l.contains("set_fr_sig]")).collect();
+    assert!(
+        lines.iter().any(|l| l.contains("FR0 slot 5 没有发送条目")),
+        "the slot nobody fills: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("FR7 没有集群描述")),
+        "the 路 that does not exist: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("不声明信号")),
+        "it never got as far as the coding: {lines:?}"
+    );
+    assert!(!node.errored, "{:?}", node.log);
+    assert!(app.fr_tx_list.is_empty(), "no entry was invented either");
+    app.stop();
+}
+
 /// Replaying a FlexRay log drives the `on fr slot` handlers off the file's own
 /// timeline: one run per arrival, in the log's order, with that arrival's slot,
 /// cycle and payload as the frame context. This is the shape a user actually

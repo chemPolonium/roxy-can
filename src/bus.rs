@@ -1014,6 +1014,12 @@ pub struct BusCore {
     pub(crate) injected: Vec<(u8, u32)>,
     /// The same "one frame now" intent for a FlexRay slot.
     pub(crate) injected_fr: Vec<(u8, u16)>,
+    /// FlexRay frames queued by a script's `fr_send` during this step, with the
+    /// node that wrote them so a refusal can reach that node's log. They enter
+    /// the session at this step's generator block, or the next one's if the
+    /// handler woke after it -- taking the queue there (rather than inside the
+    /// dispatch) is what caps a self-answering script at one round per step.
+    pub(crate) fr_from_scripts: Vec<(u64, u8, u16, Vec<u8>)>,
     /// The load rollups as of the last publish. Rebuilt only when a step
     /// (or a channel add/remove) touched them; the Bus Statistics window
     /// reads this, never the live state. FlexRay's rollups ride the same
@@ -1147,6 +1153,7 @@ impl BusCore {
             fr_loads: Default::default(),
             injected: Vec::new(),
             injected_fr: Vec::new(),
+            fr_from_scripts: Vec::new(),
             published_loads,
             published_fr_loads: Arc::new(Default::default()),
             loads_dirty: false,
@@ -2083,6 +2090,8 @@ impl BusCore {
     fn run_node_timers(&mut self, now_us: u64, inputs: &HashMap<u8, HostInput>) {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
+        let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
+        let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
@@ -2101,6 +2110,7 @@ impl BusCore {
                     self.buf.push(frame);
                 }
             }
+            Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -2119,6 +2129,8 @@ impl BusCore {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
         self.apply_sys_writes(sys_writes);
+        self.fr_from_scripts.append(&mut fr_sends);
+        self.apply_fr_sig_writes(fr_sig_writes);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -2137,6 +2149,8 @@ impl BusCore {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
+        let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
+        let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色闸（见 run_node_timers）。
@@ -2156,6 +2170,7 @@ impl BusCore {
                 }
             }
             out.extend(node_out);
+            Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -2174,6 +2189,8 @@ impl BusCore {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
         self.apply_sys_writes(sys_writes);
+        self.fr_from_scripts.append(&mut fr_sends);
+        self.apply_fr_sig_writes(fr_sig_writes);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -2202,6 +2219,8 @@ impl BusCore {
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
+        let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
+        let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         for node in &mut self.nodes {
             if !node.waits_on_flexray() {
                 continue;
@@ -2226,6 +2245,7 @@ impl BusCore {
                 }
                 queued.push(frame);
             }
+            Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -2244,6 +2264,8 @@ impl BusCore {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
         self.apply_sys_writes(sys_writes);
+        self.fr_from_scripts.append(&mut fr_sends);
+        self.apply_fr_sig_writes(fr_sig_writes);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -2258,6 +2280,55 @@ impl BusCore {
                 && let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id)
             {
                 n.note(format!("[sysvar] 未定义，写入被丢弃: \"{key}\""));
+            }
+        }
+    }
+
+    /// Drains one node's FlexRay queues into the step's two collectors. The
+    /// three dispatch paths (node timers, a CAN arrival, a FlexRay arrival) do
+    /// the same thing, and this cannot be a `&mut self` method because the
+    /// caller is already iterating `&mut self.nodes`.
+    fn drain_node_fr(
+        node: &mut crate::node::ScriptNode,
+        sends: &mut Vec<(u64, u8, u16, Vec<u8>)>,
+        sig_writes: &mut Vec<(u64, u8, u16, String, f64)>,
+    ) {
+        let id = node.id;
+        for (bus, slot, data) in node.take_fr_out() {
+            sends.push((id, bus, slot, data));
+        }
+        for (bus, slot, name, v) in node.take_fr_sig_sets() {
+            sig_writes.push((id, bus, slot, name, v));
+        }
+    }
+
+    /// Applies the `set_fr_sig` writes a handler run queued: encode one signal
+    /// into the generator entry that fills this slot, through the description
+    /// this 路 carries. A refusal is advice, not a fault -- the node keeps
+    /// running and the reason goes to its log, the same shape an undefined
+    /// system variable write takes.
+    fn apply_fr_sig_writes(&mut self, writes: Vec<(u64, u8, u16, String, f64)>) {
+        for (node_id, bus, slot, name, v) in writes {
+            let ix = self
+                .fr_tx_list
+                .iter()
+                .position(|t| t.bus == bus && t.slot == slot);
+            let reason = match (self.fr_dbs.get(&bus).cloned(), ix) {
+                (None, _) => Some(format!(
+                    "FR{bus} 没有集群描述：信号在载荷里的位置由描述给出"
+                )),
+                (Some(_), None) => Some(format!(
+                    "FR{bus} slot {slot} 没有发送条目：set_fr_sig 改的是这一路要发的条目"
+                )),
+                (Some(db), Some(ix)) => {
+                    crate::generator::fr_tx_set_signal(&mut self.fr_tx_list[ix], &db, &name, v)
+                        .err()
+                }
+            };
+            if let Some(reason) = reason
+                && let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id)
+            {
+                n.note(format!("[set_fr_sig] 写入被丢弃: {reason}"));
             }
         }
     }
@@ -3649,6 +3720,7 @@ impl BusCore {
         // belong to it, not to the fresh one.
         self.injected.clear();
         self.injected_fr.clear();
+        self.fr_from_scripts.clear();
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
         }
@@ -4035,6 +4107,55 @@ impl BusCore {
             };
             let payload = crate::generator::fr_tx_payload(&self.fr_dbs, tx, sim);
             tx.last_sent = payload.clone();
+            let cycle = self
+                .fr_dbs
+                .get(&bus)
+                .map_or(0, |db| crate::generator::fr_cycle_at(db, sim));
+            fr_gen.push(crate::trace::FrRow {
+                bus,
+                t_us: sim,
+                ab: 2,
+                slot,
+                cycle,
+                payload,
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            });
+        }
+        // A script's `fr_send` joins the session through the same funnel a
+        // generator slot uses, so everything that sees an arrival sees it: Trace,
+        // Messages, load and spec, triggers, `on fr slot` handlers, the recording.
+        // The width is the description's, not the script's: a short payload is
+        // zero-padded to the slot, and one longer than the slot is refused with a
+        // line in that node's log rather than truncated into a frame nobody asked
+        // for. A handler that wakes on this step's own rows queues its frames for
+        // the next generator block, which is what keeps a script that answers
+        // itself to one round per step.
+        let from_scripts = std::mem::take(&mut self.fr_from_scripts);
+        for (node_id, bus, slot, data) in from_scripts {
+            let declared = self.fr_dbs.get(&bus).and_then(|db| {
+                db.frame_ix_of_slot(slot)
+                    .and_then(|ix| db.frame_index(ix))
+                    .map(|f| f.length as usize)
+            });
+            let payload = match declared {
+                Some(w) if data.len() > w => {
+                    if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+                        n.note(format!(
+                            "[fr_send] 丢弃: FR{bus} slot {slot} 声明 {w} 字节，脚本给了 {}",
+                            data.len()
+                        ));
+                    }
+                    continue;
+                }
+                Some(w) => {
+                    let mut p = data;
+                    p.resize(w, 0);
+                    p
+                }
+                None => data,
+            };
             let cycle = self
                 .fr_dbs
                 .get(&bus)
