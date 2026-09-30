@@ -613,6 +613,71 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
     frames(&mut app, &mut ctx, 5);
 }
 
+/// The picked row's highlight rides the table's *alternating* background slot
+/// while the error / remote / cursor-mark tints ride the other one, so a picked
+/// row can be marked at the same time and still say both -- and a picked FlexRay
+/// frame highlights its decoded child rows with it. Both streams are drawn here
+/// because the tint itself only exists inside the table's row loop.
+#[test]
+fn a_picked_row_draws_on_both_streams_beside_the_marks() {
+    use crate::workspace::TracePick;
+    let _ui_lock = UI_LOCK.lock().unwrap();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_trace_window();
+    let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    app.settle();
+    app.text_fresh = false;
+    let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+    data[..2].copy_from_slice(&[0xAB, 0xCD]);
+    let rows = vec![
+        // An error frame, so the row carries its own tint under the pick.
+        TraceRow::Can(CanFrame {
+            t_us: 4_000,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 2,
+            data,
+            dir: crate::can::frame::Direction::Rx,
+            flags: crate::can::frame::FrameFlags::ERROR,
+        }),
+        TraceRow::Fr(
+            crate::trace::FrRow {
+                bus: 0,
+                t_us: 5_000,
+                ab: 1,
+                slot: 13,
+                cycle: 4,
+                payload: vec![1, 2, 3],
+                header_crc: 0,
+                flags: 0,
+                name: Some("ChassisStatus".to_string()),
+            },
+            // Two decoded children, whatever the description resolves: the child
+            // branch is what has to take the parent's key.
+            2,
+        ),
+    ];
+    app.trace_windows[0].rows = rows.into();
+    app.trace_windows[0].mark_us = [Some(4_000), Some(5_000)];
+    app.trace_windows[0].pick = Some(TracePick {
+        t_us: 4_000,
+        fr: false,
+    });
+    frames(&mut app, &mut ctx, 2);
+    app.trace_windows[0].pick = Some(TracePick {
+        t_us: 5_000,
+        fr: true,
+    });
+    frames(&mut app, &mut ctx, 2);
+    app.trace_windows[0].pick = None;
+    frames(&mut app, &mut ctx, 1);
+    if !described {
+        println!("assets/arxml/PowerTrain.arxml absent -- the FR rows drew unresolved");
+    }
+}
+
 /// The signal-selection popup renders its FlexRay section -- a checkbox per
 /// decoded FlexRay signal -- against a real cluster description without
 /// panicking. This is the ImGui path an observer uses to add a FlexRay

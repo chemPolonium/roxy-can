@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Mutex;
 
-use crate::app::{App, PopupTarget, SigScope, TraceRow, TOOLBAR_H};
+use crate::app::{App, PopupTarget, SigScope, TracePick, TraceRow, TOOLBAR_H};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
@@ -130,6 +130,45 @@ fn fmt_data(f: &CanFrame) -> String {
     f.payload().iter().map(|b| format!("{b:02X} ")).collect()
 }
 
+/// The picked row's background. It rides the table's *alternating* slot (bg0)
+/// while the error / remote / cursor-mark tints ride bg1, so one row can be
+/// picked and marked at once and still say both; it is stronger than a mark
+/// because it is the row the keyboard is about to act on.
+const PICK_COLOR: [f32; 4] = [0.25, 0.42, 0.68, 0.45];
+
+/// One FlexRay frame's Bus cell: the 路 as the user named it, with the reception
+/// channel appended when the row knows it. The table and "Copy row" print this
+/// through one function, so a copied row reads like the row it was copied from.
+fn fr_bus_cell(app: &App, bus: u8, ab: u8) -> String {
+    format!(
+        "{}{}",
+        app.fr_bus_name(bus),
+        match ab {
+            0 => " A",
+            1 => " B",
+            _ => "",
+        }
+    )
+}
+
+/// One FlexRay frame row as plain text -- [`fmt_row`]'s twin with the same
+/// columns in the same order, so a CAN row and a FlexRay row paste out
+/// comparable. The flags column has nothing to report for a FlexRay frame, so it
+/// reads `-` exactly as the table's cell does.
+fn fmt_fr_row(app: &App, r: &crate::trace::FrRow) -> String {
+    let hex: String = r.payload.iter().map(|b| format!("{b:02X} ")).collect();
+    format!(
+        "{:.6}  {}  {}.{}  {}  {}  -  {}  Rx",
+        r.t_us as f64 / 1e6,
+        fr_bus_cell(app, r.bus, r.ab),
+        r.slot,
+        r.cycle,
+        app.fr_row_name(r).unwrap_or("-"),
+        r.payload.len(),
+        hex.trim_end()
+    )
+}
+
 /// One trace row as plain text, used for "Copy row".
 fn fmt_row(app: &App, f: &CanFrame) -> String {
     let tag = f.flags.tag();
@@ -194,6 +233,17 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 mark_us[1].map(|t| t as f64 / 1e6),
                 6,
             ),
+        );
+    }
+    // The picked row's own line, and the only place its two keys are written
+    // down: a highlight does not teach that Up/Down walk the list or that Ctrl+C
+    // copies the row. It appears only once there is a pick, so the header never
+    // carries a hint about a state the window is not in.
+    if app.trace_windows[i].pick.is_some() {
+        ui.same_line();
+        ui.text_colored(
+            [0.55, 0.8, 1.0, 1.0],
+            "已选中一行 · ↑/↓ 换行 · Ctrl+C 复制该行",
         );
     }
     // Head trims are accounted either way: with the archive they are
@@ -419,6 +469,10 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
 
     // Virtual scrolling: the clipper submits only the visible slice of
     // the (possibly very long) filtered row list.
+    // The picked row is read into a local so a row clicked *this* frame is
+    // already tinted this frame; the keyboard walk and the write-back happen
+    // after the loop, where the row list is still at hand.
+    let mut picked = app.trace_windows[i].pick;
     let clip = ListClipper::new(flat).begin(ui);
     for n in clip.iter() {
         // Which cache entry this table row belongs to, and which part of it.
@@ -438,6 +492,13 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 // Last, so a marked error row is still recognisably both.
                 if let Some(tint) = mark_tint(mark_us, f.t_us) {
                     ui.table_set_row_bg1_color(tint);
+                }
+                let here = TracePick {
+                    t_us: f.t_us,
+                    fr: false,
+                };
+                if picked == Some(here) {
+                    ui.table_set_row_bg0_color(PICK_COLOR);
                 }
                 if !ui.table_next_column() {
                     continue;
@@ -471,6 +532,9 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                     Direction::Tx => ui.text_colored([1.0, 0.65, 0.2, 1.0], "Tx"),
                 }
                 hovered |= ui.is_item_hovered();
+                if hovered && ui.is_mouse_clicked(dear_imgui_rs::MouseButton::Left) {
+                    picked = Some(here);
+                }
                 can_ctx = if hovered
                     && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right)
                 {
@@ -486,24 +550,20 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 if let Some(tint) = mark_tint(mark_us, fr.t_us) {
                     ui.table_set_row_bg1_color(tint);
                 }
+                let here = TracePick {
+                    t_us: fr.t_us,
+                    fr: true,
+                };
+                if picked == Some(here) {
+                    ui.table_set_row_bg0_color(PICK_COLOR);
+                }
                 if !ui.table_next_column() {
                     continue;
                 }
                 ui.text(format!("{:.6}", fr.t_us as f64 / 1e6));
                 hovered |= ui.is_item_hovered();
                 ui.table_next_column();
-                ui.text_colored(
-                    [0.55, 0.8, 1.0, 1.0],
-                    format!(
-                        "{}{}",
-                        app.fr_bus_name(fr.bus),
-                        match fr.ab {
-                            0 => " A",
-                            1 => " B",
-                            _ => "",
-                        }
-                    ),
-                );
+                ui.text_colored([0.55, 0.8, 1.0, 1.0], fr_bus_cell(app, fr.bus, fr.ab));
                 hovered |= ui.is_item_hovered();
                 ui.table_next_column();
                 ui.text_colored([0.55, 0.8, 1.0, 1.0], format!("{}.{}", fr.slot, fr.cycle));
@@ -530,6 +590,9 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                     *CTX_FR.lock().unwrap() = Some((i, (*fr).clone()));
                     ui.open_popup(format!("trace_fr_ctx{i}"));
                 }
+                if hovered && ui.is_mouse_clicked(dear_imgui_rs::MouseButton::Left) {
+                    picked = Some(here);
+                }
                 can_ctx = None;
             }
             TraceRow::Fr(fr, _) => {
@@ -543,6 +606,17 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 // Decoded right here, for the rows on screen: the cache holds one
                 // entry per frame and this is where its signals become text (see
                 // [`TraceRow::Fr`]).
+                // The group is one arrival: a child row carries its frame's key,
+                // so picking a child picks the frame and the whole block lights up
+                // together -- and one Up/Down step moves a whole frame, not one of
+                // its signal lines.
+                let here = TracePick {
+                    t_us: fr.t_us,
+                    fr: true,
+                };
+                if picked == Some(here) {
+                    ui.table_set_row_bg0_color(PICK_COLOR);
+                }
                 if !ui.table_next_column() {
                     continue;
                 }
@@ -562,8 +636,12 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.text("-");
                 ui.table_next_column();
                 ui.text_colored([0.75, 0.92, 1.0, 1.0], value);
+                hovered |= ui.is_item_hovered();
                 ui.table_next_column();
                 ui.text("-");
+                if hovered && ui.is_mouse_clicked(dear_imgui_rs::MouseButton::Left) {
+                    picked = Some(here);
+                }
                 can_ctx = None;
             }
         }
@@ -572,12 +650,38 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             ui.open_popup(format!("trace_row_ctx{i}"));
         }
     }
+    // Keyboard: Up/Down walk the rows on screen from the picked one, and Ctrl+C
+    // copies the picked row. Both need the pointer to be on this window, and
+    // neither runs while something is typing -- an input field owns the arrows
+    // and the clipboard keys while it is active, and taking them from the filter
+    // box would be a trap.
+    if ui.is_window_hovered() && !ui.is_any_item_active() {
+        if ui.is_key_pressed_with_repeat(dear_imgui_rs::Key::DownArrow, true) {
+            picked = crate::workspace::step_pick(&rows, picked, true);
+        }
+        if ui.is_key_pressed_with_repeat(dear_imgui_rs::Key::UpArrow, true) {
+            picked = crate::workspace::step_pick(&rows, picked, false);
+        }
+        let copy = dear_imgui_rs::KeyChord::new(dear_imgui_rs::Key::C)
+            .with_mods(dear_imgui_rs::KeyMods::CTRL);
+        if ui.is_key_chord_pressed(copy)
+            && let Some(p) = picked
+            && let Some(row) = rows.iter().find(|r| TracePick::of(r) == p)
+        {
+            let text = match row {
+                TraceRow::Can(f) => fmt_row(app, f),
+                TraceRow::Fr(r, _) => fmt_fr_row(app, r),
+            };
+            crate::clipboard::Clipboard.set(&text);
+        }
+    }
     // The rows go back before the popup: its menu mutates the window's
     // filter state. The span buffer returns with them -- it describes that
     // list, and nothing reads it between draws.
     let w = &mut app.trace_windows[i];
     w.row_ends = ends;
     w.rows = rows;
+    w.pick = picked;
 
     // The FlexRay row menu: what the row is, the window's own view narrowed to
     // it, and the payload copied.
@@ -621,6 +725,12 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         }
         if ui.menu_item("Copy slot.cycle") {
             crate::clipboard::Clipboard.set(&format!("{}.{}", r.slot, r.cycle));
+        }
+        // The same last item the CAN menu ends with, for the same reason: the
+        // row as the table shows it, so it can be pasted into a report.
+        ui.separator();
+        if ui.menu_item("Copy row") {
+            crate::clipboard::Clipboard.set(&fmt_fr_row(app, &r));
         }
     }
 
@@ -742,6 +852,104 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
 #[cfg(test)]
 mod tests {
     use super::mark_tint;
+    use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+    use crate::trace::FrRow;
+    use crate::workspace::{TracePick, TraceRow, step_pick};
+    use std::collections::VecDeque;
+
+    fn can(t_us: u64, id: u32) -> TraceRow {
+        let mut data = [0u8; MAX_CAN_FD_LEN];
+        data[0] = 1;
+        data[1] = 2;
+        TraceRow::Can(CanFrame {
+            t_us,
+            channel: 0,
+            id,
+            extended: false,
+            len: 2,
+            data,
+            flags: FrameFlags::NONE,
+            dir: Direction::Rx,
+        })
+    }
+
+    fn fr(t_us: u64, slot: u16, kids: u32) -> TraceRow {
+        TraceRow::Fr(
+            FrRow {
+                t_us,
+                bus: 0,
+                slot,
+                cycle: 0,
+                ab: 2,
+                payload: vec![0; 8],
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            },
+            kids,
+        )
+    }
+
+    /// Up/Down walk the rows on screen, which is the cache list: newest-first,
+    /// clamped at both ends, starting from the newest when nothing is picked, and
+    /// re-anchoring at the newest when the picked row has left the list.
+    #[test]
+    fn the_keyboard_walks_the_row_list_and_clamps_at_both_ends() {
+        let rows: VecDeque<TraceRow> = [can(40, 0x100), fr(30, 13, 2), can(20, 0x200)].into();
+        assert_eq!(
+            step_pick(&rows, None, true),
+            Some(TracePick::of(&rows[0])),
+            "the first press picks the newest row"
+        );
+        assert_eq!(step_pick(&rows, Some(TracePick::of(&rows[0])), true), Some(TracePick::of(&rows[1])), "down is toward the older end");
+        assert_eq!(
+            step_pick(&rows, Some(TracePick::of(&rows[1])), false),
+            Some(TracePick::of(&rows[0])),
+            "and up comes back"
+        );
+        assert_eq!(
+            step_pick(&rows, Some(TracePick::of(&rows[0])), false),
+            Some(TracePick::of(&rows[0])),
+            "up at the top stays put -- a step off the end is not a clear"
+        );
+        assert_eq!(
+            step_pick(&rows, Some(TracePick::of(&rows[2])), true),
+            Some(TracePick::of(&rows[2])),
+            "and down at the bottom does too"
+        );
+        // The row a pick named is gone (filtered out, ring trimmed, trace
+        // cleared): the walk lands on the newest row instead of dead-ending.
+        let gone = TracePick {
+            t_us: 999,
+            fr: false,
+        };
+        assert_eq!(step_pick(&rows, Some(gone), true), Some(TracePick::of(&rows[0])));
+        assert_eq!(step_pick(&rows, Some(gone), false), Some(TracePick::of(&rows[0])));
+        // Nothing to walk: no crash, no pick.
+        let empty: VecDeque<TraceRow> = VecDeque::new();
+        assert_eq!(step_pick(&empty, None, true), None);
+    }
+
+    /// A CAN frame and a FlexRay frame can carry the same microsecond in the one
+    /// merged table, and clicking one must not light the other up -- hence the
+    /// stream in the key. The decoded child rows of a frame are not rows of the
+    /// list, so they share their parent's key: the group picks and steps as the
+    /// one arrival it is.
+    #[test]
+    fn a_pick_names_one_stream_and_covers_its_frame_children() {
+        let same_us = [can(40, 0x100), fr(40, 13, 3)];
+        let can_key = TracePick::of(&same_us[0]);
+        let fr_key = TracePick::of(&same_us[1]);
+        assert_ne!(can_key, fr_key, "the same stamp on two streams is two rows");
+        // Two children of the same frame: same cache entry, same key.
+        assert_eq!(TracePick::of(&fr(40, 13, 3)), fr_key);
+        let rows: VecDeque<TraceRow> = same_us.into();
+        assert_eq!(
+            step_pick(&rows, Some(can_key), true),
+            Some(fr_key),
+            "one step crosses from the CAN row to the FlexRay frame, children and all"
+        );
+    }
 
     /// A cursor is an instant, so the tint is decided by the row's timestamp and
     /// nothing else -- not by its position in a table that reorders itself as
@@ -764,5 +972,74 @@ mod tests {
             Some(super::MARK_COLOR[1]),
             "B keeps its own colour"
         );
+    }
+
+    /// "Copy row" prints a FlexRay frame with the same eight columns, in the same
+    /// order, as the table shows them -- and as a CAN row's copy does, so a pasted
+    /// Trace of both streams lines up. The description's frame name wins over the
+    /// one the log carried, and the flags column reads `-` because a FlexRay frame
+    /// has nothing to report there.
+    #[test]
+    fn a_copied_flexray_row_carries_the_table_columns() {
+        use crate::app::App;
+        use crate::fr_db::{FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrTriggering};
+        let mut app = App::headless();
+        let db = FrDb::assemble(
+            FrClusterParams::default(),
+            vec![],
+            vec![FrPdu {
+                name: "P".into(),
+                length: 2,
+                dynamic: false,
+                comment: String::new(),
+                signals: vec![],
+            }],
+            vec![FrFrameDb {
+                name: "ScheduledFrame".into(),
+                length: 2,
+                payload_preamble: false,
+                triggering: FrTriggering {
+                    channel: FrChannel::Both,
+                    slot_id: 13,
+                    base_cycle: 0,
+                    cycle_repetition: 1,
+                    startup: false,
+                },
+                pdus: vec![("P".into(), 0u32)],
+                comment: String::new(),
+            }],
+        );
+        app.fr_buses.insert(
+            0,
+            crate::app::FrBusCfg {
+                path: "synthetic".into(),
+                db: db.into(),
+            },
+        );
+        let row = FrRow {
+            t_us: 1_500_000,
+            bus: 0,
+            slot: 13,
+            cycle: 7,
+            ab: 0,
+            payload: vec![0x11, 0x22],
+            header_crc: 0,
+            flags: 0,
+            name: Some("FromLog".into()),
+        };
+        let text = super::fmt_fr_row(&app, &row);
+        let cols: Vec<&str> = text.split("  ").collect();
+        assert_eq!(cols.len(), 8, "the table's eight columns: {text}");
+        assert_eq!(cols[0], "1.500000", "time in seconds, six places");
+        assert_eq!(cols[1], "FR0 A", "the bus cell with its reception channel");
+        assert_eq!(cols[2], "13.7", "slot.cycle, the way the ID column prints it");
+        assert_eq!(
+            cols[3], "ScheduledFrame",
+            "the description names the frame, not the log"
+        );
+        assert_eq!(cols[4], "2");
+        assert_eq!(cols[5], "-", "no flags to report");
+        assert_eq!(cols[6], "11 22");
+        assert_eq!(cols[7], "Rx");
     }
 }

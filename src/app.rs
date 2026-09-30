@@ -83,8 +83,8 @@ pub use crate::observe::{
 };
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
-    Desktop, MsgWin, PopupTarget, RowsBuild, SigScope, StatsWin, TraceFilter, TraceRow, TraceWin,
-    WindowKind,
+    Desktop, MsgWin, PopupTarget, RowsBuild, SigScope, StatsWin, TraceFilter, TracePick, TraceRow,
+    TraceWin, WindowKind,
 };
 
 /// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot

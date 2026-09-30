@@ -75,6 +75,50 @@ impl TraceRow {
     }
 }
 
+/// Which row of the merged Trace table the pointer picked: the arrival's
+/// microsecond, plus the stream it came from. An expanded FlexRay frame's child
+/// rows carry their parent's stamp and the same stream flag, so picking one of
+/// them picks the frame -- the group is one arrival and highlights as one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TracePick {
+    pub t_us: u64,
+    pub fr: bool,
+}
+
+impl TracePick {
+    /// The key of a cache entry.
+    pub fn of(row: &TraceRow) -> Self {
+        match row {
+            TraceRow::Can(f) => Self {
+                t_us: f.t_us,
+                fr: false,
+            },
+            TraceRow::Fr(r, _) => Self {
+                t_us: r.t_us,
+                fr: true,
+            },
+        }
+    }
+}
+
+/// One step through the rows on screen: `down` moves toward the older end (the
+/// list is newest-first), and an expanded FlexRay frame counts as one step -- its
+/// decoded children belong to it, so they never become stops of their own.
+/// Nothing picked starts at the newest row, and so does a pick whose row has left
+/// the cache (a filter that stopped matching it, the ring trimmed, a cleared
+/// trace): a keyboard that dead-ends reads as a broken control. Both ends clamp.
+pub(crate) fn step_pick(
+    rows: &std::collections::VecDeque<TraceRow>,
+    from: Option<TracePick>,
+    down: bool,
+) -> Option<TracePick> {
+    let Some(at) = from.and_then(|p| rows.iter().position(|r| TracePick::of(r) == p)) else {
+        return rows.front().map(TracePick::of);
+    };
+    let next = if down { at + 1 } else { at.saturating_sub(1) };
+    rows.get(next).map(TracePick::of).or(from)
+}
+
 /// The table rows a whole cache list occupies: `ends[i]` is the first table row
 /// *after* cache entry `i`, and the return value is the total the list covers.
 /// `ends` is a buffer the caller reuses (the Trace window's scratch pad, never
@@ -278,6 +322,14 @@ pub struct TraceWin {
     /// measured -- two rows sharing a microsecond are simultaneous, and they
     /// both take the mark.
     pub mark_us: [Option<u64>; 2],
+    /// The row the pointer picked (`None` = nothing picked). Session state, for
+    /// the same reason as [`TraceWin::mark_us`]: it names an instant inside the
+    /// row ring, which a fresh measurement empties.
+    /// The stream is part of the key because one merged table holds both: a CAN
+    /// frame and a FlexRay frame stamped at the same microsecond are two
+    /// different rows, and lighting both up from one click would be a lie about
+    /// which one was meant.
+    pub pick: Option<TracePick>,
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only. A double-ended queue
@@ -795,6 +847,7 @@ impl App {
             filters_open: false,
             fr_expand: false,
             mark_us: [None, None],
+            pick: None,
             rows: std::collections::VecDeque::new(),
             rows_build: None,
             row_ends: Vec::new(),
