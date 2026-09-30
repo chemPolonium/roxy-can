@@ -7888,7 +7888,71 @@ fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
     app.stop();
 }
 
-/// `set_fr_sig` is the script's version of typing a value into the Network ECU
+/// A script cannot invent a bus: `fr_send` to a cluster with neither a
+/// description nor a watch is dropped with the reason in that node's log, rather
+/// than conjuring a Buses row that claims "日志里有这路流量" for traffic nobody
+/// received. A slot the description does not schedule is a different thing -- the
+/// 路 exists, so the frame goes out with the bytes as typed.
+#[test]
+fn a_script_frame_for_an_unconfigured_bus_is_refused() {
+    use crate::hw::vector::flexray::FrFrame;
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.fr_buses.insert(
+        0,
+        crate::app::FrBusCfg {
+            path: "synthetic".into(),
+            db: one_slot_db(&["One"], 40.0),
+        },
+    );
+    app.push_fr_db_to_core();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "typo".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on fr slot 5 { fr_send(7, 5, 1); fr_send(0, 6, 2); }".to_string(),
+    });
+    app.settle();
+    let q = app.hw.attach_fr_mock(0, 5);
+    q.lock().expect("mock lock").push_back(FrFrame {
+        slot: 5,
+        cycle: 0,
+        payload: vec![0x2A],
+        header_crc: 0,
+        flags: 0,
+    });
+    for n in 1..=3u64 {
+        app.advance_clock(n * 20_000);
+        app.tick(n * 20_000);
+    }
+    app.refresh_snapshot();
+    let buses = (0..app.snap.fr_trace.len())
+        .filter_map(|i| app.snap.fr_trace.get(i))
+        .map(|r| r.bus)
+        .collect::<Vec<_>>();
+    assert!(!buses.contains(&7), "FR7 was never invented: {buses:?}");
+    assert!(buses.contains(&0), "the configured 路 still carries rows");
+    assert_eq!(
+        app.fr_bus_rows(),
+        [0],
+        "and the Buses table lists only the 路 that exists"
+    );
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    assert!(
+        node.log
+            .iter()
+            .any(|l| l.contains("fr_send") && l.contains("FR7 不是已配置的路")),
+        "the typo is reported where the script writes: {:?}",
+        node.log
+    );
+    assert!(!node.errored, "{:?}", node.log);
+    app.stop();
+}
 /// panel: it encodes one signal into the generator entry that owns the slot,
 /// through the cluster description -- and `fr_send` to a described slot fills
 /// that slot with what the description declares, not with what felt convenient.

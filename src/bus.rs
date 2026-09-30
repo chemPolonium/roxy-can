@@ -4134,6 +4134,21 @@ impl BusCore {
         // itself to one round per step.
         let from_scripts = std::mem::take(&mut self.fr_from_scripts);
         for (node_id, bus, slot, data) in from_scripts {
+            // A script cannot invent a bus. `fr_send` to a cluster that carries
+            // neither a description nor a watch would otherwise conjure a row in
+            // the Buses table that reads "日志里有这路流量" -- traffic nobody
+            // received, named after a typo. What the 路 *is* is the frontend's
+            // `fr_buses` plus the watches, and this is the core-side reading of
+            // the same two facts (see `App::fr_bus_rows`).
+            let known = self.fr_dbs.contains_key(&bus) || self.hw.fr_watches.contains_key(&bus);
+            if !known {
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+                    n.note(format!(
+                        "[fr_send] 丢弃: FR{bus} 不是已配置的路（先加载集群描述或挂监听）"
+                    ));
+                }
+                continue;
+            }
             let declared = self.fr_dbs.get(&bus).and_then(|db| {
                 db.frame_ix_of_slot(slot)
                     .and_then(|ix| db.frame_index(ix))
