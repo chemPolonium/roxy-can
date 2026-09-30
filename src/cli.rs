@@ -1048,8 +1048,19 @@ pub fn attach_parent_console() {
             template: isize,
         ) -> isize;
         fn SetStdHandle(which: u32, handle: isize) -> i32;
+        fn GetStdHandle(which: u32) -> isize;
+        fn GetFileType(handle: isize) -> u32;
     }
+    const FILE_TYPE_CHAR: u32 = 2;
     unsafe {
+        // Only take the parent's console when our own standard handles still
+        // point at one. A GUI-subsystem binary launched from a shell has no
+        // console of its own, so without the attach its report goes nowhere --
+        // but `roxy-can --vector-probe > report.txt` has already redirected us,
+        // and re-pointing stdout at CONOUT$ there throws the report away.
+        if GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_CHAR {
+            return;
+        }
         if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
             return;
         }

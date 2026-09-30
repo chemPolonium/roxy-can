@@ -854,8 +854,23 @@ impl FlexRayChannel {
             if status != 0 {
                 (lib.close_port)(port);
                 (lib.close_driver)();
+                // The granted access mask is the diagnosis, so it travels with
+                // the error. Verified live on a VN7640: a channel that opens
+                // fine and whose configuration is *readable* still refuses
+                // every `xlFrSetConfiguration` -- zeroed and database-derived
+                // alike -- while the granted mask reads 0. That is an access
+                // question, not a cluster-parameter one, and blaming the
+                // parameters sends the user to the wrong document.
+                let granted = if permission == 0 {
+                    "驱动授予本应用的权限是 0：这一路没有授权给 FlexRay（查 Vector Hardware Config 里这一路的占用/授权，以及 License Manager 有没有 FlexRay 选件）"
+                        .to_string()
+                } else {
+                    format!(
+                        "授予权限 0x{permission:016X}：权限在手，那就检查集群参数与目标网络是否一致"
+                    )
+                };
                 return Err(format!(
-                    "FlexRay 集群配置被拒绝（{}）——检查集群参数与目标网络一致",
+                    "FlexRay 集群配置被拒绝（{}）——{granted}",
                     lib.error(status)
                 ));
             }
@@ -1110,8 +1125,20 @@ mod tests {
         };
         let channels = enumerate().expect("enumerate");
         println!("driver channels: {channels:?}");
-        if channels.len() < 2 {
-            println!("need two virtual channels for the loop -- probe skipped");
+        // Only the driver's own virtual channels: once real adapters are
+        // attached the first entries of the list are physical ports, and a test
+        // that opens one for transmit and writes a frame into it would be
+        // talking on somebody's bench.
+        let virtuals: Vec<i32> = channels
+            .iter()
+            .filter(|c| c.name.starts_with("Virtual Channel"))
+            .map(|c| c.index)
+            .collect();
+        if virtuals.len() < 2 {
+            println!(
+                "need two virtual channels for the loop, found {} -- probe skipped",
+                virtuals.len()
+            );
             return;
         }
         unsafe {
@@ -1119,7 +1146,7 @@ mod tests {
             assert_eq!(status, 0, "xlOpenDriver: {}", lib.error(status));
             // Registration housekeeping: point app channel 0 at the first
             // virtual channel (hwType 1 = XL_HWTYPE_VIRTUAL).
-            let (vch0, vch1) = (channels[0].index, channels[1].index);
+            let (vch0, vch1) = (virtuals[0], virtuals[1]);
             let status = (lib.set_appl_config)(
                 c"roxy-can".as_ptr() as *const u8,
                 0,
