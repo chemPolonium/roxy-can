@@ -101,6 +101,25 @@ impl FrRing {
         self.dropped
     }
 
+    /// Drops every row of one cluster -- the FlexRay bus-removal path, twin of
+    /// [`TraceRing::rewrite`] minus the renumbering (a cluster index is not a
+    /// list position, so the other clusters stay where they are). The rows are
+    /// not counted as `dropped`: that counter means "trimmed for space", and
+    /// traffic the operator deleted on purpose is a different fact.
+    pub fn drop_bus(&mut self, bus: u8) {
+        let mut gone = 0usize;
+        for c in &mut self.chunks {
+            let c = Arc::make_mut(c);
+            let before = c.len();
+            c.retain(|row| row.bus != bus);
+            gone += before - c.len();
+        }
+        let before = self.tail.len();
+        self.tail.retain(|row| row.bus != bus);
+        gone += before - self.tail.len();
+        self.total -= gone;
+    }
+
     pub fn clear(&mut self) {
         self.chunks.clear();
         self.tail.clear();

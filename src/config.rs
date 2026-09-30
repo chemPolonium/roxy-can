@@ -2362,6 +2362,48 @@ mod tests {
         );
     }
 
+    /// Deleting a 路 leaves a hole, and the hole is exactly what the project
+    /// file states: every description carries its own cluster index, so the
+    /// survivor comes back as FR1 rather than shifted into FR0's place -- which
+    /// would point a recording's `clusterNo 1` rows, a script's `fr_sig(1, ..)`
+    /// and the filter's `FR1:5` at the wrong schedule.
+    #[test]
+    fn a_removed_flexray_bus_does_not_renumber_the_survivor_through_a_save() {
+        let arxml = "assets/arxml/PowerTrain.arxml";
+        let fibex = "assets/fibex/PowerTrain_v2.xml";
+        if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
+            println!("{arxml} or {fibex} not present -- skipped");
+            return;
+        }
+        let mut app = App::headless();
+        assert_eq!(app.load_cluster_description(arxml, Some(0)), Some(0));
+        assert_eq!(app.load_cluster_description(fibex, Some(1)), Some(1));
+        app.set_flexray_name(0, "动力总成");
+        app.set_flexray_name(1, "底盘");
+        app.remove_fr_bus(0);
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).expect("serialises");
+        assert!(
+            !json.contains("动力总成"),
+            "the deleted 路's name went with it: {json}"
+        );
+        let mut again = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .expect("parses")
+            .apply(&mut again);
+        assert_eq!(
+            again.fr_buses.keys().copied().collect::<Vec<_>>(),
+            [1],
+            "FR1 stayed FR1"
+        );
+        assert_eq!(again.fr_bus_name(1), "底盘", "with the name it was given");
+        assert_eq!(
+            again.next_flexray_bus(),
+            Some(0),
+            "and the freed index is what the next 路 added takes"
+        );
+    }
+
     /// A FlexRay rule persists as kind 5/6, which is what states that `ch` names
     /// a FlexRay bus and `id` a schedule slot. Reloaded as any other kind it
     /// would become a CAN watch on a made-up arbitration id.

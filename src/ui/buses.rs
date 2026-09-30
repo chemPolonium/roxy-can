@@ -289,7 +289,10 @@ fn content(app: &mut App, ui: &Ui) {
                             );
                         }
                     }
-                    if ui.button(format!("解挂##hwdet{i}")) {
+                    if ui.button(format!(
+                    "{}##hwdet{i}",
+                    crate::channel::DETACH_LABEL
+                )) {
                         app.detach_hardware(i as u8);
                     }
                     if ui.is_item_hovered() {
@@ -394,7 +397,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.same_line();
     ui.text(format!("{} 路", rows.len()));
     let mut detach = None;
-    let mut forget = None;
+    let mut remove_fr = None;
     let mut attach: Option<(u8, i32)> = None;
     let mut load_for: Option<u8> = None;
     {
@@ -503,9 +506,11 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             match &watch {
                 Some(w) => {
-                    ui.text(format!("[V] ch{}", w.channel_index));
-                    ui.same_line();
-                    ui.text_disabled("（只收）");
+                    // 两行布局，与 CAN 行一致：状态一行、解挂按钮一行。单行塞不下
+                    // 时按钮会被单元格右边缘裁掉（CAN 那列早已写下这条教训）。
+                    ui.text(format!("[V] ch{}（只收）", w.channel_index));
+                    // Simulated 模式下端口挂着但不收帧——列内写明，免得用户以为
+                    // 适配器坏了。
                     if !app.snap.real_bus {
                         ui.same_line();
                         ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
@@ -515,17 +520,14 @@ fn content(app: &mut App, ui: &Ui) {
                             );
                         }
                     }
-                    ui.same_line();
                     if ui.button(format!(
                         "{}##frdet{bus}",
-                        crate::channel::FR_DETACH_LABEL
+                        crate::channel::DETACH_LABEL
                     )) {
                         detach = Some(bus);
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text(
-                            "关闭这路的接收端口并移除这路（它的集群描述一并移除）。",
-                        );
+                        ui.tooltip_text("关闭这路的接收端口；这路的描述与所有曲线保留。");
                     }
                 }
                 None => match &listed {
@@ -554,30 +556,31 @@ fn content(app: &mut App, ui: &Ui) {
                 },
             }
             ui.table_next_column();
-            // The row's removal is the description's: closing the watch is the
-            // "断开并移除" one column to the left. With nothing loaded there is
-            // nothing to take away, so the cell stays empty rather than offering
-            // an x that would silently do nothing.
-            if path.is_empty() {
+            // The row's removal, the same `x` as a CAN row: the 路 goes -- port,
+            // cluster description, and everything pointed at its slots. The
+            // other 路 keep their numbers, because a cluster number is not a
+            // position in a list. A row that only the log's traffic names has
+            // nothing here to take away, so its cell stays empty rather than
+            // offering an x that would do nothing.
+            if path.is_empty() && watch.is_none() {
                 ui.text("");
             } else {
                 if ui.button(format!("x##frrm{bus}")) {
-                    forget = Some(bus);
+                    remove_fr = Some(bus);
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text(format!(
-                        "移除这行的集群描述（正在监听时先点本行的{}）。",
-                        crate::channel::FR_DETACH_LABEL
-                    ));
+                    ui.tooltip_text(
+                        "删除这路 FlexRay：关闭端口、移除集群描述与引用它的所有曲线、发送条目和规则；其他各路编号不变。",
+                    );
                 }
             }
         }
     }
     if let Some(bus) = detach {
-        app.detach_fr_watch(bus);
+        app.detach_flexray_watch(bus);
     }
-    if let Some(bus) = forget {
-        app.forget_cluster_description(bus);
+    if let Some(bus) = remove_fr {
+        app.remove_fr_bus(bus);
     }
     if let Some(bus) = load_for {
         app.pick_cluster_description(bus);

@@ -125,10 +125,12 @@ use crate::app::App;
 use crate::observe::{GfxSignal, SigKey};
 use crate::workspace::SigScope;
 
-/// The FlexRay row's "close the port and forget this 路" button, spelled in one
-/// place: the refusals in this file tell the user to press it by name, so a
-/// message must not drift away from the label on screen.
-pub const FR_DETACH_LABEL: &str = "断开并移除";
+/// The row button that closes a bus's hardware without touching the bus
+/// itself, spelled in one place because both tables use it -- a CAN adapter and
+/// a FlexRay watch detach the same way. The refusals in this file tell the user
+/// to press it by name, so a message must not drift away from the label on
+/// screen.
+pub const DETACH_LABEL: &str = "解挂";
 
 impl App {
     /// The bus's database, from this frame's snapshot. This inherent method
@@ -499,7 +501,7 @@ impl App {
             Some(want) => {
                 if self.snap.fr_watches.iter().any(|w| w.bus == want) {
                     self.status = format!(
-                        "{} 正在监听：先点本行的“{FR_DETACH_LABEL}”，再加载新描述",
+                        "{} 正在监听：先点本行的“{DETACH_LABEL}”，再加载新描述",
                         self.fr_bus_label(want)
                     );
                     return None;
@@ -536,20 +538,93 @@ impl App {
         self.send(crate::bus::BusCommand::SetFrDbs(dbs));
     }
 
-    /// Detaches one FlexRay watch and forgets its bus, description included.
-    pub fn detach_fr_watch(&mut self, bus: u8) {
-        self.fr_buses.remove(&bus);
-        self.push_fr_db_to_core();
+    /// Closes one FlexRay 路's receive port and leaves the 路 alone: its
+    /// description, its name, its send entries and every curve pointed at it
+    /// stay where they are. The FR twin of a CAN row's `解挂` -- and the step to
+    /// take before loading a different description onto a watched 路, because
+    /// its port was configured from the file already there.
+    pub fn detach_flexray_watch(&mut self, bus: u8) {
         self.set_fr_watch(bus, None, "");
+    }
+
+    /// Deletes one FlexRay 路: its port, its cluster description, and every
+    /// reference to it on either side of the core. The other 路 keep their
+    /// indexes -- a cluster number is an identity, not a list position (see
+    /// [`crate::bus::BusCore::remove_fr_bus`]) -- so this is a pure drop, with
+    /// no renumbering to get wrong anywhere.
+    ///
+    /// Two things deliberately survive, because both are *typed* references to
+    /// an index rather than a table keyed by it, and silently editing what the
+    /// user typed is the worse answer: a script's `on fr 1 slot 5` /
+    /// `fr_sig(1, ..)` source text, and the record filter's `FR1:5`. Each names
+    /// a cluster that now has no description and no port, so it matches nothing
+    /// -- and if a new 路 later takes the freed index, they apply to it, which
+    /// is what the (visible) text says.
+    pub fn remove_fr_bus(&mut self, bus: u8) {
+        // Resolved before the maps go, because the status line names the 路 the
+        // way the user did.
+        let label = self.fr_bus_label(bus);
+        self.fr_buses.remove(&bus);
+        self.fr_names.remove(&bus);
+        if matches!(&self.fr_name_edit, Some((r, _)) if *r == bus) {
+            self.fr_name_edit = None;
+        }
+        self.fr_tx_pick.remove(&bus);
+        if self.net_fr_sel.as_ref().is_some_and(|(b, _)| *b == bus) {
+            self.net_fr_sel = None;
+        }
+        // An open rule editor naming this cluster would offer a bus the tool no
+        // longer knows anything about.
+        if self
+            .trig_draft
+            .as_ref()
+            .is_some_and(|d| d.cond.fr_bus() == Some(bus))
+        {
+            self.trig_draft = None;
+        }
+        // Descriptions move as one map, so the core forgets this 路 here; the
+        // command below carries everything keyed by its index that the core
+        // holds. Its status line is the bar's final word -- a message written
+        // here instead would be overwritten by it a frame later once the core
+        // runs on its own thread.
+        self.push_fr_db_to_core();
         self.reset_fr_scope(bus);
+        let on_bus = |k: &SigKey| matches!(k, SigKey::Fr { bus: b, .. } if *b == bus);
+        let on_bus_pick = |p: &crate::workspace::Pick| {
+            matches!(p, crate::workspace::Pick::Fr { bus: b, .. } if *b == bus)
+        };
+        for w in &mut self.trace_windows {
+            w.manual.retain(|p| !on_bus_pick(p));
+        }
+        for w in &mut self.msg_windows {
+            w.manual.retain(|p| !on_bus_pick(p));
+        }
+        for w in &mut self.stats_windows {
+            w.manual.retain(|p| !on_bus_pick(p));
+        }
+        for g in &mut self.graphics {
+            g.signals.retain(|s| !on_bus(&s.key));
+        }
+        for d in &mut self.data_windows {
+            d.signals.retain(|s| !on_bus(&s.key));
+        }
+        // State Tracker rows carry the key plus per-key memory that means
+        // nothing once the signal it describes is gone.
+        for w in &mut self.state_trackers {
+            w.signals.retain(|s| !on_bus(&s.key));
+            w.color_slots.retain(|k, _| !on_bus(k));
+            w.rules.retain(|k, _| !on_bus(k));
+            w.overrides.retain(|k, _| !on_bus(k));
+        }
+        self.monitor_rows.retain(|r| !on_bus(&r.key));
+        self.send(crate::bus::BusCommand::RemoveFrBus { bus, label });
     }
 
     /// A window left pointing at a cluster that no longer exists would show an
     /// unexplained empty table, so its scope goes back to All buses -- what
-    /// `remove_bus` does for a CAN channel. Only called when the whole bus
-    /// goes away: `forget_cluster_description` deliberately leaves scopes
-    /// alone, because a replayed log can still carry that cluster's rows with
-    /// no description and no watch behind them.
+    /// `remove_bus` does for a CAN channel. Only called when the whole 路 goes
+    /// away: [`Self::detach_flexray_watch`] deliberately leaves scopes alone,
+    /// because the 路 and its description are still there to be looked at.
     fn reset_fr_scope(&mut self, bus: u8) {
         let drop_bus = |s: &mut SigScope| {
             if matches!(*s, SigScope::FrBus(b) if b == bus) {
@@ -565,26 +640,6 @@ impl App {
         for w in &mut self.stats_windows {
             drop_bus(&mut w.scope);
         }
-    }
-
-    /// Drops one bus's description and leaves any watch alone: the undo of a
-    /// description loaded for a replay, which never opened a port to begin with.
-    /// A watched bus refuses -- its port was configured from that file, and
-    /// forgetting it would leave a port running on a configuration the tool can
-    /// no longer explain. The row's "断开并移除" is the action for that, and it
-    /// says so in its own name: there is no way to keep the port and drop the
-    /// description it was built from.
-    pub fn forget_cluster_description(&mut self, bus: u8) {
-        if self.snap.fr_watches.iter().any(|w| w.bus == bus) {
-            self.status = format!(
-                "{} 正在监听：不能单独移除集群描述，请用本行的“{FR_DETACH_LABEL}”",
-                self.fr_bus_label(bus)
-            );
-            return;
-        }
-        self.fr_buses.remove(&bus);
-        self.push_fr_db_to_core();
-        self.status = format!("已移除 {} 集群描述", self.fr_bus_label(bus));
     }
 
     /// Opens a watch for a bus whose description is already loaded, taking the

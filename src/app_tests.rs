@@ -6630,7 +6630,15 @@ fn two_flexray_watches_feed_their_own_buses() {
 
     // A cluster that goes away releases the windows pointed at it: an
     // unexplained empty table is worse than falling back to the widest view.
-    app.detach_fr_watch(0);
+    // Closing the port alone must not do that -- the 路 and its description are
+    // still there to look at.
+    app.detach_flexray_watch(0);
+    assert_eq!(
+        app.msg_windows[0].scope,
+        SigScope::FrBus(0),
+        "解挂 keeps the 路, so the view of it stays"
+    );
+    app.remove_fr_bus(0);
     assert_eq!(app.msg_windows[0].scope, SigScope::All);
     app.stop();
 }
@@ -7981,7 +7989,8 @@ fn a_flexray_entry_outlives_the_description_it_came_from() {
     app.set_fr_tx_active(0, slot, true);
     app.settle();
     assert_eq!(app.snap.fr_tx.len(), 1, "the entry was built from a slot");
-    app.forget_cluster_description(0);
+    app.fr_buses.remove(&0);
+    app.push_fr_db_to_core();
     app.settle();
     assert!(
         app.snap.fr_tx[0].undescribed,
@@ -9088,7 +9097,7 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     app.refresh_snapshot();
     assert_eq!(app.load_cluster_description(second, Some(1)), None);
     assert!(
-        app.status.contains(crate::channel::FR_DETACH_LABEL),
+        app.status.contains(crate::channel::DETACH_LABEL),
         "the refusal names the button that can do it: {}",
         app.status
     );
@@ -9114,12 +9123,12 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     app.stop();
 }
 
-/// A bus that has a description but no port can be attached with the file it
-/// already holds (no second picker), and its description can be dropped again
-/// -- which a watched bus must not do, because its port was configured from
-/// that very file.
+/// A 路 that has a description but no port is attached with the file it already
+/// holds (no second picker); `解挂` closes that port and leaves the 路 alone; and
+/// removal takes the whole 路, port included -- which a watched 路 allows
+/// precisely because closing the port is part of what removal means.
 #[test]
-fn a_described_bus_can_be_attached_or_forgot() {
+fn a_flexray_bus_can_be_detached_and_removed() {
     let arxml = "assets/arxml/PowerTrain.arxml";
     if !std::path::Path::new(arxml).exists() {
         println!("{arxml} not present -- skipped");
@@ -9141,25 +9150,228 @@ fn a_described_bus_can_be_attached_or_forgot() {
     app.attach_fr_watch_on(3, 5);
     assert!(app.status.contains("没有集群描述"), "{}", app.status);
 
-    // Dropping the description is the undo of loading it, core included.
-    app.forget_cluster_description(0);
-    assert!(app.fr_buses.is_empty(), "the frontend forgot it");
-    assert!(app.fr_dbs.is_empty(), "and told the core");
-
-    // While a port is watching that bus, the same action refuses: the
-    // description is what the open was configured from.
-    app.load_cluster_description(arxml, None);
+    // 解挂 closes the port and keeps the 路: it is still the cluster its
+    // description describes, so nothing pointed at it has to move.
     app.hw.attach_fr_mock(0, 5);
     app.refresh_snapshot();
-    app.forget_cluster_description(0);
+    app.detach_flexray_watch(0);
+    assert!(app.snap.fr_watches.is_empty(), "the port closed");
+    assert!(app.fr_buses.contains_key(&0), "the 路 stayed");
     assert!(
-        app.status.contains(crate::channel::FR_DETACH_LABEL),
-        "the refusal names the button that can do it: {}",
-        app.status
+        app.fr_dbs.contains_key(&0),
+        "and so did the core's copy of its description"
+    );
+
+    // Removal is the whole 路, no prior 解挂 needed.
+    app.hw.attach_fr_mock(0, 5);
+    app.refresh_snapshot();
+    app.remove_fr_bus(0);
+    assert!(app.fr_buses.is_empty(), "the frontend forgot it");
+    assert!(app.fr_dbs.is_empty(), "and told the core");
+    assert!(app.snap.fr_watches.is_empty(), "the port went with it");
+    assert!(app.status.contains("FR0"), "the bar names it: {}", app.status);
+    app.stop();
+}
+
+/// Deleting a FlexRay 路 takes everything keyed on its cluster index with it --
+/// the frames it received, their tallies, its subscriptions, curves, hand-picked
+/// rows, send entries and rules -- while the surviving 路 keeps both its number
+/// and its data. The number is the point: a cluster index is an identity, not a
+/// position in a list. A BLF stamps each row with its own `clusterNo`, a script
+/// types `fr_sig(1, ..)` and the record filter types `FR1:5` with it, so
+/// shifting the survivors down would silently re-aim every one of those at the
+/// wrong network -- and the gap is not a problem, since the next 路 added takes
+/// the lowest free index anyway.
+#[test]
+fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
+    use crate::hw::vector::flexray::FrFrame;
+    use crate::observe::GfxSignal;
+    use crate::workspace::{Pick, SigScope};
+    let arxml = "assets/arxml/PowerTrain.arxml";
+    let mut app = quiet_app();
+    let (slot, _) = fr_bound_slot(&mut app);
+    let db = std::sync::Arc::clone(&app.fr_buses[&0].db);
+    app.fr_buses.insert(
+        1,
+        crate::app::FrBusCfg {
+            path: arxml.into(),
+            db,
+        },
+    );
+    app.push_fr_db_to_core();
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    let q1 = app.hw.attach_fr_mock(1, 6);
+    // One reference of each kind, on each 路.
+    for bus in [0u8, 1] {
+        let key = SigKey::Fr {
+            bus,
+            slot,
+            name: "CarSpeed".to_string(),
+        };
+        app.subscribe(key.clone());
+        app.graphics[0].signals.push(GfxSignal {
+            key,
+            visible: true,
+            y_mode: YMode::Auto,
+        });
+        app.trace_windows[0].manual.insert(Pick::Fr { bus, slot });
+        app.add_fr_tx(bus, slot);
+    }
+    app.msg_windows[0].scope = SigScope::FrBus(0);
+    app.stats_windows[0].scope = SigScope::FrBus(1);
+    // A rule on each 路: removal has one to take away and one to leave alone.
+    // `add_fr_trigger` aims at `fr_default_slot`, which reads the first 路 --
+    // the one being deleted.
+    app.add_fr_trigger();
+    app.send(crate::bus::BusCommand::AddTrigger {
+        cond: TriggerCond::FrSignalCross {
+            bus: 1,
+            slot,
+            signal: "CarSpeed".to_string(),
+            threshold: 0.0,
+            rising: true,
+        },
+        action: TriggerAction::StartRecording,
+    });
+    let rules_on = |app: &App, bus: u8| -> usize {
+        app.snap
+            .triggers
+            .iter()
+            .filter(|t| t.cond.fr_bus() == Some(bus))
+            .count()
+    };
+    assert_eq!(rules_on(&app, 0), 1, "the new FlexRay rule sits on FR0");
+    assert_eq!(rules_on(&app, 1), 1, "and the other on FR1");
+    app.start_virtual();
+    for q in [&q0, &q1] {
+        q.lock().expect("mock lock").push_back(FrFrame {
+            slot,
+            cycle: 0,
+            payload: vec![0; 8],
+            header_crc: 0,
+            flags: 0,
+        });
+    }
+    app.advance_clock(1_000);
+    app.tick(1_000);
+    app.refresh_snapshot();
+    let rows = |app: &App| -> Vec<u8> {
+        (0..app.snap.fr_trace.len())
+            .filter_map(|i| app.snap.fr_trace.get(i))
+            .map(|r| r.bus)
+            .collect()
+    };
+    assert_eq!(rows(&app), [0, 1], "both 路 carried traffic");
+
+    // A spec verdict and its interval memory on each 路, so the report has one
+    // row to lose and one to keep. Planted after the last step, on a slot no
+    // traffic fills: the monitor rewrites both tables from the arrivals on every
+    // step, so anything planted before the run is the monitor's data, not the
+    // test's.
+    let phantom = slot + 1;
+    for bus in [0u8, 1] {
+        app.spec.record_fr(
+            (bus, phantom, None),
+            crate::spec::Kind::Cycle,
+            1_000,
+            5.0,
+            9.0,
+        );
+        app.spec.note_fr((bus, phantom, 0), 1_000);
+    }
+
+    app.remove_fr_bus(0);
+    app.refresh_snapshot();
+
+    // The survivor kept its index, on both sides.
+    assert_eq!(app.fr_buses.keys().copied().collect::<Vec<_>>(), [1]);
+    assert_eq!(app.fr_dbs.keys().copied().collect::<Vec<_>>(), [1]);
+    assert_eq!(
+        app.fr_bus_rows(),
+        [1],
+        "the Buses table has one 路 left, and it is still FR1"
+    );
+    // Its traffic stayed, the deleted 路's went.
+    assert_eq!(rows(&app), [1], "FR0's rows are out of the ring");
+    assert_eq!(
+        app.fr_aggs.values().filter(|a| a.bus == 0).count(),
+        0,
+        "and its tallies with them"
     );
     assert!(
-        app.fr_buses.contains_key(&0),
-        "a watched bus keeps the file its port runs from"
+        app.fr_aggs.values().any(|a| a.bus == 1 && a.count >= 1),
+        "FR1 is still tallied: {:?}",
+        app.fr_aggs.values().map(|a| (a.bus, a.count)).collect::<Vec<_>>()
     );
+    // No subscription, curve or hand-picked row names the deleted cluster.
+    assert!(
+        !app.subs.keys().any(|k| matches!(k, SigKey::Fr { bus: 0, .. })),
+        "FR0's subscription is gone"
+    );
+    assert!(app.subs.contains_key(&SigKey::Fr {
+        bus: 1,
+        slot,
+        name: "CarSpeed".to_string()
+    }));
+    assert_eq!(
+        app.graphics[0]
+            .signals
+            .iter()
+            .map(|s| match &s.key {
+                SigKey::Fr { bus, .. } => *bus,
+                SigKey::Can { .. } => 255,
+            })
+            .collect::<Vec<_>>(),
+        [1],
+        "only FR1's curve is left"
+    );
+    assert_eq!(
+        app.trace_windows[0]
+            .manual
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        [Pick::Fr { bus: 1, slot }],
+        "and only FR1's picked row"
+    );
+    // Its send entries and its rule.
+    assert_eq!(
+        app.snap.fr_tx.iter().map(|t| t.bus).collect::<Vec<_>>(),
+        [1],
+        "FR0's generator entry went with it"
+    );
+    // The spec report loses the deleted 路's verdicts and keeps the survivor's.
+    assert!(
+        app.spec.fr_rows.keys().all(|(s, _)| s.0 != 0),
+        "no verdict about a cluster that is gone"
+    );
+    assert_eq!(
+        app.spec
+            .fr_rows
+            .keys()
+            .filter(|(s, _)| s.0 == 1 && s.1 == phantom)
+            .count(),
+        1,
+        "FR1's row is still reported"
+    );
+    assert_eq!(
+        app.spec.fr_previous((0, phantom, 0)),
+        None,
+        "and FR0's interval memory with it"
+    );
+    assert_eq!(app.spec.fr_previous((1, phantom, 0)), Some(1_000));
+    assert_eq!(
+        rules_on(&app, 0),
+        0,
+        "a rule about a cluster that is gone can never fire"
+    );
+    assert_eq!(rules_on(&app, 1), 1, "FR1's rule is untouched");
+    // The window pointed at the deleted cluster falls back to the widest view;
+    // the one pointed at the survivor is nobody's business.
+    assert_eq!(app.msg_windows[0].scope, SigScope::All);
+    assert_eq!(app.stats_windows[0].scope, SigScope::FrBus(1));
+    // The gap is what the next added 路 uses.
+    assert_eq!(app.next_flexray_bus(), Some(0));
+    assert!(app.status.contains("FR0"), "{}", app.status);
     app.stop();
 }

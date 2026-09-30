@@ -359,6 +359,17 @@ pub enum BusCommand {
         channel_index: Option<i32>,
         fibex_path: String,
     },
+    /// Deletes one FlexRay 路 outright: its watch, its cluster description,
+    /// the frames it received, its tallies and its send entries. Unlike CAN's
+    /// `RemoveChannel` this **does not renumber the survivors** -- see
+    /// [`BusCore::remove_fr_bus`].
+    RemoveFrBus {
+        bus: u8,
+        /// The 路 as the operator named it, resolved by the frontend: the bar's
+        /// confirmation has to say which one went, and only the frontend holds
+        /// user names for clusters.
+        label: String,
+    },
     /// Trigger-recording context, clamped core-side: pre-trigger frames,
     /// post-roll frames, and the marker list cap. Any subset may be set.
     SetRunLimits {
@@ -1676,6 +1687,7 @@ impl BusCore {
                     *status = format!("FlexRay 监听已断开: FR{bus}");
                 }
             },
+            BusCommand::RemoveFrBus { bus, label } => self.remove_fr_bus(bus, &label, status),
             BusCommand::SetRunLimits {
                 pre_frames,
                 post_frames,
@@ -3153,6 +3165,44 @@ impl BusCore {
         });
         self.publish_trace();
         *status = format!("{name} removed");
+    }
+
+    /// Deletes one FlexRay 路 and everything keyed by its cluster index.
+    ///
+    /// The survivors keep their numbers, which is the whole difference from
+    /// [`Self::remove_channel`]: a FlexRay bus index is not a position in a
+    /// list but the **cluster number** everything else speaks -- a BLF stamps
+    /// each frame with its own `clusterNo`, a script's `on fr 1 slot 5` and
+    /// the record filter's `FR1:5` are typed with it, and a trigger rule
+    /// stores it. Shifting the survivors down would silently re-aim every one
+    /// of those at a different network. The gap is what `next_flexray_bus`
+    /// fills when the user adds the next 路, so indexes stay small without
+    /// anyone having to move one.
+    fn remove_fr_bus(&mut self, bus: u8, label: &str, status: &mut String) {
+        // The port closes with the bus it watched.
+        self.hw.detach_fr(bus);
+        self.fr_dbs.remove(&bus);
+        self.fr_loads.remove(&bus);
+        self.loads_dirty = true;
+        // What this 路 was asked to send, and what the loaded log was already
+        // sending for it, both go with it.
+        self.fr_tx_list.retain(|t| t.bus != bus);
+        self.injected_fr.retain(|(b, _)| *b != bus);
+        self.replay_fr_ids.retain(|(b, _)| *b != bus);
+        self.subs
+            .retain(|k, _| !matches!(k, SigKey::Fr { bus: b, .. } if *b == bus));
+        self.fr_trace.drop_bus(bus);
+        self.publish_trace();
+        // The tallies are the surviving rows' tallies, and a frame name
+        // resolved from the description that just went cannot be resolved
+        // again -- re-fold the ring rather than hand-patch keys.
+        self.rebuild_fr_aggs();
+        self.spec.drop_fr_bus(bus);
+        // A rule whose condition names a cluster that no longer exists can
+        // never fire again, so it goes; CAN-indexed rules are not this bus's
+        // business.
+        self.triggers.retain(|t| t.cond.fr_bus() != Some(bus));
+        *status = format!("FlexRay 路 {label} 已移除");
     }
 
     /// Declares a DBC node's role.

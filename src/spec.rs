@@ -178,6 +178,16 @@ impl Spec {
             .filter_map(|((c, id, ext), t)| remap(c).map(|nc| ((nc, id, ext), t)))
             .collect();
     }
+
+    /// Follow a FlexRay 路 deletion: that cluster's verdicts and the interval
+    /// memory behind them. The other clusters keep their indexes (a cluster
+    /// number is not a list position -- see
+    /// [`crate::bus::BusCore::remove_fr_bus`]), so nothing here shifts, and the
+    /// CAN tables are a different numbering space entirely.
+    pub fn drop_fr_bus(&mut self, bus: u8) {
+        self.fr_rows.retain(|(subject, _), _| subject.0 != bus);
+        self.fr_previous.retain(|(b, _, _), _| *b != bus);
+    }
 }
 
 /// One latched verdict as a report line: which bus, which address, which frame

@@ -449,6 +449,21 @@
 12. Trace 窗口：过滤框的 hint 现在应完整可见（框变宽了）——在**窄** Trace 窗口里看一眼这一行是否换到第二行（换行可接受，裁字不可接受）；工具栏录制行最后那个框应长到贴住窗口右边缘，`id / FR slot filter` 一句看完；回放块的 id 框同理。
 13. 挂上 `assets/arxml/PowerTrain.arxml` 后回放一段 FlexRay：在 Trace 过滤框写某个 FR 信号名加条件（例如 `CarSpeed>0`，名字从展开子行里抄）——FR 行应留下能解码的那些、没有该信号/没描述的行出去，且**留下的那些展开子行里的数值确实满足条件**（这是"同一个数"的肉眼验证）。
 
+### 2026-09-30：FlexRay 一路能被删除了（并且删除不重编号）
+
+用户原话："**没有两台 VN7640，没法实现 FlexRay 的硬件联通，但是发送 flexray 消息、删除 flexray 总线的功能都可以做**"。这一条做**删除**；发送另立一条。
+
+- **设计决定：删除 FlexRay 路不搬家编号，与 CAN 的 `remove_channel` 相反**。CAN 的通道号是**列表位置**，删一条就前移，前端跟着重映射；FlexRay 的"路号"是 **cluster 身份**——BLF 给每一帧盖上它自己的 `clusterNo`（`src/log/blf.rs`，读侧就是 `bus = cluster_no`），脚本里打的是 `fr_sig(1, 13, ..)`、`on fr 1 slot 13`，录制过滤框打的是 `FR1:13`，触发器存的也是这个数字。把这些整体前移一格，等于让**已经打进文本里**的引用悄悄指向另一张网——这才是最坏的失败。所以 `remove_fr_bus` 只删引用这一路的东西，别的一路都不动；空出来的号由 `next_flexray_bus()`（第一条没有描述的路）在下次 `+ Add FlexRay` 时填上，号因此仍然小而密，只是**不会被人搬动**。工程文件本来就逐条写 `bus`，空档存得下来、读得回来（`a_removed_flexray_bus_does_not_renumber_the_survivor_through_a_save`）。
+- **两个动词与 CAN 行对齐**（同一动作在两处用两个词会被读成两件事）：硬件列的按钮从 `断开并移除` 改成 **`解挂`**——与 CAN 行同一个词、同一件事：关端口，路、描述、曲线全留；行末 `x` = **删除这一路**（端口 + 描述 + 引用它槽号的一切）。`DETACH_LABEL`（原 `FR_DETACH_LABEL`）现在两张表共用一个常量，拒绝文案"先点本行的解挂"照旧对得上屏幕上的字。原先"只移除描述、不动监听"那个第三态一并取消：要那个效果就 `解挂`，要彻底删掉就 `x`。
+- **删除到底删了什么**（两边清点，全部有断言）：核心侧 `hw.detach_fr`（端口随路关）+ `fr_dbs` + `fr_loads`（置 dirty）+ `fr_trace` 里这一路的行（新增 `FrRing::drop_bus`，**不计入 `dropped`**——那个数的含义是"因容量被裁"）+ 由幸存行重建 `fr_aggs` + `subs` 里的 `SigKey::Fr{bus}` + `spec.fr_rows`/`fr_previous`（`Spec::drop_fr_bus`）+ `fr_tx_list` + `injected_fr` + `replay_fr_ids` + 条件指向这一路的触发规则。前端侧 `fr_buses`/`fr_names`/`fr_name_edit`/`fr_tx_pick`/`net_fr_sel`/`trig_draft`（编辑器开着且写的就是这一路）+ 三个窗口的 `Pick::Fr` 手选集合 + Graphics/Data/State 的 `SigKey::Fr` 曲线与 State 那张按 key 存的色号/规则/覆盖表 + Monitor 行 + 作用域退回 All（`reset_fr_scope`；只有整路删除才退，`解挂` 不退）。
+- **两处故意不动**，理由写进 `remove_fr_bus` 的注释：脚本源码里的 `on fr 1 slot 5` / `fr_sig(1, ..)`，和录制过滤框里的 `FR1:5`。它们是**打字进来的引用**，不是按 key 存的表，静默改写用户打的字比留着更坏；删掉这一路后那个号没有描述也没有端口，于是匹配不到任何东西（若按同一个号新加一路，它们就重新生效——框里写的是什么，行为就是什么）。
+- **状态行由核心写**，并把用户给这路起的名字一起报（`RemoveFrBus` 带 `label`，前端在下发前解析好 `fr_bus_label`）：线程化前端里前端自己写的状态会被一帧后到达的核心快照冲掉，"谁最后写条谁说话"这条老规则又一次说了算。
+- **防线**：`removing_a_flexray_bus_takes_everything_keyed_on_it`（两路各挂 mock 监听、各有曲线/手选/订阅/发送条目/规则/规格判定，各来一帧真流量，删低号那路：幸存路的**号**、行、聚合、订阅、曲线、白名单、规则、规格行与间隔记忆全在，被删的全没，`fr_bus_rows()==[1]`、`next_flexray_bus()==Some(0)`）。规格那两笔**踩到一个坑**：`start_virtual` 走 `reset_run` 会整个换掉 `Spec`，所以测试里的判定与 `fr_previous` 必须**在最后一次步进之后**种、并且种在**没有流量的槽**上，否则断言检查的是监视器自己的账，不是测试种的账。`a_flexray_bus_can_be_detached_and_removed`（原 `a_described_bus_can_be_attached_or_forgot`）按新两动词重写：解挂关端口留描述，删除两者都关；被删掉的那条"监听中拒绝单独移除描述"的拒绝文案随第三个动作一起退役。**破测七处各红**：注释掉 `FrRing::drop_bus` → "FR0's rows are out of the ring"；注释掉前端曲线清理 → "only FR1's curve is left"；`triggers.retain` → "a rule about a cluster that is gone can never fire"；`spec.drop_fr_bus` → "no verdict about a cluster that is gone"；`subs.retain` → "FR0's subscription is gone"；`fr_tx_list.retain` → "FR0's generator entry went with it"；前端 `fr_names.remove` → 工程 JSON 里还留着已删那路的名字。
+
+**要看界面（这一批新增）**：
+14. Buses 窗口 FlexRay 区：已挂接的行应是**两行布局**（第一行 `[V] ch2（只收）`，第二行 `解挂`），窄窗口下按钮不被格子裁掉（与 CAN 行同形）；点 `解挂` 后这一行**还在**、描述列的 `Open...` 还能用、硬件列换回空闲端口下拉；点行末 `x` 后整行消失，状态行写 `FlexRay 路 <名字> 已移除`（改过名就用名字）。旧文案"断开并移除"不应再出现在界面上。
+15. 两路都在时删掉**号小的**那路：剩下那行灰字里的 `#n` **不变**（还是 `#1`），它的曲线、Trace/Messages 里的行、发送条目都还在；被删那路的曲线从图例消失，作用域指着它的窗口退回 All。
+
 ## 备注
 
 - UI 无 imgui 自动化测试床：部分补齐（`src/ui_tests.rs` 无头冒烟床——imgui 不接渲染器也能逐帧跑真实绘制路径，全窗口齐开/脚本编辑器/控件交互等场景由测试守护）。控件交互（点击、选区、输入法）仍靠人工验收，判定逻辑用无头测试自动证明。

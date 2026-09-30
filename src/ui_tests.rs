@@ -791,11 +791,11 @@ fn the_flexray_tab_lists_the_slots_a_script_can_read() {
 }
 
 /// The Buses window lists FlexRay 路 in a table shaped like the CAN one above
-/// it: two watched clusters, each its own row with its own port, parked marker
-/// and 断开并移除; a third row that has a description and no port; and only the
-/// channels still free offered in any row's 硬件 column. Drawing it is the point
-/// -- a view shaped like the old single `Option<FrWatch>` panics right where a
-/// user looks for their second bus.
+/// it: two watched clusters, each its own row with its own port, parked marker,
+/// 解挂 and row-end `x`; a third row that has a description and no port; and
+/// only the channels still free offered in any row's 硬件 column. Drawing it is
+/// the point -- a view shaped like the old single `Option<FrWatch>` panics right
+/// where a user looks for their second bus.
 #[test]
 fn the_buses_window_draws_two_flexray_watches() {
     let _ui_lock = UI_LOCK.lock().unwrap();
