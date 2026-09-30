@@ -76,12 +76,25 @@ impl TraceRow {
 }
 
 /// Which row of the merged Trace table the pointer picked: the arrival's
-/// microsecond, plus the stream it came from. An expanded FlexRay frame's child
-/// rows carry their parent's stamp and the same stream flag, so picking one of
-/// them picks the frame -- the group is one arrival and highlights as one.
+/// microsecond, the bus it came on and its address (a CAN id, or a FlexRay slot),
+/// with the stream spelled out so the numbers cannot be read in the wrong space.
+///
+/// The address is not decoration: a simulation stamps every frame of one step
+/// with the same microsecond, so CAN1's id 100 and CAN1's id 200 arrive side by
+/// side at one instant -- and a pick that lit both would be a lie about which row
+/// the operator clicked, and one arrow press would jump two rows.
+///
+/// An expanded FlexRay frame's child rows carry their parent's key, so picking
+/// one of them picks the frame: the group is one arrival, and it highlights and
+/// steps as one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TracePick {
     pub t_us: u64,
+    /// The CAN channel, or the FlexRay cluster -- never both in one comparison,
+    /// which is what [`TracePick::fr`] is for.
+    pub bus: u8,
+    /// CAN id, or slot number.
+    pub addr: u32,
     pub fr: bool,
 }
 
@@ -91,10 +104,14 @@ impl TracePick {
         match row {
             TraceRow::Can(f) => Self {
                 t_us: f.t_us,
+                bus: f.channel,
+                addr: f.id,
                 fr: false,
             },
             TraceRow::Fr(r, _) => Self {
                 t_us: r.t_us,
+                bus: r.bus,
+                addr: u32::from(r.slot),
                 fr: true,
             },
         }

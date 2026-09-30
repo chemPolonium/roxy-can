@@ -493,10 +493,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 if let Some(tint) = mark_tint(mark_us, f.t_us) {
                     ui.table_set_row_bg1_color(tint);
                 }
-                let here = TracePick {
-                    t_us: f.t_us,
-                    fr: false,
-                };
+                let here = TracePick::of(row);
                 if picked == Some(here) {
                     ui.table_set_row_bg0_color(PICK_COLOR);
                 }
@@ -550,10 +547,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 if let Some(tint) = mark_tint(mark_us, fr.t_us) {
                     ui.table_set_row_bg1_color(tint);
                 }
-                let here = TracePick {
-                    t_us: fr.t_us,
-                    fr: true,
-                };
+                let here = TracePick::of(row);
                 if picked == Some(here) {
                     ui.table_set_row_bg0_color(PICK_COLOR);
                 }
@@ -610,10 +604,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 // so picking a child picks the frame and the whole block lights up
                 // together -- and one Up/Down step moves a whole frame, not one of
                 // its signal lines.
-                let here = TracePick {
-                    t_us: fr.t_us,
-                    fr: true,
-                };
+                let here = TracePick::of(row);
                 if picked == Some(here) {
                     ui.table_set_row_bg0_color(PICK_COLOR);
                 }
@@ -921,6 +912,8 @@ mod tests {
         // cleared): the walk lands on the newest row instead of dead-ending.
         let gone = TracePick {
             t_us: 999,
+            bus: 0,
+            addr: 0x7FF,
             fr: false,
         };
         assert_eq!(step_pick(&rows, Some(gone), true), Some(TracePick::of(&rows[0])));
@@ -930,24 +923,38 @@ mod tests {
         assert_eq!(step_pick(&empty, None, true), None);
     }
 
-    /// A CAN frame and a FlexRay frame can carry the same microsecond in the one
-    /// merged table, and clicking one must not light the other up -- hence the
-    /// stream in the key. The decoded child rows of a frame are not rows of the
-    /// list, so they share their parent's key: the group picks and steps as the
-    /// one arrival it is.
+    /// A simulation stamps every frame of one step with the same microsecond, so
+    /// a shared instant is the ordinary case, not the pathological one: the pick
+    /// has to name the row -- bus and address included -- or one click lights up
+    /// half a step and one arrow press jumps two rows. A CAN frame and a FlexRay
+    /// frame can share the stamp too, and the two numbering spaces must not read
+    /// each other's numbers. The decoded child rows of a frame are not rows of
+    /// the list, so they share their parent's key: the group picks and steps as
+    /// the one arrival it is. (The first version of this key was the timestamp
+    /// plus the stream alone, and the GUI showed two rows lighting up from one
+    /// click -- the case the address now separates.)
     #[test]
-    fn a_pick_names_one_stream_and_covers_its_frame_children() {
-        let same_us = [can(40, 0x100), fr(40, 13, 3)];
-        let can_key = TracePick::of(&same_us[0]);
-        let fr_key = TracePick::of(&same_us[1]);
-        assert_ne!(can_key, fr_key, "the same stamp on two streams is two rows");
+    fn a_pick_names_one_row_at_a_shared_instant() {
+        let at_40 = [can(40, 0x100), can(40, 0x200), fr(40, 13, 3)];
+        let keys: Vec<TracePick> = at_40.iter().map(TracePick::of).collect();
+        assert_ne!(keys[0], keys[1], "two CAN ids in the same microsecond");
+        assert_ne!(
+            keys[0], keys[2],
+            "a CAN id and a FlexRay slot are two numbering spaces"
+        );
+        assert_ne!(keys[1], keys[2]);
         // Two children of the same frame: same cache entry, same key.
-        assert_eq!(TracePick::of(&fr(40, 13, 3)), fr_key);
-        let rows: VecDeque<TraceRow> = same_us.into();
+        assert_eq!(TracePick::of(&fr(40, 13, 3)), keys[2]);
+        let rows: VecDeque<TraceRow> = at_40.into();
         assert_eq!(
-            step_pick(&rows, Some(can_key), true),
-            Some(fr_key),
-            "one step crosses from the CAN row to the FlexRay frame, children and all"
+            step_pick(&rows, Some(keys[0]), true),
+            Some(keys[1]),
+            "one step is one row, even when the next row shares the stamp"
+        );
+        assert_eq!(
+            step_pick(&rows, Some(keys[1]), true),
+            Some(keys[2]),
+            "and the FlexRay frame is the next single step, children and all"
         );
     }
 

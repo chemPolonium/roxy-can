@@ -661,15 +661,13 @@ fn a_picked_row_draws_on_both_streams_beside_the_marks() {
     ];
     app.trace_windows[0].rows = rows.into();
     app.trace_windows[0].mark_us = [Some(4_000), Some(5_000)];
-    app.trace_windows[0].pick = Some(TracePick {
-        t_us: 4_000,
-        fr: false,
-    });
+    // The keys come from the rows themselves: the pick names a row by its bus and
+    // address, and a fixture that retyped them would test nothing.
+    let keys: Vec<crate::workspace::TracePick> =
+        app.trace_windows[0].rows.iter().map(TracePick::of).collect();
+    app.trace_windows[0].pick = Some(keys[0]);
     frames(&mut app, &mut ctx, 2);
-    app.trace_windows[0].pick = Some(TracePick {
-        t_us: 5_000,
-        fr: true,
-    });
+    app.trace_windows[0].pick = Some(keys[1]);
     frames(&mut app, &mut ctx, 2);
     app.trace_windows[0].pick = None;
     frames(&mut app, &mut ctx, 1);
