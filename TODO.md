@@ -6,9 +6,9 @@
 
 已落地：Write 窗口长行折行；状态行长消息不再压住左侧状态串（截断 + tooltip 给全文）；硬件下拉回显"配置过/刚试过"的那一口；**发车被线路拒绝不再静默**（第一次进 Write 带驱动原因，之后只累计，Buses 行 `发车被拒 ×N`），状态栏 `MEASURING (virtual)` 改为说帧去哪儿（`simulation` / `real bus · N` / `simulation · hardware parked`）。
 
-1. **FlexRay 真机收帧仍未验证**：这台 VN7640 的 6 个 CAN 口 + 2 个 Vector 虚拟口全部 `caps=0x00000000 / flexray:false`。probe 逐口试开：ch0 `xlOpenPort` 成功但 `xlFrSetConfiguration` 被拒 `112 XL_ERR_INVALID_ACCESS`、**授予本应用的权限位为 0**；ch1/2/3/5 `204 INVALID_CHANNEL_MASK`；ch4 `117 NOT_IMPLEMENTED`；虚拟口 `255`。→ 要带 FlexRay 选件的授权或真 FR 接口。任务 #11/#45 保持 pending，文档里不许出现"已真机验证"。
-2. **CAN 口不对称待查**：同一台设备，Vector ch1 挂 CAN 成功（500k 收发、经典模式），ch0 却 `204 INVALID_CHANNEL_MASK`。两种解释：该口在 Vector Hardware Config 里被占用/未分配，或我们的 `index → channelMask` 口径与枚举不一致（probe 与 GUI 同为 `1<<index`，且 ch0 在 FR 侧反而开得起来）。**等用户查过 Hardware Config 再下结论**，别急着改映射。
-3. **屏幕验收欠四项**（形状类改动，逻辑与测试都过，眼睛没看）：Write 长行折行、状态行截断与 tooltip、硬件行回显所选口、`发车被拒 ×N` 红字与新状态串。另外 FR 行的同一回显只验了 CAN 侧（FR 侧同一查表逻辑 + 单测）。
+1. ~~FlexRay 真机收帧未验证~~ **同日纠正——"没有授权"是我误判**：`xlOpenPort` 申请 `permission = 0`，驱动自然授予 0，`xlFrSetConfiguration` 就回 `INVALID_ACCESS`。权限扫描实测：申请 `1<<通道号` → 授予同值 → **配置被接受**（`0925cbf`；权限位是按通道编的，`0x1/0x2/0x3/0x7` 直接 `WRONG_PARAMETER`）。现在探针在 VN7640 CH1 上 `open OK` + 激活 + 抽取（0 帧，因为 CH1 没接线）。用户跑 `FRLoop.exe` **全绿**（Net config accepted → Coldstart-CC sync received → Test completed successfully，`CapChannel: Index 2, FRpiggyC`）——硬件与授权都在，FR 流量这台机器自己就能造。**仍欠三件**：① GUI 里把 FR0 挂到 `VN7640 Channel 1`，看是否显示"已挂接（只收）"；② 真帧进环——FRLoop 跑着时我们能否被动收到（两口争用没测），或接真实集群；③ `ab` 通道偏移仍未坐实，#11/#45 保持 pending，文档里不许出现"已真机验证收帧"。
+2. **通道编号随硬件变，裸索引不是身份**：插上 VN1610 兼容口之后 VN7640 CH1 从 ch0 变 **ch2**、CH2 变 ch3。所以先前那条"ch0 挂 CAN 报 `204`、ch1 却正常"的"不对称"根本不是故障——**CH1 插着 FRpiggyC，它不是 CAN 口**（手册 §2.8：CH1 可 FlexRay/CAN/LIN，CH2..CH4 CAN/LIN，CH5 专用 IO，所以四接口的设备枚举出六个通道）。遗留：`profiles/*.toml` 的 `[[hw]] channel` 存的就是裸编号，换硬件会指错口——要不要改成按设备名匹配（或名字+编号双校验、错配整份拒绝），单独定。
+3. **屏幕验收**：Write 长行折行**用户已确认**；状态行截断 + tooltip、CAN 行回显所选口我在屏上验过。还欠：FR 行的同一回显（逻辑与单测在，眼睛没看）、Buses 行 `发车被拒 ×N` 红字、新状态串 `MEASURING (real bus · N)`、Triggers 按钮行换行的实际观感。
 4. 任务 #49 仍开着：回放节拍断言在任何机器上都贴线（CI 已因此吃掉一次发布），且它 panic 会毒掉共享 imgui 锁连坐 13 个 UI 测试。
 
 ## 2026-09-17/18 夜间批次：用户清单七项 + FlexRay 解析（全部落地 ✅，明细见 git log）

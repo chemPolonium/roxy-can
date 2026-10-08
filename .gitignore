@@ -14,5 +14,7 @@ clippy.log
 
 # 助手会话的本地计划文件
 /.zcode/
+# 本机硬件手册（6 MB PDF，诊断时查，不入库）
+docs/VN7640_Manual_EN.pdf
 # 本机 cargo 源覆写（镜像滞后时直连官方 index）
 /.cargo/config.toml
