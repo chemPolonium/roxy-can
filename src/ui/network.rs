@@ -47,6 +47,10 @@ fn collect(app: &App) -> Vec<Vec<NodeInfo>> {
 /// green `*` tail marks "seen transmitting this run", and clicking a
 /// leaf opens the node's detail below.
 fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base: usize) {
+    // The root's ID is the channel index, not its name: two buses may be
+    // renamed alike, and two visible tree nodes with one label would share one
+    // ID.
+    let _id = ui.push_id(ch as i32);
     let token = ui
         .tree_node_config(app.channel_name(ch as u8))
         .default_open(true)
@@ -199,6 +203,9 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
         Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
         None => format!("{}（未加载描述）", app.fr_bus_name(bus)),
     };
+    // The root's ID is the cluster index: two 路 can be renamed alike, and two
+    // visible tree nodes with one label would share one ID.
+    let _id = ui.push_id(format!("fr{bus}").as_str());
     let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
         return;
     };

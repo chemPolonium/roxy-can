@@ -6615,6 +6615,15 @@ fn two_flexray_watches_feed_their_own_buses() {
         format!("{} messages", win.text_rows.len()),
         "the header counts what is on screen"
     );
+    // Both rows print "slot 13" -- the clusters differ only in the Bus column --
+    // so this is the same two-visible-items-on-one-ID shape the CAN side has.
+    let keys: Vec<&str> = win.text_rows.iter().map(|r| r.id_key.as_str()).collect();
+    let unique = std::collections::HashSet::<&str>::from_iter(keys.iter().copied());
+    assert_eq!(
+        unique.len(),
+        keys.len(),
+        "one ID per row, however the labels repeat: {keys:?}"
+    );
 
     // Scoping the window to one cluster leaves the other cluster's rows out --
     // the whole point of numbering the slots by bus in a two-cluster table.
@@ -6640,6 +6649,46 @@ fn two_flexray_watches_feed_their_own_buses() {
     );
     app.remove_fr_bus(0);
     assert_eq!(app.msg_windows[0].scope, SigScope::All);
+    app.stop();
+}
+
+/// One database on two buses puts the same message in the Messages table twice:
+/// same id, same name, only the Bus column differs -- which is what a bench
+/// with both channels loading one DBC does on its own. A table does not seed
+/// item IDs per cell, so an ID taken from the printed label lands on two visible
+/// items at once and ImGui stops the window with "2 visible items with
+/// conflicting ID". The row therefore carries its own key.
+#[test]
+fn messages_rows_that_print_one_label_keep_their_own_ids() {
+    let mut app = spec_app();
+    app.channels[1].dbc = app.channels[0].dbc.clone();
+    receive(
+        &mut app,
+        0,
+        vec![
+            frame_at(0, 100, 8, Direction::Rx),
+            CanFrame {
+                channel: 1,
+                ..frame_at(0, 100, 8, Direction::Rx)
+            },
+        ],
+    );
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    let rows = &app.msg_windows[0].text_rows;
+    let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+    let sets = std::collections::HashSet::<&str>::from_iter(labels.iter().copied());
+    assert!(
+        labels.len() > sets.len(),
+        "the setup must print one label twice: {labels:?}"
+    );
+    let keys: Vec<&str> = rows.iter().map(|r| r.id_key.as_str()).collect();
+    let key_sets = std::collections::HashSet::<&str>::from_iter(keys.iter().copied());
+    assert_eq!(
+        key_sets.len(),
+        keys.len(),
+        "one ID per visible row, however the labels repeat: {keys:?} against {labels:?}"
+    );
     app.stop();
 }
 

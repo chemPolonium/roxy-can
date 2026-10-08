@@ -132,6 +132,9 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         if !ui.table_next_column() {
             continue;
         }
+        // The row's own ID, not its label: a table does not seed item IDs per
+        // cell, and the same message on two buses prints the same label.
+        let _row_id = ui.push_id(row.id_key.as_str());
         let token = ui
             .tree_node_config(row.label.clone())
             .span_full_width(true)

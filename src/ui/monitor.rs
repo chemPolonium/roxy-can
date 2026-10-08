@@ -90,7 +90,10 @@ fn content(app: &mut App, ui: &Ui) {
 fn rule_controls(app: &mut App, ui: &Ui, i: usize) {
     let width = ui.content_region_avail()[0];
     ui.same_line_with_pos(width - 268.0);
-    if ui.button(if app.monitor_rows[i].rule_on { "on" } else { "off" }) {
+    // The label is a state, so two rows agree on it -- the suffix keeps them on
+    // separate IDs.
+    let toggle = if app.monitor_rows[i].rule_on { "on" } else { "off" };
+    if ui.button(format!("{toggle}##mrule{i}")) {
         app.monitor_rows[i].rule_on = !app.monitor_rows[i].rule_on;
     }
     if ui.is_item_hovered() {

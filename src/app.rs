@@ -125,6 +125,12 @@ pub struct StatsRowText {
 #[derive(Clone)]
 pub struct MsgRowText {
     pub label: String,
+    /// The row's own identity, for the tree node's ImGui ID. Not derived from
+    /// `label`: the same `(id, name)` legitimately appears on two buses -- a
+    /// bench where both channels load one DBC does exactly that -- and ImGui
+    /// tables do not seed item IDs per cell, so a label-derived ID puts two
+    /// visible items on one ID and the conflict check fires.
+    pub id_key: String,
     pub bus: String,
     pub dir: &'static str,
     pub count: String,
@@ -1357,6 +1363,12 @@ impl App {
             };
             rows.push(MsgRowText {
                 label: format!("{id_str}  {name}"),
+                id_key: format!(
+                    "c{}:{:08X}{}",
+                    agg.channel,
+                    agg.id,
+                    if agg.extended { "x" } else { "" }
+                ),
                 bus: self.channel_name(agg.channel),
                 dir: match (agg.rx > 0, agg.tx > 0) {
                     (true, true) => "Rx+Tx",
@@ -1444,6 +1456,16 @@ impl App {
                 };
                 rows.push(MsgRowText {
                     label,
+                    id_key: format!(
+                        "f{}:{}:{}",
+                        agg.bus,
+                        agg.slot,
+                        match &agg.occupant {
+                            crate::aggregate::FrOccupant::Frame(i) => format!("f{i}"),
+                            crate::aggregate::FrOccupant::Logged(n) => format!("l{n}"),
+                            crate::aggregate::FrOccupant::Unknown => "u".to_string(),
+                        }
+                    ),
                     bus: self.fr_bus_name(agg.bus),
                     dir: "Rx",
                     count: agg.count.to_string(),
