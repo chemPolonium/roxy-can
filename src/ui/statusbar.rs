@@ -1,6 +1,36 @@
 use crate::app::{App, Mode, STATUSBAR_H};
 use dear_imgui_rs::{Condition, StyleVar, Ui, WindowFlags};
 
+/// The longest prefix of `text` that fits `avail` pixels as measured by
+/// `width_of`, with `…` marking a cut. `width_of` is a parameter so the rule
+/// can be tested without a font atlas.
+fn fit_width(text: &str, avail: f32, width_of: impl Fn(&str) -> f32) -> String {
+    if avail <= 0.0 {
+        return String::new();
+    }
+    if width_of(text) <= avail {
+        return text.to_string();
+    }
+    let ellipsis_w = width_of("…");
+    let chars: Vec<char> = text.chars().collect();
+    // Binary search the prefix: a status line is drawn every frame, and the
+    // messages that need cutting are the long ones.
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        let cand: String = chars[..mid].iter().copied().collect();
+        if width_of(&cand) + ellipsis_w <= avail {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut out: String = chars[..lo].iter().copied().collect();
+    out.push('…');
+    out
+}
+
 /// Fixed bottom bar showing measurement state; independent of any window.
 pub fn render(app: &App, ui: &Ui) {
     let io = ui.io();
@@ -61,17 +91,78 @@ pub fn render(app: &App, ui: &Ui) {
 
             wrap.end();
             let msg = &app.status;
-            let w = ui.calc_text_size(msg)[0];
             let pad_y = unsafe { ui.style() }.window_padding()[1];
-            ui.get_window_draw_list().add_text(
-                [
-                    io.display_size()[0] - w - 12.0,
-                    io.display_size()[1] - STATUSBAR_H + pad_y,
-                ],
-                [0.7, 0.75, 0.85, 1.0],
-                msg.clone(),
-            );
+            // The message owns the space the left-hand chain leaves it and no
+            // more. It used to be drawn right-aligned at its full width, so a
+            // driver failure long enough to matter -- which channel refused
+            // what, and why -- painted straight over the project name and the
+            // counters. Cut it with an ellipsis; the whole line is one gesture
+            // away on hover, and the Write window keeps every one of them.
+            // The anchor is the last item's right edge: a text item leaves the
+            // cursor at the *start* of the line, which would read as "the
+            // whole bar is free".
+            let left_x = ui.item_rect_max()[0] + 8.0;
+            let right = io.display_size()[0] - 12.0;
+            let shown = fit_width(msg, right - left_x, |s| ui.calc_text_size(s)[0]);
+            let w = ui.calc_text_size(&shown)[0];
+            ui.set_cursor_pos([right - w, pad_y]);
+            ui.text_colored([0.7, 0.75, 0.85, 1.0], &shown);
+            if shown != *msg && ui.is_item_hovered() {
+                ui.tooltip_text(msg.clone());
+            }
         });
     pad.pop();
     min.pop();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_width;
+
+    /// One pixel per `char`: the ruler stands in for the font atlas, and the
+    /// messages that need cutting are the multibyte ones -- a byte-indexed
+    /// prefix would panic mid-character.
+    fn ruler(s: &str) -> f32 {
+        s.chars().count() as f32
+    }
+
+    fn fits(msg: &str, avail: f32) -> String {
+        fit_width(msg, avail, ruler)
+    }
+
+    #[test]
+    fn a_message_that_fits_is_left_alone() {
+        assert_eq!(
+            fits("hardware attached to 0", 999.0),
+            "hardware attached to 0"
+        );
+    }
+
+    #[test]
+    fn a_long_message_is_cut_to_the_room_left_and_says_so() {
+        let msg = "打开 Vector 通道 0 失败（status 204: XL_ERR_INVALID_CHANNEL_MASK）";
+        let shown = fits(msg, 12.0);
+        assert_eq!(ruler(&shown), 12.0, "the cut used the room it was given: {shown}");
+        assert!(shown.ends_with('…'), "a cut is marked as one: {shown}");
+        assert!(msg.starts_with(shown.trim_end_matches('…')));
+    }
+
+    #[test]
+    fn every_room_from_nothing_to_the_whole_line_comes_back_measurable() {
+        let msg = "FlexRay 监听挂接失败: FR0 集群配置被拒绝（status 112: XL_ERR_INVALID_ACCESS）";
+        for px in 0..=ruler(msg) as u32 + 3 {
+            let avail = px as f32;
+            let shown = fits(msg, avail);
+            assert!(
+                ruler(&shown) <= avail,
+                "asked for {avail}px of {msg:?} and got {shown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_room_is_no_message() {
+        assert_eq!(fits("anything at all", 0.0), "");
+        assert_eq!(fits("anything at all", -5.0), "");
+    }
 }
