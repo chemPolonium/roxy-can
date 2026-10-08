@@ -1,7 +1,24 @@
-# 每次推送/PR 自动跑构建、全量测试与 clippy。
+# 每次推送/PR 自动跑构建、clippy 与全量测试。
 # 只用官方 checkout 与 runner 预装的 stable Rust，不引第三方 action。
-# 产品面向 Windows，先只开 windows-latest；计时敏感的测试在
-# runner 负载下如出现偶发，再单独加筛减，不预先放宽断言。
+# 产品面向 Windows，先只开 windows-latest。
+#
+# 规则（2026-10-08 重定，起因：同一份二进制本机全绿、runner 上随机红，且一条
+# 计时断言失败会把 13 个不相干的 UI 测试一起拖红）：
+#
+# 1. clippy 的警告即失败（`-D warnings`）。以前警告不挡门，攒到某次顺手改动
+#    才炸，那时已经分不清是哪一条引入的。
+# 2. 测试不许"缺文件就跳过"。`assets/` 与 `examples/` 都在库里，缺了就是
+#    checkout 坏了，必须红——此前有 21 处 `not present -- skipped`，等于 21 扇
+#    可以假绿的门（FlexRay 那套资源测试全在里面）。
+# 3. 性能断言一律同机对照，不许用绝对阈值。先测一个基线阶段（图形窗口关），
+#    再测加载阶段（6 条曲线 + 拖游标），断言的是两者之比。绝对阈值（"日志钟须
+#    走够墙钟的 25%"）量的是光栅器而不是产品：runner 没有 GPU，软件光栅下每圈
+#    ~9 ms，同一测本机 27% 过、runner 17–23% 随机红。
+# 4. 一个测试失败不许连坐。共享 imgui 上下文的锁在持有者 panic 后必须还能取回
+#    （`ui_tests::ui_lock` 走 `PoisonError::into_inner`），否则一条断言红会报成
+#    十四条，真正的消息被自己的噪声埋掉。
+# 5. 计时测试开始前必须等回放真的跑起来（`ui_tests::wait_measuring`）：核心打开
+#    并索引一份 60k 行的 BLF 要几百毫秒，把加载算进测量阶段等于测加载器。
 
 name: CI
 
@@ -19,8 +36,8 @@ jobs:
       - name: Build all targets
         run: cargo build --all-targets
 
-      - name: Clippy
-        run: cargo clippy --all-targets
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
         run: cargo test
