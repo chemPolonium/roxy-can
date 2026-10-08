@@ -268,9 +268,18 @@ fn content(app: &mut App, ui: &Ui) {
                 .hw
                 .iter()
                 .find(|h| h.bus as usize == i)
-                .map(|h| (h.driver, h.adapter, h.kbps, h.can_tx, h.fd));
+                .map(|h| {
+                    (
+                        h.driver,
+                        h.adapter,
+                        h.kbps,
+                        h.can_tx,
+                        h.fd,
+                        h.tx_fail.clone(),
+                    )
+                });
             match attached {
-                Some((driver, adapter, kbps, can_tx, fd)) => {
+                Some((driver, adapter, kbps, can_tx, fd, tx_fail)) => {
                     // 两行布局：上行状态、下行解挂按钮——任何列宽下都完整
                     // 可见可点（单行塞不下时按钮会被单元格裁掉）。
                     ui.text(format!(
@@ -309,6 +318,16 @@ fn content(app: &mut App, ui: &Ui) {
                         } else {
                             "挂接中（只收：通道初始化访问被其他程序占用）"
                         });
+                    }
+                    // The wire refusing writes is the one failure a bench cannot
+                    // see from the frames: they all stay on the internal bus and
+                    // every view keeps scrolling. So the row carries the count,
+                    // and the reason the driver gave, permanently.
+                    if let Some((reason, n)) = &tx_fail {
+                        ui.text_colored([1.0, 0.45, 0.35, 1.0], format!("发车被拒 ×{n}"));
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text(format!("线路拒绝发车 {n} 次，第一次的原因：{reason}"));
+                        }
                     }
                 }
                 None => {

@@ -118,6 +118,13 @@ pub struct BusHardware {
     /// attachment (another program holds the channel) still feeds RX into
     /// every view, but node switches cannot direct traffic to the wire.
     pub can_tx: bool,
+    /// Why the wire last refused this bus's transmit, and how many writes it
+    /// has refused since the attachment. Latched rather than logged per frame:
+    /// a dead wire refuses thousands of writes a second, and the first reason
+    /// is the one that explains the rest. Before this existed a refused write
+    /// was dropped with `.ok()`, so a bench with nothing connected and a bench
+    /// whose cable was cut looked identical on screen.
+    tx_fail: Option<(String, u64)>,
     port: HwPort,
 }
 
@@ -169,6 +176,10 @@ impl HwPort {
 pub struct MockPort {
     pub written: std::sync::Arc<std::sync::Mutex<Vec<CanFrame>>>,
     pub incoming: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<CanFrame>>>,
+    /// When set, every write is refused with this reason: an adapter that is
+    /// there but takes nothing -- the state a cut cable or a receive-only
+    /// handle leaves the tool in.
+    pub refuse: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// The shared handles [`Hardware::attach_mock`] hands back to a test:
@@ -182,6 +193,9 @@ pub type MockHandles = (
 #[cfg(test)]
 impl MockPort {
     pub fn write(&self, f: &CanFrame) -> Result<(), String> {
+        if let Some(r) = self.refuse.lock().expect("mock lock").as_ref() {
+            return Err(r.clone());
+        }
         self.written.lock().expect("mock lock").push(*f);
         Ok(())
     }
@@ -252,6 +266,10 @@ pub struct Hardware {
     /// attachment. Attaching is an explicit act, so the default keeps
     /// the attachment the user just made connected.
     pub live: bool,
+    /// Buses whose *first* refused write has not been announced yet. The core
+    /// drains this once per step into the Write ring, so one driver fault makes
+    /// one line no matter how many frames it refuses.
+    pending_tx_fail: Vec<u8>,
 }
 
 /// The FlexRay RX-only watch: a Vector channel opened with a
@@ -276,6 +294,7 @@ impl Hardware {
             buses: Default::default(),
             fr_watches: Default::default(),
             live: true,
+            pending_tx_fail: Vec::new(),
         }
     }
 }
@@ -296,6 +315,9 @@ impl Hardware {
 
     /// Attaches a port to a bus, replacing any previous attachment.
     pub fn attach(&mut self, bus: u8, driver: HwDriver, adapter: i32, kbps: u32, can_tx: bool, port: HwPort) {
+        // A new port starts with a clean record, and an announcement queued
+        // about the old one must not arrive after the swap.
+        self.pending_tx_fail.retain(|&b| b != bus);
         self.buses.insert(
             bus,
             BusHardware {
@@ -303,6 +325,7 @@ impl Hardware {
                 driver,
                 kbps,
                 can_tx,
+                tx_fail: None,
                 port,
             },
         );
@@ -386,15 +409,45 @@ impl Hardware {
     /// Writes one frame out the bus's wire in Real bus mode. Everything
     /// the tool transmits for a Simulated node rides the same switch --
     /// CANoe's simulated/real bus distinction, not a per-node dial.
-    /// 只收句柄写入失败时静默降级——帧已留在内部总线，视图不丢。
     /// Simulated 模式（`!live`）不写线。
+    ///
+    /// A refused write is latched per bus, never swallowed and never logged
+    /// per frame: the frame stays on the internal bus so no view loses it, but
+    /// the row and the Write ring say that the wire took nothing.
     pub fn write_if_live(&mut self, bus: u8, f: &CanFrame) {
         if !self.live {
             return;
         }
-        if let Some(bh) = self.buses.get_mut(&bus) {
-            bh.port.write_frame(f).ok();
+        if let Some(bh) = self.buses.get_mut(&bus)
+            && let Err(e) = bh.port.write_frame(f)
+        {
+            match &mut bh.tx_fail {
+                Some((_, n)) => *n += 1,
+                None => {
+                    bh.tx_fail = Some((e, 1));
+                    self.pending_tx_fail.push(bus);
+                }
+            }
         }
+    }
+
+    /// What the wire last refused on this bus, and how many writes it refused.
+    pub fn tx_fail(&self, bus: u8) -> Option<(String, u64)> {
+        self.buses.get(&bus).and_then(|b| b.tx_fail.clone())
+    }
+
+    /// Takes the buses whose first refusal has not been announced yet, with
+    /// the reason each one got.
+    pub(crate) fn take_tx_fail_news(&mut self) -> Vec<(u8, String)> {
+        self.pending_tx_fail
+            .drain(..)
+            .filter_map(|b| {
+                self.buses
+                    .get(&b)
+                    .and_then(|bh| bh.tx_fail.clone())
+                    .map(|(reason, _)| (b, reason))
+            })
+            .collect()
     }
 
     /// Drains every attached adapter's receive queue into `out`, stamped
@@ -468,6 +521,30 @@ impl Hardware {
             HwPort::Mock(MockPort {
                 written: written.clone(),
                 incoming: incoming.clone(),
+                refuse: Default::default(),
+            }),
+        );
+        (written, incoming)
+    }
+
+    /// Like [`Self::attach_mock`], but every write the bus attempts is refused
+    /// with `reason` -- a wire that is present and takes nothing.
+    #[cfg(test)]
+    pub fn attach_mock_refusing(&mut self, bus: u8, reason: &str) -> MockHandles {
+        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let incoming = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::new(),
+        ));
+        self.attach(
+            bus,
+            HwDriver::Vector,
+            1,
+            500,
+            true,
+            HwPort::Mock(MockPort {
+                written: written.clone(),
+                incoming: incoming.clone(),
+                refuse: std::sync::Arc::new(std::sync::Mutex::new(Some(reason.to_string()))),
             }),
         );
         (written, incoming)

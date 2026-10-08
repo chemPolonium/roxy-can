@@ -86,6 +86,23 @@ pub struct HwBusView {
     pub can_tx: bool,
     /// FD data-phase params were applied; FD frames can leave.
     pub fd: bool,
+    /// Why the wire last refused this bus's transmit, and how many writes it
+    /// has refused. `None` while every write has been taken.
+    pub tx_fail: Option<(String, u64)>,
+}
+
+/// What the run's frames do about the wire, in the toolbar switch's own words:
+/// `simulation` with nothing attached, `real bus · N` when N buses ride the
+/// wire, `simulation · hardware parked` when the attachments are held back.
+/// The status bar and the start-of-run line say it together. "(virtual)" used
+/// to stand in for the first of these -- it named the clock's source -- and on
+/// a bench with a channel attached it read as "none of this is real hardware".
+pub fn wire_note(attached: usize, real_bus: bool) -> String {
+    match (attached, real_bus) {
+        (0, _) => "simulation".to_string(),
+        (n, true) => format!("real bus · {n}"),
+        (_, false) => "simulation · hardware parked".to_string(),
+    }
 }
 
 /// The FlexRay RX-only watch as the frontend sees it: identity only --
@@ -2571,6 +2588,7 @@ impl BusCore {
                     kbps: bh.kbps,
                     can_tx: bh.can_tx,
                     fd: self.hw.fd(bus),
+                    tx_fail: self.hw.tx_fail(bus),
                 })
                 .collect(),
             real_bus: self.hw.live,
@@ -3671,13 +3689,11 @@ impl BusCore {
                 }
             }
         }
+        let note = wire_note(self.hw.buses.len(), self.hw.live);
         *status = if block_notes.is_empty() {
-            "measuring (virtual)".to_string()
+            format!("measuring ({note})")
         } else {
-            format!(
-                "measuring (virtual); replay block {}",
-                block_notes.join("; ")
-            )
+            format!("measuring ({note}); replay block {}", block_notes.join("; "))
         };
         if self.recorder.recording {
             match self.recorder.open() {
@@ -4275,6 +4291,22 @@ impl BusCore {
 
         self.check_spec(tol_pct, grace);
         self.eval_timeout_triggers(now_us, grace, status);
+
+        // A wire that refuses writes says so once per bus, here at the end of
+        // the step so every write of this lap is behind it. The count keeps
+        // growing on the Buses row; one line per refused frame would bury every
+        // other news in the log, and a dead wire refuses thousands a second.
+        for (bus, reason) in self.hw.take_tx_fail_news() {
+            let name = self
+                .channels
+                .get(bus as usize)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| format!("总线 {}", bus + 1));
+            self.write_push(
+                WriteKind::Error,
+                format!("{name}：发车被线路拒绝：{reason}（只报第一次，次数见 Buses）"),
+            );
+        }
 
         if replay_done {
             self.measuring = false;
@@ -4945,6 +4977,17 @@ impl BusCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bar names where the frames go. "(virtual)" used to be read as "not
+    /// on real hardware" even with a channel attached, which is how a bench
+    /// session gets doubted.
+    #[test]
+    fn the_wire_note_names_the_wire_the_frames_go_out_on() {
+        assert_eq!(wire_note(0, true), "simulation");
+        assert_eq!(wire_note(0, false), "simulation", "nothing to park");
+        assert_eq!(wire_note(2, true), "real bus · 2");
+        assert_eq!(wire_note(2, false), "simulation · hardware parked");
+    }
 
     fn fr_row(t_us: u64, slot: u16) -> crate::trace::FrRow {
         crate::trace::FrRow {

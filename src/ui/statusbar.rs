@@ -57,13 +57,22 @@ pub fn render(app: &App, ui: &Ui) {
             let wrap = ui.push_text_wrap_pos(-1.0);
             ui.text_colored([0.8, 0.85, 1.0, 1.0], app.display_name());
             ui.same_line();
-            let (state, color): (&str, [f32; 4]) = if app.snap.measuring {
+            let (state, color): (String, [f32; 4]) = if app.snap.measuring {
                 match app.snap.mode {
-                    Mode::Virtual => ("MEASURING (virtual)", [0.4, 0.95, 0.5, 1.0]),
-                    Mode::Replay => ("REPLAYING", [0.3, 0.8, 1.0, 1.0]),
+                    // The wire's story, in the same words the toolbar switch
+                    // uses -- see [`crate::bus::wire_note`].
+                    Mode::Virtual => (
+                        format!("MEASURING ({})", crate::bus::wire_note(app.snap.hw.len(), app.snap.real_bus)),
+                        if app.snap.hw.is_empty() || app.snap.real_bus {
+                            [0.4, 0.95, 0.5, 1.0]
+                        } else {
+                            [1.0, 0.8, 0.4, 1.0]
+                        },
+                    ),
+                    Mode::Replay => ("REPLAYING".to_string(), [0.3, 0.8, 1.0, 1.0]),
                 }
             } else {
-                ("STOPPED", [0.6, 0.6, 0.65, 1.0])
+                ("STOPPED".to_string(), [0.6, 0.6, 0.65, 1.0])
             };
             ui.text_colored(color, state);
             ui.same_line();

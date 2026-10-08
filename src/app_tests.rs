@@ -6948,6 +6948,108 @@ fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
     app.stop();
 }
 
+/// A wire that takes nothing used to be invisible: every refused write fell
+/// into `.ok()`, the frames stayed on the internal bus, and every view kept
+/// scrolling as though the bench were merely quiet. The first refusal is now
+/// said once and each one after it counted on the row.
+#[test]
+fn a_wire_that_refuses_writes_is_said_once_and_counted() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    let (written, _incoming) = app.hw.attach_mock_refusing(0, "XL_ERR_HW_NOTPRESENT");
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.start_virtual();
+    app.settle();
+    for t in 1..=500u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.refresh_snapshot();
+    assert!(
+        written.lock().expect("mock lock").is_empty(),
+        "nothing reached the wire -- that is the fact being reported"
+    );
+    let (_, n) = app
+        .snap
+        .hw
+        .iter()
+        .find(|h| h.bus == 0)
+        .and_then(|h| h.tx_fail.clone())
+        .expect("the row says the wire refused writes");
+    assert!(
+        n >= 2,
+        "every refusal after the first is counted, not swallowed: {n}"
+    );
+    let said: Vec<String> = app
+        .snap
+        .write
+        .iter()
+        .filter(|l| l.text.contains("发车被线路拒绝"))
+        .map(|l| l.text.clone())
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "one line for one fault, however many frames it refused: {said:?}"
+    );
+    assert!(
+        said[0].contains("XL_ERR_HW_NOTPRESENT"),
+        "the driver's own reason travels with it: {}",
+        said[0]
+    );
+    assert!(
+        app.snap
+            .write
+            .iter()
+            .any(|l| l.kind == crate::bus::WriteKind::Error),
+        "a dead wire is not news of the informational kind"
+    );
+}
+
+/// The same drive on a wire that takes everything: no complaint anywhere.
+/// Without this half the test above only proves the latch fires, not that it
+/// can tell the two situations apart.
+#[test]
+fn a_wire_that_takes_writes_leaves_no_complaint() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    let (written, _incoming) = app.hw.attach_mock(0);
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.start_virtual();
+    app.settle();
+    for t in 1..=500u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.refresh_snapshot();
+    assert!(
+        !written.lock().expect("mock lock").is_empty(),
+        "the wire took the frames"
+    );
+    assert!(
+        app.snap
+            .hw
+            .iter()
+            .find(|h| h.bus == 0)
+            .is_some_and(|h| h.tx_fail.is_none()),
+        "and nothing was refused, so the row stays quiet"
+    );
+    assert!(
+        !app.snap.write.iter().any(|l| l.text.contains("发车被线路拒绝")),
+        "and the log says nothing about it"
+    );
+}
+
 /// State Trackers ride the same remap: their rows (and the per-key color
 /// memory) follow the bus removal just like Graphics and Data rows.
 #[test]
