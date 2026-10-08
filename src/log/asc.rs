@@ -581,8 +581,7 @@ mod tests {
     #[test]
     fn the_real_canoe_flexray_asc_parses() {
         let Ok(text) = std::fs::read_to_string("assets/arxml/Logging.asc") else {
-            println!("assets/arxml/Logging.asc not present -- skipped");
-            return;
+            panic!("assets/arxml/Logging.asc missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let (frames, fr) = parse_asc_full(&text);
         assert!(

@@ -1164,8 +1164,7 @@ mod tests {
     #[test]
     fn r2_spike_reports_static_send_coverage_on_examples() {
         let Ok(rd) = std::fs::read_dir("examples") else {
-            println!("examples/ not present -- skipped");
-            return;
+            panic!("examples/ missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let mut total_derived = 0usize;
         let mut total_opaque = 0usize;

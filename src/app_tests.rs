@@ -6655,8 +6655,7 @@ fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        println!("{arxml} not present -- skipped");
-        return;
+        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     app.fr_buses.insert(
@@ -6711,8 +6710,7 @@ fn an_empty_flexray_message_row_names_its_reason() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        println!("{arxml} not present -- skipped");
-        return;
+        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     // A slot the description schedules but does not name any signals for, when
@@ -7455,8 +7453,7 @@ fn the_trace_row_cache_extends_in_place_without_losing_rows() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        println!("{arxml} not present -- skipped");
-        return;
+        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     // Slots whose frame actually declares signals, with the cycle that frame is
@@ -8078,8 +8075,7 @@ fn a_script_writes_a_flexray_signal_into_its_entry() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        println!("{arxml} not present -- skipped");
-        return;
+        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     };
     let parsed = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     let (slot, sig, declared_len) = (0..parsed.frames.len())
@@ -8652,8 +8648,7 @@ fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        println!("{arxml} not present -- skipped");
-        return;
+        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     // The declared period comes out of the schedule itself, so the test states
@@ -9601,8 +9596,7 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
 fn a_flexray_bus_can_be_detached_and_removed() {
     let arxml = "assets/arxml/PowerTrain.arxml";
     if !std::path::Path::new(arxml).exists() {
-        println!("{arxml} not present -- skipped");
-        return;
+        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     }
     let mut app = quiet_app();
     assert_eq!(app.load_cluster_description(arxml, None), Some(0));

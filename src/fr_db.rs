@@ -2345,8 +2345,7 @@ mod tests {
             );
         }
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
-            return;
+            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).unwrap();
         for ix in 0..db.frames.len() {
@@ -2454,8 +2453,7 @@ mod tests {
     fn one_static_slot_belongs_to_several_frames_in_turn() {
         use std::collections::BTreeSet;
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            println!("{POWERTRAIN_ARXML} not present -- skipped");
-            return;
+            panic!("{POWERTRAIN_ARXML} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).expect("the asset parses");
         let occupants: BTreeSet<String> = (0..8u8)
@@ -2538,8 +2536,7 @@ mod tests {
     #[test]
     fn parses_the_real_gbk_powertrain_arxml() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
-            return;
+            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).expect("PowerTrain.arxml parses");
         assert_eq!(db.params.speed_kbps, 10000);
@@ -2569,8 +2566,7 @@ mod tests {
     #[test]
     fn arxml_keeps_signal_widths_and_pdu_bit_offsets() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
-            return;
+            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).unwrap();
         // (1) CarSpeed is a 16-bit I-SIGNAL; the SYSTEM-SIGNAL merge must
@@ -2624,8 +2620,7 @@ mod tests {
     #[test]
     fn parses_the_real_fibex_20d_export() {
         let Some(text) = read_asset(POWERTRAIN_FIBEX_V2) else {
-            println!("assets/fibex/PowerTrain_v2.xml not present -- skipped");
-            return;
+            panic!("assets/fibex/PowerTrain_v2.xml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).expect("PowerTrain_v2.xml parses");
         assert_eq!(db.frames.len(), 6, "the demo schedules six static frames");
@@ -2651,8 +2646,7 @@ mod tests {
     #[test]
     fn frame_at_respects_the_real_schedule() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
-            return;
+            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).unwrap();
         // Slot 13 hosts a frame that the logging session carried on the
@@ -2685,8 +2679,7 @@ mod tests {
     #[test]
     fn decodes_a_signal_from_the_real_arxml() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            println!("assets/arxml/PowerTrain.arxml not present -- skipped");
-            return;
+            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let db = FrDb::parse(&text).unwrap();
         let (frame_ix, frame, pdu_name, sig) = db

@@ -1051,8 +1051,7 @@ pub(crate) mod tests {
     fn the_real_canoe_flexray_blf_parses() {
         let path = std::path::Path::new("assets/arxml/Logging.blf");
         let Ok(mut stream) = BlfStream::open(path) else {
-            println!("assets/arxml/Logging.blf not present -- skipped");
-            return;
+            panic!("assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         let mut fr = Vec::new();
         let mut can = 0usize;
@@ -1097,8 +1096,7 @@ pub(crate) mod tests {
     fn flexray_only_stream_stays_can_exhausted() {
         let path = std::path::Path::new("assets/arxml/Logging.blf");
         let Ok(mut stream) = BlfStream::open(path) else {
-            println!("assets/arxml/Logging.blf not present -- skipped");
-            return;
+            panic!("assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         };
         // The first CAN peek scans to EOF and finds none; the flag latches.
         assert!(stream.peek_t().is_none(), "no CAN frames in an FR-only log");
@@ -2086,8 +2084,7 @@ pub(crate) mod tests {
     fn a_real_two_cluster_recording_keeps_its_clusters_apart() {
         let p = std::path::Path::new("assets/fibex/Logging.blf");
         if !p.exists() {
-            println!("{p:?} not present -- skipped");
-            return;
+            panic!("{p:?} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         }
         let mut s = BlfStream::open(p).expect("open");
         let mut rows = Vec::new();

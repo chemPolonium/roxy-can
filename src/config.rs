@@ -2300,8 +2300,7 @@ mod tests {
         let arxml = "assets/arxml/PowerTrain.arxml";
         let fibex = "assets/fibex/PowerTrain_v2.xml";
         if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
-            println!("{arxml} or {fibex} not present -- skipped");
-            return;
+            panic!("{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         }
         let cfg: Config =
             serde_json::from_str(&format!(r#"{{"fr_fibex":"{arxml}"}}"#)).unwrap();
@@ -2373,8 +2372,7 @@ mod tests {
         let arxml = "assets/arxml/PowerTrain.arxml";
         let fibex = "assets/fibex/PowerTrain_v2.xml";
         if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
-            println!("{arxml} or {fibex} not present -- skipped");
-            return;
+            panic!("{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
         }
         let mut app = App::headless();
         assert_eq!(app.load_cluster_description(arxml, Some(0)), Some(0));
