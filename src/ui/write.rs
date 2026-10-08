@@ -5,7 +5,7 @@
 
 use crate::app::App;
 use crate::bus::WriteKind;
-use dear_imgui_rs::{Condition, StyleVar, Ui};
+use dear_imgui_rs::{Condition, StyleColor, StyleVar, Ui};
 
 /// `wall_us` (local microseconds since midnight) as `HH:MM:SS.mmm`.
 /// Shared with the Write log's text export so the file lines match the
@@ -91,16 +91,16 @@ fn content(app: &mut App, ui: &Ui) {
         };
         ui.text_colored([0.45, 0.45, 0.45, 1.0], wall_stamp(line.wall_us));
         ui.same_line();
-        // Wrap at the window's right edge. `ui.text` does not wrap on its own,
-        // and what runs past the edge is clipped rather than scrolled: the
-        // driver messages this log exists for ("which channel refused what, and
-        // why") are exactly the long ones. The wrap position is taken after the
-        // stamp, so a continuation line starts under the text, not under the
-        // time.
-        let wrap_at = ui.cursor_screen_pos()[0] + ui.content_region_avail()[0];
-        let wrap = ui.push_text_wrap_pos(wrap_at);
-        ui.text_colored(color, &line.text);
-        wrap.end();
+        // `text_wrapped` is the API for this: it pushes the wrap position at
+        // the window's work-rect edge itself. Hand-computing one from the
+        // cursor and the available width put a screen coordinate where the
+        // binding wants a window-local one, and the middle of the line was
+        // drawn off-screen -- the message looked truncated mid-word while the
+        // tail sat on a second line. Colour rides a style push because there is
+        // no coloured variant of the wrapped call.
+        let color_tok = ui.push_style_color(StyleColor::Text, color);
+        ui.text_wrapped(&line.text);
+        color_tok.pop();
     }
     if at_bottom && ui.scroll_max_y() > 0.0 {
         ui.set_scroll_here_y(1.0);
