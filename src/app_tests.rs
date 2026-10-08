@@ -7048,6 +7048,55 @@ fn a_wire_that_takes_writes_leaves_no_complaint() {
     );
 }
 
+/// The third way the wire fails, and the one the driver admits to only in
+/// events: `xlCanTransmitEx` **accepts** the frame, the controller retries it
+/// forever because nobody answers, and the sole sign is a stream of non-frame
+/// events. Those used to be dropped where no frame was read, so the screen
+/// showed a calm stream of Tx and 0 Rx -- indistinguishable from a quiet bus.
+#[test]
+fn a_wire_that_never_answers_is_told_from_the_events() {
+    let mut app = App::headless();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.hw
+        .attach_mock_reporting(0, &[(0x0402, 4001), (0x0409, 16)]);
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: true,
+    });
+    app.start_virtual();
+    for t in 1..=50u64 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.refresh_snapshot();
+    let (reason, n) = app
+        .snap
+        .hw
+        .iter()
+        .find(|h| h.bus == 0)
+        .and_then(|h| h.tx_fail.clone())
+        .expect("the events are reported, not dropped");
+    assert!(
+        reason.contains("0x0402"),
+        "the tag the driver actually used travels with it: {reason}"
+    );
+    assert_eq!(n, 4001, "the count is the driver's own: {n}");
+    let said: Vec<String> = app
+        .snap
+        .write
+        .iter()
+        .filter(|l| l.text.contains("发车被线路拒绝"))
+        .map(|l| l.text.clone())
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "4001 refused attempts are one line, not 4001: {said:?}"
+    );
+}
+
 /// State Trackers ride the same remap: their rows (and the per-key color
 /// memory) follow the bus removal just like Graphics and Data rows.
 #[test]

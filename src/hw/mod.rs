@@ -157,6 +157,17 @@ impl HwPort {
         }
     }
 
+    /// Non-frame events this port has seen since the last call, by tag. Only
+    /// Vector reports any; the mock hands back whatever a test put in it.
+    pub(crate) fn take_tag_news(&mut self) -> std::collections::BTreeMap<u16, u64> {
+        match self {
+            HwPort::Kvaser(_) => Default::default(),
+            HwPort::Vector(ch) => ch.take_tag_news(),
+            #[cfg(test)]
+            HwPort::Mock(m) => m.take_tag_news(),
+        }
+    }
+
     /// Whether FD data-phase params are active on this port.
     pub fn fd(&self) -> bool {
         match self {
@@ -180,6 +191,9 @@ pub struct MockPort {
     /// there but takes nothing -- the state a cut cable or a receive-only
     /// handle leaves the tool in.
     pub refuse: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Non-frame events a test wants the port to report, by tag -- the driver's
+    /// side of a transmit the bus never took.
+    pub tags: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<u16, u64>>>,
 }
 
 /// The shared handles [`Hardware::attach_mock`] hands back to a test:
@@ -202,6 +216,10 @@ impl MockPort {
 
     pub fn try_read(&mut self) -> Option<CanFrame> {
         self.incoming.lock().expect("mock lock").pop_front()
+    }
+
+    pub(crate) fn take_tag_news(&mut self) -> std::collections::BTreeMap<u16, u64> {
+        std::mem::take(&mut *self.tags.lock().expect("mock lock"))
     }
 }
 
@@ -455,6 +473,7 @@ impl Hardware {
     /// Simulated 模式（`!live`）照常抽干队列（防驱动缓冲塞满旧帧）但
     /// 把帧丢弃——不上内部总线。
     pub fn poll_rx(&mut self, sim_t_us: u64, out: &mut Vec<CanFrame>) {
+        let mut news: Vec<(u8, std::collections::BTreeMap<u16, u64>)> = Vec::new();
         for (&bus, bh) in self.buses.iter_mut() {
             while let Some(mut f) = bh.port.try_read() {
                 if !self.live {
@@ -463,6 +482,40 @@ impl Hardware {
                 f.t_us = sim_t_us;
                 f.channel = bus;
                 out.push(f);
+            }
+            let tags = bh.port.take_tag_news();
+            if !tags.is_empty() {
+                news.push((bus, tags));
+            }
+        }
+        for (bus, tags) in news {
+            self.latch_refused_wire(bus, &tags);
+        }
+    }
+
+    /// Turns a port's non-frame events into the bus's latched wire complaint.
+    ///
+    /// A transmit the driver *accepted* is not a transmit the bus took: an
+    /// unanswered frame is retried by the controller indefinitely, and the only
+    /// sign of it is this event stream. It shares the latch with a refused
+    /// write, so the row says one thing however the wire failed -- and the count
+    /// keeps climbing where a per-event line would bury the log at thousands a
+    /// second.
+    fn latch_refused_wire(&mut self, bus: u8, tags: &std::collections::BTreeMap<u16, u64>) {
+        if !self.live {
+            return;
+        }
+        let Some((tag, n)) = crate::hw::vector::refused_tag(tags) else {
+            return;
+        };
+        let Some(bh) = self.buses.get_mut(&bus) else {
+            return;
+        };
+        match &mut bh.tx_fail {
+            Some((_, total)) => *total += n,
+            None => {
+                bh.tx_fail = Some((format!("发车未被应答（驱动回报 tag 0x{tag:04X}，{n} 条）"), n));
+                self.pending_tx_fail.push(bus);
             }
         }
     }
@@ -522,6 +575,7 @@ impl Hardware {
                 written: written.clone(),
                 incoming: incoming.clone(),
                 refuse: Default::default(),
+                tags: Default::default(),
             }),
         );
         (written, incoming)
@@ -545,8 +599,38 @@ impl Hardware {
                 written: written.clone(),
                 incoming: incoming.clone(),
                 refuse: std::sync::Arc::new(std::sync::Mutex::new(Some(reason.to_string()))),
+                tags: Default::default(),
             }),
         );
         (written, incoming)
+    }
+
+    /// Like [`Self::attach_mock`], but the port also reports `tags` as non-frame
+    /// events: writes are **accepted** while the driver says the bus is not
+    /// taking them. That is the shape of a wired channel whose peer never
+    /// answers -- the transmit goes into the controller and is retried forever.
+    /// The returned handle owns the tally, so a test can top it up.
+    #[cfg(test)]
+    pub fn attach_mock_reporting(
+        &mut self,
+        bus: u8,
+        tags: &[(u16, u64)],
+    ) -> std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<u16, u64>>> {
+        let tally: std::collections::BTreeMap<u16, u64> = tags.iter().copied().collect();
+        let tags = std::sync::Arc::new(std::sync::Mutex::new(tally));
+        self.attach(
+            bus,
+            HwDriver::Vector,
+            1,
+            500,
+            true,
+            HwPort::Mock(MockPort {
+                written: Default::default(),
+                incoming: Default::default(),
+                refuse: Default::default(),
+                tags: tags.clone(),
+            }),
+        );
+        tags
     }
 }

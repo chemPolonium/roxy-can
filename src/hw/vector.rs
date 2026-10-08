@@ -286,6 +286,41 @@ pub struct VectorChannel {
     /// FD data-phase params were applied; FD frames can leave. Always
     /// false in the first cut (see module docs).
     pub fd: bool,
+    /// Non-frame events seen since the last [`Self::take_tag_news`], by tag.
+    tags: std::collections::BTreeMap<u16, u64>,
+}
+
+/// One event per transmit the bus took. Measured, not looked up: three frames
+/// on a Vector virtual channel produced exactly three of these and nothing
+/// else, and a physical channel whose transmits were never acknowledged
+/// produced none of them.
+const XL_CAN_EV_TAG_TX_DONE: u16 = 0x0404;
+/// The driver's own periodic housekeeping -- 16 to 30 a second on every channel
+/// measured, healthy or not.
+const XL_CAN_EV_TAG_SYSTIME: u16 = 0x0409;
+
+/// Reads a tally of non-frame events as the driver's account of our transmits.
+///
+/// `RX_OK` never reaches this (it becomes a frame), and the two tags above are
+/// the ones a *working* channel produces. Anything else arriving in bulk means
+/// the frames are not completing: measured on a VN7640, a wired channel with a
+/// terminated bus and nothing answering streamed `0x0402` at ~4 kHz, and an
+/// unconnected one streamed `0x0401` at ~18 kHz -- both with no completion event
+/// at all. Before this the receive path dropped every non-`RX_OK` event, so all
+/// of that was invisible and a cut cable looked like a quiet bus.
+///
+/// The vendor names for `0x0401`/`0x0402` are deliberately not asserted: there
+/// is no `vxlapi.h` on this machine, so the number is what the operator sees.
+pub(crate) fn refused_tag(tally: &std::collections::BTreeMap<u16, u64>) -> Option<(u16, u64)> {
+    // A handful of events is not a verdict: a channel starting up reports a
+    // chip state or two. The floods this is meant to catch run to thousands.
+    const MIN_REPORTED: u64 = 8;
+    tally
+        .iter()
+        .filter(|(tag, _)| **tag != XL_CAN_EV_TAG_TX_DONE && **tag != XL_CAN_EV_TAG_SYSTIME)
+        .max_by_key(|(_, n)| **n)
+        .filter(|(_, n)| *n >= &MIN_REPORTED)
+        .map(|(tag, n)| (*tag, *n))
 }
 
 /// CAN FD data length from the DLC + EDL/RTR flags
@@ -412,6 +447,7 @@ impl VectorChannel {
                 port,
                 mask,
                 fd: false,
+                tags: Default::default(),
             })
         }
     }
@@ -483,7 +519,11 @@ impl VectorChannel {
             }
             let tag = u16::from_le_bytes([ev[4], ev[5]]);
             if tag != XL_CAN_EV_TAG_RX_OK {
-                continue; // chip state / TX ack / error events: not frames
+                // Not a frame, but not nothing either: this is the driver's
+                // account of what happened to our transmits, and it used to be
+                // thrown away on the floor.
+                *self.tags.entry(tag).or_default() += 1;
+                continue;
             }
             let raw_id = u32::from_le_bytes(ev[RX_EVENT_CAN_ID..RX_EVENT_CAN_ID + 4].try_into().ok()?);
             let msg_flags = u32::from_le_bytes(ev[RX_EVENT_MSG_FLAGS..RX_EVENT_MSG_FLAGS + 4].try_into().ok()?);
@@ -526,6 +566,11 @@ impl VectorChannel {
 }
 
 impl VectorChannel {
+    /// Takes the non-frame events seen since the last call, by tag.
+    pub(crate) fn take_tag_news(&mut self) -> std::collections::BTreeMap<u16, u64> {
+        std::mem::take(&mut self.tags)
+    }
+
     /// Diagnostic for a bench: queue `frames` test frames on one channel and
     /// tally **every** event tag the driver hands back for `millis` ms.
     ///
@@ -1153,6 +1198,32 @@ pub fn enumerate_flexray() -> Result<Vec<ChannelInfo>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The events a working channel reports are not a complaint; a third tag
+    /// arriving in bulk is. The numbers are the ones measured on the VN7640 --
+    /// see the `XL_CAN_EV_TAG_*` notes for what each case looked like on the
+    /// bench.
+    #[test]
+    fn a_stream_of_unrecognized_events_is_the_wire_refusing_us() {
+        let t = |pairs: &[(u16, u64)]| {
+            pairs
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        assert_eq!(refused_tag(&t(&[(0x0404, 900), (0x0409, 30)])), None);
+        assert_eq!(refused_tag(&t(&[(0x0402, 3)])), None, "a few is not a verdict");
+        assert_eq!(
+            refused_tag(&t(&[(0x0402, 4001), (0x0409, 16)])),
+            Some((0x0402, 4001)),
+            "the wired channel with nothing answering"
+        );
+        assert_eq!(
+            refused_tag(&t(&[(0x0401, 18514), (0x0404, 3)])),
+            Some((0x0401, 18514)),
+            "and the busiest tag wins"
+        );
+    }
     use flexray::*;
 
     /// FR-2 live probe: on a machine whose Vector driver lists a
