@@ -2,14 +2,15 @@
 
 只记录**尚未完成**的工作项。已完成能力的行为说明见 `README.md` 与 `docs/usage.md`；系统结构与设计决策见 `docs/architecture.md`；已完成批次的明细见 git log（本文件曾长期记录批次明细，2026-09-15 起按"只记未完成"的既定原则精简）。
 
-## 2026-10-08 VN7640 真机批次（四项落地 ✅，明细见 git log；下面只列还欠的）
+## 2026-10-08 VN7640 + VN1610 真机批次（本批全部落地 ✅，明细见 git log；下面只列还欠的）
 
-已落地：Write 窗口长行折行；状态行长消息不再压住左侧状态串（截断 + tooltip 给全文）；硬件下拉回显"配置过/刚试过"的那一口；**发车被线路拒绝不再静默**（第一次进 Write 带驱动原因，之后只累计，Buses 行 `发车被拒 ×N`），状态栏 `MEASURING (virtual)` 改为说帧去哪儿（`simulation` / `real bus · N` / `simulation · hardware parked`）。
+已落地：Write 长行折行；状态行长消息不再盖住左侧状态串（按剩余宽度截断 + tooltip 给全文）；硬件下拉回显"配置过/刚试过"的那一口；**发车被线路拒绝不再静默**——两种失败走同一句话：驱动当场拒绝写入，以及帧被接受、总线上却没人应答（后者只在事件流里露头，`5a600ff` 起按 tag 计数并锁存，Buses 行 `发车被拒 ×N`）；状态栏 `MEASURING (virtual)` 改为说帧去哪儿；Triggers 按钮行放不下就换行；`--vector-tx-probe`；**CI 规则重定**（`ea12691`：clippy `-D warnings` 挡门、21 处"缺文件就跳过"改成必须红、性能断言一律同机对照、共享 imgui 锁中毒可恢复、计时测试先等回放真跑起来）。
 
-1. ~~FlexRay 真机收帧未验证~~ **同日纠正——"没有授权"是我误判**：`xlOpenPort` 申请 `permission = 0`，驱动自然授予 0，`xlFrSetConfiguration` 就回 `INVALID_ACCESS`。权限扫描实测：申请 `1<<通道号` → 授予同值 → **配置被接受**（`0925cbf`；权限位是按通道编的，`0x1/0x2/0x3/0x7` 直接 `WRONG_PARAMETER`）。现在探针在 VN7640 CH1 上 `open OK` + 激活 + 抽取（0 帧，因为 CH1 没接线）。用户跑 `FRLoop.exe` **全绿**（Net config accepted → Coldstart-CC sync received → Test completed successfully，`CapChannel: Index 2, FRpiggyC`）——硬件与授权都在，FR 流量这台机器自己就能造。**仍欠三件**：① GUI 里把 FR0 挂到 `VN7640 Channel 1`，看是否显示"已挂接（只收）"；② 真帧进环——FRLoop 跑着时我们能否被动收到（两口争用没测），或接真实集群；③ `ab` 通道偏移仍未坐实，#11/#45 保持 pending，文档里不许出现"已真机验证收帧"。
-2. **通道编号随硬件变，裸索引不是身份**：插上 VN1610 兼容口之后 VN7640 CH1 从 ch0 变 **ch2**、CH2 变 ch3。所以先前那条"ch0 挂 CAN 报 `204`、ch1 却正常"的"不对称"根本不是故障——**CH1 插着 FRpiggyC，它不是 CAN 口**（手册 §2.8：CH1 可 FlexRay/CAN/LIN，CH2..CH4 CAN/LIN，CH5 专用 IO，所以四接口的设备枚举出六个通道）。遗留：`profiles/*.toml` 的 `[[hw]] channel` 存的就是裸编号，换硬件会指错口——要不要改成按设备名匹配（或名字+编号双校验、错配整份拒绝），单独定。
-3. **屏幕验收**：Write 长行折行**用户已确认**；状态行截断 + tooltip、CAN 行回显所选口我在屏上验过。还欠：FR 行的同一回显（逻辑与单测在，眼睛没看）、Buses 行 `发车被拒 ×N` 红字、新状态串 `MEASURING (real bus · N)`、Triggers 按钮行换行的实际观感。
-4. 任务 #49 仍开着：回放节拍断言在任何机器上都贴线（CI 已因此吃掉一次发布），且它 panic 会毒掉共享 imgui 锁连坐 13 个 UI 测试。
+1. **FlexRay 挂接已在真机确认**（用户 2026-10-08："现在可以正常挂载 vn7640 在 CH1 上的 flexray"）。前提是先修权限：`xlOpenPort` 以前申请 `permission = 0`，驱动授予 0，`xlFrSetConfiguration` 就回 `INVALID_ACCESS`——"这一路没有授权给 FlexRay"那句是**我的误判**。实测申请 `1<<通道号` 即被授予且配置被接受（`0925cbf`；`0x1/0x2/0x3/0x7` 直接 `WRONG_PARAMETER`，权限位是按通道编的）。用户跑 `FRLoop.exe` 全绿（`CapChannel: Index 2, FRpiggyC`），说明硬件与授权本来就在。**仍欠两件**：① 真帧进环——FRLoop 跑着时我们能否被动收到（两口争用没测），或接真实集群；② `ab` 通道偏移仍未坐实（#11）。文档里不许出现"已真机验证收帧"。
+2. **通道编号随硬件变，裸索引不是身份**：插上 VN1610 兼容口之后 VN7640 CH1 从 ch0 变 **ch2**、CH2 变 ch3。所以先前那条"ch0 挂 CAN 报 `204`、ch1 却正常"的"不对称"根本不是故障——**CH1 插着 FRpiggyC，它不是 CAN 口**（手册 §2.8：CH1 可 FlexRay/CAN/LIN，CH2..CH4 CAN/LIN，CH5 专用 IO，所以四接口的设备枚举出六个通道）。
+3. **`profiles/*.toml` 的 `[[hw]] channel` 存的正是这种裸编号**：换一次硬件就指错口，而 Profile 的卖点恰恰是"同一套工程在 simulation / bench / CI 间零修改切换"。要不要改成按设备名匹配（或名字+编号双校验、错配整份拒绝），单独定。
+4. **屏幕验收**：Write 折行、FR 挂接、Real bus 显示、Triggers 换行**均已由用户确认**。还欠：FR 行的下拉回显（CAN 侧已验，FR 侧同一查表 + 单测）、`发车被拒 ×N` 在真机上亮出来（两设备对发目前是通的，要复现得让对端不应答）、`解挂` 之后端口是否真关（#45）。
+5. **CI 新规则的头两次跑已绿**（37732970249、37734427284）。今后这条测试再红，先按同机对照的比率看是不是真实退化——**不许退回绝对阈值**，那是量光栅器不是量产品。
 
 ## 2026-09-17/18 夜间批次：用户清单七项 + FlexRay 解析（全部落地 ✅，明细见 git log）
 
