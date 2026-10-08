@@ -70,35 +70,51 @@ fn parse_hex(s: &str) -> Option<u32> {
     u32::from_str_radix(t, 16).ok()
 }
 
+/// Keep the next button on the current line while it fits, and let it start a
+/// new one when it does not. ImGui has no flow layout -- `same_line` is a
+/// per-item yes/no -- so a row of eight buttons either clips off the window's
+/// right edge or stacks one per line. The window opens 560 px wide and this row
+/// needs more than that, so the choice has to be made per button.
+fn flow(ui: &Ui, label: &str) {
+    let (pad_x, gap_x) = unsafe {
+        let style = ui.style();
+        (style.frame_padding()[0], style.item_spacing()[0])
+    };
+    let need = ui.calc_text_size(label)[0] + pad_x * 2.0 + gap_x;
+    if ui.content_region_avail()[0] >= need {
+        ui.same_line();
+    }
+}
+
 fn content(app: &mut App, ui: &Ui) {
     if ui.button("+ Signal") {
         app.add_signal_trigger();
     }
-    ui.same_line();
+    flow(ui, "+ ID");
     if ui.button("+ ID") {
         app.add_id_trigger();
     }
-    ui.same_line();
+    flow(ui, "+ Error frames");
     if ui.button("+ Error frames") {
         app.add_error_trigger();
     }
-    ui.same_line();
+    flow(ui, "+ FlexRay frame");
     if ui.button("+ FlexRay frame") {
         app.add_fr_trigger();
     }
-    ui.same_line();
+    flow(ui, "+ FlexRay signal");
     if ui.button("+ FlexRay signal") {
         app.add_fr_signal_trigger();
     }
-    ui.same_line();
+    flow(ui, "+ Timeout");
     if ui.button("+ Timeout") {
         app.add_timeout_trigger();
     }
-    ui.same_line();
+    flow(ui, "+ SysVar");
     if ui.button("+ SysVar") {
         app.add_sysvar_trigger();
     }
-    ui.same_line();
+    flow(ui, "Re-arm latched");
     if ui.button("Re-arm latched") {
         app.send(crate::bus::BusCommand::RearmTriggers);
     }
@@ -107,8 +123,9 @@ fn content(app: &mut App, ui: &Ui) {
     }
     // Trigger-recording context: pre-trigger frames, post-roll frames,
     // and the marker cap. Each accepted edit is its own command, like the
-    // bitrate inputs in the Buses window.
-    ui.same_line();
+    // bitrate inputs in the Buses window. They own a line of their own: they
+    // are settings for a trigger-driven recording, not ways to add a rule, and
+    // sharing the row pushed the last buttons off the window.
     ui.align_text_to_frame_padding();
     ui.text_disabled("预触发");
     ui.same_line();
