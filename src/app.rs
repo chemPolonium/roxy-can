@@ -317,6 +317,14 @@ pub struct App {
     /// FlexRay-capable Vector channels, enumerated once on first need
     /// (a real vxlapi call). `Err` = the Vector driver is unavailable.
     pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
+    /// The port each CAN row's 硬件 picker last chose, by bus. A failed attach
+    /// leaves the driver holding nothing, so without this the cell falls back
+    /// to the list's first entry and the row ends up showing a channel while
+    /// the status line blames another one for failing. Session state: which
+    /// port answers is a bench fact, not a project one.
+    pub hw_pick: std::collections::BTreeMap<u8, (crate::hw::HwDriver, i32)>,
+    /// The same for a FlexRay 路's port picker -- see [`Self::hw_pick`].
+    pub fr_pick: std::collections::BTreeMap<u8, i32>,
     /// The FlexRay descriptions behind the watches, one per bus, parsed when
     /// the user picked each description file. Slot numbers repeat across
     /// clusters, so a frame's identity is `(bus, slot)` and every lookup goes
@@ -599,6 +607,8 @@ impl App {
             // Vector probe is a real driver call). The combo pick is not
             // cached -- each row's 硬件 column picks its own port, per frame.
             fr_channels: None,
+            hw_pick: std::collections::BTreeMap::new(),
+            fr_pick: std::collections::BTreeMap::new(),
             fr_buses: Default::default(),
             fr_names: Default::default(),
             fr_name_edit: None,

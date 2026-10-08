@@ -6833,6 +6833,12 @@ fn removing_a_bus_detaches_its_hardware_and_shifts_the_rest() {
     app.hw.attach_mock(0);
     let (_w, _i) = app.hw.attach_mock(1);
     assert!(app.hw.is_attached(1));
+    // Each row's picker remembers the port it chose. The survivor must keep
+    // naming its own after the shift; the removed row must stop naming one, or
+    // a later bus on index 0 opens showing a port somebody chose for its
+    // predecessor.
+    app.hw_pick.insert(0, (crate::hw::HwDriver::Vector, 3));
+    app.hw_pick.insert(1, (crate::hw::HwDriver::Vector, 4));
 
     app.remove_channel(0);
     app.settle();
@@ -6841,6 +6847,12 @@ fn removing_a_bus_detaches_its_hardware_and_shifts_the_rest() {
         app.hw.is_attached(0) && !app.hw.is_attached(1),
         "the removed bus's hardware went with it, the survivor shifted down"
     );
+    assert_eq!(
+        app.hw_pick.get(&0).copied(),
+        Some((crate::hw::HwDriver::Vector, 4)),
+        "the survivor's picker moved down with its bus"
+    );
+    assert_eq!(app.hw_pick.len(), 1, "and the removed bus is out of it");
 }
 
 /// The CANoe-style bus mode switch: Simulated parks every attachment
@@ -9635,6 +9647,9 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
         );
         app.spec.note_fr((bus, phantom, 0), 1_000);
     }
+    // The port each row's picker last chose, mirroring the mock watches.
+    app.fr_pick.insert(0, 5);
+    app.fr_pick.insert(1, 6);
 
     app.remove_fr_bus(0);
     app.refresh_snapshot();
@@ -9646,6 +9661,15 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
         app.fr_bus_rows(),
         [1],
         "the Buses table has one 路 left, and it is still FR1"
+    );
+    assert_eq!(
+        app.fr_pick.get(&1).copied(),
+        Some(6),
+        "FR1's picker still names the port it chose"
+    );
+    assert!(
+        !app.fr_pick.contains_key(&0),
+        "the deleted 路 leaves no port choice for whoever takes the index later"
     );
     // Its traffic stayed, the deleted 路's went.
     assert_eq!(rows(&app), [1], "FR0's rows are out of the ring");

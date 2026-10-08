@@ -321,13 +321,23 @@ fn content(app: &mut App, ui: &Ui) {
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                             ui.set_next_item_width(110.0);
-                            let mut pick = 0usize;
+                            // Show the port this row last chose, not the list's
+                            // first entry: after a refused open the cell is the
+                            // only place left that can say which port the
+                            // status line is talking about.
+                            let want = app.hw_pick.get(&(i as u8)).copied();
+                            let mut pick = channels
+                                .iter()
+                                .position(|c| Some((c.driver, c.index)) == want)
+                                .unwrap_or(0);
                             if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
-                                let info = &channels[pick];
+                                let (driver, index) =
+                                    (channels[pick].driver, channels[pick].index);
+                                app.hw_pick.insert(i as u8, (driver, index));
                                 app.set_hardware_channel(
                                     i as u8,
-                                    info.driver,
-                                    info.index,
+                                    driver,
+                                    index,
                                     arb_kbps,
                                     Some(data_kbps),
                                 );
@@ -542,9 +552,17 @@ fn content(app: &mut App, ui: &Ui) {
                             .collect();
                         let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                         ui.set_next_item_width(110.0);
-                        let mut pick = 0usize;
+                        // The CAN row's rule, same reason: a refused open leaves
+                        // no watch behind, and the row would otherwise read
+                        // `ch0` while the bar names the port that failed.
+                        let want = app.fr_pick.get(&bus).copied();
+                        let mut pick = free
+                            .iter()
+                            .position(|c| Some(c.index) == want)
+                            .unwrap_or(0);
                         if ui.combo_simple_string(format!("##frch{bus}"), &mut pick, &refs) {
                             let idx = free[pick.min(free.len() - 1)].index;
+                            app.fr_pick.insert(bus, idx);
                             attach = Some((bus, idx));
                         }
                         if ui.is_item_hovered() {

@@ -275,6 +275,14 @@ impl App {
                 Some(c - 1)
             }
         };
+        // The picker's remembered port travels with the bus it belongs to:
+        // dropping the entry would send a surviving row back to showing the
+        // list's first channel, which is the thing this map exists to avoid.
+        self.hw_pick = self
+            .hw_pick
+            .iter()
+            .filter_map(|(&b, &v)| remap(b).map(|nb| (nb, v)))
+            .collect();
         // Only a CAN pick carries a CAN channel number. A FlexRay pick names a
         // cluster, which adding or removing a CAN channel does not renumber --
         // it is kept as it is, exactly like a FlexRay curve's key.
@@ -570,6 +578,10 @@ impl App {
             self.fr_name_edit = None;
         }
         self.fr_tx_pick.remove(&bus);
+        // The picker's remembered port goes with the row: it echoes a choice
+        // about a 路 that no longer exists, and a later 路 on the freed index
+        // should not open showing this one's port.
+        self.fr_pick.remove(&bus);
         if self.net_fr_sel.as_ref().is_some_and(|(b, _)| *b == bus) {
             self.net_fr_sel = None;
         }
