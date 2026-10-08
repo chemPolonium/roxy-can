@@ -561,6 +561,17 @@ fn main() {
             }
             return;
         }
+        Ok(cli::Cli::VectorTxProbe { channel }) => {
+            cli::attach_parent_console();
+            match hw::vector::VectorChannel::tx_event_dump(channel, 500, 3, 1_000) {
+                Ok(report) => println!("{report}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Err(msg) => {
             cli::attach_parent_console();
             eprintln!("{msg}\n\n{}", cli::usage());

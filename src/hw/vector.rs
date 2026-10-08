@@ -43,8 +43,24 @@ const DRIVER_CONFIG_SIZE: usize = 14_576;
 const DRIVER_CONFIG_CHANNEL_STRIDE: usize = 227;
 const DRIVER_CONFIG_CHANNEL_COUNT: usize = 4;
 const DRIVER_CONFIG_CHANNELS: usize = 48;
-/// Event tags (XLcanRxEvent.tag).
+/// Event tags (XLcanRxEvent.tag). Only the two this file already writes or
+/// reads by name are here: the vendor header is not on this machine, so the
+/// rest are not named -- they were measured instead, with
+/// [`VectorChannel::tx_event_dump`] on a VN7640 (2026-10-08):
+///
+/// * virtual channel, 3 frames queued -> exactly `0x0404` ×3. One event per
+///   transmit that the bus took.
+/// * CH2 wired to a terminated bus with no working node -> `0x0402` ×4001 in
+///   one second, and no `0x0404` at all. The frames never completed; the
+///   controller retried ~4 kHz.
+/// * CH3/CH4 with nothing connected -> `0x0401` ×18514, again no `0x0404`.
+///
+/// So `0x0404` is the completion event and `0x0401`/`0x0402` stream only while
+/// a transmit is failing, at whatever rate that channel's controller can retry.
+/// Their vendor names are deliberately not asserted here -- what the bench
+/// showed is what is written down.
 const XL_CAN_EV_TAG_RX_OK: u16 = 0x0400;
+const XL_CAN_EV_TAG_TX_MSG: u16 = 0x0440;
 /// Message flags shared by RX and TX events.
 const XL_CAN_MSG_FLAG_EDL: u32 = 0x0001;
 const XL_CAN_MSG_FLAG_BRS: u32 = 0x0002;
@@ -506,6 +522,74 @@ impl VectorChannel {
                 flags,
             });
         }
+    }
+}
+
+impl VectorChannel {
+    /// Diagnostic for a bench: queue `frames` test frames on one channel and
+    /// tally **every** event tag the driver hands back for `millis` ms.
+    ///
+    /// The live path treats anything but `RX_OK` as noise, so when a
+    /// transmission goes unacknowledged the tool says nothing at all. Before
+    /// that can be fixed the tag values have to be known for *this* driver --
+    /// the vendor header is not on this machine, so this asks the hardware
+    /// instead of assuming. Known tags are named; anything else prints raw.
+    pub fn tx_event_dump(index: i32, kbps: u32, frames: u32, millis: u64) -> Result<String, String> {
+        let ch = Self::open(index, kbps, None, true)?;
+        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
+        let mut out = format!("ch{index}: 已按 {kbps} kbit/s 打开（收发）\n");
+        for i in 0..frames {
+            let f = CanFrame {
+                t_us: 0,
+                channel: 0,
+                id: 0x123 + i,
+                extended: false,
+                len: 8,
+                data: [0xA5; MAX_CAN_FD_LEN],
+                dir: Direction::Tx,
+                flags: FrameFlags::NONE,
+            };
+            match ch.write_frame(&f) {
+                Ok(()) => out.push_str(&format!("  tx id {:#X}：驱动接受\n", f.id)),
+                Err(e) => out.push_str(&format!("  tx id {:#X}：{e}\n", f.id)),
+            }
+        }
+        let start = std::time::Instant::now();
+        let mut tags: std::collections::BTreeMap<u16, u64> = std::collections::BTreeMap::new();
+        loop {
+            let mut ev = [0u8; 128];
+            let status = unsafe { (lib.can_receive)(ch.port, ev.as_mut_ptr()) };
+            if status == XL_ERR_QUEUE_IS_EMPTY {
+                if start.elapsed() >= std::time::Duration::from_millis(millis) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                continue;
+            }
+            if status != 0 {
+                out.push_str(&format!("  xlCanRead 失败（{}）\n", lib.error(status)));
+                break;
+            }
+            *tags.entry(u16::from_le_bytes([ev[4], ev[5]])).or_default() += 1;
+        }
+        let spent = start.elapsed().as_millis();
+        if tags.is_empty() {
+            out.push_str(&format!("  {spent} ms 内没有任何事件回来\n"));
+        } else {
+            let named: Vec<String> = tags
+                .iter()
+                .map(|(t, n)| {
+                    let name = match *t {
+                        XL_CAN_EV_TAG_RX_OK => " RX_OK",
+                        XL_CAN_EV_TAG_TX_MSG => " TX_MSG",
+                        _ => " 未命名",
+                    };
+                    format!("0x{t:04X}{name} ×{n}")
+                })
+                .collect();
+            out.push_str(&format!("  {spent} ms 内收到的事件：{}\n", named.join(", ")));
+        }
+        Ok(out)
     }
 }
 

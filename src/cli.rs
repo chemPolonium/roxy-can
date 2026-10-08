@@ -30,6 +30,12 @@ pub enum Cli {
     VectorProbe {
         fibex: Option<String>,
     },
+    /// Open one Vector CAN channel with init access, transmit a few frames and
+    /// report **every** event tag the driver hands back: what a bench says about
+    /// a frame nobody acknowledged. `--vector-tx-probe <channel>`.
+    VectorTxProbe {
+        channel: i32,
+    },
     /// Decode a log's signals through its description database(s) and write
     /// a CSV, with no window and no bus clock: `--export-csv <log> --out
     /// <csv> [--dbc <f> ...] [--fibex <f> ...]`. CAN signals decode through the
@@ -102,6 +108,10 @@ pub fn usage() -> &'static str {
                                  With --fibex, validates the cluster
                                  description, configures the channel from
                                  it and dumps the first event's raw bytes
+  roxy-can --vector-tx-probe <ch>  open that Vector CAN channel, send a few
+                                 frames, and print every event tag the driver
+                                 returns -- what an unacknowledged frame looks
+                                 like on this hardware
   roxy-can --export-csv <log> --out <csv>
             [--dbc <f> ...] [--fibex <f>]
                                  decode the log's signals through its
@@ -149,6 +159,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut convert: Option<(String, String)> = None;
     let mut kvaser_probe = false;
     let mut vector_probe = false;
+    let mut vector_tx_probe: Option<i32> = None;
     let mut fibex = Vec::new();
     let mut speed = 1.0f64;
     let mut duration_s = None;
@@ -181,6 +192,12 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             }
             "--kvaser-probe" => kvaser_probe = true,
             "--vector-probe" => vector_probe = true,
+            "--vector-tx-probe" => {
+                let raw = value(args, &mut i, "--vector-tx-probe")?;
+                vector_tx_probe = Some(raw.parse::<i32>().map_err(|_| {
+                    format!("`--vector-tx-probe` wants a channel number, got `{raw}`")
+                })?);
+            }
             "--fibex" => fibex.push(value(args, &mut i, "--fibex")?),
             "--check-script" => scripts.push(value(args, &mut i, "--check-script")?),
             "--dbc" => dbcs.push(value(args, &mut i, "--dbc")?),
@@ -229,6 +246,7 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             || convert.is_some()
             || kvaser_probe
             || vector_probe
+            || vector_tx_probe.is_some()
             || stats_csv.is_some()
             || speed != 1.0
         {
@@ -269,6 +287,15 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             return Err("`--kvaser-probe` runs on its own; drop the other run flags".to_string());
         }
         return Ok(Cli::KvaserProbe);
+    }
+    if let Some(channel) = vector_tx_probe {
+        if replay.is_some() || project.is_some() || profile.is_some() || vector_probe {
+            return Err("`--vector-tx-probe` runs on its own; drop the other run flags".to_string());
+        }
+        if channel < 0 {
+            return Err("`--vector-tx-probe` wants a channel index of 0 or above".to_string());
+        }
+        return Ok(Cli::VectorTxProbe { channel });
     }
     if vector_probe {
         if replay.is_some() || project.is_some() || profile.is_some() {

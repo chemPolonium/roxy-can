@@ -231,6 +231,40 @@ fn the_fibex_flag_travels_with_the_vector_probe() {
     assert!(fibex.is_none(), "no description given, none carried");
 }
 
+/// `--vector-tx-probe` is a bench diagnostic that runs alone: it names one
+/// channel, refuses a negative index and a non-numeric one, and does not ride
+/// with the FlexRay probe (the two open ports differently).
+#[test]
+fn the_vector_tx_probe_names_one_channel_and_runs_alone() {
+    let cli = parse_args(&flag_set(&["--vector-tx-probe", "1"])).unwrap();
+    let Cli::VectorTxProbe { channel } = cli else {
+        panic!("expected a tx probe");
+    };
+    assert_eq!(channel, 1);
+    for bad in [
+        flag_set(&["--vector-tx-probe", "-1"]),
+        flag_set(&["--vector-tx-probe", "ch1"]),
+        flag_set(&["--vector-tx-probe", "0", "--vector-probe"]),
+        flag_set(&["--vector-tx-probe", "0", "--replay", "a.asc"]),
+        flag_set(&[
+            "--export-csv",
+            "a.blf",
+            "--out",
+            "x.csv",
+            "--dbc",
+            "a.dbc",
+            "--vector-tx-probe",
+            "1",
+        ]),
+    ] {
+        assert!(
+            parse_args(&bad).is_err(),
+            "refused: {bad:?} -- got {:?}",
+            parse_args(&bad).ok()
+        );
+    }
+}
+
 /// The profile rides on a project: accepted with one, stored for run().
 #[test]
 fn the_profile_flag_travels_with_the_project() {
