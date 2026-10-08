@@ -227,7 +227,7 @@ pub fn render_node_generator(app: &mut App, ui: &Ui, nch: u8, nname: &str) {
     let count_word = if role == crate::app::NodeRole::Simulated {
         "发送中"
     } else {
-        "条启用 · 总关"
+        "条启用 · 角色未模拟"
     };
     ui.text(format!("生成器：{active_n}/{total} {count_word}"));
     if ui.is_item_hovered() {
@@ -339,7 +339,7 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
         // list scans without expanding anything. MUTE is the
         // replay silencing, precomputed by the bus: the checkbox
         // keeps its state, but an id the replayed log carries
-        // must not double-send. 总关 is the node-role gate: the
+        // must not double-send. 角色 is the node-role block: the
         // entry is on, but its node is not simulated.
         let (chip, color, hint) = if !view.active {
             (
@@ -349,15 +349,15 @@ fn render_rows(app: &mut App, ui: &Ui, tx: &[crate::bus::TxView], kinds: &[Strin
             )
         } else if !view.gate_open {
             (
-                "总关",
+                "角色",
                 [0.45, 0.60, 0.80, 1.0],
-                "条目已启用，但所属节点的角色不是「模拟」——总开关关闭中。把节点角色切回「模拟」即恢复发车。",
+                "条目已启用，但所属节点的角色不是「模拟」——总开关关闭中。把节点角色切回「模拟」即恢复发送。",
             )
         } else if view.muted {
             (
                 "MUTE",
                 [1.0, 0.65, 0.2, 1.0],
-                "本次回放期间静音：已加载的日志中带有此 ID，若再有第二个发送者，同一条信号的两路数据会混进曲线、统计等所有视图。On 勾选框保持原样——退出回放后照常发送。",
+                "本次回放期间不发送：已加载的日志中带有此 ID，若再有第二个发送者，同一条信号会出现两个来源，一起出现在曲线、统计等所有视图。On 勾选框保持原样——退出回放后照常发送。",
             )
         } else {
             (
@@ -636,7 +636,7 @@ pub fn render_fr_ecu_generator(app: &mut App, ui: &Ui, bus: u8, ecu: &str) {
     let active_n = mine.iter().filter(|(_, t)| t.active).count();
     ui.text(format!("生成器：{active_n}/{} 发送中", mine.len()));
     if ui.is_item_hovered() {
-        ui.tooltip_text("端口只收：这些帧进入本会话（Trace、统计、规格、脚本、录制），不上线缆。");
+        ui.tooltip_text("端口仅接收：这些帧只进入本会话（Trace、统计、规格、脚本、录制），不会发到总线上。");
     }
     ui.separator();
 
@@ -723,13 +723,13 @@ fn fr_row(
         (
             "MUTE",
             [1.0, 0.65, 0.2, 1.0],
-            "本次回放期间静音：日志里这一路本来就带这个槽的帧，再发一份会让同一条信号有两个发送者，混进每个视图。On 勾选框保持原样——退出回放后照常发车。",
+            "本次回放期间不发送：日志里这一路本来就带这个槽的帧，再发一份会让同一条信号有两个发送者，每个视图都会同时看到两个来源。On 勾选框保持原样——退出回放后照常发送。",
         )
     } else {
         (
             "ON",
             [0.4, 0.95, 0.5, 1.0],
-            "正在发出：条目已勾选，没有被任何机制抑制。端口只收，所以这些帧进的是本会话（Trace、统计、规格、脚本、录制），不是总线线缆。",
+            "正在发出：条目已勾选，没有被任何机制抑制。端口仅接收，所以这些帧进的是本会话（Trace、统计、规格、脚本、录制），不在总线上。",
         )
     };
     ui.text_colored(color, format!("{chip:<4}"));
@@ -766,7 +766,7 @@ fn fr_row(
     let (cyc, cyc_hint) = match (cycle, cycles) {
         (0, _) => (
             "不发".to_string(),
-            "周期 0：这个条目不会自己发车（Send now 仍然可以送一帧）。要恢复正常，点这个按钮填周期数。".to_string(),
+            "周期 0：这个条目不会自行发送（Send now 仍然可以送一帧）。要恢复正常，点这个按钮填周期数。".to_string(),
         ),
         (_, Some(n)) => (
             format!("{n} 周期"),

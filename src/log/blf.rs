@@ -775,7 +775,7 @@ fn system_time_us(b: &[u8], at: usize) -> Option<u64> {
 // CAN_MESSAGE / CAN_FD_MESSAGE_64 事件）。错误帧 v1 不写——读侧把错误帧
 // 归一为 id 0 的特殊帧，写回会放大歧义。
 
-/// 每个压缩容器攒多少未压缩事件字节后落盘。Vector 自家工具用 ~128 KiB。
+/// 每个压缩容器攒多少未压缩事件字节后写入文件。Vector 自家工具用 ~128 KiB。
 const CONTAINER_FLUSH_BYTES: usize = 128 * 1024;
 
 /// The eight `SYSTEMTIME` words of a wall-clock instant, in the order the

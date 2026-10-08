@@ -459,7 +459,7 @@ fn a_project_simulates_headless_until_the_duration_stops_it() {
         id: 0x100,
         on: true,
     });
-    // 角色闸放行：EngineECU 模拟（随工程保存）。
+    // 角色开关允许发送：EngineECU 模拟（随工程保存）。
     app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.send(crate::bus::BusCommand::SetEntryCycle {
         ch: 0,

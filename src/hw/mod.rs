@@ -470,7 +470,7 @@ impl Hardware {
 
     /// Drains every attached adapter's receive queue into `out`, stamped
     /// against the sim clock and tagged with the bus they are mapped to.
-    /// Simulated 模式（`!live`）照常抽干队列（防驱动缓冲塞满旧帧）但
+    /// Simulated 模式（`!live`）照常排空队列（防驱动缓冲塞满旧帧）但
     /// 把帧丢弃——不上内部总线。
     pub fn poll_rx(&mut self, sim_t_us: u64, out: &mut Vec<CanFrame>) {
         let mut news: Vec<(u8, std::collections::BTreeMap<u16, u64>)> = Vec::new();
@@ -514,7 +514,7 @@ impl Hardware {
         match &mut bh.tx_fail {
             Some((_, total)) => *total += n,
             None => {
-                bh.tx_fail = Some((format!("发车未被应答（驱动回报 tag 0x{tag:04X}，{n} 条）"), n));
+                bh.tx_fail = Some((format!("发送未被应答（驱动回报 tag 0x{tag:04X}，{n} 条）"), n));
                 self.pending_tx_fail.push(bus);
             }
         }

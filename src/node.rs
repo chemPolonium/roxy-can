@@ -29,7 +29,7 @@ pub struct ScriptNode {
     /// the project so the user can find their files again.
     pub file_path: Option<String>,
     /// 绑定的 DBC 节点（总线, 节点名）。绑定脚本的发帧受该节点角色
-    /// 闸控制——节点离线/监听时脚本同样不发车。None = 独立脚本。
+    /// 角色开关控制——节点离线或仅监听时脚本同样不发送。None = 独立脚本。
     pub attached: Option<(u8, String)>,
     /// Defined system variable keys ("ns::name"), refreshed by the bus
     /// before every (re)start: the start check reports script references

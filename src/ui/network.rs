@@ -77,7 +77,7 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                 // FlexRay ECU cannot both own the detail pane.
                 app.net_fr_sel = None;
             }
-            // 绑定到该节点的脚本作为下一层树叶挂在节点下：点击打开
+            // 绑定到该节点的脚本作为下一层树叶列在节点下：点击打开
             // 该脚本的编辑器。
             let bound: Vec<(u64, String, bool, bool, bool)> = app
                 .snap
@@ -103,7 +103,7 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                 }
                 ui.unindent();
             }
-            // 绑定到该节点的回放块同样挂在节点下：点击打开 Replay
+            // 绑定到该节点的回放块同样列在节点下：点击打开 Replay
             // Blocks 窗口编辑。
             let blocks: Vec<(u64, String, bool)> = app
                 .snap
@@ -140,7 +140,7 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                 ui.unindent();
             }
         }
-        // 自由脚本（未绑定 DBC 节点）挂在总线根下，旧工程仍可见。
+        // 自由脚本（未绑定 DBC 节点）列在总线根下，旧工程仍可见。
         let free: Vec<(u64, String, bool, bool, bool)> = app
             .snap
             .nodes
@@ -425,7 +425,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("把当前角色与硬件挂接快照存为新 profile");
+                    ui.tooltip_text("把当前角色与硬件连接快照存为新 profile");
                 }
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();
@@ -522,12 +522,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.separator();
 
                     // 节点生成器：这个节点的条目、添加与响应规则，
-                    // 就近挂在角色声明之下——节点就是编辑单元。
+                    // 紧接在角色声明之下——节点就是编辑单元。
                     crate::ui::tx::render_node_generator(app, ui, ch as u8, &ni.name);
                     ui.separator();
 
                     // 脚本编辑入口在节点之下（而非总线）：新建的脚本
-                    // 自动绑定到当前选中的 DBC 节点，发帧受其角色闸。
+                    // 自动绑定到当前选中的 DBC 节点，发帧受其角色开关。
                     // 两个新建按钮统一排在标签同一行。
                     ui.text("本节点脚本");
                     ui.same_line();
@@ -592,7 +592,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text(
-                            "把该节点录制的真实流量注回仿真总线（restbus）；新建后在下方选择日志文件，启用即发车",
+                            "把该节点录制的真实流量重新发到仿真总线上（restbus）；新建后在下方选择日志文件，启用即发送",
                         );
                     }
                     let node_blocks: Vec<(u64, String, bool, usize, Option<String>)> = app
@@ -619,7 +619,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             app.set_replay_block_enabled(bid, on);
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("启用后测量中按录制间距发车（仅仿真模式）");
+                            ui.tooltip_text("启用后测量中按录制间距发送（仅仿真模式）");
                         }
                         ui.same_line();
                         ui.text(&name);

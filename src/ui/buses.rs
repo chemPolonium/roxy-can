@@ -280,21 +280,21 @@ fn content(app: &mut App, ui: &Ui) {
                 });
             match attached {
                 Some((driver, adapter, kbps, can_tx, fd, tx_fail)) => {
-                    // 两行布局：上行状态、下行解挂按钮——任何列宽下都完整
-                    // 可见可点（单行塞不下时按钮会被单元格裁掉）。
+                    // 两行布局：上行状态、下行断开按钮——任何列宽下都完整
+                    // 可见可点（单行放不下时按钮会被单元格裁掉）。
                     ui.text(format!(
                         "[{}] ch{adapter} {kbps}k{}",
                         driver.tag(),
                         if fd { " FD" } else { "" }
                     ));
-                    // Simulated 模式下硬件挂着但不上线——列内写明，免得
-                    // 用户以为帧上不了线是适配器坏了。
+                    // Simulated 模式下硬件已连接但暂不收发——列内写明，免得
+                    // 用户以为帧发不出去是适配器坏了。
                     if !app.snap.real_bus {
                         ui.same_line();
-                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "未启用");
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "总线模式为 Simulated：硬件保留配置但不收不发；顶部切到 Real bus 上线",
+                                "总线模式为 Simulated：硬件配置保留但不收不发；顶部切到 Real bus 即启用",
                             );
                         }
                     }
@@ -309,14 +309,14 @@ fn content(app: &mut App, ui: &Ui) {
                         // 常驻提示（状态行早已被后续事件冲掉）。
                         ui.tooltip_text(if can_tx {
                             if fd {
-                                "挂接中（收发，FD 数据段参数已应用）"
+                                "连接中（收发，FD 数据段参数已应用）"
                             } else if data_kbps > 0 {
-                                "挂接中（收发）。总线配了 FD 数据段波特率，但通道未带 FD——预设不匹配或硬件不支持，FD 帧上不了硬件。"
+                                "连接中（收发）。总线配了 FD 数据段波特率，但通道未带 FD——预设不匹配或硬件不支持，FD 帧无法经该通道发送。"
                             } else {
-                                "挂接中（收发）"
+                                "连接中（收发）"
                             }
                         } else {
-                            "挂接中（只收：通道初始化访问被其他程序占用）"
+                            "连接中（仅接收：通道初始化访问被其他程序占用）"
                         });
                     }
                     // The wire refusing writes is the one failure a bench cannot
@@ -324,9 +324,9 @@ fn content(app: &mut App, ui: &Ui) {
                     // every view keeps scrolling. So the row carries the count,
                     // and the reason the driver gave, permanently.
                     if let Some((reason, n)) = &tx_fail {
-                        ui.text_colored([1.0, 0.45, 0.35, 1.0], format!("发车被拒 ×{n}"));
+                        ui.text_colored([1.0, 0.45, 0.35, 1.0], format!("发送被拒 ×{n}"));
                         if ui.is_item_hovered() {
-                            ui.tooltip_text(format!("线路拒绝发车 {n} 次，第一次的原因：{reason}"));
+                            ui.tooltip_text(format!("线路拒绝发送 {n} 次，第一次的原因：{reason}"));
                         }
                     }
                 }
@@ -363,7 +363,7 @@ fn content(app: &mut App, ui: &Ui) {
                             }
                             if ui.is_item_hovered() {
                                 ui.tooltip_text(
-                                    "挂接适配器：收到的帧进总线，节点可经它发车（[K] Kvaser / [V] Vector）",
+                                    "连接适配器：收到的帧进入总线，节点可经它发送（[K] Kvaser / [V] Vector）",
                                 );
                             }
                         }
@@ -378,7 +378,7 @@ fn content(app: &mut App, ui: &Ui) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "移除这条总线；后面的总线号依次前移，挂在它上面的曲线与条目随之删除或重编号。",
+                    "移除这条总线；后面的总线号依次前移，关联到它的曲线与条目随之删除或重编号。",
                 );
             }
         }
@@ -535,17 +535,17 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             match &watch {
                 Some(w) => {
-                    // 两行布局，与 CAN 行一致：状态一行、解挂按钮一行。单行塞不下
+                    // 两行布局，与 CAN 行一致：状态一行、断开按钮一行。单行放不下
                     // 时按钮会被单元格右边缘裁掉（CAN 那列早已写下这条教训）。
-                    ui.text(format!("[V] ch{}（只收）", w.channel_index));
-                    // Simulated 模式下端口挂着但不收帧——列内写明，免得用户以为
+                    ui.text(format!("[V] ch{}（仅接收）", w.channel_index));
+                    // Simulated 模式下端口已连接但不收帧——列内写明，免得用户以为
                     // 适配器坏了。
                     if !app.snap.real_bus {
                         ui.same_line();
-                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "已下线");
+                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "未启用");
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "总线模式为 Simulated：监听保留配置但不收帧；顶部切到 Real bus 上线",
+                                "总线模式为 Simulated：监听配置保留但不收帧；顶部切到 Real bus 即启用",
                             );
                         }
                     }
@@ -586,7 +586,7 @@ fn content(app: &mut App, ui: &Ui) {
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "挂上只收监听（Vector 端口），选中即挂；这行需要先有集群描述。",
+                                "以仅接收方式连接（Vector 端口），选中即连接；这行需要先有集群描述。",
                             );
                         }
                     }

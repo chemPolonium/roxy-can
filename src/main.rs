@@ -37,7 +37,7 @@ mod workspace;
 #[path = "headless_tests.rs"]
 mod headless_tests;
 
-/// 无头 UI 冒烟测试床：不接渲染器逐帧跑真实绘制路径。
+/// 无头 UI 冒烟测试：不接渲染器逐帧跑真实绘制路径。
 #[cfg(test)]
 mod ui_tests;
 

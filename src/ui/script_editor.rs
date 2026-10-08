@@ -314,7 +314,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             ui.text_colored(
                 [1.0, 0.8, 0.4, 1.0],
                 format!(
-                    "未绑定节点（总线 {}）——挂接 DBC 后自动收养",
+                    "未绑定节点（总线 {}）——加载 DBC 后自动归入该总线第一个节点下",
                     app.channel_name(node.channel),
                 ),
             );

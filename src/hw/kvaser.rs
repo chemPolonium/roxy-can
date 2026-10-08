@@ -502,8 +502,8 @@ mod tables {
 /// cargo test kvaser_live -- --ignored --nocapture
 /// ```
 ///
-/// 虚拟通道回环诊断：ch0 只收收听，ch1 只收发送——若虚拟网络在通道
-/// 间路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发车），并
+/// 虚拟通道回环诊断：ch0 仅接收收听，ch1 仅接收发送——若虚拟网络在通道
+/// 间路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发送），并
 /// 顺带验证经典帧与 FD 帧的标志位编解码。单个通道打不开只记录并继续。
 #[cfg(test)]
 mod live {
@@ -511,7 +511,7 @@ mod live {
     use std::time::{Duration, Instant};
 
     /// 诊断矩阵：逐通道试 init access / FD 的开关组合，找出虚拟通道
-    /// 拒绝收发挂接的确切条件。只开即关，不往线上写任何帧。
+    /// 拒绝收发连接的确切条件。只开即关，不往线上写任何帧。
     #[test]
     #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_open_matrix -- --ignored --nocapture"]
     fn kvaser_open_matrix() {
@@ -674,7 +674,7 @@ mod live {
     }
 
     /// 虚拟通道回环：ch1 发、ch0 收，验证经典/FD/RTR 的标志位编解码
-    /// 与 NO_INIT 句柄的可发车性。
+    /// 与 NO_INIT 句柄的可发送性。
     #[test]
     #[ignore = "需要本机 Kvaser 驱动：cargo test kvaser_live -- --ignored --nocapture"]
     fn kvaser_live_open_and_read() {
@@ -684,8 +684,8 @@ mod live {
         });
         println!("{} channel(s)", channels.len());
 
-        // 回环诊断：ch0 只收收听，ch1 只收发送——若虚拟网络在通道间
-        // 路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发车）。
+        // 回环诊断：ch0 仅接收收听，ch1 仅接收发送——若虚拟网络在通道间
+        // 路由帧，ch0 应收到 ch1 写的帧（证明 NO_INIT 句柄可发送）。
         // 走封装的 open（含 FD 预设路径），而不是裸标志。
         let (mut rx, tx) = {
             let rx = KvaserChannel::open(0, 500, Some(2000), false);

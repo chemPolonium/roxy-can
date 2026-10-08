@@ -467,7 +467,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         app.state_trackers[i].min_shown_ms = min_ms.max(0) as u64;
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("最短显示时长（毫秒）：更短的碎带并入前一段，0 = 全部显示");
+        ui.tooltip_text("最短显示时长（毫秒）：更短的区段并入前一段，0 = 全部显示");
     }
     ui.same_line();
     if ui.button(format!("Export CSV##stexp{i}")) {

@@ -400,7 +400,7 @@ fn aggregates_frames_per_message_id() {
         .expect("EngineStatus pre-populated in generator");
     tx.active = true;
     tx.cycle_us = 10_000;
-    // 角色闸放行：0x100 属 EngineECU。
+    // 角色开关允许发送：0x100 属 EngineECU。
     app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     app.start_virtual();
     for _ in 0..8 {
@@ -673,7 +673,7 @@ fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App 
         crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
     ));
     app.add_tx(0, 0x300);
-    // 测试 DBC 的发送节点 ECU 需要角色闸放行。
+    // 测试 DBC 的发送节点 ECU 需要角色开关允许发送。
     app.set_node_role(0, "ECU", NodeRole::Simulated);
     let tx = app.tx_list.last_mut().expect("tx entry added");
     tx.cycle_us = 20_000;
@@ -934,7 +934,7 @@ fn active_ids(app: &App, ch: u8) -> Vec<u32> {
 }
 
 /// 测试助手（新语义）：声明节点角色为模拟，并启用它名下全部条目。
-/// 角色本身不再触碰条目开关——需要旧行为（角色切了就发车）的测试
+/// 角色本身不再触碰条目开关——需要旧行为（角色切了就发送）的测试
 /// 用这个助手显式补上“启用”一步。
 fn simulate_node_and_enable(app: &mut App, ch: u8, node: &str) {
     app.set_node_role(ch, node, NodeRole::Simulated);
@@ -950,8 +950,8 @@ fn simulate_node_and_enable(app: &mut App, ch: u8, node: &str) {
     app.settle();
 }
 
-/// 测试助手：把所有总线的所有 DBC 节点角色设为模拟（打开全部闸门）。
-/// 手动武装（tx.active = true）的测试需要它，否则闸门拦截发车。
+/// 测试助手：把所有总线的所有 DBC 节点角色设为模拟（打开全部开关）。
+/// 手动武装（tx.active = true）的测试需要它，否则开关拦截发送。
 fn open_all_gates(app: &mut App) {
     for ch in 0..app.snap.channel_count as u8 {
         app.simulate_all_nodes(ch);
@@ -966,8 +966,8 @@ fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
         .expect("entry exists")
 }
 
-/// 模拟角色补建条目但不发车；逐条启用（SetEntryActive）后只有启用的
-/// 条目上线，且不影响其他总线。
+/// 模拟角色补建条目但不发送；逐条启用（SetEntryActive）后只有启用的
+/// 条目开始发送，且不影响其他总线。
 #[test]
 fn ticking_a_node_activates_only_its_own_messages() {
     let mut app = App::headless();
@@ -1020,14 +1020,14 @@ fn simulating_a_node_creates_entries_but_leaves_them_off() {
     let mut app = App::headless();
     app.tx_list.clear();
     app.set_node_role(1, "ABS", NodeRole::Simulated);
-    // 条目已补建（inactive），角色闸已开——但没有任何一条在发车。
+    // 条目已补建（inactive），角色开关已打开——但没有任何一条在发送。
     assert_eq!(app.tx_list.iter().filter(|t| t.channel == 1).count(), 3);
     assert!(
         active_ids(&app, 1).is_empty(),
-        "模拟不自动发车：条目开关是用户自定义"
+        "模拟不自动发送：条目开关是用户自定义"
     );
 
-    // 逐条启用后按各自周期发车。
+    // 逐条启用后按各自周期发送。
     let ids: Vec<u32> = app
         .tx_list
         .iter()
@@ -1108,8 +1108,8 @@ fn unticking_a_node_keeps_its_entries_and_their_stimulus() {
     assert!(app.tx_list[i].active);
 }
 
-/// 角色闸关闭（节点离线/监听）不影响条目开关：条目仍是"启用"，
-/// 只是闸门不让它上线；切回模拟即恢复。
+/// 角色开关关闭（节点离线/监听）不影响条目开关：条目仍是"启用"，
+/// 只是开关不允许它发送；切回模拟即恢复。
 #[test]
 fn node_gate_does_not_touch_entry_switches() {
     let mut app = App::headless();
@@ -1129,7 +1129,7 @@ fn node_gate_does_not_touch_entry_switches() {
     }
     app.settle();
 
-    // 切到离线：闸门关闭（条目开/关保留），再切回模拟：原样恢复发车。
+    // 切到离线：开关关闭（条目开/关保留），再切回模拟：原样恢复发送。
     app.set_node_role(1, "ABS", NodeRole::Absent);
     app.settle();
     for t in app.snap.tx.iter().filter(|t| t.channel == 1) {
@@ -1149,8 +1149,8 @@ fn node_gate_does_not_touch_entry_switches() {
     }
 }
 
-/// 闸门模型下，DBC 消失不影响“角色闸关闭即停发”：生成器用 base
-/// 字节就能发车，DBC 只影响解码与补建。
+/// 开关模型下，DBC 消失不影响“角色开关关闭即停发”：生成器用 base
+/// 字节就能发送，DBC 只影响解码与补建。
 #[test]
 fn the_role_gate_silences_a_node_even_after_its_dbc_is_gone() {
     let mut app = App::headless();
@@ -1175,7 +1175,7 @@ fn the_role_gate_silences_a_node_even_after_its_dbc_is_gone() {
     app.refresh_snapshot();
     app.set_node_role(1, "ABS", NodeRole::Absent);
     app.settle();
-    // 闸门语义：开关原样保留（自定义不丢），但角色离线即不发车。
+    // 开关语义：开关原样保留（自定义不丢），但角色离线即不发送。
     // 只检查 ABS 名下的三条（其余节点的条目本就是关）。
     for id in &ids {
         let t = app
@@ -1207,7 +1207,7 @@ fn a_receive_only_node_can_still_be_simulated() {
 fn a_monitoring_node_declares_presence_without_traffic() {
     let mut app = App::headless();
     // 模拟并启用全部条目，然后切到监听：条目开关原样保留（自定义不
-    // 被角色切换改写），闸门关闭即停发。
+    // 被角色切换改写），开关关闭即停发。
     app.set_node_role(1, "ABS", NodeRole::Simulated);
     let ids: Vec<u32> = app
         .tx_list
@@ -1551,7 +1551,7 @@ fn two_channels_aggregate_separately() {
     for (ch, c) in app.channels.iter().enumerate() {
         assert!(c.dbc.is_some(), "CAN{} should load its DBC", ch + 1);
     }
-    // 角色闸：两条总线的节点全部模拟，条目才能上线。
+    // 角色开关：两条总线的节点全部模拟，条目才会发送。
     open_all_gates(&mut app);
     assert!(
         app.tx_list.iter().any(|t| t.channel == 0 && t.id == 0x100)
@@ -2592,7 +2592,7 @@ fn replay_injection_lands_on_the_log_timeline() {
     app.tx_list[0].active = true;
     app.tx_list[0].cycle_us = 40_000;
     app.tx_list[0].data = [0xDE; MAX_CAN_FD_LEN];
-    // 角色闸放行：条目 node 戳仍是 EngineECU。
+    // 角色开关允许发送：条目 node 戳仍是 EngineECU。
     app.set_node_role(tx_ch, "EngineECU", NodeRole::Simulated);
     app.replay();
     // Drive the replay by hand: 50 ms wall steps release the log frames at
@@ -2999,7 +2999,7 @@ fn recording_captures_generator_data_faithfully() {
     let mut app = App::headless();
     app.tx_list[0].active = true;
     app.tx_list[0].cycle_us = 10_000;
-    // 角色闸放行：0x100 属 EngineECU。
+    // 角色开关允许发送：0x100 属 EngineECU。
     app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     let mut payload = [0u8; MAX_CAN_FD_LEN];
     payload[..8].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
@@ -3873,8 +3873,8 @@ fn the_rearm_command_resets_latches_but_not_real_levels() {
 }
 
 /// "Switch All Blocks to Simulation" at the bus level: simulate-all 补建
-/// 全部条目并把角色闸全开（条目保持默认关——发车由用户逐条或经
-/// All On 打开）；stop-all 关闭全部闸门。
+/// 全部条目并把角色开关全部打开（条目保持默认关——发送由用户逐条或经
+/// All On 打开）；stop-all 关闭全部开关。
 #[test]
 fn simulate_all_activates_every_dbc_node() {
     let mut app = App::headless();
@@ -3893,7 +3893,7 @@ fn simulate_all_activates_every_dbc_node() {
             "node message 0x{id:X} should have an entry"
         );
     }
-    // 全部闸门开放：逐条目打开后按条目开关发车。
+    // 全部开关开放：逐条目打开后按条目开关发送。
     let bus_entries: Vec<(u8, u32)> = app
         .tx_list
         .iter()
@@ -4231,7 +4231,7 @@ BO_ 300 FirstMsg: 1 ECU
     });
     app.settle();
     app.set_node_role(0, "ECU", NodeRole::Simulated);
-    // 新语义：模拟只开放闸门，条目默认关——用户显式启用后发车。
+    // 新语义：模拟只开放开关，条目默认关——用户显式启用后发送。
     app.send(crate::bus::BusCommand::SetEntryActive {
         ch: 0,
         id: 300,
@@ -6636,7 +6636,7 @@ fn two_flexray_watches_feed_their_own_buses() {
     assert_eq!(
         app.msg_windows[0].scope,
         SigScope::FrBus(0),
-        "解挂 keeps the 路, so the view of it stays"
+        "断开 keeps the 路, so the view of it stays"
     );
     app.remove_fr_bus(0);
     assert_eq!(app.msg_windows[0].scope, SigScope::All);
@@ -6987,7 +6987,7 @@ fn a_wire_that_refuses_writes_is_said_once_and_counted() {
         .snap
         .write
         .iter()
-        .filter(|l| l.text.contains("发车被线路拒绝"))
+        .filter(|l| l.text.contains("发送被线路拒绝"))
         .map(|l| l.text.clone())
         .collect();
     assert_eq!(
@@ -7043,7 +7043,7 @@ fn a_wire_that_takes_writes_leaves_no_complaint() {
         "and nothing was refused, so the row stays quiet"
     );
     assert!(
-        !app.snap.write.iter().any(|l| l.text.contains("发车被线路拒绝")),
+        !app.snap.write.iter().any(|l| l.text.contains("发送被线路拒绝")),
         "and the log says nothing about it"
     );
 }
@@ -7087,7 +7087,7 @@ fn a_wire_that_never_answers_is_told_from_the_events() {
         .snap
         .write
         .iter()
-        .filter(|l| l.text.contains("发车被线路拒绝"))
+        .filter(|l| l.text.contains("发送被线路拒绝"))
         .map(|l| l.text.clone())
         .collect();
     assert_eq!(
@@ -9381,7 +9381,7 @@ fn a_log_id_stays_silent_during_replay_and_returns_in_simulation() {
     let mut app = App::headless();
     // The sample config pre-populates a generator entry for the log's 0x100;
     // add one id the log lacks as the stirring control.
-    // 角色闸放行：EngineECU 模拟（否则闸门拦截发车）。
+    // 角色开关允许发送：EngineECU 模拟（否则开关拦截发送）。
     app.set_node_role(0, "EngineECU", NodeRole::Simulated);
     let twin = app
         .tx_list
@@ -9638,7 +9638,7 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
 }
 
 /// A 路 that has a description but no port is attached with the file it already
-/// holds (no second picker); `解挂` closes that port and leaves the 路 alone; and
+/// holds (no second picker); `断开` closes that port and leaves the 路 alone; and
 /// removal takes the whole 路, port included -- which a watched 路 allows
 /// precisely because closing the port is part of what removal means.
 #[test]
@@ -9663,7 +9663,7 @@ fn a_flexray_bus_can_be_detached_and_removed() {
     app.attach_fr_watch_on(3, 5);
     assert!(app.status.contains("没有集群描述"), "{}", app.status);
 
-    // 解挂 closes the port and keeps the 路: it is still the cluster its
+    // 断开 closes the port and keeps the 路: it is still the cluster its
     // description describes, so nothing pointed at it has to move.
     app.hw.attach_fr_mock(0, 5);
     app.refresh_snapshot();
@@ -9675,7 +9675,7 @@ fn a_flexray_bus_can_be_detached_and_removed() {
         "and so did the core's copy of its description"
     );
 
-    // Removal is the whole 路, no prior 解挂 needed.
+    // Removal is the whole 路, no prior 断开 needed.
     app.hw.attach_fr_mock(0, 5);
     app.refresh_snapshot();
     app.remove_fr_bus(0);

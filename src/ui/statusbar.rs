@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn every_room_from_nothing_to_the_whole_line_comes_back_measurable() {
-        let msg = "FlexRay 监听挂接失败: FR0 集群配置被拒绝（status 112: XL_ERR_INVALID_ACCESS）";
+        let msg = "FlexRay 监听连接失败: FR0 集群配置被拒绝（status 112: XL_ERR_INVALID_ACCESS）";
         for px in 0..=ruler(msg) as u32 + 3 {
             let avail = px as f32;
             let shown = fits(msg, avail);

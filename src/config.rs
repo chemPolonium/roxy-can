@@ -367,7 +367,7 @@ pub struct NodeCfg {
     pub source: String,
     #[serde(default = "true_default")]
     pub enabled: bool,
-    /// 绑定的 DBC 节点 (总线, 节点名)：绑定脚本的发帧受该节点角色闸
+    /// 绑定的 DBC 节点 (总线, 节点名)：绑定脚本的发帧受该节点角色开关
     /// 控制。旧工程缺省为 None（独立脚本）。
     #[serde(default)]
     pub attached: Option<(u8, String)>,

@@ -418,7 +418,7 @@ impl VectorChannel {
                 // channel. Close and let the attach logic retry rx-only.
                 (lib.close_port)(port);
                 (lib.close_driver)();
-                return Err("通道被其他程序占用（只得到只收权限）".to_string());
+                return Err("通道被其他程序占用（只得到仅接收权限）".to_string());
             }
             // Bitrate needs init access; a monitoring port attaches at
             // whatever the bus already runs.

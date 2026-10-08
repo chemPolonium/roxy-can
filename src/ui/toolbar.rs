@@ -316,9 +316,9 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.is_item_hovered() {
                 ui.tooltip_text(
                     if real_bus {
-                        "Real bus：挂接的硬件已上线——RX 进总线，定向 TX 出线"
+                        "Real bus：已连接的硬件已启用——RX 进入总线，定向 TX 发出"
                     } else {
-                        "Simulated：纯仿真——硬件挂接保留但不收不发"
+                        "Simulated：纯仿真——硬件连接保留但不收不发"
                     },
                 );
             }

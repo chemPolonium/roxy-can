@@ -130,7 +130,7 @@ use crate::workspace::SigScope;
 /// a FlexRay watch detach the same way. The refusals in this file tell the user
 /// to press it by name, so a message must not drift away from the label on
 /// screen.
-pub const DETACH_LABEL: &str = "解挂";
+pub const DETACH_LABEL: &str = "断开";
 
 impl App {
     /// The bus's database, from this frame's snapshot. This inherent method
@@ -428,7 +428,7 @@ impl App {
                 .map(|db| db.params.name.as_str())
                 .unwrap_or("");
             self.status = format!(
-                "已加载 {} 集群描述（{name}，未挂监听，供回放解码）: {path}",
+                "已加载 {} 集群描述（{name}，未连接监听，供回放解码）: {path}",
                 self.fr_bus_label(bus)
             );
         }
@@ -548,7 +548,7 @@ impl App {
 
     /// Closes one FlexRay 路's receive port and leaves the 路 alone: its
     /// description, its name, its send entries and every curve pointed at it
-    /// stay where they are. The FR twin of a CAN row's `解挂` -- and the step to
+    /// stay where they are. The FR twin of a CAN row's `断开` -- and the step to
     /// take before loading a different description onto a watched 路, because
     /// its port was configured from the file already there.
     pub fn detach_flexray_watch(&mut self, bus: u8) {
@@ -659,7 +659,7 @@ impl App {
     /// no second file picker.
     pub fn attach_fr_watch_on(&mut self, bus: u8, channel_index: i32) {
         let Some(path) = self.fr_buses.get(&bus).map(|c| c.path.clone()) else {
-            self.status = format!("{} 没有集群描述，无法挂接", self.fr_bus_label(bus));
+            self.status = format!("{} 没有集群描述，无法连接", self.fr_bus_label(bus));
             return;
         };
         self.set_fr_watch(bus, Some(channel_index), &path);

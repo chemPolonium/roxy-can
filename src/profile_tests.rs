@@ -64,8 +64,8 @@ role = "Absent"
     app.settle();
 
     assert_eq!(app.node_role(0, "EngineECU"), NodeRole::Simulated);
-    // 默认关：角色应用不改写条目开关——Simulated 只开放闸门，用户在
-    // 生成器里逐条启用后才会发车。
+    // 默认关：角色应用不改写条目开关——Simulated 只开放开关，用户在
+    // 生成器里逐条启用后才会发送。
     assert!(
         app.tx_list
             .iter()

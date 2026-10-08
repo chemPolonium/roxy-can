@@ -400,7 +400,7 @@ pub enum BusCommand {
         name: String,
         channel: u8,
         /// 绑定的 DBC 节点 (总线, 节点名)：绑定脚本的发帧受该节点
-        /// 角色闸控制。
+        /// 角色开关控制。
         attached: Option<(u8, String)>,
     },
     /// Remove a node wholesale: source, runtime, log.
@@ -832,8 +832,8 @@ pub struct TxView {
     /// what the generator groups its rows by.
     pub node: String,
     pub active: bool,
-    /// 角色闸是否放行（绑定节点的角色为「模拟」，或条目无节点归属）。
-    /// 闸关时即便 active 也不发车——UI 用它区分「条目关」与「总关」。
+    /// 角色开关是否允许发送（绑定节点的角色为「模拟」，或条目无节点归属）。
+    /// 开关关闭时即便 active 也不发送——UI 用它区分「条目自己关着」与「所属节点的角色不是模拟」。
     pub gate_open: bool,
     pub fd: bool,
     pub cycle_us: u64,
@@ -1401,9 +1401,9 @@ impl BusCore {
             BusCommand::SetBusMode { real } => {
                 self.hw.live = real;
                 *status = if real {
-                    "总线模式：Real bus——挂接的硬件已上线（RX 进总线，定向 TX 出线）".into()
+                    "总线模式：Real bus——已连接的硬件已启用（RX 进入总线，定向 TX 发出）".into()
                 } else {
-                    "总线模式：Simulated——硬件挂接保留但已下线（纯仿真）".into()
+                    "总线模式：Simulated——硬件连接保留但未启用（纯仿真）".into()
                 };
             }
             BusCommand::AddReplayBlock {
@@ -1666,7 +1666,7 @@ impl BusCore {
                             self.hw
                                 .attach(bus, driver, adapter, kbps, false, port);
                             *status = format!(
-                                "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s（只收——通道被其他程序占用）{}",
+                                "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s（仅接收——通道被其他程序占用）{}",
                                 hw_fd_note(fd_data_kbps, fd)
                             );
                         }
@@ -1694,15 +1694,15 @@ impl BusCore {
                         Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, db) {
                             Ok(()) => {
                                 *status =
-                                    format!("FlexRay 监听已挂接: FR{bus} / Vector ch{idx}（只收）");
+                                    format!("FlexRay 监听已连接: FR{bus} / Vector ch{idx}（仅接收）");
                             }
                             Err(e) => {
-                                *status = format!("FlexRay 监听挂接失败: FR{bus} {e}");
+                                *status = format!("FlexRay 监听连接失败: FR{bus} {e}");
                             }
                         },
                         None => {
                             *status =
-                                format!("FlexRay 监听挂接失败: FR{bus} 尚未解析描述文件")
+                                format!("FlexRay 监听连接失败: FR{bus} 尚未解析描述文件")
                         }
                     }
                 }
@@ -2112,8 +2112,8 @@ impl BusCore {
         let mut node_lines: Vec<(String, String)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
-            // 绑定脚本的发帧受所属 DBC 节点的角色闸：节点离线时脚本同样
-            // 不发车（模拟 = 闸门放行）。
+            // 绑定脚本的发帧受所属 DBC 节点的角色开关：节点离线时脚本同样
+            // 不发送（模拟 = 允许发送）。
             let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
                 self.channels
                     .get(*ach as usize)
@@ -2121,7 +2121,7 @@ impl BusCore {
             });
             for (id, ext, data) in node.run_timers(now_us, &input) {
                 let frame = Self::node_frame(node.channel, id, ext, &data, self.sim_t_us);
-                // Real bus 模式下脚本帧与生成器帧一样上挂接通道。
+                // Real bus 模式下脚本帧与生成器帧一样经已连接的通道发出。
                 if script_allowed {
                     self.hw.write_if_live(node.channel, &frame);
                     self.buf.push(frame);
@@ -2170,7 +2170,7 @@ impl BusCore {
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
-            // 绑定脚本的发帧受所属 DBC 节点的角色闸（见 run_node_timers）。
+            // 绑定脚本的发帧受所属 DBC 节点的角色开关（见 run_node_timers）。
             let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
                 self.channels
                     .get(*ach as usize)
@@ -2179,7 +2179,7 @@ impl BusCore {
             let node_out =
                 node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input);
             // The node's own wire egress: Real bus 模式下反应帧与生成器帧
-            // 一样上挂接通道。
+            // 一样经已连接的通道发出。
             if script_allowed {
                 for (id, ext, data) in &node_out {
                     let frame = Self::node_frame(node.channel, *id, *ext, data, f.t_us);
@@ -2651,7 +2651,7 @@ impl BusCore {
                 .iter()
                 .map(|t| {
                     // 显示值读发射时存储的载荷（随消息周期跳变）；
-                    // 从未发射过的条目回退显示 base 字节。
+                    // 从未发送过的条目回退显示 base 字节。
                     let (sent_data, sent_len) = if t.last_len > 0 {
                         (t.last_sent, t.last_len)
                     } else {
@@ -3323,8 +3323,8 @@ impl BusCore {
             for id in &ids {
                 self.add_entry(channel, *id);
             }
-            // 闸门刚开：把该节点已启用条目的排程锚定到当前时钟。闸关
-            // 期间发射循环不跑、next_t_us 冻结，不锚定会在开闸瞬间把
+            // 开关刚打开：把该节点已启用条目的排程锚定到当前时钟。开关关闭
+            // 期间发送循环不跑、next_t_us 冻结，不锚定会在开关刚打开时把
             // 陈旧排程倾泻成突发。只动排程，绝不改写条目的开/关——
             // 那是用户的逐条自定义，角色切换无权触碰。
             let sim = self.sim_t_us;
@@ -3334,7 +3334,7 @@ impl BusCore {
                 }
             }
         }
-        // 切出「模拟」（监听/离线）：条目开/关原样保留，闸门关闭即停发。
+        // 切出「模拟」（监听/离线）：条目开/关原样保留，开关关闭即停发。
         let bus = self
             .channels
             .get(channel as usize)
@@ -3342,7 +3342,7 @@ impl BusCore {
             .unwrap_or_else(|| format!("CAN{}", channel + 1));
         *status = match role {
             NodeRole::Simulated => format!(
-                "simulating {node} on {bus} ({} message(s), 条目按各自开关发车)",
+                "simulating {node} on {bus} ({} message(s), 条目按各自开关发送)",
                 ids.len()
             ),
             NodeRole::Absent => format!("{node} offline from {bus}"),
@@ -3838,7 +3838,7 @@ impl BusCore {
                 let min_next = self
                     .tx_list
                     .iter()
-                    // 角色闸同发射循环：闸关的条目不产生死线。
+                    // 角色开关与发送循环同规则：开关关闭的条目不产生发送时刻。
                     .filter(|t| {
                         t.active
                             && t.cycle_us != 0
@@ -3974,8 +3974,8 @@ impl BusCore {
             }
             let muted =
                 matches!(self.mode, Mode::Replay) && self.replay_ids.contains(&(tx.channel, tx.id));
-            // 角色闸：绑定到 DBC 节点的条目只有在节点角色为「模拟」时才
-            // 发车；未分配条目（无 node 戳）不受闸。闸关时循环不跑、
+            // 角色开关：绑定到 DBC 节点的条目只有在节点角色为「模拟」时才
+            // 发送；未分配条目（无 node 戳）不受角色开关约束。开关关闭时发送循环不运行、
             // next_t_us 冻结，切回模拟由 set_node_role 锚定排程。
             let gate_open = tx.node.is_empty()
                 || channels[tx.channel as usize].role_of(&tx.node) == NodeRole::Simulated;
@@ -4001,7 +4001,7 @@ impl BusCore {
                 let slot = tx.next_t_us;
                 tx.next_t_us += tx.cycle_us;
                 let (data, len, flags) = crate::generator::tx_payload(channels, tx, slot);
-                // 发射时计算并存储：快照直接读存储值，UI 显示随消息周期
+                // 发送时计算并存储：快照直接读存储值，UI 显示随消息周期
                 // 跳变，不再逐帧重算。
                 tx.last_sent = data;
                 tx.last_len = len;
@@ -4160,7 +4160,7 @@ impl BusCore {
             if !known {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                     n.note(format!(
-                        "[fr_send] 丢弃: FR{bus} 不是已配置的路（先加载集群描述或挂监听）"
+                        "[fr_send] 丢弃: FR{bus} 不是已配置的路（先加载集群描述或连接监听）"
                     ));
                 }
                 continue;
@@ -4304,7 +4304,7 @@ impl BusCore {
                 .unwrap_or_else(|| format!("总线 {}", bus + 1));
             self.write_push(
                 WriteKind::Error,
-                format!("{name}：发车被线路拒绝：{reason}（只报第一次，次数见 Buses）"),
+                format!("{name}：发送被线路拒绝：{reason}（只报第一次，次数见 Buses）"),
             );
         }
 
@@ -4958,7 +4958,7 @@ impl BusCore {
                 );
             }
         }
-        // 发送反应帧同样更新条目的最近发射载荷，显示与发送一致。
+        // 发送反应帧同样更新条目的最近发送载荷，显示与发送一致。
         self.tx_list[i].last_sent = data;
         self.tx_list[i].last_len = len;
         self.buf.push(CanFrame {
