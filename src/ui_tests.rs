@@ -20,6 +20,19 @@ use std::sync::Mutex;
 /// a context must not run concurrently.
 static UI_LOCK: Mutex<()> = Mutex::new(());
 
+/// Takes that lock without letting one failure become many.
+///
+/// `lock().unwrap()` poisons the mutex when a test panics while holding it, so
+/// every later UI test died with `PoisonError` before reaching its own
+/// assertion: on CI a single pace failure reported 14, and the thirteen noise
+/// results buried the one message that mattered (2026-10-07 and again on the
+/// v0.17.1 tag). The guard protects nothing but the ordering -- the context is
+/// built per test and thrown away -- so a poisoned lock is still the lock we
+/// want, and the panicking test stays the only red one.
+fn ui_lock() -> std::sync::MutexGuard<'static, ()> {
+    UI_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 const FONT: &[u8] = include_bytes!("../fonts/Inconsolata-Regular.ttf");
 
 /// An imgui context wired like the app's (docking on, no ini file) but
@@ -74,6 +87,61 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
     }
 }
 
+/// Waits (bounded) for the replay to actually be running.
+///
+/// Starting one is not instantaneous -- the core opens and indexes the log
+/// first, which for the 60k-row FlexRay capture takes hundreds of milliseconds.
+/// Measuring a phase that begins during the load measures the loader, and the
+/// warm-up phase of these pace tests used to report the run as not measuring at
+/// all.
+fn wait_measuring(app: &mut App) {
+    for _ in 0..400 {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        app.update();
+        if app.snap.measuring {
+            return;
+        }
+    }
+    panic!(
+        "the replay never started (measuring={})",
+        app.snap.measuring
+    );
+}
+
+/// Drives the app for `millis` of wall clock the way the front end does --
+/// update, draw, repeat -- and reports the replay position it reached, the lap
+/// count and the worst lap.
+///
+/// `plot` is the load under test: the Graphics window on screen with its cursor
+/// pair moved every lap, which is the hot path a drag runs on rather than a
+/// parked pair. Measuring the loaded phase against the same run's plot-shut
+/// phase is what makes the pace assertions hold on a machine with no GPU.
+fn drive(
+    app: &mut App,
+    ctx: &mut Context,
+    millis: u64,
+    plot: bool,
+) -> (f64, usize, std::time::Duration) {
+    use std::time::{Duration, Instant};
+    app.graphics[0].opened = plot;
+    let start = Instant::now();
+    let mut worst = Duration::ZERO;
+    let mut laps = 0usize;
+    while start.elapsed() < Duration::from_millis(millis) {
+        std::thread::sleep(Duration::from_millis(5));
+        let t = Instant::now();
+        app.update();
+        if plot {
+            let now = app.plot_now_s();
+            app.graphics[0].cursor_s = [Some(now - 8.0), Some(now - 2.0)];
+        }
+        frames(app, ctx, 1);
+        worst = worst.max(t.elapsed());
+        laps += 1;
+    }
+    (app.replay_position().expect("a replay timeline").0, laps, worst)
+}
+
 /// Puts a cluster description on one FlexRay bus, the way the Buses window's
 /// picker does. False when the asset is missing or does not parse, so a test
 /// can skip rather than draw an empty table.
@@ -106,7 +174,7 @@ fn load_fr_db(app: &mut App, bus: u8, path: &str) -> bool {
 #[test]
 fn siglist_drag_reorders_a_row() {
     use crate::app::PopupTarget;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_graphics_window();
@@ -343,7 +411,7 @@ fn load_library_probe() {
 /// "open everything" layout a curious user ends up with.
 #[test]
 fn every_window_draws_without_panicking() {
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_trace_window();
@@ -385,7 +453,7 @@ fn every_window_draws_without_panicking() {
 #[test]
 fn the_graphics_window_draws_a_cursor_pair() {
     use crate::app::PopupTarget;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_graphics_window();
@@ -419,7 +487,7 @@ fn the_graphics_window_draws_a_cursor_pair() {
 #[test]
 fn a_fast_drag_keeps_its_cursor_and_leaves_the_view_alone() {
     use crate::app::PopupTarget;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_graphics_window();
@@ -483,7 +551,7 @@ fn a_fast_drag_keeps_its_cursor_and_leaves_the_view_alone() {
 /// several frames so the fact cache and the marker refresh both run.
 #[test]
 fn script_editor_draws_with_highlighting() {
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.send(crate::bus::BusCommand::AddNode {
@@ -530,7 +598,7 @@ fn script_editor_draws_with_highlighting() {
 /// text is produced inside the draw, which is the part only this test reaches.
 #[test]
 fn trace_draws_merged_flexray_rows_without_panicking() {
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_trace_window();
@@ -621,7 +689,7 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
 #[test]
 fn a_picked_row_draws_on_both_streams_beside_the_marks() {
     use crate::workspace::TracePick;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_trace_window();
@@ -684,7 +752,7 @@ fn a_picked_row_draws_on_both_streams_beside_the_marks() {
 #[test]
 fn flexray_signal_picker_draws_without_panicking() {
     use crate::app::PopupTarget;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_graphics_window();
@@ -715,7 +783,7 @@ fn flexray_signal_picker_draws_without_panicking() {
 #[test]
 fn the_message_picker_offers_flexray_slots() {
     use crate::app::PopupTarget;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
@@ -753,7 +821,7 @@ fn the_message_picker_offers_flexray_slots() {
 #[test]
 fn the_network_view_draws_a_flexray_generator_row() {
     use crate::app::GenRow;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
@@ -821,7 +889,7 @@ fn the_network_view_draws_a_flexray_generator_row() {
 /// function is drawn directly, against a real description, and must not panic.
 #[test]
 fn the_flexray_tab_lists_the_slots_a_script_can_read() {
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
@@ -861,7 +929,7 @@ fn the_flexray_tab_lists_the_slots_a_script_can_read() {
 /// where a user looks for their second bus.
 #[test]
 fn the_buses_window_draws_two_flexray_watches() {
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.show_buses = true;
@@ -899,7 +967,7 @@ fn the_buses_window_draws_two_flexray_watches() {
 #[test]
 fn the_network_view_draws_flexray_clusters_with_and_without_a_description() {
     use crate::hw::vector::flexray::FrFrame;
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.show_network = true;
@@ -935,7 +1003,7 @@ fn the_network_view_draws_flexray_clusters_with_and_without_a_description() {
 /// bug lived in).
 #[test]
 fn editor_popups_draw_without_panicking() {
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
     app.sysvar_draft = Some(crate::ui::sysvars::SysVarDraft::for_add());
@@ -991,11 +1059,10 @@ fn editor_popups_draw_without_panicking() {
 #[test]
 fn a_plot_window_never_starves_the_replay() {
     use crate::app::PopupTarget;
-    use std::time::{Duration, Instant};
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    use std::time::Duration;
+    let _ui_lock = ui_lock();
     if !std::path::Path::new("assets/fibex/Logging.blf").exists() {
-        println!("assets/fibex/Logging.blf not present -- skipped");
-        return;
+        panic!("assets/fibex/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
     }
     let mut ctx = harness();
     // The real app: the core runs on its own thread, which is the shape
@@ -1034,43 +1101,50 @@ fn a_plot_window_never_starves_the_replay() {
     app.graphics[0].show_cursor = true;
     app.graphics[0].zoom_enabled = true;
     app.replay();
+    wait_measuring(&mut app);
 
-    let start = Instant::now();
-    let mut worst_lap = Duration::ZERO;
-    let mut laps = 0usize;
-    while start.elapsed() < Duration::from_millis(1500) {
-        std::thread::sleep(Duration::from_millis(5));
-        let t = Instant::now();
-        app.update();
-        let now = app.plot_now_s();
-        app.graphics[0].cursor_s = [Some(now - 8.0), Some(now - 2.0)];
-        {
-            let ui = ctx.frame();
-            crate::ui::render(&mut app, ui);
-            let _ = ctx.render_legacy();
-        }
-        worst_lap = worst_lap.max(t.elapsed());
-        laps += 1;
-    }
-    let wall = start.elapsed().as_secs_f64();
+    // Baseline first: the same app, the same log, the plot window shut. What
+    // this machine manages without a curve on screen is the number the loaded
+    // phase is compared to.
+    //
+    // The rule this replaces was absolute -- "the log clock must cover 25% of
+    // the wall clock" -- and it measured the rasterizer, not the product.
+    // GitHub's runners have no GPU: the same binary passed locally and failed
+    // there at 17-23% of wall, three times across two releases, and each red run
+    // buried the real result under thirteen poisoned ones. A ratio against the
+    // same machine's own plot-shut baseline holds on both.
+    // A short throwaway phase first: the replay's first second is still paying
+    // for the log load, and comparing a warm-up phase to a steady one is how a
+    // ratio test ends up unable to fail.
+    let (warm_pos, _, _) = drive(&mut app, &mut ctx, 400, false);
+    let (base_pos, base_laps, base_worst) = drive(&mut app, &mut ctx, 1_500, false);
+    let (loaded_pos, laps, worst_lap) = drive(&mut app, &mut ctx, 1_500, true);
+    let base_gain = base_pos - warm_pos;
+    let loaded_gain = loaded_pos - base_pos;
     println!(
-        "6 curves + a dragged cursor pair: {laps} laps in {wall:.2} s, worst lap \
-         {worst_lap:?} (mean {:.2} ms)",
-        wall * 1e3 / laps.max(1) as f64
+        "plot shut: {base_gain:.2} s of log in 1.5 s ({base_laps} laps, worst \
+         {base_worst:?}) | 6 curves + dragged cursors: {loaded_gain:.2} s in 1.5 s \
+         ({laps} laps, worst {worst_lap:?})"
     );
-    let (pos, dur) = app.replay_position().expect("a replay timeline");
     assert!(
         app.snap.measuring,
-        "the run is still measuring after {wall:.2} s of plotting"
+        "the run is still measuring after 3 s of plotting"
     );
     assert!(
-        pos >= wall * 0.25,
-        "the log clock kept pace: {pos:.2} s of log in {wall:.2} s of wall \
-         ({dur:.1} s log total, {laps} laps, worst lap {worst_lap:?})"
+        base_gain > 0.2,
+        "even the plot-shut baseline barely advanced ({base_gain:.2} s of log in \
+         1.5 s) -- that is a broken run, not a slow machine, and the ratio below \
+         would mean nothing"
+    );
+    assert!(
+        loaded_gain >= base_gain * 0.5,
+        "a Graphics window with 6 curves cost the replay more than half its pace: \
+         {loaded_gain:.2} s of log against a {base_gain:.2} s baseline, both over \
+         1.5 s of wall ({laps} laps, worst lap {worst_lap:?})"
     );
     assert!(
         worst_lap < Duration::from_secs(2),
-        "one lap took {worst_lap:?} with a plot window open ({laps} laps, pos={pos:.2})"
+        "one lap took {worst_lap:?} with a plot window open ({laps} laps, pos={loaded_pos:.2})"
     );
     app.stop();
 }
@@ -1087,8 +1161,7 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
     use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
     use crate::log::blf::BlfWriter;
     use crate::trace::FrRow;
-    use std::time::{Duration, Instant};
-    let _ui_lock = UI_LOCK.lock().unwrap();
+    let _ui_lock = ui_lock();
     let path =
         std::env::temp_dir().join(format!("roxy_can_pace_{}.blf", std::process::id()));
     {
@@ -1155,29 +1228,37 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
     );
     app.load_log(&path.to_string_lossy());
     app.replay();
+    wait_measuring(&mut app);
 
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_millis(1200) {
-        std::thread::sleep(Duration::from_millis(5));
-        app.update();
-        {
-            let ui = ctx.frame();
-            crate::ui::render(&mut app, ui);
-            let _ = ctx.render_legacy();
-        }
-    }
-    let wall = start.elapsed().as_secs_f64();
-    let (pos, dur) = app.replay_position().expect("a replay timeline");
+    // The same two-phase shape as `a_plot_window_never_starves_the_replay`: the
+    // pace is judged against this machine's own plot-shut baseline, never
+    // against a fraction of the wall clock that a GPU-less runner cannot reach.
+    let (warm_pos, _, _) = drive(&mut app, &mut ctx, 400, false);
+    let (base_pos, base_laps, _) = drive(&mut app, &mut ctx, 1_200, false);
+    let (loaded_pos, laps, worst) = drive(&mut app, &mut ctx, 1_200, true);
+    let base_gain = base_pos - warm_pos;
+    let loaded_gain = loaded_pos - base_pos;
+    let dur = app.replay_position().expect("a replay timeline").1;
     app.stop();
     std::fs::remove_file(&path).ok();
+    println!(
+        "own recording, plot shut: {base_gain:.2} s in 1.2 s ({base_laps} laps) | \
+         2 curves open: {loaded_gain:.2} s ({laps} laps, worst lap {worst:?})"
+    );
     assert!(
         dur > 9.0,
         "the file states its 10 s span: {dur:.2} s -- a recording with no \
          header duration leaves the progress bar guessing"
     );
     assert!(
-        pos >= wall * 0.5,
-        "the log clock reached {pos:.2} s in {wall:.2} s of wall time of a \
-         {dur:.1} s recording"
+        base_gain > 0.2,
+        "even the plot-shut baseline barely advanced ({base_gain:.2} s of a \
+         {dur:.1} s recording in 1.2 s) -- a broken run, not a slow machine"
+    );
+    assert!(
+        loaded_gain >= base_gain * 0.5,
+        "two curves cost the replay of our own recording more than half its pace: \
+         {loaded_gain:.2} s against a {base_gain:.2} s baseline ({laps} laps, worst \
+         lap {worst:?})"
     );
 }
