@@ -292,9 +292,10 @@ pub struct Script {
     /// R2 spike: sends whose `(from, id, extended)` the compiler derived
     /// statically. Pure metadata -- the runtime behaviour is unchanged.
     pub send_refs: Vec<(String, u32, bool)>,
-    /// R2 spike: `send` / `send_ext` calls whose id was NOT statically
-    /// derivable, with the reason. The fail-closed rule (roadmap §4)
-    /// would turn these into compile errors; the spike only reports.
+    /// Sends whose id the compiler could not enumerate, with the reason.
+    /// The fail-closed rule (roadmap §3) rejects those at compile time; the
+    /// one declared exception is a forward of `frame_id()` out of
+    /// `on message *`, which lands here instead.
     pub opaque_sends: Vec<String>,
     /// R2 response mapping: `(arming handler label, timer name)` for
     /// every literal `set_timer` call, attributed to its handler.
