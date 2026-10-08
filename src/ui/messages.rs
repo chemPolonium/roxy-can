@@ -5,6 +5,12 @@ use dear_imgui_rs::{
     Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui,
 };
 
+/// The Messages table's columns, and the one an expanded row puts its value in.
+/// A table cell is clipped to its own column, so the long text belongs in the
+/// wide last one ("Data") rather than the narrow column beside the name.
+const COLUMNS: usize = 7;
+const VALUE_COL: usize = COLUMNS - 1;
+
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
     let n = app.msg_windows.len();
@@ -94,25 +100,28 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y;
     let opts = TableOptions::from(tbl_flags).sizing_policy(TableSizingPolicy::StretchProp);
-    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), 7, opts) else {
+    let Some(_table) = ui.begin_table_with_flags(format!("msg_table{i}"), COLUMNS, opts) else {
         return;
     };
-    // An expanded row reads `signal name` then `value`, one per column: the name
-    // gets the wider share, and the value's column is the unclipped one, because
-    // a decoded FlexRay value ("2.54 Mpa (正常)  (1Fh)", "2 (完成)  (2h)") needs
-    // the five columns to its right -- all of them empty on a child row. "Bus"
-    // keeps its 60 px width for the parent rows; the flag only lets a child's
-    // text run past it.
+    // An expanded row reads `signal name` in "Message" and the value in the last
+    // column, "Data" -- the wide one. Not in the column next to the name: a cell
+    // is clipped to its own column rect (`TableBeginCell` sets that rect unless
+    // the *table* skips clipping, and the table cannot -- see above), and "Bus"
+    // is 60 px, which cut "6600 rpm [u16]" down to "6600 rpm [". A decoded
+    // FlexRay value ("2.54 Mpa (正常)  (1Fh)", "2 (完成)  (2h)") needs the room,
+    // and on a child row every column after "Message" is empty anyway. This is
+    // also how the Trace window's FlexRay sub-rows place their values: same
+    // shape in both tables, and the values of a list of signals line up.
     //
-    // "Message" is deliberately *not* unclipped: when both the name and the
-    // value were drawn in that one cell, at a fixed offset for the value, a long
-    // name printed straight through its reading ("...OrderStat" under "(1h)").
+    // "Message" stays clipped on purpose: when both the name and the value were
+    // drawn in that one cell, at a fixed offset for the value, a long name
+    // printed straight through its reading ("...OrderStat" under "(1h)").
     // Clipped, an over-long name stops at the column edge -- widen the column by
     // dragging its header, which is what RESIZABLE is for.
     ui.table_setup_column_stretch_weight("Message", TableColumnFlags::NONE, 2.0);
     ui.table_setup_column(
         "Bus",
-        TableColumnFlags::NO_CLIP,
+        TableColumnFlags::NONE,
         Some(dear_imgui_rs::TableColumnWidth::fixed(60.0)),
     );
     for (label, w) in [
@@ -158,10 +167,9 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_row();
                 ui.table_next_column();
                 // The sync pass worked out *why* there is nothing here; the
-                // window only prints it. It goes in the value's cell because the
-                // sentence is longer than the name column, and that cell's column
-                // is the one set up to run past its own width.
-                if ui.table_next_column() {
+                // window only prints it. It goes in the value's column because
+                // the sentence is longer than any cell before it.
+                if ui.table_set_column_index(VALUE_COL) {
                     ui.text(row.empty_note.as_deref().unwrap_or("(no signals)"));
                 }
             } else {
@@ -169,7 +177,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
                     ui.table_next_row();
                     ui.table_next_column();
                     ui.text(format!("   {name}"));
-                    if ui.table_next_column() {
+                    if ui.table_set_column_index(VALUE_COL) {
                         ui.text(value);
                     }
                 }
