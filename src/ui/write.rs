@@ -91,7 +91,16 @@ fn content(app: &mut App, ui: &Ui) {
         };
         ui.text_colored([0.45, 0.45, 0.45, 1.0], wall_stamp(line.wall_us));
         ui.same_line();
+        // Wrap at the window's right edge. `ui.text` does not wrap on its own,
+        // and what runs past the edge is clipped rather than scrolled: the
+        // driver messages this log exists for ("which channel refused what, and
+        // why") are exactly the long ones. The wrap position is taken after the
+        // stamp, so a continuation line starts under the text, not under the
+        // time.
+        let wrap_at = ui.cursor_screen_pos()[0] + ui.content_region_avail()[0];
+        let wrap = ui.push_text_wrap_pos(wrap_at);
         ui.text_colored(color, &line.text);
+        wrap.end();
     }
     if at_bottom && ui.scroll_max_y() > 0.0 {
         ui.set_scroll_here_y(1.0);
