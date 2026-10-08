@@ -2,6 +2,15 @@
 
 只记录**尚未完成**的工作项。已完成能力的行为说明见 `README.md` 与 `docs/usage.md`；系统结构与设计决策见 `docs/architecture.md`；已完成批次的明细见 git log（本文件曾长期记录批次明细，2026-09-15 起按"只记未完成"的既定原则精简）。
 
+## 2026-10-08 VN7640 真机批次（四项落地 ✅，明细见 git log；下面只列还欠的）
+
+已落地：Write 窗口长行折行；状态行长消息不再压住左侧状态串（截断 + tooltip 给全文）；硬件下拉回显"配置过/刚试过"的那一口；**发车被线路拒绝不再静默**（第一次进 Write 带驱动原因，之后只累计，Buses 行 `发车被拒 ×N`），状态栏 `MEASURING (virtual)` 改为说帧去哪儿（`simulation` / `real bus · N` / `simulation · hardware parked`）。
+
+1. **FlexRay 真机收帧仍未验证**：这台 VN7640 的 6 个 CAN 口 + 2 个 Vector 虚拟口全部 `caps=0x00000000 / flexray:false`。probe 逐口试开：ch0 `xlOpenPort` 成功但 `xlFrSetConfiguration` 被拒 `112 XL_ERR_INVALID_ACCESS`、**授予本应用的权限位为 0**；ch1/2/3/5 `204 INVALID_CHANNEL_MASK`；ch4 `117 NOT_IMPLEMENTED`；虚拟口 `255`。→ 要带 FlexRay 选件的授权或真 FR 接口。任务 #11/#45 保持 pending，文档里不许出现"已真机验证"。
+2. **CAN 口不对称待查**：同一台设备，Vector ch1 挂 CAN 成功（500k 收发、经典模式），ch0 却 `204 INVALID_CHANNEL_MASK`。两种解释：该口在 Vector Hardware Config 里被占用/未分配，或我们的 `index → channelMask` 口径与枚举不一致（probe 与 GUI 同为 `1<<index`，且 ch0 在 FR 侧反而开得起来）。**等用户查过 Hardware Config 再下结论**，别急着改映射。
+3. **屏幕验收欠四项**（形状类改动，逻辑与测试都过，眼睛没看）：Write 长行折行、状态行截断与 tooltip、硬件行回显所选口、`发车被拒 ×N` 红字与新状态串。另外 FR 行的同一回显只验了 CAN 侧（FR 侧同一查表逻辑 + 单测）。
+4. 任务 #49 仍开着：回放节拍断言在任何机器上都贴线（CI 已因此吃掉一次发布），且它 panic 会毒掉共享 imgui 锁连坐 13 个 UI 测试。
+
 ## 2026-09-17/18 夜间批次：用户清单七项 + FlexRay 解析（全部落地 ✅，明细见 git log）
 
 录制路径默认进工程 Record/ 目录；DBC/脚本/FIBEX 的 GBK 编码容忍；Trace 工具条收拢；VN7640 能力位诊断（probe 逐通道 FR 试开）；Graphics Y 轴防遮挡 + 曲线面板横向滚动；CAN+FlexRay 在 Trace/Messages 混排合并（含 FR 信号展开、帧名过滤、CSV 导出）；脚本编辑器三栏化（左大纲/收发、右函数/SysVar/报文）；**FlexRay 数据库解析**（`fr_db.rs`，roxy-fibex 同源：FIBEX 2.x/3.x + AUTOSAR R4.x + 调度表 + 信号解码 + 驱动集群配置推导，真实 PowerTrain.arxml 48 帧回归锁定）。
@@ -16,7 +25,7 @@
 2. ~~**DBC 自动重载 × `$` 引用失配**~~ ✅：重载后原地重算各节点 `$报文::信号` 名字→id 映射，变化/消失进节点日志 `[reload]` 行。
 3. ~~**print 数值格式控制**~~ ✅：`format(fmt, ...)` 内建（`%d/%u/%x/%X/%f/%.Nf/%e/%g/%s/%%` + 宽度/`-`/`0` 标志），返回字符串进 print/日志。
 4. ~~**轻量监控面板 v1**~~ ✅：View > Monitor——`[色点] 标签 值 单位` 文本行，行内阈值着色规则（方向/阈值/色号行内可调），行随工程保存并自动重订阅；Clear 清空。
-5. ~~**BLF 录制写入**~~ ✅：录制按扩展名选后端——`.blf` 走二进制容器写入（LOGG 头 + zlib 压缩 LOG_CONTAINER；经典帧 CAN_MESSAGE、FD 帧 CAN_FD_MESSAGE_64、RTR/扩展标志齐全，错误帧 v1 不写），写→读回环测试逐帧一致。后续（2026-09-16）：录制格式改为**工具栏 combo 显式选择**（`_<date>.asc` / `_<date>.blf`），摆勾时 combo 决定扩展名（覆盖手敲路径里的扩展名），不再隐式依赖命名。
+5. ~~**BLF 录制写入**~~ ✅：录制按扩展名选后端——`.blf` 走二进制容器写入（LOGG 头 + zlib 压缩 LOG_CONTAINER；经典帧 CAN_MESSAGE、FD 帧 CAN_FD_MESSAGE_64、RTR/扩展标志齐全，错误帧 v1 不写），写→读回环测试逐帧一致。后续（2026-09-16）：录制格式改为**工具栏 combo 显式选择**（`_<date>.asc` / `_<date>.blf`），摆勾时 combo 决定扩展名（覆盖手敲路径里的扩展名），不再隐式依赖命名。再后续（2026-09-16，`145a321`）：错误帧改为写 `CAN_ERROR_EXT` 对象并有写→读回环测试——上面那句"错误帧 v1 不写"自此作废。
 6. ~~**触发条件加系统变量**~~ ✅：`SysVar { key, threshold, rising }` 按步扫描活注册表，Triggers 窗口 "+ SysVar" + 变量下拉/阈值/方向，持久化 kind=4；测试锁定"越阈一次一发、保持不重发、回落再越阈再发"。
 
 ### 需要人工验收（批次完成后）
