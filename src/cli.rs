@@ -858,6 +858,10 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     // open here; nothing is drained yet.
     s.push_str("FlexRay open scan (rx-only):\n");
     let mut usable: Vec<i32> = Vec::new();
+    // Channels whose port *opened* but whose cluster configuration was refused:
+    // that is where "no FlexRay licence" and "we asked for no rights" look
+    // identical, so they get swept below.
+    let mut refused: Vec<i32> = Vec::new();
     for c in &channels {
         match open_probe_channel(c.index, fibex_cfg.as_ref()) {
             Ok(ch) => {
@@ -872,11 +876,29 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
                     None => "config read failed".to_string(),
                 };
                 s.push_str(&format!("  ch{}: open OK, {status_word}\n", c.index));
-                if valid || c.flexray {
-                    usable.push(c.index);
-                }
+                // Opening *is* the proof now: the port is only handed back
+                // after `xlFrSetConfiguration` accepted the cluster. The status
+                // word says whether the driver also sees a running network --
+                // 0 with nothing plugged in is expected, not a refusal.
+                usable.push(c.index);
             }
-            Err(e) => s.push_str(&format!("  ch{}: {e}\n", c.index)),
+            Err(e) => {
+                if e.contains("集群配置被拒绝") {
+                    refused.push(c.index);
+                }
+                s.push_str(&format!("  ch{}: {e}\n", c.index));
+            }
+        }
+    }
+    if !refused.is_empty() {
+        let cfg = fibex_cfg.clone().unwrap_or_default();
+        s.push_str("FlexRay 权限扫描（申请 → 授予 / 配置结果，数字是驱动原话）:\n");
+        for index in refused {
+            for request in [0u64, 1, 2, 3, 7, 1u64 << index] {
+                s.push_str(&crate::hw::vector::flexray::FlexRayChannel::access_probe_line(
+                    index, &cfg, request,
+                ));
+            }
         }
     }
     if usable.is_empty() {

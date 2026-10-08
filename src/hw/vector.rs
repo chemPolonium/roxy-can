@@ -905,10 +905,64 @@ impl FlexRayChannel {
         Self::open_rx(index, &config_from_db(&db.params))
     }
 
-    /// Opens the channel and applies the cluster configuration. RX-only:
-    /// the port never requests init access, so it succeeds even on a
-    /// bus another tool cold-starts.
-    pub fn open_rx(index: i32, config: &XLfrClusterConfig) -> Result<FlexRayChannel, String> {
+    /// Probe-only: open the port asking for `request` access rights, try to
+    /// apply `config`, and report what the driver answered.
+    ///
+    /// [`Self::open_rx`] asks for **nothing** (`permission = 0`), so a channel
+    /// that refuses `xlFrSetConfiguration` with `XL_ERR_INVALID_ACCESS` has not
+    /// been shown to lack a FlexRay licence -- it may only have been asked for
+    /// too little. This sweeps requests and prints the mask the driver granted,
+    /// which it fills in either way. Raw numbers on purpose: the vendor header
+    /// is not on this machine, so the bits are not named.
+    pub fn access_probe_line(index: i32, config: &XLfrClusterConfig, request: XlAccess) -> String {
+        let Some(lib) = Vxlapi::lib() else {
+            return format!("ch{index} 申请 0x{request:X}：Vector 驱动不可用\n");
+        };
+        unsafe {
+            if (lib.open_driver)() != 0 {
+                return format!("ch{index} 申请 0x{request:X}：xlOpenDriver 失败\n");
+            }
+            let mask = 1u64 << index;
+            let mut permission: XlAccess = request;
+            let mut port: XlPortHandle = 0;
+            let status = (lib.open_port)(
+                &mut port,
+                c"roxy-can".as_ptr() as *const u8,
+                mask,
+                &mut permission,
+                65_536,
+                XL_INTERFACE_VERSION_V4,
+                XL_BUS_TYPE_FLEXRAY,
+            );
+            if status != 0 || port == XL_INVALID_PORT {
+                (lib.close_driver)();
+                return format!(
+                    "ch{index} 申请 0x{request:X}：xlOpenPort 被拒（{}）\n",
+                    lib.error(status)
+                );
+            }
+            let granted = permission;
+            let status = (lib.fr_set_configuration)(port, mask, config);
+            (lib.close_port)(port);
+            (lib.close_driver)();
+            let outcome = if status == 0 {
+                "接受".to_string()
+            } else {
+                format!("被拒（{}）", lib.error(status))
+            };
+            format!("ch{index} 申请 0x{request:X} → 授予 0x{granted:X}，xlFrSetConfiguration {outcome}\n")
+        }
+    }
+
+    /// Opens the channel and applies the cluster configuration, asking the
+    /// driver for `request` access rights. The worker behind
+    /// [`Self::open_rx`]; probe code calls it with a single request to see what
+    /// comes back.
+    fn open_at(
+        index: i32,
+        config: &XLfrClusterConfig,
+        request: XlAccess,
+    ) -> Result<FlexRayChannel, String> {
         let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
         unsafe {
             let status = (lib.open_driver)();
@@ -916,7 +970,7 @@ impl FlexRayChannel {
                 return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
             }
             let mask = 1u64 << index;
-            let mut permission: XlAccess = 0;
+            let mut permission: XlAccess = request;
             let mut port: XlPortHandle = 0;
             let status = (lib.open_port)(
                 &mut port,
@@ -939,14 +993,15 @@ impl FlexRayChannel {
                 (lib.close_port)(port);
                 (lib.close_driver)();
                 // The granted access mask is the diagnosis, so it travels with
-                // the error. Verified live on a VN7640: a channel that opens
-                // fine and whose configuration is *readable* still refuses
-                // every `xlFrSetConfiguration` -- zeroed and database-derived
-                // alike -- while the granted mask reads 0. That is an access
-                // question, not a cluster-parameter one, and blaming the
-                // parameters sends the user to the wrong document.
+                // the error. Measured on a VN7640 (2026-10-08): a port opened
+                // with `permission = 0` is granted 0 and every
+                // `xlFrSetConfiguration` on it answers `XL_ERR_INVALID_ACCESS`,
+                // while the same open asking for the channel's own bit is
+                // granted and the configuration is accepted. So a zero here
+                // means somebody else holds the channel (or it is not assigned
+                // to this application), not that the parameters are wrong.
                 let granted = if permission == 0 {
-                    "驱动授予本应用的权限是 0：这一路没有授权给 FlexRay（查 Vector Hardware Config 里这一路的占用/授权，以及 License Manager 有没有 FlexRay 选件）"
+                    "驱动只给到被动权限（授予 0）：这一路多半被别的程序占着，或在 Vector Hardware Config 里没分给本应用——集群配置要的是该通道的 init 权限位"
                         .to_string()
                 } else {
                     format!(
@@ -966,6 +1021,28 @@ impl FlexRayChannel {
             }
             (lib.flush_receive_queue)(port);
             Ok(FlexRayChannel { port, mask })
+        }
+    }
+
+    /// Opens the channel and applies the cluster configuration.
+    ///
+    /// The port asks for **the channel's own access bit** first, because that
+    /// is what makes `xlFrSetConfiguration` take at all -- measured on a
+    /// VN7640 (2026-10-08), an open that requests nothing is granted nothing and
+    /// every configuration is then refused with `XL_ERR_INVALID_ACCESS`, while
+    /// the same open requesting `1 << channel` is granted and the configuration
+    /// is accepted. (The rights mask is per channel: bits outside the channel
+    /// mask are rejected outright with `XL_ERR_WRONG_PARAMETER`, which is why
+    /// this carries the channel bit rather than a bare `1`.)
+    ///
+    /// If that open fails the channel is owned by another program, so the
+    /// passive port is retried -- the watch then reports who holds it instead of
+    /// the open failing with the first error's number alone.
+    pub fn open_rx(index: i32, config: &XLfrClusterConfig) -> Result<FlexRayChannel, String> {
+        let init = Self::open_at(index, config, 1u64 << index);
+        match init {
+            Ok(ch) => Ok(ch),
+            Err(e) => Self::open_at(index, config, 0).map_err(|_| e),
         }
     }
 
