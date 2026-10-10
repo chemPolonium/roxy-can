@@ -116,6 +116,20 @@ impl Recorder {
         }
     }
 
+    /// Pushes the open file's buffer to disk. Called at the end of every
+    /// measurement step, so the file grows while the recording runs: a person
+    /// watching it (or a process that dies before Stop) should see the frames
+    /// that were already on the bus, not a 144-byte stub.
+    pub fn flush(&mut self) {
+        match &mut self.writer {
+            Some(Backend::Asc(w)) => {
+                w.flush().ok();
+            }
+            Some(Backend::Blf(w)) => w.flush(),
+            None => {}
+        }
+    }
+
     /// Closes the file, if any. Recorded data stays; only the handle goes.
     pub fn close(&mut self) {
         if let Some(w) = self.writer.take() {

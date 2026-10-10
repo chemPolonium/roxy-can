@@ -924,7 +924,18 @@ pub struct BlfWriter {
     start: chrono::DateTime<chrono::Local>,
     first_ns: Option<u64>,
     last_ns: u64,
+    /// When the last container went to disk. A container is a size decision
+    /// (128 KiB of objects), and on a quiet bench that size takes minutes -- so
+    /// the same data also has a deadline, or the file looks frozen while the
+    /// recording is running.
+    last_container: std::time::Instant,
+    container_interval: std::time::Duration,
 }
+
+/// How old the un-flushed objects may get before they are written out. Only the
+/// test overrides it; the number itself is the one a person watching a file
+/// size would call live.
+const CONTAINER_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl BlfWriter {
     pub fn create(path: &str) -> std::io::Result<Self> {
@@ -946,7 +957,15 @@ impl BlfWriter {
             start,
             first_ns: None,
             last_ns: 0,
+            last_container: std::time::Instant::now(),
+            container_interval: CONTAINER_FLUSH_INTERVAL,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_flush_interval(mut self, d: std::time::Duration) -> Self {
+        self.container_interval = d;
+        self
     }
 
     /// Records the span the objects cover, in the file's own nanosecond units.
@@ -1005,25 +1024,57 @@ impl BlfWriter {
         c.extend_from_slice(&payload);
         if self.file.write_all(&c).is_ok() {
             self.containers += 1;
+            self.last_container = std::time::Instant::now();
+            // The header is the only place that says how much of this file is
+            // there, and a file someone looks at mid-recording is read from it.
+            let _ = self.patch_header();
         }
         self.pending.clear();
     }
 
-    /// Flushes the last container, then patches the container count and
-    /// the stop SYSTEMTIME into the file header.
-    pub fn finish(mut self) -> std::io::Result<()> {
-        use std::io::{Seek, SeekFrom, Write};
-        self.flush_container();
-        self.file.seek(SeekFrom::Start(HDR_OBJECT_COUNT as u64))?;
-        self.file.write_all(&self.containers.to_le_bytes())?;
-        self.file.seek(SeekFrom::Start(HDR_STOP_TIME as u64))?;
+    /// Writes what has arrived so far out as a container, however young it is.
+    ///
+    /// The size threshold alone is not enough: a container is 128 KiB of
+    /// objects, which on a bench doing ten frames a second takes minutes. The
+    /// file then sits at 144 bytes while the recording is plainly running, which
+    /// reads as "nothing is being written". The interval keeps containers from
+    /// shattering into one-per-step fragments at the same time.
+    pub fn flush(&mut self) {
+        if !self.pending.is_empty() && self.last_container.elapsed() >= self.container_interval {
+            self.flush_container();
+        }
+    }
+
+    /// The stop time the header carries: the start plus the span the recorded
+    /// traffic covers, not the wall clock of this call.
+    fn stop_time(&self) -> chrono::DateTime<chrono::Local> {
         let span_ns = self
             .first_ns
             .map_or(0u64, |first| self.last_ns.saturating_sub(first));
-        let stop = self.start + chrono::Duration::nanoseconds(span_ns as i64);
+        self.start + chrono::Duration::nanoseconds(span_ns as i64)
+    }
+
+    /// Patches the container count and the stop SYSTEMTIME into the fixed
+    /// 144-byte header, then moves the write position back to the end so the
+    /// next container appends.
+    fn patch_header(&mut self) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let end = self.file.seek(SeekFrom::End(0))?;
+        self.file.seek(SeekFrom::Start(HDR_OBJECT_COUNT as u64))?;
+        self.file.write_all(&self.containers.to_le_bytes())?;
+        self.file.seek(SeekFrom::Start(HDR_STOP_TIME as u64))?;
+        let stop = self.stop_time();
         for f in fields_at(&stop) {
             self.file.write_all(&f.to_le_bytes())?;
         }
+        self.file.seek(SeekFrom::Start(end))?;
+        Ok(())
+    }
+
+    /// Flushes the last container, then patches the header one final time.
+    pub fn finish(mut self) -> std::io::Result<()> {
+        self.flush_container();
+        self.patch_header()?;
         self.file.flush()
     }
 }
@@ -1174,6 +1225,64 @@ pub(crate) mod tests {
             "the error frame stays flagged"
         );
         std::fs::remove_file(&path).ok();
+    }
+
+    /// A recording that has not been closed is already a readable file.
+    ///
+    /// A container is a *size* decision (128 KiB of objects), which on a bench
+    /// doing ten frames a second is minutes away -- so the file sat at its
+    /// 144-byte header while traffic was visibly arriving, and a process killed
+    /// mid-run left nothing behind. `flush` is what the end of every measurement
+    /// step calls; the interval is zeroed here so the test does not sleep.
+    #[test]
+    fn a_flushed_recording_reads_back_before_it_is_closed() {
+        let path = std::env::temp_dir().join("roxy_can_writer_live.blf");
+        let frames: Vec<CanFrame> = (0..3u64)
+            .map(|i| CanFrame {
+                t_us: 1_000 + i * 1_000,
+                channel: 0,
+                id: 0x100 + i as u32,
+                extended: false,
+                len: 8,
+                data: [0x11; MAX_CAN_FD_LEN],
+                dir: Direction::Rx,
+                flags: FrameFlags::NONE,
+            })
+            .collect();
+        let mut w = BlfWriter::create(&path.to_string_lossy())
+            .expect("create")
+            .with_flush_interval(std::time::Duration::ZERO);
+        for f in &frames {
+            w.write(f);
+        }
+        w.flush();
+
+        let bytes = std::fs::read(&path).expect("on disk");
+        assert!(
+            bytes.len() > FILE_HEADER_SIZE,
+            "the file grew past its header: {} B",
+            bytes.len()
+        );
+        assert_eq!(
+            u32_at(&bytes, HDR_OBJECT_COUNT),
+            1,
+            "the header counts what is there"
+        );
+        let mut stream = BlfStream::open(&path).expect("an unfinished file parses");
+        let mut got = Vec::new();
+        while let Some(f) = stream.next_frame() {
+            got.push(f);
+        }
+        assert_eq!(got.len(), frames.len(), "the running file holds them");
+
+        // Closing writes no second copy of what the flush already put down.
+        w.finish().expect("finish");
+        let bytes = std::fs::read(&path).expect("on disk");
+        assert_eq!(
+            u32_at(&bytes, HDR_OBJECT_COUNT),
+            1,
+            "the flush is not counted twice"
+        );
     }
 
     /// Vector's `TIME_ONE_NANS`. The reader never names it -- nanoseconds are

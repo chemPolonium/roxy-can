@@ -4308,6 +4308,13 @@ impl BusCore {
             );
         }
 
+        // The record file is written as the measurement runs, not at Stop: this
+        // pushes whatever the step added down to disk. A BLF container is a size
+        // decision (128 KiB of objects), so on a slow bench the file would
+        // otherwise sit at its 144-byte header for minutes while frames scroll
+        // past in Trace.
+        self.recorder.flush();
+
         if replay_done {
             self.measuring = false;
             self.recorder.close();

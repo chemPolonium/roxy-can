@@ -142,6 +142,12 @@ impl AscWriter {
         )
     }
 
+    /// Pushes what the buffer holds to disk. A recording should grow while the
+    /// frames arrive, not only when it closes.
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.w.flush()
+    }
+
     pub fn finish(mut self) -> std::io::Result<()> {
         writeln!(self.w, "End TriggerBlock")?;
         self.w.flush()

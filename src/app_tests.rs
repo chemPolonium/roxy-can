@@ -4540,6 +4540,41 @@ fn an_id_present_trigger_latches_and_can_stop_a_recording() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
+/// The record file grows while the measurement runs.
+///
+/// Everything used to wait for the buffer: the file appeared with its header and
+/// stayed that size until Stop, so on a bench doing ten frames a second a
+/// recording looked like it was not writing at all -- and a process that died
+/// took the whole session with it. The tail of every step now pushes what the
+/// step recorded down to disk, which is what this asserts: the frame is readable
+/// from the file while the recorder is still open.
+#[test]
+fn the_record_file_grows_before_anyone_presses_stop() {
+    let mut app = quiet_app();
+    let base = std::env::temp_dir().join("roxy_can_live_record.asc");
+    let _ = std::fs::remove_file(&base);
+    app.send(crate::bus::BusCommand::SetRecordPath(
+        base.to_string_lossy().into_owned(),
+    ));
+    app.recorder.recording = true;
+    app.recorder.open().unwrap();
+
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x100, 8, FrameFlags::NONE)],
+    );
+
+    let text = std::fs::read_to_string(&app.recorder.last_record).expect("on disk");
+    let frames = crate::log::asc::parse_asc(&text);
+    assert!(
+        frames.iter().any(|f| f.id == 0x100),
+        "the step's frames are already in the file: {text:?}"
+    );
+
+    app.recorder.close();
+    std::fs::remove_file(&app.recorder.last_record).ok();
+}
 /// The manual re-arm for appearance watches: the edge blanks the trace
 /// ring but leaves aggregates, spec memory and the recorder alone.
 #[test]
