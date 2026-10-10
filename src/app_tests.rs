@@ -10021,3 +10021,50 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     assert!(app.status.contains("FR0"), "{}", app.status);
     app.stop();
 }
+
+/// What starting the tool hands you: two windows, not six.
+///
+/// Statistics / Graphics / Data / State Tracker used to be created on every
+/// boot, so each one landed in every project file and each one came back after
+/// the user had removed it. They are added from Measurement Setup now.
+#[test]
+fn a_started_session_boots_with_trace_and_messages_only() {
+    let mut app = App::headless();
+    for kind in 0..6 {
+        match kind {
+            0 => app.trace_windows.clear(),
+            1 => app.msg_windows.clear(),
+            2 => app.stats_windows.clear(),
+            3 => app.graphics.clear(),
+            4 => app.data_windows.clear(),
+            _ => app.state_trackers.clear(),
+        }
+    }
+    app.seed_startup_windows(false);
+    assert_eq!(
+        (
+            app.trace_windows.len(),
+            app.msg_windows.len(),
+            app.stats_windows.len(),
+            app.graphics.len(),
+            app.data_windows.len(),
+            app.state_trackers.len()
+        ),
+        (1, 1, 0, 0, 0, 0),
+        "the product seeds the two windows an operator looks at first"
+    );
+    // The manual drive keeps one of each kind, which is what every suite in
+    // this file indexes by position.
+    app.seed_startup_windows(true);
+    assert_eq!(
+        (
+            app.trace_windows.len(),
+            app.stats_windows.len(),
+            app.graphics.len(),
+            app.data_windows.len(),
+            app.state_trackers.len()
+        ),
+        (2, 1, 1, 1, 1),
+        "the extra kinds arrive only on the full workspace"
+    );
+}

@@ -520,6 +520,7 @@ impl App {
         inbox_tx: std::sync::mpsc::Sender<crate::bus::BusCommand>,
         mail: crate::bus::SnapshotMailbox,
         knobs: std::sync::Arc<crate::core_loop::BusKnobs>,
+        every_window_kind: bool,
     ) -> Self {
         let mut app = App {
             drive,
@@ -644,18 +645,33 @@ impl App {
         // the thread (if any) exists, so the workspace baseline and the
         // first UI frame see the full bus, not an empty placeholder.
         app.read_snapshot();
-        app.new_trace_window();
-        app.new_msg_window();
-        app.new_stats_window();
-        app.new_graphics_window();
-        app.new_data_window();
-        app.new_state_window();
+        app.seed_startup_windows(every_window_kind);
         let mut first = app.desktop_snapshot();
         first.name = "Desktop 1".to_string();
         app.desktops = vec![first];
         app.active_desktop = 0;
         app.baseline = app.config_snapshot();
         app
+    }
+
+    /// The observer windows a session boots with: **Trace and Messages**, the two
+    /// an operator looks at first. Statistics / Graphics / Data / State Tracker
+    /// are one `+` in Measurement Setup away and are no longer handed to you
+    /// unasked -- they used to be six windows in every project, and every window
+    /// the workspace holds is a window the project file has to carry.
+    ///
+    /// `every_kind` is what the manual drive (tests, the headless CLI) passes to
+    /// keep one of each: those suites index each kind by position, and dock state
+    /// that never renders costs nothing.
+    pub(crate) fn seed_startup_windows(&mut self, every_kind: bool) {
+        self.new_trace_window();
+        self.new_msg_window();
+        if every_kind {
+            self.new_stats_window();
+            self.new_graphics_window();
+            self.new_data_window();
+            self.new_state_window();
+        }
     }
 
     /// The production drive: the core boots here, then moves to its own
@@ -668,7 +684,7 @@ impl App {
         let mut lane = crate::core_loop::CoreLoop::new(core, inbox_rx, mail.clone());
         lane.publish();
         crate::core_loop::spawn_lane(lane, knobs.clone());
-        Self::shell(CoreDrive::Threaded, inbox_tx, mail, knobs)
+        Self::shell(CoreDrive::Threaded, inbox_tx, mail, knobs, false)
     }
 
     /// The manual drive: the same booted core stays a plain value on this
@@ -681,7 +697,7 @@ impl App {
         let knobs = std::sync::Arc::new(crate::core_loop::BusKnobs::default());
         let mut lane = crate::core_loop::CoreLoop::new(core, inbox_rx, mail.clone());
         lane.publish();
-        Self::shell(CoreDrive::Manual(Box::new(lane)), inbox_tx, mail, knobs)
+        Self::shell(CoreDrive::Manual(Box::new(lane)), inbox_tx, mail, knobs, true)
     }
 
     pub fn now_us(&self) -> u64 {
