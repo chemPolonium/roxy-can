@@ -33,3 +33,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # FlexRay database parsing (FIBEX / AUTOSAR ARXML), namespaced XML without
 # a schema step -- the same parser roxy-fibex uses.
 roxmltree = "0.21"
+
+[build-dependencies]
+# build.rs puts roxy-can.ico into the exe's PE resources (Windows only).
+winresource = "0.1"

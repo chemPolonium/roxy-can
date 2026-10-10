@@ -16,6 +16,7 @@ mod export;
 mod fr_db;
 mod generator;
 mod hw;
+mod icon;
 mod load;
 mod log;
 mod node;
@@ -99,7 +100,8 @@ impl State {
                 .create_window(
                     Window::default_attributes()
                         .with_title("roxy-can")
-                        .with_inner_size(LogicalSize::new(1280.0, 800.0)),
+                        .with_inner_size(LogicalSize::new(1280.0, 800.0))
+                        .with_window_icon(crate::icon::window_icon()),
                 )
                 .unwrap(),
         );
