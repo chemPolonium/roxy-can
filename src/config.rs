@@ -1326,102 +1326,97 @@ impl Config {
                 srcs: t.srcs.into_iter().filter_map(value_src).collect(),
             });
         }
-        if !self.trace_windows.is_empty() {
-            app.trace_windows = self
-                .trace_windows
-                .into_iter()
-                .map(|w| TraceWin {
-                    name: w.name,
-                    opened: w.opened,
-                    scope: w.scope,
-                    manual: merge_picks(w.manual, w.fr_manual),
-                    filter: w.filter,
-                    dir: w.dir.min(2),
-                    dbc_only: w.dbc_only,
-                    payload: w.payload,
-                    flags_kind: w.flags_kind,
-                    time_from: w.time_from,
-                    time_to: w.time_to,
-                    filters_open: w.filters_open,
-                    fr_expand: w.fr_expand,
-                    mark_us: [None, None],
-                    pick: None,
-                    rows: std::collections::VecDeque::new(),
-                    rows_build: None,
-                    row_ends: Vec::new(),
-                    rows_sorted: false,
-                    shown_t_us: u64::MAX,
-                    shown_count: 0,
-                })
-                .collect();
-        }
-        if !self.msg_windows.is_empty() {
-            app.msg_windows = self
-                .msg_windows
-                .into_iter()
-                .map(|w| MsgWin {
-                    name: w.name,
-                    opened: w.opened,
-                    scope: w.scope,
-                    manual: merge_picks(w.manual, w.fr_manual),
-                    filter: w.filter,
-                    dbc_only: w.dbc_only,
-                    text_keys: Vec::new(),
-                    text_header: String::new(),
-                    text_rows: Vec::new(),
-                })
-                .collect();
-        }
-        if !self.stats_windows.is_empty() {
-            app.stats_windows = self
-                .stats_windows
-                .into_iter()
-                .map(|w| StatsWin {
-                    name: w.name,
-                    opened: w.opened,
-                    scope: w.scope,
-                    manual: merge_picks(w.manual, w.fr_manual),
-                    text_keys: Vec::new(),
-                    text_header: String::new(),
-                    text_rows: Vec::new(),
-                })
-                .collect();
-        }
-        if !self.graphics.is_empty() {
-            app.graphics = self
-                .graphics
-                .into_iter()
-                .map(|g| GraphicsWindow {
-                    name: g.name,
-                    signals: sig_keys(&g.signals),
-                    time_window_s: g.time_window_s.clamp(0.1, 3600.0),
-                    stacked: g.stacked,
-                    opened: g.opened,
-                    t_offset_s: 0.0,
-                    show_cursor: g.show_cursor,
-                    cursor_s: [None, None],
-                    cursor_drag: None,
-                    zoom_enabled: g.zoom_enabled,
-                    show_markers: g.show_markers,
-                    y_locks: HashMap::new(),
-                    legend_keys: Vec::new(),
-                    legend: Vec::new(),
-                })
-                .collect();
-        }
-        if !self.data_windows.is_empty() {
-            app.data_windows = self
-                .data_windows
-                .into_iter()
-                .map(|d| DataWindow {
-                    name: d.name,
-                    signals: sig_keys(&d.signals),
-                    opened: d.opened,
-                    text_keys: Vec::new(),
-                    text_cache: Vec::new(),
-                })
-                .collect();
-        }
+        // Every window kind is restored as the file states it -- an empty list
+        // means the project has none of that kind. These used to be skipped
+        // when the saved list was empty, which let the six windows a fresh
+        // session boots with (app.rs's `shell`) leak back into a project whose
+        // user had deleted them.
+        app.trace_windows = self
+            .trace_windows
+            .into_iter()
+            .map(|w| TraceWin {
+                name: w.name,
+                opened: w.opened,
+                scope: w.scope,
+                manual: merge_picks(w.manual, w.fr_manual),
+                filter: w.filter,
+                dir: w.dir.min(2),
+                dbc_only: w.dbc_only,
+                payload: w.payload,
+                flags_kind: w.flags_kind,
+                time_from: w.time_from,
+                time_to: w.time_to,
+                filters_open: w.filters_open,
+                fr_expand: w.fr_expand,
+                mark_us: [None, None],
+                pick: None,
+                rows: std::collections::VecDeque::new(),
+                rows_build: None,
+                row_ends: Vec::new(),
+                rows_sorted: false,
+                shown_t_us: u64::MAX,
+                shown_count: 0,
+            })
+            .collect();
+        app.msg_windows = self
+            .msg_windows
+            .into_iter()
+            .map(|w| MsgWin {
+                name: w.name,
+                opened: w.opened,
+                scope: w.scope,
+                manual: merge_picks(w.manual, w.fr_manual),
+                filter: w.filter,
+                dbc_only: w.dbc_only,
+                text_keys: Vec::new(),
+                text_header: String::new(),
+                text_rows: Vec::new(),
+            })
+            .collect();
+        app.stats_windows = self
+            .stats_windows
+            .into_iter()
+            .map(|w| StatsWin {
+                name: w.name,
+                opened: w.opened,
+                scope: w.scope,
+                manual: merge_picks(w.manual, w.fr_manual),
+                text_keys: Vec::new(),
+                text_header: String::new(),
+                text_rows: Vec::new(),
+            })
+            .collect();
+        app.graphics = self
+            .graphics
+            .into_iter()
+            .map(|g| GraphicsWindow {
+                name: g.name,
+                signals: sig_keys(&g.signals),
+                time_window_s: g.time_window_s.clamp(0.1, 3600.0),
+                stacked: g.stacked,
+                opened: g.opened,
+                t_offset_s: 0.0,
+                show_cursor: g.show_cursor,
+                cursor_s: [None, None],
+                cursor_drag: None,
+                zoom_enabled: g.zoom_enabled,
+                show_markers: g.show_markers,
+                y_locks: HashMap::new(),
+                legend_keys: Vec::new(),
+                legend: Vec::new(),
+            })
+            .collect();
+        app.data_windows = self
+            .data_windows
+            .into_iter()
+            .map(|d| DataWindow {
+                name: d.name,
+                signals: sig_keys(&d.signals),
+                opened: d.opened,
+                text_keys: Vec::new(),
+                text_cache: Vec::new(),
+            })
+            .collect();
         if !self.monitor_rows.is_empty() {
             app.monitor_rows = self
                 .monitor_rows
@@ -1437,50 +1432,48 @@ impl Config {
                 })
                 .collect();
         }
-        if !self.state_trackers.is_empty() {
-            app.state_trackers = self
-                .state_trackers
-                .into_iter()
-                .map(|w| {
-                    let signals = sig_keys(&w.signals);
-                    let mut rules = HashMap::new();
-                    let mut overrides = HashMap::new();
-                    for (s, cfg) in signals.iter().zip(&w.signals) {
-                        if let Some(r) = &cfg.state_rule {
-                            rules.insert(
-                                s.key.clone(),
-                                crate::observe::StateRule {
-                                    cuts: r.cuts.clone(),
-                                    names: r.names.clone(),
-                                    colors: r.colors.clone(),
-                                },
-                            );
-                        }
-                        if let Some(list) = &cfg.state_overrides {
-                            // The map keys by the value's normalized bits,
-                            // the same key the band view classifies with.
-                            let mut m = HashMap::new();
-                            for o in list {
-                                let q = o.value;
-                                let q = if q == 0.0 { 0.0 } else { q };
-                                m.insert(q.to_bits(), o.color);
-                            }
-                            overrides.insert(s.key.clone(), m);
-                        }
+        app.state_trackers = self
+            .state_trackers
+            .into_iter()
+            .map(|w| {
+                let signals = sig_keys(&w.signals);
+                let mut rules = HashMap::new();
+                let mut overrides = HashMap::new();
+                for (s, cfg) in signals.iter().zip(&w.signals) {
+                    if let Some(r) = &cfg.state_rule {
+                        rules.insert(
+                            s.key.clone(),
+                            crate::observe::StateRule {
+                                cuts: r.cuts.clone(),
+                                names: r.names.clone(),
+                                colors: r.colors.clone(),
+                            },
+                        );
                     }
-                    crate::observe::StateWin {
-                        name: w.name,
-                        opened: w.opened,
-                        signals,
-                        time_window_s: w.time_window_s,
-                        min_shown_ms: w.min_shown_ms,
-                        color_slots: HashMap::new(),
-                        rules,
-                        overrides,
+                    if let Some(list) = &cfg.state_overrides {
+                        // The map keys by the value's normalized bits,
+                        // the same key the band view classifies with.
+                        let mut m = HashMap::new();
+                        for o in list {
+                            let q = o.value;
+                            let q = if q == 0.0 { 0.0 } else { q };
+                            m.insert(q.to_bits(), o.color);
+                        }
+                        overrides.insert(s.key.clone(), m);
                     }
-                })
-                .collect();
-        }
+                }
+                crate::observe::StateWin {
+                    name: w.name,
+                    opened: w.opened,
+                    signals,
+                    time_window_s: w.time_window_s,
+                    min_shown_ms: w.min_shown_ms,
+                    color_slots: HashMap::new(),
+                    rules,
+                    overrides,
+                }
+            })
+            .collect();
         app.show_tx = self.show_tx;
         app.show_network = self.show_network;
         app.show_measurement = self.show_measurement;
@@ -1803,6 +1796,44 @@ mod tests {
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert_eq!(restored.channels.len(), app.channels.len());
+    }
+
+    /// A project with no analysis windows gets none back.
+    ///
+    /// The restore used to skip a saved list that was empty, so the six windows
+    /// a fresh session boots with reappeared in a project whose user had deleted
+    /// them -- "I kept one Trace, and Graphics came back too". `new_project`
+    /// also used to miss the State Tracker kind, which is why the empty
+    /// workspace here is built through that path.
+    #[test]
+    fn a_project_without_windows_restores_without_windows() {
+        let mut app = App::headless();
+        app.new_project();
+        assert!(
+            app.trace_windows.is_empty()
+                && app.msg_windows.is_empty()
+                && app.stats_windows.is_empty()
+                && app.graphics.is_empty()
+                && app.data_windows.is_empty()
+                && app.state_trackers.is_empty(),
+            "the new-project path empties every kind"
+        );
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+
+        assert!(restored.trace_windows.is_empty(), "no Trace came back");
+        assert!(restored.msg_windows.is_empty(), "no Messages came back");
+        assert!(restored.stats_windows.is_empty(), "no Statistics came back");
+        assert!(restored.graphics.is_empty(), "no Graphics came back");
+        assert!(restored.data_windows.is_empty(), "no Data came back");
+        assert!(
+            restored.state_trackers.is_empty(),
+            "no State Tracker came back"
+        );
     }
 
     /// A restored project gets back the generator entries it saved -- and only

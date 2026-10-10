@@ -287,6 +287,9 @@ impl App {
         self.stats_windows.clear();
         self.graphics.clear();
         self.data_windows.clear();
+        // The sixth kind the bootstrap opens. Missing it left a State Tracker
+        // window standing in every "new project".
+        self.state_trackers.clear();
         self.baseline = self.config_snapshot();
         if !self.default_layout.is_empty() {
             self.pending_layout = Some(self.default_layout.clone());
