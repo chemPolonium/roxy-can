@@ -4575,6 +4575,43 @@ fn the_record_file_grows_before_anyone_presses_stop() {
     app.recorder.close();
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
+
+/// Opening a recording never abandons the one that is open.
+///
+/// `Recorder::open` used to overwrite its own writer. Today no call path
+/// reaches it with a file open, but the cost of getting that wrong is silent:
+/// the abandoned BLF loses the objects still in its buffer and the abandoned ASC
+/// its trailer, and neither says anything.
+#[test]
+fn opening_a_second_recording_finishes_the_first_file() {
+    let dir = std::env::temp_dir();
+    let mut app = quiet_app();
+    app.recorder.record_path = dir.join("roxy_can_first").to_string_lossy().into_owned();
+    let first = app.recorder.open().expect("first opens");
+    app.recorder
+        .write(&rx_frame(10_000, 0x100, 8, FrameFlags::NONE));
+
+    app.recorder.record_path = dir.join("roxy_can_second").to_string_lossy().into_owned();
+    let second = app.recorder.open().expect("second opens");
+    assert_ne!(first, second, "the two files are two files");
+
+    let text = std::fs::read_to_string(&first).expect("the first is on disk");
+    assert!(
+        text.contains("End TriggerBlock"),
+        "the first file was closed, not dropped: {text:?}"
+    );
+    assert!(
+        crate::log::asc::parse_asc(&text)
+            .iter()
+            .any(|f| f.id == 0x100),
+        "and it kept the frame: {text:?}"
+    );
+
+    app.recorder.close();
+    std::fs::remove_file(&first).ok();
+    std::fs::remove_file(&second).ok();
+}
+
 /// The manual re-arm for appearance watches: the edge blanks the trace
 /// ring but leaves aggregates, spec memory and the recorder alone.
 #[test]

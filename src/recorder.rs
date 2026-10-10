@@ -145,6 +145,12 @@ impl Recorder {
     /// anything else records ASC as before. Returns the opened path, or
     /// the error text for the status line.
     pub fn open(&mut self) -> Result<String, String> {
+        // Never abandon a live file. Nothing on today's call paths gets here
+        // with a writer still open -- a start closes first, and the checkbox and
+        // the trigger action are exclusive -- but "the caller remembered to
+        // close" is not an assumption this type should carry: an abandoned BLF
+        // loses its buffered objects and an abandoned ASC its trailer.
+        self.close();
         let b = self.record_path.trim();
         let lower = b.to_ascii_lowercase();
         let (blf, cut) = if lower.ends_with(".blf") {

@@ -1079,6 +1079,22 @@ impl BlfWriter {
     }
 }
 
+/// `finish` consumes the writer, so any path that drops one without calling it
+/// -- a replaced recorder, an early `return`, a panic unwinding past the core
+/// loop -- would otherwise discard whatever is still in `pending`. The objects
+/// that made it to disk are already readable (each container patches the
+/// header), but the ones buffered since the last container should not vanish
+/// just because nobody called the closing function.
+impl Drop for BlfWriter {
+    fn drop(&mut self) {
+        // Unconditional: this is the last chance, and the interval that keeps a
+        // running recording from shattering into tiny containers is pointless
+        // here. `finish` empties `pending` first, so the normal path writes
+        // nothing twice.
+        self.flush_container();
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1282,6 +1298,38 @@ pub(crate) mod tests {
             u32_at(&bytes, HDR_OBJECT_COUNT),
             1,
             "the flush is not counted twice"
+        );
+    }
+
+    /// A writer that is dropped without `finish` loses nothing that arrived.
+    ///
+    /// `finish` consumes the writer, so every path that abandons one -- a
+    /// replaced recorder, an early return, a panic unwinding past the core loop
+    /// -- used to discard whatever was buffered since the last container. On a
+    /// quiet bench that window is the whole recording: the container threshold
+    /// is 128 KiB of objects and the flush interval is a second.
+    #[test]
+    fn dropping_the_writer_loses_no_buffered_objects() {
+        let path = std::env::temp_dir().join("roxy_can_writer_drop.blf");
+        {
+            let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
+            w.write(&CanFrame {
+                t_us: 1_000,
+                channel: 0,
+                id: 0x100,
+                extended: false,
+                len: 8,
+                data: [0x22; MAX_CAN_FD_LEN],
+                dir: Direction::Rx,
+                flags: FrameFlags::NONE,
+            });
+            // No flush, no finish -- the flush interval has not even elapsed.
+        }
+        let mut stream = BlfStream::open(&path).expect("a dropped writer's file parses");
+        assert_eq!(
+            stream.next_frame().map(|f| f.id),
+            Some(0x100),
+            "the drop wrote out what was buffered"
         );
     }
 
