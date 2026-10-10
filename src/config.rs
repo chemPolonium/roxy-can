@@ -1285,27 +1285,21 @@ impl Config {
             // Databases were already loaded with their full attach lists
             // above; no second pass needed.
         }
-        // The generator is rebuilt from the (possibly new) DBCs, then the
-        // saved per-message state is overlaid.
+        // Whatever the fresh app or the loaded databases put in the generator
+        // goes, and the project's own entries come back in its place.
         let stale: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
         for (ch, id) in stale {
             app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
         }
-        let ids: Vec<(u8, u32)> = app
-            .snap
-            .channels
-            .iter()
-            .enumerate()
-            .flat_map(|(ch, c)| {
-                c.dbc
-                    .as_ref()
-                    .map(|db| db.order.iter().map(move |&(id, _)| (ch as u8, id)))
-                    .into_iter()
-                    .flatten()
-            })
-            .collect();
-        for (ch, id) in ids {
-            app.add_tx(ch, id);
+        // The saved entries, and only those. This used to add a row for **every
+        // message in every loaded database** ("rebuild from the DBCs, then
+        // overlay"), because `set_entry_config` only edits an entry that already
+        // exists -- so opening a project filled the panel with the whole
+        // database, including the entries the user had deleted before saving.
+        // A message the databases no longer declare keeps its row on purpose:
+        // the generator has always accepted an entry the database does not know.
+        for t in &self.tx {
+            app.add_tx(t.channel, t.id);
         }
         app.settle();
         for t in self.tx {
@@ -1809,6 +1803,41 @@ mod tests {
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert_eq!(restored.channels.len(), app.channels.len());
+    }
+
+    /// A restored project gets back the generator entries it saved -- and only
+    /// those.
+    ///
+    /// The restore used to rebuild the generator from the databases' own message
+    /// list, so opening a project added a row for every message in every attached
+    /// DBC: delete entries, save, reopen, and the node's whole transmit list is
+    /// back as inactive rows nobody asked for.
+    #[test]
+    fn a_restored_project_keeps_just_its_own_generator_entries() {
+        let mut app = App::headless();
+        let all: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
+        assert!(
+            all.len() > 2,
+            "the default project ships several entries to delete from"
+        );
+        for (ch, id) in all.iter().skip(2) {
+            app.send(crate::bus::BusCommand::RemoveEntry { ch: *ch, id: *id });
+        }
+        app.settle();
+        let saved: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
+        assert_eq!(saved.len(), 2, "the two kept entries");
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+
+        let back: Vec<(u8, u32)> = restored.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
+        assert_eq!(
+            back, saved,
+            "the project's own entries came back, nothing else was added"
+        );
     }
 
     /// A FlexRay 路 name is the user's opinion, so it survives a save the way a
