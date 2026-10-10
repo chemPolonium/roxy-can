@@ -460,8 +460,15 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
 
     // Horizontal scrollbar: a long signal name extends the rows past the
     // panel instead of running under the right-side widgets.
-    ui.child_window("sig_panel")
+    //
+    // RESIZE_X makes the panel's right border draggable -- ImGui's own resize
+    // affordance, so the operator decides how much of a name fits and the width
+    // is remembered with the rest of the layout (the ini blob the project
+    // carries). The size below is then only the first-ever value. The id is
+    // per window so two Graphics windows can be widened differently.
+    ui.child_window(format!("sig_panel{i}"))
         .size([PANEL_W, avail[1]])
+        .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
         .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
         .build(ui, || left_panel(app, ui, i));
 

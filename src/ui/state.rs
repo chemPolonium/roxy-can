@@ -480,6 +480,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let avail = ui.content_region_avail();
     ui.child_window(format!("st_panel{i}"))
         .size([PANEL_W, avail[1]])
+        .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
         .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
         .build(ui, || {
             ui.text("Tracked signals");

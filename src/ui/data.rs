@@ -42,8 +42,12 @@ pub fn render(app: &mut App, ui: &Ui) {
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
     let avail = ui.content_region_avail();
 
-    ui.child_window("sig_panel")
+    // The same draggable split as the Graphics window: the panel's right border
+    // resizes it, and the width is remembered with the layout. Per-window id so
+    // two Data windows can differ.
+    ui.child_window(format!("data_sig_panel{i}"))
         .size([PANEL_W, avail[1]])
+        .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
         .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
         .build(ui, || left_panel(app, ui, i));
 
