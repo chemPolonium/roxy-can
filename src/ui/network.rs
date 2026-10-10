@@ -441,12 +441,19 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
 
                 // 左右分栏：左边树形拓扑，右边所选节点的详情。两栏各自
-                // 滚动——树的长度与详情的长度互不挤占。宽度按树里最长的
-                // 一行取（DBC 节点名与 FlexRay 的 cluster 标题同一量级）。
+                // 滚动——树的长度与详情的长度互不挤占。
+                //
+                // RESIZE_X makes the tree's right border draggable (ImGui's own
+                // affordance, cursor turns into ↔), so a long node or cluster
+                // name is the operator's to make room for; the width rides in the
+                // project's layout. BORDERS stays because ImGui only draws the
+                // persistent resize edge for a child that has one -- `border(true)`
+                // and `child_flags` write the same field, so they are set here
+                // together rather than chained.
                 const TREE_W: f32 = 320.0;
                 ui.child_window("net_tree")
                     .size([TREE_W, 0.0])
-                    .border(true)
+                    .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
                     .build(ui, || {
                         let mut flat_base = 0usize;
                         for (ch, infos) in dbc_nodes.iter().enumerate() {
