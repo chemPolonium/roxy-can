@@ -286,14 +286,16 @@ pub fn render(app: &mut App, ui: &Ui) {
             // a control that does nothing.
             if matches!(app.snap.mode, Mode::Replay) {
                 ui.same_line();
-                let labels = ["0.5x", "1x", "2x", "4x", "∞"];
-                let mut pick = REPLAY_SPEEDS
-                    .iter()
-                    .position(|s| *s == app.replay_speed || (*s - app.replay_speed).abs() < 1e-9)
-                    .unwrap_or(1);
-                ui.set_next_item_width(64.0);
-                if ui.combo_simple_string("##speed", &mut pick, &labels) {
-                    app.set_replay_speed(REPLAY_SPEEDS[pick]);
+                // 列表里永远有当前在跑的那一档：命令行 `--speed` 给的是任意正数，
+                // 阶梯上没有它时旧写法一律显示成 1x——屏幕说 1x，总线却跑得快得多。
+                let (vals, labels) = speed_choices(app.replay_speed);
+                let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                let mut pick = speed_position(&vals, app.replay_speed);
+                // 框宽跟着要显示的那一行走：`25x` 在 64 px 里放不下，而这串数字
+                // 是屏幕上唯一说清当前倍速的地方。
+                ui.set_next_item_width(crate::ui::hint_width(ui, &labels[pick], 64.0));
+                if ui.combo_simple_string("##speed", &mut pick, &refs) {
+                    app.set_replay_speed(vals[pick.min(vals.len() - 1)]);
                 }
                 if ui.is_item_hovered() {
                     ui.tooltip_text("回放倍速：∞ = as fast as possible（不限速，观测器照常逐批刷新）");
@@ -440,4 +442,56 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
             }
         });
+}
+
+/// 倍速下拉框的列表：固定阶梯，再加上当前在跑而不属于阶梯的那些
+/// （命令行 `--speed` 可以给任意正数）。当前值折进列表，而不是把它"修"成
+/// 相近的一档——比特率那条规则在这儿同样成立。
+fn speed_choices(current: f64) -> (Vec<f64>, Vec<String>) {
+    let mut vals: Vec<f64> = REPLAY_SPEEDS.to_vec();
+    if speed_position(&vals, current) >= vals.len() {
+        vals.push(current);
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    let labels = vals.iter().map(|s| speed_label(*s)).collect();
+    (vals, labels)
+}
+
+/// 当前倍速在列表里的位置；不在表上时给 `vals.len()`，由调用方决定怎么办。
+fn speed_position(vals: &[f64], current: f64) -> usize {
+    vals.iter()
+        .position(|s| *s == current || (*s - current).abs() < 1e-9)
+        .unwrap_or(vals.len())
+}
+
+/// ∞ 就印 ∞：`format!("{:e}")` 会写成 `1.000000einf`，看着像坏了。
+fn speed_label(s: f64) -> String {
+    if s.is_infinite() {
+        "∞".to_string()
+    } else {
+        format!("{s}x")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_ladder_lists_itself_and_prints_infinity_as_is() {
+        let (vals, labels) = speed_choices(2.0);
+        assert_eq!(vals, REPLAY_SPEEDS.to_vec());
+        assert_eq!(labels, ["0.5x", "1x", "2x", "4x", "∞"]);
+        assert_eq!(speed_position(&vals, f64::INFINITY), 4, "∞ 认得自己");
+    }
+
+    /// 命令行 `--speed 25` 给的值以前显示成 1x，而总线在 25 倍速上跑。
+    #[test]
+    fn an_off_ladder_speed_gets_its_own_row_and_its_own_label() {
+        let (vals, labels) = speed_choices(25.0);
+        assert_eq!(vals, [0.5, 1.0, 2.0, 4.0, 25.0, f64::INFINITY]);
+        let at = speed_position(&vals, 25.0);
+        assert_eq!(at, 4);
+        assert_eq!(labels[at], "25x");
+    }
 }
