@@ -104,6 +104,11 @@ fn ten_default() -> u32 {
     10
 }
 
+/// 旧版工程文件里 ∞ 的替身：`serde_json` 写不出一个无穷大的数，当时存的是
+/// 这个数。阶梯里没有 100 这一档，`--speed` 也不落进工程文件，所以文件里
+/// 看到它只有这一个意思——那份工程存的是 as-fast-as-possible。
+const LEGACY_FASTEST_SPEED: f64 = 100.0;
+
 fn trace_limit_default() -> usize {
     crate::app::TRACE_LIMIT
 }
@@ -684,8 +689,13 @@ pub struct Config {
     pub show_sysvars: bool,
     #[serde(default = "true_default")]
     pub show_write: bool,
+    /// 回放倍速。`∞`（as-fast-as-possible）在 JSON 里写不出一个数，所以那一档
+    /// 记在 `replay_fastest` 上，这个数只在有限倍速时有意义。
     #[serde(default = "one_default")]
     pub replay_speed: f64,
+    /// 上一档的"是不是 ∞"。缺省 false，所以旧工程文件照原样读。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replay_fastest: bool,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
     /// frame rate.
     #[serde(default = "ten_default")]
@@ -911,12 +921,12 @@ impl Config {
             show_id_filter: app.show_id_filter,
             show_sysvars: app.show_sysvars,
             show_write: app.show_write,
-            // "As fast as possible" (infinity) cannot serialize; it
-            // persists as the ladder's fastest finite notch.
+            // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
+            replay_fastest: !app.replay_speed.is_finite(),
             replay_speed: if app.replay_speed.is_finite() {
                 app.replay_speed
             } else {
-                100.0
+                1.0
             },
             text_rate_hz: app.text_rate_hz,
             trace_limit: app.trace_limit,
@@ -1579,7 +1589,15 @@ impl Config {
         app.trig_draft = None;
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
-        app.replay_speed = self.replay_speed.clamp(0.01, 100.0);
+        app.replay_speed = if self.replay_fastest {
+            f64::INFINITY
+        } else if (self.replay_speed - LEGACY_FASTEST_SPEED).abs() < 1e-9 {
+            // 老工程文件里 ∞ 存的就是 100.0（那时写不出 inf）。照 ∞ 认回来，
+            // 别把用户选的 as-fast-as-possible 悄悄改成 100 倍。
+            f64::INFINITY
+        } else {
+            self.replay_speed.clamp(0.01, 100.0)
+        };
         // The FlexRay descriptions: each bus's file is parsed back into that
         // bus's database so a FlexRay replay decodes against the same network.
         // A file that moved or broke is reported, not fatal.
@@ -2865,5 +2883,45 @@ mod tests {
             leftover.snap.replay_map.is_empty(),
             "文件没写就是没有映射，不是留着上一个工程的"
         );
+    }
+
+    /// ∞ 存回来还得是 ∞。JSON 写不出一个无穷大的数，以前工程里存的是
+    /// `100.0` 这个替身：重开工程倍速悄悄变成 100 倍，而下拉框上根本没有
+    /// 100 这一档，于是显示成 1x —— 屏幕说 1x，日志在飞快跑。
+    #[test]
+    fn as_fast_as_possible_survives_a_project_round_trip() {
+        let mut app = App::headless();
+        app.replay_speed = f64::INFINITY;
+        let cfg = Config::from_app(&app, None);
+        assert!(cfg.replay_fastest, "∞ 记在开关上，不记在数上");
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"replay_fastest\":true"));
+
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .expect("a project carrying the flag loads")
+            .apply(&mut restored);
+        assert_eq!(restored.replay_speed, f64::INFINITY);
+
+        // 老文件：只有 `"replay_speed": 100.0`，没有这个开关。
+        let mut from_old = App::headless();
+        serde_json::from_str::<Config>("{\"replay_speed\":100.0}")
+            .expect("an old project file loads")
+            .apply(&mut from_old);
+        assert_eq!(
+            from_old.replay_speed, f64::INFINITY,
+            "文件里的 100.0 就是当年的 ∞"
+        );
+
+        // 正常倍速不受牵连，也不该多出这一项。
+        let mut finite = App::headless();
+        finite.replay_speed = 4.0;
+        let json = serde_json::to_string(&Config::from_app(&finite, None)).unwrap();
+        assert!(!json.contains("replay_fastest"), "没到 ∞ 就不写这一项");
+        let mut back = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut back);
+        assert_eq!(back.replay_speed, 4.0);
     }
 }
