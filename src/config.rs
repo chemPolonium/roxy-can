@@ -654,6 +654,11 @@ pub struct Config {
     /// default, so an older project file reads unchanged.
     #[serde(default)]
     pub fr_names: Vec<(u8, String)>,
+    /// 回放通道映射：日志里的通道编号 → 本工程的第几路。日志只记编号，而那是
+    /// 录它的那个人工程里的编号，所以这层对应关系属于工程。缺省（没有这一项，
+    /// 或空表）= 按编号原样用，旧工程读进来行为不变。
+    #[serde(default, skip_serializing_if = "crate::replay_map::ReplayMap::is_empty")]
+    pub replay_map: crate::replay_map::ReplayMap,
     /// Legacy: the single description file from before FlexRay got a bus
     /// index. It loads as bus 0, which is the only bus a project of that
     /// shape could have watched; new files write `fr_buses` and drop this.
@@ -892,6 +897,7 @@ impl Config {
                 .iter()
                 .map(|(bus, name)| (*bus, name.clone()))
                 .collect(),
+            replay_map: app.snap.replay_map.clone(),
             // Written only by the legacy loader; a save drops it in favour of
             // `fr_buses` above.
             fr_fibex: None,
@@ -1608,6 +1614,9 @@ impl Config {
         for (bus, name) in &self.fr_names {
             app.set_flexray_name(*bus, name);
         }
+        // 回放映射整张交回核心，空表也交——工程文件没写这一项就该把上一份工程
+        // 留下的映射清掉，和窗口、生成器条目同一条规则：文件说什么就恢复什么。
+        app.set_replay_map(self.replay_map.clone());
         // The descriptions move to the core with the rest of the restored bus
         // state, so a replay or a watch attach finds them where the user left
         // them -- no lazy re-push at the moment of use.
@@ -2810,5 +2819,51 @@ mod tests {
         assert!(back.layout.contains("[Docking][Data]"));
         assert_eq!(back.project, None);
         assert_eq!(back.config.channels.len(), app.channels.len());
+    }
+
+    /// 回放通道映射随工程存：日志里只有通道编号，那是录它的那个人工程里的
+    /// 编号，同一个工程下次打开还是这套对应关系。
+    #[test]
+    fn the_replay_channel_map_travels_with_the_project() {
+        use crate::replay_map::{LogBusKind, ReplayMap};
+        let mut app = App::headless();
+        let mut map = ReplayMap::default();
+        map.set(LogBusKind::Can, 1, Some(0));
+        map.set(LogBusKind::Fr, 2, None);
+        app.set_replay_map(map.clone());
+        app.settle();
+        assert_eq!(app.snap.replay_map, map);
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .expect("a project carrying the map loads")
+            .apply(&mut restored);
+        restored.settle();
+        assert_eq!(
+            restored.snap.replay_map, map,
+            "同一套对应关系回来了，包括那条不回放"
+        );
+
+        // 没配过映射的工程里不该多出这一项。
+        let clean = serde_json::to_value(Config::from_app(&App::headless(), None)).unwrap();
+        assert!(
+            clean.get("replay_map").is_none(),
+            "一条映射都没有时不写这一项"
+        );
+
+        // 旧工程文件里没有这一项 —— 读成"没有映射"，并且把上一份工程留在
+        // 核心里的那张表清掉，与窗口、生成器条目同一条规则。
+        let mut leftover = App::headless();
+        leftover.set_replay_map(map);
+        leftover.settle();
+        serde_json::from_str::<Config>("{}")
+            .expect("a project file without the key loads")
+            .apply(&mut leftover);
+        leftover.settle();
+        assert!(
+            leftover.snap.replay_map.is_empty(),
+            "文件没写就是没有映射，不是留着上一个工程的"
+        );
     }
 }

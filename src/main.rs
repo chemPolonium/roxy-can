@@ -24,6 +24,7 @@ mod observe;
 mod profile;
 mod project;
 mod recorder;
+mod replay_map;
 mod script;
 mod sim;
 mod source;

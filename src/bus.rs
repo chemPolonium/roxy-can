@@ -312,6 +312,11 @@ pub enum BusCommand {
         path: String,
         speed: f64,
     },
+    /// 整张回放通道映射：日志里的通道编号 → 本工程的第几路（`None` = 那一路
+    /// 不回放）。一次给全表而不是给一行，是为了让"工程文件说什么就恢复什么"
+    /// 这条规则成立——一个没有映射的工程必须能把上一份工程留下的映射清掉。
+    /// 正在回放时下一条命令被抽干就生效，已经进环的帧不动。
+    SetReplayMap(crate::replay_map::ReplayMap),
     /// Static per-bus declarations from the Buses window / project
     /// restore: rename, bitrate figures, the DBC path (without loading
     /// it -- pair with `LoadDbc`), or the node-role map.
@@ -666,6 +671,13 @@ pub struct Snapshot {
     /// Replay playhead and log length in µs, when a log with a known
     /// position is loaded.
     pub replay: Option<(u64, u64)>,
+    /// 当前生效的回放通道映射：日志里的通道编号 → 本工程的第几路。
+    pub replay_map: crate::replay_map::ReplayMap,
+    /// 本次回放见过的文件 CAN 通道与各自的条数，按**文件里的**编号升序。
+    /// Buses 窗口的映射表用它说出"这个文件里有这几路"。
+    pub replay_census_can: Vec<(u8, u64)>,
+    /// 同上，FlexRay 的 cluster 号。
+    pub replay_census_fr: Vec<(u8, u64)>,
     /// How many buses exist (frontends key window state off this).
     pub channel_count: usize,
     /// Commands the core has processed; a threaded frontend watches it to
@@ -971,6 +983,23 @@ pub struct BusCore {
     /// [`Self::replay_ids`] exists: a FlexRay entry filling a slot the replayed
     /// log fills too would put two senders of one signal into every view.
     pub(crate) replay_fr_ids: std::collections::HashSet<(u8, u16)>,
+    /// What the loaded log carries in the **log's own** numbering.
+    /// `Self::replay_ids` is derived from it plus the current mapping, and the
+    /// derivation re-runs whenever either changes -- re-reading the whole file
+    /// to recompute a set we already have is not a price worth paying for a
+    /// mapping edit.
+    pub(crate) log_ids_file: std::collections::HashSet<(u8, u32)>,
+    /// The same, for FlexRay slots.
+    pub(crate) log_fr_ids_file: std::collections::HashSet<(u8, u16)>,
+    /// 日志里的通道编号 → 本工程的第几路。别人的日志记的是他工程的编号，
+    /// 而文件里根本没有总线名可对照。
+    pub(crate) replay_map: crate::replay_map::ReplayMap,
+    /// 本次回放实际见过的文件通道与条数（文件编号）。Buses 窗口的映射表靠它
+    /// 列出"这个文件里有这几路"，所以不必为数通道把文件再读一遍。
+    pub(crate) log_census: crate::replay_map::LogCensus,
+    /// 已经报过"这一路没有对应的总线"的文件通道：一句话只说一次，同一条规矩
+    /// 适用于发送被线路拒绝的总线（一秒几千条会把状态行埋掉）。
+    pub(crate) drop_news_done: std::collections::HashSet<u8>,
     pub(crate) channels: Vec<Channel>,
     /// Counter for naming new buses (CAN3, CAN4, ...).
     pub(crate) bus_counter: usize,
@@ -1149,6 +1178,11 @@ impl BusCore {
             source: Box::new(crate::source::virtual_source::VirtualSource::new()),
             replay_ids: std::collections::HashSet::new(),
             replay_fr_ids: std::collections::HashSet::new(),
+            log_ids_file: std::collections::HashSet::new(),
+            log_fr_ids_file: std::collections::HashSet::new(),
+            replay_map: crate::replay_map::ReplayMap::default(),
+            log_census: crate::replay_map::LogCensus::default(),
+            drop_news_done: std::collections::HashSet::new(),
             channels: Vec::new(),
             bus_counter: 2,
             tx_list: Vec::new(),
@@ -1577,6 +1611,10 @@ impl BusCore {
                 self.subs.remove(&key);
             }
             BusCommand::StartReplay { path, speed } => self.start_replay(&path, speed, status),
+            BusCommand::SetReplayMap(map) => {
+                self.replay_map = map;
+                self.remap_log_ids();
+            }
             BusCommand::SetChannelConfig {
                 ch,
                 name,
@@ -2558,6 +2596,13 @@ impl BusCore {
             },
             sub_count: self.subs.len(),
             replay,
+            replay_map: self.replay_map.clone(),
+            replay_census_can: self
+                .log_census
+                .rows(crate::replay_map::LogBusKind::Can),
+            replay_census_fr: self
+                .log_census
+                .rows(crate::replay_map::LogBusKind::Fr),
             channel_count: self.channels.len(),
             laps: self.laps,
             bus_counter: self.bus_counter,
@@ -2711,6 +2756,32 @@ impl BusCore {
         }
     }
 
+    /// 按当前映射把"日志里有什么"换成工程编号，供生成器静音那两份表用。
+    /// 不回放的那些（`target` 给 `None`）不进表：它们的帧也进不了环，留着
+    /// 只会让一个条目莫名被静音。
+    fn remap_log_ids(&mut self) {
+        use crate::replay_map::LogBusKind;
+        let map = &self.replay_map;
+        let ids: std::collections::HashSet<(u8, u32)> = self
+            .log_ids_file
+            .iter()
+            .filter_map(|(ch, id)| {
+                map.target(LogBusKind::Can, *ch)
+                    .map(|t| (t, *id))
+            })
+            .collect();
+        let fr: std::collections::HashSet<(u8, u16)> = self
+            .log_fr_ids_file
+            .iter()
+            .filter_map(|(bus, slot)| {
+                map.target(LogBusKind::Fr, *bus)
+                    .map(|t| (t, *slot))
+            })
+            .collect();
+        self.replay_ids = ids;
+        self.replay_fr_ids = fr;
+    }
+
     /// Opens `path` and starts replaying it. File open and the silence-set
     /// scan are the two deliberate blocking costs of a replay start; they
     /// run once per start, never per frame.
@@ -2726,8 +2797,11 @@ impl BusCore {
         // stream, so the generators can stand down for the traffic the replay
         // itself covers. Draining here, never per frame.
         let (ids, fr_ids) = scan_log_ids(std::path::Path::new(path)).unwrap_or_default();
-        self.replay_ids = ids;
-        self.replay_fr_ids = fr_ids;
+        // 两份集合存的是**文件自己的**编号；喂给生成器静音的那两份按当前映射
+        // 推导，于是中途改映射只重算集合，不必把整个文件再读一遍。
+        self.log_ids_file = ids;
+        self.log_fr_ids_file = fr_ids;
+        self.remap_log_ids();
         let info = stream.describe();
         self.recorder.close();
         // Replay just re-emits an existing log; recording it would only
@@ -3178,6 +3252,13 @@ impl BusCore {
                 t.channel -= 1;
             }
         }
+        // 回放映射是"文件编号 → 第几路"，路是这张表里的位置，所以跟着挪：
+        // 指到被删那一路的变成「不回放」，指到它后面的往前一号。留下行而不是
+        // 悄悄取消，映射表就会自己说出这一路现在不回放——被删掉的路不该让
+        // 那些帧回到"原样用"上去猜。
+        self.replay_map
+            .shift_targets(crate::replay_map::LogBusKind::Can, &remap);
+        self.remap_log_ids();
         // The hardware attachment of the removed bus closes with it; the
         // other buses' attachments shift down with their bus.
         self.hw.remove_bus(ch);
@@ -3277,7 +3358,13 @@ impl BusCore {
         // sending for it, both go with it.
         self.fr_tx_list.retain(|t| t.bus != bus);
         self.injected_fr.retain(|(b, _)| *b != bus);
-        self.replay_fr_ids.retain(|(b, _)| *b != bus);
+        // 这路的编号不会有人接替（删一路不把别的前挪），所以指向它的映射
+        // 只是变成「不回放」；静音集合按新映射重算，不留这路的影子。
+        self.replay_map
+            .shift_targets(crate::replay_map::LogBusKind::Fr, |c| {
+                if c == bus { None } else { Some(c) }
+            });
+        self.remap_log_ids();
         self.subs
             .retain(|k, _| !matches!(k, SigKey::Fr { bus: b, .. } if *b == bus));
         self.fr_trace.drop_bus(bus);
@@ -3720,6 +3807,11 @@ impl BusCore {
         self.frame_counter = 0;
         self.aggs.clear();
         self.fr_aggs.clear();
+        // 通道计数说的是"这一趟回放里日志带来了哪些路"，和 Trace 同一条命：
+        // 按下 Start 就该空着，等下一趟的帧重新数。配好的映射不在这里，
+        // 那是工程的决定。
+        self.log_census.clear();
+        self.drop_news_done.clear();
         for load in &mut self.bus_loads {
             load.clear();
         }
@@ -3931,6 +4023,56 @@ impl BusCore {
         // they skip the CAN pipeline and land in the FR ring directly.
         let mut fr_replay: Vec<crate::trace::FrRow> = Vec::new();
         self.source.poll_fr(now_us, &mut fr_replay);
+        // 日志的每条帧只带一个通道**编号**，那是录它的那个人工程里的编号，
+        // 文件里没有总线名可对照。所以在进环之前换成本工程的第几路，让解码、
+        // 负载、Trace、聚合看见的都是自己这几条路；对不上任何一路的不回放
+        // （规则在 `ReplayMap::can_channel`，映射表用的是同一个函数）。
+        // 计数按文件里的编号记，被挡掉的那些也记：Buses 的映射表就是靠它说出
+        // "这个文件里有这几路、各多少条"，不必把文件再读一遍。
+        if matches!(self.mode, Mode::Replay) {
+            use crate::replay_map::LogBusKind;
+            let map = &self.replay_map;
+            let census = &mut self.log_census;
+            let buses = self.channels.len();
+            let mut unaimed: Vec<u8> = Vec::new();
+            self.buf.retain_mut(|f| {
+                census.bump(LogBusKind::Can, f.channel);
+                match map.can_channel(f.channel, buses) {
+                    Some(t) => {
+                        f.channel = t;
+                        true
+                    }
+                    None => {
+                        if !unaimed.contains(&f.channel) {
+                            unaimed.push(f.channel);
+                        }
+                        false
+                    }
+                }
+            });
+            // FlexRay 一侧不给这样的兜底：一个没有定义的 cluster 号也能进环，
+            // Buses 窗口会为它列一行"日志里有这路流量"，那是有用的信息，
+            // 不是错位的编号。
+            fr_replay.retain_mut(|r| {
+                census.bump(LogBusKind::Fr, r.bus);
+                match map.target(LogBusKind::Fr, r.bus) {
+                    Some(t) => {
+                        r.bus = t;
+                        true
+                    }
+                    None => false,
+                }
+            });
+            // 有人被挡在门外就说一句。状态行只有一行，所以一个通道一趟一次。
+            for raw in unaimed {
+                if self.drop_news_done.insert(raw) {
+                    *status = format!(
+                        "日志的通道 {} 在本工程里没有对应的总线，先不回放；Buses 的「回放通道映射」能把它指到某一路",
+                        raw + 1
+                    );
+                }
+            }
+        }
         let fr_replayed = !fr_replay.is_empty();
         // Send-now requests are intents recorded by commands; building the
         // frames here stamps them with this step's clock, so a request that
@@ -5552,5 +5694,157 @@ mod tests {
             );
         }
         assert!(core.hw.fr_watches.is_empty(), "a refusal leaves no watch");
+    }
+
+    // ---- 回放通道映射 ----
+
+    /// 帧只带通道编号；`t_us = 0` 让第一次 step 就把它们发完。
+    fn frame_on(channel: u8, id: u32) -> crate::can::frame::CanFrame {
+        crate::can::frame::CanFrame {
+            t_us: 0,
+            channel,
+            id,
+            extended: false,
+            len: 8,
+            data: [0; crate::can::frame::MAX_CAN_FD_LEN],
+            dir: crate::can::frame::Direction::Rx,
+            flags: crate::can::frame::FrameFlags::NONE,
+        }
+    }
+
+    /// 一条总线、一段日志。日志自带的编号换成本工程的第几路，回放时钟照常推进。
+    fn replay_core(frames: Vec<crate::can::frame::CanFrame>, rows: Vec<crate::trace::FrRow>) -> BusCore {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        core.mode = Mode::Replay;
+        core.source = Box::new(crate::source::replay::ReplaySource::new(Box::new(
+            crate::log::vec_stream::VecStream::with_fr(frames, rows),
+        )));
+        core
+    }
+
+    /// 别人的日志里通道编号是他工程里的，文件里又不带总线名。编号在本工程
+    /// 对应不上一条路时不冒充"第 n 路"——那种行会让人以为总线对上了，
+    /// 而它其实挂的是别的描述文件。它停在映射表里，条数照算。
+    #[test]
+    fn a_log_channel_with_no_bus_here_is_not_replayed() {
+        let mut core = replay_core(vec![frame_on(0, 0x100), frame_on(1, 0x200)], Vec::new());
+        let mut status = String::new();
+        core.step_to(0, 0, 1, 1, &mut status);
+        core.publish_trace();
+        let snap = core.snapshot();
+        assert_eq!(snap.aggs.len(), 1, "只有能对上的一路进得来");
+        assert_eq!(snap.aggs[0].id, 0x100);
+        assert!(
+            status.contains("通道 2"),
+            "被挡在门外的那一路要说一句，不能只让人发现 Trace 少了东西: {status}"
+        );
+        assert_eq!(
+            snap.replay_census_can,
+            vec![(0, 1), (1, 1)],
+            "被挡掉的那一路在映射表里数得出来"
+        );
+    }
+
+    #[test]
+    fn pointing_a_log_channel_at_a_bus_replays_it_there() {
+        use crate::replay_map::LogBusKind;
+        let mut core = replay_core(vec![frame_on(0, 0x100), frame_on(1, 0x200)], Vec::new());
+        let mut map = crate::replay_map::ReplayMap::default();
+        map.set(LogBusKind::Can, 1, Some(0));
+        core.replay_map = map;
+        let mut status = String::new();
+        core.step_to(0, 0, 1, 1, &mut status);
+        core.publish_trace();
+        let snap = core.snapshot();
+        assert_eq!(snap.aggs.len(), 2, "两条都落在唯一的那一路上");
+        assert!(
+            snap.aggs.iter().all(|a| a.channel == 0),
+            "日志的第 2 路现在就是这里的第 1 路"
+        );
+        // 计数按文件里的编号记，映射改的是归属，不是"这条帧是谁"。
+        assert_eq!(snap.replay_census_can, vec![(0, 1), (1, 1)]);
+    }
+
+    /// 映射是回放中途也能改的：下一条命令被抽干，接下来的帧就按新表走。
+    #[test]
+    fn a_mapping_change_applies_to_the_frames_after_it() {
+        use crate::replay_map::LogBusKind;
+        let mut core = replay_core(Vec::new(), Vec::new());
+        let mut status = String::new();
+        let mut map = crate::replay_map::ReplayMap::default();
+        map.set(LogBusKind::Can, 1, Some(0));
+        core.handle(BusCommand::SetReplayMap(map), &mut status);
+        assert_eq!(core.replay_map.target(LogBusKind::Can, 1), Some(0));
+    }
+
+    /// 日志静音集合存的是文件编号，喂给生成器的那两份按映射推。改了映射
+    /// 不必把文件重读一遍——这是同一趟扫描的结果换一套编号而已。
+    #[test]
+    fn the_generator_mute_set_follows_the_map() {
+        use crate::replay_map::LogBusKind;
+        let mut core = BusCore::new(Vec::new());
+        core.log_ids_file = [(1u8, 0x100u32)].into_iter().collect();
+        core.log_fr_ids_file = [(2u8, 10u16)].into_iter().collect();
+        let mut map = crate::replay_map::ReplayMap::default();
+        map.set(LogBusKind::Can, 1, Some(0));
+        map.set(LogBusKind::Fr, 2, None);
+        core.replay_map = map;
+        core.remap_log_ids();
+        assert!(core.replay_ids.contains(&(0, 0x100)));
+        assert!(!core.replay_ids.contains(&(1, 0x100)), "按新编号静音");
+        assert!(
+            core.replay_fr_ids.is_empty(),
+            "不回放的那一路没有帧进环，条目也不该被静音"
+        );
+    }
+
+    #[test]
+    fn a_flexray_cluster_moves_onto_the_bus_the_operator_chose() {
+        use crate::replay_map::LogBusKind;
+        // `fr_row` 造的 bus 是 0；这里要的是"日志里第 1 号 cluster"。
+        let mut row = fr_row(0, 10);
+        row.bus = 1;
+        let mut core = replay_core(Vec::new(), vec![row]);
+        let mut map = crate::replay_map::ReplayMap::default();
+        map.set(LogBusKind::Fr, 1, Some(0));
+        core.replay_map = map;
+        let mut status = String::new();
+        core.step_to(0, 0, 1, 1, &mut status);
+        core.publish_trace();
+        core.publish_loads();
+        let snap = core.snapshot();
+        assert_eq!(snap.fr_trace.len(), 1, "指过来的 cluster 照样进环");
+        assert!(
+            snap.fr_loads.contains_key(&0),
+            "占用率算在被指过去的那一路上"
+        );
+        assert_eq!(
+            snap.replay_census_fr,
+            vec![(1, 1)],
+            "表上说的是日志里的编号，不是本工程的路"
+        );
+        assert!(!snap.fr_loads.contains_key(&1), "1 号那路没被凭空造出来");
+    }
+
+    /// CAN 的一路删掉，后面的往前挪：指到被删那一路的映射变成不回放，指到
+    /// 它后面的跟着挪一号。留着行，映射表就会自己说出少了哪一路。
+    #[test]
+    fn deleting_a_bus_re_aims_the_map_instead_of_silently_unsetting_it() {
+        use crate::replay_map::LogBusKind;
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        core.add_channel(&mut status);
+        core.add_channel(&mut status);
+        let mut map = crate::replay_map::ReplayMap::default();
+        map.set(LogBusKind::Can, 4, Some(1));
+        map.set(LogBusKind::Can, 5, Some(2));
+        core.replay_map = map;
+        // 删掉中间那一路（下标 1），第 3 路变成第 2 路。
+        core.remove_channel(1, &mut status);
+        assert_eq!(core.replay_map.target(LogBusKind::Can, 4), None);
+        assert_eq!(core.replay_map.target(LogBusKind::Can, 5), Some(1));
     }
 }

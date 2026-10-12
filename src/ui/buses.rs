@@ -100,6 +100,169 @@ fn ensure_fr_list(app: &mut App) -> Result<Vec<crate::hw::vector::ChannelInfo>, 
     })
 }
 
+/// 回放通道映射：日志里的通道编号 → 本工程的哪一路。
+///
+/// 行来自本次回放真正见过的编号（映射表因此不需要先把文件读第二遍来数通道），
+/// 再加上配过但这次没来过的——那是一份存进工程的选择，删掉就等于悄悄改回原样。
+/// 每一行改完整张表发回核心：正在回放时下一条命令被抽干就生效，已经进环的帧不动。
+fn replay_map_section(app: &mut App, ui: &Ui) {
+    use crate::replay_map::LogBusKind;
+
+    ui.separator();
+    ui.text("回放通道映射");
+    if ui.is_item_hovered() {
+        ui.tooltip_text("把日志里的通道编号指到本工程的哪一路；改完立即生效，随工程保存");
+    }
+
+    let map = app.snap.replay_map.clone();
+    let can_rows = merged_rows(
+        &app.snap.replay_census_can,
+        &map.configured(LogBusKind::Can),
+    );
+    let fr_rows = merged_rows(&app.snap.replay_census_fr, &map.configured(LogBusKind::Fr));
+    if can_rows.is_empty() && fr_rows.is_empty() {
+        ui.text_disabled("回放一个日志之后，这里列出日志里有哪几路通道。");
+        return;
+    }
+
+    // 读进自有值再画，理由与上面两张表一样：下面的下拉框要 `app` 独占。
+    let can_names: Vec<String> = app
+        .snap
+        .channels
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    let mut fr_buses: Vec<u8> = app.fr_buses.keys().copied().collect();
+    fr_buses.sort_unstable();
+    let fr_names: Vec<String> = fr_buses
+        .iter()
+        .map(|bus| app.fr_bus_name(*bus))
+        .collect();
+    let mut edited = map.clone();
+
+    // 一行一路。列就三样：日志里的编号、它带来了多少条、回放成哪一路——
+    // 第二个数字正是挑错路时的凭据（哪一路的条数像自己熟悉的那条业务）。
+    for (kind, rows, targets) in [
+        (LogBusKind::Can, &can_rows, &can_names),
+        (LogBusKind::Fr, &fr_rows, &fr_names),
+    ] {
+        let header = match kind {
+            LogBusKind::Can => "日志里的 CAN 通道",
+            LogBusKind::Fr => "日志里的 FlexRay 通道",
+        };
+        ui.text_disabled(header);
+        let opts = dear_imgui_rs::TableOptions::from(TableFlags::NONE)
+            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
+        let Some(_t) = ui.begin_table_with_flags(
+            match kind {
+                LogBusKind::Can => "replay_map_can",
+                LogBusKind::Fr => "replay_map_fr",
+            },
+            3,
+            opts,
+        ) else {
+            continue;
+        };
+        ui.table_setup_column_fixed_width("编号", TableColumnFlags::NONE, 120.0);
+        ui.table_setup_column_fixed_width("条数", TableColumnFlags::NONE, 90.0);
+        ui.table_setup_column_stretch_weight("回放成", TableColumnFlags::NONE, 1.0);
+        ui.table_headers_row();
+        for &(raw, count) in rows {
+            ui.table_next_row();
+            // 控件的身份是（哪一类总线, 编号）。两张表在同一个窗口里，而表格
+            // 不给单元格另加 ID 种子，只按编号 push 会让 CAN 的 0 号与 FlexRay
+            // 的 0 号撞成同一个控件。
+            let _id = ui.push_id(replay_row_key(kind, raw).as_str());
+            if !ui.table_next_column() {
+                continue;
+            }
+            // 编号按文件里印出来的那个数写：CAN 的日志从 1 起（内部存的是
+            // 起算后的下标），FlexRay 的 cluster 号与 Buses 表里 `#0` 同一套。
+            ui.text(match kind {
+                LogBusKind::Can => format!("通道 {}", raw + 1),
+                LogBusKind::Fr => format!("#{raw}"),
+            });
+            ui.table_next_column();
+            ui.text(count.to_string());
+            if ui.is_item_hovered() {
+                ui.tooltip_text("本次回放里这一路来了多少条；选了不回放的就是被挡掉的条数");
+            }
+            ui.table_next_column();
+            // 原样 → 本工程的某一路 → 不回放。第一项是"表里没这一行"，所以
+            // 选中它就等于取消这一行，以后加了新的一路还能自动接上。
+            let mut labels: Vec<String> = Vec::with_capacity(targets.len() + 2);
+            labels.push(match kind {
+                LogBusKind::Can => format!("原样（通道 {}）", raw + 1),
+                LogBusKind::Fr => format!("原样（#{raw}）"),
+            });
+            labels.extend(targets.iter().cloned());
+            labels.push("不回放".to_string());
+            let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+            // 当前值问的是核心会怎么做，不是表里写了什么：编号在本工程对不上
+            // 一路时核心就把它挡在门外，那一行在这里就该显示「不回放」。
+            let effective = match kind {
+                LogBusKind::Can => edited.can_channel(raw, can_names.len()),
+                LogBusKind::Fr => edited.target(LogBusKind::Fr, raw),
+            };
+            let mut pick = match effective {
+                None => labels.len() - 1,
+                Some(t) => match kind {
+                    LogBusKind::Can => t as usize + 1,
+                    LogBusKind::Fr => fr_buses
+                        .iter()
+                        .position(|b| *b == t)
+                        .map(|at| at + 1)
+                        .unwrap_or(0),
+                },
+            };
+            pick = pick.min(labels.len() - 1);
+            ui.set_next_item_width(-1.0);
+            if ui.combo_simple_string("##replaymap", &mut pick, &refs) {
+                let to = if pick == 0 {
+                    Some(raw)
+                } else if pick == labels.len() - 1 {
+                    None
+                } else {
+                    Some(match kind {
+                        LogBusKind::Can => (pick - 1) as u8,
+                        LogBusKind::Fr => fr_buses[pick - 1],
+                    })
+                };
+                edited.set(kind, raw, to);
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("这一路日志回放成工程的哪一路；不回放就不进 Trace");
+            }
+        }
+    }
+    if edited != map {
+        app.set_replay_map(edited);
+    }
+}
+
+/// 一行控件的身份：（哪一类总线, 日志里的编号）。两张表在同一个窗口里，
+/// 而表格不给单元格另加 ID 种子，只用编号会让 CAN 的 0 号与 FlexRay 的
+/// 0 号落在同一个控件上。
+pub(crate) fn replay_row_key(kind: crate::replay_map::LogBusKind, raw: u8) -> String {
+    match kind {
+        crate::replay_map::LogBusKind::Can => format!("c{raw}"),
+        crate::replay_map::LogBusKind::Fr => format!("f{raw}"),
+    }
+}
+
+/// 见过的编号（带条数）与配过的编号合一行列表，按编号升序。配过但这次没来的
+/// 条数印 0：行要在，人才改得回去。
+fn merged_rows(counts: &[(u8, u64)], configured: &[(u8, Option<u8>)]) -> Vec<(u8, u64)> {
+    let mut out: Vec<(u8, u64)> = counts.to_vec();
+    for (raw, _) in configured {
+        if !out.iter().any(|(seen, _)| seen == raw) {
+            out.push((*raw, 0));
+        }
+    }
+    out.sort_unstable_by_key(|(raw, _)| *raw);
+    out
+}
+
 fn content(app: &mut App, ui: &Ui) {
     if ui.button("+ Add bus") {
         app.add_channel();
@@ -625,4 +788,5 @@ fn content(app: &mut App, ui: &Ui) {
     if let Some((bus, channel_index)) = attach {
         app.attach_fr_watch_on(bus, channel_index);
     }
+    replay_map_section(app, ui);
 }
