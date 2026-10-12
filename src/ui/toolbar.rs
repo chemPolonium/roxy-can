@@ -417,6 +417,27 @@ pub fn render(app: &mut App, ui: &Ui) {
                     app.pick_log();
                 }
                 open.end();
+                ui.same_line();
+                // 按钮旁边是这一次回放要用的那份文件，选文件的依据得看得见。
+                // 取的就是 Play 的那份：加载过的日志，没有则上次录的那份。
+                // 名字长了会被窗口右缘裁掉，所以完整路径在 hover 里。
+                let (path, fallback) = if !app.log_path.trim().is_empty() {
+                    (app.log_path.clone(), false)
+                } else {
+                    (app.snap.last_record.clone(), true)
+                };
+                if !path.trim().is_empty() {
+                    ui.text_disabled(file_name(&path));
+                    if ui.is_item_hovered() {
+                        if fallback {
+                            ui.tooltip_text(format!(
+                                "{path}\n上次录的那份，没另选就直接回放它；Open Log 换一份"
+                            ));
+                        } else {
+                            ui.tooltip_text(path);
+                        }
+                    }
+                }
             }
         });
 }
