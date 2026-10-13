@@ -281,11 +281,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                 app.stop();
             }
             stop.end();
-            // The speed ladder drives only the replay clock -- VirtualSource
-            // ignores it -- so simulation mode hides it instead of offering
-            // a control that does nothing.
-            if matches!(app.snap.mode, Mode::Replay) {
-                ui.same_line();
+            // 倍速只管回放的时钟——VirtualSource 不认它——所以仿真模式下它是
+            // 灰的，而不是整格消失：和 `<<` / `>>` / Stop 一样常驻，位置不动，
+            // 选过的档位也一直看得见。
+            ui.same_line();
+            let speed_on = ui.begin_disabled_with_cond(!matches!(app.snap.mode, Mode::Replay));
+            {
                 // 列表里永远有当前在跑的那一档：命令行 `--speed` 给的是任意正数，
                 // 阶梯上没有它时旧写法一律显示成 1x——屏幕说 1x，总线却跑得快得多。
                 let (vals, labels) = speed_choices(app.replay_speed);
@@ -301,6 +302,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.tooltip_text("回放倍速：∞ = as fast as possible（不限速，观测器照常逐批刷新）");
                 }
             }
+            speed_on.end();
             vsep(ui);
             // CANoe-style bus mode: Simulated keeps the tool virtual even
             // when adapters are attached; Real bus connects them to the
