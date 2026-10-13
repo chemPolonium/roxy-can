@@ -282,10 +282,11 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             stop.end();
             // 倍速只管回放的时钟——VirtualSource 不认它——所以仿真模式下它是
-            // 灰的，而不是整格消失：和 `<<` / `>>` / Stop 一样常驻，位置不动，
-            // 选过的档位也一直看得见。
+            // 灰的，而不是整格消失：和 `<<` / `>>` / Stop 一样常驻，选过的档位
+            // 一直看得见。灰不灰看的是**选定的**模式：工具条切到 Replay 之后，
+            // 还没按 Play 就能先把倍速定下来（这个值本来就留给下一次回放）。
             ui.same_line();
-            let speed_on = ui.begin_disabled_with_cond(!matches!(app.snap.mode, Mode::Replay));
+            let speed_on = ui.begin_disabled_with_cond(!matches!(app.snap.run_mode, Mode::Replay));
             {
                 // 列表里永远有当前在跑的那一档：命令行 `--speed` 给的是任意正数，
                 // 阶梯上没有它时旧写法一律显示成 1x——屏幕说 1x，总线却跑得快得多。
