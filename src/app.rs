@@ -279,13 +279,12 @@ pub struct App {
     pub spec_tol_pct: u64,
     /// How many declared periods of silence count as a dropped message.
     pub spec_grace: u64,
-    pub symbol_search: String,
-    pub show_id_filter: bool,
+    /// The Message/Signal Selection popup's open flag, bound window and search
+    /// boxes (see [`crate::ui::idfilter::IdFilterView`]).
+    pub id_filter: crate::ui::idfilter::IdFilterView,
     /// The recording file format: 0 = ASC, 1 = BLF. The toolbar combo
     /// selects this; the recorder picks the backend by extension.
     pub record_format: usize,
-    pub id_filter_search: String,
-    pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
     /// The State Tracker row whose state editor is open is tracked by
     /// [`crate::ui::state::StateUi`], alongside the color picker.
@@ -493,10 +492,7 @@ impl App {
             state_ui: Default::default(),
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
-            symbol_search: String::new(),
-            show_id_filter: false,
-            id_filter_search: String::new(),
-            popup_target: None,
+            id_filter: Default::default(),
             focus_title: None,
             editors: HashMap::new(),
             pending_editors: Vec::new(),

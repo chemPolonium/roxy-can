@@ -1025,8 +1025,7 @@ impl App {
                 }
                 TraceCmd::Export(i) => self.export_trace_dialog(i),
                 TraceCmd::OpenPicker(i) => {
-                    self.popup_target = Some(PopupTarget::Trace(i));
-                    self.show_id_filter = true;
+                    self.id_filter.open_for(PopupTarget::Trace(i));
                 }
                 TraceCmd::ClearFocus => self.focus_title = None,
                 TraceCmd::AddEntry {

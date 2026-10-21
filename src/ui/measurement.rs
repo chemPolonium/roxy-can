@@ -471,15 +471,24 @@ impl App {
         match target {
             PopupTarget::Trace(i) if i < self.trace_windows.len() => {
                 self.trace_windows.remove(i);
-                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 0));
+                self.id_filter.target = self
+                    .id_filter
+                    .target
+                    .and_then(|t| popup_after_remove(t, i, 0));
             }
             PopupTarget::Messages(i) if i < self.msg_windows.len() => {
                 self.msg_windows.remove(i);
-                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 1));
+                self.id_filter.target = self
+                    .id_filter
+                    .target
+                    .and_then(|t| popup_after_remove(t, i, 1));
             }
             PopupTarget::Stats(i) if i < self.stats_windows.len() => {
                 self.stats_windows.remove(i);
-                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 2));
+                self.id_filter.target = self
+                    .id_filter
+                    .target
+                    .and_then(|t| popup_after_remove(t, i, 2));
             }
             PopupTarget::Graphics(i) if i < self.graphics.len() => {
                 let keys: Vec<_> = self.graphics[i]
@@ -491,7 +500,10 @@ impl App {
                 for k in keys {
                     self.prune_signal(&k);
                 }
-                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 3));
+                self.id_filter.target = self
+                    .id_filter
+                    .target
+                    .and_then(|t| popup_after_remove(t, i, 3));
             }
             PopupTarget::Data(i) if i < self.data_windows.len() => {
                 let keys: Vec<_> = self.data_windows[i]
@@ -503,7 +515,10 @@ impl App {
                 for k in keys {
                     self.prune_signal(&k);
                 }
-                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 4));
+                self.id_filter.target = self
+                    .id_filter
+                    .target
+                    .and_then(|t| popup_after_remove(t, i, 4));
             }
             PopupTarget::State(i) if i < self.state_trackers.len() => {
                 let keys: Vec<_> = self.state_trackers[i]
@@ -515,7 +530,10 @@ impl App {
                 for k in keys {
                     self.prune_signal(&k);
                 }
-                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 5));
+                self.id_filter.target = self
+                    .id_filter
+                    .target
+                    .and_then(|t| popup_after_remove(t, i, 5));
             }
             _ => {}
         }
@@ -535,8 +553,7 @@ impl App {
                     self.set_trace_limit(cap);
                 }
                 MeasurementCmd::OpenPicker(target) => {
-                    self.popup_target = Some(target);
-                    self.show_id_filter = true;
+                    self.id_filter.open_for(target);
                 }
                 MeasurementCmd::Focus(target) => {
                     match target {

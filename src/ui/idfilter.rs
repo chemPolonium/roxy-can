@@ -2,6 +2,52 @@ use crate::app::{App, PopupTarget, SigScope};
 use dear_imgui_rs::{Condition, Ui};
 use std::collections::HashSet;
 
+/// The selection popup's own state: whether it is open, which window it edits,
+/// and the two search boxes. Kept out of `App` so the draw path only reads the
+/// application and emits [`IdFilterCmd`]s (see `AGENTS.md`).
+#[derive(Default)]
+pub struct IdFilterView {
+    pub open: bool,
+    pub target: Option<PopupTarget>,
+    pub msg_search: String,
+    pub sig_search: String,
+}
+
+impl IdFilterView {
+    /// Binds the popup to one window and opens it -- what every observer's
+    /// "…" button does.
+    pub fn open_for(&mut self, target: PopupTarget) {
+        self.target = Some(target);
+        self.open = true;
+    }
+}
+
+/// What a click in the selection popup asks the application to change. The
+/// draw never edits the window's pick set or signal list itself.
+pub enum IdFilterCmd {
+    TogglePick {
+        target: PopupTarget,
+        pick: crate::workspace::Pick,
+        on: bool,
+    },
+    AddPicks {
+        target: PopupTarget,
+        picks: Vec<crate::workspace::Pick>,
+    },
+    ClearPicks {
+        target: PopupTarget,
+    },
+    ToggleSignal {
+        target: PopupTarget,
+        key: crate::observe::SigKey,
+        on: bool,
+    },
+    ClearSignals {
+        target: PopupTarget,
+        keys: Vec<crate::observe::SigKey>,
+    },
+}
+
 struct MsgEntry {
     id: u32,
     name: String,
@@ -62,50 +108,62 @@ pub fn scope_combo(
     kinds[cur.min(kinds.len() - 1)]
 }
 
-/// Opens the selection popup for the window named by app.popup_target.
+/// Opens the selection popup for the window it is bound to.
 /// Trace/Messages/Statistics filter at the message level (flat list, hover a
 /// message to see its signals); Graphics/Data filter at the signal level
 /// (message tree with signal checkboxes).
 pub fn render(app: &mut App, ui: &Ui) {
-    if !app.show_id_filter {
-        return;
+    let mut view = std::mem::take(&mut app.id_filter);
+    let cmds = view.show(ui, app);
+    app.id_filter = view;
+    app.apply_id_filter_cmds(cmds);
+}
+
+impl IdFilterView {
+    fn show(&mut self, ui: &Ui, app: &App) -> Vec<IdFilterCmd> {
+        if !self.open {
+            return Vec::new();
+        }
+        let io = ui.io();
+        let mut open = self.open;
+        let target = self.target;
+        let signal_level = matches!(
+            target,
+            Some(PopupTarget::Graphics(_))
+                | Some(PopupTarget::Data(_))
+                | Some(PopupTarget::State(_))
+                | Some(PopupTarget::Monitor)
+        );
+        let title = match target {
+            Some(t) => format!(
+                "{} — {}",
+                if signal_level {
+                    "Signal Selection"
+                } else {
+                    "Message Selection"
+                },
+                target_name(app, t)
+            ),
+            None => "Message Selection".to_string(),
+        };
+        let mut cmds = Vec::new();
+        ui.window(title)
+            .opened(&mut open)
+            .position(
+                [io.display_size()[0] * 0.35, io.display_size()[1] * 0.18],
+                Condition::FirstUseEver,
+            )
+            .size([460.0, 480.0], Condition::FirstUseEver)
+            .build(|| {
+                if signal_level {
+                    signal_content(self, app, ui, &mut cmds);
+                } else {
+                    message_content(self, app, ui, &mut cmds);
+                }
+            });
+        self.open = open;
+        cmds
     }
-    let io = ui.io();
-    let mut open = app.show_id_filter;
-    let signal_level = matches!(
-        app.popup_target,
-        Some(PopupTarget::Graphics(_))
-            | Some(PopupTarget::Data(_))
-            | Some(PopupTarget::State(_))
-            | Some(PopupTarget::Monitor)
-    );
-    let title = match app.popup_target {
-        Some(t) => format!(
-            "{} — {}",
-            if signal_level {
-                "Signal Selection"
-            } else {
-                "Message Selection"
-            },
-            target_name(app, t)
-        ),
-        None => "Message Selection".to_string(),
-    };
-    ui.window(title)
-        .opened(&mut open)
-        .position(
-            [io.display_size()[0] * 0.35, io.display_size()[1] * 0.18],
-            Condition::FirstUseEver,
-        )
-        .size([460.0, 480.0], Condition::FirstUseEver)
-        .build(|| {
-            if signal_level {
-                signal_content(app, ui);
-            } else {
-                message_content(app, ui);
-            }
-        });
-    app.show_id_filter = open;
 }
 
 pub fn target_name(app: &App, t: PopupTarget) -> String {
@@ -144,41 +202,79 @@ pub fn target_name(app: &App, t: PopupTarget) -> String {
     }
 }
 
-fn set_target_scope(app: &mut App, scope: SigScope) {
-    if let Some(t) = app.popup_target {
-        match t {
-            PopupTarget::Trace(i) => {
-                if let Some(w) = app.trace_windows.get_mut(i) {
-                    w.scope = scope;
+fn set_window_scope(app: &mut App, target: PopupTarget, scope: SigScope) {
+    match target {
+        PopupTarget::Trace(i) => {
+            if let Some(w) = app.trace_windows.get_mut(i) {
+                w.scope = scope;
+            }
+        }
+        PopupTarget::Messages(i) => {
+            if let Some(w) = app.msg_windows.get_mut(i) {
+                w.scope = scope;
+            }
+        }
+        PopupTarget::Stats(i) => {
+            if let Some(w) = app.stats_windows.get_mut(i) {
+                w.scope = scope;
+            }
+        }
+        _ => {}
+    }
+}
+
+impl App {
+    /// Applies the selection popup's clicks after its draw put the view back.
+    pub(crate) fn apply_id_filter_cmds(&mut self, cmds: Vec<IdFilterCmd>) {
+        for cmd in cmds {
+            match cmd {
+                IdFilterCmd::TogglePick { target, pick, on } => {
+                    if let Some(m) = self.win_manual_mut(target) {
+                        if on {
+                            m.insert(pick);
+                        } else {
+                            m.remove(&pick);
+                        }
+                    }
+                    set_window_scope(self, target, SigScope::Manual);
+                }
+                IdFilterCmd::AddPicks { target, picks } => {
+                    if let Some(m) = self.win_manual_mut(target) {
+                        m.extend(picks);
+                    }
+                    set_window_scope(self, target, SigScope::Manual);
+                }
+                IdFilterCmd::ClearPicks { target } => {
+                    if let Some(m) = self.win_manual_mut(target) {
+                        m.clear();
+                    }
+                    set_window_scope(self, target, SigScope::All);
+                }
+                IdFilterCmd::ToggleSignal { target, key, on } => {
+                    self.set_win_signal(target, key, on);
+                }
+                IdFilterCmd::ClearSignals { target, keys } => {
+                    for key in keys {
+                        self.set_win_signal(target, key, false);
+                    }
                 }
             }
-            PopupTarget::Messages(i) => {
-                if let Some(w) = app.msg_windows.get_mut(i) {
-                    w.scope = scope;
-                }
-            }
-            PopupTarget::Stats(i) => {
-                if let Some(w) = app.stats_windows.get_mut(i) {
-                    w.scope = scope;
-                }
-            }
-            _ => {}
         }
     }
 }
 
 /// Message-level selection for Trace/Messages/Statistics: one checkbox per
 /// message.
-fn message_content(app: &mut App, ui: &Ui) {
-    let Some(target) = app.popup_target else {
+fn message_content(view: &mut IdFilterView, app: &App, ui: &Ui, cmds: &mut Vec<IdFilterCmd>) {
+    let Some(target) = view.target else {
         return;
     };
     ui.set_next_item_width(ui.content_region_avail()[0]);
-    ui.input_text("##idf_search", &mut app.id_filter_search)
+    ui.input_text("##idf_search", &mut view.msg_search)
         .hint("search messages / signals")
         .build();
     if ui.button("Select all matching") {
-        let q = app.id_filter_search.trim().to_ascii_uppercase();
+        let q = view.msg_search.trim().to_ascii_uppercase();
         let mut keys: Vec<crate::workspace::Pick> = Vec::new();
         for (ch, channel) in app.snap.channels.iter().enumerate() {
             let Some(db) = &channel.dbc else {
@@ -207,26 +303,21 @@ fn message_content(app: &mut App, ui: &Ui) {
                 .filter(|a| eth_flow_matches(app, &a.key, &q))
                 .map(|a| crate::workspace::Pick::Eth(a.key)),
         );
-        if let Some(m) = app.win_manual_mut(target) {
-            for k in keys {
-                m.insert(k);
-            }
-        }
-        set_target_scope(app, SigScope::Manual);
+        cmds.push(IdFilterCmd::AddPicks {
+            target,
+            picks: keys,
+        });
     }
     ui.same_line();
     if ui.button("Clear") {
-        if let Some(m) = app.win_manual_mut(target) {
-            m.clear();
-        }
-        set_target_scope(app, SigScope::All);
+        cmds.push(IdFilterCmd::ClearPicks { target });
     }
     ui.same_line();
     let n_sel = app.win_manual(target).map(|m| m.len()).unwrap_or(0);
     ui.text(format!("{n_sel} message(s) / slot(s) selected"));
     ui.separator();
 
-    let q = app.id_filter_search.trim().to_ascii_uppercase();
+    let q = view.msg_search.trim().to_ascii_uppercase();
 
     // Clone the message/signal layout first so the checkbox callbacks can
     // mutate the window's manual set without borrow conflicts.
@@ -290,14 +381,11 @@ fn message_content(app: &mut App, ui: &Ui) {
             // produce identical labels and colliding widget IDs.
             let label = format!("{:03X}  {}##msgsel{ch}_{:X}", e.id, e.name, e.id);
             if ui.checkbox(label, &mut on) {
-                if let Some(m) = app.win_manual_mut(target) {
-                    if on {
-                        m.insert(key);
-                    } else {
-                        m.remove(&key);
-                    }
-                }
-                set_target_scope(app, SigScope::Manual);
+                cmds.push(IdFilterCmd::TogglePick {
+                    target,
+                    pick: key,
+                    on,
+                });
             }
         }
     }
@@ -324,14 +412,11 @@ fn message_content(app: &mut App, ui: &Ui) {
                 app.fr_bus_name(*bus)
             );
             if ui.checkbox(label, &mut on) {
-                if let Some(m) = app.win_manual_mut(target) {
-                    if on {
-                        m.insert(key);
-                    } else {
-                        m.remove(&key);
-                    }
-                }
-                set_target_scope(app, SigScope::Manual);
+                cmds.push(IdFilterCmd::TogglePick {
+                    target,
+                    pick: key,
+                    on,
+                });
             }
         }
     }
@@ -354,14 +439,11 @@ fn message_content(app: &mut App, ui: &Ui) {
             let mut on = app.win_manual(target).is_some_and(|m| m.contains(&key));
             let label = format!("{label}##ethsel{}", eth_flow_tag(flow));
             if ui.checkbox(label, &mut on) {
-                if let Some(m) = app.win_manual_mut(target) {
-                    if on {
-                        m.insert(key);
-                    } else {
-                        m.remove(&key);
-                    }
-                }
-                set_target_scope(app, SigScope::Manual);
+                cmds.push(IdFilterCmd::TogglePick {
+                    target,
+                    pick: key,
+                    on,
+                });
             }
         }
     }
@@ -431,8 +513,8 @@ fn fr_slot_hits(app: &App, q: &str) -> Vec<(u8, u16, String)> {
 /// tree, so this composes TreeNode + Checkbox with cascading selection:
 /// checking a message selects every signal listed below it, and labels show
 /// (selected/total) counts.
-fn signal_content(app: &mut App, ui: &Ui) {
-    let Some(target) = app.popup_target else {
+fn signal_content(view: &mut IdFilterView, app: &App, ui: &Ui, cmds: &mut Vec<IdFilterCmd>) {
+    let Some(target) = view.target else {
         return;
     };
     let selected: Vec<crate::observe::SigKey> = match target {
@@ -464,19 +546,20 @@ fn signal_content(app: &mut App, ui: &Ui) {
     };
 
     ui.set_next_item_width(ui.content_region_avail()[0]);
-    ui.input_text("##sig_search", &mut app.symbol_search)
+    ui.input_text("##sig_search", &mut view.sig_search)
         .hint("search messages / signals")
         .build();
     if ui.button("Clear##sigsel") {
-        for key in selected.clone() {
-            app.set_win_signal(target, key, false);
-        }
+        cmds.push(IdFilterCmd::ClearSignals {
+            target,
+            keys: selected.clone(),
+        });
     }
     ui.same_line();
     ui.text(format!("{} signal(s) selected", selected.len()));
     ui.separator();
 
-    let q = app.symbol_search.trim().to_ascii_uppercase();
+    let q = view.sig_search.trim().to_ascii_uppercase();
     let sel: HashSet<crate::observe::SigKey> = selected.into_iter().collect();
     let bus_names: Vec<String> = (0..app.snap.channel_count)
         .map(|ch| app.channel_name(ch as u8))
@@ -595,16 +678,18 @@ fn signal_content(app: &mut App, ui: &Ui) {
     flexray_section(app, ui, &sel, &mut actions, &q);
     eth_section(app, ui, &sel, &mut actions, &q);
 
-    for (key, on) in actions {
-        app.set_win_signal(target, key, on);
-    }
+    cmds.extend(
+        actions
+            .into_iter()
+            .map(|(key, on)| IdFilterCmd::ToggleSignal { target, key, on }),
+    );
 }
 
 /// Adds a checkbox per emitted signal emitted by the script nodes
 /// (`emit_value`): grouped by node below the DBC tree, because a derived
 /// signal is selected exactly like a database one.
 fn emitted_section(
-    app: &mut App,
+    app: &App,
     ui: &Ui,
     sel: &HashSet<crate::observe::SigKey>,
     actions: &mut Vec<(crate::observe::SigKey, bool)>,
@@ -654,7 +739,7 @@ fn emitted_section(
 /// first one alone would hide the rest of the cluster. Hidden until a FlexRay
 /// database loads.
 fn flexray_section(
-    app: &mut App,
+    app: &App,
     ui: &Ui,
     sel: &HashSet<crate::observe::SigKey>,
     actions: &mut Vec<(crate::observe::SigKey, bool)>,
@@ -743,7 +828,7 @@ fn flexray_section(
 /// frames into, so a selection here samples and plots exactly like a DBC
 /// signal. Hidden until an Ethernet matrix loads.
 fn eth_section(
-    app: &mut App,
+    app: &App,
     ui: &Ui,
     sel: &HashSet<crate::observe::SigKey>,
     actions: &mut Vec<(crate::observe::SigKey, bool)>,

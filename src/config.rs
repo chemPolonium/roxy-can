@@ -994,7 +994,7 @@ impl Config {
             show_triggers: app.triggers_view.open,
             show_bus_stats: app.busstats_view.open,
             show_spec: app.spec_view.open,
-            show_id_filter: app.show_id_filter,
+            show_id_filter: app.id_filter.open,
             show_sysvars: app.sysvars_view.open,
             show_write: app.write_view.open,
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
@@ -1579,7 +1579,7 @@ impl Config {
         app.triggers_view.open = self.show_triggers;
         app.busstats_view.open = self.show_bus_stats;
         app.spec_view.open = self.show_spec;
-        app.show_id_filter = self.show_id_filter;
+        app.id_filter.open = self.show_id_filter;
         app.sysvars_view.open = self.show_sysvars;
         app.write_view.open = self.show_write;
         app.text_rate_hz = self.text_rate_hz;
@@ -1881,7 +1881,7 @@ mod tests {
     #[test]
     fn config_round_trips_through_json() {
         let mut app = App::headless();
-        app.show_id_filter = true;
+        app.id_filter.open = true;
         app.replay_speed = 2.0;
         app.trace_windows[0].filter = "Motor".to_string();
         app.trace_windows[0].scope = SigScope::Bus(1);
@@ -1906,7 +1906,7 @@ mod tests {
             .unwrap()
             .apply(&mut restored);
 
-        assert!(restored.show_id_filter);
+        assert!(restored.id_filter.open);
         assert_eq!(restored.replay_speed, 2.0);
         assert_eq!(restored.trace_windows[0].filter, "Motor");
         assert_eq!(restored.trace_windows[0].scope, SigScope::Bus(1));

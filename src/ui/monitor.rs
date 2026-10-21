@@ -169,8 +169,8 @@ impl App {
         for cmd in cmds {
             match cmd {
                 MonitorCmd::OpenPicker => {
-                    self.popup_target = Some(crate::workspace::PopupTarget::Monitor);
-                    self.show_id_filter = true;
+                    self.id_filter
+                        .open_for(crate::workspace::PopupTarget::Monitor);
                 }
                 MonitorCmd::Clear => {
                     let keys: Vec<SigKey> = self

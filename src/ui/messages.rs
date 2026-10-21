@@ -211,8 +211,7 @@ impl App {
                 MessagesCmd::Clear => self.send(crate::bus::BusCommand::ClearAggregates),
                 MessagesCmd::Export(i) => self.export_messages_dialog(i),
                 MessagesCmd::OpenPicker(i) => {
-                    self.popup_target = Some(PopupTarget::Messages(i));
-                    self.show_id_filter = true;
+                    self.id_filter.open_for(PopupTarget::Messages(i));
                 }
                 MessagesCmd::ClearFocus => self.focus_title = None,
             }

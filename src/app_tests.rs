@@ -4832,10 +4832,10 @@ fn monitor_commands_apply_in_one_place() {
     let mut app = quiet_app();
     app.apply_monitor_cmds(vec![MonitorCmd::OpenPicker]);
     assert!(matches!(
-        app.popup_target,
+        app.id_filter.target,
         Some(crate::workspace::PopupTarget::Monitor)
     ));
-    assert!(app.show_id_filter);
+    assert!(app.id_filter.open);
 
     let key = SigKey::can(0, 0x100, false, "EngineSpeed");
     app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
@@ -10591,4 +10591,77 @@ fn the_frame_length_convention_renames_trace_rows() {
         "LenFrame",
         "the cache rebuilt under the new convention and matched the frame"
     );
+}
+
+/// Every click the selection popup offers goes through one command type; this
+/// walks each variant without a frame so the state transitions are pinned
+/// where the draw cannot hide them.
+#[test]
+fn id_filter_commands_toggle_picks_and_signals() {
+    use crate::ui::idfilter::IdFilterCmd;
+    use crate::workspace::Pick;
+    let mut app = App::headless();
+    let trace = crate::workspace::PopupTarget::Trace(0);
+    let pick = Pick::Can { ch: 0, id: 0x100 };
+
+    app.apply_id_filter_cmds(vec![IdFilterCmd::TogglePick {
+        target: trace,
+        pick,
+        on: true,
+    }]);
+    assert!(app.trace_windows[0].manual.contains(&pick));
+    assert_eq!(app.trace_windows[0].scope, SigScope::Manual);
+
+    app.apply_id_filter_cmds(vec![IdFilterCmd::TogglePick {
+        target: trace,
+        pick,
+        on: false,
+    }]);
+    assert!(!app.trace_windows[0].manual.contains(&pick));
+
+    let other = Pick::Eth(crate::aggregate::EthFlowKey {
+        bus: 0,
+        vlan: Some(100),
+        dst: [9, 8, 7, 6, 5, 4],
+        src: [1, 2, 3, 4, 5, 6],
+        ethertype: 0x0800,
+        len: 8,
+    });
+    app.trace_windows[0].scope = SigScope::All;
+    app.apply_id_filter_cmds(vec![IdFilterCmd::AddPicks {
+        target: trace,
+        picks: vec![pick, other],
+    }]);
+    assert_eq!(app.trace_windows[0].manual.len(), 2);
+    assert_eq!(app.trace_windows[0].scope, SigScope::Manual);
+
+    app.apply_id_filter_cmds(vec![IdFilterCmd::ClearPicks { target: trace }]);
+    assert!(app.trace_windows[0].manual.is_empty());
+    assert_eq!(app.trace_windows[0].scope, SigScope::All);
+
+    // Signal-level targets: the same toggle path drives set_win_signal, and
+    // Clear drops exactly the keys it was given.
+    app.new_graphics_window();
+    let gfx = crate::workspace::PopupTarget::Graphics(0);
+    let a = SigKey::can(0, 0x100, false, "A");
+    let b = SigKey::can(0, 0x100, false, "B");
+    app.apply_id_filter_cmds(vec![
+        IdFilterCmd::ToggleSignal {
+            target: gfx,
+            key: a.clone(),
+            on: true,
+        },
+        IdFilterCmd::ToggleSignal {
+            target: gfx,
+            key: b.clone(),
+            on: true,
+        },
+    ]);
+    assert_eq!(app.graphics[0].signals.len(), 2);
+    app.apply_id_filter_cmds(vec![IdFilterCmd::ClearSignals {
+        target: gfx,
+        keys: vec![a],
+    }]);
+    assert_eq!(app.graphics[0].signals.len(), 1);
+    assert_eq!(app.graphics[0].signals[0].key, b);
 }

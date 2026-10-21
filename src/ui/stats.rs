@@ -144,8 +144,7 @@ impl App {
             match cmd {
                 StatsCmd::Export(i) => self.export_stats_dialog(i),
                 StatsCmd::OpenPicker(i) => {
-                    self.popup_target = Some(PopupTarget::Stats(i));
-                    self.show_id_filter = true;
+                    self.id_filter.open_for(PopupTarget::Stats(i));
                 }
                 StatsCmd::ClearFocus => self.focus_title = None,
             }

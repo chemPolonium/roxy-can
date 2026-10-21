@@ -812,8 +812,7 @@ fn flexray_signal_picker_draws_without_panicking() {
     load_fr_db(&mut app, 1, "assets/fibex/PowerTrain_v2.xml");
     assert_eq!(app.fr_buses.len(), 2, "both descriptions loaded");
     app.settle();
-    app.popup_target = Some(PopupTarget::Graphics(0));
-    app.show_id_filter = true;
+    app.id_filter.open_for(PopupTarget::Graphics(0));
     frames(&mut app, &mut ctx, 3);
 }
 
@@ -844,8 +843,7 @@ fn the_message_picker_offers_ethernet_flows() {
     app.trace_windows[0].manual.insert(pick);
     app.trace_windows[0].scope = crate::app::SigScope::Manual;
     app.settle();
-    app.popup_target = Some(PopupTarget::Trace(0));
-    app.show_id_filter = true;
+    app.id_filter.open_for(PopupTarget::Trace(0));
     frames(&mut app, &mut ctx, 3);
     assert!(
         app.trace_windows[0].manual.contains(&pick),
@@ -886,8 +884,7 @@ fn the_message_picker_offers_flexray_slots() {
         .insert(crate::workspace::Pick::Can { ch: 0, id: 0x100 });
     app.trace_windows[0].scope = crate::app::SigScope::Manual;
     app.settle();
-    app.popup_target = Some(PopupTarget::Trace(0));
-    app.show_id_filter = true;
+    app.id_filter.open_for(PopupTarget::Trace(0));
     frames(&mut app, &mut ctx, 3);
     assert!(
         app.trace_windows[0]
@@ -974,8 +971,7 @@ fn ethernet_signal_picker_draws_without_panicking() {
         app.subs.contains_key(&key),
         "the pick subscribes the Ethernet key the core decodes"
     );
-    app.popup_target = Some(PopupTarget::Graphics(0));
-    app.show_id_filter = true;
+    app.id_filter.open_for(PopupTarget::Graphics(0));
     frames(&mut app, &mut ctx, 3);
 }
 

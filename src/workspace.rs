@@ -713,7 +713,7 @@ impl App {
             show_triggers: self.triggers_view.open,
             show_bus_stats: self.busstats_view.open,
             show_spec: self.spec_view.open,
-            show_id_filter: self.show_id_filter,
+            show_id_filter: self.id_filter.open,
             show_sysvars: self.sysvars_view.open,
             show_write: self.write_view.open,
         }
@@ -749,7 +749,7 @@ impl App {
         self.triggers_view.open = d.show_triggers;
         self.busstats_view.open = d.show_bus_stats;
         self.spec_view.open = d.show_spec;
-        self.show_id_filter = d.show_id_filter;
+        self.id_filter.open = d.show_id_filter;
         self.sysvars_view.open = d.show_sysvars;
         self.write_view.open = d.show_write;
         let layout = if d.layout.is_empty() {
