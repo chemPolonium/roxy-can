@@ -132,17 +132,19 @@ pub fn cycles_of(period_us: u64, cycle_us: u64) -> Option<u64> {
 /// sentence the dialog prints in place of the confirmation.
 pub fn fr_cycle_draft(text: &str, cycle_us: u64) -> Result<(u64, u64), &'static str> {
     if cycle_us == 0 {
-        return Err("这一路没有声明周期时间：没有可数的周期");
+        return Err("This bus declares no cycle time; cycles cannot be counted");
     }
     let Ok(n) = text.trim().parse::<u64>() else {
-        return Err("整数周期数");
+        return Err("Enter a whole number of cycles");
     };
     if n == 0 {
-        return Err("静态槽没有事件触发：至少 1 个周期；要它不发，用行上的 On 勾选框");
+        return Err(
+            "A static slot is not event-triggered: use at least 1 cycle; clear On in the row to stop it",
+        );
     }
     let max = TX_CYCLE_MAX_MS * 1_000 / cycle_us;
     if n > max {
-        return Err("周期数太大");
+        return Err("Too many cycles");
     }
     Ok((n, n * cycle_us))
 }
@@ -396,16 +398,21 @@ impl App {
     pub fn add_fr_tx(&mut self, bus: u8, slot: u16) {
         let label = self.fr_bus_label(bus);
         let Some(db) = self.fr_db(bus) else {
-            self.status = format!("{label} 没有集群描述：条目按描述声明的发送者归属，先加载描述");
+            self.status = format!(
+                "{label} has no cluster description; entries belong to the sender it declares -- load the description first"
+            );
             return;
         };
         let Some(ix) = db.frame_ix_of_slot(slot) else {
-            self.status = format!("{label} 的描述未调度 slot {slot}：没有帧可归属，加不了条目");
+            self.status = format!(
+                "{label} description does not schedule slot {slot}: no frame to own the entry"
+            );
             return;
         };
         let Some(node) = db.frame_sender(ix) else {
-            self.status =
-                format!("{label} 的描述没有说明 slot {slot} 的帧由哪个 ECU 发送：加不了条目");
+            self.status = format!(
+                "{label} description does not name the ECU that sends the frame in slot {slot}: cannot add the entry"
+            );
             return;
         };
         let node = node.to_string();
@@ -726,13 +733,16 @@ pub(crate) fn fr_tx_set_signal(
     name: &str,
     phys: f64,
 ) -> Result<(), String> {
-    let ix = db
-        .frame_ix_of_slot(tx.slot)
-        .ok_or_else(|| format!("这一路的描述未在 slot {} 调度帧：没有信号可写", tx.slot))?;
+    let ix = db.frame_ix_of_slot(tx.slot).ok_or_else(|| {
+        format!(
+            "This bus's description schedules no frame in slot {}: no signal to write",
+            tx.slot
+        )
+    })?;
     let mut data = tx.data.clone();
     if !db.encode_signal(ix, name, phys, &mut data) {
         return Err(format!(
-            "slot {} 的帧不声明信号 {name:?}（或载荷长度不够它）",
+            "The frame in slot {} does not declare signal {name:?} (or its payload is too short)",
             tx.slot
         ));
     }
@@ -748,16 +758,18 @@ pub(crate) fn fr_tx_set_signal(
 pub fn fr_hex_refusal(text: &str, len: usize) -> Option<String> {
     let toks: Vec<&str> = text.split_whitespace().collect();
     if toks.is_empty() {
-        return Some(format!("载荷 {len} 字节：空的不能写入"));
+        return Some(format!(
+            "Payload is {len} bytes: an empty payload cannot be written"
+        ));
     }
     if toks.len() > len {
         return Some(format!(
-            "这个槽的载荷是 {len} 字节（调度表规定的），{n} 字节写不下；多出来的部分不会发出",
+            "This slot's payload is {len} bytes by the schedule; {n} bytes do not fit and the extra bytes would not be transmitted",
             n = toks.len()
         ));
     }
     if toks.iter().any(|t| u8::from_str_radix(t, 16).is_err()) {
-        return Some("载荷要写成 hex 字节对，例如 00 1A FF".to_string());
+        return Some("Write the payload as hex byte pairs, for example 00 1A FF".to_string());
     }
     None
 }

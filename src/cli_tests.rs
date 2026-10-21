@@ -162,7 +162,7 @@ on start {
         report.contains("0x101"),
         "reverse check names EngineCmd: {report}"
     );
-    assert!(report.contains("脚本未发送"), "{report}");
+    assert!(report.contains("never sends them"), "{report}");
     assert!(report.contains("9999"), "range check named: {report}");
     assert!(report.contains("sends: 0x100"), "the send set is printed");
     std::fs::remove_file(&dbc_path).ok();

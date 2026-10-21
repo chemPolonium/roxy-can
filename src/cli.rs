@@ -579,7 +579,7 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     for path in &opts.fibex {
         // Chinese-locale FIBEX/ARXML exports are often ANSI (GBK); the
         // same tolerant read the DBC loader and the vector probe use.
-        let bytes = std::fs::read(path).map_err(|e| format!("FIBEX 读取失败: {path}: {e}"))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("FIBEX read failed: {path}: {e}"))?;
         let text = crate::dbc::text_from_bytes(bytes);
         let db = crate::fr_db::FrDb::parse(&text).map_err(|e| format!("{path}: {e}"))?;
         fr_dbs.insert(fr_dbs.len().try_into().unwrap_or(u8::MAX), db);
@@ -832,7 +832,7 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
         Some(path) => {
             // AUTOSAR/FIBEX exports from Chinese-locale tooling are often
             // ANSI (GBK) rather than UTF-8; same tolerant read as DBCs.
-            let bytes = std::fs::read(path).map_err(|e| format!("FIBEX 读取失败: {e}"))?;
+            let bytes = std::fs::read(path).map_err(|e| format!("FIBEX read failed: {e}"))?;
             let text = crate::dbc::text_from_bytes(bytes);
             let db = crate::fr_db::FrDb::parse(&text)?;
             let p = &db.params;
@@ -891,7 +891,7 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
                 usable.push(c.index);
             }
             Err(e) => {
-                if e.contains("集群配置被拒绝") {
+                if e.contains("FlexRay cluster configuration rejected") {
                     refused.push(c.index);
                 }
                 s.push_str(&format!("  ch{}: {e}\n", c.index));
@@ -900,7 +900,9 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     }
     if !refused.is_empty() {
         let cfg = fibex_cfg.clone().unwrap_or_default();
-        s.push_str("FlexRay 权限扫描（申请 → 授予 / 配置结果，数字是驱动原话）:\n");
+        s.push_str(
+            "FlexRay permission scan (request -> granted / configuration result, numbers are the driver's own):\n",
+        );
         for index in refused {
             for request in [0u64, 1, 2, 3, 7, 1u64 << index] {
                 s.push_str(

@@ -1925,7 +1925,7 @@ fn a_closed_filter_row_names_the_conditions_still_working() {
     w.dbc_only = true;
     assert_eq!(
         w.hidden_conds(),
-        ["payload", "帧类型", "仅 DBC", "时间范围"],
+        ["payload", "frame kind", "DBC only", "time range"],
         "every condition that is working while the row is closed"
     );
     // The main row's own controls are always visible, so they never join the
@@ -1935,7 +1935,7 @@ fn a_closed_filter_row_names_the_conditions_still_working() {
     w.fr_expand = true;
     assert_eq!(
         w.hidden_conds(),
-        ["payload", "帧类型", "仅 DBC", "时间范围"],
+        ["payload", "frame kind", "DBC only", "time range"],
         "visible controls and row-expansion are not conditions in disguise"
     );
 }
@@ -6203,13 +6203,15 @@ fn a_project_load_problem_outlives_the_loaded_line() {
     restored.open_project_path(&path);
     restored.settle();
     assert!(
-        restored.status.contains("project loaded") && restored.status.contains("1 项未能载入"),
+        restored.status.contains("project loaded")
+            && restored.status.contains("1 item(s) failed to load"),
         "the bar says both what worked and how much did not: {}",
         restored.status
     );
     assert!(
         restored.snap.write.iter().any(|l| {
-            l.kind == crate::bus::WriteKind::Error && l.text.contains("FlexRay 描述加载失败")
+            l.kind == crate::bus::WriteKind::Error
+                && l.text.contains("FlexRay description load failed")
         }),
         "and the reason is still there to read: {:?}",
         restored
@@ -7051,7 +7053,7 @@ fn an_empty_flexray_message_row_names_its_reason() {
     };
     assert_eq!(
         note("FR0", 4_095).as_deref(),
-        Some("（FR0 的描述未在 slot 4095 调度此帧）"),
+        Some("(FR0 description schedules no frame in slot 4095)"),
         "a slot the description resolves no frame for says so"
     );
     assert_eq!(
@@ -7061,13 +7063,13 @@ fn an_empty_flexray_message_row_names_its_reason() {
     );
     assert_eq!(
         note("FR1", 13).as_deref(),
-        Some("（FR1 未加载集群描述）"),
+        Some("(FR1 has no cluster description)"),
         "an undescribed cluster says that instead"
     );
     if let Some(slot) = silent {
         assert_eq!(
             note("FR0", slot).as_deref(),
-            Some("（该帧不声明信号）"),
+            Some("(frame declares no signals)"),
             "a frame the description does have says a third thing"
         );
     }
@@ -7288,7 +7290,7 @@ fn a_wire_that_refuses_writes_is_said_once_and_counted() {
         .snap
         .write
         .iter()
-        .filter(|l| l.text.contains("发送被线路拒绝"))
+        .filter(|l| l.text.contains("transmit refused by the wire"))
         .map(|l| l.text.clone())
         .collect();
     assert_eq!(
@@ -7347,7 +7349,7 @@ fn a_wire_that_takes_writes_leaves_no_complaint() {
         !app.snap
             .write
             .iter()
-            .any(|l| l.text.contains("发送被线路拒绝")),
+            .any(|l| l.text.contains("transmit refused by the wire")),
         "and the log says nothing about it"
     );
 }
@@ -7391,7 +7393,7 @@ fn a_wire_that_never_answers_is_told_from_the_events() {
         .snap
         .write
         .iter()
-        .filter(|l| l.text.contains("发送被线路拒绝"))
+        .filter(|l| l.text.contains("transmit refused by the wire"))
         .map(|l| l.text.clone())
         .collect();
     assert_eq!(
@@ -8373,7 +8375,7 @@ fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
     assert!(
         node.log
             .iter()
-            .any(|l| l.contains("fr_send") && l.contains("声明 1 字节")),
+            .any(|l| l.contains("fr_send") && l.contains("declares 1 bytes")),
         "the reason is in the node's log: {:?}",
         node.log
     );
@@ -8448,7 +8450,7 @@ fn a_script_frame_for_an_unconfigured_bus_is_refused() {
     assert!(
         node.log
             .iter()
-            .any(|l| l.contains("fr_send") && l.contains("FR7 不是已配置的路")),
+            .any(|l| l.contains("fr_send") && l.contains("FR7 is not a configured bus")),
         "the typo is reported where the script writes: {:?}",
         node.log
     );
@@ -8599,15 +8601,19 @@ fn a_flexray_signal_write_without_its_entry_is_refused() {
         .filter(|l| l.contains("set_fr_sig]"))
         .collect();
     assert!(
-        lines.iter().any(|l| l.contains("FR0 slot 5 没有发送条目")),
+        lines
+            .iter()
+            .any(|l| l.contains("FR0 slot 5 has no transmit entry")),
         "the slot nobody fills: {lines:?}"
     );
     assert!(
-        lines.iter().any(|l| l.contains("FR7 没有集群描述")),
+        lines
+            .iter()
+            .any(|l| l.contains("FR7 has no cluster description")),
         "the 路 that does not exist: {lines:?}"
     );
     assert!(
-        !lines.iter().any(|l| l.contains("不声明信号")),
+        !lines.iter().any(|l| l.contains("does not declare signal")),
         "it never got as far as the coding: {lines:?}"
     );
     assert!(!node.errored, "{:?}", node.log);
@@ -8929,7 +8935,7 @@ fn a_flexray_payload_is_bounded_by_its_slot_width() {
         "the refused edit changed nothing"
     );
     assert!(
-        app.status.contains(&format!("{wide} 字节")),
+        app.status.contains(&format!("{wide} bytes")),
         "the refusal names the width: {}",
         app.status
     );
@@ -8956,7 +8962,7 @@ fn the_flexray_cycle_box_counts_cycles_and_refuses_event_fills() {
     assert_eq!(fr_cycle_draft("1", ct), Ok((1, 5_000)));
     // CAN's event mode, refused with the reason and the alternative.
     let zero = fr_cycle_draft("0", ct).expect_err("0 is not a period");
-    assert!(zero.contains("事件触发"), "{zero}");
+    assert!(zero.contains("event-triggered"), "{zero}");
     assert!(zero.contains("On"), "{zero}");
     assert!(
         fr_cycle_draft("", ct).is_err(),
@@ -8999,7 +9005,11 @@ fn a_flexray_slot_the_description_leaves_unowned_gets_no_entry() {
         app.snap.fr_tx.is_empty(),
         "nothing owns the slot, so nothing was added"
     );
-    assert!(app.status.contains("没有集群描述"), "{}", app.status);
+    assert!(
+        app.status.contains("has no cluster description"),
+        "{}",
+        app.status
+    );
 
     let (bound, _ecu) = fr_bound_slot(&mut app);
     let unowned = {
@@ -9018,7 +9028,7 @@ fn a_flexray_slot_the_description_leaves_unowned_gets_no_entry() {
     app.settle();
     assert!(app.snap.fr_tx.is_empty(), "an unowned slot gets no entry");
     assert!(
-        app.status.contains("没有说明") && app.status.contains(&format!("slot {unowned}")),
+        app.status.contains("does not name") && app.status.contains(&format!("slot {unowned}")),
         "{}",
         app.status
     );
@@ -9940,7 +9950,7 @@ fn a_second_cluster_description_loads_without_any_hardware() {
         None,
         "a file that cannot be read is refused"
     );
-    assert!(app.status.contains("读取失败"), "{}", app.status);
+    assert!(app.status.contains("read failed"), "{}", app.status);
     assert_eq!(
         app.fr_buses.keys().copied().collect::<Vec<_>>(),
         [0, 1],
@@ -10043,13 +10053,17 @@ fn a_flexray_bus_can_be_detached_and_removed() {
     app.attach_fr_watch_on(0, 5);
     assert!(app.status.contains("FR0"), "{}", app.status);
     assert!(
-        !app.status.contains("没有集群描述"),
+        !app.status.contains("has no cluster description"),
         "the description was there to use: {}",
         app.status
     );
     // A bus with nothing loaded cannot be attached.
     app.attach_fr_watch_on(3, 5);
-    assert!(app.status.contains("没有集群描述"), "{}", app.status);
+    assert!(
+        app.status.contains("has no cluster description"),
+        "{}",
+        app.status
+    );
 
     // 断开 closes the port and keeps the 路: it is still the cluster its
     // description describes, so nothing pointed at it has to move.
@@ -10704,7 +10718,7 @@ fn script_commands_reach_the_node_model_and_file() {
         source: "on timer 1 { }".into(),
     }]);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "on timer 1 { }");
-    assert!(app.status.starts_with("已保存"));
+    assert!(app.status.starts_with("saved"));
     std::fs::remove_file(&path).ok();
 
     app.apply_script_cmds(vec![ScriptCmd::Status("loaded".into())]);

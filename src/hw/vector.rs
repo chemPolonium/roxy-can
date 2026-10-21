@@ -398,11 +398,12 @@ impl VectorChannel {
         init_access: bool,
     ) -> Result<VectorChannel, String> {
         let _ = fd_data_kbps;
-        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
+        let lib = Vxlapi::lib()
+            .ok_or("Vector driver unavailable (vxlapi64.dll / vxlapi.dll not found)")?;
         unsafe {
             let status = (lib.open_driver)();
             if status != 0 {
-                return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
+                return Err(format!("xlOpenDriver failed ({})", lib.error(status)));
             }
             let mask = 1u64 << index;
             let mut permission: XlAccess = if init_access { mask } else { 0 };
@@ -419,7 +420,7 @@ impl VectorChannel {
             if status != 0 || port == XL_INVALID_PORT {
                 (lib.close_driver)();
                 return Err(format!(
-                    "打开 Vector 通道 {index} 失败（{}）",
+                    "failed to open vector channel {index} ({})",
                     lib.error(status)
                 ));
             }
@@ -429,7 +430,10 @@ impl VectorChannel {
                 // channel. Close and let the attach logic retry rx-only.
                 (lib.close_port)(port);
                 (lib.close_driver)();
-                return Err("通道被其他程序占用（只得到仅接收权限）".to_string());
+                return Err(
+                    "channel is in use by another program (receive-only permission granted)"
+                        .to_string(),
+                );
             }
             // Bitrate needs init access; a monitoring port attaches at
             // whatever the bus already runs.
@@ -440,7 +444,7 @@ impl VectorChannel {
                     (lib.close_port)(port);
                     (lib.close_driver)();
                     return Err(format!(
-                        "设置波特率 {kbps} kbit/s 失败（{}）",
+                        "failed to set bitrate {kbps} kbit/s ({})",
                         lib.error(status)
                     ));
                 }
@@ -449,7 +453,10 @@ impl VectorChannel {
             if status != 0 {
                 (lib.close_port)(port);
                 (lib.close_driver)();
-                return Err(format!("激活通道失败（{}）", lib.error(status)));
+                return Err(format!(
+                    "failed to activate channel ({})",
+                    lib.error(status)
+                ));
             }
             // Frames queued while parked (or from a previous owner of the
             // channel) must not leak into this run's views.
@@ -468,7 +475,7 @@ impl VectorChannel {
     /// frames carry the EDL/BRS flags (they fail on a channel whose
     /// Vector configuration has no FD data-phase params).
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
-        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用")?;
+        let lib = Vxlapi::lib().ok_or("Vector driver unavailable")?;
         let payload = if f.is_remote() { &[][..] } else { f.payload() };
         let len = payload.len().min(MAX_CAN_FD_LEN);
         let mut tx = [0u8; 88];
@@ -504,9 +511,9 @@ impl VectorChannel {
         if status == 0 && sent == 1 {
             Ok(())
         } else if status == 0 {
-            Err("帧未进入发送队列".to_string())
+            Err("frame was not queued for transmission".to_string())
         } else {
-            Err(format!("xlCanTransmitEx 失败（{}）", lib.error(status)))
+            Err(format!("xlCanTransmitEx failed ({})", lib.error(status)))
         }
     }
 
@@ -598,8 +605,9 @@ impl VectorChannel {
         millis: u64,
     ) -> Result<String, String> {
         let ch = Self::open(index, kbps, None, true)?;
-        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
-        let mut out = format!("ch{index}: 已按 {kbps} kbit/s 打开（收发）\n");
+        let lib = Vxlapi::lib()
+            .ok_or("Vector driver unavailable (vxlapi64.dll / vxlapi.dll not found)")?;
+        let mut out = format!("ch{index}: opened at {kbps} kbit/s (tx/rx)\n");
         for i in 0..frames {
             let f = CanFrame {
                 t_us: 0,
@@ -612,8 +620,8 @@ impl VectorChannel {
                 flags: FrameFlags::NONE,
             };
             match ch.write_frame(&f) {
-                Ok(()) => out.push_str(&format!("  tx id {:#X}：驱动接受\n", f.id)),
-                Err(e) => out.push_str(&format!("  tx id {:#X}：{e}\n", f.id)),
+                Ok(()) => out.push_str(&format!("  tx id {:#X}: accepted by driver\n", f.id)),
+                Err(e) => out.push_str(&format!("  tx id {:#X}: {e}\n", f.id)),
             }
         }
         let start = std::time::Instant::now();
@@ -629,14 +637,14 @@ impl VectorChannel {
                 continue;
             }
             if status != 0 {
-                out.push_str(&format!("  xlCanRead 失败（{}）\n", lib.error(status)));
+                out.push_str(&format!("  xlCanRead failed ({})\n", lib.error(status)));
                 break;
             }
             *tags.entry(u16::from_le_bytes([ev[4], ev[5]])).or_default() += 1;
         }
         let spent = start.elapsed().as_millis();
         if tags.is_empty() {
-            out.push_str(&format!("  {spent} ms 内没有任何事件回来\n"));
+            out.push_str(&format!("  no events within {spent} ms\n"));
         } else {
             let named: Vec<String> = tags
                 .iter()
@@ -644,13 +652,13 @@ impl VectorChannel {
                     let name = match *t {
                         XL_CAN_EV_TAG_RX_OK => " RX_OK",
                         XL_CAN_EV_TAG_TX_MSG => " TX_MSG",
-                        _ => " 未命名",
+                        _ => " unnamed",
                     };
                     format!("0x{t:04X}{name} ×{n}")
                 })
                 .collect();
             out.push_str(&format!(
-                "  {spent} ms 内收到的事件：{}\n",
+                "  events within {spent} ms: {}\n",
                 named.join(", ")
             ));
         }
@@ -675,18 +683,19 @@ impl Drop for VectorChannel {
 /// (driver present, no adapters); `Err` means the driver itself is
 /// unavailable.
 pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
-    let lib = Vxlapi::lib()
-        .ok_or_else(|| "Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）".to_string())?;
+    let lib = Vxlapi::lib().ok_or_else(|| {
+        "Vector driver unavailable (vxlapi64.dll / vxlapi.dll not found)".to_string()
+    })?;
     unsafe {
         let status = (lib.open_driver)();
         if status != 0 {
-            return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
+            return Err(format!("xlOpenDriver failed ({})", lib.error(status)));
         }
         let mut config = [0u8; DRIVER_CONFIG_SIZE];
         let status = (lib.get_driver_config)(config.as_mut_ptr());
         if status != 0 {
             (lib.close_driver)();
-            return Err(format!("xlGetDriverConfig 失败（{}）", lib.error(status)));
+            return Err(format!("xlGetDriverConfig failed ({})", lib.error(status)));
         }
         let count = u32::from_le_bytes(
             config[DRIVER_CONFIG_CHANNEL_COUNT..DRIVER_CONFIG_CHANNEL_COUNT + 4]
@@ -712,7 +721,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             out.push(ChannelInfo {
                 index: channel_index as i32,
                 name: if name.is_empty() {
-                    format!("Vector 通道 {channel_index}")
+                    format!("Vector channel {channel_index}")
                 } else {
                     name
                 },
@@ -996,11 +1005,11 @@ pub mod flexray {
             request: XlAccess,
         ) -> String {
             let Some(lib) = Vxlapi::lib() else {
-                return format!("ch{index} 申请 0x{request:X}：Vector 驱动不可用\n");
+                return format!("ch{index} request 0x{request:X}: Vector driver unavailable\n");
             };
             unsafe {
                 if (lib.open_driver)() != 0 {
-                    return format!("ch{index} 申请 0x{request:X}：xlOpenDriver 失败\n");
+                    return format!("ch{index} request 0x{request:X}: xlOpenDriver failed\n");
                 }
                 let mask = 1u64 << index;
                 let mut permission: XlAccess = request;
@@ -1017,7 +1026,7 @@ pub mod flexray {
                 if status != 0 || port == XL_INVALID_PORT {
                     (lib.close_driver)();
                     return format!(
-                        "ch{index} 申请 0x{request:X}：xlOpenPort 被拒（{}）\n",
+                        "ch{index} request 0x{request:X}: xlOpenPort rejected ({})\n",
                         lib.error(status)
                     );
                 }
@@ -1026,12 +1035,12 @@ pub mod flexray {
                 (lib.close_port)(port);
                 (lib.close_driver)();
                 let outcome = if status == 0 {
-                    "接受".to_string()
+                    "accepted".to_string()
                 } else {
-                    format!("被拒（{}）", lib.error(status))
+                    format!("rejected ({})", lib.error(status))
                 };
                 format!(
-                    "ch{index} 申请 0x{request:X} → 授予 0x{granted:X}，xlFrSetConfiguration {outcome}\n"
+                    "ch{index} request 0x{request:X} -> granted 0x{granted:X}, xlFrSetConfiguration {outcome}\n"
                 )
             }
         }
@@ -1045,12 +1054,12 @@ pub mod flexray {
             config: &XLfrClusterConfig,
             request: XlAccess,
         ) -> Result<FlexRayChannel, String> {
-            let lib =
-                Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
+            let lib = Vxlapi::lib()
+                .ok_or("Vector driver unavailable (vxlapi64.dll / vxlapi.dll not found)")?;
             unsafe {
                 let status = (lib.open_driver)();
                 if status != 0 {
-                    return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
+                    return Err(format!("xlOpenDriver failed ({})", lib.error(status)));
                 }
                 let mask = 1u64 << index;
                 let mut permission: XlAccess = request;
@@ -1067,7 +1076,7 @@ pub mod flexray {
                 if status != 0 || port == XL_INVALID_PORT {
                     (lib.close_driver)();
                     return Err(format!(
-                        "打开 FlexRay 通道 {index} 失败（{}）",
+                        "failed to open FlexRay channel {index} ({})",
                         lib.error(status)
                     ));
                 }
@@ -1084,15 +1093,15 @@ pub mod flexray {
                     // means somebody else holds the channel (or it is not assigned
                     // to this application), not that the parameters are wrong.
                     let granted = if permission == 0 {
-                        "驱动只给到被动权限（授予 0）：这一路多半被别的程序占着，或在 Vector Hardware Config 里没分给本应用——集群配置要的是该通道的 init 权限位"
+                        "driver granted passive access only (granted 0): this channel is most likely held by another program, or not assigned to this application in Vector Hardware Config -- cluster configuration needs the channel's init access bit"
                         .to_string()
                     } else {
                         format!(
-                            "授予权限 0x{permission:016X}：权限在手，那就检查集群参数与目标网络是否一致"
+                            "granted access 0x{permission:016X}: access is held, so check that the cluster parameters match the target network"
                         )
                     };
                     return Err(format!(
-                        "FlexRay 集群配置被拒绝（{}）——{granted}",
+                        "FlexRay cluster configuration rejected ({}): {granted}",
                         lib.error(status)
                     ));
                 }
@@ -1100,7 +1109,10 @@ pub mod flexray {
                 if status != 0 {
                     (lib.close_port)(port);
                     (lib.close_driver)();
-                    return Err(format!("激活通道失败（{}）", lib.error(status)));
+                    return Err(format!(
+                        "failed to activate channel ({})",
+                        lib.error(status)
+                    ));
                 }
                 (lib.flush_receive_queue)(port);
                 Ok(FlexRayChannel { port, mask })
@@ -1134,7 +1146,7 @@ pub mod flexray {
         /// actually runs -- the driver's answer to "what are this network's
         /// timings", removing the need for the user to transcribe them.
         pub fn channel_config(&self) -> Result<XLfrChannelConfig, String> {
-            let lib = Vxlapi::lib().ok_or("Vector 驱动不可用")?;
+            let lib = Vxlapi::lib().ok_or("Vector driver unavailable")?;
             let mut cfg = flexray::XLfrChannelConfig {
                 status: 0,
                 cfg_mode: 0,
@@ -1145,7 +1157,7 @@ pub mod flexray {
                 unsafe { (lib.fr_get_channel_configuration)(self.port, self.mask, &mut cfg) };
             if status != 0 {
                 return Err(format!(
-                    "xlFrGetChannelConfiguration 失败（{}）",
+                    "xlFrGetChannelConfiguration failed ({})",
                     lib.error(status)
                 ));
             }

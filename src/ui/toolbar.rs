@@ -133,6 +133,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item_with_shortcut("Open DBC...", "Ctrl+O") {
                         app.pick_dbc();
                     }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Load a DBC onto the first CAN bus; use Buses to attach one to any other bus",
+                        );
+                    }
                     if ui.menu_item_enabled_selected("Open Log...", None::<&str>, false, !log_switch_blocked(app))
                     {
                         app.pick_log();
@@ -161,8 +166,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         });
                     }
                     ui.separator();
-                    if ui.menu_item_with_shortcut("Export Trace ASC...", "Ctrl+E") {
+                    if ui.menu_item_with_shortcut("Export Trace...", "Ctrl+E") {
                         app.export_trace_dialog(0);
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Export the first Trace window's filtered rows: .asc for CAN/FlexRay, .pcap for Ethernet",
+                        );
                     }
                     ui.separator();
                     if ui.menu_item("Exit") {
@@ -186,11 +196,16 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ) {
                         app.stop();
                     }
-                    if ui.menu_item_enabled_selected_with_shortcut(
-                        "Pause Trace",
-                        "F9",
+                    let pause_label = if app.snap.trace_paused {
+                        "Resume"
+                    } else {
+                        "Pause"
+                    };
+                    if ui.menu_item_enabled_selected(
+                        pause_label,
+                        None::<&str>,
                         app.snap.trace_paused,
-                        true,
+                        app.snap.measuring,
                     ) {
                         app.send(crate::bus::BusCommand::SetTracePaused(
                             !app.snap.trace_paused,
@@ -305,7 +320,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     app.set_replay_speed(vals[pick.min(vals.len() - 1)]);
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("回放倍速：∞ = as fast as possible（不限速，观测器照常逐批刷新）");
+                    ui.tooltip_text("Replay speed: ∞ = as fast as possible (unthrottled; observers still refresh in batches)");
                 }
             }
             speed_on.end();
@@ -326,9 +341,9 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.is_item_hovered() {
                 ui.tooltip_text(
                     if real_bus {
-                        "Real bus：已连接的硬件已启用——RX 进入总线，定向 TX 发出"
+                        "Real bus: attached hardware is enabled — RX enters the bus, directed TX goes out"
                     } else {
-                        "Simulated：纯仿真——硬件连接保留但不收不发"
+                        "Simulated: fully virtual — hardware attachments are kept but neither receive nor transmit"
                     },
                 );
             }
@@ -376,7 +391,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     .hint("record")
                     .build();
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("录制文件名（自动加日期后缀）：保存在工程目录 Record/ 下；填绝对路径则按它保存");
+                    ui.tooltip_text("Recording file name (a date suffix is added): saved under Record/ in the project directory; an absolute path is used as given");
                 }
                 ui.same_line();
                 // The format combo decides ASC vs BLF; the extension is
@@ -390,7 +405,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     &["_<date>.asc", "_<date>.blf"],
                 );
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("录制格式：文件名自动加日期后缀");
+                    ui.tooltip_text("Recording format: a date suffix is appended to the file name");
                 }
                 // The filter commits on edit end: only matching traffic lands in
                 // the file; trace and statistics stay whole-bus.
@@ -415,8 +430,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
                 if ui.is_item_hovered() {
                     ui.tooltip_text(
-                        "只录制这些条目：CAN 写 id（100, 3F4x = 扩展帧），FlexRay 写 FR<路>:<槽>（如 FR0:13）；留空 = 全部。\n\
-                         只管文件内容——Trace、统计、规格监视照旧看全总线。",
+                        "Record only these items: CAN takes an id (100, 3F4x = extended), FlexRay takes \
+                         FR<bus>:<slot> (e.g. FR0:13); empty = everything.\n\
+                         Affects the file only — Trace, statistics and the specification watch still see the whole bus.\n\
+                         中文：只过滤录制文件；Trace、统计和规格仍看整条总线",
                     );
                 }
             }
@@ -441,7 +458,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.is_item_hovered() {
                         if fallback {
                             ui.tooltip_text(format!(
-                                "{path}\n上次录的那份，没另选就直接回放它；Open Log 换一份"
+                                "{path}\nlast recording; replayed as-is unless another log is picked — use Open Log to change it"
                             ));
                         } else {
                             ui.tooltip_text(path);

@@ -113,7 +113,7 @@ fn content(app: &App, ui: &Ui, cmds: &mut Vec<MeasurementCmd>) {
         cmds.push(MeasurementCmd::SetTraceLimit(TRACE_CAPS[cap_idx]));
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("Trace 容量（帧数）：超出后最旧帧被裁掉，Trace 窗口会提示");
+        ui.tooltip_text("Trace capacity (frames): past this the oldest frames are dropped and the Trace window says so");
     }
     ui.separator();
 
@@ -133,7 +133,7 @@ fn content(app: &App, ui: &Ui, cmds: &mut Vec<MeasurementCmd>) {
     ui.table_setup_column_fixed_width("Type", TableColumnFlags::NONE, 96.0);
     ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
     ui.table_setup_column_fixed_width("Filter", TableColumnFlags::NONE, 160.0);
-    ui.table_setup_column_fixed_width("Save", TableColumnFlags::NONE, 44.0);
+    ui.table_setup_column_fixed_width("Export", TableColumnFlags::NONE, 60.0);
     ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
     ui.table_headers_row();
 
@@ -160,6 +160,9 @@ fn content(app: &App, ui: &Ui, cmds: &mut Vec<MeasurementCmd>) {
 fn row_open(ui: &Ui, target: PopupTarget, id: &str, cmds: &mut Vec<MeasurementCmd>) {
     if goto_button(ui, id) {
         cmds.push(MeasurementCmd::Focus(target));
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Show this window and bring it to the front");
     }
 }
 
@@ -192,6 +195,17 @@ fn row_scope(app: &App, ui: &Ui, target: PopupTarget, id: String, cmds: &mut Vec
     }
 }
 
+fn row_remove(ui: &Ui, id: String, target: PopupTarget, cmds: &mut Vec<MeasurementCmd>) {
+    if ui.button(id) {
+        cmds.push(MeasurementCmd::Remove(target));
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "Remove this window from Measurement Setup; it closes and its filter, scope and signal selection are discarded",
+        );
+    }
+}
+
 fn trace_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
     ui.table_next_row();
     if !ui.table_next_column() {
@@ -211,13 +225,11 @@ fn trace_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
         cmds,
     );
     ui.table_next_column();
-    if ui.button(format!("ASC##save_t{i}")) {
+    if ui.button(format!("Export##save_t{i}")) {
         cmds.push(MeasurementCmd::Export(PopupTarget::Trace(i)));
     }
     ui.table_next_column();
-    if ui.button(format!("x##t{i}")) {
-        cmds.push(MeasurementCmd::Remove(PopupTarget::Trace(i)));
-    }
+    row_remove(ui, format!("x##t{i}"), PopupTarget::Trace(i), cmds);
 }
 
 fn messages_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
@@ -245,13 +257,11 @@ fn messages_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
         cmds,
     );
     ui.table_next_column();
-    if ui.button(format!("CSV##save_m{i}")) {
+    if ui.button(format!("Export##save_m{i}")) {
         cmds.push(MeasurementCmd::Export(PopupTarget::Messages(i)));
     }
     ui.table_next_column();
-    if ui.button(format!("x##m{i}")) {
-        cmds.push(MeasurementCmd::Remove(PopupTarget::Messages(i)));
-    }
+    row_remove(ui, format!("x##m{i}"), PopupTarget::Messages(i), cmds);
 }
 
 fn stats_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
@@ -273,13 +283,11 @@ fn stats_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
         cmds,
     );
     ui.table_next_column();
-    if ui.button(format!("CSV##save_s{i}")) {
+    if ui.button(format!("Export##save_s{i}")) {
         cmds.push(MeasurementCmd::Export(PopupTarget::Stats(i)));
     }
     ui.table_next_column();
-    if ui.button(format!("x##s{i}")) {
-        cmds.push(MeasurementCmd::Remove(PopupTarget::Stats(i)));
-    }
+    row_remove(ui, format!("x##s{i}"), PopupTarget::Stats(i), cmds);
 }
 
 /// Filter cell of a Graphics/Data row: a "…" button opening the Signal
@@ -343,13 +351,11 @@ fn graphics_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
     ui.table_next_column();
     signal_cell(app, ui, ListKind::Graphics(i), cmds);
     ui.table_next_column();
-    if ui.button(format!("CSV##save_g{i}")) {
+    if ui.button(format!("Export##save_g{i}")) {
         cmds.push(MeasurementCmd::Export(PopupTarget::Graphics(i)));
     }
     ui.table_next_column();
-    if ui.button(format!("x##g{i}")) {
-        cmds.push(MeasurementCmd::Remove(PopupTarget::Graphics(i)));
-    }
+    row_remove(ui, format!("x##g{i}"), PopupTarget::Graphics(i), cmds);
 }
 
 fn data_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
@@ -365,13 +371,11 @@ fn data_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
     ui.table_next_column();
     signal_cell(app, ui, ListKind::Data(i), cmds);
     ui.table_next_column();
-    if ui.button(format!("CSV##save_d{i}")) {
+    if ui.button(format!("Export##save_d{i}")) {
         cmds.push(MeasurementCmd::Export(PopupTarget::Data(i)));
     }
     ui.table_next_column();
-    if ui.button(format!("x##d{i}")) {
-        cmds.push(MeasurementCmd::Remove(PopupTarget::Data(i)));
-    }
+    row_remove(ui, format!("x##d{i}"), PopupTarget::Data(i), cmds);
 }
 
 /// The State Tracker row mirrors Data: signal-level selection, no CSV
@@ -396,9 +400,7 @@ fn state_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
     signal_cell(app, ui, ListKind::State(i), cmds);
     ui.table_next_column();
     ui.table_next_column();
-    if ui.button(format!("x##st{i}")) {
-        cmds.push(MeasurementCmd::Remove(PopupTarget::State(i)));
-    }
+    row_remove(ui, format!("x##st{i}"), PopupTarget::State(i), cmds);
 }
 
 fn win_name(app: &App, t: PopupTarget) -> &str {

@@ -179,15 +179,17 @@ fn content(app: &App, ui: &Ui) {
         let cluster = app
             .fr_db(bus)
             .map(|db| db.params.name.as_str())
-            .unwrap_or("未加载描述");
+            .unwrap_or("no description loaded");
         ui.text_colored(
             [0.55, 0.8, 1.0, 1.0],
             format!("{} ({cluster})", app.fr_bus_name(bus)),
         );
         if ui.is_item_hovered() {
             ui.tooltip_text(
-                "占用率 = 窗口内到达帧的占用时间之和 / 窗口时长；一帧的占用时间 = gstaticSlot × \
-                 gmacrotick，与载荷长度无关。不含动态段（被动监听只报静态槽）；未加载描述或未声明槽时长时只统计帧数。",
+                "Utilization = sum of the arrival slot times in the window / window length; one frame's \
+                 slot time = gstaticSlot × gmacrotick, independent of payload length. The dynamic segment \
+                 is not included (a passive listen reports static slots only); with no description loaded, \
+                 or none declaring slot timing, only frames are counted.",
             );
         }
         for _ in 1..5 {
@@ -196,7 +198,7 @@ fn content(app: &App, ui: &Ui) {
         let (l_min, l_max, l_avg) = load.load_stats();
         stat_row(
             ui,
-            "静态段占用 [%]",
+            "Static segment load [%]",
             slot_us
                 .map(|_| pct(load.load()))
                 .unwrap_or_else(|| "-".into()),
@@ -332,10 +334,10 @@ fn load_history_section(app: &App, ui: &Ui) {
         }
         ui.text_colored(
             [0.35, 0.65, 1.0, 1.0],
-            format!("{} 负载历史（近 1 分钟）", ch.name),
+            format!("{} load history (last 1 min)", ch.name),
         );
         ui.same_line();
-        ui.text_disabled(format!("当前 {:.2} %", load.load() * 100.0));
+        ui.text_disabled(format!("now {:.2} %", load.load() * 100.0));
 
         let avail = ui.content_region_avail();
         let rect_min = ui.cursor_screen_pos();

@@ -518,7 +518,9 @@ impl Hardware {
             Some((_, total)) => *total += n,
             None => {
                 bh.tx_fail = Some((
-                    format!("发送未被应答（驱动回报 tag 0x{tag:04X}，{n} 条）"),
+                    format!(
+                        "transmission not acknowledged (driver reported tag 0x{tag:04X}, {n} frame(s))"
+                    ),
                     n,
                 ));
                 self.pending_tx_fail.push(bus);

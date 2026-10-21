@@ -86,16 +86,16 @@ impl SysVarDraft {
         let ns = self.namespace.trim();
         let name = self.name.trim();
         if ns.is_empty() || name.is_empty() {
-            return Err("namespace 和名称不能为空".into());
+            return Err("namespace and name must not be empty".into());
         }
         if ns.contains("::") || name.contains("::") {
-            return Err("namespace 和名称不能包含 \"::\"".into());
+            return Err("namespace and name must not contain \"::\"".into());
         }
         let init: f64 = self
             .init
             .trim()
             .parse()
-            .map_err(|_| "初值必须是数字".to_string())?;
+            .map_err(|_| "initial value must be a number".to_string())?;
         let opt = |s: &str| -> Result<Option<f64>, String> {
             let t = s.trim();
             if t.is_empty() {
@@ -103,14 +103,14 @@ impl SysVarDraft {
             }
             t.parse::<f64>()
                 .map(Some)
-                .map_err(|_| "界限必须是数字".to_string())
+                .map_err(|_| "bounds must be numbers".to_string())
         };
         let min = opt(&self.min)?;
         let max = opt(&self.max)?;
         if let (Some(lo), Some(hi)) = (min, max)
             && lo > hi
         {
-            return Err(format!("下界 {lo} 大于上界 {hi}"));
+            return Err(format!("lower bound {lo} is greater than upper bound {hi}"));
         }
         Ok(SysVarDef {
             namespace: ns.to_string(),
@@ -168,7 +168,7 @@ impl SysVarsView {
         ui.same_line();
         ui.align_text_to_frame_padding();
         ui.text_disabled(
-            "sys_get(\"ns::name\") / sys_set(\"ns::name\", v) 访问；每次测量开始复位为初值",
+            "Read with sys_get(\"ns::name\"), write with sys_set(\"ns::name\", v); reset to the initial value when measurement starts",
         );
 
         let n = app.snap.sysvars.len();
@@ -210,7 +210,7 @@ impl SysVarsView {
             let bounded = v.def.min.is_some() || v.def.max.is_some();
             let bounds_tip = if bounded {
                 Some(format!(
-                    "写入会被夹到 {} .. {}",
+                    "writes are clamped to {} .. {}",
                     v.def.min.map(fmt_f64).unwrap_or_else(|| "-".into()),
                     v.def.max.map(fmt_f64).unwrap_or_else(|| "+".into())
                 ))
@@ -294,8 +294,8 @@ impl SysVarsView {
         let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
         ui.modal_popup_with_opened(ID, &mut open, || {
             ui.text(match &draft.editing {
-                Some((ns, name)) => format!("编辑 {ns}::{name}"),
-                None => "新建 system variable".to_string(),
+                Some((ns, name)) => format!("Edit {ns}::{name}"),
+                None => "New system variable".to_string(),
             });
             ui.separator();
             if ui.is_window_appearing() {
@@ -323,13 +323,13 @@ impl SysVarsView {
             row(ui, "Min", |ui| {
                 ui.set_next_item_width(-1.0);
                 ui.input_text("##svmin", &mut draft.min)
-                    .hint("无限制")
+                    .hint("no limit")
                     .build();
             });
             row(ui, "Max", |ui| {
                 ui.set_next_item_width(-1.0);
                 ui.input_text("##svmax", &mut draft.max)
-                    .hint("无限制")
+                    .hint("no limit")
                     .build();
             });
             row(ui, "Unit", |ui| {

@@ -456,13 +456,13 @@ impl TraceWin {
             conds.push("payload");
         }
         if f.flags_kind != 0 {
-            conds.push("帧类型");
+            conds.push("frame kind");
         }
         if f.dbc_only {
-            conds.push("仅 DBC");
+            conds.push("DBC only");
         }
         if f.from_s.is_some() || f.to_s.is_some() {
-            conds.push("时间范围");
+            conds.push("time range");
         }
         conds
     }
@@ -1336,7 +1336,7 @@ impl App {
         };
         match db.match_flow(&eth_flow(key), self.eth_length_includes_header) {
             crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
-            crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} 个候选>  {macs}"),
+            crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} candidates>  {macs}"),
             crate::eth::db::EthMatch::None => macs,
         }
     }

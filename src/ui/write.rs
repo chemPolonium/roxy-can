@@ -92,28 +92,28 @@ impl App {
 }
 
 fn content(view: &mut WriteView, app: &App, ui: &Ui, cmds: &mut Vec<WriteCmd>) {
-    if ui.button("清空") {
+    if ui.button("Clear") {
         cmds.push(WriteCmd::Clear);
     }
     ui.same_line();
-    if ui.button("导出") {
+    if ui.button("Export") {
         cmds.push(WriteCmd::Export);
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("把当前过滤视图导出为文本文件");
+        ui.tooltip_text("Export the current filtered view as a text file");
     }
     ui.same_line();
     ui.align_text_to_frame_padding();
-    ui.text_disabled("按类别：");
+    ui.text_disabled("Kind:");
     // Per-kind visibility; the order mirrors WriteKind's variants.
-    const LABELS: [&str; 4] = ["脚本", "信息", "告警", "错误"];
+    const LABELS: [&str; 4] = ["Script", "Info", "Warning", "Error"];
     for (slot, label) in view.filter.iter_mut().zip(LABELS) {
         ui.same_line();
         ui.checkbox(label, slot);
     }
     ui.same_line();
     ui.align_text_to_frame_padding();
-    ui.text_disabled("脚本输出、检查告警与系统事件");
+    ui.text_disabled("script output, checks, system events");
 
     // Stick to the bottom while the user hasn't scrolled up to read
     // something: arrivals keep appending below otherwise.

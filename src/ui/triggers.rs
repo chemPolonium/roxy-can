@@ -145,7 +145,7 @@ fn content(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCm
     }
     if ui.is_item_hovered() {
         ui.tooltip_text(
-            "重置出现类条件的锁存（CAN ID / 错误帧 / FlexRay 槽）：下一个对应事件再次触发",
+            "Re-arm latched presence conditions (CAN ID / error frame / FlexRay slot): the next matching event fires again",
         );
     }
     // Trigger-recording context: pre-trigger frames, post-roll frames,
@@ -154,7 +154,7 @@ fn content(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCm
     // are settings for a trigger-driven recording, not ways to add a rule, and
     // sharing the row pushed the last buttons off the window.
     ui.align_text_to_frame_padding();
-    ui.text_disabled("预触发");
+    ui.text_disabled("pre-trigger");
     ui.same_line();
     ui.set_next_item_width(64.0);
     let mut pre = app.limits.pre_frames as i32;
@@ -162,7 +162,9 @@ fn content(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCm
         cmds.push(TriggerCmd::SetPreFrames(pre.max(0) as usize));
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("触发启动的录制：文件以事件前这么多帧开头");
+        ui.tooltip_text(
+            "Trigger-started recording: the file begins this many frames before the event",
+        );
     }
     ui.same_line();
     ui.align_text_to_frame_padding();
@@ -174,11 +176,13 @@ fn content(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCm
         cmds.push(TriggerCmd::SetPostFrames(post.max(0) as u32));
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("触发停止的录制：边沿后再滚这么多帧才闭文件");
+        ui.tooltip_text(
+            "Trigger-stopped recording: keep rolling this many frames past the edge before closing the file",
+        );
     }
     ui.same_line();
     ui.align_text_to_frame_padding();
-    ui.text_disabled("标记上限");
+    ui.text_disabled("marker cap");
     ui.same_line();
     ui.set_next_item_width(64.0);
     let mut cap = app.limits.marker_cap as i32;
@@ -186,7 +190,7 @@ fn content(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCm
         cmds.push(TriggerCmd::SetMarkerCap(cap.max(8) as usize));
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("Graphics 标记竖线最多保留这么多条");
+        ui.tooltip_text("Keep at most this many marker lines in Graphics");
     }
     ui.separator();
 

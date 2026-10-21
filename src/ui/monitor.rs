@@ -56,7 +56,9 @@ impl MonitorView {
             cmds.push(MonitorCmd::OpenPicker);
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("从信号选择器挑一行监控（数据库信号 / 派生信号 / 系统变量）");
+            ui.tooltip_text(
+                "Pick a row from the signal picker (database, derived, or system variable)",
+            );
         }
         ui.same_line();
         if ui.button("Clear") {
@@ -126,7 +128,7 @@ impl MonitorView {
             self.rows[i].rule_on = !self.rows[i].rule_on;
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("开关着色规则");
+            ui.tooltip_text("Toggle the coloring rule");
         }
         ui.same_line();
         ui.set_next_item_width(66.0);
@@ -139,7 +141,7 @@ impl MonitorView {
             self.rows[i].threshold = th as f64;
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("着色阈值");
+            ui.tooltip_text("Color threshold");
         }
         ui.same_line();
         let dir = if self.rows[i].rising { ">=" } else { "<=" };
@@ -147,7 +149,7 @@ impl MonitorView {
             self.rows[i].rising = !self.rows[i].rising;
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("切换方向");
+            ui.tooltip_text("Flip the comparison direction");
         }
         ui.same_line();
         let digits = self.rows[i].digits;
@@ -155,7 +157,7 @@ impl MonitorView {
             self.rows[i].digits = (digits + 1) % 4;
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("小数位数");
+            ui.tooltip_text("Decimal places");
         }
         ui.same_line();
         if ui.button(format!("x##mrm{i}")) {

@@ -189,7 +189,7 @@ impl ScriptNode {
                     &mut self.log,
                     &mut self.log_dirty,
                     &mut self.pending_lines,
-                    format!("[check] 系统变量未定义: \"{key}\""),
+                    format!("[check] system variable undefined: \"{key}\""),
                 );
             }
         }
@@ -345,8 +345,10 @@ impl ScriptNode {
                         (Some(o), Some(n)) => {
                             format!("$\"{msg}\"::{sig} id 0x{o:X} -> 0x{n:X}")
                         }
-                        (Some(o), None) => format!("$\"{msg}\" (0x{o:X}) 已从库中移除"),
-                        (None, Some(n)) => format!("$\"{msg}\" 新增 (0x{n:X})"),
+                        (Some(o), None) => {
+                            format!("$\"{msg}\" (0x{o:X}) was removed from the database")
+                        }
+                        (None, Some(n)) => format!("$\"{msg}\" added (0x{n:X})"),
                         (None, None) => continue,
                     };
                     Self::push_log_into(
@@ -810,21 +812,25 @@ pub fn dbc_checks(
             .message_of(*id)
             .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
         if !known {
-            lines.push(format!("[check] 信号未在 DBC 中找到: 0x{id:X} \"{sig}\""));
+            lines.push(format!(
+                "[check] signal not found in DBC: 0x{id:X} \"{sig}\""
+            ));
         }
     }
     // `$Message::Signal` 的名字对同样要能落到库上：报文名查不到、或查
     // 到了但信号名不在该报文里，都在装配时报出——拼错名字是显式失败。
     for (msg, sig) in &script.named_signal_refs {
         let Some(id) = db.message_id_by_name(msg) else {
-            lines.push(format!("[check] 报文名未在 DBC 中找到: \"{msg}\""));
+            lines.push(format!("[check] message name not found in DBC: \"{msg}\""));
             continue;
         };
         let known = db
             .message_of(id)
             .is_some_and(|m| m.signals.iter().any(|s| s.name == *sig));
         if !known {
-            lines.push(format!("[check] 信号未在 DBC 中找到: \"{msg}\" \"{sig}\""));
+            lines.push(format!(
+                "[check] signal not found in DBC: \"{msg}\" \"{sig}\""
+            ));
         }
     }
     // 发送集对照 DBC 发送者声明：发送了不属于绑定节点的报文 →
@@ -835,10 +841,12 @@ pub fn dbc_checks(
             match db.messages.get(&key) {
                 Some(m) if m.transmitter == attached_node => {} // own message
                 Some(m) => lines.push(format!(
-                    "[check] 0x{id:X} 是 {} 的报文，不是 {attached_node} 的",
+                    "[check] 0x{id:X} belongs to {}, not {attached_node}",
                     m.transmitter
                 )),
-                None => lines.push(format!("[check] 0x{id:X} 不在 DBC 中（自定义报文）")),
+                None => lines.push(format!(
+                    "[check] 0x{id:X} is not in the DBC (custom message)"
+                )),
             }
         }
     }
@@ -870,12 +878,12 @@ pub fn dbc_checks(
                 .collect::<Vec<_>>()
                 .join(", ");
             let more = if missing.len() > SHOW {
-                format!(" 等 {} 条", missing.len())
+                format!(" and {} more", missing.len())
             } else {
                 String::new()
             };
             lines.push(format!(
-                "[info] DBC 声明本节点发送、脚本未发送（可能由生成器代发）: {list}{more}"
+                "[info] the DBC declares frames this node sends but the script never sends them (the generator may send them): {list}{more}"
             ));
         }
     }
@@ -888,11 +896,11 @@ pub fn dbc_checks(
         && script.recv_wildcard
     {
         lines.push(format!(
-            "[info] on message *：本脚本按「转发者/记录者」归类，发送集 = 接收集 ∩ 库声明（{attached_node}）"
+            "[info] on message *: classified as forwarder/recorder; send set = received set ∩ DBC declaration ({attached_node})"
         ));
         if script.wildcard_sends() {
             lines.push(
-                "[info] 通配 handler 内有发送：发出的帧会再次进入本 handler（自激成环风险）——转发前用 frame_id() 排除自己的报文（参考 examples/sniffer.rxcan）"
+                "[info] a wildcard handler sends frames: they re-enter this handler (feedback-loop risk) -- exclude your own frames with frame_id() before forwarding (see examples/sniffer.rxcan)"
                     .to_string(),
             );
         }
@@ -909,7 +917,7 @@ pub fn dbc_checks(
         };
         if s.max > s.min && (*v < s.min || *v > s.max) {
             lines.push(format!(
-                "[check] set_sig 0x{id:X} \"{sig}\" 值 {v} 超出 DBC 声明范围 {}..{}",
+                "[check] set_sig 0x{id:X} \"{sig}\" value {v} is outside the DBC range {}..{}",
                 s.min, s.max
             ));
         }
@@ -1050,20 +1058,20 @@ BO_ 512 GearInfo: 8 GearBox
         let logs = n.log_snapshot();
         assert!(
             logs.iter()
-                .any(|l| l.contains("0x101") && l.contains("脚本未发送")),
+                .any(|l| l.contains("0x101") && l.contains("never sends them")),
             "EngineCmd (0x101) is named: {logs:?}"
         );
         assert!(
             !logs
                 .iter()
-                .any(|l| l.contains("未发送") && l.contains("0x100")),
+                .any(|l| l.contains("never sends") && l.contains("0x100")),
             "the implemented EngineStatus is not flagged"
         );
         // Foreign DBC traffic (GearBox's 0x200) is nobody's business here.
         assert!(
             !logs
                 .iter()
-                .any(|l| l.contains("未发送") && l.contains("0x200")),
+                .any(|l| l.contains("never sends") && l.contains("0x200")),
             "another node's messages are not this script's job"
         );
     }
@@ -1076,7 +1084,9 @@ BO_ 512 GearInfo: 8 GearBox
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
-            !n.log_snapshot().iter().any(|l| l.contains("脚本未发送")),
+            !n.log_snapshot()
+                .iter()
+                .any(|l| l.contains("never sends them")),
             "a wildcard forwarder is exempt"
         );
     }
@@ -1101,12 +1111,12 @@ BO_ 512 GearInfo: 8 GearBox
         let logs = n.log_snapshot();
         assert!(
             logs.iter()
-                .any(|l| l.contains("转发者") && l.contains("接收集")),
+                .any(|l| l.contains("forwarder") && l.contains("received set")),
             "the forwarder classification line is there: {logs:?}"
         );
         assert!(
             logs.iter()
-                .any(|l| l.contains("自激成环") && l.starts_with("[info]")),
+                .any(|l| l.contains("feedback-loop") && l.starts_with("[info]")),
             "the self-excitation hint is info-level: {logs:?}"
         );
 
@@ -1115,7 +1125,7 @@ BO_ 512 GearInfo: 8 GearBox
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
-            !n.log_snapshot().iter().any(|l| l.contains("自激成环")),
+            !n.log_snapshot().iter().any(|l| l.contains("feedback-loop")),
             "no send, no loop hint"
         );
     }
@@ -1128,7 +1138,7 @@ BO_ 512 GearInfo: 8 GearBox
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
-            n.log_snapshot().iter().any(|l| l.contains("自激成环")),
+            n.log_snapshot().iter().any(|l| l.contains("feedback-loop")),
             "an unguarded pure forward is the textbook loop: {logs:?}",
             logs = n.log_snapshot()
         );
@@ -1152,7 +1162,7 @@ BO_ 512 GearInfo: 8 GearBox
         let logs = n.log_snapshot();
         assert!(
             logs.iter()
-                .any(|l| l.contains("9999") && l.contains("超出")),
+                .any(|l| l.contains("9999") && l.contains("outside")),
             "the out-of-range literal is named: {logs:?}"
         );
         assert!(

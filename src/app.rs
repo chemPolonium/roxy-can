@@ -633,7 +633,7 @@ impl App {
             self.log_status(crate::bus::WriteKind::Error, p.clone());
         }
         self.status = format!(
-            "{} · {} 项未能载入（Write 窗口有明细）",
+            "{} · {} item(s) failed to load (details in Write)",
             self.status,
             problems.len()
         );
@@ -1070,7 +1070,7 @@ impl App {
                 .and_then(
                     |db| match db.match_flow(&flow, self.eth_length_includes_header) {
                         crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
-                        crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                        crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} candidates>")),
                         crate::eth::db::EthMatch::None => None,
                     },
                 )
@@ -1201,12 +1201,12 @@ impl App {
                     .and_then(|db| db.frame_index(*ix))
                     .map(|f| {
                         if f.name.is_empty() {
-                            format!("slot {slot} 的帧 {ix}")
+                            format!("frame {ix} in slot {slot}")
                         } else {
                             f.name.clone()
                         }
                     })
-                    .unwrap_or_else(|| "当前描述已无此帧".to_string()),
+                    .unwrap_or_else(|| "frame no longer in the current description".to_string()),
                 None => "not in the schedule".to_string(),
             };
             out.push(crate::spec::SpecRow {
@@ -1355,7 +1355,7 @@ impl App {
             } else if declared.is_none() {
                 Some("(not in DBC)".to_string())
             } else {
-                Some("（该报文不声明信号）".to_string())
+                Some("(message declares no signals)".to_string())
             };
             rows.push(MsgRowText {
                 label: format!("{id_str}  {name}"),
@@ -1444,15 +1444,18 @@ impl App {
                 let empty_note = if !signals.is_empty() {
                     None
                 } else if db.is_none() {
-                    Some(format!("（{} 未加载集群描述）", self.fr_bus_name(agg.bus)))
+                    Some(format!(
+                        "({} has no cluster description)",
+                        self.fr_bus_name(agg.bus)
+                    ))
                 } else if frame_ix.is_none() {
                     Some(format!(
-                        "（{} 的描述未在 slot {} 调度此帧）",
+                        "({} description schedules no frame in slot {})",
                         self.fr_bus_name(agg.bus),
                         agg.slot
                     ))
                 } else {
-                    Some("（该帧不声明信号）".to_string())
+                    Some("(frame declares no signals)".to_string())
                 };
                 rows.push(MsgRowText {
                     label,
@@ -1503,7 +1506,7 @@ impl App {
                 db.and_then(
                     |db| match db.match_flow(&flow, self.eth_length_includes_header) {
                         crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
-                        crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                        crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} candidates>")),
                         crate::eth::db::EthMatch::None => None,
                     },
                 );
@@ -1545,11 +1548,11 @@ impl App {
             let empty_note = if !signals.is_empty() {
                 None
             } else if db.is_none() {
-                Some(format!("（ETH{} 未加载 ARXML）", agg.key.bus))
+                Some(format!("(ETH{} has no ARXML loaded)", agg.key.bus))
             } else if matched.is_none() {
-                Some("（多个或没有 ARXML 帧匹配该 flow）".to_string())
+                Some("(multiple or no ARXML frames match this flow)".to_string())
             } else {
-                Some("（该帧不声明信号）".to_string())
+                Some("(frame declares no signals)".to_string())
             };
             rows.push(MsgRowText {
                 label: format!("ETH{}  {name}", agg.key.bus),

@@ -105,6 +105,9 @@ pub fn scope_combo(
     if ui.button(format!("…{id}")) {
         *open_picker = true;
     }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Open the selection popup: choose buses or hand-pick messages and signals");
+    }
     kinds[cur.min(kinds.len() - 1)]
 }
 
@@ -455,7 +458,7 @@ fn eth_flow_label(app: &App, key: &crate::aggregate::EthFlowKey) -> String {
     let vlan = key
         .vlan
         .map(|v| format!("VLAN {v}"))
-        .unwrap_or_else(|| "无 VLAN".to_string());
+        .unwrap_or_else(|| "no VLAN".to_string());
     format!(
         "{}  {vlan}  {}",
         app.eth_bus_label(key.bus),
@@ -703,12 +706,12 @@ fn emitted_section(
     ui.text_colored(
         [0.75, 0.55, 1.0, 1.0],
         format!(
-            "派生信号  ({}/{})",
+            "Derived signals  ({}/{})",
             streams.iter().filter(|(k, _)| sel.contains(k)).count(),
             streams.len()
         ),
     );
-    ui.text_disabled("脚本节点 emit_value 发布的派生信号");
+    ui.text_disabled("Derived signals published by script nodes via emit_value");
     for (key, node_name) in &streams {
         let mut on = sel.contains(key);
         // The id suffix only has to be unique per stream, so it spells
@@ -785,7 +788,7 @@ fn flexray_section(
         [0.35, 0.80, 0.60, 1.0],
         format!("FlexRay ({sel_n}/{total})"),
     );
-    ui.text_disabled("FlexRay 描述数据库解析出的信号");
+    ui.text_disabled("Signals decoded from the FlexRay description database");
     for (bus, slot, frame, sigs) in &hits {
         let keys: Vec<_> = sigs.iter().map(|s| key(*bus, *slot, s)).collect();
         let m_sel = keys.iter().filter(|k| sel.contains(k)).count();
@@ -873,7 +876,7 @@ fn eth_section(
         [0.90, 0.70, 0.30, 1.0],
         format!("Ethernet ({sel_n}/{total})"),
     );
-    ui.text_disabled("ARXML 以太网矩阵解析出的信号");
+    ui.text_disabled("Signals decoded from the ARXML Ethernet matrix");
     for (bus, frame, sigs) in &hits {
         let keys: Vec<_> = sigs.iter().map(|s| key(*bus, frame, s)).collect();
         let m_sel = keys.iter().filter(|k| sel.contains(k)).count();

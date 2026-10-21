@@ -157,7 +157,7 @@ fn file_name(p: &str) -> String {
 fn fr_cluster_tag(app: &App, bus: u8) -> String {
     match app.fr_db(bus) {
         Some(db) if !db.params.name.is_empty() => {
-            format!("{}（{} 帧）", db.params.name, db.frames.len())
+            format!("{} ({} frames)", db.params.name, db.frames.len())
         }
         _ => String::new(),
     }
@@ -172,9 +172,9 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     use crate::replay_map::LogBusKind;
 
     ui.separator();
-    ui.text("回放通道映射");
+    ui.text("Replay channel map");
     if ui.is_item_hovered() {
-        ui.tooltip_text("把日志里的通道编号指到本工程的哪一路；改完立即生效，随工程保存");
+        ui.tooltip_text("Maps a log's channel numbers onto buses of this project; takes effect immediately and is saved with the project\n中文：日志通道编号 → 本工程的路，改完立即生效并随工程保存");
     }
 
     let map = app.snap.replay_map.clone();
@@ -188,7 +188,7 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         &map.configured(LogBusKind::Eth),
     );
     if can_rows.is_empty() && fr_rows.is_empty() && eth_rows.is_empty() {
-        ui.text_disabled("回放一个日志之后，这里列出日志里有哪几路通道。");
+        ui.text_disabled("Replay a log and the channels it contains are listed here.");
         return;
     }
 
@@ -213,9 +213,9 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         (LogBusKind::Eth, &eth_rows, &eth_names),
     ] {
         let header = match kind {
-            LogBusKind::Can => "日志里的 CAN 通道",
-            LogBusKind::Fr => "日志里的 FlexRay 通道",
-            LogBusKind::Eth => "日志里的以太网通道",
+            LogBusKind::Can => "CAN channels in the log",
+            LogBusKind::Fr => "FlexRay channels in the log",
+            LogBusKind::Eth => "Ethernet channels in the log",
         };
         ui.text_disabled(header);
         let opts = dear_imgui_rs::TableOptions::from(TableFlags::NONE)
@@ -231,9 +231,9 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         ) else {
             continue;
         };
-        ui.table_setup_column_fixed_width("编号", TableColumnFlags::NONE, 120.0);
-        ui.table_setup_column_fixed_width("条数", TableColumnFlags::NONE, 90.0);
-        ui.table_setup_column_stretch_weight("回放成", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_column_fixed_width("Channel", TableColumnFlags::NONE, 120.0);
+        ui.table_setup_column_fixed_width("Frames", TableColumnFlags::NONE, 90.0);
+        ui.table_setup_column_stretch_weight("Replay as", TableColumnFlags::NONE, 1.0);
         ui.table_headers_row();
         for &(raw, count) in rows {
             ui.table_next_row();
@@ -247,24 +247,24 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             // 起算后的下标），FlexRay 的 cluster 号与以太网的 capture channel
             // 都与 Buses 表里 `#0` 同一套。
             ui.text(match kind {
-                LogBusKind::Can => format!("通道 {}", raw + 1),
+                LogBusKind::Can => format!("Channel {}", raw + 1),
                 LogBusKind::Fr | LogBusKind::Eth => format!("#{raw}"),
             });
             ui.table_next_column();
             ui.text(count.to_string());
             if ui.is_item_hovered() {
-                ui.tooltip_text("本次回放里这一路来了多少条；选了不回放的就是被挡掉的条数");
+                ui.tooltip_text("Frames that arrived on this channel in this replay; for a channel set to No replay, the frames it blocks");
             }
             ui.table_next_column();
             // 原样 → 本工程的某一路 → 不回放。第一项是"表里没这一行"，所以
             // 选中它就等于取消这一行，以后加了新的一路还能自动接上。
             let mut labels: Vec<String> = Vec::with_capacity(targets.len() + 2);
             labels.push(match kind {
-                LogBusKind::Can => format!("原样（通道 {}）", raw + 1),
-                LogBusKind::Fr | LogBusKind::Eth => format!("原样（#{raw}）"),
+                LogBusKind::Can => format!("As-is (channel {})", raw + 1),
+                LogBusKind::Fr | LogBusKind::Eth => format!("As-is (#{raw})"),
             });
             labels.extend(targets.iter().cloned());
-            labels.push("不回放".to_string());
+            labels.push("No replay".to_string());
             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
             // 当前值问的是核心会怎么做，不是表里写了什么：编号在本工程对不上
             // 一路时核心就把它挡在门外，那一行在这里就该显示「不回放」。
@@ -306,7 +306,7 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 edited.set(kind, raw, to);
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("这一路日志回放成工程的哪一路；不回放就不进 Trace");
+                ui.tooltip_text("Which project bus this log channel replays as; No replay keeps it out of the Trace");
             }
         }
     }
@@ -348,12 +348,12 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     ui.same_line();
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
-    if ui.button("刷新通道##hwref") {
+    if ui.button("Refresh channels##hwref") {
         view.hw_channels = None;
         view.fr_channels = None;
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("重新枚举本机硬件通道（Kvaser / Vector）");
+        ui.tooltip_text("Re-enumerate this machine's hardware channels (Kvaser / Vector)");
     }
     ui.separator();
 
@@ -369,7 +369,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
         ui.table_setup_column_stretch_weight("DBC", TableColumnFlags::NONE, 1.6);
         ui.table_setup_column_fixed_width("kbit/s (arb / FD data)", TableColumnFlags::NONE, 190.0);
-        ui.table_setup_column_fixed_width("硬件", TableColumnFlags::NONE, 140.0);
+        ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, 140.0);
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
 
@@ -433,14 +433,14 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 cmds.push(BusesCmd::PickDbc(i));
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("换这条总线的主 DBC 文件（解码与查名以它为先）");
+                ui.tooltip_text("Change this bus's primary DBC file (it takes precedence for decoding and name lookup)");
             }
             ui.same_line();
             if ui.button(format!("+##busdbadd{i}")) {
                 cmds.push(BusesCmd::AttachDbc(i));
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("附加更多 DBC 文件到该总线");
+                ui.tooltip_text("Attach more DBC files to this bus");
             }
             // Extra attached databases: one line each with a detach button.
             for (e, extra) in extras.iter().enumerate() {
@@ -471,10 +471,10 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 });
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("仲裁段比特率 kbit/s（选一个，选中即下发）");
+                ui.tooltip_text("Arbitration bit rate in kbit/s (pick one; applied on selection)");
             }
             ui.same_line();
-            let (data_vals, data_labels) = rate_choices(CAN_DATA_KBPS, data_kbps, "0（无 FD 段）");
+            let (data_vals, data_labels) = rate_choices(CAN_DATA_KBPS, data_kbps, "0 (no FD)");
             let data_refs: Vec<&str> = data_labels.iter().map(|s| s.as_str()).collect();
             let data_at = data_vals.iter().position(|v| *v == data_kbps).unwrap_or(0);
             let mut data_pick = data_at;
@@ -489,7 +489,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "CAN FD 数据段比特率 kbit/s。0 = 这条总线没有 FD 数据段（经典 CAN 就选它）。",
+                    "CAN FD data-phase bit rate in kbit/s. 0 = this bus has no FD data phase (pick it for classic CAN).",
                 );
             }
             ui.table_next_column();
@@ -520,10 +520,10 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                     // 用户以为帧发不出去是适配器坏了。
                     if !app.snap.real_bus {
                         ui.same_line();
-                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "未启用");
+                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "inactive");
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "总线模式为 Simulated：硬件配置保留但不收不发；顶部切到 Real bus 即启用",
+                                "Bus mode is Simulated: the hardware configuration is kept but nothing is received or transmitted; switch to Real bus at the top to enable it",
                             );
                         }
                     }
@@ -535,14 +535,14 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                         // 常驻提示（状态行早已被后续事件冲掉）。
                         ui.tooltip_text(if can_tx {
                             if fd {
-                                "连接中（收发，FD 数据段参数已应用）"
+                                "Attached (TX/RX, FD data-phase settings applied)"
                             } else if data_kbps > 0 {
-                                "连接中（收发）。总线配了 FD 数据段波特率，但通道未带 FD——预设不匹配或硬件不支持，FD 帧无法经该通道发送。"
+                                "Attached (TX/RX). The bus declares an FD data-phase rate but the channel did not come up with FD — preset mismatch or unsupported hardware, so FD frames cannot be sent on this channel."
                             } else {
-                                "连接中（收发）"
+                                "Attached (TX/RX)"
                             }
                         } else {
-                            "连接中（仅接收：通道初始化访问被其他程序占用）"
+                            "Attached (receive-only: channel init access was taken by another program)"
                         });
                     }
                     // The wire refusing writes is the one failure a bench cannot
@@ -550,9 +550,11 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                     // every view keeps scrolling. So the row carries the count,
                     // and the reason the driver gave, permanently.
                     if let Some((reason, n)) = &tx_fail {
-                        ui.text_colored([1.0, 0.45, 0.35, 1.0], format!("发送被拒 ×{n}"));
+                        ui.text_colored([1.0, 0.45, 0.35, 1.0], format!("TX refused ×{n}"));
                         if ui.is_item_hovered() {
-                            ui.tooltip_text(format!("线路拒绝发送 {n} 次，第一次的原因：{reason}"));
+                            ui.tooltip_text(format!(
+                                "The wire refused transmission {n} time(s); first reason: {reason}"
+                            ));
                         }
                     }
                 }
@@ -587,11 +589,11 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                             }
                             if ui.is_item_hovered() {
                                 ui.tooltip_text(
-                                    "连接适配器：收到的帧进入总线，节点可经它发送（[K] Kvaser / [V] Vector）",
+                                    "Attach an adapter: received frames enter the bus and nodes can transmit through it ([K] Kvaser / [V] Vector)",
                                 );
                             }
                         }
-                        Ok(_) => ui.text_disabled("无通道"),
+                        Ok(_) => ui.text_disabled("No channels"),
                         Err(e) => ui.text_disabled(e),
                     }
                 }
@@ -602,7 +604,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "移除这条总线；后面的总线号依次前移，关联到它的曲线与条目随之删除或重编号。",
+                    "Remove this bus; later bus numbers shift down and the curves and items tied to it are deleted or renumbered.",
                 );
             }
         }
@@ -645,10 +647,12 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         cmds.push(BusesCmd::AddFrBus);
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("添加一条 FlexRay 路：先为它选择集群描述（取消则不添加）。");
+        ui.tooltip_text(
+            "Add a FlexRay bus: pick its cluster description first (cancelling adds nothing).",
+        );
     }
     ui.same_line();
-    ui.text(format!("{} 路", rows.len()));
+    ui.text(format!("{} bus(es)", rows.len()));
     let mut detach = None;
     let mut remove_fr = None;
     let mut attach: Option<(u8, i32)> = None;
@@ -663,8 +667,8 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         ui.table_setup_column_stretch_weight("FIBEX/ARXML", TableColumnFlags::NONE, 1.6);
         // Same widths as the CAN table, so the two line up column for column --
         // 190 because CAN's cell holds two combos side by side.
-        ui.table_setup_column_fixed_width("kbit/s · 周期 ms", TableColumnFlags::NONE, 190.0);
-        ui.table_setup_column_fixed_width("硬件", TableColumnFlags::NONE, 140.0);
+        ui.table_setup_column_fixed_width("kbit/s · cycle ms", TableColumnFlags::NONE, 190.0);
+        ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, 140.0);
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
         for bus in rows {
@@ -715,7 +719,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 // cluster's frames, and they stay nameless until a description
                 // lands here. Say so -- an unnamed row with "(none)" in it reads
                 // as a half-added bus.
-                meta.push_str(" · 日志里有这路流量");
+                meta.push_str(" · traffic seen in log");
             }
             ui.text_disabled(meta);
             ui.table_next_column();
@@ -743,7 +747,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "换这路的集群描述文件（帧名与信号解码以它为先）；只加载描述，不打开端口。",
+                    "Change this bus's cluster description (it takes precedence for frame names and signal decoding); loading the description does not open the port.",
                 );
             }
             if !tag.is_empty() {
@@ -754,7 +758,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 Some((kbps, cycle)) => {
                     ui.text(format!("{kbps} / {cycle:.2}"));
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("描述声明的比特率与宏周期；此列只读——要改得改描述文件。");
+                        ui.tooltip_text("Bit rate and macro cycle declared by the description; read-only — edit the description file to change them.");
                     }
                 }
                 None => ui.text_disabled("-"),
@@ -764,15 +768,15 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 Some(w) => {
                     // 两行布局，与 CAN 行一致：状态一行、断开按钮一行。单行放不下
                     // 时按钮会被单元格右边缘裁掉（CAN 那列早已写下这条教训）。
-                    ui.text(format!("[V] ch{}（仅接收）", w.channel_index));
+                    ui.text(format!("[V] ch{} (RX only)", w.channel_index));
                     // Simulated 模式下端口已连接但不收帧——列内写明，免得用户以为
                     // 适配器坏了。
                     if !app.snap.real_bus {
                         ui.same_line();
-                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "未启用");
+                        ui.text_colored([1.0, 0.8, 0.4, 1.0], "inactive");
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "总线模式为 Simulated：监听配置保留但不收帧；顶部切到 Real bus 即启用",
+                                "Bus mode is Simulated: the listen configuration is kept but no frames are received; switch to Real bus at the top to enable it",
                             );
                         }
                     }
@@ -780,11 +784,11 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                         detach = Some(bus);
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("关闭这路的接收端口；这路的描述与所有曲线保留。");
+                        ui.tooltip_text("Close this bus's receive port; its description and all curves are kept.");
                     }
                 }
                 None => match &listed {
-                    Ok(_) if free.is_empty() => ui.text_disabled("无空闲 FlexRay 通道"),
+                    Ok(_) if free.is_empty() => ui.text_disabled("No free FlexRay channel"),
                     Err(e) => ui.text_disabled(e.as_str()),
                     Ok(_) => {
                         // Picking a port from the combo is the attach, exactly
@@ -806,7 +810,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text(
-                                "以仅接收方式连接（Vector 端口），选中即连接；这行需要先有集群描述。",
+                                "Attach in receive-only mode (Vector port); selecting connects. This row needs a cluster description first.",
                             );
                         }
                     }
@@ -827,7 +831,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 }
                 if ui.is_item_hovered() {
                     ui.tooltip_text(
-                        "删除这路 FlexRay：关闭端口、移除集群描述与引用它的所有曲线、发送条目和规则；其他各路编号不变。",
+                        "Remove this FlexRay bus: closes the port and drops the cluster description plus every curve, transmit item and rule that refers to it; other bus numbers stay unchanged.",
                     );
                 }
             }
@@ -855,19 +859,23 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         cmds.push(BusesCmd::AddEthBus);
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("选择 AUTOSAR Ethernet 通信矩阵（ARXML）");
+        ui.tooltip_text("Pick an AUTOSAR Ethernet communication matrix (ARXML)");
     }
     ui.same_line();
     let eth_rows = app.eth_bus_rows();
-    ui.text(format!("{} 路", eth_rows.len()));
+    ui.text(format!("{} bus(es)", eth_rows.len()));
     let mut len_includes_header = app.eth_length_includes_header;
-    if ui.checkbox("FRAME-LENGTH 含 L2 头##ethlen", &mut len_includes_header) {
+    if ui.checkbox(
+        "FRAME-LENGTH includes L2 header##ethlen",
+        &mut len_includes_header,
+    ) {
         cmds.push(BusesCmd::SetEthLengthIncludesHeader(len_includes_header));
     }
     if ui.is_item_hovered() {
         ui.tooltip_text(
-            "ARXML 的 FRAME-LENGTH 是否包含 14 字节以太网头：捕获帧的 payload 不含头，\
-             打开后匹配长度时按「声明长度 - 14」计算；随工程保存",
+            "Whether the ARXML FRAME-LENGTH includes the 14-byte Ethernet header: captured payloads exclude it, \
+             so with this on, lengths are matched as \"declared - 14\"; saved with the project\n\
+             中文：开启后按「声明长度 − 14 字节」匹配捕获 payload；随工程保存",
         );
     }
     if !eth_rows.is_empty() {
@@ -878,7 +886,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         if let Some(_t) = ui.begin_table_with_flags("eth_table", 5, opts) {
             ui.table_setup_column_fixed_width("Eth", TableColumnFlags::NONE, 46.0);
             ui.table_setup_column_stretch_weight("ARXML", TableColumnFlags::NONE, 1.6);
-            ui.table_setup_column_stretch_weight("VLAN / 帧", TableColumnFlags::NONE, 1.0);
+            ui.table_setup_column_stretch_weight("VLAN / frames", TableColumnFlags::NONE, 1.0);
             ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 70.0);
             ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
             ui.table_headers_row();
@@ -905,7 +913,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                     ui.tooltip_text(format!("{cluster}\n{}", cfg.path));
                 }
                 ui.table_next_column();
-                ui.text(format!("{vlans} VLAN / {frames} 帧"));
+                ui.text(format!("{vlans} VLAN / {frames} frames"));
                 ui.table_next_column();
                 if ui.button(format!("Open...##ethopen{bus}")) {
                     cmds.push(BusesCmd::PickEthArxml(bus));
@@ -917,7 +925,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             }
         }
     } else {
-        ui.text_disabled("尚未加载 Ethernet 通信矩阵");
+        ui.text_disabled("No Ethernet communication matrix loaded");
     }
 
     replay_map_section(app, ui, cmds);

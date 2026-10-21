@@ -30,8 +30,8 @@ impl HelpView {
             let min = ui.push_style_var(StyleVar::WindowMinSize([380.0, 0.0]));
             ui.modal_popup_with_opened(ID, &mut open, || {
                 ui.table("##shortcut_cols")
-                    .add_column(TableColumnSetup::new("键"))
-                    .add_column(TableColumnSetup::new("功能"))
+                    .add_column(TableColumnSetup::new("Key"))
+                    .add_column(TableColumnSetup::new("Action"))
                     .build(|ui| {
                         for (key, desc) in SHORTCUTS {
                             ui.table_next_row();
@@ -54,8 +54,8 @@ impl HelpView {
             let mut close = false;
             ui.modal_popup_with_opened(ID, &mut open, || {
                 ui.text(format!("roxy-can {}", env!("CARGO_PKG_VERSION")));
-                ui.text("CAN 总线仿真与分析工具");
-                ui.text("虚拟仿真与 ASC/BLF 回放 · DBC 解码 · 多窗口观测 · 多桌面");
+                ui.text("CAN / FlexRay / Ethernet simulation and analysis tool");
+                ui.text("Virtual simulation and ASC/BLF replay · DBC and ARXML decoding · multi-window observation · multiple desktops");
                 ui.separator();
                 if ui.button("Close") {
                     ui.close_current_popup();
@@ -68,15 +68,15 @@ impl HelpView {
 }
 
 const SHORTCUTS: [(&str, &str); 11] = [
-    ("F9", "启动 / 停止测量"),
-    ("Space", "播放 / 暂停"),
-    ("- / +", "回放减速 / 加速一档"),
-    ("Home", "图形窗口回到实时边缘"),
-    ("Ctrl+N", "新建工程"),
-    ("Ctrl+O", "打开 DBC"),
-    ("Ctrl+Shift+O", "打开工程"),
-    ("Ctrl+R", "切换日志录制 (ASC)"),
-    ("Ctrl+E", "导出 Trace 为 ASC"),
-    ("Ctrl+S", "保存工程"),
-    ("Ctrl+Shift+S", "工程另存为"),
+    ("F9", "Start / stop measurement"),
+    ("Space", "Play / pause"),
+    ("- / +", "Replay one step slower / faster"),
+    ("Home", "Graphics window: jump to live edge"),
+    ("Ctrl+N", "New project"),
+    ("Ctrl+O", "Open DBC"),
+    ("Ctrl+Shift+O", "Open project"),
+    ("Ctrl+R", "Toggle log recording (ASC / BLF)"),
+    ("Ctrl+E", "Export Trace (ASC / PCAP)"),
+    ("Ctrl+S", "Save project"),
+    ("Ctrl+Shift+S", "Save project as"),
 ];

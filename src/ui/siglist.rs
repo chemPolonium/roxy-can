@@ -183,7 +183,7 @@ pub fn draw_view(
                 ui.open_popup(&menu_id);
             }
             ui.popup(&menu_id, || {
-                ui.text_disabled("加入 State Tracker");
+                ui.text_disabled("Add to State Tracker");
                 let names: Vec<String> =
                     app.state_trackers.iter().map(|w| w.name.clone()).collect();
                 for (ti, name) in names.iter().enumerate() {
@@ -194,7 +194,7 @@ pub fn draw_view(
                         });
                     }
                 }
-                if ui.menu_item("+ 新建 State Tracker") {
+                if ui.menu_item("+ New State Tracker") {
                     cmds.push(SigListCmd::NewStateWith(key.clone()));
                 }
             });

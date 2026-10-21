@@ -970,8 +970,8 @@ fn scan_log_ids(path: &std::path::Path) -> Option<LogIds> {
 /// data-phase bitrate, classic-mode degradation, or nothing for classic buses.
 fn hw_fd_note(fd_data_kbps: Option<u32>, fd_active: bool) -> String {
     match (fd_data_kbps, fd_active) {
-        (Some(k), true) => format!("，FD 数据段 {k} kbit/s"),
-        (Some(_), false) => "，经典模式（FD 预设不匹配或硬件不支持）".to_string(),
+        (Some(k), true) => format!(", FD data phase {k} kbit/s"),
+        (Some(_), false) => ", classic mode (FD preset mismatch or unsupported)".to_string(),
         (None, _) => String::new(),
     }
 }
@@ -1457,7 +1457,7 @@ impl BusCore {
             } => {
                 let key = format!("{namespace}::{name}");
                 if !self.sysvar_write(&key, value) {
-                    *status = format!("[sysvar] 未定义: \"{key}\"");
+                    *status = format!("[sysvar] undefined: \"{key}\"");
                 }
             }
             BusCommand::ClearWrite => {
@@ -1467,9 +1467,9 @@ impl BusCore {
             BusCommand::SetBusMode { real } => {
                 self.hw.live = real;
                 *status = if real {
-                    "总线模式：Real bus——已连接的硬件已启用（RX 进入总线，定向 TX 发出）".into()
+                    "Bus mode: Real bus -- attached hardware enabled (RX reaches the bus, directed TX is sent)".into()
                 } else {
-                    "总线模式：Simulated——硬件连接保留但未启用（纯仿真）".into()
+                    "Bus mode: Simulated -- hardware attachments kept but inactive (simulation only)".into()
                 };
             }
             BusCommand::AddReplayBlock {
@@ -1742,7 +1742,7 @@ impl BusCore {
                         };
                         self.hw.attach(bus, driver, adapter, kbps, true, port);
                         *status = format!(
-                            "hardware attached to {bus}: {driver_name} ch{adapter} @ {kbps} kbit/s (收发){}",
+                            "hardware attached to {bus}: {driver_name} ch{adapter} @ {kbps} kbit/s (TX/RX){}",
                             hw_fd_note(fd_data_kbps, fd)
                         );
                     }
@@ -1750,7 +1750,7 @@ impl BusCore {
                         Ok((port, fd)) => {
                             self.hw.attach(bus, driver, adapter, kbps, false, port);
                             *status = format!(
-                                "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s（仅接收——通道被其他程序占用）{}",
+                                "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s (receive-only -- channel taken by another program){}",
                                 hw_fd_note(fd_data_kbps, fd)
                             );
                         }
@@ -1776,19 +1776,23 @@ impl BusCore {
                         Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, db) {
                             Ok(()) => {
                                 *status = format!(
-                                    "FlexRay 监听已连接: FR{bus} / Vector ch{idx}（仅接收）"
+                                    "FlexRay watch attached: FR{bus} / Vector ch{idx} (receive-only)"
                                 );
                             }
                             Err(e) => {
-                                *status = format!("FlexRay 监听连接失败: FR{bus} {e}");
+                                *status = format!("FlexRay watch attach failed: FR{bus} {e}");
                             }
                         },
-                        None => *status = format!("FlexRay 监听连接失败: FR{bus} 尚未解析描述文件"),
+                        None => {
+                            *status = format!(
+                                "FlexRay watch attach failed: FR{bus} description not loaded"
+                            )
+                        }
                     }
                 }
                 None => {
                     self.hw.detach_fr(bus);
-                    *status = format!("FlexRay 监听已断开: FR{bus}");
+                    *status = format!("FlexRay watch detached: FR{bus}");
                 }
             },
             BusCommand::RemoveFrBus { bus, label } => self.remove_fr_bus(bus, &label, status),
@@ -2378,7 +2382,7 @@ impl BusCore {
             if !self.sysvar_write(&key, v)
                 && let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id)
             {
-                n.note(format!("[sysvar] 未定义，写入被丢弃: \"{key}\""));
+                n.note(format!("[sysvar] undefined, write dropped: \"{key}\""));
             }
         }
     }
@@ -2414,10 +2418,10 @@ impl BusCore {
                 .position(|t| t.bus == bus && t.slot == slot);
             let reason = match (self.fr_dbs.get(&bus).cloned(), ix) {
                 (None, _) => Some(format!(
-                    "FR{bus} 没有集群描述：信号在载荷里的位置由描述给出"
+                    "FR{bus} has no cluster description: the description gives each signal its place in the payload"
                 )),
                 (Some(_), None) => Some(format!(
-                    "FR{bus} slot {slot} 没有发送条目：set_fr_sig 改的是这一路要发的条目"
+                    "FR{bus} slot {slot} has no transmit entry: set_fr_sig edits the entry this bus sends"
                 )),
                 (Some(db), Some(ix)) => {
                     crate::generator::fr_tx_set_signal(&mut self.fr_tx_list[ix], &db, &name, v)
@@ -2427,7 +2431,7 @@ impl BusCore {
             if let Some(reason) = reason
                 && let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id)
             {
-                n.note(format!("[set_fr_sig] 写入被丢弃: {reason}"));
+                n.note(format!("[set_fr_sig] write dropped: {reason}"));
             }
         }
     }
@@ -3532,7 +3536,7 @@ impl BusCore {
         // never fire again, so it goes; CAN-indexed rules are not this bus's
         // business.
         self.triggers.retain(|t| t.cond.fr_bus() != Some(bus));
-        *status = format!("FlexRay 路 {label} 已移除");
+        *status = format!("FlexRay bus {label} removed");
     }
 
     /// Declares a DBC node's role.
@@ -3583,7 +3587,7 @@ impl BusCore {
             .unwrap_or_else(|| format!("CAN{}", channel + 1));
         *status = match role {
             NodeRole::Simulated => format!(
-                "simulating {node} on {bus} ({} message(s), 条目按各自开关发送)",
+                "simulating {node} on {bus} ({} message(s), entries follow their own switches)",
                 ids.len()
             ),
             NodeRole::Absent => format!("{node} offline from {bus}"),
@@ -4249,7 +4253,7 @@ impl BusCore {
             for raw in unaimed {
                 if self.drop_news_done.insert(raw) {
                     *status = format!(
-                        "日志的通道 {} 在本工程里没有对应的总线，先不回放；Buses 的「回放通道映射」能把它指到某一路",
+                        "log channel {} has no matching bus in this project and is not replayed; Buses > Replay Channel Map can point it at one",
                         raw + 1
                     );
                 }
@@ -4489,7 +4493,7 @@ impl BusCore {
             if !known {
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                     n.note(format!(
-                        "[fr_send] 丢弃: FR{bus} 不是已配置的路（先加载集群描述或连接监听）"
+                        "[fr_send] dropped: FR{bus} is not a configured bus (load a cluster description or attach a watch first)"
                     ));
                 }
                 continue;
@@ -4503,7 +4507,7 @@ impl BusCore {
                 Some(w) if data.len() > w => {
                     if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                         n.note(format!(
-                            "[fr_send] 丢弃: FR{bus} slot {slot} 声明 {w} 字节，脚本给了 {}",
+                            "[fr_send] dropped: FR{bus} slot {slot} declares {w} bytes, script supplied {}",
                             data.len()
                         ));
                     }
@@ -4630,10 +4634,10 @@ impl BusCore {
                 .channels
                 .get(bus as usize)
                 .map(|c| c.name.clone())
-                .unwrap_or_else(|| format!("总线 {}", bus + 1));
+                .unwrap_or_else(|| format!("bus {}", bus + 1));
             self.write_push(
                 WriteKind::Error,
-                format!("{name}：发送被线路拒绝：{reason}（只报第一次，次数见 Buses）"),
+                format!("{name}: transmit refused by the wire: {reason} (reported once; count is in Buses)"),
             );
         }
 
@@ -5961,7 +5965,10 @@ mod tests {
             },
             &mut status,
         );
-        assert!(status.contains("失败"), "attach failure reports: {status}");
+        assert!(
+            status.contains("failed"),
+            "attach failure reports: {status}"
+        );
         assert!(core.hw.fr_watches.is_empty());
 
         core.handle(
@@ -5972,7 +5979,7 @@ mod tests {
             },
             &mut status,
         );
-        assert!(status.contains("断开"));
+        assert!(status.contains("detached"));
         assert!(core.hw.fr_watches.is_empty());
     }
 
@@ -5992,7 +5999,7 @@ mod tests {
         };
         core.handle(watch(), &mut status);
         assert!(
-            status.contains("尚未解析"),
+            status.contains("description not loaded"),
             "no description pushed yet: {status}"
         );
 
@@ -6007,13 +6014,13 @@ mod tests {
             core.handle(BusCommand::SetFrDbs(dbs.clone()), &mut status);
             core.handle(watch(), &mut status);
             assert!(
-                status.contains("尚未解析"),
+                status.contains("description not loaded"),
                 "another bus's description does not count: {status}"
             );
             core.handle(BusCommand::SetFrDbs(Default::default()), &mut status);
             core.handle(watch(), &mut status);
             assert!(
-                status.contains("尚未解析"),
+                status.contains("description not loaded"),
                 "a cleared description is refused too: {status}"
             );
         }
@@ -6064,7 +6071,7 @@ mod tests {
         assert_eq!(snap.aggs.len(), 1, "只有能对上的一路进得来");
         assert_eq!(snap.aggs[0].id, 0x100);
         assert!(
-            status.contains("通道 2"),
+            status.contains("log channel 2"),
             "被挡在门外的那一路要说一句，不能只让人发现 Trace 少了东西: {status}"
         );
         assert_eq!(

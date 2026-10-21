@@ -31,8 +31,8 @@ impl NodeRole {
     /// The UI label.
     pub fn label(self) -> &'static str {
         match self {
-            NodeRole::Absent => "离线",
-            NodeRole::Simulated => "模拟",
+            NodeRole::Absent => "Absent",
+            NodeRole::Simulated => "Simulated",
         }
     }
 
@@ -48,8 +48,8 @@ impl NodeRole {
     /// One-line explanation shown under every role selector.
     pub fn hint(self) -> &'static str {
         match self {
-            NodeRole::Simulated => "正常发送报文",
-            NodeRole::Absent => "报文需来自回放块或真实总线",
+            NodeRole::Simulated => "Transmits its DBC messages",
+            NodeRole::Absent => "Messages come from replay blocks or real hardware",
         }
     }
 
@@ -130,7 +130,7 @@ use crate::workspace::SigScope;
 /// a FlexRay watch detach the same way. The refusals in this file tell the user
 /// to press it by name, so a message must not drift away from the label on
 /// screen.
-pub const DETACH_LABEL: &str = "断开";
+pub const DETACH_LABEL: &str = "Detach";
 
 impl App {
     /// The bus's database, from this frame's snapshot. This inherent method
@@ -430,7 +430,7 @@ impl App {
                 .map(|db| db.params.name.as_str())
                 .unwrap_or("");
             self.status = format!(
-                "已加载 {} 集群描述（{name}，未连接监听，供回放解码）: {path}",
+                "Loaded {} cluster description ({name}, not attached; used for replay decoding): {path}",
                 self.fr_bus_label(bus)
             );
         }
@@ -449,14 +449,14 @@ impl App {
     /// Ethernet index; cancelling the picker adds nothing.
     pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         let Ok(bytes) = std::fs::read(path) else {
-            self.fail(format!("ARXML 读取失败: {path}"));
+            self.fail(format!("ARXML read failed: {path}"));
             return None;
         };
         let text = crate::dbc::text_from_bytes(bytes);
         let db = match crate::eth::db::EthDb::parse(&text) {
             Ok(db) => db,
             Err(e) => {
-                self.fail(format!("Ethernet ARXML 解析失败: {e}"));
+                self.fail(format!("Ethernet ARXML parse failed: {e}"));
                 return None;
             }
         };
@@ -481,7 +481,7 @@ impl App {
         );
         self.push_eth_db_to_core();
         self.status = format!(
-            "已加载 Ethernet 矩阵 ETH{bus}（{cluster}，{vlans} VLAN，{frames} 帧）: {path}"
+            "Loaded Ethernet matrix ETH{bus} ({cluster}, {vlans} VLANs, {frames} frames): {path}"
         );
         Some(bus)
     }
@@ -501,7 +501,7 @@ impl App {
     pub fn remove_eth_bus(&mut self, bus: u8) {
         if self.eth_buses.remove(&bus).is_some() {
             self.push_eth_db_to_core();
-            self.status = format!("已移除 Ethernet 总线 ETH{bus}");
+            self.status = format!("Removed Ethernet bus ETH{bus}");
         }
     }
 
@@ -546,7 +546,7 @@ impl App {
     /// is needed.
     pub fn add_flexray_bus(&mut self) {
         let Some(bus) = self.next_flexray_bus() else {
-            self.status = "FlexRay 总线索引已用尽（256 路）".to_string();
+            self.status = "FlexRay bus index exhausted (256 buses)".to_string();
             return;
         };
         self.pick_cluster_description(bus);
@@ -588,14 +588,14 @@ impl App {
     /// set a failure status if it did not.
     pub fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         let Ok(bytes) = std::fs::read(path) else {
-            self.fail(format!("FIBEX 读取失败: {path}"));
+            self.fail(format!("FIBEX read failed: {path}"));
             return None;
         };
         let text = crate::dbc::text_from_bytes(bytes);
         let db = match crate::fr_db::FrDb::parse(&text) {
             Ok(db) => db,
             Err(e) => {
-                self.fail(format!("FlexRay 描述解析失败: {e}"));
+                self.fail(format!("FlexRay description parse failed: {e}"));
                 return None;
             }
         };
@@ -603,7 +603,7 @@ impl App {
             Some(want) => {
                 if self.snap.fr_watches.iter().any(|w| w.bus == want) {
                     self.status = format!(
-                        "{} 正在监听：先点本行的“{DETACH_LABEL}”，再加载新描述",
+                        "{} is attached: click {DETACH_LABEL} on its row before loading a new description",
                         self.fr_bus_label(want)
                     );
                     return None;
@@ -613,7 +613,7 @@ impl App {
             None => match (0..=u8::MAX).find(|b| !self.fr_buses.contains_key(b)) {
                 Some(free) => free,
                 None => {
-                    self.status = "FlexRay 总线索引已用尽（256 路）".to_string();
+                    self.status = "FlexRay bus index exhausted (256 buses)".to_string();
                     return None;
                 }
             },
@@ -757,7 +757,10 @@ impl App {
     /// no second file picker.
     pub fn attach_fr_watch_on(&mut self, bus: u8, channel_index: i32) {
         let Some(path) = self.fr_buses.get(&bus).map(|c| c.path.clone()) else {
-            self.status = format!("{} 没有集群描述，无法连接", self.fr_bus_label(bus));
+            self.status = format!(
+                "{} has no cluster description; cannot attach",
+                self.fr_bus_label(bus)
+            );
             return;
         };
         self.set_fr_watch(bus, Some(channel_index), &path);

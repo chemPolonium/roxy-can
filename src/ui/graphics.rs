@@ -459,7 +459,7 @@ impl crate::observe::GraphicsWindow {
         ui.checkbox("Cursors", &mut self.show_cursor);
         if ui.is_item_hovered() {
             ui.tooltip_text(
-                "两条游标 A/B：双击图面放下一个，按住游标线拖动，读每条曲线两点的值与 Δ",
+                "Two cursors A/B: double-click the plot to place one, drag the line to move it, and read each curve's values at both points plus Δ",
             );
         }
         wrap_same_line(ui, "Zoom");
@@ -1150,7 +1150,7 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         if cursors == [None, None] {
             // Nothing placed yet: say so and name the gesture, where the
             // readings will appear -- not a placeholder row somewhere else.
-            head.push_str("  双击图面放置游标");
+            head.push_str("  double-click the plot to place a cursor");
         }
         let mut rows: Vec<([f32; 4], String)> = vec![([0.90, 0.90, 0.95, 1.0], head)];
         if let (Some(a), Some(b)) = (cursors[0], cursors[1]) {

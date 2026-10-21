@@ -113,7 +113,7 @@ fn cursor_menu(win: &mut TraceWin, ui: &Ui, t_us: u64) {
             win.mark_us[n] = Some(t_us);
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("表头读出 A、B 两点与它们的 Δt；这一行会底色标出");
+            ui.tooltip_text("The header shows A, B and their Δt; this row is tinted");
         }
     }
     if win.mark_us.iter().any(Option::is_some) && ui.menu_item("Clear cursors") {
@@ -263,12 +263,12 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         ui.same_line();
         let fr_note = if app.snap.fr_dropped > 0 {
             format!(
-                "· FlexRay {} 帧（早期裁掉 {}）",
+                "· FlexRay {} frames ({} head-trimmed)",
                 app.snap.fr_trace.len(),
                 app.snap.fr_dropped
             )
         } else {
-            format!("· FlexRay {} 帧", app.snap.fr_trace.len())
+            format!("· FlexRay {} frames", app.snap.fr_trace.len())
         };
         ui.text_colored([0.55, 0.8, 1.0, 1.0], fr_note);
     }
@@ -276,7 +276,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         ui.same_line();
         ui.text_colored(
             [0.55, 0.9, 0.7, 1.0],
-            format!("· Ethernet {} 帧", app.snap.eth_trace.len()),
+            format!("· Ethernet {} frames", app.snap.eth_trace.len()),
         );
     }
     // The cursor pair, worded as the plot words it -- to the microsecond here,
@@ -302,7 +302,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         ui.same_line();
         ui.text_colored(
             [0.55, 0.8, 1.0, 1.0],
-            "已选中一行 · ↑/↓ 换行 · Ctrl+C 复制该行",
+            "Row selected · ↑/↓ move · Ctrl+C copies it",
         );
     }
     // Head trims are accounted either way: with the archive they are
@@ -316,16 +316,16 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
             .unwrap_or_default();
         let archived = app.snap.trace.archive().is_some();
         let msg = if archived {
-            format!("· 已归档 {dropped} 帧（导出包含）{since}")
+            format!("· {dropped} frame(s) archived (export includes them) {since}")
         } else {
             format!("· head trimmed: {dropped} frame(s) {since}")
         };
         ui.text_colored([1.0, 0.8, 0.4, 1.0], msg);
         if ui.is_item_hovered() {
             ui.tooltip_text(if archived {
-                "超出容量的旧帧已写入临时归档文件，Export Trace 会包含它们"
+                "Frames past capacity were written to a temporary archive file; Export Trace includes them"
             } else {
-                "超出容量的旧帧被裁掉且归档不可用"
+                "Frames past capacity were trimmed and no archive is available"
             });
         }
     }
@@ -343,7 +343,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
     }
     win.scope = new_scope;
     ui.same_line();
-    const FILTER_HINT: &str = "名称 / hex 子串 · id:1AB · slot:13";
+    const FILTER_HINT: &str = "name / hex substring · id:1AB · slot:13";
     ui.set_next_item_width(crate::ui::hint_width(ui, FILTER_HINT, 120.0));
     ui.input_text(format!("##tfilter{i}"), &mut win.filter)
         .hint(FILTER_HINT)
@@ -363,15 +363,18 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         win.hidden_conds()
     };
     let filter_label = if hidden.is_empty() {
-        "筛选".to_string()
+        "Filter".to_string()
     } else {
-        format!("筛选 ·{}", hidden.len())
+        format!("Filter ·{}", hidden.len())
     };
     if ui.button(format!("{filter_label}##tf{i}")) {
         win.filters_open = !win.filters_open;
     }
     if !hidden.is_empty() && ui.is_item_hovered() {
-        ui.tooltip_text(format!("收起的过滤条件仍在生效：{}", hidden.join(" · ")));
+        ui.tooltip_text(format!(
+            "Hidden filters still apply: {}",
+            hidden.join(" · ")
+        ));
     }
     if win.filters_open {
         ui.same_line();
@@ -382,7 +385,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
             .build();
         if ui.is_item_hovered() {
             ui.tooltip_text(
-                "payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤",
+                "Payload byte search: hex pairs, spaces optional; matches frames with that sequence. Unparsable input filters nothing",
             );
         }
         ui.same_line();
@@ -397,41 +400,88 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         ui.same_line();
         // Expand FlexRay rows into their decoded signal children (needs the
         // arriving row's own cluster description).
-        ui.checkbox(format!("FR 信号##tfrx{i}"), &mut win.fr_expand);
+        ui.checkbox(format!("FR signals##tfrx{i}"), &mut win.fr_expand);
         if ui.is_item_hovered() {
-            ui.tooltip_text("FlexRay 帧下方展开解码后的信号值（需该路总线的集群描述数据库）");
+            ui.tooltip_text(
+                "Expand decoded signal values under FlexRay frames (needs that bus's cluster description database)",
+            );
         }
         // Time window: two small numeric boxes in seconds -- empty means
         // unbounded on that side. Same parse semantics as the filter's
         // time-range check (blank/invalid = no bound).
         ui.same_line();
-        const FROM_HINT: &str = "从 s";
+        const FROM_HINT: &str = "from s";
         ui.set_next_item_width(crate::ui::hint_width(ui, FROM_HINT, 52.0));
         ui.input_text(format!("##tfrom{i}"), &mut win.time_from)
             .hint(FROM_HINT)
             .build();
         if ui.is_item_hovered() {
-            ui.tooltip_text("时间范围下界（秒）：早于此的帧不显示；留空 = 不限");
+            ui.tooltip_text("Lower time bound (s): earlier frames stay hidden; empty = unbounded");
         }
         ui.same_line();
-        const TO_HINT: &str = "到 s";
+        const TO_HINT: &str = "to s";
         ui.set_next_item_width(crate::ui::hint_width(ui, TO_HINT, 52.0));
         ui.input_text(format!("##tto{i}"), &mut win.time_to)
             .hint(TO_HINT)
             .build();
         if ui.is_item_hovered() {
-            ui.tooltip_text("时间范围上界（秒）：晚于此的帧不显示；留空 = 不限");
+            ui.tooltip_text("Upper time bound (s): later frames stay hidden; empty = unbounded");
         }
     }
     ui.same_line();
+    let filters_active = !win.filter.trim().is_empty()
+        || win.scope != SigScope::All
+        || win.dir != 0
+        || win.dbc_only
+        || !win.payload.trim().is_empty()
+        || win.flags_kind != 0
+        || !win.time_from.trim().is_empty()
+        || !win.time_to.trim().is_empty();
+    if filters_active {
+        let _reset = ui.push_style_color(dear_imgui_rs::StyleColor::Text, [1.0, 0.75, 0.35, 1.0]);
+        if ui.button(format!("Reset filters##treset{i}")) {
+            clear_filter_win(win);
+        }
+        _reset.pop();
+        if ui.is_item_hovered() {
+            ui.tooltip_text(
+                "Clear the text, scope, direction and every filter condition; captured rows are kept\n\
+                 中文：清空文本、作用域、方向和全部过滤条件，已捕获的行保留",
+            );
+        }
+        ui.same_line();
+    }
     // Clear empties the display (ring + archive); the filter controls
     // keep their settings -- they are the viewer's lens, not its content.
-    if ui.button(format!("Clear##tf{i}")) {
-        cmds.push(TraceCmd::ClearTrace);
+    if ui.button(format!("Clear trace##tf{i}")) {
+        ui.open_popup(format!("trace_clear_confirm{i}"));
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "Empty the captured trace (ring and archive); filter settings stay as they are",
+        );
+    }
+    if let Some(_p) = ui.begin_popup(format!("trace_clear_confirm{i}")) {
+        ui.text("Clear the captured trace?");
+        ui.text_disabled("The ring and archive are emptied; filter settings stay.");
+        if ui.button(format!("Clear##tclearok{i}")) {
+            cmds.push(TraceCmd::ClearTrace);
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button(format!("Cancel##tclearcancel{i}")) {
+            ui.close_current_popup();
+        }
     }
     ui.same_line();
     if ui.button(format!("Export##tx{i}")) {
         cmds.push(TraceCmd::Export(i));
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "Export the filtered rows: ASC for CAN/FlexRay, PCAP for Ethernet (choose the extension in the save dialog)\n\
+             中文：ASC 写 CAN/FlexRay，PCAP 写以太网，按保存扩展名选择",
+        );
     }
     ui.separator();
 
@@ -828,7 +878,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         }
         if ui.is_item_hovered() {
             ui.tooltip_text(format!(
-                "把这个槽加进本窗口的 Manual 选择并切到该作用域（已选的其他条目保留），只列出选中行：{label}"
+                "Add this slot to the window's Manual picks and switch to that scope (other picks are kept); only selected rows are listed: {label}"
             ));
         }
         cursor_menu(win, ui, r.t_us);

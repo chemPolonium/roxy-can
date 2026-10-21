@@ -341,7 +341,7 @@ impl FrDb {
     pub fn parse(text: &str) -> Result<FrDb, String> {
         // A UTF-8 BOM (DaVinci exports carry one) is not XML.
         let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
-        let doc = roxmltree::Document::parse(text).map_err(|e| format!("XML 解析错误：{e}"))?;
+        let doc = roxmltree::Document::parse(text).map_err(|e| format!("XML parse error: {e}"))?;
         let root = doc.root_element();
         let root_name = root.tag_name().name().to_uppercase();
         if root_name.contains("FIBEX") {
@@ -369,7 +369,7 @@ impl FrDb {
             } else if has_fibex {
                 parse_fibex_doc(&doc)
             } else {
-                Err("无法识别的 XML 格式：既不是 FIBEX 也不是 AUTOSAR".to_string())
+                Err("unrecognized XML format: neither FIBEX nor AUTOSAR".to_string())
             }
         }
     }

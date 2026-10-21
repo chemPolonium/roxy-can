@@ -316,7 +316,7 @@ fn editor_window(
     // `###` pins the window identity to the node, so a rename moves the
     // title without losing position or open state.
     let mut open = true;
-    ui.window(format!("脚本 · {}###script{}", node.name, id))
+    ui.window(format!("Script · {}###script{}", node.name, id))
         .opened(&mut open)
         .position(
             [
@@ -376,13 +376,13 @@ fn content(
     // read-only, there is no bus choice anywhere in the flow.
     match &node.attached {
         Some((ach, anode)) => {
-            ui.text_disabled(format!("节点 {anode} · 总线 {}", app.channel_name(*ach),));
+            ui.text_disabled(format!("node {anode} · bus {}", app.channel_name(*ach),));
         }
         None => {
             ui.text_colored(
                 [1.0, 0.8, 0.4, 1.0],
                 format!(
-                    "未绑定节点（总线 {}）——加载 DBC 后自动归入该总线第一个节点下",
+                    "Unbound node (bus {}); once a DBC loads it joins that bus's first node",
                     app.channel_name(node.channel),
                 ),
             );
@@ -390,11 +390,11 @@ fn content(
     }
     ui.same_line();
     let mut enabled = node.enabled;
-    if ui.checkbox(format!("运行##een{id}"), &mut enabled) {
+    if ui.checkbox(format!("Run##een{id}"), &mut enabled) {
         cmds.push(ScriptCmd::SetEnabled { id, on: enabled });
     }
     ui.same_line();
-    if ui.button(format!("删除##erm{id}")) {
+    if ui.button(format!("Delete##erm{id}")) {
         cmds.push(ScriptCmd::Remove { id });
         view.close(id);
         return;
@@ -404,12 +404,12 @@ fn content(
     if node.errored {
         ui.text_colored(
             [1.0, 0.55, 0.3, 1.0],
-            "出错（见日志；重新 Apply 或重启测量恢复）",
+            "Error (see the log; Apply again or restart the measurement)",
         );
     } else if node.running {
-        ui.text_colored([0.4, 0.95, 0.5, 1.0], "运行中");
+        ui.text_colored([0.4, 0.95, 0.5, 1.0], "Running");
     } else {
-        ui.text_disabled("已停止");
+        ui.text_disabled("Stopped");
     }
 
     // Three columns, the CAPL Browser shape: left = the source's outline
@@ -469,7 +469,7 @@ fn content(
                         (line - 1) as usize,
                         MARKER_LINE_NUMBER,
                         MARKER_LINE_FILL,
-                        "编译错误",
+                        "compile error",
                         &tip,
                     );
                 }
@@ -490,16 +490,16 @@ fn content(
             }
             if unsaved {
                 ui.same_line();
-                ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
+                ui.text_colored([1.0, 0.8, 0.4, 1.0], "Not applied");
             }
             ui.same_line();
-            if ui.button(format!("保存##esave{id}"))
+            if ui.button(format!("Save##esave{id}"))
                 && let Some(editor) = view.editors.get(&id)
             {
                 let source = editor.text().unwrap_or_default();
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("保存节点脚本")
-                    .add_filter("节点脚本", &["rxcan"])
+                    .set_title("Save node script")
+                    .add_filter("Node scripts", &["rxcan"])
                     .save_file()
                 {
                     cmds.push(ScriptCmd::Save {
@@ -509,10 +509,10 @@ fn content(
                 }
             }
             ui.same_line();
-            if ui.button(format!("加载##eload{id}")) {
+            if ui.button(format!("Load##eload{id}")) {
                 let picked = rfd::FileDialog::new()
-                    .set_title("加载节点脚本")
-                    .add_filter("节点脚本", &["rxcan"])
+                    .set_title("Load node script")
+                    .add_filter("Node scripts", &["rxcan"])
                     .pick_file();
                 if let Some(p) = picked {
                     let path = p.to_string_lossy().into_owned();
@@ -530,7 +530,7 @@ fn content(
                             view.facts.remove(&id);
                         }
                         Err(e) => {
-                            cmds.push(ScriptCmd::Status(format!("加载失败: {e}")));
+                            cmds.push(ScriptCmd::Status(format!("load failed: {e}")));
                         }
                     }
                 }
@@ -560,74 +560,82 @@ fn content(
 /// into the source when clicked.
 const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[
     // (category, label, insert_text)
-    ("事件处理器", "on start", "on start {\n    \n}"),
-    ("事件处理器", "on message", "on message 0x000 {\n    \n}"),
+    ("Handlers", "on start", "on start {\n    \n}"),
+    ("Handlers", "on message", "on message 0x000 {\n    \n}"),
     (
-        "事件处理器",
+        "Handlers",
         "on ext message",
         "on extended message 0x000 {\n    \n}",
     ),
-    ("事件处理器", "on message *", "on message * {\n    \n}"),
-    ("事件处理器", "on errorFrame", "on errorFrame {\n    \n}"),
-    ("事件处理器", "on timer", "on timer 100 {\n    \n}"),
+    ("Handlers", "on message *", "on message * {\n    \n}"),
+    ("Handlers", "on errorFrame", "on errorFrame {\n    \n}"),
+    ("Handlers", "on timer", "on timer 100 {\n    \n}"),
     (
-        "事件处理器",
+        "Handlers",
         "on timer \"name\"",
         "on timer \"name\" {\n    \n}",
     ),
-    ("事件处理器", "on fr slot", "on fr slot 0 {\n    \n}"),
-    ("事件处理器", "on fr 0 slot", "on fr 0 slot 0 {\n    \n}"),
+    ("Handlers", "on fr slot", "on fr slot 0 {\n    \n}"),
+    ("Handlers", "on fr 0 slot", "on fr 0 slot 0 {\n    \n}"),
     (
-        "控制流",
+        "Control flow",
         "switch/case",
         "switch (value) {\n    case 1: {\n        \n    }\n    case 2: {\n        \n    }\n    default: {\n        \n    }\n}",
     ),
-    ("总线控制", "send", "send(0x000, 0x00);"),
-    ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
-    ("总线控制", "sig", "sig(0x000, \"Signal\")"),
-    ("总线控制", "fr_sig", "fr_sig(0, 0, \"Signal\")"),
-    ("总线控制", "fr_send", "fr_send(0, 0, 0x00);"),
-    ("总线控制", "set_fr_sig", "set_fr_sig(0, 0, \"Signal\", 0)"),
-    ("总线控制", "$信号", "$Message::Signal"),
-    ("总线控制", "set_sig", "set_sig(buf, 0x000, \"Signal\", 0)"),
-    ("总线控制", "emit_value", "emit_value(\"Name\", 0)"),
-    ("系统变量", "sys_get", "sys_get(\"ns::name\")"),
-    ("系统变量", "sys_set", "sys_set(\"ns::name\", 0)"),
-    ("系统变量", "@sysvar", "@sysvar::ns::name"),
-    ("帧数据", "frame_byte", "frame_byte(0)"),
-    ("帧数据", "frame_dlc", "frame_dlc()"),
-    ("帧数据", "frame_id", "frame_id()"),
-    ("帧数据", "fr_cycle", "fr_cycle()"),
-    ("定时器", "set_timer", "set_timer(\"name\", 100)"),
-    ("定时器", "cancel_timer", "cancel_timer()"),
-    ("定时器", "set_period", "set_period(100)"),
-    ("波形", "ramp", "ramp(0, 255, 1000)"),
-    ("波形", "sine_wave", "sine_wave(0, 255, 1000)"),
-    ("波形", "triangle", "triangle(0, 255, 1000)"),
-    ("波形", "square", "square(0, 255, 1000)"),
-    ("波形", "counter", "counter(0, 255, 1000)"),
-    ("波形", "random", "random(0, 255)"),
-    ("缓冲/数组", "bytes", "bytes(8)"),
-    ("缓冲/数组", "array", "array(4)"),
-    ("缓冲/数组", "len", "len(v)"),
-    ("数学", "abs", "abs(x)"),
-    ("数学", "floor", "floor(x)"),
-    ("数学", "ceil", "ceil(x)"),
-    ("数学", "round", "round(x)"),
-    ("数学", "sin", "sin(x)"),
-    ("数学", "cos", "cos(x)"),
-    ("数学", "min", "min(a, b)"),
-    ("数学", "max", "max(a, b)"),
-    ("数学", "clamp", "clamp(v, lo, hi)"),
-    ("位运算", "bit_and", "bit_and(a, b)"),
-    ("位运算", "bit_or", "bit_or(a, b)"),
-    ("位运算", "bit_xor", "bit_xor(a, b)"),
-    ("位运算", "bit_not", "bit_not(a)"),
-    ("位运算", "bit_shl", "bit_shl(a, b)"),
-    ("位运算", "bit_shr", "bit_shr(a, b)"),
-    ("其他", "now", "now()"),
-    ("其他", "format", "format(\"%.0f\", v)"),
-    ("其他", "srand", "srand(seed)"),
+    ("Bus access", "send", "send(0x000, 0x00);"),
+    ("Bus access", "send_ext", "send_ext(0x000, 0x00);"),
+    ("Bus access", "sig", "sig(0x000, \"Signal\")"),
+    ("Bus access", "fr_sig", "fr_sig(0, 0, \"Signal\")"),
+    ("Bus access", "fr_send", "fr_send(0, 0, 0x00);"),
+    (
+        "Bus access",
+        "set_fr_sig",
+        "set_fr_sig(0, 0, \"Signal\", 0)",
+    ),
+    ("Bus access", "$signal", "$Message::Signal"),
+    (
+        "Bus access",
+        "set_sig",
+        "set_sig(buf, 0x000, \"Signal\", 0)",
+    ),
+    ("Bus access", "emit_value", "emit_value(\"Name\", 0)"),
+    ("SysVars", "sys_get", "sys_get(\"ns::name\")"),
+    ("SysVars", "sys_set", "sys_set(\"ns::name\", 0)"),
+    ("SysVars", "@sysvar", "@sysvar::ns::name"),
+    ("Frame data", "frame_byte", "frame_byte(0)"),
+    ("Frame data", "frame_dlc", "frame_dlc()"),
+    ("Frame data", "frame_id", "frame_id()"),
+    ("Frame data", "fr_cycle", "fr_cycle()"),
+    ("Timers", "set_timer", "set_timer(\"name\", 100)"),
+    ("Timers", "cancel_timer", "cancel_timer()"),
+    ("Timers", "set_period", "set_period(100)"),
+    ("Waveforms", "ramp", "ramp(0, 255, 1000)"),
+    ("Waveforms", "sine_wave", "sine_wave(0, 255, 1000)"),
+    ("Waveforms", "triangle", "triangle(0, 255, 1000)"),
+    ("Waveforms", "square", "square(0, 255, 1000)"),
+    ("Waveforms", "counter", "counter(0, 255, 1000)"),
+    ("Waveforms", "random", "random(0, 255)"),
+    ("Buffers", "bytes", "bytes(8)"),
+    ("Buffers", "array", "array(4)"),
+    ("Buffers", "len", "len(v)"),
+    ("Math", "abs", "abs(x)"),
+    ("Math", "floor", "floor(x)"),
+    ("Math", "ceil", "ceil(x)"),
+    ("Math", "round", "round(x)"),
+    ("Math", "sin", "sin(x)"),
+    ("Math", "cos", "cos(x)"),
+    ("Math", "min", "min(a, b)"),
+    ("Math", "max", "max(a, b)"),
+    ("Math", "clamp", "clamp(v, lo, hi)"),
+    ("Bitwise", "bit_and", "bit_and(a, b)"),
+    ("Bitwise", "bit_or", "bit_or(a, b)"),
+    ("Bitwise", "bit_xor", "bit_xor(a, b)"),
+    ("Bitwise", "bit_not", "bit_not(a)"),
+    ("Bitwise", "bit_shl", "bit_shl(a, b)"),
+    ("Bitwise", "bit_shr", "bit_shr(a, b)"),
+    ("Other", "now", "now()"),
+    ("Other", "format", "format(\"%.0f\", v)"),
+    ("Other", "srand", "srand(seed)"),
 ];
 
 /// The left column: the source's handler outline and the static
@@ -643,12 +651,12 @@ fn left_tabs(
     let Some(_bar) = ui.tab_bar(format!("##elefttab{id}")) else {
         return;
     };
-    if let Some(_t) = ui.tab_item("大纲") {
+    if let Some(_t) = ui.tab_item("Outline") {
         ui.child_window(format!("##esbscroll{id}o"))
             .size([0.0, 0.0])
             .build(ui, || outline_tab(view, ui, id));
     }
-    if let Some(_t) = ui.tab_item("收发") {
+    if let Some(_t) = ui.tab_item("I/O") {
         ui.child_window(format!("##esbscroll{id}i"))
             .size([0.0, 0.0])
             .build(ui, || io_tab(app, view, ui, id, node));
@@ -669,7 +677,7 @@ fn palette_tabs(
     let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
         return;
     };
-    if let Some(_t) = ui.tab_item("函数") {
+    if let Some(_t) = ui.tab_item("Functions") {
         ui.child_window(format!("##esbscroll{id}f"))
             .size([0.0, 0.0])
             .build(ui, || fns_tab(app, view, ui, id));
@@ -679,7 +687,7 @@ fn palette_tabs(
             .size([0.0, 0.0])
             .build(ui, || sysvar_tab(app, view, ui, id));
     }
-    if let Some(_t) = ui.tab_item("报文") {
+    if let Some(_t) = ui.tab_item("Messages") {
         ui.child_window(format!("##esbscroll{id}b"))
             .size([0.0, 0.0])
             .build(ui, || bus_tab(app, view, ui, id, node));
@@ -711,9 +719,9 @@ impl App {
                 }
                 ScriptCmd::Save { path, source } => {
                     if let Err(e) = std::fs::write(&path, &source) {
-                        self.status = format!("保存失败: {e}");
+                        self.status = format!("save failed: {e}");
                     } else {
-                        self.status = format!("已保存 {path}");
+                        self.status = format!("saved {path}");
                     }
                 }
                 ScriptCmd::Status(text) => self.status = text,
@@ -781,7 +789,7 @@ fn fns_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
     let dbc_items = owned_dbc_items(app, id);
     if !dbc_items.is_empty() {
         ui.separator();
-        ui.text_disabled("本节点报文/信号");
+        ui.text_disabled("Node messages / signals");
         for (msg_id, ext, msg_name, sigs) in &dbc_items {
             let id_str = format!("{msg_id:03X}{}", if *ext { "x" } else { "" });
             if ui
@@ -828,7 +836,7 @@ pub(crate) fn fr_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
         })
         .collect();
     if fr_items.is_empty() {
-        ui.text_disabled("（未加载 FlexRay 集群描述）");
+        ui.text_disabled("(no FlexRay cluster description loaded)");
         return;
     }
     for (bus, slot, frame, sigs) in &fr_items {
@@ -851,7 +859,7 @@ pub(crate) fn fr_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
 fn bus_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let bus_items = bus_dbc_items(app, node.channel);
     if bus_items.is_empty() {
-        ui.text_disabled("（本总线无 DBC 报文）");
+        ui.text_disabled("(no DBC messages on this bus)");
         return;
     }
     for (msg_id, ext, msg_name, sigs) in &bus_items {
@@ -938,13 +946,13 @@ fn bus_dbc_items(app: &App, ch: u8) -> Vec<DbcItem> {
 fn outline_tab(view: &mut ScriptEditorView, ui: &Ui, id: u64) {
     let facts = facts_for(view, id, false);
     if let Some(e) = &facts.error {
-        ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
+        ui.text_colored([1.0, 0.55, 0.3, 1.0], "Draft does not compile");
         if ui.is_item_hovered() {
             ui.tooltip_text(e);
         }
     }
     if facts.outline.is_empty() {
-        ui.text_disabled("（尚无处理器）");
+        ui.text_disabled("(no handlers yet)");
         return;
     }
     for (line, label) in &facts.outline {
@@ -957,7 +965,7 @@ fn outline_tab(view: &mut ScriptEditorView, ui: &Ui, id: u64) {
             let _ = editor.scroll_to_line(target, ScrollAlignment::Middle);
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text(format!("第 {line} 行，点击跳转"));
+            ui.tooltip_text(format!("line {line}; click to jump"));
         }
     }
 }
@@ -969,21 +977,21 @@ fn outline_tab(view: &mut ScriptEditorView, ui: &Ui, id: u64) {
 fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let facts = facts_for(view, id, false);
     if let Some(e) = &facts.error {
-        ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
+        ui.text_colored([1.0, 0.55, 0.3, 1.0], "Draft does not compile");
         if ui.is_item_hovered() {
             ui.tooltip_text(e);
         }
         return;
     }
 
-    ui.text_disabled(format!("发送（{}）", facts.sends.len()));
+    ui.text_disabled(format!("Sends ({})", facts.sends.len()));
     let dbc = node
         .attached
         .as_ref()
         .and_then(|(bus, _)| app.channel_dbc(*bus));
     let attached_node = node.attached.as_ref().map(|(_, n)| n.clone());
     if facts.sends.is_empty() {
-        ui.text_disabled("  （无）");
+        ui.text_disabled("  (none)");
     }
     for (msg_id, ext, from) in &facts.sends {
         let mark = match (&dbc, &attached_node) {
@@ -999,7 +1007,7 @@ fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate
             if *ext { "x" } else { "" }
         ));
         if ui.is_item_hovered() {
-            ui.tooltip_text(format!("来自 {from}"));
+            ui.tooltip_text(format!("from {from}"));
         }
     }
 
@@ -1020,7 +1028,7 @@ fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate
         missing.sort();
         if !missing.is_empty() {
             ui.separator();
-            ui.text_disabled(format!("未实现（{}）", missing.len()));
+            ui.text_disabled(format!("Not implemented ({})", missing.len()));
             for (msg_id, ext, name) in &missing {
                 ui.text(format!(
                     "  0x{msg_id:03X}{} {name}",
@@ -1028,44 +1036,46 @@ fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate
                 ));
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("可能由生成器代发；启动日志有同款 [info]");
+                ui.tooltip_text("may be sent by the generator; the start log has the same [info]");
             }
         }
     }
 
     ui.separator();
     ui.text_disabled(format!(
-        "接收（{}）",
+        "Receives ({})",
         facts.recvs.len() + usize::from(facts.recv_wildcard)
     ));
     if facts.recv_wildcard {
-        ui.text("  *  所有帧（转发者/记录者）");
+        ui.text("  *  all frames (forwarder / recorder)");
         if ui.is_item_hovered() {
-            ui.tooltip_text("发送集 = 接收集 ∩ DBC 声明；启动日志有同款 [info]");
+            ui.tooltip_text(
+                "send set = receive set ∩ DBC declarations; the start log has the same [info]",
+            );
         }
         if facts.wildcard_sends {
             ui.text_colored(
                 [1.0, 0.75, 0.3, 1.0],
-                "    通配 handler 内有发送：发出的帧会再次进入本 handler（自激成环风险）",
+                "    wildcard handler sends: emitted frames re-enter this handler (loop risk)",
             );
             if ui.is_item_hovered() {
                 ui.tooltip_text(
-                    "转发前用 frame_id() 排除自己的报文（参考 examples/sniffer.rxcan）",
+                    "exclude your own frames with frame_id() before forwarding (see examples/sniffer.rxcan)",
                 );
             }
         }
     }
     if facts.recvs.is_empty() && !facts.recv_wildcard {
-        ui.text_disabled("  （无）");
+        ui.text_disabled("  (none)");
     }
     for (msg_id, ext) in &facts.recvs {
         ui.text(format!("  0x{msg_id:03X}{}", if *ext { "x" } else { "" }));
     }
 
     ui.separator();
-    ui.text_disabled(format!("系统变量（{}）", facts.sysvars.len()));
+    ui.text_disabled(format!("System variables ({})", facts.sysvars.len()));
     if facts.sysvars.is_empty() {
-        ui.text_disabled("  （无）");
+        ui.text_disabled("  (none)");
     }
     for key in &facts.sysvars {
         ui.text(format!("  {key}"));
@@ -1075,7 +1085,7 @@ fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate
     // `*` the pair resolves to a real message+signal, `-` it does not.
     if !facts.named_refs.is_empty() {
         ui.separator();
-        ui.text_disabled(format!("$速记（{}）", facts.named_refs.len()));
+        ui.text_disabled(format!("$shorthand ({})", facts.named_refs.len()));
         for (msg, sig) in &facts.named_refs {
             let known = dbc.as_ref().is_some_and(|db| {
                 db.message_id_by_name(msg).is_some_and(|id| {
@@ -1086,15 +1096,17 @@ fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate
             let mark = if known { "*" } else { "-" };
             ui.text(format!("  {mark} ${msg}::{sig}"));
             if ui.is_item_hovered() && !known {
-                ui.tooltip_text("报文名或信号名不在 DBC 中——启动检查会报 [check]");
+                ui.tooltip_text(
+                    "message or signal name not in the DBC; the start check reports [check]",
+                );
             }
         }
     }
 
     ui.separator();
-    ui.text_disabled(format!("响应映射（{}）", facts.responses.len()));
+    ui.text_disabled(format!("Response map ({})", facts.responses.len()));
     if facts.responses.is_empty() {
-        ui.text_disabled("  （无未被武装的单次定时器）");
+        ui.text_disabled("  (no armed one-shot timers)");
     }
     for row in &facts.responses {
         let replies = row
@@ -1105,7 +1117,7 @@ fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate
             .join(", ");
         ui.text(format!("  {} -> {replies}", row.timer_label));
         if ui.is_item_hovered() {
-            ui.tooltip_text(format!("由 {} 武装", row.armed_by.join(", ")));
+            ui.tooltip_text(format!("armed by {}", row.armed_by.join(", ")));
         }
     }
 }
@@ -1130,21 +1142,21 @@ fn sysvar_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
         }
     }
     if vars.is_empty() {
-        ui.text_disabled("（尚未定义）");
-        ui.text_disabled("View > System Variables 中管理");
+        ui.text_disabled("(none defined)");
+        ui.text_disabled("Manage in View > System Variables");
         return;
     }
     for (ns, names) in &vars {
         ui.text_disabled(ns);
         for (name, _) in names {
             if ui
-                .selectable_config(format!("读  {name}##svr{ns}{name}"))
+                .selectable_config(format!("get  {name}##svr{ns}{name}"))
                 .build()
             {
                 insert(view, id, &format!("sys_get(\"{ns}::{name}\")"));
             }
             if ui
-                .selectable_config(format!("写  {name}##svw{ns}{name}"))
+                .selectable_config(format!("set  {name}##svw{ns}{name}"))
                 .build()
             {
                 insert(view, id, &format!("sys_set(\"{ns}::{name}\", 0)"));

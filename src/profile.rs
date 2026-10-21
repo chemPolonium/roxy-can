@@ -211,7 +211,7 @@ pub fn list_profiles(project_dir: &Path) -> Vec<String> {
 pub fn save_profile(app: &App, project_dir: &Path, name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err("profile 名不能为空".to_string());
+        return Err("profile name cannot be empty".to_string());
     }
     if trimmed.chars().any(|c| {
         matches!(
@@ -219,7 +219,9 @@ pub fn save_profile(app: &App, project_dir: &Path, name: &str) -> Result<String,
             '/' | '\\' | '.' | ':' | '"' | '<' | '>' | '|' | '?' | '*'
         )
     }) {
-        return Err(format!("profile 名含非法字符: `{trimmed}`"));
+        return Err(format!(
+            "profile name contains invalid characters: `{trimmed}`"
+        ));
     }
     let mut text = String::from("# saved from the current state\n\n");
     let mut role_count = 0usize;
@@ -254,18 +256,19 @@ pub fn save_profile(app: &App, project_dir: &Path, name: &str) -> Result<String,
         hw_count += 1;
     }
     let dir = project_dir.join("profiles");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("profiles 目录创建失败: {e}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create profiles directory: {e}"))?;
     let path = dir.join(format!("{trimmed}.toml"));
-    std::fs::write(&path, &text).map_err(|e| format!("profile 写入失败: {e}"))?;
+    std::fs::write(&path, &text).map_err(|e| format!("failed to write profile: {e}"))?;
     Ok(format!(
-        "profile `{trimmed}` 已保存: {role_count} role override(s), {hw_count} hardware mapping(s)"
+        "profile `{trimmed}` saved: {role_count} role override(s), {hw_count} hardware mapping(s)"
     ))
 }
 
 /// Deletes `profiles/<name>.toml`. The GUI confirms before calling.
 pub fn delete_profile(project_dir: &Path, name: &str) -> Result<(), String> {
     let path = project_dir.join("profiles").join(format!("{name}.toml"));
-    std::fs::remove_file(&path).map_err(|e| format!("profile 删除失败: {e}"))
+    std::fs::remove_file(&path).map_err(|e| format!("failed to delete profile: {e}"))
 }
 
 #[cfg(test)]

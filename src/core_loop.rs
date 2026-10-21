@@ -196,16 +196,16 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                     Ok(cmd) => {
                         any = true;
                         let (reset, panicked) =
-                            catch_core_panic("命令处理", || lane.apply(cmd));
+                            catch_core_panic("command handling", || lane.apply(cmd));
                         if panicked {
-                            lane.halt_after_internal_error("命令处理");
+                            lane.halt_after_internal_error("command handling");
                         } else if let Some(reset) = reset {
                             clock_reset = reset;
                         }
                         let (drained, panicked) =
-                            catch_core_panic("命令队列排空", || lane.drain());
+                            catch_core_panic("command queue drain", || lane.drain());
                         if panicked {
-                            lane.halt_after_internal_error("命令队列排空");
+                            lane.halt_after_internal_error("command queue drain");
                         } else if let Some((more, more_reset)) = drained {
                             clock_reset |= more_reset;
                             any |= more;
@@ -235,7 +235,7 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                         lane.core.paused_at_us = Some(at);
                     }
                     let mut status = String::new();
-                    let (_, panicked) = catch_core_panic("测量步进", || {
+                    let (_, panicked) = catch_core_panic("measurement step", || {
                         lane.core.step_to(
                             now,
                             knobs.stride_us(),
@@ -245,7 +245,7 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                         );
                     });
                     if panicked {
-                        lane.halt_after_internal_error("测量步进");
+                        lane.halt_after_internal_error("measurement step");
                     }
                     lane.note(crate::bus::WriteKind::Info, status);
                     lane.publish();
@@ -291,7 +291,7 @@ impl CoreLoop {
     fn halt_after_internal_error(&mut self, what: &str) {
         self.note(
             crate::bus::WriteKind::Error,
-            format!("[core] 内部错误（panic）：{what}——测量已停止；请保存现场并反馈复现步骤"),
+            format!("[core] internal error (panic): {what} -- measurement stopped; save your work and report the reproduction steps"),
         );
         self.core.measuring = false;
         self.core.recorder.close();

@@ -285,7 +285,7 @@ impl GeneratorView {
                     .iter()
                     .filter(|t| t.active && t.node.is_empty())
                     .count();
-                ui.text(format!("{active_count} active (未分配)"));
+                ui.text(format!("{active_count} active (unassigned)"));
                 ui.separator();
 
                 // Per-bus lines: add-by-id -- the way to put a message the
@@ -356,11 +356,11 @@ impl GeneratorView {
             .count();
         let role = app.node_role(nch, nname);
         let count_word = if role == crate::app::NodeRole::Simulated {
-            "发送中"
+            "sending"
         } else {
-            "条启用 · 角色未模拟"
+            "on · node not simulated"
         };
-        ui.text(format!("生成器：{active_n}/{total} {count_word}"));
+        ui.text(format!("Generator: {active_n}/{total} {count_word}"));
         if ui.is_item_hovered() {
             ui.tooltip_text(role.hint());
         }
@@ -433,11 +433,11 @@ impl GeneratorView {
             .collect();
         if !reactions.is_empty() {
             ui.separator();
-            ui.text("响应规则（触发器 -> 发送到本节点报文）");
+            ui.text("Reactions (trigger -> this node's messages)");
             for r in &reactions {
                 ui.text(format!("  · {r}"));
             }
-            if ui.button("在 Triggers 窗口管理##noder") {
+            if ui.button("Manage in Triggers##noder") {
                 cmds.push(GeneratorCmd::OpenTriggers);
             }
         }
@@ -496,25 +496,25 @@ fn render_rows(
             (
                 "OFF",
                 [0.55, 0.58, 0.65, 1.0],
-                "未发送：条目生成开关未勾选。",
+                "Not sending: the entry's On switch is off.",
             )
         } else if !entry.gate_open {
             (
-                "角色",
+                "ROLE",
                 [0.45, 0.60, 0.80, 1.0],
-                "条目已启用，但所属节点的角色不是「模拟」——总开关关闭中。把节点角色切回「模拟」即恢复发送。",
+                "Entry is on, but its node's role is not Simulated -- the role gate is closed. Set the node role back to Simulated to resume sending.",
             )
         } else if entry.muted {
             (
                 "MUTE",
                 [1.0, 0.65, 0.2, 1.0],
-                "本次回放期间不发送：已加载的日志中带有此 ID，若再有第二个发送者，同一条信号会出现两个来源，一起出现在曲线、统计等所有视图。On 勾选框保持原样——退出回放后照常发送。",
+                "Not sent during this replay: the loaded log already carries this ID, so a second sender would give the same signal two sources in every view (plots, statistics, ...). The On checkbox is unchanged -- sending resumes when the replay ends.",
             )
         } else {
             (
                 "ON",
                 [0.4, 0.95, 0.5, 1.0],
-                "正在发送：条目已勾选，且没有被任何机制抑制。",
+                "Sending: the entry is on and nothing is suppressing it.",
             )
         };
         // Four cells wide in the monospace font, so the three
@@ -805,10 +805,10 @@ impl GeneratorView {
             .map(|(i, t)| (i, t.clone()))
             .collect();
         let active_n = mine.iter().filter(|(_, t)| t.active).count();
-        ui.text(format!("生成器：{active_n}/{} 发送中", mine.len()));
+        ui.text(format!("Generator: {active_n}/{} sending", mine.len()));
         if ui.is_item_hovered() {
             ui.tooltip_text(
-                "端口仅接收：这些帧只进入本会话（Trace、统计、规格、脚本、录制），不会发到总线上。",
+                "Receive-only port: these frames stay in this session (Trace, statistics, Specification, scripts, recording) and never reach the bus.",
             );
         }
         ui.separator();
@@ -841,7 +841,9 @@ impl GeneratorView {
             }
         }
         if slots.is_empty() {
-            ui.text_disabled("描述没有把这路里的任何帧绑定给这个 ECU 发送：这里没有可加的条目");
+            ui.text_disabled(
+                "The description binds no frame on this bus to this ECU as sender: there is nothing to add here",
+            );
         } else {
             let labels: Vec<String> = slots
                 .iter()
@@ -891,19 +893,19 @@ fn fr_row(
         (
             "OFF",
             [0.55, 0.58, 0.65, 1.0],
-            "未发送：条目生成开关未勾选。",
+            "Not sending: the entry's On switch is off.",
         )
     } else if view.muted {
         (
             "MUTE",
             [1.0, 0.65, 0.2, 1.0],
-            "本次回放期间不发送：日志里这一路本来就带这个槽的帧，再发一份会让同一条信号有两个发送者，每个视图都会同时看到两个来源。On 勾选框保持原样——退出回放后照常发送。",
+            "Not sent during this replay: this bus's log already carries frames in this slot, so another copy would give the same signal two senders and every view would show both sources. The On checkbox is unchanged -- sending resumes when the replay ends.",
         )
     } else {
         (
             "ON",
             [0.4, 0.95, 0.5, 1.0],
-            "正在发出：条目已勾选，没有被任何机制抑制。端口仅接收，所以这些帧进的是本会话（Trace、统计、规格、脚本、录制），不在总线上。",
+            "Sending: the entry is on and nothing is suppressing it. The port is receive-only, so these frames stay in this session (Trace, statistics, Specification, scripts, recording), not on the bus.",
         )
     };
     ui.text_colored(color, format!("{chip:<4}"));
@@ -935,21 +937,21 @@ fn fr_row(
     let cycles = crate::generator::cycles_of(cycle, cycle_time.unwrap_or(0));
     let (cyc, cyc_hint) = match (cycle, cycles) {
         (0, _) => (
-            "不发".to_string(),
-            "周期 0：这个条目不会自行发送（Send now 仍然可以送一帧）。要恢复正常，点这个按钮填周期数。".to_string(),
+            "never".to_string(),
+            "Cycle 0: this entry never sends on its own (Send now still sends one frame). Click this button and enter a cycle count to restore.".to_string(),
         ),
         (_, Some(n)) => (
-            format!("{n} 周期"),
+            format!("{n} cyc"),
             format!(
-                "每 {n} 个通信周期发一帧 = {} ms。静态槽由调度表决定什么时候发，所以这里数的是周期，不是毫秒。",
+                "One frame every {n} communication cycles = {} ms. The schedule decides when a static slot sends, so this counts cycles, not milliseconds.",
                 cycle / 1000
             ),
         ),
         _ => (
             format!("{} ms", cycle / 1000),
             match cycle_time {
-                Some(_) => "不在周期网格的整倍数上：这一路描述声明的周期数除不进这个值。".to_string(),
-                None => "这一路没有集群描述（或没声明周期时间），只能按毫秒发。".to_string(),
+                Some(_) => "Not a whole multiple of the cycle grid: this bus's declared cycle time does not divide this value.".to_string(),
+                None => "This bus has no cluster description (or declares no cycle time), so only milliseconds can be used.".to_string(),
             },
         ),
     };
@@ -973,8 +975,8 @@ fn fr_row(
     if let Some(declared) = off {
         ui.same_line();
         let label = match crate::generator::cycles_of(declared, cycle_time.unwrap_or(0)) {
-            Some(n) => format!("描述 {n} 周期"),
-            None => format!("描述 {}ms", declared / 1000),
+            Some(n) => format!("declared {n} cyc"),
+            None => format!("declared {}ms", declared / 1000),
         };
         if ui.button(format!("{label}##frdbc{i}")) {
             cmds.push(GeneratorCmd::SetFrCycle {
@@ -1011,7 +1013,7 @@ fn fr_row(
                 .fr_declared_len(bus, slot)
                 .unwrap_or_else(|| crate::generator::hex_len_of(&view.data_text));
             ui.tooltip_text(format!(
-                "载荷 {wide} 字节（这个槽的宽度由调度表规定）：不足补 0，多出来的不收"
+                "Payload of {wide} bytes (the schedule fixes this slot's width): short payloads are zero-padded, extra bytes are rejected"
             ));
         }
         if ui.is_item_active() {
@@ -1031,7 +1033,9 @@ fn fr_row(
         ui.text_disabled(&view.sent_text);
     }
     if view.undescribed {
-        ui.text_disabled("该路没有集群描述、或描述未调度这个槽：载荷按原样发出，无人解码它。");
+        ui.text_disabled(
+            "This bus has no cluster description, or the description does not schedule this slot: the payload goes out as-is and nobody decodes it.",
+        );
     }
     signal_rows(
         gview,
@@ -1110,7 +1114,10 @@ impl GeneratorView {
         };
         let note = match cycle_us {
             Some(ct) => match crate::generator::fr_cycle_draft(&self.tx_cycle_buf, ct) {
-                Ok((n, us)) => (format!("每 {n} 个通信周期 = {} ms", us / 1000), false),
+                Ok((n, us)) => (
+                    format!("every {n} communication cycles = {} ms", us / 1000),
+                    false,
+                ),
                 Err(why) => (why.to_string(), true),
             },
             None => match draft {
@@ -1133,19 +1140,19 @@ impl GeneratorView {
         let declared_line = declared.filter(|d| *d != current).map(|d| match cycle_us {
             Some(ct) => match crate::generator::cycles_of(d, ct) {
                 Some(n) => (
-                    format!("{declared_by} 声明的周期：每 {n} 周期（{} ms）", d / 1000),
+                    format!("{declared_by} declares: every {n} cycles ({} ms)", d / 1000),
                     n.to_string(),
                 ),
                 None => (
-                    format!("{declared_by} 声明的周期：{} ms", d / 1000),
+                    format!("{declared_by} declares: {} ms", d / 1000),
                     (d / 1000).to_string(),
                 ),
             },
             None => (
                 format!(
-                    "{declared_by} 声明的周期：{}",
+                    "{declared_by} declares: {}",
                     if d == 0 {
-                        "event（无周期）".to_string()
+                        "event (no cycle)".to_string()
                     } else {
                         format!("{} ms", d / 1000)
                     }
@@ -1174,7 +1181,7 @@ impl GeneratorView {
             ui.set_next_item_width(120.0);
             let entered = ui
                 .input_text(
-                    if cycle_us.is_some() { "周期" } else { "ms" },
+                    if cycle_us.is_some() { "cycles" } else { "ms" },
                     &mut self.tx_cycle_buf,
                 )
                 .flags(InputTextFlags::CHARS_DECIMAL | InputTextFlags::AUTO_SELECT_ALL)
@@ -1275,7 +1282,7 @@ fn cycle_edit(app: &App, target: GenRow) -> Option<CycleEdit> {
                 title: format!("{name}  slot {slot}  on {bus_name}"),
                 current_us: cycle_us,
                 declared_us: declared,
-                declared_by: "描述",
+                declared_by: "Description",
                 cycle_us: app.fr_cycle_time_us(bus),
             })
         }
@@ -1453,9 +1460,10 @@ impl App {
                 GeneratorCmd::AddHex { ch, text } => match u32::from_str_radix(text.trim(), 16) {
                     Ok(id) if id <= 0x7FF => self.add_tx(ch, id),
                     Ok(_) => {
-                        self.status = "手动添加只支持标准帧 id（≤ 7FF）".to_string();
+                        self.status =
+                            "Manual add supports standard frame ids only (<= 7FF)".to_string();
                     }
-                    Err(_) => self.status = format!("hex id 解析失败：{text}"),
+                    Err(_) => self.status = format!("bad hex id: {text}"),
                 },
                 GeneratorCmd::Add { ch, id } => self.add_tx(ch, id),
                 GeneratorCmd::SetActive { ch, id, on } => {

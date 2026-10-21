@@ -1705,7 +1705,7 @@ impl Config {
                         },
                     );
                 }
-                Err(e) => problems.push(format!("FlexRay 描述加载失败: {e}")),
+                Err(e) => problems.push(format!("FlexRay description load failed: {e}")),
             }
         }
         // Ethernet matrices load the same way; a moved or broken file is a
@@ -1726,7 +1726,7 @@ impl Config {
                         },
                     );
                 }
-                Err(e) => problems.push(format!("Ethernet ARXML 加载失败: {e}")),
+                Err(e) => problems.push(format!("Ethernet ARXML load failed: {e}")),
             }
         }
         // Names come back before anything that labels a bus, and they survive a

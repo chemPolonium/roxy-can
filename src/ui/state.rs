@@ -162,9 +162,9 @@ fn rule_editor(state: &mut StateUi, wins: &mut [StateWin], app: &App, ui: &Ui) {
             // observed values, custom bands from explicit cuts.
             let mut mode = if w.rules.contains_key(&key) { 1 } else { 0 };
             let mut chosen = mode;
-            ui.radio_button_int("默认", &mut chosen, 0);
+            ui.radio_button_int("Default", &mut chosen, 0);
             ui.same_line();
-            ui.radio_button_int("自定义", &mut chosen, 1);
+            ui.radio_button_int("Custom", &mut chosen, 1);
             if chosen != mode {
                 if chosen == 1 {
                     w.rules.entry(key.clone()).or_insert_with(|| StateRule {
@@ -348,7 +348,9 @@ fn default_panel(
     }
 
     if states.is_empty() {
-        ui.text_disabled("暂无状态：等总线出现取值，或让数据库带 VAL_ 值表。");
+        ui.text_disabled(
+            "No states yet -- wait for bus values, or add a VAL_ table to the database.",
+        );
     }
     for (bits, label) in &states {
         ui.text(label);
@@ -370,7 +372,7 @@ fn default_panel(
             ui.tooltip_text("automatic");
         }
     }
-    if ui.button("清除颜色##srdclear") {
+    if ui.button("Clear colors##srdclear") {
         w.overrides.remove(key);
     }
 }
@@ -395,17 +397,19 @@ fn color_picker_popup(state: &mut StateUi, wins: &mut [StateWin], ui: &Ui) {
                 if band >= rule.colors.len() {
                     return;
                 }
-                if ui.selectable_config("自动").build() {
+                if ui.selectable_config("Auto").build() {
                     rule.colors[band] = None;
                     ui.close_current_popup();
                     state.rule_pick = None;
                     return;
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("配色跟随自动机制，与其他状态同样稳定");
+                    ui.tooltip_text(
+                        "Follows the automatic color scheme; as stable as any other state",
+                    );
                 }
                 ui.separator();
-                ui.text_disabled("默认颜色");
+                ui.text_disabled("Default colors");
                 for (idx, c) in BAND_PALETTE.iter().enumerate() {
                     if idx % 6 > 0 {
                         ui.same_line();
@@ -418,7 +422,7 @@ fn color_picker_popup(state: &mut StateUi, wins: &mut [StateWin], ui: &Ui) {
                     }
                 }
                 ui.separator();
-                ui.text_disabled("其他颜色");
+                ui.text_disabled("Other colors");
                 let mut col = rule.colors[band].unwrap_or([0.80, 0.80, 0.80]);
                 if ui.color_picker3("##srccustom", &mut col) {
                     rule.colors[band] = Some(col);
@@ -426,17 +430,19 @@ fn color_picker_popup(state: &mut StateUi, wins: &mut [StateWin], ui: &Ui) {
             }
             PickTarget::Value(bits) => {
                 let ov = w.overrides.entry(key.clone()).or_default();
-                if ui.selectable_config("自动").build() {
+                if ui.selectable_config("Auto").build() {
                     ov.remove(&bits);
                     ui.close_current_popup();
                     state.rule_pick = None;
                     return;
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("配色跟随自动机制，与其他状态同样稳定");
+                    ui.tooltip_text(
+                        "Follows the automatic color scheme; as stable as any other state",
+                    );
                 }
                 ui.separator();
-                ui.text_disabled("默认颜色");
+                ui.text_disabled("Default colors");
                 for (idx, c) in BAND_PALETTE.iter().enumerate() {
                     if idx % 6 > 0 {
                         ui.same_line();
@@ -449,7 +455,7 @@ fn color_picker_popup(state: &mut StateUi, wins: &mut [StateWin], ui: &Ui) {
                     }
                 }
                 ui.separator();
-                ui.text_disabled("其他颜色");
+                ui.text_disabled("Other colors");
                 let mut col = ov.get(&bits).copied().unwrap_or([0.80, 0.80, 0.80]);
                 if ui.color_picker3("##srccustom", &mut col) {
                     ov.insert(bits, col);
@@ -488,14 +494,16 @@ impl StateWin {
             self.min_shown_ms = min_ms.max(0) as u64;
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("最短显示时长（毫秒）：更短的区段并入前一段，0 = 全部显示");
+            ui.tooltip_text(
+                "Min band duration (ms): shorter bands merge into the previous; 0 = show all",
+            );
         }
         ui.same_line();
         if ui.button(format!("Export CSV##stexp{i}")) {
             cmds.push(StateCmd::Export(i));
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("导出当前窗口的状态区段表（CSV）");
+            ui.tooltip_text("Export this window's state band table (CSV)");
         }
         ui.separator();
         let avail = ui.content_region_avail();

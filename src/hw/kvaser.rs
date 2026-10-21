@@ -228,7 +228,7 @@ impl KvaserChannel {
         fd_data_kbps: Option<u32>,
         init_access: bool,
     ) -> Result<KvaserChannel, String> {
-        let lib = Canlib::lib().ok_or("Kvaser 驱动不可用（canlib32.dll 未找到）")?;
+        let lib = Canlib::lib().ok_or("Kvaser driver unavailable (canlib32.dll not found)")?;
         let fd_code = fd_data_kbps.and_then(fd_bitrate_code);
         unsafe {
             (lib.initialize_library)();
@@ -248,18 +248,20 @@ impl KvaserChannel {
                 handle = (lib.open_channel)(index, flags & !CAN_OPEN_CAN_FD);
             }
             if handle < 0 {
-                return Err(format!("打开 Kvaser 通道 {index} 失败（status {handle}）"));
+                return Err(format!(
+                    "failed to open Kvaser channel {index} (status {handle})"
+                ));
             }
             let Some(code) = bitrate_code(kbps) else {
                 (lib.close)(handle);
                 return Err(format!(
-                    "不支持的波特率 {kbps} kbit/s（支持 10/50/62/83/100/125/250/500/1000）"
+                    "unsupported bitrate {kbps} kbit/s (supported: 10/50/62/83/100/125/250/500/1000)"
                 ));
             };
             let status = (lib.set_bus_params)(handle, code, 0, 0, 0, 0, 0);
             if status != CAN_OK {
                 (lib.close)(handle);
-                return Err(format!("设置波特率失败（status {status}）"));
+                return Err(format!("failed to set bitrate (status {status})"));
             }
             if let (true, Some(code)) = (fd, fd_code) {
                 match lib.set_bus_params_fd {
@@ -267,7 +269,9 @@ impl KvaserChannel {
                         let status = set_fd(handle, code, 0, 0, 0);
                         if status != CAN_OK {
                             (lib.close)(handle);
-                            return Err(format!("设置 FD 数据段波特率失败（status {status}）"));
+                            return Err(format!(
+                                "failed to set FD data-phase bitrate (status {status})"
+                            ));
                         }
                     }
                     None => {
@@ -280,7 +284,7 @@ impl KvaserChannel {
             let status = (lib.bus_on)(handle);
             if status != CAN_OK {
                 (lib.close)(handle);
-                return Err(format!("BusOn 失败（status {status}）"));
+                return Err(format!("BusOn failed (status {status})"));
             }
             Ok(KvaserChannel { handle, fd })
         }
@@ -292,7 +296,7 @@ impl KvaserChannel {
     /// frame's flag — the same canWrite call the official migration
     /// guide uses, with the FD bits in the high flag byte.
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
-        let lib = Canlib::lib().ok_or("Kvaser 驱动不可用")?;
+        let lib = Canlib::lib().ok_or("Kvaser driver unavailable")?;
         // RTR carries no payload but its `len` is the requested byte
         // count: the DLC goes out as the request, not the empty payload.
         let len = if f.is_remote() {
@@ -324,7 +328,7 @@ impl KvaserChannel {
         if status == CAN_OK {
             Ok(())
         } else {
-            Err(format!("canWrite 失败（status {status}）"))
+            Err(format!("canWrite failed (status {status})"))
         }
     }
 
@@ -400,14 +404,14 @@ impl Drop for KvaserChannel {
 /// result is a valid answer (driver present, no adapters); `Err` means
 /// the driver itself is unavailable.
 pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
-    let lib =
-        Canlib::lib().ok_or_else(|| "Kvaser 驱动不可用（canlib32.dll 未找到）".to_string())?;
+    let lib = Canlib::lib()
+        .ok_or_else(|| "Kvaser driver unavailable (canlib32.dll not found)".to_string())?;
     unsafe {
         (lib.initialize_library)();
         let mut num: i32 = 0;
         let status = (lib.get_number_of_channels)(&mut num);
         if status != CAN_OK {
-            return Err(format!("canGetNumberOfChannels 失败（status {status}）"));
+            return Err(format!("canGetNumberOfChannels failed (status {status})"));
         }
         let mut out = Vec::new();
         for index in 0..num {
@@ -418,7 +422,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             // the non-handle variant -- crashes this process on some
             // driver builds and is never called.
             let name =
-                probe_channel_name(lib, index).unwrap_or_else(|| format!("Kvaser 通道 {index}"));
+                probe_channel_name(lib, index).unwrap_or_else(|| format!("Kvaser channel {index}"));
             out.push(ChannelInfo { index, name });
         }
         Ok(out)

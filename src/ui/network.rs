@@ -211,7 +211,7 @@ impl NetworkView {
                         };
                         ui.text_colored(color, marker);
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("回放块 / [o] 启用 / [-] 停用");
+                            ui.tooltip_text("Replay block / [o] enabled / [-] disabled");
                         }
                         ui.same_line();
                         if ui
@@ -284,7 +284,7 @@ impl NetworkView {
     fn draw_flexray_section(&mut self, ui: &Ui, app: &App, bus: u8) {
         let label = match app.fr_db(bus) {
             Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
-            None => format!("{}（未加载描述）", app.fr_bus_name(bus)),
+            None => format!("{} (no description loaded)", app.fr_bus_name(bus)),
         };
         // The root's ID is the cluster index: two 路 can be renamed alike, and two
         // visible tree nodes with one label would share one ID.
@@ -308,9 +308,9 @@ impl NetworkView {
         let Some(db) = app.fr_db(bus) else {
             let seen: u64 = app.snap.fr_loads.get(&bus).map_or(0, |l| l.frames);
             ui.text_disabled(if seen > 0 {
-                "该路正在接收帧，但未加载集群描述，ECU 与帧归属无法显示"
+                "This bus is receiving frames, but no cluster description is loaded, so ECUs and frame ownership cannot be shown"
             } else {
-                "该路已配置，尚无帧到达，且未加载集群描述"
+                "This bus is configured, no frames have arrived yet, and no cluster description is loaded"
             });
             if !nodes.is_empty() {
                 self.draw_ecu_leaves(ui, bus, &nodes, &[]);
@@ -321,7 +321,9 @@ impl NetworkView {
             // An empty ECU list is a property of the document, not of the session:
             // a cluster export carries no ECUs at all (both bundled FIBEX files are
             // one), and saying so beats a group that looks like it failed to load.
-            ui.text_disabled("描述未声明 ECU（该文件是集群参数导出，不含 ECUs 一节）");
+            ui.text_disabled(
+                "The description declares no ECUs (this file is a cluster parameter export with no ECUs section)",
+            );
             return;
         }
         // How many frames each ECU is the declared sender of, so a leaf says what
@@ -353,7 +355,7 @@ impl NetworkView {
         for (i, ecu) in nodes.iter().enumerate() {
             let text = match counts.get(i) {
                 Some(0) | None => ecu.clone(),
-                Some(n) => format!("{ecu} · 发 {n} 帧"),
+                Some(n) => format!("{ecu} · sends {n} frames"),
             };
             if ui
                 .selectable_config(format!("{text}##freculeaf{bus}_{i}"))
@@ -394,7 +396,7 @@ impl NetworkView {
         ui.text_colored(color, marker);
         if ui.is_item_hovered() {
             ui.tooltip_text(
-                "[*] 运行中 / [o] 已启用待测量 / [-] 未启用 / [!] 出错（编辑器里看日志）",
+                "[*] running / [o] enabled, waiting for measurement / [-] disabled / [!] error (see the editor's log)",
             );
         }
         ui.same_line();
@@ -467,31 +469,31 @@ impl NetworkView {
                         self.profile_pick = pick;
                     }
                     ui.same_line();
-                    if ui.button("应用##profapply") {
+                    if ui.button("Apply##profapply") {
                         let name =
                             profile_list[self.profile_pick.min(profile_list.len() - 1)].clone();
                         cmds.push(NetworkCmd::ApplyProfile(name));
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("按 profiles/*.toml 覆盖角色（all-or-nothing）");
+                        ui.tooltip_text("Override roles from profiles/*.toml (all-or-nothing)");
                     }
                     ui.same_line();
-                    if ui.button("编辑##profedit") {
+                    if ui.button("Edit##profedit") {
                         let name =
                             profile_list[self.profile_pick.min(profile_list.len() - 1)].clone();
                         let path = profile_dir.join("profiles").join(format!("{name}.toml"));
                         cmds.push(NetworkCmd::OpenProfileFile { name, path });
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("用系统默认编辑器打开这个 .toml");
+                        ui.tooltip_text("Open this .toml in the system's default editor");
                     }
                     ui.same_line();
                     let name =
                         profile_list[self.profile_pick.min(profile_list.len() - 1)].clone();
                     if ui.button(if self.profile_delete_arm {
-                        "确认删除##profdel"
+                        "Confirm delete##profdel"
                     } else {
-                        "删除##profdel"
+                        "Delete##profdel"
                     }) {
                         if self.profile_delete_arm {
                             cmds.push(NetworkCmd::DeleteProfile(name));
@@ -501,20 +503,24 @@ impl NetworkView {
                         }
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("删除选中的 profile 文件（点两次确认）");
+                        ui.tooltip_text(
+                            "Delete the selected profile file (click twice to confirm)",
+                        );
                     }
                 }
                 ui.same_line();
                 ui.set_next_item_width(120.0);
                 ui.input_text("##profnew", &mut self.profile_draft_name)
-                    .hint("新名字")
+                    .hint("new name")
                     .build();
                 ui.same_line();
-                if ui.button("存当前##profsave") {
+                if ui.button("Save current##profsave") {
                     cmds.push(NetworkCmd::SaveProfile(self.profile_draft_name.clone()));
                 }
                 if ui.is_item_hovered() {
-                    ui.tooltip_text("把当前角色与硬件连接快照存为新 profile");
+                    ui.tooltip_text(
+                        "Save the current roles and hardware connections as a new profile",
+                    );
                 }
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();
@@ -558,7 +564,7 @@ impl NetworkView {
                     if let Some((bus, ecu)) = self.net_fr_sel.clone() {
                         ui.text_colored(
                             [0.30, 0.80, 1.00, 1.0],
-                            format!("{} / {}  —  FlexRay 发送方", app.fr_bus_label(bus), ecu),
+                            format!("{} / {}  —  FlexRay sender", app.fr_bus_label(bus), ecu),
                         );
                         ui.separator();
                         gen_cmds.extend(genv.fr_ecu_generator(ui, app, bus, &ecu));
@@ -572,7 +578,9 @@ impl NetworkView {
                         if app.fr_buses.is_empty() && app.snap.fr_loads.is_empty() {
                             ui.text("no DBC nodes to display");
                         } else {
-                            ui.text("没有 DBC 节点；点左侧 FlexRay 一节里的 ECU，这里就是它的生成器");
+                            ui.text(
+                                "No DBC nodes; pick an ECU under FlexRay on the left and its generator shows here",
+                            );
                         }
                         return;
                     }
@@ -629,9 +637,9 @@ impl NetworkView {
                     // 脚本编辑入口在节点之下（而非总线）：新建的脚本
                     // 自动绑定到当前选中的 DBC 节点，发帧受其角色开关。
                     // 两个新建按钮统一排在标签同一行。
-                    ui.text("本节点脚本");
+                    ui.text("Node scripts");
                     ui.same_line();
-                    if ui.button(format!("+ 脚本节点##netadd{ch}")) {
+                    if ui.button(format!("+ Script node##netadd{ch}")) {
                         let name = format!("Node {}", app.snap.nodes.len() + 1);
                         let attached = Some((ch as u8, ni.name.clone()));
                         cmds.push(NetworkCmd::AddNode {
@@ -641,7 +649,7 @@ impl NetworkView {
                         });
                     }
                     ui.same_line();
-                    ui.text_disabled("点名字打开脚本编辑器");
+                    ui.text_disabled("Click a name to open its script editor");
                     let node_scripts: Vec<(u64, String, bool, bool)> = app
                         .snap
                         .nodes
@@ -667,16 +675,18 @@ impl NetworkView {
                             cmds.push(NetworkCmd::OpenScriptEditor(nid));
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [-] 未启用");
+                            ui.tooltip_text(
+                                "[*] running / [o] enabled, waiting for measurement / [-] disabled",
+                            );
                         }
                     }
                     ui.separator();
 
                     // 回放块也是节点的一种驱动：该节点名下的块就近列出，
                     // 新建即绑定到本节点并默认只回放它的报文。
-                    ui.text("本节点回放块");
+                    ui.text("Node replay blocks");
                     ui.same_line();
-                    if ui.button(format!("+ 回放块##netaddblk{ch}")) {
+                    if ui.button(format!("+ Replay block##netaddblk{ch}")) {
                         let name = format!("Block {}", app.snap.blocks.len() + 1);
                         cmds.push(NetworkCmd::AddReplayBlock {
                             channel: ch as u8,
@@ -686,7 +696,7 @@ impl NetworkView {
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text(
-                            "把该节点录制的真实流量重新发到仿真总线上（restbus）；新建后在下方选择日志文件，启用即发送",
+                            "Replay this node's recorded traffic onto the simulated bus (restbus); pick a log file below, then enable to send",
                         );
                     }
                     let node_blocks: Vec<(u64, String, bool, usize, Option<String>)> = app
@@ -713,15 +723,17 @@ impl NetworkView {
                             cmds.push(NetworkCmd::SetReplayBlockEnabled { id: bid, on });
                         }
                         if ui.is_item_hovered() {
-                            ui.tooltip_text("启用后测量中按录制间距发送（仅仿真模式）");
+                            ui.tooltip_text(
+                                "When enabled, sends with the recorded spacing during measurement (simulation only)",
+                            );
                         }
                         ui.same_line();
                         ui.text(&name);
                         ui.same_line();
-                        ui.text_disabled(format!("{frames} 帧"));
+                        ui.text_disabled(format!("{frames} frames"));
                         if let Some(e) = &last_error {
                             ui.same_line();
-                            ui.text_colored([1.0, 0.55, 0.3, 1.0], format!("载入失败：{e}"));
+                            ui.text_colored([1.0, 0.55, 0.3, 1.0], format!("load failed: {e}"));
                         }
                         ui.same_line();
                         if ui.button(format!("x##netblockrm{bid}")) {
@@ -756,8 +768,8 @@ impl NetworkView {
                         ui.same_line();
                         if ui.button(format!("...##blfile{bid}"))
                             && let Some(p) = rfd::FileDialog::new()
-                                .set_title("选择回放日志")
-                                .add_filter("日志文件", &["asc", "blf"])
+                                .set_title("Select replay log")
+                                .add_filter("Log files", &["asc", "blf"])
                                 .pick_file()
                             && let Some(d) = self.block_drafts.get_mut(&bid)
                         {
@@ -765,7 +777,7 @@ impl NetworkView {
                             draft.path = d.path.clone();
                         }
                         // id 过滤（可选）：留空 = 该节点的全部报文。
-                        const BLOCK_IDS_HINT: &str = "id 过滤，如 100, 3F4x";
+                        const BLOCK_IDS_HINT: &str = "id filter, e.g. 100, 3F4x";
                         ui.set_next_item_width(crate::ui::hint_width(
                             ui,
                             BLOCK_IDS_HINT,
@@ -803,7 +815,7 @@ impl NetworkView {
                         }
                         if draft.path != saved {
                             ui.same_line();
-                            ui.text_colored([1.0, 0.8, 0.4, 1.0], "未应用");
+                            ui.text_colored([1.0, 0.8, 0.4, 1.0], "Not applied");
                         }
                         ui.unindent();
                     }
@@ -930,14 +942,14 @@ impl App {
                         .arg(&path)
                         .spawn();
                     self.status = match opened {
-                        Ok(_) => format!("已在系统编辑器打开 {name}.toml"),
-                        Err(e) => format!("打开编辑器失败: {e}"),
+                        Ok(_) => format!("Opened {name}.toml in the system editor"),
+                        Err(e) => format!("failed to open editor: {e}"),
                     };
                 }
                 NetworkCmd::DeleteProfile(name) => {
                     let dir = self.network_profile_dir();
                     self.status = match crate::profile::delete_profile(&dir, &name) {
-                        Ok(()) => format!("profile `{name}` 已删除"),
+                        Ok(()) => format!("profile `{name}` deleted"),
                         Err(e) => e,
                     };
                     self.refresh_network_profiles();
