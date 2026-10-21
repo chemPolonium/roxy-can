@@ -266,6 +266,8 @@ pub struct App {
     pub(crate) network_view: crate::ui::network::NetworkView,
     /// The Measurement Setup window's open flag.
     pub(crate) measurement_view: crate::ui::measurement::MeasurementView,
+    /// The State Tracker windows' shared band-editor/color-picker state.
+    pub(crate) state_ui: crate::ui::state::StateUi,
     /// How far an observed period may stray from the declared one, in percent.
     pub spec_tol_pct: u64,
     /// How many declared periods of silence count as a dropped message.
@@ -278,13 +280,8 @@ pub struct App {
     pub id_filter_search: String,
     pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
-    /// The State Tracker row whose state editor is open: window index plus
-    /// signal key. Session state only.
-    pub state_rule_edit: Option<(usize, crate::observe::SigKey)>,
-    /// The swatch currently picking a color in that editor: window index,
-    /// signal key, and the target -- a custom band, or a default-mode
-    /// state value (normalized bits). Session state only.
-    pub state_rule_pick: Option<(usize, crate::observe::SigKey, PickTarget)>,
+    /// The State Tracker row whose state editor is open is tracked by
+    /// [`crate::ui::state::StateUi`], alongside the color picker.
     /// CTE text editors, keyed by the node's stable id. They bind to the
     /// ImGui context, which `App::new` does not have: rendering a script
     /// editor queues the id in `pending_editors`, and main creates the
@@ -479,6 +476,7 @@ impl App {
             generator_view: Default::default(),
             network_view: Default::default(),
             measurement_view: Default::default(),
+            state_ui: Default::default(),
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
             symbol_search: String::new(),
@@ -486,8 +484,6 @@ impl App {
             id_filter_search: String::new(),
             popup_target: None,
             focus_title: None,
-            state_rule_edit: None,
-            state_rule_pick: None,
             editors: HashMap::new(),
             pending_editors: Vec::new(),
             editor_synced: HashMap::new(),
@@ -1183,6 +1179,37 @@ impl App {
     pub(crate) fn fr_slot_wire_us(&self, bus: u8) -> Option<f64> {
         self.fr_db(bus)
             .and_then(|db| crate::load::fr_slot_wire_us(&db.params))
+    }
+
+    /// Refreshes the observer windows whose draw paths are read-only. Runs
+    /// once per UI frame before any window draws; each sync keeps its own
+    /// text-gate early return, so a closed or unchanged window costs a check.
+    pub(crate) fn sync_observer_text(&mut self) {
+        for i in 0..self.msg_windows.len() {
+            if self.msg_windows[i].opened {
+                self.sync_msg_text(i);
+            }
+        }
+        for i in 0..self.stats_windows.len() {
+            if self.stats_windows[i].opened {
+                self.sync_stats_text(i);
+            }
+        }
+        for i in 0..self.data_windows.len() {
+            if self.data_windows[i].opened {
+                self.sync_data_text(i);
+            }
+        }
+        for i in 0..self.trace_windows.len() {
+            if self.trace_windows[i].opened {
+                self.sync_trace_rows(i);
+            }
+        }
+        for i in 0..self.graphics.len() {
+            if self.graphics[i].opened {
+                self.sync_gfx_legend(i);
+            }
+        }
     }
 
     /// Refreshes Messages window `i`'s throttled text snapshot: the header

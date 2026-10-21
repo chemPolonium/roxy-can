@@ -69,15 +69,41 @@ fn band_auto_color(slots: &mut HashMap<u64, usize>, band: usize) -> [f32; 3] {
     [p[0], p[1], p[2]]
 }
 
+/// The State Tracker windows' shared popup state: which signal's band editor
+/// or color picker is open. The rules themselves stay on each window.
+#[derive(Default)]
+pub struct StateUi {
+    pub(crate) rule_edit: Option<(usize, SigKey)>,
+    pub(crate) rule_pick: Option<(usize, SigKey, PickTarget)>,
+}
+
+pub enum StateCmd {
+    ClearFocus,
+    Export(usize),
+    Sig(crate::ui::siglist::SigListCmd),
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
-    let n = app.state_trackers.len();
     let disp_h = ui.io().display_size()[1];
-    for i in 0..n {
-        let mut open = app.state_trackers[i].opened;
+    let mut wins = std::mem::take(&mut app.state_trackers);
+    let mut state = std::mem::take(&mut app.state_ui);
+    let mut cmds = Vec::new();
+    for (i, win) in wins.iter_mut().enumerate() {
+        win.show(ui, app, i, disp_h, &mut cmds);
+    }
+    rule_editor(&mut state, &mut wins, app, ui);
+    app.state_trackers = wins;
+    app.state_ui = state;
+    app.apply_state_cmds(cmds);
+}
+
+impl StateWin {
+    pub fn show(&mut self, ui: &Ui, app: &App, i: usize, disp_h: f32, cmds: &mut Vec<StateCmd>) {
+        let mut open = self.opened;
         if !open {
-            continue;
+            return;
         }
-        let raw = app.state_trackers[i].name.clone();
+        let raw = self.name.clone();
         let name = if raw.trim().is_empty() {
             format!("State Tracker {}", i + 1)
         } else {
@@ -85,7 +111,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         };
         let focus = app.focus_title.as_deref() == Some(name.as_str());
         if focus {
-            app.focus_title = None;
+            cmds.push(StateCmd::ClearFocus);
         }
         let mut window = ui
             .window(format!("{name}###st{i}"))
@@ -99,11 +125,10 @@ pub fn render(app: &mut App, ui: &Ui) {
             window = window.focused(true);
         }
         window.build(|| {
-            window_content(app, ui, i);
+            self.window_content(app, ui, i, cmds);
         });
-        app.state_trackers[i].opened = open;
+        self.opened = open;
     }
-    rule_editor(app, ui);
 }
 
 /// CANoe's Value Definition editor for one tracked signal: ascending cut
@@ -111,8 +136,8 @@ pub fn render(app: &mut App, ui: &Ui) {
 /// every band gets its own name and fill color. Edits land directly in
 /// the window's rule map -- rules are frontend state, so nothing feeds
 /// back to fight the keystrokes.
-fn rule_editor(app: &mut App, ui: &Ui) {
-    let Some((wi, key)) = app.state_rule_edit.clone() else {
+fn rule_editor(state: &mut StateUi, wins: &mut [StateWin], app: &App, ui: &Ui) {
+    let Some((wi, key)) = state.rule_edit.clone() else {
         return;
     };
     // The window id must tell two same-named signals apart, so it carries the
@@ -128,7 +153,7 @@ fn rule_editor(app: &mut App, ui: &Ui) {
         .opened(&mut open)
         .size([410.0, 0.0], Condition::Appearing)
         .build(|| {
-            let Some(w) = app.state_trackers.get_mut(wi) else {
+            let Some(w) = wins.get_mut(wi) else {
                 return;
             };
             // Two modes per signal, CANoe's Rectangle-with-definitions vs
@@ -165,17 +190,17 @@ fn rule_editor(app: &mut App, ui: &Ui) {
                 crate::observe::SigKey::Fr { .. } => None,
             };
             if mode == 0 {
-                default_panel(ui, dbc.as_deref(), w, &key, &mut app.state_rule_pick, wi);
+                default_panel(ui, dbc.as_deref(), w, &key, &mut state.rule_pick, wi);
             } else {
-                custom_panel(ui, w, &key, &mut app.state_rule_pick, wi);
+                custom_panel(ui, w, &key, &mut state.rule_pick, wi);
             }
             // Must render inside this window's ID scope: OpenPopup hashed
             // "##srpick" against it, and a popup begun outside would look
             // for a different ID and never show.
-            color_picker_popup(app, ui);
+            color_picker_popup(state, wins, ui);
         });
     if !open {
-        app.state_rule_edit = None;
+        state.rule_edit = None;
     }
 }
 
@@ -353,12 +378,12 @@ fn default_panel(
 /// default-mode state: 自动 plus a short row of low-saturation defaults,
 /// with a full palette (and RGB inputs) at the bottom for the rare case
 /// nothing default fits. Selecting applies immediately and closes.
-fn color_picker_popup(app: &mut App, ui: &Ui) {
-    let Some((wi, key, target)) = app.state_rule_pick.clone() else {
+fn color_picker_popup(state: &mut StateUi, wins: &mut [StateWin], ui: &Ui) {
+    let Some((wi, key, target)) = state.rule_pick.clone() else {
         return;
     };
     ui.popup("##srpick", || {
-        let Some(w) = app.state_trackers.get_mut(wi) else {
+        let Some(w) = wins.get_mut(wi) else {
             return;
         };
         match target {
@@ -372,7 +397,7 @@ fn color_picker_popup(app: &mut App, ui: &Ui) {
                 if ui.selectable_config("自动").build() {
                     rule.colors[band] = None;
                     ui.close_current_popup();
-                    app.state_rule_pick = None;
+                    state.rule_pick = None;
                     return;
                 }
                 if ui.is_item_hovered() {
@@ -387,7 +412,7 @@ fn color_picker_popup(app: &mut App, ui: &Ui) {
                     if ui.color_button(format!("##srpal{idx}"), [c[0], c[1], c[2], 1.0]) {
                         rule.colors[band] = Some(*c);
                         ui.close_current_popup();
-                        app.state_rule_pick = None;
+                        state.rule_pick = None;
                         return;
                     }
                 }
@@ -403,7 +428,7 @@ fn color_picker_popup(app: &mut App, ui: &Ui) {
                 if ui.selectable_config("自动").build() {
                     ov.remove(&bits);
                     ui.close_current_popup();
-                    app.state_rule_pick = None;
+                    state.rule_pick = None;
                     return;
                 }
                 if ui.is_item_hovered() {
@@ -418,7 +443,7 @@ fn color_picker_popup(app: &mut App, ui: &Ui) {
                     if ui.color_button(format!("##srpal{idx}"), [c[0], c[1], c[2], 1.0]) {
                         ov.insert(bits, *c);
                         ui.close_current_popup();
-                        app.state_rule_pick = None;
+                        state.rule_pick = None;
                         return;
                     }
                 }
@@ -433,253 +458,264 @@ fn color_picker_popup(app: &mut App, ui: &Ui) {
     });
 }
 
-fn window_content(app: &mut App, ui: &Ui, i: usize) {
-    for (val, label) in TW_CHOICES {
-        let selected = (app.state_trackers[i].time_window_s - val).abs() < 1e-9;
-        let text = if selected {
-            format!("[{label}]##stw{i}")
-        } else {
-            format!("{label}##stw{i}")
-        };
-        if ui.button(text) {
-            app.state_trackers[i].time_window_s = val;
+impl StateWin {
+    fn window_content(&mut self, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<StateCmd>) {
+        for (val, label) in TW_CHOICES {
+            let selected = (self.time_window_s - val).abs() < 1e-9;
+            let text = if selected {
+                format!("[{label}]##stw{i}")
+            } else {
+                format!("{label}##stw{i}")
+            };
+            if ui.button(text) {
+                self.time_window_s = val;
+            }
+            ui.same_line();
+        }
+        ui.text_colored([0.6, 0.85, 1.0, 1.0], "live");
+        ui.same_line();
+        // Minimum display duration: state bands shorter than this are absorbed
+        // into the band before them (the first into the one after), so a
+        // jittery signal stays readable. 0 = show everything.
+        ui.same_line();
+        let mut min_ms = self.min_shown_ms as i32;
+        ui.set_next_item_width(70.0);
+        if ui
+            .input_int_config(format!("Min ms##stmin{i}"))
+            .build(&mut min_ms)
+        {
+            self.min_shown_ms = min_ms.max(0) as u64;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("最短显示时长（毫秒）：更短的区段并入前一段，0 = 全部显示");
         }
         ui.same_line();
+        if ui.button(format!("Export CSV##stexp{i}")) {
+            cmds.push(StateCmd::Export(i));
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("导出当前窗口的状态区段表（CSV）");
+        }
+        ui.separator();
+        let avail = ui.content_region_avail();
+        ui.child_window(format!("st_panel{i}"))
+            .size([PANEL_W, avail[1]])
+            .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
+            .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
+            .build(ui, || {
+                ui.text("Tracked signals");
+                let mut sig_cmds = Vec::new();
+                crate::ui::siglist::draw_view(
+                    app,
+                    ui,
+                    crate::ui::siglist::ListKind::State(i),
+                    &mut self.signals,
+                    None,
+                    &mut sig_cmds,
+                );
+                cmds.extend(sig_cmds.into_iter().map(StateCmd::Sig));
+            });
+        ui.same_line();
+        ui.child_window(format!("st_bands{i}"))
+            .size([0.0, avail[1]])
+            .build(ui, || self.bands_area(app, ui));
     }
-    ui.text_colored([0.6, 0.85, 1.0, 1.0], "live");
-    ui.same_line();
-    // Minimum display duration: state bands shorter than this are absorbed
-    // into the band before them (the first into the one after), so a
-    // jittery signal stays readable. 0 = show everything.
-    ui.same_line();
-    let mut min_ms = app.state_trackers[i].min_shown_ms as i32;
-    ui.set_next_item_width(70.0);
-    if ui
-        .input_int_config(format!("Min ms##stmin{i}"))
-        .build(&mut min_ms)
-    {
-        app.state_trackers[i].min_shown_ms = min_ms.max(0) as u64;
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("最短显示时长（毫秒）：更短的区段并入前一段，0 = 全部显示");
-    }
-    ui.same_line();
-    if ui.button(format!("Export CSV##stexp{i}")) {
-        app.export_state_dialog(i);
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("导出当前窗口的状态区段表（CSV）");
-    }
-    ui.separator();
-    let avail = ui.content_region_avail();
-    ui.child_window(format!("st_panel{i}"))
-        .size([PANEL_W, avail[1]])
-        .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
-        .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
-        .build(ui, || {
-            ui.text("Tracked signals");
-            crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::State(i));
-        });
-    ui.same_line();
-    ui.child_window(format!("st_bands{i}"))
-        .size([0.0, avail[1]])
-        .build(ui, || bands_area(app, ui, i));
-}
 
-/// Right area: the time ruler and one state band per tracked row. Names
-/// and bands share one draw list, so a row's label and its band cannot
-/// drift apart the way separately-laid-out widgets can.
-fn bands_area(app: &mut App, ui: &Ui, i: usize) {
-    let avail = ui.content_region_avail();
-    let w = avail[0].max(NAME_W + 60.0);
-    let h = avail[1].max(RULER_H + ROW_H);
-    let [x0, y0] = ui.cursor_screen_pos();
-    let mut dl = ui.get_window_draw_list();
+    /// Right area: the time ruler and one state band per tracked row. Names
+    /// and bands share one draw list, so a row's label and its band cannot
+    /// drift apart the way separately-laid-out widgets can.
+    fn bands_area(&mut self, app: &App, ui: &Ui) {
+        let avail = ui.content_region_avail();
+        let w = avail[0].max(NAME_W + 60.0);
+        let h = avail[1].max(RULER_H + ROW_H);
+        let [x0, y0] = ui.cursor_screen_pos();
+        let mut dl = ui.get_window_draw_list();
 
-    let tw = app.state_trackers[i].time_window_s;
-    // Always live: the right edge is the plot clock, which follows the
-    // replay playhead in replay, so the bands track playback too.
-    let t_right = app.plot_now_s();
-    let t_left = (t_right - tw).max(0.0);
-    let lo_us = (t_left * 1e6) as u64;
-    let hi_us = (t_right * 1e6) as u64;
-    let geo = BandGeo {
-        bx0: x0 + NAME_W,
-        bx1: x0 + w,
-        t_left,
-        span_s: (t_right - t_left).max(1e-6),
-        ry: 0.0,
-    };
-
-    // Ruler: minor ticks at a fifth of the label step first, then labeled
-    // major ticks over them -- CANoe's axis reads absolute time at a
-    // glance this way.
-    let step = nice_step(geo.span_s);
-    let minor = step / 5.0;
-    let mut tm = (geo.t_left / minor).ceil() * minor;
-    while tm <= t_right {
-        let x = geo.x_of(tm);
-        dl.add_line(
-            [x, y0 + RULER_H - 3.0],
-            [x, y0 + RULER_H],
-            [0.32, 0.32, 0.38, 1.0],
-        )
-        .thickness(1.0)
-        .build();
-        tm += minor;
-    }
-    let mut t = (geo.t_left / step).ceil() * step;
-    while t <= t_right {
-        let x = geo.x_of(t);
-        dl.add_line(
-            [x, y0 + RULER_H - 5.0],
-            [x, y0 + RULER_H],
-            [0.55, 0.55, 0.6, 1.0],
-        )
-        .thickness(1.0)
-        .build();
-        let label = if step < 1.0 {
-            format!("{t:.1}")
-        } else {
-            format!("{}", t as u64)
+        let tw = self.time_window_s;
+        // Always live: the right edge is the plot clock, which follows the
+        // replay playhead in replay, so the bands track playback too.
+        let t_right = app.plot_now_s();
+        let t_left = (t_right - tw).max(0.0);
+        let lo_us = (t_left * 1e6) as u64;
+        let hi_us = (t_right * 1e6) as u64;
+        let geo = BandGeo {
+            bx0: x0 + NAME_W,
+            bx1: x0 + w,
+            t_left,
+            span_s: (t_right - t_left).max(1e-6),
+            ry: 0.0,
         };
-        dl.add_text([x + 2.0, y0 + 2.0], [0.7, 0.7, 0.75, 1.0], label);
-        t += step;
-    }
 
-    if app.state_trackers[i].signals.is_empty() {
-        dl.add_text(
-            [x0 + 8.0, y0 + RULER_H + 8.0],
-            [0.6, 0.6, 0.65, 1.0],
-            "Select signals for this window in Measurement Setup.",
-        );
-    }
-    // Rows that do not fit the window height are left out; the window can
-    // be resized. Tracking dozens of signals wants a scrolling pane, not
-    // this clip.
-    let fit = (((h - RULER_H) / (ROW_H + ROW_GAP)).floor() as usize).max(1);
-    for j in 0..app.state_trackers[i].signals.len().min(fit) {
-        let key = app.state_trackers[i].signals[j].key.clone();
-        let visible = app.state_trackers[i].signals[j].visible;
-        let ry = y0 + RULER_H + j as f32 * (ROW_H + ROW_GAP);
-        let geo = BandGeo { ry, ..geo };
-        let bg = if j % 2 == 0 {
-            [0.13, 0.13, 0.16, 1.0]
-        } else {
-            [0.10, 0.10, 0.125, 1.0]
-        };
-        dl.add_rect([x0, ry], [x0 + w, ry + ROW_H], bg)
-            .filled(true)
+        // Ruler: minor ticks at a fifth of the label step first, then labeled
+        // major ticks over them -- CANoe's axis reads absolute time at a
+        // glance this way.
+        let step = nice_step(geo.span_s);
+        let minor = step / 5.0;
+        let mut tm = (geo.t_left / minor).ceil() * minor;
+        while tm <= t_right {
+            let x = geo.x_of(tm);
+            dl.add_line(
+                [x, y0 + RULER_H - 3.0],
+                [x, y0 + RULER_H],
+                [0.32, 0.32, 0.38, 1.0],
+            )
+            .thickness(1.0)
             .build();
-        let tsz = ui.calc_text_size(key.name());
-        let name_col = if visible {
-            [0.9, 0.9, 0.95, 1.0]
-        } else {
-            [0.45, 0.45, 0.5, 1.0]
-        };
-        dl.add_text(
-            [x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5],
-            name_col,
-            key.name(),
-        );
-        dl.add_rect(
-            [geo.bx0, ry],
-            [geo.bx1, ry + ROW_H],
-            [0.07, 0.07, 0.09, 1.0],
-        )
-        .filled(true)
-        .build();
-        if !visible {
-            continue;
+            tm += minor;
         }
-        let Some(sub) = app.sub_view(&key) else {
-            continue;
-        };
-        let color = PALETTE[sub.color % PALETTE.len()];
-        // The value carried into the window by the last sample before it:
-        // a signal that updates once a second must still paint the whole
-        // band, not just the instant of its sample.
-        let held = sub.history.at(lo_us).map(quantize);
-        let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
-        // Custom state bands (CANoe's Value Definition) own both labels
-        // and colors when present; otherwise states are quantized values
-        // labeled from the DBC value table.
-        let has_rule = app.state_trackers[i].rules.contains_key(&key);
-        let segs = compute_segs(app, i, &key, held, &pts, lo_us, hi_us);
-        let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
-        states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        states.dedup();
-
-        // CANoe's Binary rendering: a signal whose whole visible world is
-        // 0/1 draws as a square wave instead of filled bands -- but a
-        // custom rule owns the palette, so it wins.
-        if !has_rule && is_binary(&states) {
-            draw_wave(ui, &mut dl, &segs, &geo, color);
-            continue;
+        let mut t = (geo.t_left / step).ceil() * step;
+        while t <= t_right {
+            let x = geo.x_of(t);
+            dl.add_line(
+                [x, y0 + RULER_H - 5.0],
+                [x, y0 + RULER_H],
+                [0.55, 0.55, 0.6, 1.0],
+            )
+            .thickness(1.0)
+            .build();
+            let label = if step < 1.0 {
+                format!("{t:.1}")
+            } else {
+                format!("{}", t as u64)
+            };
+            dl.add_text([x + 2.0, y0 + 2.0], [0.7, 0.7, 0.75, 1.0], label);
+            t += step;
         }
 
-        // State colors: with few distinct values visible, every state gets
-        // its own slot in the muted default palette -- gear 5 and gear 1
-        // read apart at a glance without shouting. Slots are remembered
-        // per value (see `slot_for`), so the same value keeps its color
-        // across the whole run. A pinned override (default-mode color
-        // picked in the editor) beats the slot, and a busy analog with
-        // more visible states than the palette gets CANoe's plain neutral
-        // band: the value label does the talking.
-        let rule = app.state_trackers[i].rules.get(&key).cloned();
-        let per_state = rule.is_none() && states.len() <= BAND_PALETTE.len();
-        let win = &mut app.state_trackers[i];
-        let overrides = win.overrides.get(&key).cloned();
-        let slots = win.color_slots.entry(key.clone()).or_default();
-        let rule = rule.as_ref();
-        for seg in segs {
-            let sx0 = geo.x_of(seg.t0_us as f64 / 1e6).max(geo.bx0);
-            let sx1 = geo.x_of(seg.t1_us as f64 / 1e6).min(geo.bx1);
-            if sx1 - sx0 < 1.0 {
-                continue;
-            }
-            let fill = if let Some(rule) = rule {
-                let b = rule.band(seg.value);
-                match rule.colors[b] {
-                    Some(c) => [c[0], c[1], c[2], 0.92],
-                    None => {
-                        let p = band_auto_color(slots, b);
-                        [p[0], p[1], p[2], 0.92]
-                    }
-                }
+        if self.signals.is_empty() {
+            dl.add_text(
+                [x0 + 8.0, y0 + RULER_H + 8.0],
+                [0.6, 0.6, 0.65, 1.0],
+                "Select signals for this window in Measurement Setup.",
+            );
+        }
+        // Rows that do not fit the window height are left out; the window can
+        // be resized. Tracking dozens of signals wants a scrolling pane, not
+        // this clip.
+        let fit = (((h - RULER_H) / (ROW_H + ROW_GAP)).floor() as usize).max(1);
+        for j in 0..self.signals.len().min(fit) {
+            let key = self.signals[j].key.clone();
+            let visible = self.signals[j].visible;
+            let ry = y0 + RULER_H + j as f32 * (ROW_H + ROW_GAP);
+            let geo = BandGeo { ry, ..geo };
+            let bg = if j % 2 == 0 {
+                [0.13, 0.13, 0.16, 1.0]
             } else {
-                let bits = bits_of(seg.value);
-                match overrides.as_ref().and_then(|m| m.get(&bits)) {
-                    Some(c) => [c[0], c[1], c[2], 0.92],
-                    None if per_state => {
-                        let p = BAND_PALETTE[slot_for(slots, seg.value, BAND_PALETTE.len())];
-                        [p[0], p[1], p[2], 0.92]
-                    }
-                    _ => NEUTRAL_FILL,
-                }
+                [0.10, 0.10, 0.125, 1.0]
             };
-            // A 1px gap on each side separates neighbouring segments in
-            // every mode; too-narrow segments skip the inset so they do
-            // not vanish entirely.
-            let (fx0, fx1) = if sx1 - sx0 > 3.0 {
-                (sx0 + 1.0, sx1 - 1.0)
+            dl.add_rect([x0, ry], [x0 + w, ry + ROW_H], bg)
+                .filled(true)
+                .build();
+            let tsz = ui.calc_text_size(key.name());
+            let name_col = if visible {
+                [0.9, 0.9, 0.95, 1.0]
             } else {
-                (sx0, sx1)
+                [0.45, 0.45, 0.5, 1.0]
             };
+            dl.add_text(
+                [x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5],
+                name_col,
+                key.name(),
+            );
             dl.add_rect(
-                [fx0, ry + 2.0],
-                [fx1, ry + ROW_H - 2.0],
-                [fill[0], fill[1], fill[2], 0.92],
+                [geo.bx0, ry],
+                [geo.bx1, ry + ROW_H],
+                [0.07, 0.07, 0.09, 1.0],
             )
             .filled(true)
             .build();
-            let tsz = ui.calc_text_size(&seg.label);
-            if tsz[0] + 8.0 <= fx1 - fx0 {
-                dl.add_text(
-                    [(fx0 + fx1 - tsz[0]) * 0.5, ry + (ROW_H - tsz[1]) * 0.5],
-                    text_on(fill),
-                    &seg.label,
-                );
+            if !visible {
+                continue;
+            }
+            let Some(sub) = app.sub_view(&key) else {
+                continue;
+            };
+            let color = PALETTE[sub.color % PALETTE.len()];
+            // The value carried into the window by the last sample before it:
+            // a signal that updates once a second must still paint the whole
+            // band, not just the instant of its sample.
+            let held = sub.history.at(lo_us).map(quantize);
+            let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
+            // Custom state bands (CANoe's Value Definition) own both labels
+            // and colors when present; otherwise states are quantized values
+            // labeled from the DBC value table.
+            let has_rule = self.rules.contains_key(&key);
+            let segs = compute_segs_win(self, app, &key, held, &pts, lo_us, hi_us);
+            let mut states: Vec<f64> = segs.iter().map(|s| s.value).collect();
+            states.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            states.dedup();
+
+            // CANoe's Binary rendering: a signal whose whole visible world is
+            // 0/1 draws as a square wave instead of filled bands -- but a
+            // custom rule owns the palette, so it wins.
+            if !has_rule && is_binary(&states) {
+                draw_wave(ui, &mut dl, &segs, &geo, color);
+                continue;
+            }
+
+            // State colors: with few distinct values visible, every state gets
+            // its own slot in the muted default palette -- gear 5 and gear 1
+            // read apart at a glance without shouting. Slots are remembered
+            // per value (see `slot_for`), so the same value keeps its color
+            // across the whole run. A pinned override (default-mode color
+            // picked in the editor) beats the slot, and a busy analog with
+            // more visible states than the palette gets CANoe's plain neutral
+            // band: the value label does the talking.
+            let rule = self.rules.get(&key).cloned();
+            let per_state = rule.is_none() && states.len() <= BAND_PALETTE.len();
+            let win = &mut *self;
+            let overrides = win.overrides.get(&key).cloned();
+            let slots = win.color_slots.entry(key.clone()).or_default();
+            let rule = rule.as_ref();
+            for seg in segs {
+                let sx0 = geo.x_of(seg.t0_us as f64 / 1e6).max(geo.bx0);
+                let sx1 = geo.x_of(seg.t1_us as f64 / 1e6).min(geo.bx1);
+                if sx1 - sx0 < 1.0 {
+                    continue;
+                }
+                let fill = if let Some(rule) = rule {
+                    let b = rule.band(seg.value);
+                    match rule.colors[b] {
+                        Some(c) => [c[0], c[1], c[2], 0.92],
+                        None => {
+                            let p = band_auto_color(slots, b);
+                            [p[0], p[1], p[2], 0.92]
+                        }
+                    }
+                } else {
+                    let bits = bits_of(seg.value);
+                    match overrides.as_ref().and_then(|m| m.get(&bits)) {
+                        Some(c) => [c[0], c[1], c[2], 0.92],
+                        None if per_state => {
+                            let p = BAND_PALETTE[slot_for(slots, seg.value, BAND_PALETTE.len())];
+                            [p[0], p[1], p[2], 0.92]
+                        }
+                        _ => NEUTRAL_FILL,
+                    }
+                };
+                // A 1px gap on each side separates neighbouring segments in
+                // every mode; too-narrow segments skip the inset so they do
+                // not vanish entirely.
+                let (fx0, fx1) = if sx1 - sx0 > 3.0 {
+                    (sx0 + 1.0, sx1 - 1.0)
+                } else {
+                    (sx0, sx1)
+                };
+                dl.add_rect(
+                    [fx0, ry + 2.0],
+                    [fx1, ry + ROW_H - 2.0],
+                    [fill[0], fill[1], fill[2], 0.92],
+                )
+                .filled(true)
+                .build();
+                let tsz = ui.calc_text_size(&seg.label);
+                if tsz[0] + 8.0 <= fx1 - fx0 {
+                    dl.add_text(
+                        [(fx0 + fx1 - tsz[0]) * 0.5, ry + (ROW_H - tsz[1]) * 0.5],
+                        text_on(fill),
+                        &seg.label,
+                    );
+                }
             }
         }
     }
@@ -903,7 +939,18 @@ pub(crate) fn compute_segs(
     lo_us: u64,
     hi_us: u64,
 ) -> Vec<StateSeg> {
-    let w = &app.state_trackers[wi];
+    compute_segs_win(&app.state_trackers[wi], app, key, held, pts, lo_us, hi_us)
+}
+
+fn compute_segs_win(
+    w: &StateWin,
+    app: &App,
+    key: &SigKey,
+    held: Option<f64>,
+    pts: &[(u64, f64)],
+    lo_us: u64,
+    hi_us: u64,
+) -> Vec<StateSeg> {
     let rule = w.rules.get(key);
     let mut segs = if let Some(rule) = rule {
         state_segments(held, pts, lo_us, hi_us, |v| {
@@ -995,6 +1042,18 @@ pub(crate) fn text_on(fill: [f32; 4]) -> [f32; 4] {
         [0.06, 0.06, 0.08, 1.0]
     } else {
         [0.92, 0.93, 0.95, 1.0]
+    }
+}
+
+impl App {
+    pub(crate) fn apply_state_cmds(&mut self, cmds: Vec<StateCmd>) {
+        for cmd in cmds {
+            match cmd {
+                StateCmd::ClearFocus => self.focus_title = None,
+                StateCmd::Export(i) => self.export_state_dialog(i),
+                StateCmd::Sig(cmd) => self.apply_siglist_cmds(vec![cmd]),
+            }
+        }
     }
 }
 

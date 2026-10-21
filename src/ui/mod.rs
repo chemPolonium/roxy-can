@@ -97,6 +97,9 @@ pub fn render(app: &mut App, ui: &Ui) {
     // The status bar takes `&App`, so its throttled counters refresh here;
     // every other window syncs inside its own draw path.
     app.sync_status_text();
+    // Observer text caches are refreshed before any window draws, so the
+    // windows themselves only read `&App` (see the view/command pattern).
+    app.sync_observer_text();
     dockspace::render(ui);
     toolbar::render(app, ui);
     trace::render(app, ui);

@@ -5,6 +5,7 @@ use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H, TracePick, TraceRow};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
+use crate::workspace::TraceWin;
 use dear_imgui_rs::{
     Condition, ListClipper, SortDirection, TableColumnFlags, TableFlags, TableOptions,
     TableSizingPolicy, Ui,
@@ -16,15 +17,39 @@ static CTX: Mutex<Option<(usize, CanFrame)>> = Mutex::new(None);
 /// Same, for FlexRay rows (their menu only copies address and payload).
 static CTX_FR: Mutex<Option<(usize, crate::trace::FrRow)>> = Mutex::new(None);
 
+pub enum TraceCmd {
+    ClearTrace,
+    Export(usize),
+    OpenPicker(usize),
+    ClearFocus,
+    AddEntry {
+        ch: u8,
+        id: u32,
+        fd: bool,
+        cycle_us: u64,
+        flags: crate::can::frame::FrameFlags,
+        data_text: Option<String>,
+    },
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
-    let io = ui.io();
-    let n = app.trace_windows.len();
-    for i in 0..n {
-        if !app.trace_windows[i].opened {
-            continue;
+    let mut wins = std::mem::take(&mut app.trace_windows);
+    let mut cmds = Vec::new();
+    for (i, win) in wins.iter_mut().enumerate() {
+        win.show(ui, app, i, &mut cmds);
+    }
+    app.trace_windows = wins;
+    app.apply_trace_cmds(cmds);
+}
+
+impl TraceWin {
+    pub fn show(&mut self, ui: &Ui, app: &App, i: usize, cmds: &mut Vec<TraceCmd>) {
+        if !self.opened {
+            return;
         }
+        let io = ui.io();
         let mut open = true;
-        let raw = app.trace_windows[i].name.clone();
+        let raw = self.name.clone();
         let title = if raw.trim().is_empty() {
             format!("Trace {}", i + 1)
         } else {
@@ -33,7 +58,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         let off = i as f32 * 30.0;
         let focus = app.focus_title.as_deref() == Some(title.as_str());
         if focus {
-            app.focus_title = None;
+            cmds.push(TraceCmd::ClearFocus);
         }
         let mut window = ui
             .window(format!("{title}###trace{i}"))
@@ -49,8 +74,8 @@ pub fn render(app: &mut App, ui: &Ui) {
         if focus {
             window = window.focused(true);
         }
-        window.build(|| window_content(app, ui, i));
-        app.trace_windows[i].opened = open;
+        window.build(|| self.content(app, ui, i, cmds));
+        self.opened = open;
     }
 }
 
@@ -67,25 +92,30 @@ fn fmt_id(f: &CanFrame) -> String {
 /// `1AB` also matches `1AB0` and `0x1AB...`; the `id:` prefix is the exact form,
 /// and the `x` suffix has to travel with a 29-bit id because the frame class is
 /// part of the address.
+#[allow(dead_code)] // the headless tests drive these helpers directly
 pub(crate) fn filter_to_id(app: &mut App, win: usize, f: &CanFrame) {
-    app.trace_windows[win].filter = format!("id:{}", fmt_id(f));
+    filter_to_id_win(&mut app.trace_windows[win], f);
+}
+
+fn filter_to_id_win(win: &mut TraceWin, f: &CanFrame) {
+    win.filter = format!("id:{}", fmt_id(f));
 }
 
 /// The cursor pair's rows in every row menu, offered identically for CAN and
 /// FlexRay: a cursor is an instant, and an instant does not care which cable the
 /// row came off. Setting one that exists moves it; the clear only appears once
 /// there is something to clear.
-fn cursor_menu(app: &mut App, ui: &Ui, win: usize, t_us: u64) {
+fn cursor_menu(win: &mut TraceWin, ui: &Ui, t_us: u64) {
     for (n, label) in [(0, "Set cursor A"), (1, "Set cursor B")] {
         if ui.menu_item(label) {
-            app.trace_windows[win].mark_us[n] = Some(t_us);
+            win.mark_us[n] = Some(t_us);
         }
         if ui.is_item_hovered() {
             ui.tooltip_text("表头读出 A、B 两点与它们的 Δt；这一行会底色标出");
         }
     }
-    if app.trace_windows[win].mark_us.iter().any(Option::is_some) && ui.menu_item("Clear cursors") {
-        app.trace_windows[win].mark_us = [None, None];
+    if win.mark_us.iter().any(Option::is_some) && ui.menu_item("Clear cursors") {
+        win.mark_us = [None, None];
     }
 }
 
@@ -95,8 +125,12 @@ fn cursor_menu(app: &mut App, ui: &Ui, win: usize, t_us: u64) {
 /// time range, the direction, and the scope back to All. The window's Manual
 /// pick set stays -- that is a curated list, not a condition typed on a whim,
 /// and a one-key clear must not quietly eat it.
+#[allow(dead_code)] // the headless tests drive these helpers directly
 pub(crate) fn clear_filter(app: &mut App, win: usize) {
-    let w = &mut app.trace_windows[win];
+    clear_filter_win(&mut app.trace_windows[win]);
+}
+
+fn clear_filter_win(w: &mut TraceWin) {
     w.filter.clear();
     w.payload.clear();
     w.time_from.clear();
@@ -184,18 +218,20 @@ fn fmt_row(app: &App, f: &CanFrame) -> String {
     )
 }
 
-fn window_content(app: &mut App, ui: &Ui, i: usize) {
-    // CAN and FlexRay rows share the one table, interleaved by time --
-    // the row cache is a merged, filtered TraceRow list (see
-    // `App::sync_trace_rows`), so no separate FR section exists here.
-    can_table(app, ui, i);
+impl TraceWin {
+    fn content(&mut self, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<TraceCmd>) {
+        // CAN and FlexRay rows share the one table, interleaved by time --
+        // the row cache is a merged, filtered TraceRow list (see
+        // `App::sync_trace_rows`), so no separate FR section exists here.
+        can_table(self, app, ui, i, cmds);
+    }
 }
 
-fn can_table(app: &mut App, ui: &Ui, i: usize) {
-    // The filtered row cache rebuilds on the text gate, like every number
-    // readout; the clipper then submits only the visible slice per frame.
-    app.sync_trace_rows(i);
-    let matching = app.trace_windows[i].rows.len();
+fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<TraceCmd>) {
+    // The filtered row cache was refreshed before the draw (see
+    // `App::sync_observer_text`); the clipper then submits only the visible
+    // slice per frame.
+    let matching = win.rows.len();
     ui.text(format!(
         "{matching} matching frames · ring holds {}",
         app.snap.trace_len
@@ -218,7 +254,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // The cursor pair, worded as the plot words it -- to the microsecond here,
     // because that is what separates two rows. Only once something is marked:
     // an empty readout next to the frame count reads as a broken counter.
-    let mark_us = app.trace_windows[i].mark_us;
+    let mark_us = win.mark_us;
     if mark_us.iter().any(Option::is_some) {
         ui.same_line();
         ui.text_colored(
@@ -234,7 +270,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // down: a highlight does not teach that Up/Down walk the list or that Ctrl+C
     // copies the row. It appears only once there is a pick, so the header never
     // carries a hint about a state the window is not in.
-    if app.trace_windows[i].pick.is_some() {
+    if win.pick.is_some() {
         ui.same_line();
         ui.text_colored(
             [0.55, 0.8, 1.0, 1.0],
@@ -270,38 +306,33 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         app,
         ui,
         &format!("##tscope{i}"),
-        app.trace_windows[i].scope,
+        win.scope,
         PopupTarget::Trace(i),
         &mut open_picker,
     );
     if open_picker {
-        app.popup_target = Some(PopupTarget::Trace(i));
-        app.show_id_filter = true;
+        cmds.push(TraceCmd::OpenPicker(i));
     }
-    app.trace_windows[i].scope = new_scope;
+    win.scope = new_scope;
     ui.same_line();
     const FILTER_HINT: &str = "名称 / hex 子串 · id:1AB · slot:13";
     ui.set_next_item_width(crate::ui::hint_width(ui, FILTER_HINT, 120.0));
-    ui.input_text(format!("##tfilter{i}"), &mut app.trace_windows[i].filter)
+    ui.input_text(format!("##tfilter{i}"), &mut win.filter)
         .hint(FILTER_HINT)
         .build();
     ui.same_line();
     ui.set_next_item_width(52.0);
-    ui.combo_simple_string(
-        format!("##tdir{i}"),
-        &mut app.trace_windows[i].dir,
-        &["All", "Rx", "Tx"],
-    );
+    ui.combo_simple_string(format!("##tdir{i}"), &mut win.dir, &["All", "Rx", "Tx"]);
     // The payload / kind / DBC-only / time-range filters collapse behind
     // this toggle: the main row stays short enough for a half-width
     // window, and the extras only take space when actually wanted.
     ui.same_line();
     // Closed and still filtering: say so on the button, and name the
     // conditions on hover. Otherwise the row is invisible while it works.
-    let hidden = if app.trace_windows[i].filters_open {
+    let hidden = if win.filters_open {
         Vec::new()
     } else {
-        app.trace_windows[i].hidden_conds()
+        win.hidden_conds()
     };
     let filter_label = if hidden.is_empty() {
         "筛选".to_string()
@@ -309,16 +340,16 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         format!("筛选 ·{}", hidden.len())
     };
     if ui.button(format!("{filter_label}##tf{i}")) {
-        app.trace_windows[i].filters_open = !app.trace_windows[i].filters_open;
+        win.filters_open = !win.filters_open;
     }
     if !hidden.is_empty() && ui.is_item_hovered() {
         ui.tooltip_text(format!("收起的过滤条件仍在生效：{}", hidden.join(" · ")));
     }
-    if app.trace_windows[i].filters_open {
+    if win.filters_open {
         ui.same_line();
         const PAYLOAD_HINT: &str = "payload 11 22";
         ui.set_next_item_width(crate::ui::hint_width(ui, PAYLOAD_HINT, 84.0));
-        ui.input_text(format!("##tpayload{i}"), &mut app.trace_windows[i].payload)
+        ui.input_text(format!("##tpayload{i}"), &mut win.payload)
             .hint(PAYLOAD_HINT)
             .build();
         if ui.is_item_hovered() {
@@ -330,18 +361,15 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         ui.set_next_item_width(58.0);
         ui.combo_simple_string(
             format!("##tflags{i}"),
-            &mut app.trace_windows[i].flags_kind,
+            &mut win.flags_kind,
             &["Any", "Data", "FD", "RTR", "Error"],
         );
         ui.same_line();
-        ui.checkbox(format!("DBC##tdbc{i}"), &mut app.trace_windows[i].dbc_only);
+        ui.checkbox(format!("DBC##tdbc{i}"), &mut win.dbc_only);
         ui.same_line();
         // Expand FlexRay rows into their decoded signal children (needs the
         // arriving row's own cluster description).
-        ui.checkbox(
-            format!("FR 信号##tfrx{i}"),
-            &mut app.trace_windows[i].fr_expand,
-        );
+        ui.checkbox(format!("FR 信号##tfrx{i}"), &mut win.fr_expand);
         if ui.is_item_hovered() {
             ui.tooltip_text("FlexRay 帧下方展开解码后的信号值（需该路总线的集群描述数据库）");
         }
@@ -351,7 +379,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         ui.same_line();
         const FROM_HINT: &str = "从 s";
         ui.set_next_item_width(crate::ui::hint_width(ui, FROM_HINT, 52.0));
-        ui.input_text(format!("##tfrom{i}"), &mut app.trace_windows[i].time_from)
+        ui.input_text(format!("##tfrom{i}"), &mut win.time_from)
             .hint(FROM_HINT)
             .build();
         if ui.is_item_hovered() {
@@ -360,7 +388,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         ui.same_line();
         const TO_HINT: &str = "到 s";
         ui.set_next_item_width(crate::ui::hint_width(ui, TO_HINT, 52.0));
-        ui.input_text(format!("##tto{i}"), &mut app.trace_windows[i].time_to)
+        ui.input_text(format!("##tto{i}"), &mut win.time_to)
             .hint(TO_HINT)
             .build();
         if ui.is_item_hovered() {
@@ -371,11 +399,11 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // Clear empties the display (ring + archive); the filter controls
     // keep their settings -- they are the viewer's lens, not its content.
     if ui.button(format!("Clear##tf{i}")) {
-        app.send(crate::bus::BusCommand::ClearTrace);
+        cmds.push(TraceCmd::ClearTrace);
     }
     ui.same_line();
     if ui.button(format!("Export##tx{i}")) {
-        app.export_trace_dialog(i);
+        cmds.push(TraceCmd::Export(i));
     }
     ui.separator();
 
@@ -437,7 +465,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // Take the row cache out: the sort needs `app` for names while the
     // clipper below needs the rows as an owned list, and the right-click
     // popup afterwards needs `app` mutably again.
-    let mut rows = std::mem::take(&mut app.trace_windows[i].rows);
+    let mut rows = std::mem::take(&mut win.rows);
 
     // Newest first (the default order); sorted when a column header is
     // clicked, back to default on the third click (tri-state). The row
@@ -454,7 +482,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         rows.make_contiguous()
             .sort_by(|a, b| sort_frame(app, col, a, b, asc));
         specs.clear_dirty(ui);
-        app.trace_windows[i].rows_sorted = true;
+        win.rows_sorted = true;
     }
 
     // The clipper counts *table* rows, and a FlexRay frame row occupies one plus
@@ -462,7 +490,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // They are rebuilt from the list on every draw -- after the sort above, which
     // is why they are never stored between draws -- and the window's buffer only
     // saves the allocation.
-    let mut ends = std::mem::take(&mut app.trace_windows[i].row_ends);
+    let mut ends = std::mem::take(&mut win.row_ends);
     let flat = crate::workspace::table_row_spans(&rows, &mut ends);
 
     // Virtual scrolling: the clipper submits only the visible slice of
@@ -470,7 +498,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // The picked row is read into a local so a row clicked *this* frame is
     // already tinted this frame; the keyboard walk and the write-back happen
     // after the loop, where the row list is still at hand.
-    let mut picked = app.trace_windows[i].pick;
+    let mut picked = win.pick;
     let clip = ListClipper::new(flat).begin(ui);
     for n in clip.iter() {
         // Which cache entry this table row belongs to, and which part of it.
@@ -664,7 +692,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     // The rows go back before the popup: its menu mutates the window's
     // filter state. The span buffer returns with them -- it describes that
     // list, and nothing reads it between draws.
-    let w = &mut app.trace_windows[i];
+    let w = &mut *win;
     w.row_ends = ends;
     w.rows = rows;
     w.pick = picked;
@@ -689,7 +717,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             // matches CAN id 13 and slot 113, while a `Pick::Fr` says which bus
             // it means. Additive, not a replacement -- the window's other picks
             // stay, so this can never quietly discard a curated selection.
-            let w = &mut app.trace_windows[i];
+            let w = &mut *win;
             w.manual.insert(crate::workspace::Pick::Fr {
                 bus: r.bus,
                 slot: r.slot,
@@ -701,9 +729,9 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 "把这个槽加进本窗口的 Manual 选择并切到该作用域（已选的其他条目保留），只列出选中行：{label}"
             ));
         }
-        cursor_menu(app, ui, i, r.t_us);
+        cursor_menu(win, ui, r.t_us);
         if ui.menu_item("Clear filter") {
-            clear_filter(app, i);
+            clear_filter_win(win);
         }
         let hex: String = r.payload.iter().map(|b| format!("{b:02X} ")).collect();
         if ui.menu_item("Copy payload") {
@@ -732,11 +760,11 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         ));
         ui.separator();
         if ui.menu_item(format!("Filter this ID ({})", fmt_id(&f))) {
-            filter_to_id(app, i, &f);
+            filter_to_id_win(win, &f);
         }
-        cursor_menu(app, ui, i, f.t_us);
+        cursor_menu(win, ui, f.t_us);
         if ui.menu_item("Clear filter") {
-            clear_filter(app, i);
+            clear_filter_win(win);
         }
         let addable = !f.is_error() && !f.is_remote();
         if ui.menu_item_enabled_selected(
@@ -747,38 +775,32 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         ) {
             // Add, then re-shape the fresh row via command: keep the flags
             // it was seen with, and for an id no database declares, keep
-            // the observed payload. `add_tx` skips a duplicate row, so the
-            // length compare tells a fresh add from an existing one.
-            let was_len = app.snap.tx.len();
-            app.add_tx(f.channel, f.id);
-            if app.snap.tx.len() > was_len {
-                let known = app
-                    .channel_dbc(f.channel)
-                    .is_some_and(|db| db.messages.contains_key(&(f.id, f.extended)));
-                let data_text = if known {
-                    None
-                } else {
-                    Some(
-                        f.data[..f.len as usize]
-                            .iter()
-                            .map(|b| format!("{b:02X}"))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    )
-                };
-                app.send(crate::bus::BusCommand::SetEntryConfig {
-                    ch: f.channel,
-                    id: f.id,
-                    active: true,
-                    cycle_us: app
-                        .dbc_cycle_us(f.channel, f.id)
-                        .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
-                    fd: f.flags.contains(crate::can::frame::FrameFlags::FD),
-                    flags: Some(f.flags),
-                    data_text,
-                    srcs: Vec::new(),
-                });
-            }
+            // the observed payload. The command applies both steps after the
+            // window is put back, so the draw stays read-only.
+            let known = app
+                .channel_dbc(f.channel)
+                .is_some_and(|db| db.messages.contains_key(&(f.id, f.extended)));
+            let data_text = if known {
+                None
+            } else {
+                Some(
+                    f.data[..f.len as usize]
+                        .iter()
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            };
+            cmds.push(TraceCmd::AddEntry {
+                ch: f.channel,
+                id: f.id,
+                fd: f.flags.contains(crate::can::frame::FrameFlags::FD),
+                cycle_us: app
+                    .dbc_cycle_us(f.channel, f.id)
+                    .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
+                flags: f.flags,
+                data_text,
+            });
         }
         ui.separator();
         if ui.menu_item("Copy row") {
@@ -837,6 +859,47 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
         _ => dir(a).cmp(&dir(b)),
     };
     if asc { ord } else { ord.reverse() }
+}
+
+impl App {
+    pub(crate) fn apply_trace_cmds(&mut self, cmds: Vec<TraceCmd>) {
+        for cmd in cmds {
+            match cmd {
+                TraceCmd::ClearTrace => {
+                    self.send(crate::bus::BusCommand::ClearTrace);
+                }
+                TraceCmd::Export(i) => self.export_trace_dialog(i),
+                TraceCmd::OpenPicker(i) => {
+                    self.popup_target = Some(PopupTarget::Trace(i));
+                    self.show_id_filter = true;
+                }
+                TraceCmd::ClearFocus => self.focus_title = None,
+                TraceCmd::AddEntry {
+                    ch,
+                    id,
+                    fd,
+                    cycle_us,
+                    flags,
+                    data_text,
+                } => {
+                    let was_len = self.snap.tx.len();
+                    self.add_tx(ch, id);
+                    if self.snap.tx.len() > was_len {
+                        self.send(crate::bus::BusCommand::SetEntryConfig {
+                            ch,
+                            id,
+                            active: true,
+                            cycle_us,
+                            fd,
+                            flags: Some(flags),
+                            data_text,
+                            srcs: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

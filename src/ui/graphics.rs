@@ -364,15 +364,29 @@ fn fmt_dt_rel(d: f64) -> String {
     }
 }
 
+pub enum GraphicsCmd {
+    ClearFocus,
+    Sig(crate::ui::siglist::SigListCmd),
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
-    let n = app.graphics.len();
     let disp_h = ui.io().display_size()[1];
-    for i in 0..n {
-        let mut open = app.graphics[i].opened;
+    let mut wins = std::mem::take(&mut app.graphics);
+    let mut cmds = Vec::new();
+    for (i, win) in wins.iter_mut().enumerate() {
+        win.show(ui, app, i, disp_h, &mut cmds);
+    }
+    app.graphics = wins;
+    app.apply_graphics_cmds(cmds);
+}
+
+impl crate::observe::GraphicsWindow {
+    pub fn show(&mut self, ui: &Ui, app: &App, i: usize, disp_h: f32, cmds: &mut Vec<GraphicsCmd>) {
+        let mut open = self.opened;
         if !open {
-            continue;
+            return;
         }
-        let raw = app.graphics[i].name.clone();
+        let raw = self.name.clone();
         let name = if raw.trim().is_empty() {
             format!("Graphics {}", i + 1)
         } else {
@@ -380,7 +394,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         };
         let focus = app.focus_title.as_deref() == Some(name.as_str());
         if focus {
-            app.focus_title = None;
+            cmds.push(GraphicsCmd::ClearFocus);
         }
         let mut window = ui
             .window(format!("{name}###gfx{i}"))
@@ -394,95 +408,118 @@ pub fn render(app: &mut App, ui: &Ui) {
             window = window.focused(true);
         }
         window.build(|| {
-            window_content(app, ui, i);
+            self.window_content(app, ui, i, cmds);
         });
-        app.graphics[i].opened = open;
+        self.opened = open;
     }
 }
 
-fn window_content(app: &mut App, ui: &Ui, i: usize) {
-    for (k, (val, label)) in TW_PRESETS.iter().enumerate() {
-        let selected = (app.graphics[i].time_window_s - val).abs() < 1e-9;
-        // Tokens must drop innermost-first: the tuple stores them in
-        // reverse push order.
-        let colors = selected.then(|| {
-            let button = ui.push_style_color(StyleColor::Button, [0.2, 0.45, 0.75, 1.0]);
-            let hovered = ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]);
-            let active = ui.push_style_color(StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]);
-            (active, hovered, button)
-        });
-        let text = if selected {
-            format!("[{label}]##tw{i}")
-        } else {
-            format!("{label}##tw{i}")
-        };
-        if ui.button(text) {
-            app.graphics[i].time_window_s = *val;
+impl crate::observe::GraphicsWindow {
+    fn window_content(&mut self, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<GraphicsCmd>) {
+        for (k, (val, label)) in TW_PRESETS.iter().enumerate() {
+            let selected = (self.time_window_s - val).abs() < 1e-9;
+            // Tokens must drop innermost-first: the tuple stores them in
+            // reverse push order.
+            let colors = selected.then(|| {
+                let button = ui.push_style_color(StyleColor::Button, [0.2, 0.45, 0.75, 1.0]);
+                let hovered =
+                    ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]);
+                let active = ui.push_style_color(StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]);
+                (active, hovered, button)
+            });
+            let text = if selected {
+                format!("[{label}]##tw{i}")
+            } else {
+                format!("{label}##tw{i}")
+            };
+            if ui.button(text) {
+                self.time_window_s = *val;
+            }
+            drop(colors);
+            if k + 1 < TW_PRESETS.len() || self.t_offset_s > 0.0 {
+                ui.same_line();
+            }
         }
-        drop(colors);
-        if k + 1 < TW_PRESETS.len() || app.graphics[i].t_offset_s > 0.0 {
-            ui.same_line();
+        if self.t_offset_s > 0.0 {
+            ui.text_colored(
+                [1.0, 0.8, 0.4, 1.0],
+                format!("{:.1}s behind live", self.t_offset_s),
+            );
         }
-    }
-    if app.graphics[i].t_offset_s > 0.0 {
-        ui.text_colored(
-            [1.0, 0.8, 0.4, 1.0],
-            format!("{:.1}s behind live", app.graphics[i].t_offset_s),
-        );
-    }
-    let mut stacked = app.graphics[i].stacked;
-    if ui.radio_button_bool("Overlay", !stacked) {
-        stacked = false;
-    }
-    ui.same_line();
-    if ui.radio_button_bool("One plot per signal", stacked) {
-        stacked = true;
-    }
-    app.graphics[i].stacked = stacked;
-    ui.same_line();
-    ui.checkbox("Cursors", &mut app.graphics[i].show_cursor);
-    if ui.is_item_hovered() {
-        ui.tooltip_text("两条游标 A/B：双击图面放下一个，按住游标线拖动，读每条曲线两点的值与 Δ");
-    }
-    wrap_same_line(ui, "Zoom");
-    ui.checkbox("Zoom", &mut app.graphics[i].zoom_enabled);
-    wrap_same_line(ui, "Dots");
-    ui.checkbox("Dots", &mut app.graphics[i].show_markers);
-    wrap_same_line(ui, "Live");
-    if ui.button("Live") {
-        app.graphics[i].t_offset_s = 0.0;
-    }
+        let mut stacked = self.stacked;
+        if ui.radio_button_bool("Overlay", !stacked) {
+            stacked = false;
+        }
+        ui.same_line();
+        if ui.radio_button_bool("One plot per signal", stacked) {
+            stacked = true;
+        }
+        self.stacked = stacked;
+        ui.same_line();
+        ui.checkbox("Cursors", &mut self.show_cursor);
+        if ui.is_item_hovered() {
+            ui.tooltip_text(
+                "两条游标 A/B：双击图面放下一个，按住游标线拖动，读每条曲线两点的值与 Δ",
+            );
+        }
+        wrap_same_line(ui, "Zoom");
+        ui.checkbox("Zoom", &mut self.zoom_enabled);
+        wrap_same_line(ui, "Dots");
+        ui.checkbox("Dots", &mut self.show_markers);
+        wrap_same_line(ui, "Live");
+        if ui.button("Live") {
+            self.t_offset_s = 0.0;
+        }
 
-    ui.separator();
-    let avail = ui.content_region_avail();
+        ui.separator();
+        let avail = ui.content_region_avail();
 
-    // Horizontal scrollbar: a long signal name extends the rows past the
-    // panel instead of running under the right-side widgets.
-    //
-    // RESIZE_X makes the panel's right border draggable -- ImGui's own resize
-    // affordance, so the operator decides how much of a name fits and the width
-    // is remembered with the rest of the layout (the ini blob the project
-    // carries). The size below is then only the first-ever value. The id is
-    // per window so two Graphics windows can be widened differently.
-    ui.child_window(format!("sig_panel{i}"))
-        .size([PANEL_W, avail[1]])
-        .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
-        .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
-        .build(ui, || left_panel(app, ui, i));
+        // Horizontal scrollbar: a long signal name extends the rows past the
+        // panel instead of running under the right-side widgets.
+        //
+        // RESIZE_X makes the panel's right border draggable -- ImGui's own resize
+        // affordance, so the operator decides how much of a name fits and the width
+        // is remembered with the rest of the layout (the ini blob the project
+        // carries). The size below is then only the first-ever value. The id is
+        // per window so two Graphics windows can be widened differently.
+        ui.child_window(format!("sig_panel{i}"))
+            .size([PANEL_W, avail[1]])
+            .child_flags(dear_imgui_rs::ChildFlags::RESIZE_X | dear_imgui_rs::ChildFlags::BORDERS)
+            .flags(dear_imgui_rs::WindowFlags::HORIZONTAL_SCROLLBAR)
+            .build(ui, || {
+                left_panel(app, ui, i, &mut self.signals, &mut self.y_locks, cmds)
+            });
 
-    ui.same_line();
+        ui.same_line();
 
-    ui.child_window("plot_area")
-        .size([0.0, avail[1]])
-        .build(ui, || plot_area(app, ui, i));
+        ui.child_window("plot_area")
+            .size([0.0, avail[1]])
+            .build(ui, || self.plot_area(app, ui, i));
+    }
 }
 
 /// Left panel: the window's selected signal list; each signal can be
 /// toggled for drawing. Bus, node identity, and signal selection live in
 /// Measurement Setup.
-fn left_panel(app: &mut App, ui: &Ui, i: usize) {
+fn left_panel(
+    app: &App,
+    ui: &Ui,
+    i: usize,
+    signals: &mut Vec<crate::app::GfxSignal>,
+    y_locks: &mut std::collections::HashMap<String, (f64, f64)>,
+    cmds: &mut Vec<GraphicsCmd>,
+) {
     ui.text("Curves");
-    crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(i));
+    let mut sig_cmds = Vec::new();
+    crate::ui::siglist::draw_view(
+        app,
+        ui,
+        crate::ui::siglist::ListKind::Graphics(i),
+        signals,
+        Some(y_locks),
+        &mut sig_cmds,
+    );
+    cmds.extend(sig_cmds.into_iter().map(GraphicsCmd::Sig));
 }
 
 /// Chains the next toolbar item onto the current row when an item labelled
@@ -505,185 +542,190 @@ fn wrap_same_line(ui: &Ui, text: &str) {
 /// Right area: draws plots directly on the draw list and reserves exactly
 /// the available space, so no scrollbar appears. Also handles mouse-wheel
 /// zoom, left-drag pan, and placing and dragging the two measurement cursors.
-fn plot_area(app: &mut App, ui: &Ui, i: usize) {
-    let avail = ui.content_region_avail();
-    let w = avail[0].max(40.0);
-    let h = avail[1].max(40.0);
-    let p0 = ui.cursor_screen_pos();
-    let [x0, y0] = p0;
-    let dl = ui.get_window_draw_list();
+impl crate::observe::GraphicsWindow {
+    fn plot_area(&mut self, app: &App, ui: &Ui, _i: usize) {
+        let avail = ui.content_region_avail();
+        let w = avail[0].max(40.0);
+        let h = avail[1].max(40.0);
+        let p0 = ui.cursor_screen_pos();
+        let [x0, y0] = p0;
+        let dl = ui.get_window_draw_list();
 
-    let stacked = app.graphics[i].stacked;
-    let tw = app.graphics[i].time_window_s;
-    // Follows the replay playhead, not the wall clock, so the axis moves with
-    // the playback and the curve stays in view at any playback speed.
-    let t_now = app.plot_now_s();
-    let keys: Vec<crate::observe::SigKey> = app.graphics[i]
-        .signals
-        .iter()
-        .filter(|s| s.visible)
-        .map(|s| s.key.clone())
-        .collect();
+        let stacked = self.stacked;
+        let tw = self.time_window_s;
+        // Follows the replay playhead, not the wall clock, so the axis moves with
+        // the playback and the curve stays in view at any playback speed.
+        let t_now = app.plot_now_s();
+        let keys: Vec<crate::observe::SigKey> = self
+            .signals
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.key.clone())
+            .collect();
 
-    // The legend readouts are throttled text; refresh the snapshot once
-    // before the panes pick out their slices.
-    app.sync_gfx_legend(i);
+        // The legend readouts are throttled text; refresh the snapshot once
+        // before the panes pick out their slices.
+        // The legend cache was refreshed before the draw (see
+        // `App::sync_observer_text`); the readout holds still while the curve
+        // animates at full frame rate.
 
-    // Never pan or zoom further back than the oldest stored sample.
-    let mut oldest = f64::INFINITY;
-    for key in &keys {
-        if let Some(sub) = app.sub_view(key)
-            && let Some((t, _)) = sub.history.first()
-        {
-            oldest = oldest.min(t as f64 / 1e6);
-        }
-    }
-    let max_off = if oldest.is_finite() {
-        (t_now - oldest).max(0.0)
-    } else {
-        0.0
-    };
-    // Re-clamp unconditionally: the pan and zoom handlers were not the only
-    // thing that can make an existing offset unreachable. The playhead only
-    // ever moves forward, so history grows out from under a stale offset, and
-    // without this the window sits over ground with no samples and the curve
-    // looks gone.
-    if app.graphics[i].t_offset_s > max_off {
-        app.graphics[i].t_offset_s = max_off;
-    }
-
-    let io = ui.io();
-    let mx = io.mouse_pos()[0];
-    let my = io.mouse_pos()[1];
-    // Curves are inset so the axis labels sit outside them; the pointer maths
-    // has to use the same rect draw_plot works in.
-    let (ix0, iy0, iw, _ih) = axis_inset(x0, y0, w, h);
-    #[cfg(test)]
-    if i == 0 {
-        // The bed has no window manager to ask, so a test that drives the mouse
-        // over the plot reads the rect back from the frame that just drew it.
-        *LAST_PLOT.lock().unwrap() = Some([ix0, iy0, iw, h]);
-    }
-    let hover = mx >= ix0 && mx <= ix0 + iw && my >= iy0 && my <= iy0 + h;
-    let t_left = t_now - app.graphics[i].t_offset_s - tw;
-    // What the pointer is asking for this frame. A drag that already started owns
-    // the gesture wherever the pointer goes; a new grab or a placement needs the
-    // plot under it. Without the first half a fast hand outruns the 6 px grab
-    // window, the line is dropped mid-drag, and the pan takes the same gesture.
-    let held = ui.is_mouse_down(MouseButton::Left);
-    let dragging = app.graphics[i].cursor_drag.filter(|_| held);
-    let mut owns_line = false;
-    if dragging.is_some() || (app.graphics[i].show_cursor && hover) {
-        let claim = cursor_claim(
-            dragging,
-            held,
-            ui.is_mouse_double_clicked(MouseButton::Left),
-            mx,
-            cursor_xs(&app.graphics[i].cursor_s, ix0, iw, t_left, tw),
-        );
-        if let Some(n) = claim.cursor() {
-            app.graphics[i].cursor_s[n] = Some(t_at_x(mx, ix0, iw, t_left, tw));
-        }
-        app.graphics[i].cursor_drag = match claim {
-            PointerClaim::Drag(n) => Some(n),
-            PointerClaim::None | PointerClaim::Place(_) => None,
-        };
-        owns_line = matches!(claim, PointerClaim::Drag(_));
-    } else {
-        app.graphics[i].cursor_drag = None;
-    }
-    if hover && app.graphics[i].zoom_enabled && !owns_line {
-        if io.mouse_down(MouseButton::Left) && io.mouse_delta()[0] != 0.0 {
-            let dt = tw as f32 * io.mouse_delta()[0] / iw;
-            let off = &mut app.graphics[i].t_offset_s;
-            *off = (*off + dt as f64).clamp(0.0, max_off);
-        }
-        if io.mouse_wheel() != 0.0 {
-            let new_tw = zoom_step(tw, io.mouse_wheel());
-            if (new_tw - tw).abs() > 1e-9 {
-                let frac = ((mx - ix0) / iw) as f64;
-                app.graphics[i].time_window_s = new_tw;
-                app.graphics[i].t_offset_s =
-                    zoom_offset(app.graphics[i].t_offset_s, t_now, tw, new_tw, frac, max_off);
+        // Never pan or zoom further back than the oldest stored sample.
+        let mut oldest = f64::INFINITY;
+        for key in &keys {
+            if let Some(sub) = app.sub_view(key)
+                && let Some((t, _)) = sub.history.first()
+            {
+                oldest = oldest.min(t as f64 / 1e6);
             }
         }
-    }
+        let max_off = if oldest.is_finite() {
+            (t_now - oldest).max(0.0)
+        } else {
+            0.0
+        };
+        // Re-clamp unconditionally: the pan and zoom handlers were not the only
+        // thing that can make an existing offset unreachable. The playhead only
+        // ever moves forward, so history grows out from under a stale offset, and
+        // without this the window sits over ground with no samples and the curve
+        // looks gone.
+        if self.t_offset_s > max_off {
+            self.t_offset_s = max_off;
+        }
 
-    let t_right = t_now - app.graphics[i].t_offset_s;
-    // The cursors keep their own times; where they land on screen is this view's
-    // business, recomputed every frame, so panning and live advance move the
-    // lines while the point they mark stays put. Off means no lines at all.
-    let cursors = if app.graphics[i].show_cursor {
-        app.graphics[i].cursor_s
-    } else {
-        [None, None]
-    };
+        let io = ui.io();
+        let mx = io.mouse_pos()[0];
+        let my = io.mouse_pos()[1];
+        // Curves are inset so the axis labels sit outside them; the pointer maths
+        // has to use the same rect draw_plot works in.
+        let (ix0, iy0, iw, _ih) = axis_inset(x0, y0, w, h);
+        #[cfg(test)]
+        if _i == 0 {
+            // The bed has no window manager to ask, so a test that drives the mouse
+            // over the plot reads the rect back from the frame that just drew it.
+            *LAST_PLOT.lock().unwrap() = Some([ix0, iy0, iw, h]);
+        }
+        let hover = mx >= ix0 && mx <= ix0 + iw && my >= iy0 && my <= iy0 + h;
+        let t_left = t_now - self.t_offset_s - tw;
+        // What the pointer is asking for this frame. A drag that already started owns
+        // the gesture wherever the pointer goes; a new grab or a placement needs the
+        // plot under it. Without the first half a fast hand outruns the 6 px grab
+        // window, the line is dropped mid-drag, and the pan takes the same gesture.
+        let held = ui.is_mouse_down(MouseButton::Left);
+        let dragging = self.cursor_drag.filter(|_| held);
+        let mut owns_line = false;
+        if dragging.is_some() || (self.show_cursor && hover) {
+            let claim = cursor_claim(
+                dragging,
+                held,
+                ui.is_mouse_double_clicked(MouseButton::Left),
+                mx,
+                cursor_xs(&self.cursor_s, ix0, iw, t_left, tw),
+            );
+            if let Some(n) = claim.cursor() {
+                self.cursor_s[n] = Some(t_at_x(mx, ix0, iw, t_left, tw));
+            }
+            self.cursor_drag = match claim {
+                PointerClaim::Drag(n) => Some(n),
+                PointerClaim::None | PointerClaim::Place(_) => None,
+            };
+            owns_line = matches!(claim, PointerClaim::Drag(_));
+        } else {
+            self.cursor_drag = None;
+        }
+        if hover && self.zoom_enabled && !owns_line {
+            if io.mouse_down(MouseButton::Left) && io.mouse_delta()[0] != 0.0 {
+                let dt = tw as f32 * io.mouse_delta()[0] / iw;
+                let off = &mut self.t_offset_s;
+                *off = (*off + dt as f64).clamp(0.0, max_off);
+            }
+            if io.mouse_wheel() != 0.0 {
+                let new_tw = zoom_step(tw, io.mouse_wheel());
+                if (new_tw - tw).abs() > 1e-9 {
+                    let frac = ((mx - ix0) / iw) as f64;
+                    self.time_window_s = new_tw;
+                    self.t_offset_s =
+                        zoom_offset(self.t_offset_s, t_now, tw, new_tw, frac, max_off);
+                }
+            }
+        }
 
-    // Every curve in this window writes the same draw list, so the budget is
-    // shared out here rather than assumed per call.
-    let budget = CurveBudget::split(keys.len(), iw, app.graphics[i].show_markers);
-    // The value range is resolved per pane out here, where the Y mode can
-    // read and freeze window state; the drawing only consumes it.
-    let vis_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
-    let vis_hi = (t_right.max(0.0) * 1e6) as u64;
-    if keys.is_empty() {
-        draw_plot_frame(&dl, x0, y0, w, h);
-        dl.add_text(
-            [x0 + 8.0, y0 + 8.0],
-            [0.5, 0.5, 0.6, 1.0],
-            "add signals via Measurement Setup (…)",
-        );
-    } else if stacked {
-        let ph = h / keys.len() as f32;
-        let last = keys.len() - 1;
-        for (k, key) in keys.iter().enumerate() {
-            let legend = app.graphics[i].legend_for(std::slice::from_ref(key));
-            let y_range = resolve_y_range(app, i, std::slice::from_ref(key), vis_lo, vis_hi);
+        let t_right = t_now - self.t_offset_s;
+        // The cursors keep their own times; where they land on screen is this view's
+        // business, recomputed every frame, so panning and live advance move the
+        // lines while the point they mark stays put. Off means no lines at all.
+        let cursors = if self.show_cursor {
+            self.cursor_s
+        } else {
+            [None, None]
+        };
+
+        // Every curve in this window writes the same draw list, so the budget is
+        // shared out here rather than assumed per call.
+        let budget = CurveBudget::split(keys.len(), iw, self.show_markers);
+        // The value range is resolved per pane out here, where the Y mode can
+        // read and freeze window state; the drawing only consumes it.
+        let vis_lo = ((t_right - tw).max(0.0) * 1e6) as u64;
+        let vis_hi = (t_right.max(0.0) * 1e6) as u64;
+        if keys.is_empty() {
+            draw_plot_frame(&dl, x0, y0, w, h);
+            dl.add_text(
+                [x0 + 8.0, y0 + 8.0],
+                [0.5, 0.5, 0.6, 1.0],
+                "add signals via Measurement Setup (…)",
+            );
+        } else if stacked {
+            let ph = h / keys.len() as f32;
+            let last = keys.len() - 1;
+            for (k, key) in keys.iter().enumerate() {
+                let legend = self.legend_for(std::slice::from_ref(key));
+                let y_range =
+                    resolve_y_range_for(self, app, std::slice::from_ref(key), vis_lo, vis_hi);
+                draw_plot(
+                    &dl,
+                    app,
+                    PlotPane {
+                        x0,
+                        y0: y0 + k as f32 * ph,
+                        w,
+                        h: ph,
+                        keys: std::slice::from_ref(key),
+                        legend,
+                        t_right,
+                        tw,
+                        y_range,
+                        budget,
+                        // The time axis is shared, so labelling it once at the bottom
+                        // is enough -- per pane it collided with the next pane's top
+                        // value label.
+                        time_labels: k == last,
+                        cursors,
+                    },
+                );
+            }
+        } else {
+            let y_range = resolve_y_range_for(self, app, &keys, vis_lo, vis_hi);
             draw_plot(
                 &dl,
                 app,
                 PlotPane {
                     x0,
-                    y0: y0 + k as f32 * ph,
+                    y0,
                     w,
-                    h: ph,
-                    keys: std::slice::from_ref(key),
-                    legend,
+                    h,
+                    keys: &keys,
+                    legend: self.legend_for(&keys),
                     t_right,
                     tw,
                     y_range,
                     budget,
-                    // The time axis is shared, so labelling it once at the bottom
-                    // is enough -- per pane it collided with the next pane's top
-                    // value label.
-                    time_labels: k == last,
+                    time_labels: true,
                     cursors,
                 },
             );
         }
-    } else {
-        let y_range = resolve_y_range(app, i, &keys, vis_lo, vis_hi);
-        draw_plot(
-            &dl,
-            app,
-            PlotPane {
-                x0,
-                y0,
-                w,
-                h,
-                keys: &keys,
-                legend: app.graphics[i].legend_for(&keys),
-                t_right,
-                tw,
-                y_range,
-                budget,
-                time_labels: true,
-                cursors,
-            },
-        );
-    }
 
-    ui.dummy([w, h]);
+        ui.dummy([w, h]);
+    }
 }
 
 pub(crate) fn draw_plot_frame(dl: &DrawListMut<'_>, x0: f32, y0: f32, w: f32, h: f32) {
@@ -765,6 +807,7 @@ struct PlotPane<'a> {
 /// the union of the visible signals' individual ranges: a locked signal pins
 /// its floor or ceiling into the axis while an Auto neighbour keeps
 /// breathing around it.
+#[allow(dead_code)] // the app tests exercise the range resolver directly
 pub(crate) fn resolve_y_range(
     app: &mut App,
     gi: usize,
@@ -772,9 +815,39 @@ pub(crate) fn resolve_y_range(
     lo_us: u64,
     hi_us: u64,
 ) -> (f64, f64) {
+    // Tests and the old call shape keep this signature; the draw path uses
+    // `resolve_y_range_for`, which borrows the window directly.
+    let mut locks = std::mem::take(&mut app.graphics[gi].y_locks);
+    let win = &app.graphics[gi];
+    let r = resolve_y_range_locks(win, app, keys, lo_us, hi_us, &mut locks);
+    app.graphics[gi].y_locks = locks;
+    r
+}
+
+fn resolve_y_range_for(
+    win: &mut crate::observe::GraphicsWindow,
+    app: &App,
+    keys: &[crate::observe::SigKey],
+    lo_us: u64,
+    hi_us: u64,
+) -> (f64, f64) {
+    let mut locks = std::mem::take(&mut win.y_locks);
+    let r = resolve_y_range_locks(win, app, keys, lo_us, hi_us, &mut locks);
+    win.y_locks = locks;
+    r
+}
+
+fn resolve_y_range_locks(
+    win: &crate::observe::GraphicsWindow,
+    app: &App,
+    keys: &[crate::observe::SigKey],
+    lo_us: u64,
+    hi_us: u64,
+    locks: &mut std::collections::HashMap<String, (f64, f64)>,
+) -> (f64, f64) {
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     for key in keys {
-        let (a, b) = resolve_signal_range(app, gi, key, lo_us, hi_us);
+        let (a, b) = resolve_signal_range(win, app, key, lo_us, hi_us, locks);
         lo = lo.min(a);
         hi = hi.max(b);
     }
@@ -791,13 +864,14 @@ pub(crate) fn resolve_y_range(
 /// project restored straight into Lock mode waits for data instead of
 /// freezing the empty 0..1 placeholder.
 fn resolve_signal_range(
-    app: &mut App,
-    gi: usize,
+    win: &crate::observe::GraphicsWindow,
+    app: &App,
     key: &crate::observe::SigKey,
     lo_us: u64,
     hi_us: u64,
+    locks: &mut std::collections::HashMap<String, (f64, f64)>,
 ) -> (f64, f64) {
-    let mode = app.graphics[gi]
+    let mode = win
         .signals
         .iter()
         .find(|s| &s.key == key)
@@ -832,11 +906,11 @@ fn resolve_signal_range(
     match mode {
         YMode::Auto => auto(app, key, lo_us, hi_us),
         YMode::Lock => {
-            if let Some(&r) = app.graphics[gi].y_locks.get(&lock_key) {
+            if let Some(&r) = locks.get(&lock_key) {
                 r
             } else {
                 let r = auto(app, key, lo_us, hi_us);
-                app.graphics[gi].y_locks.insert(lock_key, r);
+                locks.insert(lock_key, r);
                 r
             }
         }
@@ -1125,6 +1199,17 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
         return None;
     }
     history.at(t_us as u64)
+}
+
+impl App {
+    pub(crate) fn apply_graphics_cmds(&mut self, cmds: Vec<GraphicsCmd>) {
+        for cmd in cmds {
+            match cmd {
+                GraphicsCmd::ClearFocus => self.focus_title = None,
+                GraphicsCmd::Sig(cmd) => self.apply_siglist_cmds(vec![cmd]),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

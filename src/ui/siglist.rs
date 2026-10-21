@@ -9,16 +9,51 @@ pub enum ListKind {
     State(usize),
 }
 
+/// What the shared signal list asks the window/App to do. Visibility, order
+/// and y-mode are the list's own state; these three cross windows.
+pub enum SigListCmd {
+    AddStateSignal {
+        window: usize,
+        key: crate::observe::SigKey,
+    },
+    NewStateWith(crate::observe::SigKey),
+    EditStateRule {
+        window: usize,
+        key: crate::observe::SigKey,
+    },
+}
+
 static DRAG: std::sync::Mutex<Option<(ListKind, usize)>> = std::sync::Mutex::new(None);
 
 const ROW_H: f32 = 20.0;
 
-fn signals_mut(app: &mut App, kind: ListKind) -> &mut Vec<GfxSignal> {
+/// Legacy wrapper for windows not yet migrated: take the signal list and
+/// (for Graphics) the y-locks out, draw read-only, put them back, then apply
+/// the commands. New windows call `draw_view` directly.
+#[allow(dead_code)] // the headless drag test still calls the legacy wrapper
+pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
+    let mut signals = match kind {
+        ListKind::Graphics(i) => std::mem::take(&mut app.graphics[i].signals),
+        ListKind::Data(i) => std::mem::take(&mut app.data_windows[i].signals),
+        ListKind::State(i) => std::mem::take(&mut app.state_trackers[i].signals),
+    };
+    let mut y_locks = match kind {
+        ListKind::Graphics(i) => Some(std::mem::take(&mut app.graphics[i].y_locks)),
+        _ => None,
+    };
+    let mut cmds = Vec::new();
+    draw_view(app, ui, kind, &mut signals, y_locks.as_mut(), &mut cmds);
     match kind {
-        ListKind::Graphics(i) => &mut app.graphics[i].signals,
-        ListKind::Data(i) => &mut app.data_windows[i].signals,
-        ListKind::State(i) => &mut app.state_trackers[i].signals,
+        ListKind::Graphics(i) => {
+            app.graphics[i].signals = signals;
+            if let Some(locks) = y_locks {
+                app.graphics[i].y_locks = locks;
+            }
+        }
+        ListKind::Data(i) => app.data_windows[i].signals = signals,
+        ListKind::State(i) => app.state_trackers[i].signals = signals,
     }
+    app.apply_siglist_cmds(cmds);
 }
 
 /// Shared selected-signal list of Graphics/Data/State Tracker windows.
@@ -26,14 +61,22 @@ fn signals_mut(app: &mut App, kind: ListKind) -> &mut Vec<GfxSignal> {
 /// insertion line indicator, and -- for Graphics lists only -- each
 /// signal's own value-axis policy badge. Adding/removing signals happens
 /// in the Signal Selection popup (Measurement Setup).
-pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
+#[allow(clippy::needless_range_loop)]
+pub fn draw_view(
+    app: &App,
+    ui: &Ui,
+    kind: ListKind,
+    signals: &mut Vec<GfxSignal>,
+    mut y_locks: Option<&mut std::collections::HashMap<String, (f64, f64)>>,
+    cmds: &mut Vec<SigListCmd>,
+) {
     if ui.button("Show all") {
-        for s in signals_mut(app, kind).iter_mut() {
+        for s in signals.iter_mut() {
             s.visible = true;
         }
     }
 
-    let n = signals_mut(app, kind).len();
+    let n = signals.len();
     let dl = ui.get_window_draw_list();
     let mouse = ui.io().mouse_pos();
     let mouse_down = ui.is_mouse_down(MouseButton::Left);
@@ -41,7 +84,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
     let mut list_x = 0.0;
 
     for j in 0..n {
-        let key = signals_mut(app, kind)[j].key.clone();
+        let key = signals[j].key.clone();
         // The chip shows the curve color for Graphics/Data. A State Tracker
         // colors by state value, not per signal, so its rows stay bare.
         let chip = !matches!(kind, ListKind::State(_));
@@ -73,16 +116,16 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
             }
         }
         ui.same_line();
-        let mut vis = signals_mut(app, kind)[j].visible;
+        let mut vis = signals[j].visible;
         if ui.checkbox(format!("##sigvis{j}"), &mut vis) {
-            signals_mut(app, kind)[j].visible = vis;
+            signals[j].visible = vis;
         }
         // The Y-axis policy sits right after the checkbox, before the
         // color chip: it is always at the same offset regardless of how
         // long the signal name below grows, so nothing can cover it.
         if let ListKind::Graphics(gi) = kind {
             ui.same_line();
-            let mode = signals_mut(app, kind)[j].y_mode;
+            let mode = signals[j].y_mode;
             let menu_id = format!("Y scale##{gi}-{j}");
             if ui.button(format!("{}##ym{j}", mode.short())) {
                 ui.open_popup(&menu_id);
@@ -104,12 +147,11 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                     if ui.selectable_config(m.label()).selected(m == mode).build() {
                         // Re-entering Lock re-captures whatever the axis
                         // shows then, so any change drops the frozen range.
-                        let changed_key = {
-                            let sigs = signals_mut(app, kind);
-                            sigs[j].y_mode = m;
-                            format!("{:?}", sigs[j].key)
-                        };
-                        app.graphics[gi].y_locks.remove(&changed_key);
+                        signals[j].y_mode = m;
+                        let changed_key = format!("{:?}", signals[j].key);
+                        if let Some(locks) = &mut y_locks {
+                            locks.remove(&changed_key);
+                        }
                     }
                     // imgui-rs tooltips draw unconditionally; without this
                     // gate every entry's hint piles up at the mouse.
@@ -146,13 +188,14 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                     app.state_trackers.iter().map(|w| w.name.clone()).collect();
                 for (ti, name) in names.iter().enumerate() {
                     if ui.menu_item(name) {
-                        app.set_win_signal(crate::app::PopupTarget::State(ti), key.clone(), true);
+                        cmds.push(SigListCmd::AddStateSignal {
+                            window: ti,
+                            key: key.clone(),
+                        });
                     }
                 }
                 if ui.menu_item("+ 新建 State Tracker") {
-                    app.new_state_window();
-                    let ti = app.state_trackers.len() - 1;
-                    app.set_win_signal(crate::app::PopupTarget::State(ti), key.clone(), true);
+                    cmds.push(SigListCmd::NewStateWith(key.clone()));
                 }
             });
         }
@@ -163,7 +206,10 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         if let ListKind::State(wi) = kind {
             ui.same_line();
             if ui.button(format!("S##srule{j}")) {
-                app.state_rule_edit = Some((wi, key.clone()));
+                cmds.push(SigListCmd::EditStateRule {
+                    window: wi,
+                    key: key.clone(),
+                });
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text("Custom state bands: cuts, names, colors");
@@ -182,7 +228,7 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
         // the state; any other window must leave DRAG untouched, otherwise
         // an earlier-rendered window would cancel the drag on mouse release.
         if dk == kind && from < tops.len() {
-            let label = signals_mut(app, kind)[from].key.name().to_string();
+            let label = signals[from].key.name().to_string();
             dl.add_text(
                 [mouse[0] + 12.0, mouse[1] + 12.0],
                 [0.9, 0.9, 0.95, 1.0],
@@ -216,13 +262,33 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                     let no_move = target == from || target == from + 1;
                     if !no_move {
                         let adj = if target > from { target - 1 } else { target };
-                        let sig = signals_mut(app, kind).remove(from);
-                        signals_mut(app, kind).insert(adj, sig);
+                        let sig = signals.remove(from);
+                        signals.insert(adj, sig);
                     }
                     *DRAG.lock().unwrap() = None;
                 }
             } else if !mouse_down {
                 *DRAG.lock().unwrap() = None;
+            }
+        }
+    }
+}
+
+impl App {
+    pub(crate) fn apply_siglist_cmds(&mut self, cmds: Vec<SigListCmd>) {
+        for cmd in cmds {
+            match cmd {
+                SigListCmd::AddStateSignal { window, key } => {
+                    self.set_win_signal(crate::app::PopupTarget::State(window), key, true);
+                }
+                SigListCmd::NewStateWith(key) => {
+                    self.new_state_window();
+                    let ti = self.state_trackers.len() - 1;
+                    self.set_win_signal(crate::app::PopupTarget::State(ti), key, true);
+                }
+                SigListCmd::EditStateRule { window, key } => {
+                    self.state_ui.rule_edit = Some((window, key));
+                }
             }
         }
     }
