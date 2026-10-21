@@ -6,6 +6,7 @@
 //! on this module.
 #![allow(dead_code)]
 
+pub mod db;
 pub mod frame;
 pub mod ring;
 
