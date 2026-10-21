@@ -10882,3 +10882,24 @@ fn ethernet_flows_reach_messages_and_statistics_csv() {
     assert!(!std::fs::read_to_string(&stats).unwrap().contains("ETH0"));
     std::fs::remove_file(&stats).ok();
 }
+
+/// View > Observers (and Measurement Setup's arrow) share one focus action:
+/// a hidden window is reopened and named as the one to bring to the front.
+#[test]
+fn focusing_an_observer_reopens_it_and_requests_the_front() {
+    use crate::workspace::PopupTarget;
+    let mut app = App::headless();
+    app.new_graphics_window();
+    let i = app.graphics.len() - 1;
+    app.graphics[i].opened = false;
+    let name = app.graphics[i].name.clone();
+
+    app.focus_observer(PopupTarget::Graphics(i));
+    assert!(app.graphics[i].opened, "a hidden observer is shown again");
+    assert_eq!(app.focus_title.as_deref(), Some(name.as_str()));
+
+    app.monitor_view.open = false;
+    app.focus_observer(PopupTarget::Monitor);
+    assert!(app.monitor_view.open);
+    assert_eq!(app.focus_title.as_deref(), Some("Monitor"));
+}

@@ -469,6 +469,45 @@ fn popup_after_remove(t: PopupTarget, removed: usize, which: u8) -> Option<Popup
 }
 
 impl App {
+    /// Shows one observer window and brings it to the front. Shared by the
+    /// Measurement Setup `->` button and the View > Observers menu.
+    pub fn focus_observer(&mut self, target: PopupTarget) {
+        match target {
+            PopupTarget::Trace(i) => {
+                if let Some(w) = self.trace_windows.get_mut(i) {
+                    w.opened = true;
+                }
+            }
+            PopupTarget::Messages(i) => {
+                if let Some(w) = self.msg_windows.get_mut(i) {
+                    w.opened = true;
+                }
+            }
+            PopupTarget::Stats(i) => {
+                if let Some(w) = self.stats_windows.get_mut(i) {
+                    w.opened = true;
+                }
+            }
+            PopupTarget::Graphics(i) => {
+                if let Some(w) = self.graphics.get_mut(i) {
+                    w.opened = true;
+                }
+            }
+            PopupTarget::Data(i) => {
+                if let Some(w) = self.data_windows.get_mut(i) {
+                    w.opened = true;
+                }
+            }
+            PopupTarget::State(i) => {
+                if let Some(w) = self.state_trackers.get_mut(i) {
+                    w.opened = true;
+                }
+            }
+            PopupTarget::Monitor => self.monitor_view.open = true,
+        }
+        self.focus_title = Some(target_name(self, target));
+    }
+
     fn remove_observer(&mut self, target: PopupTarget) {
         match target {
             PopupTarget::Trace(i) if i < self.trace_windows.len() => {
@@ -557,42 +596,7 @@ impl App {
                 MeasurementCmd::OpenPicker(target) => {
                     self.id_filter.open_for(target);
                 }
-                MeasurementCmd::Focus(target) => {
-                    match target {
-                        PopupTarget::Trace(i) => {
-                            if let Some(w) = self.trace_windows.get_mut(i) {
-                                w.opened = true;
-                            }
-                        }
-                        PopupTarget::Messages(i) => {
-                            if let Some(w) = self.msg_windows.get_mut(i) {
-                                w.opened = true;
-                            }
-                        }
-                        PopupTarget::Stats(i) => {
-                            if let Some(w) = self.stats_windows.get_mut(i) {
-                                w.opened = true;
-                            }
-                        }
-                        PopupTarget::Graphics(i) => {
-                            if let Some(w) = self.graphics.get_mut(i) {
-                                w.opened = true;
-                            }
-                        }
-                        PopupTarget::Data(i) => {
-                            if let Some(w) = self.data_windows.get_mut(i) {
-                                w.opened = true;
-                            }
-                        }
-                        PopupTarget::State(i) => {
-                            if let Some(w) = self.state_trackers.get_mut(i) {
-                                w.opened = true;
-                            }
-                        }
-                        PopupTarget::Monitor => self.monitor_view.open = true,
-                    }
-                    self.focus_title = Some(target_name(self, target));
-                }
+                MeasurementCmd::Focus(target) => self.focus_observer(target),
                 MeasurementCmd::Remove(target) => self.remove_observer(target),
                 MeasurementCmd::Export(target) => match target {
                     PopupTarget::Trace(i) => self.export_trace_dialog(i),

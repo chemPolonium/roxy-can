@@ -1,4 +1,4 @@
-use crate::app::{App, Mode, REPLAY_SPEEDS, TOOLBAR_H};
+use crate::app::{App, Mode, PopupTarget, REPLAY_SPEEDS, TOOLBAR_H};
 use dear_imgui_rs::{Condition, Ui, WindowFlags};
 
 fn vsep(ui: &Ui) {
@@ -248,6 +248,45 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item_enabled_selected("Monitor", None::<&str>, app.monitor_view.open, true) {
                         app.monitor_view.open = !app.monitor_view.open;
                     }
+                    ui.separator();
+                    let mut observers: Vec<(PopupTarget, String)> = Vec::new();
+                    for (i, w) in app.trace_windows.iter().enumerate() {
+                        observers.push((PopupTarget::Trace(i), format!("Trace: {}", w.name)));
+                    }
+                    for (i, w) in app.msg_windows.iter().enumerate() {
+                        observers.push((PopupTarget::Messages(i), format!("Messages: {}", w.name)));
+                    }
+                    for (i, w) in app.stats_windows.iter().enumerate() {
+                        observers.push((
+                            PopupTarget::Stats(i),
+                            format!("Statistics: {}", w.name),
+                        ));
+                    }
+                    for (i, w) in app.graphics.iter().enumerate() {
+                        observers.push((
+                            PopupTarget::Graphics(i),
+                            format!("Graphics: {}", w.name),
+                        ));
+                    }
+                    for (i, w) in app.data_windows.iter().enumerate() {
+                        observers.push((PopupTarget::Data(i), format!("Data: {}", w.name)));
+                    }
+                    for (i, w) in app.state_trackers.iter().enumerate() {
+                        observers.push((
+                            PopupTarget::State(i),
+                            format!("State Tracker: {}", w.name),
+                        ));
+                    }
+                    ui.menu("Observers", || {
+                        if observers.is_empty() {
+                            ui.text_disabled("No observer windows yet");
+                        }
+                        for (target, name) in &observers {
+                            if ui.menu_item(name) {
+                                app.focus_observer(*target);
+                            }
+                        }
+                    });
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {
