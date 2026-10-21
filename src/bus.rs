@@ -171,6 +171,10 @@ pub enum BusCommand {
     /// Replaces the Ethernet matrices the core decodes captured frames
     /// against, one per Ethernet bus.
     SetEthDbs(std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>),
+    /// Whether an ARXML `FRAME-LENGTH` counts the 14-byte L2 header. The
+    /// capture's payload never does, so this decides how a definition's
+    /// stated length compares with an arriving flow.
+    SetEthLengthIncludesHeader(bool),
     /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
     /// dedupes on that pair, so the key is stable where an index would
     /// shift under the sender's feet.
@@ -683,6 +687,8 @@ pub struct Snapshot {
     pub replay_census_can: Vec<(u8, u64)>,
     /// 同上，FlexRay 的 cluster 号。
     pub replay_census_fr: Vec<(u8, u64)>,
+    /// 同上，以太网抓包里的 channel。
+    pub replay_census_eth: Vec<(u8, u64)>,
     /// How many buses exist (frontends key window state off this).
     pub channel_count: usize,
     /// Commands the core has processed; a threaded frontend watches it to
@@ -1057,6 +1063,10 @@ pub struct BusCore {
     pub(crate) fr_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
     /// Ethernet matrices, pushed from the frontend when ARXML files load.
     pub(crate) eth_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
+    /// Project-level `FRAME-LENGTH` convention: true when the matrix states
+    /// a frame length including the 14-byte L2 header rather than the
+    /// captured payload length.
+    pub(crate) eth_length_includes_header: bool,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -1217,6 +1227,7 @@ impl BusCore {
             eth_aggs: HashMap::new(),
             fr_dbs: Default::default(),
             eth_dbs: Default::default(),
+            eth_length_includes_header: false,
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -1521,6 +1532,7 @@ impl BusCore {
                 self.rebuild_fr_aggs();
             }
             BusCommand::SetEthDbs(dbs) => self.eth_dbs = dbs,
+            BusCommand::SetEthLengthIncludesHeader(on) => self.eth_length_includes_header = on,
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
                 // `next_t_us` still sits at the last slot before the entry
@@ -2652,9 +2664,13 @@ impl BusCore {
                 ethertype: frame.ethertype,
                 payload_len: frame.len(),
             };
-            if let crate::eth::db::EthMatch::Unique(ix) = db.match_flow(&flow, false) {
+            if let crate::eth::db::EthMatch::Unique(ix) =
+                db.match_flow(&flow, self.eth_length_includes_header)
+            {
                 let frame_name = db.frames[ix].name.clone();
-                if let Some(decoded) = db.decode(&flow, &frame.payload, false) {
+                if let Some(decoded) =
+                    db.decode(&flow, &frame.payload, self.eth_length_includes_header)
+                {
                     let stride = self.applied_stride_us;
                     let t_us = frame.t_us;
                     for d in decoded.signals {
@@ -2711,6 +2727,7 @@ impl BusCore {
             replay_map: self.replay_map.clone(),
             replay_census_can: self.log_census.rows(crate::replay_map::LogBusKind::Can),
             replay_census_fr: self.log_census.rows(crate::replay_map::LogBusKind::Fr),
+            replay_census_eth: self.log_census.rows(crate::replay_map::LogBusKind::Eth),
             channel_count: self.channels.len(),
             laps: self.laps,
             bus_counter: self.bus_counter,
@@ -4173,9 +4190,6 @@ impl BusCore {
         self.source.poll_fr(now_us, &mut fr_replay);
         let mut eth_replay: Vec<crate::eth::EthFrame> = Vec::new();
         self.source.poll_eth(now_us, &mut eth_replay);
-        for frame in eth_replay {
-            self.ingest_eth(frame);
-        }
         // 日志的每条帧只带一个通道**编号**，那是录它的那个人工程里的编号，
         // 文件里没有总线名可对照。所以在进环之前换成本工程的第几路，让解码、
         // 负载、Trace、聚合看见的都是自己这几条路；对不上任何一路的不回放
@@ -4216,6 +4230,21 @@ impl BusCore {
                     None => false,
                 }
             });
+            // An Ethernet capture's channel is the recording tool's own
+            // numbering, unrelated to CAN channels or clusters. As on the
+            // FlexRay side there is no bus-count fallback: an index with no
+            // matrix is still a real flow, and an explicit "don't replay"
+            // is the only thing that drops it.
+            eth_replay.retain_mut(|f| {
+                census.bump(LogBusKind::Eth, f.bus);
+                match map.target(LogBusKind::Eth, f.bus) {
+                    Some(t) => {
+                        f.bus = t;
+                        true
+                    }
+                    None => false,
+                }
+            });
             // 有人被挡在门外就说一句。状态行只有一行，所以一个通道一趟一次。
             for raw in unaimed {
                 if self.drop_news_done.insert(raw) {
@@ -4227,6 +4256,13 @@ impl BusCore {
             }
         }
         let fr_replayed = !fr_replay.is_empty();
+        let eth_landed = !eth_replay.is_empty();
+        // Ethernet frames enter their ring after the replay channel mapping,
+        // so the whole pipeline -- matrix match, subscriptions, Trace,
+        // aggregates -- sees the project's bus index, not the log's.
+        for frame in eth_replay {
+            self.ingest_eth(frame);
+        }
         // Send-now requests are intents recorded by commands; building the
         // frames here stamps them with this step's clock, so a request that
         // waited out a pause never sends a pre-pause timestamp.
@@ -4568,7 +4604,7 @@ impl BusCore {
                     .push(Self::node_frame(f.channel, id, ext, &data, f.t_us));
             }
         }
-        if i > 0 || fr_landed {
+        if i > 0 || fr_landed || eth_landed {
             self.publish_trace();
         }
         self.refresh_sub_histories();
@@ -5753,6 +5789,73 @@ mod tests {
         assert_eq!(sub.history.len(), 1, "sampled like a CAN signal");
     }
 
+    /// A matrix whose `FRAME-LENGTH` includes the 14-byte L2 header matches
+    /// the captured payload once the project says so, and decodes the same
+    /// way; the default (payload length) does not bind.
+    #[test]
+    fn the_frame_length_convention_decides_whether_a_flow_matches() {
+        let db = crate::eth::db::EthDb {
+            clusters: vec![crate::eth::db::EthCluster {
+                name: "Cluster".into(),
+                vlans: vec![100],
+            }],
+            frames: vec![crate::eth::db::EthFrameDef {
+                name: "LenFrame".into(),
+                cluster: "Cluster".into(),
+                vlan: Some(100),
+                // 8 payload bytes + 14-byte L2 header.
+                length: 22,
+                ethertype_hint: Some(0x0800),
+                pdus: vec![crate::eth::db::EthPdu {
+                    name: "P".into(),
+                    length: 8,
+                    start_bit: 0,
+                    signals: vec![crate::eth::db::EthSignal {
+                        name: "Speed".into(),
+                        start_bit: 0,
+                        size: 8,
+                        big_endian: false,
+                        signed: false,
+                        factor: 1.0,
+                        offset: 0.0,
+                        unit: "km/h".into(),
+                        values: vec![],
+                    }],
+                }],
+            }],
+        };
+        let key = crate::observe::SigKey::eth(0, "LenFrame", "Speed");
+        let run = |includes_header: bool| {
+            let mut core = BusCore::new(Vec::new());
+            core.eth_dbs.insert(0, std::sync::Arc::new(db.clone()));
+            core.eth_length_includes_header = includes_header;
+            core.subscribe_signal(key.clone());
+            core.ingest_eth(crate::eth::EthFrame::new(
+                1_000,
+                0,
+                crate::can::frame::Direction::Rx,
+                [9, 8, 7, 6, 5, 4],
+                [1, 2, 3, 4, 5, 6],
+                Some(100),
+                0x0800,
+                vec![42, 0, 0, 0, 0, 0, 0, 0],
+            ));
+            core
+        };
+        let unmatched = run(false);
+        let sub = unmatched.subs.get(&key).expect("subscribed");
+        assert_eq!(sub.latest, 0.0);
+        assert_eq!(
+            sub.last_update_us, 0,
+            "the payload-length convention does not bind a header-inclusive definition"
+        );
+        assert_eq!(
+            run(true).subs.get(&key).expect("matched").latest,
+            42.0,
+            "with the convention set, the same frame decodes"
+        );
+    }
+
     /// Two clusters, two descriptions, the same slot number: each bus decodes
     /// against its own file. Merging them into one description -- which is what
     /// a single global database amounted to -- would hand bus 1's frames bus 0's
@@ -6050,6 +6153,60 @@ mod tests {
             "表上说的是日志里的编号，不是本工程的路"
         );
         assert!(!snap.fr_loads.contains_key(&1), "1 号那路没被凭空造出来");
+    }
+
+    /// An Ethernet capture's channel is the recording tool's numbering too;
+    /// the map moves it onto the project's Ethernet bus, and the census keeps
+    /// counting by the file's number. An explicit "don't replay" drops it.
+    #[test]
+    fn an_ethernet_capture_channel_follows_the_replay_map() {
+        use crate::replay_map::LogBusKind;
+        let frame = |bus: u8| {
+            crate::eth::EthFrame::new(
+                0,
+                bus,
+                crate::can::frame::Direction::Rx,
+                [9, 8, 7, 6, 5, 4],
+                [1, 2, 3, 4, 5, 6],
+                Some(100),
+                0x0800,
+                vec![0xAA; 8],
+            )
+        };
+        let run = |mapping: Option<u8>| {
+            let mut core = BusCore::new(Vec::new());
+            core.mode = Mode::Replay;
+            core.source = Box::new(crate::source::replay::ReplaySource::new(Box::new(
+                crate::log::vec_stream::VecStream::with_all(Vec::new(), Vec::new(), vec![frame(1)]),
+            )));
+            let mut map = crate::replay_map::ReplayMap::default();
+            map.set(LogBusKind::Eth, 1, mapping);
+            core.replay_map = map;
+            let mut status = String::new();
+            core.step_to(0, 0, 1, 1, &mut status);
+            core.publish_trace();
+            core.snapshot()
+        };
+
+        let snap = run(Some(2));
+        assert_eq!(snap.eth_trace.len(), 1, "the frame reached the ring");
+        assert_eq!(snap.eth_trace.last().unwrap().bus, 2, "on the chosen bus");
+        assert_eq!(
+            snap.replay_census_eth,
+            vec![(1, 1)],
+            "the map lists the file's channel, not the project's bus"
+        );
+
+        let dropped = run(None);
+        assert!(
+            dropped.eth_trace.is_empty(),
+            "an explicit drop replays nothing"
+        );
+        assert_eq!(
+            dropped.replay_census_eth,
+            vec![(1, 1)],
+            "and the mapping table still reports how much was dropped"
+        );
     }
 
     /// CAN 的一路删掉，后面的往前挪：指到被删那一路的映射变成不回放，指到

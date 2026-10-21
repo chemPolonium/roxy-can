@@ -516,6 +516,15 @@ impl App {
         self.send(crate::bus::BusCommand::SetEthDbs(dbs));
     }
 
+    /// Sets the project's `FRAME-LENGTH` convention and tells the core, which
+    /// matches arriving flows against it.
+    pub fn set_eth_length_includes_header(&mut self, on: bool) {
+        if self.eth_length_includes_header != on {
+            self.eth_length_includes_header = on;
+            self.send(crate::bus::BusCommand::SetEthLengthIncludesHeader(on));
+        }
+    }
+
     pub fn eth_bus_label(&self, bus: u8) -> String {
         format!("ETH{bus}")
     }

@@ -700,6 +700,11 @@ pub struct Config {
     /// Ethernet buses and their AUTOSAR matrices. Separate index space.
     #[serde(default)]
     pub eth_buses: Vec<EthBusFile>,
+    /// Whether those matrices state `FRAME-LENGTH` including the 14-byte L2
+    /// header. Absent (false) means the length is the payload the capture
+    /// reports, which is what Vector BLF carries.
+    #[serde(default)]
+    pub eth_frame_length_includes_header: bool,
     /// 回放通道映射：日志里的通道编号 → 本工程的第几路。日志只记编号，而那是
     /// 录它的那个人工程里的编号，所以这层对应关系属于工程。缺省（没有这一项，
     /// 或空表）= 按编号原样用，旧工程读进来行为不变。
@@ -977,6 +982,7 @@ impl Config {
                     path: c.path.clone(),
                 })
                 .collect(),
+            eth_frame_length_includes_header: app.eth_length_includes_header,
             replay_map: app.snap.replay_map.clone(),
             // Written only by the legacy loader; a save drops it in favour of
             // `fr_buses` above.
@@ -1736,6 +1742,7 @@ impl Config {
         // them -- no lazy re-push at the moment of use.
         app.push_fr_db_to_core();
         app.push_eth_db_to_core();
+        app.set_eth_length_includes_header(self.eth_frame_length_includes_header);
         // The FlexRay generator entries are rebuilt *after* the descriptions
         // land, because their name, payload length and send period are read out
         // of the description: restored earlier, every entry would come back as a
@@ -2958,6 +2965,7 @@ mod tests {
         let mut map = ReplayMap::default();
         map.set(LogBusKind::Can, 1, Some(0));
         map.set(LogBusKind::Fr, 2, None);
+        map.set(LogBusKind::Eth, 3, Some(1));
         app.set_replay_map(map.clone());
         app.settle();
         assert_eq!(app.snap.replay_map, map);
@@ -3057,6 +3065,7 @@ mod eth_config_tests {
         let mut app = App::headless();
         assert_eq!(app.load_eth_description(&path_s, Some(2)), Some(2));
         assert_eq!(app.eth_buses.len(), 1);
+        app.set_eth_length_includes_header(true);
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
@@ -3065,6 +3074,10 @@ mod eth_config_tests {
             .apply(&mut restored);
         assert!(restored.eth_buses.contains_key(&2));
         assert_eq!(restored.eth_db(2).unwrap().frames.len(), 1);
+        assert!(
+            restored.eth_length_includes_header,
+            "the frame-length convention travels with the matrices"
+        );
         std::fs::remove_file(path).ok();
     }
 

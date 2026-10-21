@@ -510,6 +510,9 @@ pub struct RowsBuild {
     /// The same identity for each Ethernet matrix: names, decode and DBC-only
     /// answers all come from it, so swapping the file must rebuild the rows.
     eth_dbs: Vec<(u8, usize)>,
+    /// The matrix's frame-length convention; changing it changes which
+    /// definition a row matches, and therefore its name and decoding.
+    eth_len_includes_header: bool,
 }
 
 impl RowsBuild {
@@ -524,6 +527,7 @@ impl RowsBuild {
         eth_len: usize,
         fr_dbs: &[(u8, usize)],
         eth_dbs: &[(u8, usize)],
+        eth_len_includes_header: bool,
     ) -> Self {
         Self {
             lens: lens.clone(),
@@ -534,6 +538,7 @@ impl RowsBuild {
             fr_expand,
             fr_dbs: fr_dbs.to_vec(),
             eth_dbs: eth_dbs.to_vec(),
+            eth_len_includes_header,
         }
     }
 
@@ -552,11 +557,13 @@ impl RowsBuild {
         top_us: u64,
         fr_dbs: &[(u8, usize)],
         eth_dbs: &[(u8, usize)],
+        eth_len_includes_header: bool,
     ) -> bool {
         self.lens == *flt
             && self.fr_expand == fr_expand
             && self.fr_dbs == fr_dbs
             && self.eth_dbs == eth_dbs
+            && self.eth_len_includes_header == eth_len_includes_header
             && top_us >= self.through_us
             // A batch stamped in the same microsecond as the last build is
             // newer by arrival order but invisible to the `t_us > through`
@@ -1303,7 +1310,7 @@ impl App {
     ) -> Option<&crate::eth::db::EthFrameDef> {
         let db = self.eth_db(bus)?;
         let flow = eth_flow(key);
-        match db.match_flow(&flow, false) {
+        match db.match_flow(&flow, self.eth_length_includes_header) {
             crate::eth::db::EthMatch::Unique(i) => db.frames.get(i),
             crate::eth::db::EthMatch::Ambiguous(_) | crate::eth::db::EthMatch::None => None,
         }
@@ -1322,7 +1329,7 @@ impl App {
         let Some(db) = self.eth_db(f.bus) else {
             return macs;
         };
-        match db.match_flow(&eth_flow(&key), false) {
+        match db.match_flow(&eth_flow(&key), self.eth_length_includes_header) {
             crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
             crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} 个候选>  {macs}"),
             crate::eth::db::EthMatch::None => macs,
@@ -1385,10 +1392,9 @@ impl App {
             else {
                 return false;
             };
-            let Some(decoded) = self
-                .eth_db(f.bus)
-                .and_then(|db| db.decode(&eth_flow(&key), &f.payload, false))
-            else {
+            let Some(decoded) = self.eth_db(f.bus).and_then(|db| {
+                db.decode(&eth_flow(&key), &f.payload, self.eth_length_includes_header)
+            }) else {
                 return false;
             };
             let Some(v) = decoded

@@ -329,6 +329,10 @@ pub struct App {
     /// Ethernet buses and the ARXML matrices loaded for them. Separate index
     /// space from CAN and FlexRay.
     pub eth_buses: std::collections::BTreeMap<u8, EthBusCfg>,
+    /// Whether the matrix's `FRAME-LENGTH` includes the 14-byte L2 header.
+    /// The capture payload never does; this is the project-level convention
+    /// that makes the two lengths comparable.
+    pub eth_length_includes_header: bool,
     /// The record file's stem as the input box shows it -- frontend
     /// draft state; the recorder receives a copy via `SetRecordPath`
     /// when recording arms.
@@ -512,6 +516,7 @@ impl App {
             fr_buses: Default::default(),
             fr_names: Default::default(),
             eth_buses: Default::default(),
+            eth_length_includes_header: false,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -1084,11 +1089,13 @@ impl App {
             };
             let name = self
                 .eth_db(agg.key.bus)
-                .and_then(|db| match db.match_flow(&flow, false) {
-                    crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
-                    crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
-                    crate::eth::db::EthMatch::None => None,
-                })
+                .and_then(
+                    |db| match db.match_flow(&flow, self.eth_length_includes_header) {
+                        crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
+                        crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                        crate::eth::db::EthMatch::None => None,
+                    },
+                )
                 .unwrap_or_else(|| {
                     format!(
                         "{} > {}",
@@ -1514,11 +1521,14 @@ impl App {
                 payload_len: agg.key.len,
             };
             let db = self.eth_db(agg.key.bus);
-            let matched = db.and_then(|db| match db.match_flow(&flow, false) {
-                crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
-                crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
-                crate::eth::db::EthMatch::None => None,
-            });
+            let matched =
+                db.and_then(
+                    |db| match db.match_flow(&flow, self.eth_length_includes_header) {
+                        crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
+                        crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                        crate::eth::db::EthMatch::None => None,
+                    },
+                );
             let macs = format!(
                 "{} > {}",
                 crate::eth::db::mac_text(&agg.key.src),
@@ -1538,7 +1548,8 @@ impl App {
                     continue;
                 }
             }
-            let decoded = db.and_then(|db| db.decode(&flow, &agg.payload, false));
+            let decoded =
+                db.and_then(|db| db.decode(&flow, &agg.payload, self.eth_length_includes_header));
             let signals: Vec<(String, String)> = decoded
                 .map(|d| {
                     d.signals
@@ -1652,6 +1663,7 @@ impl App {
         self.trace_windows[i].shown_count = can_len;
         let flt = self.trace_windows[i].filter_lens();
         let fr_expand = self.trace_windows[i].fr_expand;
+        let eth_len_includes_header = self.eth_length_includes_header;
         // Which description each FlexRay bus resolved its rows against: an
         // expanded child row is an index into it, so a swap means a rebuild.
         let fr_dbs: Vec<(u8, usize)> = self
@@ -1672,7 +1684,15 @@ impl App {
         ) {
             (Some(b), false)
                 if b.extends_to(
-                    &flt, fr_expand, can_len, fr_len, eth_len, top, &fr_dbs, &eth_dbs,
+                    &flt,
+                    fr_expand,
+                    can_len,
+                    fr_len,
+                    eth_len,
+                    top,
+                    &fr_dbs,
+                    &eth_dbs,
+                    eth_len_includes_header,
                 ) =>
             {
                 Some(b.through())
@@ -1687,7 +1707,15 @@ impl App {
         self.walk_rows(i, &flt, fr_expand, since, &mut rows);
         let w = &mut self.trace_windows[i];
         w.rows_build = Some(RowsBuild::new(
-            &flt, fr_expand, top, can_len, fr_len, eth_len, &fr_dbs, &eth_dbs,
+            &flt,
+            fr_expand,
+            top,
+            can_len,
+            fr_len,
+            eth_len,
+            &fr_dbs,
+            &eth_dbs,
+            eth_len_includes_header,
         ));
         // The walk produced this list; the cache is it, in the same order.
         w.rows_sorted = false;

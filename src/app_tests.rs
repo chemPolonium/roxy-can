@@ -10526,3 +10526,69 @@ fn trace_merges_ethernet_rows_and_scopes_them_by_flow() {
     assert_eq!(app.trace_windows[0].rows.len(), 1);
     assert!(matches!(app.trace_windows[0].rows[0], TraceRow::Eth(_)));
 }
+
+/// The FRAME-LENGTH convention is a project switch, not a build constant:
+/// flipping it must change which ARXML frame a captured flow names and rebuild
+/// the Trace cache, or the Name column keeps a stale match.
+#[test]
+fn the_frame_length_convention_renames_trace_rows() {
+    let mut app = App::headless();
+    let db = crate::eth::db::EthDb {
+        clusters: vec![crate::eth::db::EthCluster {
+            name: "Cluster".into(),
+            vlans: vec![100],
+        }],
+        frames: vec![crate::eth::db::EthFrameDef {
+            name: "LenFrame".into(),
+            cluster: "Cluster".into(),
+            vlan: Some(100),
+            // 8 payload bytes + the 14-byte L2 header.
+            length: 22,
+            ethertype_hint: Some(0x0800),
+            pdus: vec![crate::eth::db::EthPdu {
+                name: "P".into(),
+                length: 8,
+                start_bit: 0,
+                signals: vec![],
+            }],
+        }],
+    };
+    app.eth_buses.insert(
+        0,
+        crate::app::EthBusCfg {
+            path: "synthetic.arxml".to_string(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0xAA; 8],
+    ));
+    app.refresh_snapshot();
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+    let name = |app: &App| match &app.trace_windows[0].rows[0] {
+        TraceRow::Eth(f) => app.eth_row_name(f),
+        other => panic!("expected an Ethernet row, got {other:?}"),
+    };
+    assert!(
+        name(&app).contains(" > "),
+        "the default convention states payload length, so the flow stays unnamed"
+    );
+
+    app.set_eth_length_includes_header(true);
+    app.settle();
+    assert!(app.eth_length_includes_header);
+    app.sync_trace_rows(0);
+    assert_eq!(
+        name(&app),
+        "LenFrame",
+        "the cache rebuilt under the new convention and matched the frame"
+    );
+}

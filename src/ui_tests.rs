@@ -1431,11 +1431,11 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
     );
 }
 
-/// 映射表的两张表在同一个窗口里，而表格不给单元格另加 ID 种子：日志的
-/// CAN 0 号与 FlexRay 0 号若都只拿编号当身份，就是两个可见项撞在同一个
-/// 控件上。两张表同时有一行 0 号，画得下来才算数。
+/// 映射表的三张表在同一个窗口里，而表格不给单元格另加 ID 种子：日志的
+/// CAN 0 号、FlexRay 0 号、以太网 0 号若都只拿编号当身份，就会有两个可见项
+/// 撞在同一个控件上。三张表同时有一行 0 号，画得下来才算数。
 #[test]
-fn the_replay_map_tables_draw_the_same_number_from_both_bus_kinds() {
+fn the_replay_map_tables_draw_the_same_number_from_all_three_bus_kinds() {
     use crate::replay_map::{LogBusKind, ReplayMap};
     let _ui_lock = ui_lock();
     let mut ctx = harness();
@@ -1444,21 +1444,26 @@ fn the_replay_map_tables_draw_the_same_number_from_both_bus_kinds() {
     let mut map = ReplayMap::default();
     map.set(LogBusKind::Can, 0, None);
     map.set(LogBusKind::Fr, 0, None);
+    map.set(LogBusKind::Eth, 0, None);
     app.set_replay_map(map);
     app.settle();
     app.refresh_snapshot();
     assert_eq!(
         app.snap.replay_map.configured(LogBusKind::Can).len(),
         1,
-        "两张表里都得有一行 0 号"
+        "三张表里都得有一行 0 号"
     );
     assert_eq!(app.snap.replay_map.configured(LogBusKind::Fr).len(), 1);
+    assert_eq!(app.snap.replay_map.configured(LogBusKind::Eth).len(), 1);
     // 画下来不够：控件撞车在这个无渲染的跑道上不会响，所以身份本身要比一下。
-    assert_ne!(
+    let keys = [
         crate::ui::buses::replay_row_key(LogBusKind::Can, 0),
         crate::ui::buses::replay_row_key(LogBusKind::Fr, 0),
-        "两张表的 0 号各有各的控件身份"
-    );
+        crate::ui::buses::replay_row_key(LogBusKind::Eth, 0),
+    ];
+    assert_ne!(keys[0], keys[1]);
+    assert_ne!(keys[0], keys[2]);
+    assert_ne!(keys[1], keys[2], "三张表的 0 号各有各的控件身份");
     frames(&mut app, &mut ctx, 3);
 }
 

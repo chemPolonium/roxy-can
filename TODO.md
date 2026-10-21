@@ -28,7 +28,8 @@
 - **范围**：ARXML + 离线 Vector BLF；L2 + AUTOSAR PDU/信号；不做实时硬件、ASC/PCAP、SOME/IP/SD/DoIP/TSN/SoAd、Container/Multiplexed/Secured 解码、ARXML 写回。
 - **真实样本**：目前没有真实 CANoe 以太网 BLF，导入先按规范 + 合成 fixture，标记 experimental；拿到样本后确认对象布局。
 - **帧匹配**：AUTOSAR 的 `ETHERNET-FRAME` 不含 MAC/EtherType，捕获帧只能按 flow key + 打分匹配；歧义必须由项目覆盖解决，不能猜。
-- **FRAME-LENGTH**：不同 OEM 可能含/不含 14 字节 L2 头，需要项目级开关。
+- **FRAME-LENGTH**：项目级开关已加（Buses「FRAME-LENGTH 含 L2 头」，随工程保存），声明长度含 14 字节头时按「-14」匹配。
+- **回放通道映射**：CAN / FlexRay / 以太网三套日志编号都能在 Buses 映射到本工程的路；以太网帧先映射再解码，静音与计数按文件编号。
 - **Trace/作用域**：CAN/FlexRay/Ethernet 已合并在同一张按时间排序的表；作用域提供 `Ethernet: ETHn`，Manual 以 L2 flow 为选择键并随工程保存。Export Trace 仍只写 CAN/FlexRay（ASC 尚无以太网记录格式）。
 - **后续**：Container/Multiplexed/Secured 以太网解码；SoAd/socket/SOME-IP；TSN/交换机拓扑；ARXML 写回与完整矩阵往返。
 

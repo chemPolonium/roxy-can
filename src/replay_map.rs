@@ -14,11 +14,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// 映射属于哪一类总线。FlexRay 的一路和 CAN 的一路是两套编号，
-/// 命令、映射表与计数都按这里的顺序区分它们。
+/// 命令、映射表与计数都按这里的顺序区分它们。以太网又是第三套编号：
+/// BLF 的以太网对象带的是抓包工具里的 channel，不是 CAN 通道。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogBusKind {
     Can,
     Fr,
+    Eth,
 }
 
 /// 文件通道 → 工程里的一路。值 `None` 表示这一路文件通道不回放。
@@ -29,6 +31,7 @@ pub enum LogBusKind {
 pub struct ReplayMap {
     can: BTreeMap<u8, Option<u8>>,
     fr: BTreeMap<u8, Option<u8>>,
+    eth: BTreeMap<u8, Option<u8>>,
 }
 
 impl ReplayMap {
@@ -77,7 +80,7 @@ impl ReplayMap {
 
     /// 一条都没配过。工程文件用它决定要不要写这一项。
     pub fn is_empty(&self) -> bool {
-        self.can.is_empty() && self.fr.is_empty()
+        self.can.is_empty() && self.fr.is_empty() && self.eth.is_empty()
     }
 
     /// 配过的通道（编号升序）。文件还没回放时，映射表靠它列出已有的选择。
@@ -92,6 +95,7 @@ impl ReplayMap {
         match kind {
             LogBusKind::Can => &self.can,
             LogBusKind::Fr => &self.fr,
+            LogBusKind::Eth => &self.eth,
         }
     }
 
@@ -99,6 +103,7 @@ impl ReplayMap {
         match kind {
             LogBusKind::Can => &mut self.can,
             LogBusKind::Fr => &mut self.fr,
+            LogBusKind::Eth => &mut self.eth,
         }
     }
 }
@@ -110,6 +115,7 @@ impl ReplayMap {
 pub struct LogCensus {
     can: [u64; 256],
     fr: [u64; 256],
+    eth: [u64; 256],
 }
 
 // 数组长度超过 32 时 `Default` 派生用不上，只能自己写零。
@@ -118,6 +124,7 @@ impl Default for LogCensus {
         LogCensus {
             can: [0; 256],
             fr: [0; 256],
+            eth: [0; 256],
         }
     }
 }
@@ -127,6 +134,7 @@ impl LogCensus {
         let side = match kind {
             LogBusKind::Can => &mut self.can,
             LogBusKind::Fr => &mut self.fr,
+            LogBusKind::Eth => &mut self.eth,
         };
         side[raw as usize] += 1;
     }
@@ -136,6 +144,7 @@ impl LogCensus {
         let side = match kind {
             LogBusKind::Can => &self.can,
             LogBusKind::Fr => &self.fr,
+            LogBusKind::Eth => &self.eth,
         };
         side.iter()
             .enumerate()
@@ -165,11 +174,18 @@ mod tests {
         let mut map = ReplayMap::default();
         map.set(LogBusKind::Can, 3, Some(0));
         map.set(LogBusKind::Fr, 2, None);
+        map.set(LogBusKind::Eth, 1, Some(2));
         assert_eq!(map.target(LogBusKind::Can, 3), Some(0));
         assert_eq!(map.target(LogBusKind::Can, 0), Some(0), "untouched");
         assert_eq!(map.target(LogBusKind::Fr, 2), None);
+        assert_eq!(
+            map.target(LogBusKind::Eth, 1),
+            Some(2),
+            "a capture channel lands on the project's Ethernet bus"
+        );
         assert_eq!(map.configured(LogBusKind::Can), vec![(3, Some(0))]);
         assert_eq!(map.configured(LogBusKind::Fr), vec![(2, None)]);
+        assert_eq!(map.configured(LogBusKind::Eth), vec![(1, Some(2))]);
     }
 
     #[test]

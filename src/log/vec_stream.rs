@@ -11,6 +11,9 @@ pub struct VecStream {
     /// FlexRay rows the container carried, in file order.
     fr_rows: Vec<FrRow>,
     fr_idx: usize,
+    /// Ethernet frames the container carried, in file order.
+    eth_rows: Vec<crate::eth::EthFrame>,
+    eth_idx: usize,
 }
 
 impl VecStream {
@@ -20,6 +23,8 @@ impl VecStream {
             idx: 0,
             fr_rows: Vec::new(),
             fr_idx: 0,
+            eth_rows: Vec::new(),
+            eth_idx: 0,
         }
     }
 
@@ -31,6 +36,25 @@ impl VecStream {
             idx: 0,
             fr_rows,
             fr_idx: 0,
+            eth_rows: Vec::new(),
+            eth_idx: 0,
+        }
+    }
+
+    /// All three kinds the BLF reader can produce, for headless tests.
+    #[cfg(test)]
+    pub fn with_all(
+        frames: Vec<CanFrame>,
+        fr_rows: Vec<FrRow>,
+        eth_rows: Vec<crate::eth::EthFrame>,
+    ) -> Self {
+        VecStream {
+            frames,
+            idx: 0,
+            fr_rows,
+            fr_idx: 0,
+            eth_rows,
+            eth_idx: 0,
         }
     }
 }
@@ -65,6 +89,21 @@ impl FrameStream for VecStream {
             .last()
             .map(|f| f.t_us)
             .or_else(|| self.fr_rows.last().map(|r| r.t_us))
+            .or_else(|| self.eth_rows.last().map(|f| f.t_us))
+    }
+
+    fn poll_eth_frames(&mut self, upto_t_us: u64, out: &mut Vec<crate::eth::EthFrame>) {
+        while let Some(f) = self.eth_rows.get(self.eth_idx) {
+            if f.t_us > upto_t_us {
+                break;
+            }
+            out.push(self.eth_rows[self.eth_idx].clone());
+            self.eth_idx += 1;
+        }
+    }
+
+    fn peek_eth_t(&mut self) -> Option<u64> {
+        self.eth_rows.get(self.eth_idx).map(|f| f.t_us)
     }
 
     fn describe(&self) -> String {

@@ -52,6 +52,7 @@ pub enum BusesCmd {
     AddEthBus,
     PickEthArxml(u8),
     RemoveEthBus(u8),
+    SetEthLengthIncludesHeader(bool),
 }
 
 /// The arbitration bit rates a CAN bus is wired for in practice. A pick list,
@@ -182,7 +183,11 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         &map.configured(LogBusKind::Can),
     );
     let fr_rows = merged_rows(&app.snap.replay_census_fr, &map.configured(LogBusKind::Fr));
-    if can_rows.is_empty() && fr_rows.is_empty() {
+    let eth_rows = merged_rows(
+        &app.snap.replay_census_eth,
+        &map.configured(LogBusKind::Eth),
+    );
+    if can_rows.is_empty() && fr_rows.is_empty() && eth_rows.is_empty() {
         ui.text_disabled("回放一个日志之后，这里列出日志里有哪几路通道。");
         return;
     }
@@ -192,6 +197,12 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     let mut fr_buses: Vec<u8> = app.fr_buses.keys().copied().collect();
     fr_buses.sort_unstable();
     let fr_names: Vec<String> = fr_buses.iter().map(|bus| app.fr_bus_name(*bus)).collect();
+    let mut eth_buses: Vec<u8> = app.eth_buses.keys().copied().collect();
+    eth_buses.sort_unstable();
+    let eth_names: Vec<String> = eth_buses
+        .iter()
+        .map(|bus| app.eth_bus_label(*bus))
+        .collect();
     let mut edited = map.clone();
 
     // 一行一路。列就三样：日志里的编号、它带来了多少条、回放成哪一路——
@@ -199,10 +210,12 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     for (kind, rows, targets) in [
         (LogBusKind::Can, &can_rows, &can_names),
         (LogBusKind::Fr, &fr_rows, &fr_names),
+        (LogBusKind::Eth, &eth_rows, &eth_names),
     ] {
         let header = match kind {
             LogBusKind::Can => "日志里的 CAN 通道",
             LogBusKind::Fr => "日志里的 FlexRay 通道",
+            LogBusKind::Eth => "日志里的以太网通道",
         };
         ui.text_disabled(header);
         let opts = dear_imgui_rs::TableOptions::from(TableFlags::NONE)
@@ -211,6 +224,7 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             match kind {
                 LogBusKind::Can => "replay_map_can",
                 LogBusKind::Fr => "replay_map_fr",
+                LogBusKind::Eth => "replay_map_eth",
             },
             3,
             opts,
@@ -223,18 +237,18 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         ui.table_headers_row();
         for &(raw, count) in rows {
             ui.table_next_row();
-            // 控件的身份是（哪一类总线, 编号）。两张表在同一个窗口里，而表格
-            // 不给单元格另加 ID 种子，只按编号 push 会让 CAN 的 0 号与 FlexRay
-            // 的 0 号撞成同一个控件。
+            // 控件的身份是（哪一类总线, 编号）。三张表在同一个窗口里，而表格
+            // 不给单元格另加 ID 种子，只按编号 push 会让三家的 0 号撞成同一个控件。
             let _id = ui.push_id(replay_row_key(kind, raw).as_str());
             if !ui.table_next_column() {
                 continue;
             }
             // 编号按文件里印出来的那个数写：CAN 的日志从 1 起（内部存的是
-            // 起算后的下标），FlexRay 的 cluster 号与 Buses 表里 `#0` 同一套。
+            // 起算后的下标），FlexRay 的 cluster 号与以太网的 capture channel
+            // 都与 Buses 表里 `#0` 同一套。
             ui.text(match kind {
                 LogBusKind::Can => format!("通道 {}", raw + 1),
-                LogBusKind::Fr => format!("#{raw}"),
+                LogBusKind::Fr | LogBusKind::Eth => format!("#{raw}"),
             });
             ui.table_next_column();
             ui.text(count.to_string());
@@ -247,7 +261,7 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             let mut labels: Vec<String> = Vec::with_capacity(targets.len() + 2);
             labels.push(match kind {
                 LogBusKind::Can => format!("原样（通道 {}）", raw + 1),
-                LogBusKind::Fr => format!("原样（#{raw}）"),
+                LogBusKind::Fr | LogBusKind::Eth => format!("原样（#{raw}）"),
             });
             labels.extend(targets.iter().cloned());
             labels.push("不回放".to_string());
@@ -257,12 +271,18 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             let effective = match kind {
                 LogBusKind::Can => edited.can_channel(raw, can_names.len()),
                 LogBusKind::Fr => edited.target(LogBusKind::Fr, raw),
+                LogBusKind::Eth => edited.target(LogBusKind::Eth, raw),
             };
             let mut pick = match effective {
                 None => labels.len() - 1,
                 Some(t) => match kind {
                     LogBusKind::Can => t as usize + 1,
                     LogBusKind::Fr => fr_buses
+                        .iter()
+                        .position(|b| *b == t)
+                        .map(|at| at + 1)
+                        .unwrap_or(0),
+                    LogBusKind::Eth => eth_buses
                         .iter()
                         .position(|b| *b == t)
                         .map(|at| at + 1)
@@ -280,6 +300,7 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                     Some(match kind {
                         LogBusKind::Can => (pick - 1) as u8,
                         LogBusKind::Fr => fr_buses[pick - 1],
+                        LogBusKind::Eth => eth_buses[pick - 1],
                     })
                 };
                 edited.set(kind, raw, to);
@@ -294,13 +315,14 @@ fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     }
 }
 
-/// 一行控件的身份：（哪一类总线, 日志里的编号）。两张表在同一个窗口里，
-/// 而表格不给单元格另加 ID 种子，只用编号会让 CAN 的 0 号与 FlexRay 的
-/// 0 号落在同一个控件上。
+/// 一行控件的身份：（哪一类总线, 日志里的编号）。三张表在同一个窗口里，
+/// 而表格不给单元格另加 ID 种子，只用编号会让 CAN、FlexRay、以太网的 0 号
+/// 落在同一个控件上。
 pub(crate) fn replay_row_key(kind: crate::replay_map::LogBusKind, raw: u8) -> String {
     match kind {
         crate::replay_map::LogBusKind::Can => format!("c{raw}"),
         crate::replay_map::LogBusKind::Fr => format!("f{raw}"),
+        crate::replay_map::LogBusKind::Eth => format!("e{raw}"),
     }
 }
 
@@ -838,6 +860,16 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     ui.same_line();
     let eth_rows = app.eth_bus_rows();
     ui.text(format!("{} 路", eth_rows.len()));
+    let mut len_includes_header = app.eth_length_includes_header;
+    if ui.checkbox("FRAME-LENGTH 含 L2 头##ethlen", &mut len_includes_header) {
+        cmds.push(BusesCmd::SetEthLengthIncludesHeader(len_includes_header));
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "ARXML 的 FRAME-LENGTH 是否包含 14 字节以太网头：捕获帧的 payload 不含头，\
+             打开后匹配长度时按「声明长度 - 14」计算；随工程保存",
+        );
+    }
     if !eth_rows.is_empty() {
         let table_flags =
             TableFlags::RESIZABLE | TableFlags::BORDERS_INNER | TableFlags::NO_BORDERS_IN_BODY;
@@ -941,6 +973,7 @@ impl App {
                     let _ = self.pick_eth_arxml(Some(bus));
                 }
                 BusesCmd::RemoveEthBus(bus) => self.remove_eth_bus(bus),
+                BusesCmd::SetEthLengthIncludesHeader(on) => self.set_eth_length_includes_header(on),
             }
         }
     }
