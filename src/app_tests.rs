@@ -10367,3 +10367,63 @@ fn ethernet_frames_reach_the_snapshot() {
     assert_eq!(f.ethertype, 0x0800);
     assert_eq!(f.len(), 8);
 }
+
+#[test]
+fn ethernet_flows_aggregate_like_can_messages() {
+    let mut app = App::headless();
+    let frame = |t: u64| {
+        crate::eth::EthFrame::new(
+            t,
+            0,
+            crate::can::frame::Direction::Rx,
+            [9, 8, 7, 6, 5, 4],
+            [1, 2, 3, 4, 5, 6],
+            Some(100),
+            0x0800,
+            vec![0xAA; 8],
+        )
+    };
+    app.ingest_eth(frame(0));
+    app.ingest_eth(frame(1_000));
+    app.refresh_snapshot();
+    assert_eq!(app.snap.eth_aggs.len(), 1);
+    let agg = &app.snap.eth_aggs[0];
+    assert_eq!(agg.count, 2);
+    assert_eq!(agg.cycle_us, 1_000.0);
+    assert_eq!(agg.key.len, 8);
+}
+
+#[test]
+fn messages_and_statistics_list_ethernet_flows() {
+    let mut app = App::headless();
+    app.new_msg_window();
+    app.new_stats_window();
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0xAA; 8],
+    ));
+    app.refresh_snapshot();
+    app.text_fresh = true;
+    app.sync_msg_text(0);
+    app.sync_stats_text(0);
+    assert!(
+        app.msg_windows[0]
+            .text_rows
+            .iter()
+            .any(|r| r.label.contains("ETH0")),
+        "Messages lists the Ethernet flow"
+    );
+    assert!(
+        app.stats_windows[0]
+            .text_rows
+            .iter()
+            .any(|r| r.bus == "ETH0"),
+        "Statistics lists the Ethernet flow"
+    );
+}

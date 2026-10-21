@@ -969,7 +969,13 @@ impl App {
             .collect();
         aggs.sort_by_key(|a| (a.channel, a.id));
         let keys: Vec<(u8, u32)> = aggs.iter().map(|a| (a.channel, a.id)).collect();
-        if self.stats_windows[i].text_keys == keys && !self.text_fresh {
+        // Ethernet has no CAN-style scope picker yet; All buses includes it.
+        let eth_aggs: Vec<&crate::aggregate::EthAgg> = if matches!(scope, SigScope::All) {
+            self.snap.eth_aggs.iter().collect()
+        } else {
+            Vec::new()
+        };
+        if self.stats_windows[i].text_keys == keys && !self.text_fresh && eth_aggs.is_empty() {
             return;
         }
         // FlexRay slots share the table, so they count in its denominator too.
@@ -990,6 +996,7 @@ impl App {
             .iter()
             .map(|a| a.count)
             .chain(fr_aggs.iter().map(|a| a.count))
+            .chain(eth_aggs.iter().map(|a| a.count))
             .sum();
         let share = |count: u64| {
             format!(
@@ -1001,7 +1008,7 @@ impl App {
                 }
             )
         };
-        let mut rows = Vec::with_capacity(aggs.len() + fr_aggs.len());
+        let mut rows = Vec::with_capacity(aggs.len() + fr_aggs.len() + eth_aggs.len());
         for agg in &aggs {
             let agg = **agg;
             let id_str = if agg.extended {
@@ -1060,6 +1067,52 @@ impl App {
                     "-".to_string()
                 },
                 len: agg.payload.len().to_string(),
+                flags: crate::can::frame::FrameFlags::NONE,
+                share: share(agg.count),
+            });
+        }
+        for agg in eth_aggs {
+            let flow = crate::eth::db::EthFlow {
+                vlan: agg.key.vlan,
+                dst: agg.key.dst,
+                src: agg.key.src,
+                ethertype: agg.key.ethertype,
+                payload_len: agg.key.len,
+            };
+            let name = self
+                .eth_db(agg.key.bus)
+                .and_then(|db| match db.match_flow(&flow, false) {
+                    crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
+                    crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                    crate::eth::db::EthMatch::None => None,
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} > {}",
+                        crate::eth::db::mac_text(&agg.key.src),
+                        crate::eth::db::mac_text(&agg.key.dst)
+                    )
+                });
+            rows.push(StatsRowText {
+                label: format!("ETH{}  {name}", agg.key.bus),
+                bus: format!("ETH{}", agg.key.bus),
+                count: agg.count.to_string(),
+                min: if agg.count >= 2 {
+                    ms_text(agg.min_us)
+                } else {
+                    "-".to_string()
+                },
+                avg: if agg.count >= 2 {
+                    ms_text(agg.cycle_us)
+                } else {
+                    "-".to_string()
+                },
+                max: if agg.count >= 2 {
+                    ms_text(agg.max_us)
+                } else {
+                    "-".to_string()
+                },
+                len: agg.key.len.to_string(),
                 flags: crate::can::frame::FrameFlags::NONE,
                 share: share(agg.count),
             });
@@ -1262,7 +1315,10 @@ impl App {
             .collect();
         aggs.sort_by_key(|a| (a.channel, a.id));
         let keys: Vec<(u8, u32)> = aggs.iter().map(|a| (a.channel, a.id)).collect();
-        if self.msg_windows[i].text_keys == keys && !self.text_fresh {
+        if self.msg_windows[i].text_keys == keys
+            && !self.text_fresh
+            && self.snap.eth_aggs.is_empty()
+        {
             return;
         }
         let mut rows = Vec::with_capacity(aggs.len());
@@ -1423,6 +1479,96 @@ impl App {
                         }
                     ),
                     bus: self.fr_bus_name(agg.bus),
+                    dir: "Rx",
+                    count: agg.count.to_string(),
+                    cycle: if agg.count > 1 {
+                        format!(
+                            "{:.1} ±{:.1}",
+                            agg.cycle_us / 1000.0,
+                            agg.jitter_us / 1000.0
+                        )
+                    } else {
+                        "-".to_string()
+                    },
+                    flags: crate::can::frame::FrameFlags::NONE,
+                    data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
+                    signals,
+                    empty_note,
+                });
+            }
+        }
+        // Ethernet flows: no CAN-style scope picker yet, so they appear under
+        // All buses only. The ARXML match names the row when it is unique.
+        if matches!(scope, SigScope::All) {
+            for agg in &self.snap.eth_aggs {
+                let flow = crate::eth::db::EthFlow {
+                    vlan: agg.key.vlan,
+                    dst: agg.key.dst,
+                    src: agg.key.src,
+                    ethertype: agg.key.ethertype,
+                    payload_len: agg.key.len,
+                };
+                let db = self.eth_db(agg.key.bus);
+                let matched = db.and_then(|db| match db.match_flow(&flow, false) {
+                    crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
+                    crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                    crate::eth::db::EthMatch::None => None,
+                });
+                let macs = format!(
+                    "{} > {}",
+                    crate::eth::db::mac_text(&agg.key.src),
+                    crate::eth::db::mac_text(&agg.key.dst)
+                );
+                let name = matched.clone().unwrap_or_else(|| macs.clone());
+                if dbc_only && matched.is_none() {
+                    continue;
+                }
+                if !filter.is_empty() {
+                    let hay = format!(
+                        "eth{} {} {} vlan {:?} 0x{:04X}",
+                        agg.key.bus, macs, name, agg.key.vlan, agg.key.ethertype
+                    )
+                    .to_lowercase();
+                    if !hay.contains(&filter) {
+                        continue;
+                    }
+                }
+                let decoded = db.and_then(|db| db.decode(&flow, &agg.payload, false));
+                let signals: Vec<(String, String)> = decoded
+                    .map(|d| {
+                        d.signals
+                            .into_iter()
+                            .map(|s| {
+                                let text = match &s.label {
+                                    Some(label) => format!("{} {} ({})", s.physical, s.unit, label),
+                                    None => format!("{} {}", s.physical, s.unit),
+                                };
+                                (s.name, text.trim().to_string())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let empty_note = if !signals.is_empty() {
+                    None
+                } else if db.is_none() {
+                    Some(format!("（ETH{} 未加载 ARXML）", agg.key.bus))
+                } else if matched.is_none() {
+                    Some("（多个或没有 ARXML 帧匹配该 flow）".to_string())
+                } else {
+                    Some("（该帧不声明信号）".to_string())
+                };
+                rows.push(MsgRowText {
+                    label: format!("ETH{}  {name}", agg.key.bus),
+                    id_key: format!(
+                        "e{}:{:?}:{:?}:{:?}:{:04X}:{}",
+                        agg.key.bus,
+                        agg.key.vlan,
+                        agg.key.src,
+                        agg.key.dst,
+                        agg.key.ethertype,
+                        agg.key.len
+                    ),
+                    bus: format!("ETH{}", agg.key.bus),
                     dir: "Rx",
                     count: agg.count.to_string(),
                     cycle: if agg.count > 1 {

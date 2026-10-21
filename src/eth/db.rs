@@ -495,6 +495,14 @@ fn ref_tail(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).trim().to_string()
 }
 
+/// `AA:BB:CC:DD:EE:FF`, the form the Trace/Messages columns print.
+pub fn mac_text(mac: &[u8; 6]) -> String {
+    mac.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

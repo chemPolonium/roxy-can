@@ -40,6 +40,33 @@ impl MessageAgg {
     }
 }
 
+/// The L2 identity one Ethernet aggregate row counts: bus, VLAN, MAC pair,
+/// EtherType and payload length. AUTOSAR adds no address of its own, so this
+/// is the only key a capture offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct EthFlowKey {
+    pub bus: u8,
+    pub vlan: Option<u16>,
+    pub dst: [u8; 6],
+    pub src: [u8; 6],
+    pub ethertype: u16,
+    pub len: usize,
+}
+
+/// One Ethernet flow's running tally behind Messages/Statistics. Cycle and
+/// jitter use the same EMA smoothing as the CAN/FlexRay aggregates.
+#[derive(Clone, Debug, Default)]
+pub struct EthAgg {
+    pub key: EthFlowKey,
+    pub count: u64,
+    pub last_t_us: u64,
+    pub cycle_us: f64,
+    pub min_us: f64,
+    pub max_us: f64,
+    pub jitter_us: f64,
+    pub payload: std::sync::Arc<[u8]>,
+}
+
 /// Which occupant of a slot one FlexRay aggregate row counts -- the identity
 /// [`FrFrameAgg`] is keyed by. See its doc for why this is not the slot.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]

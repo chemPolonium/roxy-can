@@ -734,6 +734,8 @@ pub struct Snapshot {
     /// One record per FlexRay slot seen this run, slot-sorted -- the
     /// Messages window's FR rows.
     pub fr_aggs: Vec<crate::aggregate::FrFrameAgg>,
+    /// One record per captured Ethernet flow.
+    pub eth_aggs: Vec<crate::aggregate::EthAgg>,
     /// One entry per live subscription: the scalar stats the Data window
     /// draws and the sampled history the curves read.
     pub subs: Vec<SubView>,
@@ -1042,6 +1044,8 @@ pub struct BusCore {
     /// [`crate::aggregate::FrFrameAgg`] for why a slot is not the unit.
     pub(crate) fr_aggs:
         HashMap<(u8, u16, crate::aggregate::FrOccupant), crate::aggregate::FrFrameAgg>,
+    /// Per-flow Ethernet tallies behind the Messages window.
+    pub(crate) eth_aggs: HashMap<crate::aggregate::EthFlowKey, crate::aggregate::EthAgg>,
     /// The parsed FlexRay descriptions, one per bus, when the project has
     /// loaded them. Held here (not only in the frontend) so an arriving
     /// FlexRay frame can be decoded against *its own cluster's* description and
@@ -1205,6 +1209,7 @@ impl BusCore {
             eth_trace: crate::eth::EthRing::default(),
             published_eth: Arc::new(crate::eth::EthTraceView::default()),
             fr_aggs: HashMap::new(),
+            eth_aggs: HashMap::new(),
             fr_dbs: Default::default(),
             trace_paused: false,
             paused_at_us: None,
@@ -2588,9 +2593,44 @@ impl BusCore {
         snap
     }
 
-    /// Appends an Ethernet frame to the run's ring. The next publish hands
-    /// the ring to every observer; no CAN/FlexRay aggregate is touched.
+    /// Appends an Ethernet frame to the run's ring and folds it into the
+    /// per-flow tally. The next publish hands both to every observer; no
+    /// CAN/FlexRay aggregate is touched.
     pub(crate) fn ingest_eth(&mut self, frame: crate::eth::EthFrame) {
+        let key = crate::aggregate::EthFlowKey {
+            bus: frame.bus,
+            vlan: frame.vlan,
+            dst: frame.dst,
+            src: frame.src,
+            ethertype: frame.ethertype,
+            len: frame.len(),
+        };
+        let agg = self.eth_aggs.entry(key).or_default();
+        agg.key = key;
+        if agg.count > 0 && frame.t_us > agg.last_t_us {
+            let dt = (frame.t_us - agg.last_t_us) as f64;
+            let prev = agg.cycle_us;
+            agg.cycle_us = if agg.count == 1 {
+                dt
+            } else {
+                agg.cycle_us * 0.9 + dt * 0.1
+            };
+            let dev = (dt - prev).abs();
+            agg.jitter_us = if agg.count == 1 {
+                dev
+            } else {
+                agg.jitter_us * 0.9 + dev * 0.1
+            };
+            if agg.min_us == 0.0 || dt < agg.min_us {
+                agg.min_us = dt;
+            }
+            if dt > agg.max_us {
+                agg.max_us = dt;
+            }
+        }
+        agg.count += 1;
+        agg.last_t_us = frame.t_us;
+        agg.payload = std::sync::Arc::clone(&frame.payload);
         self.eth_trace.push(frame);
     }
 
@@ -2693,6 +2733,29 @@ impl BusCore {
                         b.slot,
                         b.name.as_deref().unwrap_or(""),
                     ))
+                });
+                rows
+            },
+            eth_aggs: {
+                let mut rows: Vec<crate::aggregate::EthAgg> =
+                    self.eth_aggs.values().cloned().collect();
+                rows.sort_by(|a, b| {
+                    (
+                        a.key.bus,
+                        a.key.vlan,
+                        a.key.src,
+                        a.key.dst,
+                        a.key.ethertype,
+                        a.key.len,
+                    )
+                        .cmp(&(
+                            b.key.bus,
+                            b.key.vlan,
+                            b.key.src,
+                            b.key.dst,
+                            b.key.ethertype,
+                            b.key.len,
+                        ))
                 });
                 rows
             },
@@ -3832,6 +3895,7 @@ impl BusCore {
         self.frame_counter = 0;
         self.aggs.clear();
         self.fr_aggs.clear();
+        self.eth_aggs.clear();
         // 通道计数说的是"这一趟回放里日志带来了哪些路"，和 Trace 同一条命：
         // 按下 Start 就该空着，等下一趟的帧重新数。配好的映射不在这里，
         // 那是工程的决定。
@@ -3932,12 +3996,13 @@ impl BusCore {
     /// rows. Deliberately narrower than `reset_run`: load, spec memory and
     /// the recording are mid-run state the user did not ask to lose.
     fn clear_aggregates(&mut self, status: &mut String) {
-        let n = self.aggs.len() + self.fr_aggs.len();
+        let n = self.aggs.len() + self.fr_aggs.len() + self.eth_aggs.len();
         self.aggs.clear();
         // The FlexRay tallies too: the Messages window lists them beside the
         // CAN rows now, and clearing it left the FR counts running up from
         // wherever they were instead of from zero.
         self.fr_aggs.clear();
+        self.eth_aggs.clear();
         *status = format!("cleared {n} message counter(s)");
     }
 
