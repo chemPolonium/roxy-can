@@ -2830,17 +2830,17 @@ fn autosave_round_trips_the_workspace() {
 fn desktop_switching_restores_window_visibility() {
     let mut app = App::headless();
     assert!(app.trace_windows[0].opened);
-    assert!(app.show_network);
+    assert!(app.network_view.open);
     app.add_desktop();
     assert!(!app.trace_windows[0].opened, "a new desktop starts empty");
-    assert!(!app.show_network, "a new desktop hides all panels");
+    assert!(!app.network_view.open, "a new desktop hides all panels");
     app.switch_desktop(0);
     assert_eq!(app.active_desktop, 0);
     assert!(app.trace_windows[0].opened, "desktop 1 reopens its windows");
-    assert!(app.show_network, "desktop 1 restores the panel state");
+    assert!(app.network_view.open, "desktop 1 restores the panel state");
     app.switch_desktop(1);
     assert!(!app.trace_windows[0].opened, "desktop 2 keeps it closed");
-    assert!(!app.show_network);
+    assert!(!app.network_view.open);
 }
 
 #[test]

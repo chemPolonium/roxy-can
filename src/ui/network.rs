@@ -1,5 +1,76 @@
-use crate::app::App;
+use crate::app::{App, NodeRole};
+use crate::ui::tx::{GeneratorCmd, GeneratorView};
 use dear_imgui_rs::{Condition, Ui};
+
+/// The Network window's own state: selection, the Profile row, and replay
+/// block drafts. Topology and node facts stay on the bus.
+pub struct NetworkView {
+    pub open: bool,
+    pub net_selected: usize,
+    pub net_fr_sel: Option<(u8, String)>,
+    pub(crate) profile_pick: usize,
+    pub(crate) profile_draft_name: String,
+    pub(crate) profile_delete_arm: bool,
+    pub(crate) profile_names: Option<Result<Vec<String>, String>>,
+    pub(crate) block_drafts: std::collections::HashMap<u64, crate::ui::BlockDraft>,
+}
+
+impl Default for NetworkView {
+    fn default() -> Self {
+        Self {
+            open: true,
+            net_selected: 0,
+            net_fr_sel: None,
+            profile_pick: 0,
+            profile_draft_name: String::new(),
+            profile_delete_arm: false,
+            profile_names: None,
+            block_drafts: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// What the Network detail asks the bus or a project file to do. Selection
+/// and drafts are view state; roles, nodes, blocks and profiles cross here.
+pub enum NetworkCmd {
+    OpenScriptEditor(u64),
+    SetNodeRole {
+        bus: u8,
+        node: String,
+        role: NodeRole,
+    },
+    AddNode {
+        name: String,
+        channel: u8,
+        attached: Option<(u8, String)>,
+    },
+    AddReplayBlock {
+        channel: u8,
+        name: String,
+        node: String,
+    },
+    SetReplayBlockEnabled {
+        id: u64,
+        on: bool,
+    },
+    RemoveReplayBlock(u64),
+    SetReplayBlock {
+        id: u64,
+        name: String,
+        channel: u8,
+        path: String,
+        node_filter: Option<String>,
+        attached: Option<(u8, String)>,
+        ids: Vec<(u32, bool)>,
+    },
+    ApplyProfile(String),
+    OpenProfileFile {
+        name: String,
+        path: std::path::PathBuf,
+    },
+    DeleteProfile(String),
+    SaveProfile(String),
+}
 
 struct NodeInfo {
     name: String,
@@ -46,50 +117,120 @@ fn collect(app: &App) -> Vec<Vec<NodeInfo>> {
 /// absent -- plain ASCII, the merged font has no geometric glyphs), a
 /// green `*` tail marks "seen transmitting this run", and clicking a
 /// leaf opens the node's detail below.
-fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat_base: usize) {
-    // The root's ID is the channel index, not its name: two buses may be
-    // renamed alike, and two visible tree nodes with one label would share one
-    // ID.
-    let _id = ui.push_id(ch as i32);
-    let token = ui
-        .tree_node_config(app.channel_name(ch as u8))
-        .default_open(true)
-        .push();
-    if let Some(_t) = token {
-        if infos.is_empty() {
-            ui.text_disabled("no DBC loaded on this bus");
-            return;
-        }
-        for (i, ni) in infos.iter().enumerate() {
-            let role = app.node_role(ch as u8, &ni.name);
-            let (tag, tag_color) = match role {
-                crate::app::NodeRole::Simulated => ("[S]", [0.95, 0.70, 0.20, 1.0]),
-                crate::app::NodeRole::Absent => ("[-]", [0.45, 0.45, 0.55, 1.0]),
-            };
-            ui.text_colored(tag_color, tag);
-            if ui.is_item_hovered() {
-                ui.tooltip_text(role.hint());
+impl NetworkView {
+    fn draw_tree_section(
+        &mut self,
+        ui: &Ui,
+        app: &App,
+        ch: usize,
+        infos: &[NodeInfo],
+        flat_base: usize,
+        cmds: &mut Vec<NetworkCmd>,
+    ) {
+        // The root's ID is the channel index, not its name: two buses may be
+        // renamed alike, and two visible tree nodes with one label would share one
+        // ID.
+        let _id = ui.push_id(ch as i32);
+        let token = ui
+            .tree_node_config(app.channel_name(ch as u8))
+            .default_open(true)
+            .push();
+        if let Some(_t) = token {
+            if infos.is_empty() {
+                ui.text_disabled("no DBC loaded on this bus");
+                return;
             }
-            ui.same_line();
-            if ui
-                .selectable_config(format!("{}##net{ch}_{i}", ni.name))
-                .selected(app.net_fr_sel.is_none() && app.net_selected == flat_base + i)
-                .build()
-            {
-                app.net_selected = flat_base + i;
-                // One selection at a time across the two trees: a CAN node and a
-                // FlexRay ECU cannot both own the detail pane.
-                app.net_fr_sel = None;
+            for (i, ni) in infos.iter().enumerate() {
+                let role = app.node_role(ch as u8, &ni.name);
+                let (tag, tag_color) = match role {
+                    crate::app::NodeRole::Simulated => ("[S]", [0.95, 0.70, 0.20, 1.0]),
+                    crate::app::NodeRole::Absent => ("[-]", [0.45, 0.45, 0.55, 1.0]),
+                };
+                ui.text_colored(tag_color, tag);
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(role.hint());
+                }
+                ui.same_line();
+                if ui
+                    .selectable_config(format!("{}##net{ch}_{i}", ni.name))
+                    .selected(self.net_fr_sel.is_none() && self.net_selected == flat_base + i)
+                    .build()
+                {
+                    self.net_selected = flat_base + i;
+                    // One selection at a time across the two trees: a CAN node and a
+                    // FlexRay ECU cannot both own the detail pane.
+                    self.net_fr_sel = None;
+                }
+                // 绑定到该节点的脚本作为下一层树叶列在节点下：点击打开
+                // 该脚本的编辑器。
+                let bound: Vec<(u64, String, bool, bool, bool)> = app
+                    .snap
+                    .nodes
+                    .iter()
+                    .filter(|n| {
+                        n.channel as usize == ch
+                            && n.attached.as_ref().is_some_and(|a| a.1 == ni.name)
+                    })
+                    .map(|n| {
+                        (
+                            n.id,
+                            n.name.clone(),
+                            n.running && !n.errored,
+                            n.enabled,
+                            n.errored,
+                        )
+                    })
+                    .collect();
+                if !bound.is_empty() {
+                    ui.indent();
+                    for (nid, name, running, enabled, errored) in bound {
+                        self.draw_script_leaf(ui, nid, &name, running, enabled, errored, cmds);
+                    }
+                    ui.unindent();
+                }
+                // 绑定到该节点的回放块同样列在节点下：点击打开 Replay
+                // Blocks 窗口编辑。
+                let blocks: Vec<(u64, String, bool)> = app
+                    .snap
+                    .blocks
+                    .iter()
+                    .filter(|b| {
+                        b.attached
+                            .as_ref()
+                            .is_some_and(|a| a.0 == ch as u8 && a.1 == ni.name)
+                    })
+                    .map(|b| (b.id, b.name.clone(), b.enabled))
+                    .collect();
+                if !blocks.is_empty() {
+                    ui.indent();
+                    for (bid, name, enabled) in blocks {
+                        let (marker, color) = if enabled {
+                            ("[o]", [0.45, 0.62, 0.80, 1.0])
+                        } else {
+                            ("[-]", [0.5, 0.5, 0.55, 1.0])
+                        };
+                        ui.text_colored(color, marker);
+                        if ui.is_item_hovered() {
+                            ui.tooltip_text("回放块 / [o] 启用 / [-] 停用");
+                        }
+                        ui.same_line();
+                        if ui
+                            .selectable_config(format!("{name}##netblock{bid}"))
+                            .build()
+                        {
+                            // 块的编辑就在所属节点的详情里：点击树叶选中节点。
+                            self.net_selected = flat_base + i;
+                        }
+                    }
+                    ui.unindent();
+                }
             }
-            // 绑定到该节点的脚本作为下一层树叶列在节点下：点击打开
-            // 该脚本的编辑器。
-            let bound: Vec<(u64, String, bool, bool, bool)> = app
+            // 自由脚本（未绑定 DBC 节点）列在总线根下，旧工程仍可见。
+            let free: Vec<(u64, String, bool, bool, bool)> = app
                 .snap
                 .nodes
                 .iter()
-                .filter(|n| {
-                    n.channel as usize == ch && n.attached.as_ref().is_some_and(|a| a.1 == ni.name)
-                })
+                .filter(|n| n.channel as usize == ch && n.attached.is_none())
                 .map(|n| {
                     (
                         n.id,
@@ -100,72 +241,13 @@ fn draw_tree_section(app: &mut App, ui: &Ui, ch: usize, infos: &[NodeInfo], flat
                     )
                 })
                 .collect();
-            if !bound.is_empty() {
+            if !free.is_empty() {
                 ui.indent();
-                for (nid, name, running, enabled, errored) in bound {
-                    draw_script_leaf(app, ui, nid, &name, running, enabled, errored);
+                for (nid, name, running, enabled, errored) in free {
+                    self.draw_script_leaf(ui, nid, &name, running, enabled, errored, cmds);
                 }
                 ui.unindent();
             }
-            // 绑定到该节点的回放块同样列在节点下：点击打开 Replay
-            // Blocks 窗口编辑。
-            let blocks: Vec<(u64, String, bool)> = app
-                .snap
-                .blocks
-                .iter()
-                .filter(|b| {
-                    b.attached
-                        .as_ref()
-                        .is_some_and(|a| a.0 == ch as u8 && a.1 == ni.name)
-                })
-                .map(|b| (b.id, b.name.clone(), b.enabled))
-                .collect();
-            if !blocks.is_empty() {
-                ui.indent();
-                for (bid, name, enabled) in blocks {
-                    let (marker, color) = if enabled {
-                        ("[o]", [0.45, 0.62, 0.80, 1.0])
-                    } else {
-                        ("[-]", [0.5, 0.5, 0.55, 1.0])
-                    };
-                    ui.text_colored(color, marker);
-                    if ui.is_item_hovered() {
-                        ui.tooltip_text("回放块 / [o] 启用 / [-] 停用");
-                    }
-                    ui.same_line();
-                    if ui
-                        .selectable_config(format!("{name}##netblock{bid}"))
-                        .build()
-                    {
-                        // 块的编辑就在所属节点的详情里：点击树叶选中节点。
-                        app.net_selected = flat_base + i;
-                    }
-                }
-                ui.unindent();
-            }
-        }
-        // 自由脚本（未绑定 DBC 节点）列在总线根下，旧工程仍可见。
-        let free: Vec<(u64, String, bool, bool, bool)> = app
-            .snap
-            .nodes
-            .iter()
-            .filter(|n| n.channel as usize == ch && n.attached.is_none())
-            .map(|n| {
-                (
-                    n.id,
-                    n.name.clone(),
-                    n.running && !n.errored,
-                    n.enabled,
-                    n.errored,
-                )
-            })
-            .collect();
-        if !free.is_empty() {
-            ui.indent();
-            for (nid, name, running, enabled, errored) in free {
-                draw_script_leaf(app, ui, nid, &name, running, enabled, errored);
-            }
-            ui.unindent();
         }
     }
 }
@@ -198,131 +280,158 @@ fn fr_buses(app: &App) -> Vec<u8> {
 /// slots this ECU is the declared sender of -- the same node-centred editing a
 /// CAN node gets. There is no role switch: a role is the DBC node's gate, and
 /// the description says who sends, not who is simulated.
-fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
-    let label = match app.fr_db(bus) {
-        Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
-        None => format!("{}（未加载描述）", app.fr_bus_name(bus)),
-    };
-    // The root's ID is the cluster index: two 路 can be renamed alike, and two
-    // visible tree nodes with one label would share one ID.
-    let _id = ui.push_id(format!("fr{bus}").as_str());
-    let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
-        return;
-    };
-    // The rows are the ECUs the description declares plus any name an existing
-    // entry carries: swap the description out from under a stimulus setup and
-    // its entries must still have a row to be reached through, rather than
-    // vanish into a list the document no longer supports.
-    let mut nodes: Vec<String> = match app.fr_db(bus) {
-        Some(db) => db.ecus.clone(),
-        None => Vec::new(),
-    };
-    for t in app.snap.fr_tx.iter().filter(|t| t.bus == bus) {
-        if !nodes.contains(&t.node) {
-            nodes.push(t.node.clone());
-        }
-    }
-    let Some(db) = app.fr_db(bus) else {
-        let seen: u64 = app.snap.fr_loads.get(&bus).map_or(0, |l| l.frames);
-        ui.text_disabled(if seen > 0 {
-            "该路正在接收帧，但未加载集群描述，ECU 与帧归属无法显示"
-        } else {
-            "该路已配置，尚无帧到达，且未加载集群描述"
-        });
-        if !nodes.is_empty() {
-            draw_ecu_leaves(app, ui, bus, &nodes, &[]);
-        }
-        return;
-    };
-    if nodes.is_empty() {
-        // An empty ECU list is a property of the document, not of the session:
-        // a cluster export carries no ECUs at all (both bundled FIBEX files are
-        // one), and saying so beats a group that looks like it failed to load.
-        ui.text_disabled("描述未声明 ECU（该文件是集群参数导出，不含 ECUs 一节）");
-        return;
-    }
-    // How many frames each ECU is the declared sender of, so a leaf says what
-    // its generator panel will be able to offer.
-    let mut tx_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    for ix in 0..db.frames.len() {
-        if let Some(s) = db.frame_sender(ix) {
-            *tx_counts.entry(s).or_insert(0) += 1;
-        }
-    }
-    let counts: Vec<usize> = nodes
-        .iter()
-        .map(|n| tx_counts.get(n.as_str()).copied().unwrap_or(0))
-        .collect();
-    if let Some(_e) = ui
-        .tree_node_config(format!("ECU ({})##frecu{bus}", nodes.len()))
-        .default_open(true)
-        .push()
-    {
-        draw_ecu_leaves(app, ui, bus, &nodes, &counts);
-    }
-}
-
-/// The ECU leaves of one cluster. `counts` is the declared frame count per leaf;
-/// an empty slice means the description is gone and nothing can be claimed, so
-/// no count is printed -- which is not the same statement as "sends none".
-fn draw_ecu_leaves(app: &mut App, ui: &Ui, bus: u8, nodes: &[String], counts: &[usize]) {
-    for (i, ecu) in nodes.iter().enumerate() {
-        let text = match counts.get(i) {
-            Some(0) | None => ecu.clone(),
-            Some(n) => format!("{ecu} · 发 {n} 帧"),
+impl NetworkView {
+    fn draw_flexray_section(&mut self, ui: &Ui, app: &App, bus: u8) {
+        let label = match app.fr_db(bus) {
+            Some(db) => format!("{} · {}", app.fr_bus_name(bus), db.params.name),
+            None => format!("{}（未加载描述）", app.fr_bus_name(bus)),
         };
+        // The root's ID is the cluster index: two 路 can be renamed alike, and two
+        // visible tree nodes with one label would share one ID.
+        let _id = ui.push_id(format!("fr{bus}").as_str());
+        let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
+            return;
+        };
+        // The rows are the ECUs the description declares plus any name an existing
+        // entry carries: swap the description out from under a stimulus setup and
+        // its entries must still have a row to be reached through, rather than
+        // vanish into a list the document no longer supports.
+        let mut nodes: Vec<String> = match app.fr_db(bus) {
+            Some(db) => db.ecus.clone(),
+            None => Vec::new(),
+        };
+        for t in app.snap.fr_tx.iter().filter(|t| t.bus == bus) {
+            if !nodes.contains(&t.node) {
+                nodes.push(t.node.clone());
+            }
+        }
+        let Some(db) = app.fr_db(bus) else {
+            let seen: u64 = app.snap.fr_loads.get(&bus).map_or(0, |l| l.frames);
+            ui.text_disabled(if seen > 0 {
+                "该路正在接收帧，但未加载集群描述，ECU 与帧归属无法显示"
+            } else {
+                "该路已配置，尚无帧到达，且未加载集群描述"
+            });
+            if !nodes.is_empty() {
+                self.draw_ecu_leaves(ui, bus, &nodes, &[]);
+            }
+            return;
+        };
+        if nodes.is_empty() {
+            // An empty ECU list is a property of the document, not of the session:
+            // a cluster export carries no ECUs at all (both bundled FIBEX files are
+            // one), and saying so beats a group that looks like it failed to load.
+            ui.text_disabled("描述未声明 ECU（该文件是集群参数导出，不含 ECUs 一节）");
+            return;
+        }
+        // How many frames each ECU is the declared sender of, so a leaf says what
+        // its generator panel will be able to offer.
+        let mut tx_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for ix in 0..db.frames.len() {
+            if let Some(s) = db.frame_sender(ix) {
+                *tx_counts.entry(s).or_insert(0) += 1;
+            }
+        }
+        let counts: Vec<usize> = nodes
+            .iter()
+            .map(|n| tx_counts.get(n.as_str()).copied().unwrap_or(0))
+            .collect();
+        if let Some(_e) = ui
+            .tree_node_config(format!("ECU ({})##frecu{bus}", nodes.len()))
+            .default_open(true)
+            .push()
+        {
+            self.draw_ecu_leaves(ui, bus, &nodes, &counts);
+        }
+    }
+
+    /// The ECU leaves of one cluster. `counts` is the declared frame count per leaf;
+    /// an empty slice means the description is gone and nothing can be claimed, so
+    /// no count is printed -- which is not the same statement as "sends none".
+    fn draw_ecu_leaves(&mut self, ui: &Ui, bus: u8, nodes: &[String], counts: &[usize]) {
+        for (i, ecu) in nodes.iter().enumerate() {
+            let text = match counts.get(i) {
+                Some(0) | None => ecu.clone(),
+                Some(n) => format!("{ecu} · 发 {n} 帧"),
+            };
+            if ui
+                .selectable_config(format!("{text}##freculeaf{bus}_{i}"))
+                .selected(
+                    self.net_fr_sel
+                        .as_ref()
+                        .is_some_and(|(b, e)| *b == bus && e == ecu),
+                )
+                .build()
+            {
+                self.net_fr_sel = Some((bus, ecu.clone()));
+            }
+        }
+    }
+
+    /// One script node as a tree leaf: state marker + name, click opens the
+    /// script editor.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_script_leaf(
+        &mut self,
+        ui: &Ui,
+        id: u64,
+        name: &str,
+        running: bool,
+        enabled: bool,
+        errored: bool,
+        cmds: &mut Vec<NetworkCmd>,
+    ) {
+        let (marker, color) = if errored {
+            ("[!]", [1.0, 0.55, 0.3, 1.0])
+        } else if running {
+            ("[*]", [0.45, 0.95, 0.45, 1.0])
+        } else if enabled {
+            ("[o]", [0.45, 0.62, 0.80, 1.0])
+        } else {
+            ("[-]", [0.5, 0.5, 0.55, 1.0])
+        };
+        ui.text_colored(color, marker);
+        if ui.is_item_hovered() {
+            ui.tooltip_text(
+                "[*] 运行中 / [o] 已启用待测量 / [-] 未启用 / [!] 出错（编辑器里看日志）",
+            );
+        }
+        ui.same_line();
         if ui
-            .selectable_config(format!("{text}##freculeaf{bus}_{i}"))
-            .selected(
-                app.net_fr_sel
-                    .as_ref()
-                    .is_some_and(|(b, e)| *b == bus && e == ecu),
-            )
+            .selectable_config(format!("{name}##netscript{id}"))
             .build()
         {
-            app.net_fr_sel = Some((bus, ecu.clone()));
+            cmds.push(NetworkCmd::OpenScriptEditor(id));
         }
-    }
-}
-
-/// One script node as a tree leaf: state marker + name, click opens the
-/// script editor.
-fn draw_script_leaf(
-    app: &mut App,
-    ui: &Ui,
-    id: u64,
-    name: &str,
-    running: bool,
-    enabled: bool,
-    errored: bool,
-) {
-    let (marker, color) = if errored {
-        ("[!]", [1.0, 0.55, 0.3, 1.0])
-    } else if running {
-        ("[*]", [0.45, 0.95, 0.45, 1.0])
-    } else if enabled {
-        ("[o]", [0.45, 0.62, 0.80, 1.0])
-    } else {
-        ("[-]", [0.5, 0.5, 0.55, 1.0])
-    };
-    ui.text_colored(color, marker);
-    if ui.is_item_hovered() {
-        ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [-] 未启用 / [!] 出错（编辑器里看日志）");
-    }
-    ui.same_line();
-    if ui
-        .selectable_config(format!("{name}##netscript{id}"))
-        .build()
-    {
-        app.open_script_editor(id);
     }
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
-    let io = ui.io();
-    let mut open = app.show_network;
-    if open {
-        ui.window("Network")
+    let mut net = std::mem::take(&mut app.network_view);
+    let mut genv = std::mem::take(&mut app.generator_view);
+    let mut net_cmds = Vec::new();
+    let mut gen_cmds = Vec::new();
+    net.show(ui, app, &mut genv, &mut net_cmds, &mut gen_cmds);
+    app.network_view = net;
+    app.generator_view = genv;
+    app.apply_network_cmds(net_cmds);
+    app.apply_generator_cmds(gen_cmds);
+}
+
+impl NetworkView {
+    fn show(
+        &mut self,
+        ui: &Ui,
+        app: &App,
+        genv: &mut GeneratorView,
+        cmds: &mut Vec<NetworkCmd>,
+        gen_cmds: &mut Vec<GeneratorCmd>,
+    ) {
+        let io = ui.io();
+        let mut open = self.open;
+        if open {
+            ui.window("Network")
             .opened(&mut open)
             .position(
                 [
@@ -341,30 +450,27 @@ pub fn render(app: &mut App, ui: &Ui) {
                     .as_ref()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                     .unwrap_or_default();
-                if app.profile_names.is_none() {
-                    app.profile_names = Some(Ok(crate::profile::list_profiles(&profile_dir)));
+                if self.profile_names.is_none() {
+                    self.profile_names = Some(Ok(crate::profile::list_profiles(&profile_dir)));
                 }
                 let Some(profile_list) =
-                    app.profile_names.as_ref().and_then(|r| r.as_ref().ok()).cloned()
+                    self.profile_names.as_ref().and_then(|r| r.as_ref().ok()).cloned()
                 else {
                     return;
                 };
                 ui.text_disabled("Profile");
                 if !profile_list.is_empty() {
                     ui.same_line();
-                    let mut pick = app.profile_pick.min(profile_list.len() - 1);
+                    let mut pick = self.profile_pick.min(profile_list.len() - 1);
                     ui.set_next_item_width(140.0);
                     if ui.combo_simple_string("##prof", &mut pick, &profile_list) {
-                        app.profile_pick = pick;
+                        self.profile_pick = pick;
                     }
                     ui.same_line();
                     if ui.button("应用##profapply") {
                         let name =
-                            profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
-                        match crate::profile::apply_profile(app, &profile_dir, &name) {
-                            Ok(s) => app.status = s,
-                            Err(e) => app.status = e,
-                        }
+                            profile_list[self.profile_pick.min(profile_list.len() - 1)].clone();
+                        cmds.push(NetworkCmd::ApplyProfile(name));
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text("按 profiles/*.toml 覆盖角色（all-or-nothing）");
@@ -372,41 +478,26 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.same_line();
                     if ui.button("编辑##profedit") {
                         let name =
-                            profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
+                            profile_list[self.profile_pick.min(profile_list.len() - 1)].clone();
                         let path = profile_dir.join("profiles").join(format!("{name}.toml"));
-                        let opened = std::process::Command::new("cmd")
-                            .args(["/C", "start", ""])
-                            .arg(&path)
-                            .spawn();
-                        app.status = match opened {
-                            Ok(_) => format!("已在系统编辑器打开 {name}.toml"),
-                            Err(e) => format!("打开编辑器失败: {e}"),
-                        };
+                        cmds.push(NetworkCmd::OpenProfileFile { name, path });
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text("用系统默认编辑器打开这个 .toml");
                     }
                     ui.same_line();
                     let name =
-                        profile_list[app.profile_pick.min(profile_list.len() - 1)].clone();
-                    if ui.button(if app.profile_delete_arm {
+                        profile_list[self.profile_pick.min(profile_list.len() - 1)].clone();
+                    if ui.button(if self.profile_delete_arm {
                         "确认删除##profdel"
                     } else {
                         "删除##profdel"
                     }) {
-                        if app.profile_delete_arm {
-                            match crate::profile::delete_profile(&profile_dir, &name) {
-                                Ok(()) => {
-                                    app.status = format!("profile `{name}` 已删除");
-                                    app.profile_names =
-                                        Some(Ok(crate::profile::list_profiles(&profile_dir)));
-                                }
-                                Err(e) => app.status = e,
-                            }
-                            app.profile_delete_arm = false;
+                        if self.profile_delete_arm {
+                            cmds.push(NetworkCmd::DeleteProfile(name));
+                            self.profile_delete_arm = false;
                         } else {
-                            app.profile_delete_arm = true;
-                            app.status = format!("再点一次「删除」确认删掉 `{name}.toml`");
+                            self.profile_delete_arm = true;
                         }
                     }
                     if ui.is_item_hovered() {
@@ -415,29 +506,20 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
                 ui.same_line();
                 ui.set_next_item_width(120.0);
-                ui.input_text("##profnew", &mut app.profile_draft_name)
+                ui.input_text("##profnew", &mut self.profile_draft_name)
                     .hint("新名字")
                     .build();
                 ui.same_line();
                 if ui.button("存当前##profsave") {
-                    match crate::profile::save_profile(app, &profile_dir, &app.profile_draft_name)
-                    {
-                        Ok(s) => {
-                            app.status = s;
-                            app.profile_draft_name.clear();
-                            app.profile_names =
-                                Some(Ok(crate::profile::list_profiles(&profile_dir)));
-                        }
-                        Err(e) => app.status = e,
-                    }
+                    cmds.push(NetworkCmd::SaveProfile(self.profile_draft_name.clone()));
                 }
                 if ui.is_item_hovered() {
                     ui.tooltip_text("把当前角色与硬件连接快照存为新 profile");
                 }
                 let dbc_nodes = collect(app);
                 let total_dbc: usize = dbc_nodes.iter().map(|v| v.len()).sum();
-                if app.net_selected >= total_dbc.max(1) {
-                    app.net_selected = 0;
+                if self.net_selected >= total_dbc.max(1) {
+                    self.net_selected = 0;
                 }
 
                 // 左右分栏：左边树形拓扑，右边所选节点的详情。两栏各自
@@ -457,14 +539,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                     .build(ui, || {
                         let mut flat_base = 0usize;
                         for (ch, infos) in dbc_nodes.iter().enumerate() {
-                            draw_tree_section(app, ui, ch, infos, flat_base);
+                            self.draw_tree_section(ui, app, ch, infos, flat_base, cmds);
                             flat_base += infos.len();
                         }
                         // The FlexRay clusters after the CAN channels: same
                         // topology view, different numbering space on purpose --
                         // `FR{n}` is a cluster index, not a CAN channel.
                         for bus in fr_buses(app) {
-                            draw_flexray_section(app, ui, bus);
+                            self.draw_flexray_section(ui, app, bus);
                         }
                     });
                 ui.same_line();
@@ -473,13 +555,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                 // remaining space), so long content never adds a scrollbar to the
                 // outer window and shifts the topology sections.
                 ui.child_window("node_details").size([0.0, 0.0]).build(ui, || {
-                    if let Some((bus, ecu)) = app.net_fr_sel.clone() {
+                    if let Some((bus, ecu)) = self.net_fr_sel.clone() {
                         ui.text_colored(
                             [0.30, 0.80, 1.00, 1.0],
                             format!("{} / {}  —  FlexRay 发送方", app.fr_bus_label(bus), ecu),
                         );
                         ui.separator();
-                        crate::ui::tx::render_fr_ecu_generator(app, ui, bus, &ecu);
+                        gen_cmds.extend(genv.fr_ecu_generator(ui, app, bus, &ecu));
                         return;
                     }
                     if total_dbc == 0 {
@@ -495,7 +577,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         return;
                     }
                     // Locate the selected DBC node (channel, index).
-                    let mut remaining = app.net_selected;
+                    let mut remaining = self.net_selected;
                     let mut selected: Option<(usize, usize)> = None;
                     for (ch, infos) in dbc_nodes.iter().enumerate() {
                         if remaining < infos.len() {
@@ -531,13 +613,17 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.combo_simple_string(format!("##netrole{ch}"), &mut role_idx, &role_labels)
                     {
                         let role = crate::app::NodeRole::ALL[role_idx];
-                        app.set_node_role(ch as u8, &ni.name, role);
+                        cmds.push(NetworkCmd::SetNodeRole {
+                            bus: ch as u8,
+                            node: ni.name.clone(),
+                            role,
+                        });
                     }
                     ui.separator();
 
                     // 节点生成器：这个节点的条目、添加与响应规则，
                     // 紧接在角色声明之下——节点就是编辑单元。
-                    crate::ui::tx::render_node_generator(app, ui, ch as u8, &ni.name);
+                    genv.node_generator(ui, app, ch as u8, &ni.name, gen_cmds);
                     ui.separator();
 
                     // 脚本编辑入口在节点之下（而非总线）：新建的脚本
@@ -548,15 +634,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.button(format!("+ 脚本节点##netadd{ch}")) {
                         let name = format!("Node {}", app.snap.nodes.len() + 1);
                         let attached = Some((ch as u8, ni.name.clone()));
-                        app.send(crate::bus::BusCommand::AddNode {
+                        cmds.push(NetworkCmd::AddNode {
                             name,
                             channel: ch as u8,
                             attached,
                         });
-                        app.settle();
-                        if let Some(newest) = app.snap.nodes.iter().map(|n| n.id).max() {
-                            app.open_script_editor(newest);
-                        }
                     }
                     ui.same_line();
                     ui.text_disabled("点名字打开脚本编辑器");
@@ -582,7 +664,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             .selectable_config(format!("{dot} {name}##netscript{nid}"))
                             .build()
                         {
-                            app.open_script_editor(nid);
+                            cmds.push(NetworkCmd::OpenScriptEditor(nid));
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text("[*] 运行中 / [o] 已启用待测量 / [-] 未启用");
@@ -596,13 +678,11 @@ pub fn render(app: &mut App, ui: &Ui) {
                     ui.same_line();
                     if ui.button(format!("+ 回放块##netaddblk{ch}")) {
                         let name = format!("Block {}", app.snap.blocks.len() + 1);
-                        app.add_replay_block(
-                            ch as u8,
+                        cmds.push(NetworkCmd::AddReplayBlock {
+                            channel: ch as u8,
                             name,
-                            String::new(),
-                            Some(ni.name.clone()),
-                            Some((ch as u8, ni.name.clone())),
-                        );
+                            node: ni.name.clone(),
+                        });
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text(
@@ -630,7 +710,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         // 启用开关即行首 checkbox；x 删除该块。
                         let mut on = enabled;
                         if ui.checkbox(format!("##blkon{bid}"), &mut on) {
-                            app.set_replay_block_enabled(bid, on);
+                            cmds.push(NetworkCmd::SetReplayBlockEnabled { id: bid, on });
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip_text("启用后测量中按录制间距发送（仅仿真模式）");
@@ -645,13 +725,13 @@ pub fn render(app: &mut App, ui: &Ui) {
                         }
                         ui.same_line();
                         if ui.button(format!("x##netblockrm{bid}")) {
-                            app.remove_replay_block(bid);
-                            app.block_drafts.remove(&bid);
+                            cmds.push(NetworkCmd::RemoveReplayBlock(bid));
+                            self.block_drafts.remove(&bid);
                             continue;
                         }
                         // 日志行（缩进）：路径草稿 + 文件选择，Apply 一并提交。
                         ui.indent();
-                        let mut draft = app
+                        let mut draft = self
                             .block_drafts
                             .entry(bid)
                             .or_insert_with(|| crate::ui::BlockDraft {
@@ -669,7 +749,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                         if ui
                             .input_text(format!("##blpath{bid}"), &mut draft.path)
                             .build()
-                            && let Some(d) = app.block_drafts.get_mut(&bid)
+                            && let Some(d) = self.block_drafts.get_mut(&bid)
                         {
                             d.path = draft.path.clone();
                         }
@@ -679,7 +759,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                                 .set_title("选择回放日志")
                                 .add_filter("日志文件", &["asc", "blf"])
                                 .pick_file()
-                            && let Some(d) = app.block_drafts.get_mut(&bid)
+                            && let Some(d) = self.block_drafts.get_mut(&bid)
                         {
                             d.path = p.to_string_lossy().into_owned();
                             draft.path = d.path.clone();
@@ -695,7 +775,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                             .input_text(format!("##blids{bid}"), &mut draft.ids_text)
                             .hint(BLOCK_IDS_HINT)
                             .build()
-                            && let Some(d) = app.block_drafts.get_mut(&bid)
+                            && let Some(d) = self.block_drafts.get_mut(&bid)
                         {
                             d.ids_text = draft.ids_text.clone();
                         }
@@ -708,10 +788,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                             .map(|b| b.path.clone())
                             .unwrap_or_default();
                         if ui.button(format!("Apply##blapply{bid}"))
-                            && let Some(d) = app.block_drafts.get(&bid)
+                            && let Some(d) = self.block_drafts.get(&bid)
                         {
                             let block = app.snap.blocks.iter().find(|b| b.id == bid);
-                            app.send(crate::bus::BusCommand::SetReplayBlock {
+                            cmds.push(NetworkCmd::SetReplayBlock {
                                 id: bid,
                                 name: name.clone(),
                                 channel: ch as u8,
@@ -760,6 +840,120 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                 });
             });
+        }
+        self.open = open;
     }
-    app.show_network = open;
+}
+
+impl App {
+    fn network_profile_dir(&self) -> std::path::PathBuf {
+        self.project_path
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_default()
+    }
+
+    fn refresh_network_profiles(&mut self) {
+        let dir = self.network_profile_dir();
+        self.network_view.profile_names = Some(Ok(crate::profile::list_profiles(&dir)));
+    }
+
+    pub(crate) fn apply_network_cmds(&mut self, cmds: Vec<NetworkCmd>) {
+        for cmd in cmds {
+            match cmd {
+                NetworkCmd::OpenScriptEditor(id) => self.open_script_editor(id),
+                NetworkCmd::SetNodeRole { bus, node, role } => {
+                    self.set_node_role(bus, &node, role);
+                }
+                NetworkCmd::AddNode {
+                    name,
+                    channel,
+                    attached,
+                } => {
+                    self.send(crate::bus::BusCommand::AddNode {
+                        name,
+                        channel,
+                        attached,
+                    });
+                    self.settle();
+                    if let Some(newest) = self.snap.nodes.iter().map(|n| n.id).max() {
+                        self.open_script_editor(newest);
+                    }
+                }
+                NetworkCmd::AddReplayBlock {
+                    channel,
+                    name,
+                    node,
+                } => {
+                    self.add_replay_block(
+                        channel,
+                        name,
+                        String::new(),
+                        Some(node.clone()),
+                        Some((channel, node)),
+                    );
+                }
+                NetworkCmd::SetReplayBlockEnabled { id, on } => {
+                    self.set_replay_block_enabled(id, on);
+                }
+                NetworkCmd::RemoveReplayBlock(id) => self.remove_replay_block(id),
+                NetworkCmd::SetReplayBlock {
+                    id,
+                    name,
+                    channel,
+                    path,
+                    node_filter,
+                    attached,
+                    ids,
+                } => {
+                    self.send(crate::bus::BusCommand::SetReplayBlock {
+                        id,
+                        name,
+                        channel,
+                        path,
+                        node_filter,
+                        attached,
+                        ids,
+                    });
+                }
+                NetworkCmd::ApplyProfile(name) => {
+                    let dir = self.network_profile_dir();
+                    self.status = match crate::profile::apply_profile(self, &dir, &name) {
+                        Ok(s) => s,
+                        Err(e) => e,
+                    };
+                    self.refresh_network_profiles();
+                }
+                NetworkCmd::OpenProfileFile { name, path } => {
+                    let opened = std::process::Command::new("cmd")
+                        .args(["/C", "start", ""])
+                        .arg(&path)
+                        .spawn();
+                    self.status = match opened {
+                        Ok(_) => format!("已在系统编辑器打开 {name}.toml"),
+                        Err(e) => format!("打开编辑器失败: {e}"),
+                    };
+                }
+                NetworkCmd::DeleteProfile(name) => {
+                    let dir = self.network_profile_dir();
+                    self.status = match crate::profile::delete_profile(&dir, &name) {
+                        Ok(()) => format!("profile `{name}` 已删除"),
+                        Err(e) => e,
+                    };
+                    self.refresh_network_profiles();
+                }
+                NetworkCmd::SaveProfile(name) => {
+                    let dir = self.network_profile_dir();
+                    match crate::profile::save_profile(self, &dir, &name) {
+                        Ok(s) => {
+                            self.status = s;
+                            self.network_view.profile_draft_name.clear();
+                            self.refresh_network_profiles();
+                        }
+                        Err(e) => self.status = e,
+                    }
+                }
+            }
+        }
+    }
 }

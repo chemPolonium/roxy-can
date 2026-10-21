@@ -45,13 +45,19 @@ pub fn render(app: &mut App, ui: &Ui) {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
+    let mut open_picker = false;
     let new_scope = scope_combo(
         app,
         ui,
         &format!("##sscope{i}"),
         app.stats_windows[i].scope,
         PopupTarget::Stats(i),
+        &mut open_picker,
     );
+    if open_picker {
+        app.popup_target = Some(PopupTarget::Stats(i));
+        app.show_id_filter = true;
+    }
     app.stats_windows[i].scope = new_scope;
     ui.same_line();
     if ui.button(format!("Export##sx{i}")) {

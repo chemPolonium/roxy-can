@@ -260,20 +260,22 @@ pub struct App {
     pub(crate) buses_view: crate::ui::buses::BusesView,
     /// The desktop strip's rename popup.
     pub(crate) desktops_view: crate::ui::desktops::DesktopsView,
+    /// The Interactive Generator's drafts and selection state.
+    pub(crate) generator_view: crate::ui::tx::GeneratorView,
+    /// The Network window's selection, profile row and block drafts.
+    pub(crate) network_view: crate::ui::network::NetworkView,
+    /// The Measurement Setup window's open flag.
+    pub(crate) measurement_view: crate::ui::measurement::MeasurementView,
     /// How far an observed period may stray from the declared one, in percent.
     pub spec_tol_pct: u64,
     /// How many declared periods of silence count as a dropped message.
     pub spec_grace: u64,
     pub symbol_search: String,
-    pub show_tx: bool,
-    pub show_network: bool,
-    pub show_measurement: bool,
     pub show_id_filter: bool,
     /// The recording file format: 0 = ASC, 1 = BLF. The toolbar combo
     /// selects this; the recorder picks the backend by extension.
     pub record_format: usize,
     pub id_filter_search: String,
-    pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
     pub focus_title: Option<String>,
     /// The State Tracker row whose state editor is open: window index plus
@@ -294,10 +296,6 @@ pub struct App {
     /// change (project load, Apply) re-seeds the editor; without this
     /// bookkeeping the editor and the model would fight over the text.
     pub(crate) editor_synced: HashMap<u64, String>,
-    /// Text a Replay Blocks editor is typing but has not applied yet,
-    /// keyed by the block's stable id: name, log path, id filter text.
-    /// Session state only, like the node source drafts.
-    pub block_drafts: HashMap<u64, crate::ui::BlockDraft>,
     /// Script-node editors currently open, by node id in open order.
     /// Session state; an id whose node is gone closes its editor.
     pub open_editors: Vec<u64>,
@@ -324,59 +322,6 @@ pub struct App {
     /// replayed log -- which is exactly the case where `FR0`/`FR1` say nothing
     /// -- can still be named. Unnamed 路 fall back to `FR{n}`.
     pub fr_names: std::collections::BTreeMap<u8, String>,
-    /// Profile names from the project's `profiles/` directory, listed
-    /// once on first need (`Err` = driver/unavailable? no — parse or IO
-    /// failure of the directory scan). Session cache; refresh via
-    /// [`App::refresh_profiles`].
-    pub profile_names: Option<Result<Vec<String>, String>>,
-    /// The selected index in the Network-window profile dropdown.
-    pub profile_pick: usize,
-    /// The new-profile name being typed in the Network Profile row;
-    /// committed by "存当前" into `profiles/<名>.toml`.
-    pub profile_draft_name: String,
-    /// Delete confirmation for the Profile row: the first click arms it,
-    /// the second click within the session deletes the file.
-    pub profile_delete_arm: bool,
-    pub net_selected: usize,
-    /// The FlexRay ECU the Network detail pane is showing: `(cluster index,
-    /// ECU name)`. Kept apart from `net_selected` on purpose -- a DBC node index
-    /// and a cluster's ECU are different things in different numbering spaces,
-    /// and only one of them owns the detail pane at a time.
-    pub net_fr_sel: Option<(u8, String)>,
-    pub tx_pick: usize,
-    /// Which slot the FlexRay add line's combo is pointing at, per 路. Session
-    /// state, like `tx_pick`.
-    pub fr_tx_pick: std::collections::BTreeMap<u8, usize>,
-    /// The generator overview's add-by-id draft: the bus row being typed
-    /// in plus its hex text, committed to the model on Add. Session state.
-    pub gen_add_buf: Option<(u8, String)>,
-    /// Generator row whose value-source parameters the modal is editing:
-    /// index into `tx_list` plus the DBC signal name.
-    pub src_edit: Option<(GenRow, String)>,
-    /// Edit buffer for the step sequence, kept on `App` so the text box keeps
-    /// its caret and partial input across frames.
-    pub src_seq_buf: String,
-    /// The value-source dialog's in-progress parameters. Applied to the row only
-    /// when the dialog confirms, so typing 8000 into `hi` cannot make the
-    /// running waveform pass through 8 and 80 first.
-    pub src_draft: Option<crate::sim::ValueSrc>,
-    /// A generator slider's value while it is being dragged or typed; the model
-    /// waits for the edit to end. See [`crate::ui::Draft`].
-    pub num_draft: crate::ui::Draft,
-    /// Generator row whose send period the cycle dialog is drafting. The value
-    /// stays a draft until the dialog confirms it: as an inline number box it
-    /// applied every keystroke, so dialing in 100 sent at 1 ms first.
-    pub tx_cycle_edit: Option<GenRow>,
-    /// Draft period in whole milliseconds for that row.
-    pub tx_cycle_buf: String,
-    /// The generator's editable data box while it has focus: row index plus
-    /// the text typed so far. The live buffer is frontend draft state -- the
-    /// bus only sees the parsed payload once the edit commits (via
-    /// `SetEntryHex`).
-    pub tx_data_edit: Option<(usize, String)>,
-    /// The same draft box for a FlexRay row's payload, kept apart so a CAN row
-    /// and a FlexRay row with the same index never read each other's text.
-    pub fr_data_edit: Option<(usize, String)>,
     /// The record file's stem as the input box shows it -- frontend
     /// draft state; the recorder receives a copy via `SetRecordPath`
     /// when recording arms.
@@ -531,15 +476,14 @@ impl App {
             sysvars_view: Default::default(),
             buses_view: Default::default(),
             desktops_view: Default::default(),
+            generator_view: Default::default(),
+            network_view: Default::default(),
+            measurement_view: Default::default(),
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
             symbol_search: String::new(),
-            show_tx: true,
-            show_network: true,
-            show_measurement: true,
             show_id_filter: false,
             id_filter_search: String::new(),
-            gen_search: String::new(),
             popup_target: None,
             focus_title: None,
             state_rule_edit: None,
@@ -547,26 +491,8 @@ impl App {
             editors: HashMap::new(),
             pending_editors: Vec::new(),
             editor_synced: HashMap::new(),
-            block_drafts: HashMap::new(),
             open_editors: Vec::new(),
             editor_facts: HashMap::new(),
-            profile_names: None,
-            profile_pick: 0,
-            profile_draft_name: String::new(),
-            profile_delete_arm: false,
-            net_selected: 0,
-            net_fr_sel: None,
-            tx_pick: 0,
-            fr_tx_pick: Default::default(),
-            gen_add_buf: None,
-            src_edit: None,
-            src_seq_buf: String::new(),
-            src_draft: None,
-            num_draft: crate::ui::Draft::default(),
-            tx_cycle_edit: None,
-            tx_cycle_buf: String::new(),
-            tx_data_edit: None,
-            fr_data_edit: None,
             // The record draft: a file name, shown as-is in the toolbar
             // input. The directory is implicit (the open project's
             // Record/ folder, resolved when recording arms); the

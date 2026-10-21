@@ -1,7 +1,41 @@
-use crate::app::{App, PopupTarget};
+use crate::app::{App, PopupTarget, SigScope};
 use crate::ui::idfilter::{scope_combo, target_name};
 use crate::ui::siglist::ListKind;
 use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui};
+
+/// The Measurement Setup window's own state: open flag only. Every window it
+/// lists belongs to `App`; edits to them are commands.
+pub struct MeasurementView {
+    pub open: bool,
+}
+
+impl Default for MeasurementView {
+    fn default() -> Self {
+        Self { open: true }
+    }
+}
+
+pub enum MeasurementCmd {
+    NewTrace,
+    NewMessages,
+    NewStats,
+    NewGraphics,
+    NewData,
+    NewState,
+    SetTraceLimit(usize),
+    OpenPicker(PopupTarget),
+    Focus(PopupTarget),
+    Remove(PopupTarget),
+    Export(PopupTarget),
+    SetName {
+        target: PopupTarget,
+        name: String,
+    },
+    SetScope {
+        target: PopupTarget,
+        scope: SigScope,
+    },
+}
 
 /// "Go to" button: opens the window if hidden and always brings it to the
 /// front. There is no close action — windows close via their own title
@@ -15,44 +49,55 @@ fn goto_button(ui: &Ui, id: &str) -> bool {
 /// A flat list rather than a node graph: there is no measurement topology to
 /// wire here, only a table of what exists.
 pub fn render(app: &mut App, ui: &Ui) {
-    let io = ui.io();
-    let mut open = app.show_measurement;
-    if open {
-        ui.window("Measurement Setup")
-            .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.04, io.display_size()[1] * 0.30],
-                Condition::FirstUseEver,
-            )
-            .size([620.0, 320.0], Condition::FirstUseEver)
-            .build(|| content(app, ui));
-    }
-    app.show_measurement = open;
+    let mut view = std::mem::take(&mut app.measurement_view);
+    let cmds = view.show(ui, app);
+    app.measurement_view = view;
+    app.apply_measurement_cmds(cmds);
 }
 
-fn content(app: &mut App, ui: &Ui) {
+impl MeasurementView {
+    pub fn show(&mut self, ui: &Ui, app: &App) -> Vec<MeasurementCmd> {
+        let mut cmds = Vec::new();
+        let io = ui.io();
+        let mut open = self.open;
+        if open {
+            ui.window("Measurement Setup")
+                .opened(&mut open)
+                .position(
+                    [io.display_size()[0] * 0.04, io.display_size()[1] * 0.30],
+                    Condition::FirstUseEver,
+                )
+                .size([620.0, 320.0], Condition::FirstUseEver)
+                .build(|| content(app, ui, &mut cmds));
+        }
+        self.open = open;
+        cmds
+    }
+}
+
+fn content(app: &App, ui: &Ui, cmds: &mut Vec<MeasurementCmd>) {
     if ui.button("+ Trace") {
-        app.new_trace_window();
+        cmds.push(MeasurementCmd::NewTrace);
     }
     ui.same_line();
     if ui.button("+ Messages") {
-        app.new_msg_window();
+        cmds.push(MeasurementCmd::NewMessages);
     }
     ui.same_line();
     if ui.button("+ Statistics") {
-        app.new_stats_window();
+        cmds.push(MeasurementCmd::NewStats);
     }
     ui.same_line();
     if ui.button("+ Graphics") {
-        app.new_graphics_window();
+        cmds.push(MeasurementCmd::NewGraphics);
     }
     ui.same_line();
     if ui.button("+ Data") {
-        app.new_data_window();
+        cmds.push(MeasurementCmd::NewData);
     }
     ui.same_line();
     if ui.button("+ State Tracker") {
-        app.new_state_window();
+        cmds.push(MeasurementCmd::NewState);
     }
     ui.same_line();
     // The trace ring's retention is a global capacity, not a window
@@ -65,9 +110,7 @@ fn content(app: &mut App, ui: &Ui) {
         .position(|&c| c == app.trace_limit)
         .unwrap_or(0);
     if ui.combo_simple_string("##tracecap", &mut cap_idx, &TRACE_LABELS) {
-        let cap = TRACE_CAPS[cap_idx];
-        app.trace_limit = cap;
-        app.set_trace_limit(cap);
+        cmds.push(MeasurementCmd::SetTraceLimit(TRACE_CAPS[cap_idx]));
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("Trace 容量（帧数）：超出后最旧帧被裁掉，Trace 窗口会提示");
@@ -81,97 +124,307 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::NO_BORDERS_IN_BODY
         | TableFlags::SCROLL_Y;
     let opts = TableOptions::from(flags).sizing_policy(TableSizingPolicy::StretchProp);
-    let mut rm_trace: Option<usize> = None;
-    let mut rm_msgs: Option<usize> = None;
-    let mut rm_stats: Option<usize> = None;
-    let mut rm_graphics: Option<usize> = None;
-    let mut rm_data: Option<usize> = None;
-    let mut rm_state: Option<usize> = None;
-    {
-        let Some(_table) = ui.begin_table_with_flags("meas_table", 6, opts) else {
-            return;
-        };
-        // default-size "->" button
-        ui.table_setup_column_fixed_width("Open", TableColumnFlags::NONE, 32.0);
-        // longest type label is "State Tracker"
-        ui.table_setup_column_fixed_width("Type", TableColumnFlags::NONE, 96.0);
-        ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
-        ui.table_setup_column_fixed_width("Filter", TableColumnFlags::NONE, 160.0);
-        ui.table_setup_column_fixed_width("Save", TableColumnFlags::NONE, 44.0);
-        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
-        ui.table_headers_row();
+    let Some(_table) = ui.begin_table_with_flags("meas_table", 6, opts) else {
+        return;
+    };
+    // default-size "->" button
+    ui.table_setup_column_fixed_width("Open", TableColumnFlags::NONE, 32.0);
+    // longest type label is "State Tracker"
+    ui.table_setup_column_fixed_width("Type", TableColumnFlags::NONE, 96.0);
+    ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
+    ui.table_setup_column_fixed_width("Filter", TableColumnFlags::NONE, 160.0);
+    ui.table_setup_column_fixed_width("Save", TableColumnFlags::NONE, 44.0);
+    ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
+    ui.table_headers_row();
 
-        let n = app.trace_windows.len();
-        for i in 0..n {
-            trace_row(app, ui, i, &mut rm_trace);
-        }
-        let n = app.msg_windows.len();
-        for i in 0..n {
-            messages_row(app, ui, i, &mut rm_msgs);
-        }
-        let n = app.stats_windows.len();
-        for i in 0..n {
-            stats_row(app, ui, i, &mut rm_stats);
-        }
-        for i in 0..app.graphics.len() {
-            graphics_row(app, ui, i, &mut rm_graphics);
-        }
-        for i in 0..app.data_windows.len() {
-            data_row(app, ui, i, &mut rm_data);
-        }
-        for i in 0..app.state_trackers.len() {
-            state_row(app, ui, i, &mut rm_state);
-        }
+    for i in 0..app.trace_windows.len() {
+        trace_row(app, ui, i, cmds);
     }
+    for i in 0..app.msg_windows.len() {
+        messages_row(app, ui, i, cmds);
+    }
+    for i in 0..app.stats_windows.len() {
+        stats_row(app, ui, i, cmds);
+    }
+    for i in 0..app.graphics.len() {
+        graphics_row(app, ui, i, cmds);
+    }
+    for i in 0..app.data_windows.len() {
+        data_row(app, ui, i, cmds);
+    }
+    for i in 0..app.state_trackers.len() {
+        state_row(app, ui, i, cmds);
+    }
+}
 
-    if let Some(i) = rm_trace {
-        app.trace_windows.remove(i);
-        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 0));
+fn row_open(ui: &Ui, target: PopupTarget, id: &str, cmds: &mut Vec<MeasurementCmd>) {
+    if goto_button(ui, id) {
+        cmds.push(MeasurementCmd::Focus(target));
     }
-    if let Some(i) = rm_msgs {
-        app.msg_windows.remove(i);
-        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 1));
+}
+
+fn row_name(app: &App, ui: &Ui, target: PopupTarget, id: String, cmds: &mut Vec<MeasurementCmd>) {
+    let mut name = win_name(app, target).to_string();
+    ui.set_next_item_width(-1.0);
+    if ui.input_text(id, &mut name).build() {
+        cmds.push(MeasurementCmd::SetName { target, name });
     }
-    if let Some(i) = rm_stats {
-        app.stats_windows.remove(i);
-        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 2));
+}
+
+fn row_scope(app: &App, ui: &Ui, target: PopupTarget, id: String, cmds: &mut Vec<MeasurementCmd>) {
+    let mut open_picker = false;
+    let new_scope = scope_combo(
+        app,
+        ui,
+        &id,
+        win_scope(app, target),
+        target,
+        &mut open_picker,
+    );
+    if open_picker {
+        cmds.push(MeasurementCmd::OpenPicker(target));
     }
-    if let Some(i) = rm_graphics {
-        let keys: Vec<_> = app.graphics[i]
-            .signals
-            .iter()
-            .map(|s| s.key.clone())
-            .collect();
-        app.graphics.remove(i);
-        for k in keys {
-            app.prune_signal(&k);
+    if new_scope != win_scope(app, target) {
+        cmds.push(MeasurementCmd::SetScope {
+            target,
+            scope: new_scope,
+        });
+    }
+}
+
+fn trace_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    row_open(ui, PopupTarget::Trace(i), &format!("t{i}"), cmds);
+    ui.table_next_column();
+    ui.text("Trace");
+    ui.table_next_column();
+    row_name(app, ui, PopupTarget::Trace(i), format!("##name_t{i}"), cmds);
+    ui.table_next_column();
+    row_scope(
+        app,
+        ui,
+        PopupTarget::Trace(i),
+        format!("##mscope_t{i}"),
+        cmds,
+    );
+    ui.table_next_column();
+    if ui.button(format!("ASC##save_t{i}")) {
+        cmds.push(MeasurementCmd::Export(PopupTarget::Trace(i)));
+    }
+    ui.table_next_column();
+    if ui.button(format!("x##t{i}")) {
+        cmds.push(MeasurementCmd::Remove(PopupTarget::Trace(i)));
+    }
+}
+
+fn messages_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    row_open(ui, PopupTarget::Messages(i), &format!("m{i}"), cmds);
+    ui.table_next_column();
+    ui.text("Messages");
+    ui.table_next_column();
+    row_name(
+        app,
+        ui,
+        PopupTarget::Messages(i),
+        format!("##name_m{i}"),
+        cmds,
+    );
+    ui.table_next_column();
+    row_scope(
+        app,
+        ui,
+        PopupTarget::Messages(i),
+        format!("##mscope_m{i}"),
+        cmds,
+    );
+    ui.table_next_column();
+    if ui.button(format!("CSV##save_m{i}")) {
+        cmds.push(MeasurementCmd::Export(PopupTarget::Messages(i)));
+    }
+    ui.table_next_column();
+    if ui.button(format!("x##m{i}")) {
+        cmds.push(MeasurementCmd::Remove(PopupTarget::Messages(i)));
+    }
+}
+
+fn stats_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    row_open(ui, PopupTarget::Stats(i), &format!("s{i}"), cmds);
+    ui.table_next_column();
+    ui.text("Statistics");
+    ui.table_next_column();
+    row_name(app, ui, PopupTarget::Stats(i), format!("##name_s{i}"), cmds);
+    ui.table_next_column();
+    row_scope(
+        app,
+        ui,
+        PopupTarget::Stats(i),
+        format!("##mscope_s{i}"),
+        cmds,
+    );
+    ui.table_next_column();
+    if ui.button(format!("CSV##save_s{i}")) {
+        cmds.push(MeasurementCmd::Export(PopupTarget::Stats(i)));
+    }
+    ui.table_next_column();
+    if ui.button(format!("x##s{i}")) {
+        cmds.push(MeasurementCmd::Remove(PopupTarget::Stats(i)));
+    }
+}
+
+/// Filter cell of a Graphics/Data row: a "…" button opening the Signal
+/// Selection popup and the visible/total signal count.
+fn signal_cell(app: &App, ui: &Ui, kind: ListKind, cmds: &mut Vec<MeasurementCmd>) {
+    let (target, prefix, i, vis, total) = match kind {
+        ListKind::Graphics(i) => {
+            let w = &app.graphics[i];
+            (
+                PopupTarget::Graphics(i),
+                "g",
+                i,
+                w.signals.iter().filter(|s| s.visible).count(),
+                w.signals.len(),
+            )
         }
-        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 3));
-    }
-    if let Some(i) = rm_data {
-        let keys: Vec<_> = app.data_windows[i]
-            .signals
-            .iter()
-            .map(|s| s.key.clone())
-            .collect();
-        app.data_windows.remove(i);
-        for k in keys {
-            app.prune_signal(&k);
+        ListKind::Data(i) => {
+            let w = &app.data_windows[i];
+            (
+                PopupTarget::Data(i),
+                "d",
+                i,
+                w.signals.iter().filter(|s| s.visible).count(),
+                w.signals.len(),
+            )
         }
-        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 4));
-    }
-    if let Some(i) = rm_state {
-        let keys: Vec<_> = app.state_trackers[i]
-            .signals
-            .iter()
-            .map(|s| s.key.clone())
-            .collect();
-        app.state_trackers.remove(i);
-        for k in keys {
-            app.prune_signal(&k);
+        ListKind::State(i) => {
+            let w = &app.state_trackers[i];
+            (
+                PopupTarget::State(i),
+                "st",
+                i,
+                w.signals.iter().filter(|s| s.visible).count(),
+                w.signals.len(),
+            )
         }
-        app.popup_target = app.popup_target.and_then(|t| popup_after_remove(t, i, 5));
+    };
+    if ui.button(format!("…##selsig{prefix}{i}")) {
+        cmds.push(MeasurementCmd::OpenPicker(target));
     }
+    ui.same_line();
+    ui.text(format!("{vis}/{total}"));
+}
+
+fn graphics_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    row_open(ui, PopupTarget::Graphics(i), &format!("g{i}"), cmds);
+    ui.table_next_column();
+    ui.text("Graphics");
+    ui.table_next_column();
+    row_name(
+        app,
+        ui,
+        PopupTarget::Graphics(i),
+        format!("##name_g{i}"),
+        cmds,
+    );
+    ui.table_next_column();
+    signal_cell(app, ui, ListKind::Graphics(i), cmds);
+    ui.table_next_column();
+    if ui.button(format!("CSV##save_g{i}")) {
+        cmds.push(MeasurementCmd::Export(PopupTarget::Graphics(i)));
+    }
+    ui.table_next_column();
+    if ui.button(format!("x##g{i}")) {
+        cmds.push(MeasurementCmd::Remove(PopupTarget::Graphics(i)));
+    }
+}
+
+fn data_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    row_open(ui, PopupTarget::Data(i), &format!("d{i}"), cmds);
+    ui.table_next_column();
+    ui.text("Data");
+    ui.table_next_column();
+    row_name(app, ui, PopupTarget::Data(i), format!("##name_d{i}"), cmds);
+    ui.table_next_column();
+    signal_cell(app, ui, ListKind::Data(i), cmds);
+    ui.table_next_column();
+    if ui.button(format!("CSV##save_d{i}")) {
+        cmds.push(MeasurementCmd::Export(PopupTarget::Data(i)));
+    }
+    ui.table_next_column();
+    if ui.button(format!("x##d{i}")) {
+        cmds.push(MeasurementCmd::Remove(PopupTarget::Data(i)));
+    }
+}
+
+/// The State Tracker row mirrors Data: signal-level selection, no CSV
+/// export yet (the band view has nothing tabular to write).
+fn state_row(app: &App, ui: &Ui, i: usize, cmds: &mut Vec<MeasurementCmd>) {
+    ui.table_next_row();
+    if !ui.table_next_column() {
+        return;
+    }
+    row_open(ui, PopupTarget::State(i), &format!("st{i}"), cmds);
+    ui.table_next_column();
+    ui.text("State Tracker");
+    ui.table_next_column();
+    row_name(
+        app,
+        ui,
+        PopupTarget::State(i),
+        format!("##name_st{i}"),
+        cmds,
+    );
+    ui.table_next_column();
+    signal_cell(app, ui, ListKind::State(i), cmds);
+    ui.table_next_column();
+    ui.table_next_column();
+    if ui.button(format!("x##st{i}")) {
+        cmds.push(MeasurementCmd::Remove(PopupTarget::State(i)));
+    }
+}
+
+fn win_name(app: &App, t: PopupTarget) -> &str {
+    match t {
+        PopupTarget::Trace(i) => app.trace_windows.get(i).map(|w| w.name.as_str()),
+        PopupTarget::Messages(i) => app.msg_windows.get(i).map(|w| w.name.as_str()),
+        PopupTarget::Stats(i) => app.stats_windows.get(i).map(|w| w.name.as_str()),
+        PopupTarget::Graphics(i) => app.graphics.get(i).map(|w| w.name.as_str()),
+        PopupTarget::Data(i) => app.data_windows.get(i).map(|w| w.name.as_str()),
+        PopupTarget::State(i) => app.state_trackers.get(i).map(|w| w.name.as_str()),
+        PopupTarget::Monitor => None,
+    }
+    .unwrap_or("")
+}
+
+fn win_scope(app: &App, t: PopupTarget) -> SigScope {
+    match t {
+        PopupTarget::Trace(i) => app.trace_windows.get(i).map(|w| w.scope),
+        PopupTarget::Messages(i) => app.msg_windows.get(i).map(|w| w.scope),
+        PopupTarget::Stats(i) => app.stats_windows.get(i).map(|w| w.scope),
+        PopupTarget::Graphics(_) | PopupTarget::Data(_) | PopupTarget::State(_) => {
+            Some(SigScope::All)
+        }
+        PopupTarget::Monitor => Some(SigScope::All),
+    }
+    .unwrap_or(SigScope::All)
 }
 
 /// Keeps the Filter Selection popup pointing at the right window after an
@@ -213,228 +466,175 @@ fn popup_after_remove(t: PopupTarget, removed: usize, which: u8) -> Option<Popup
     }
 }
 
-fn trace_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
-    ui.table_next_row();
-    if !ui.table_next_column() {
-        return;
-    }
-    if goto_button(ui, &format!("t{i}")) {
-        app.trace_windows[i].opened = true;
-        app.focus_title = Some(target_name(app, PopupTarget::Trace(i)));
-    }
-    ui.table_next_column();
-    ui.text("Trace");
-    ui.table_next_column();
-    ui.set_next_item_width(-1.0);
-    ui.input_text(format!("##name_t{i}"), &mut app.trace_windows[i].name)
-        .build();
-    ui.table_next_column();
-    let s = scope_combo(
-        app,
-        ui,
-        &format!("##mscope_t{i}"),
-        app.trace_windows[i].scope,
-        PopupTarget::Trace(i),
-    );
-    app.trace_windows[i].scope = s;
-    ui.table_next_column();
-    if ui.button(format!("ASC##save_t{i}")) {
-        app.export_trace_dialog(i);
-    }
-    ui.table_next_column();
-    if ui.button(format!("x##t{i}")) {
-        *rm = Some(i);
-    }
-}
-
-fn messages_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
-    ui.table_next_row();
-    if !ui.table_next_column() {
-        return;
-    }
-    if goto_button(ui, &format!("m{i}")) {
-        app.msg_windows[i].opened = true;
-        app.focus_title = Some(target_name(app, PopupTarget::Messages(i)));
-    }
-    ui.table_next_column();
-    ui.text("Messages");
-    ui.table_next_column();
-    ui.set_next_item_width(-1.0);
-    ui.input_text(format!("##name_m{i}"), &mut app.msg_windows[i].name)
-        .build();
-    ui.table_next_column();
-    let s = scope_combo(
-        app,
-        ui,
-        &format!("##mscope_m{i}"),
-        app.msg_windows[i].scope,
-        PopupTarget::Messages(i),
-    );
-    app.msg_windows[i].scope = s;
-    ui.table_next_column();
-    if ui.button(format!("CSV##save_m{i}")) {
-        app.export_messages_dialog(i);
-    }
-    ui.table_next_column();
-    if ui.button(format!("x##m{i}")) {
-        *rm = Some(i);
-    }
-}
-
-fn stats_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
-    ui.table_next_row();
-    if !ui.table_next_column() {
-        return;
-    }
-    if goto_button(ui, &format!("s{i}")) {
-        app.stats_windows[i].opened = true;
-        app.focus_title = Some(target_name(app, PopupTarget::Stats(i)));
-    }
-    ui.table_next_column();
-    ui.text("Statistics");
-    ui.table_next_column();
-    ui.set_next_item_width(-1.0);
-    ui.input_text(format!("##name_s{i}"), &mut app.stats_windows[i].name)
-        .build();
-    ui.table_next_column();
-    let s = scope_combo(
-        app,
-        ui,
-        &format!("##mscope_s{i}"),
-        app.stats_windows[i].scope,
-        PopupTarget::Stats(i),
-    );
-    app.stats_windows[i].scope = s;
-    ui.table_next_column();
-    if ui.button(format!("CSV##save_s{i}")) {
-        app.export_stats_dialog(i);
-    }
-    ui.table_next_column();
-    if ui.button(format!("x##s{i}")) {
-        *rm = Some(i);
-    }
-}
-
-/// Filter cell of a Graphics/Data row: a "…" button opening the Signal
-/// Selection popup and the visible/total signal count.
-fn signal_cell(app: &mut App, ui: &Ui, kind: ListKind) {
-    let (i, prefix, vis, total) = match kind {
-        ListKind::Graphics(i) => {
-            let w = &app.graphics[i];
-            (
-                i,
-                "g",
-                w.signals.iter().filter(|s| s.visible).count(),
-                w.signals.len(),
-            )
+impl App {
+    fn remove_observer(&mut self, target: PopupTarget) {
+        match target {
+            PopupTarget::Trace(i) if i < self.trace_windows.len() => {
+                self.trace_windows.remove(i);
+                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 0));
+            }
+            PopupTarget::Messages(i) if i < self.msg_windows.len() => {
+                self.msg_windows.remove(i);
+                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 1));
+            }
+            PopupTarget::Stats(i) if i < self.stats_windows.len() => {
+                self.stats_windows.remove(i);
+                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 2));
+            }
+            PopupTarget::Graphics(i) if i < self.graphics.len() => {
+                let keys: Vec<_> = self.graphics[i]
+                    .signals
+                    .iter()
+                    .map(|s| s.key.clone())
+                    .collect();
+                self.graphics.remove(i);
+                for k in keys {
+                    self.prune_signal(&k);
+                }
+                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 3));
+            }
+            PopupTarget::Data(i) if i < self.data_windows.len() => {
+                let keys: Vec<_> = self.data_windows[i]
+                    .signals
+                    .iter()
+                    .map(|s| s.key.clone())
+                    .collect();
+                self.data_windows.remove(i);
+                for k in keys {
+                    self.prune_signal(&k);
+                }
+                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 4));
+            }
+            PopupTarget::State(i) if i < self.state_trackers.len() => {
+                let keys: Vec<_> = self.state_trackers[i]
+                    .signals
+                    .iter()
+                    .map(|s| s.key.clone())
+                    .collect();
+                self.state_trackers.remove(i);
+                for k in keys {
+                    self.prune_signal(&k);
+                }
+                self.popup_target = self.popup_target.and_then(|t| popup_after_remove(t, i, 5));
+            }
+            _ => {}
         }
-        ListKind::Data(i) => {
-            let w = &app.data_windows[i];
-            (
-                i,
-                "d",
-                w.signals.iter().filter(|s| s.visible).count(),
-                w.signals.len(),
-            )
+    }
+
+    pub(crate) fn apply_measurement_cmds(&mut self, cmds: Vec<MeasurementCmd>) {
+        for cmd in cmds {
+            match cmd {
+                MeasurementCmd::NewTrace => self.new_trace_window(),
+                MeasurementCmd::NewMessages => self.new_msg_window(),
+                MeasurementCmd::NewStats => self.new_stats_window(),
+                MeasurementCmd::NewGraphics => self.new_graphics_window(),
+                MeasurementCmd::NewData => self.new_data_window(),
+                MeasurementCmd::NewState => self.new_state_window(),
+                MeasurementCmd::SetTraceLimit(cap) => {
+                    self.trace_limit = cap;
+                    self.set_trace_limit(cap);
+                }
+                MeasurementCmd::OpenPicker(target) => {
+                    self.popup_target = Some(target);
+                    self.show_id_filter = true;
+                }
+                MeasurementCmd::Focus(target) => {
+                    match target {
+                        PopupTarget::Trace(i) => {
+                            if let Some(w) = self.trace_windows.get_mut(i) {
+                                w.opened = true;
+                            }
+                        }
+                        PopupTarget::Messages(i) => {
+                            if let Some(w) = self.msg_windows.get_mut(i) {
+                                w.opened = true;
+                            }
+                        }
+                        PopupTarget::Stats(i) => {
+                            if let Some(w) = self.stats_windows.get_mut(i) {
+                                w.opened = true;
+                            }
+                        }
+                        PopupTarget::Graphics(i) => {
+                            if let Some(w) = self.graphics.get_mut(i) {
+                                w.opened = true;
+                            }
+                        }
+                        PopupTarget::Data(i) => {
+                            if let Some(w) = self.data_windows.get_mut(i) {
+                                w.opened = true;
+                            }
+                        }
+                        PopupTarget::State(i) => {
+                            if let Some(w) = self.state_trackers.get_mut(i) {
+                                w.opened = true;
+                            }
+                        }
+                        PopupTarget::Monitor => self.monitor_view.open = true,
+                    }
+                    self.focus_title = Some(target_name(self, target));
+                }
+                MeasurementCmd::Remove(target) => self.remove_observer(target),
+                MeasurementCmd::Export(target) => match target {
+                    PopupTarget::Trace(i) => self.export_trace_dialog(i),
+                    PopupTarget::Messages(i) => self.export_messages_dialog(i),
+                    PopupTarget::Stats(i) => self.export_stats_dialog(i),
+                    PopupTarget::Graphics(i) => self.export_graphics_dialog(i),
+                    PopupTarget::Data(i) => self.export_data_dialog(i),
+                    PopupTarget::State(_) | PopupTarget::Monitor => {}
+                },
+                MeasurementCmd::SetName { target, name } => match target {
+                    PopupTarget::Trace(i) => {
+                        if let Some(w) = self.trace_windows.get_mut(i) {
+                            w.name = name;
+                        }
+                    }
+                    PopupTarget::Messages(i) => {
+                        if let Some(w) = self.msg_windows.get_mut(i) {
+                            w.name = name;
+                        }
+                    }
+                    PopupTarget::Stats(i) => {
+                        if let Some(w) = self.stats_windows.get_mut(i) {
+                            w.name = name;
+                        }
+                    }
+                    PopupTarget::Graphics(i) => {
+                        if let Some(w) = self.graphics.get_mut(i) {
+                            w.name = name;
+                        }
+                    }
+                    PopupTarget::Data(i) => {
+                        if let Some(w) = self.data_windows.get_mut(i) {
+                            w.name = name;
+                        }
+                    }
+                    PopupTarget::State(i) => {
+                        if let Some(w) = self.state_trackers.get_mut(i) {
+                            w.name = name;
+                        }
+                    }
+                    PopupTarget::Monitor => {}
+                },
+                MeasurementCmd::SetScope { target, scope } => match target {
+                    PopupTarget::Trace(i) => {
+                        if let Some(w) = self.trace_windows.get_mut(i) {
+                            w.scope = scope;
+                        }
+                    }
+                    PopupTarget::Messages(i) => {
+                        if let Some(w) = self.msg_windows.get_mut(i) {
+                            w.scope = scope;
+                        }
+                    }
+                    PopupTarget::Stats(i) => {
+                        if let Some(w) = self.stats_windows.get_mut(i) {
+                            w.scope = scope;
+                        }
+                    }
+                    _ => {}
+                },
+            }
         }
-        ListKind::State(i) => {
-            let w = &app.state_trackers[i];
-            (
-                i,
-                "st",
-                w.signals.iter().filter(|s| s.visible).count(),
-                w.signals.len(),
-            )
-        }
-    };
-    if ui.button(format!("…##selsig{prefix}{i}")) {
-        app.popup_target = Some(match kind {
-            ListKind::Graphics(i) => PopupTarget::Graphics(i),
-            ListKind::Data(i) => PopupTarget::Data(i),
-            ListKind::State(i) => PopupTarget::State(i),
-        });
-        app.show_id_filter = true;
-    }
-    ui.same_line();
-    ui.text(format!("{vis}/{total}"));
-}
-
-fn graphics_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
-    ui.table_next_row();
-    if !ui.table_next_column() {
-        return;
-    }
-    if goto_button(ui, &format!("g{i}")) {
-        app.graphics[i].opened = true;
-        app.focus_title = Some(target_name(app, PopupTarget::Graphics(i)));
-    }
-    ui.table_next_column();
-    ui.text("Graphics");
-    ui.table_next_column();
-    ui.set_next_item_width(-1.0);
-    ui.input_text(format!("##name_g{i}"), &mut app.graphics[i].name)
-        .build();
-    ui.table_next_column();
-    signal_cell(app, ui, ListKind::Graphics(i));
-    ui.table_next_column();
-    if ui.button(format!("CSV##save_g{i}")) {
-        app.export_graphics_dialog(i);
-    }
-    ui.table_next_column();
-    if ui.button(format!("x##g{i}")) {
-        *rm = Some(i);
-    }
-}
-
-fn data_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
-    ui.table_next_row();
-    if !ui.table_next_column() {
-        return;
-    }
-    if goto_button(ui, &format!("d{i}")) {
-        app.data_windows[i].opened = true;
-        app.focus_title = Some(target_name(app, PopupTarget::Data(i)));
-    }
-    ui.table_next_column();
-    ui.text("Data");
-    ui.table_next_column();
-    ui.set_next_item_width(-1.0);
-    ui.input_text(format!("##name_d{i}"), &mut app.data_windows[i].name)
-        .build();
-    ui.table_next_column();
-    signal_cell(app, ui, ListKind::Data(i));
-    ui.table_next_column();
-    if ui.button(format!("CSV##save_d{i}")) {
-        app.export_data_dialog(i);
-    }
-    ui.table_next_column();
-    if ui.button(format!("x##d{i}")) {
-        *rm = Some(i);
-    }
-}
-
-/// The State Tracker row mirrors Data: signal-level selection, no CSV
-/// export yet (the band view has nothing tabular to write).
-fn state_row(app: &mut App, ui: &Ui, i: usize, rm: &mut Option<usize>) {
-    ui.table_next_row();
-    if !ui.table_next_column() {
-        return;
-    }
-    if goto_button(ui, &format!("st{i}")) {
-        app.state_trackers[i].opened = true;
-        app.focus_title = Some(target_name(app, PopupTarget::State(i)));
-    }
-    ui.table_next_column();
-    ui.text("State Tracker");
-    ui.table_next_column();
-    ui.set_next_item_width(-1.0);
-    ui.input_text(format!("##name_st{i}"), &mut app.state_trackers[i].name)
-        .build();
-    ui.table_next_column();
-    signal_cell(app, ui, ListKind::State(i));
-    ui.table_next_column();
-    ui.table_next_column();
-    if ui.button(format!("x##st{i}")) {
-        *rm = Some(i);
     }
 }

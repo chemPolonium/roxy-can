@@ -456,10 +456,10 @@ fn every_window_draws_without_panicking() {
     app.buses_view.open = true;
     app.triggers_view.open = true;
     app.busstats_view.open = true;
-    app.show_tx = true;
-    app.show_network = true;
+    app.generator_view.open = true;
+    app.network_view.open = true;
     app.spec_view.open = true;
-    app.show_measurement = true;
+    app.measurement_view.open = true;
     app.sysvars_view.open = true;
     app.write_view.open = true;
     // Give the observers something to draw: a defined system variable
@@ -883,8 +883,8 @@ fn the_network_view_draws_a_flexray_generator_row() {
         })
         .expect("the bundled description binds a slot with signals to a sending ECU");
     assert!(described);
-    app.show_network = true;
-    app.net_fr_sel = Some((0, ecu.clone()));
+    app.network_view.open = true;
+    app.network_view.net_fr_sel = Some((0, ecu.clone()));
     frames(&mut app, &mut ctx, 2);
     app.add_fr_tx(0, slot);
     app.start_virtual();
@@ -907,11 +907,12 @@ fn the_network_view_draws_a_flexray_generator_row() {
     app.settle();
     // The row's expanded body, the cycle dialog and the params dialog, all
     // pointing at the FlexRay row.
-    app.tx_cycle_edit = Some(GenRow::Fr(0));
-    app.tx_cycle_buf = "5".to_string();
-    app.src_edit = Some((GenRow::Fr(0), edit.name.clone()));
-    app.src_draft = app.gen_source(GenRow::Fr(0), &edit.name);
-    app.src_seq_buf = format!("{}, {}", edit.offset, edit.offset + edit.factor * 10.0);
+    app.generator_view.tx_cycle_edit = Some(GenRow::Fr(0));
+    app.generator_view.tx_cycle_buf = "5".to_string();
+    app.generator_view.src_edit = Some((GenRow::Fr(0), edit.name.clone()));
+    app.generator_view.src_draft = app.gen_source(GenRow::Fr(0), &edit.name);
+    app.generator_view.src_seq_buf =
+        format!("{}, {}", edit.offset, edit.offset + edit.factor * 10.0);
     frames(&mut app, &mut ctx, 3);
     // What this harness can prove: the row's commands were accepted and came
     // back in the snapshot, and both dialogs drew over a FlexRay row (they
@@ -1014,7 +1015,7 @@ fn the_network_view_draws_flexray_clusters_with_and_without_a_description() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    app.show_network = true;
+    app.network_view.open = true;
     load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
     let q0 = app.hw.attach_fr_mock(0, 5);
     // Bus 1 is watched and carries traffic, but never gets a description.

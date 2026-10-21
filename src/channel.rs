@@ -382,7 +382,7 @@ impl App {
         for w in &mut self.stats_windows {
             fix_scope(&mut w.scope);
         }
-        self.net_selected = 0;
+        self.network_view.net_selected = 0;
         // The status line ("bus CANx removed") came from the command.
     }
 
@@ -577,13 +577,18 @@ impl App {
         if matches!(&self.buses_view.fr_name_edit, Some((r, _)) if *r == bus) {
             self.buses_view.fr_name_edit = None;
         }
-        self.fr_tx_pick.remove(&bus);
+        self.generator_view.fr_tx_pick.remove(&bus);
         // The picker's remembered port goes with the row: it echoes a choice
         // about a 路 that no longer exists, and a later 路 on the freed index
         // should not open showing this one's port.
         self.fr_pick.remove(&bus);
-        if self.net_fr_sel.as_ref().is_some_and(|(b, _)| *b == bus) {
-            self.net_fr_sel = None;
+        if self
+            .network_view
+            .net_fr_sel
+            .as_ref()
+            .is_some_and(|(b, _)| *b == bus)
+        {
+            self.network_view.net_fr_sel = None;
         }
         // An open rule editor naming this cluster would offer a bus the tool no
         // longer knows anything about.

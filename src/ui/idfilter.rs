@@ -28,11 +28,12 @@ struct TreeMsg {
 /// naming a channel that no longer exists reads back as All buses -- the
 /// widest view, never a hidden row.
 pub fn scope_combo(
-    app: &mut App,
+    app: &App,
     ui: &Ui,
     id: &str,
     scope: SigScope,
     target: PopupTarget,
+    open_picker: &mut bool,
 ) -> SigScope {
     let mut items: Vec<String> = vec!["All buses".to_string()];
     let mut kinds: Vec<SigScope> = vec![SigScope::All];
@@ -52,8 +53,7 @@ pub fn scope_combo(
     ui.combo_simple_string(id, &mut cur, &items);
     ui.same_line();
     if ui.button(format!("…{id}")) {
-        app.popup_target = Some(target);
-        app.show_id_filter = true;
+        *open_picker = true;
     }
     kinds[cur.min(kinds.len() - 1)]
 }

@@ -910,9 +910,9 @@ impl Config {
             // Written only by the legacy loader; a save drops it in favour of
             // `fr_buses` above.
             fr_fibex: None,
-            show_tx: app.show_tx,
-            show_network: app.show_network,
-            show_measurement: app.show_measurement,
+            show_tx: app.generator_view.open,
+            show_network: app.network_view.open,
+            show_measurement: app.measurement_view.open,
             show_buses: app.buses_view.open,
             show_triggers: app.triggers_view.open,
             show_bus_stats: app.busstats_view.open,
@@ -1490,9 +1490,9 @@ impl Config {
                 }
             })
             .collect();
-        app.show_tx = self.show_tx;
-        app.show_network = self.show_network;
-        app.show_measurement = self.show_measurement;
+        app.generator_view.open = self.show_tx;
+        app.network_view.open = self.show_network;
+        app.measurement_view.open = self.show_measurement;
         app.buses_view.open = self.show_buses;
         app.triggers_view.open = self.show_triggers;
         app.busstats_view.open = self.show_bus_stats;

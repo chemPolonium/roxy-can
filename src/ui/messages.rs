@@ -51,13 +51,19 @@ pub fn render(app: &mut App, ui: &Ui) {
 }
 
 fn window_content(app: &mut App, ui: &Ui, i: usize) {
+    let mut open_picker = false;
     let new_scope = scope_combo(
         app,
         ui,
         &format!("##mscope{i}"),
         app.msg_windows[i].scope,
         PopupTarget::Messages(i),
+        &mut open_picker,
     );
+    if open_picker {
+        app.popup_target = Some(PopupTarget::Messages(i));
+        app.show_id_filter = true;
+    }
     app.msg_windows[i].scope = new_scope;
     ui.same_line();
     ui.set_next_item_width(150.0);

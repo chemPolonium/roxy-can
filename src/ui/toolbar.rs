@@ -212,17 +212,17 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item_enabled_selected("Bus Statistics", None::<&str>, app.busstats_view.open, true) {
                         app.busstats_view.open = !app.busstats_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Interactive Generator", None::<&str>, app.show_tx, true) {
-                        app.show_tx = !app.show_tx;
+                    if ui.menu_item_enabled_selected("Interactive Generator", None::<&str>, app.generator_view.open, true) {
+                        app.generator_view.open = !app.generator_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Network", None::<&str>, app.show_network, true) {
-                        app.show_network = !app.show_network;
+                    if ui.menu_item_enabled_selected("Network", None::<&str>, app.network_view.open, true) {
+                        app.network_view.open = !app.network_view.open;
                     }
                     if ui.menu_item_enabled_selected("Specification", None::<&str>, app.spec_view.open, true) {
                         app.spec_view.open = !app.spec_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Measurement Setup", None::<&str>, app.show_measurement, true) {
-                        app.show_measurement = !app.show_measurement;
+                    if ui.menu_item_enabled_selected("Measurement Setup", None::<&str>, app.measurement_view.open, true) {
+                        app.measurement_view.open = !app.measurement_view.open;
                     }
                     if ui.menu_item_enabled_selected("System Variables", None::<&str>, app.sysvars_view.open, true) {
                         app.sysvars_view.open = !app.sysvars_view.open;

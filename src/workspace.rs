@@ -644,9 +644,9 @@ impl App {
             name: String::new(),
             layout: self.layout_cache.clone(),
             open_windows,
-            show_tx: self.show_tx,
-            show_network: self.show_network,
-            show_measurement: self.show_measurement,
+            show_tx: self.generator_view.open,
+            show_network: self.network_view.open,
+            show_measurement: self.measurement_view.open,
             show_buses: self.buses_view.open,
             show_triggers: self.triggers_view.open,
             show_bus_stats: self.busstats_view.open,
@@ -680,9 +680,9 @@ impl App {
         for w in &mut self.state_trackers {
             w.opened = has(WindowKind::StateTracker, &w.name);
         }
-        self.show_tx = d.show_tx;
-        self.show_network = d.show_network;
-        self.show_measurement = d.show_measurement;
+        self.generator_view.open = d.show_tx;
+        self.network_view.open = d.show_network;
+        self.measurement_view.open = d.show_measurement;
         self.buses_view.open = d.show_buses;
         self.triggers_view.open = d.show_triggers;
         self.busstats_view.open = d.show_bus_stats;

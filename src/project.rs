@@ -163,7 +163,7 @@ impl App {
                 self.retarget_record_draft();
                 // A Save As into another folder points the profile row at a
                 // different profiles/ directory; force a re-enumeration.
-                self.profile_names = None;
+                self.network_view.profile_names = None;
                 self.baseline = self.config_snapshot();
                 self.status = format!("project saved: {}", path.display());
                 true

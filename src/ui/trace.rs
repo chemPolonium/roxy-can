@@ -265,13 +265,19 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             });
         }
     }
+    let mut open_picker = false;
     let new_scope = scope_combo(
         app,
         ui,
         &format!("##tscope{i}"),
         app.trace_windows[i].scope,
         PopupTarget::Trace(i),
+        &mut open_picker,
     );
+    if open_picker {
+        app.popup_target = Some(PopupTarget::Trace(i));
+        app.show_id_filter = true;
+    }
     app.trace_windows[i].scope = new_scope;
     ui.same_line();
     const FILTER_HINT: &str = "名称 / hex 子串 · id:1AB · slot:13";
