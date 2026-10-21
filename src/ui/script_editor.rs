@@ -257,7 +257,10 @@ fn editor_window(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.window(format!("脚本 · {}###script{}", node.name, id))
         .opened(&mut open)
         .position(
-            [340.0 + (id as f32 % 6.0) * 28.0, 80.0 + (id as f32 % 6.0) * 24.0],
+            [
+                340.0 + (id as f32 % 6.0) * 28.0,
+                80.0 + (id as f32 % 6.0) * 24.0,
+            ],
             Condition::FirstUseEver,
         )
         .size([640.0, 500.0], Condition::FirstUseEver)
@@ -305,10 +308,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     // read-only, there is no bus choice anywhere in the flow.
     match &node.attached {
         Some((ach, anode)) => {
-            ui.text_disabled(format!(
-                "节点 {anode} · 总线 {}",
-                app.channel_name(*ach),
-            ));
+            ui.text_disabled(format!("节点 {anode} · 总线 {}", app.channel_name(*ach),));
         }
         None => {
             ui.text_colored(
@@ -334,7 +334,10 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
 
     // Status line.
     if node.errored {
-        ui.text_colored([1.0, 0.55, 0.3, 1.0], "出错（见日志；重新 Apply 或重启测量恢复）");
+        ui.text_colored(
+            [1.0, 0.55, 0.3, 1.0],
+            "出错（见日志；重新 Apply 或重启测量恢复）",
+        );
     } else if node.running {
         ui.text_colored([0.4, 0.95, 0.5, 1.0], "运行中");
     } else {
@@ -489,17 +492,30 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
 
 /// One insertable sidebar entry: display label and the text that goes
 /// into the source when clicked.
-const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[    // (category, label, insert_text)
+const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[
+    // (category, label, insert_text)
     ("事件处理器", "on start", "on start {\n    \n}"),
     ("事件处理器", "on message", "on message 0x000 {\n    \n}"),
-    ("事件处理器", "on ext message", "on extended message 0x000 {\n    \n}"),
+    (
+        "事件处理器",
+        "on ext message",
+        "on extended message 0x000 {\n    \n}",
+    ),
     ("事件处理器", "on message *", "on message * {\n    \n}"),
     ("事件处理器", "on errorFrame", "on errorFrame {\n    \n}"),
     ("事件处理器", "on timer", "on timer 100 {\n    \n}"),
-    ("事件处理器", "on timer \"name\"", "on timer \"name\" {\n    \n}"),
+    (
+        "事件处理器",
+        "on timer \"name\"",
+        "on timer \"name\" {\n    \n}",
+    ),
     ("事件处理器", "on fr slot", "on fr slot 0 {\n    \n}"),
     ("事件处理器", "on fr 0 slot", "on fr 0 slot 0 {\n    \n}"),
-    ("控制流", "switch/case", "switch (value) {\n    case 1: {\n        \n    }\n    case 2: {\n        \n    }\n    default: {\n        \n    }\n}"),
+    (
+        "控制流",
+        "switch/case",
+        "switch (value) {\n    case 1: {\n        \n    }\n    case 2: {\n        \n    }\n    default: {\n        \n    }\n}",
+    ),
     ("总线控制", "send", "send(0x000, 0x00);"),
     ("总线控制", "send_ext", "send_ext(0x000, 0x00);"),
     ("总线控制", "sig", "sig(0x000, \"Signal\")"),
@@ -734,9 +750,7 @@ fn bus_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
         if ui
             .selectable_config(format!(
                 "{} {}##busmsg{id}_{msg_id}_{}",
-                msg_name,
-                id_str,
-                *ext as u8
+                msg_name, id_str, *ext as u8
             ))
             .build()
         {
@@ -746,9 +760,7 @@ fn bus_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
             if ui
                 .selectable_config(format!(
                     "  {}##bussig{id}_{msg_id}_{}_{}",
-                    sig_name,
-                    *ext as u8,
-                    sig_name
+                    sig_name, *ext as u8, sig_name
                 ))
                 .build()
             {
@@ -781,8 +793,11 @@ fn owned_dbc_items(app: &App, id: u64) -> Vec<DbcItem> {
             if m.transmitter != attached_node {
                 return None;
             }
-            let sigs: Vec<(String, u64)> =
-                m.signals.iter().map(|s| (s.name.clone(), s.start_bit)).collect();
+            let sigs: Vec<(String, u64)> = m
+                .signals
+                .iter()
+                .map(|s| (s.name.clone(), s.start_bit))
+                .collect();
             Some((id, ext, m.name.clone(), sigs))
         })
         .collect()
@@ -798,8 +813,11 @@ fn bus_dbc_items(app: &App, ch: u8) -> Vec<DbcItem> {
         .iter()
         .filter_map(|&(id, ext)| {
             let m = db.messages.get(&(id, ext))?;
-            let sigs: Vec<(String, u64)> =
-                m.signals.iter().map(|s| (s.name.clone(), s.start_bit)).collect();
+            let sigs: Vec<(String, u64)> = m
+                .signals
+                .iter()
+                .map(|s| (s.name.clone(), s.start_bit))
+                .collect();
             Some((id, ext, m.name.clone(), sigs))
         })
         .collect()
@@ -867,7 +885,10 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
             },
             _ => "-",
         };
-        ui.text(format!("{mark} 0x{msg_id:03X}{}", if *ext { "x" } else { "" }));
+        ui.text(format!(
+            "{mark} 0x{msg_id:03X}{}",
+            if *ext { "x" } else { "" }
+        ));
         if ui.is_item_hovered() {
             ui.tooltip_text(format!("来自 {from}"));
         }
@@ -904,7 +925,10 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     }
 
     ui.separator();
-    ui.text_disabled(format!("接收（{}）", facts.recvs.len() + usize::from(facts.recv_wildcard)));
+    ui.text_disabled(format!(
+        "接收（{}）",
+        facts.recvs.len() + usize::from(facts.recv_wildcard)
+    ));
     if facts.recv_wildcard {
         ui.text("  *  所有帧（转发者/记录者）");
         if ui.is_item_hovered() {
@@ -945,8 +969,10 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
         ui.text_disabled(format!("$速记（{}）", facts.named_refs.len()));
         for (msg, sig) in &facts.named_refs {
             let known = dbc.as_ref().is_some_and(|db| {
-                db.message_id_by_name(msg)
-                    .is_some_and(|id| db.message_of(id).is_some_and(|m| m.signals.iter().any(|s| &s.name == sig)))
+                db.message_id_by_name(msg).is_some_and(|id| {
+                    db.message_of(id)
+                        .is_some_and(|m| m.signals.iter().any(|s| &s.name == sig))
+                })
             });
             let mark = if known { "*" } else { "-" };
             ui.text(format!("  {mark} ${msg}::{sig}"));
@@ -981,10 +1007,16 @@ fn sysvar_tab(app: &mut App, ui: &Ui, id: u64) {
     let mut vars: Vec<(String, Vec<(String, bool)>)> = Vec::new(); // (ns, [(name, has_bounds)])
     for v in &app.snap.sysvars {
         match vars.iter_mut().find(|(ns, _)| *ns == v.def.namespace) {
-            Some((_, list)) => list.push((v.def.name.clone(), v.def.min.is_some() || v.def.max.is_some())),
+            Some((_, list)) => list.push((
+                v.def.name.clone(),
+                v.def.min.is_some() || v.def.max.is_some(),
+            )),
             None => vars.push((
                 v.def.namespace.clone(),
-                vec![(v.def.name.clone(), v.def.min.is_some() || v.def.max.is_some())],
+                vec![(
+                    v.def.name.clone(),
+                    v.def.min.is_some() || v.def.max.is_some(),
+                )],
             )),
         }
     }
@@ -996,10 +1028,16 @@ fn sysvar_tab(app: &mut App, ui: &Ui, id: u64) {
     for (ns, names) in &vars {
         ui.text_disabled(ns);
         for (name, _) in names {
-            if ui.selectable_config(format!("读  {name}##svr{ns}{name}")).build() {
+            if ui
+                .selectable_config(format!("读  {name}##svr{ns}{name}"))
+                .build()
+            {
                 insert(app, id, &format!("sys_get(\"{ns}::{name}\")"));
             }
-            if ui.selectable_config(format!("写  {name}##svw{ns}{name}")).build() {
+            if ui
+                .selectable_config(format!("写  {name}##svw{ns}{name}"))
+                .build()
+            {
                 insert(app, id, &format!("sys_set(\"{ns}::{name}\", 0)"));
             }
         }
@@ -1021,7 +1059,12 @@ mod facts_tests {
             on timer "idle" { send(0x300); }
         "#;
         let f = compute_facts(src, 7);
-        assert_eq!(f.responses.len(), 1, "only the armed timer maps: {:?}", f.responses);
+        assert_eq!(
+            f.responses.len(),
+            1,
+            "only the armed timer maps: {:?}",
+            f.responses
+        );
         let row = &f.responses[0];
         assert_eq!(row.timer_label, "<on timer \"resp\">");
         assert!(

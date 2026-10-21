@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Mutex;
 
-use crate::app::{App, PopupTarget, SigScope, TracePick, TraceRow, TOOLBAR_H};
+use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H, TracePick, TraceRow};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
@@ -84,9 +84,7 @@ fn cursor_menu(app: &mut App, ui: &Ui, win: usize, t_us: u64) {
             ui.tooltip_text("表头读出 A、B 两点与它们的 Δt；这一行会底色标出");
         }
     }
-    if app.trace_windows[win].mark_us.iter().any(Option::is_some)
-        && ui.menu_item("Clear cursors")
-    {
+    if app.trace_windows[win].mark_us.iter().any(Option::is_some) && ui.menu_item("Clear cursors") {
         app.trace_windows[win].mark_us = [None, None];
     }
 }
@@ -112,10 +110,7 @@ pub(crate) fn clear_filter(app: &mut App, win: usize) {
 /// The cursor pair's row tint, in the plot's two colours at background
 /// strength: a marked row is findable at a glance, and the row is still
 /// readable through it.
-const MARK_COLOR: [[f32; 4]; 2] = [
-    [0.95, 0.85, 0.40, 0.22],
-    [0.45, 0.80, 0.95, 0.22],
-];
+const MARK_COLOR: [[f32; 4]; 2] = [[0.95, 0.85, 0.40, 0.22], [0.45, 0.80, 0.95, 0.22]];
 
 /// Which cursor tints this row, if any. A cursor is an instant, so a row that
 /// carries both (only possible at the same microsecond) reads as A.
@@ -311,10 +306,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
         app.trace_windows[i].filters_open = !app.trace_windows[i].filters_open;
     }
     if !hidden.is_empty() && ui.is_item_hovered() {
-        ui.tooltip_text(format!(
-            "收起的过滤条件仍在生效：{}",
-            hidden.join(" · ")
-        ));
+        ui.tooltip_text(format!("收起的过滤条件仍在生效：{}", hidden.join(" · ")));
     }
     if app.trace_windows[i].filters_open {
         ui.same_line();
@@ -324,7 +316,9 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             .hint(PAYLOAD_HINT)
             .build();
         if ui.is_item_hovered() {
-            ui.tooltip_text("payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤");
+            ui.tooltip_text(
+                "payload 字节搜索：hex 对、空格可选；匹配含此序列的帧。无法解析时不过滤",
+            );
         }
         ui.same_line();
         ui.set_next_item_width(58.0);
@@ -334,10 +328,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             &["Any", "Data", "FD", "RTR", "Error"],
         );
         ui.same_line();
-        ui.checkbox(
-            format!("DBC##tdbc{i}"),
-            &mut app.trace_windows[i].dbc_only,
-        );
+        ui.checkbox(format!("DBC##tdbc{i}"), &mut app.trace_windows[i].dbc_only);
         ui.same_line();
         // Expand FlexRay rows into their decoded signal children (needs the
         // arriving row's own cluster description).
@@ -454,7 +445,8 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
     {
         let col = s.column_index.get();
         let asc = s.sort_direction == SortDirection::Ascending;
-        rows.make_contiguous().sort_by(|a, b| sort_frame(app, col, a, b, asc));
+        rows.make_contiguous()
+            .sort_by(|a, b| sort_frame(app, col, a, b, asc));
         specs.clear_dirty(ui);
         app.trace_windows[i].rows_sorted = true;
     }
@@ -532,9 +524,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 if hovered && ui.is_mouse_clicked(dear_imgui_rs::MouseButton::Left) {
                     picked = Some(here);
                 }
-                can_ctx = if hovered
-                    && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right)
-                {
+                can_ctx = if hovered && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right) {
                     Some(*f)
                 } else {
                     None
@@ -575,8 +565,7 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
                 ui.table_next_column();
                 ui.text("-");
                 ui.table_next_column();
-                let hex: String =
-                    fr.payload.iter().map(|b| format!("{b:02X} ")).collect();
+                let hex: String = fr.payload.iter().map(|b| format!("{b:02X} ")).collect();
                 ui.text(hex.trim_end());
                 ui.table_next_column();
                 ui.text_colored([0.6, 0.65, 0.7, 1.0], "Rx");
@@ -744,8 +733,12 @@ fn can_table(app: &mut App, ui: &Ui, i: usize) {
             clear_filter(app, i);
         }
         let addable = !f.is_error() && !f.is_remote();
-        if ui.menu_item_enabled_selected("Add to Interactive Generator", None::<&str>, false, addable)
-        {
+        if ui.menu_item_enabled_selected(
+            "Add to Interactive Generator",
+            None::<&str>,
+            false,
+            addable,
+        ) {
             // Add, then re-shape the fresh row via command: keep the flags
             // it was seen with, and for an id no database declares, keep
             // the observed payload. `add_tx` skips a duplicate row, so the
@@ -892,7 +885,11 @@ mod tests {
             Some(TracePick::of(&rows[0])),
             "the first press picks the newest row"
         );
-        assert_eq!(step_pick(&rows, Some(TracePick::of(&rows[0])), true), Some(TracePick::of(&rows[1])), "down is toward the older end");
+        assert_eq!(
+            step_pick(&rows, Some(TracePick::of(&rows[0])), true),
+            Some(TracePick::of(&rows[1])),
+            "down is toward the older end"
+        );
         assert_eq!(
             step_pick(&rows, Some(TracePick::of(&rows[1])), false),
             Some(TracePick::of(&rows[0])),
@@ -916,8 +913,14 @@ mod tests {
             addr: 0x7FF,
             fr: false,
         };
-        assert_eq!(step_pick(&rows, Some(gone), true), Some(TracePick::of(&rows[0])));
-        assert_eq!(step_pick(&rows, Some(gone), false), Some(TracePick::of(&rows[0])));
+        assert_eq!(
+            step_pick(&rows, Some(gone), true),
+            Some(TracePick::of(&rows[0]))
+        );
+        assert_eq!(
+            step_pick(&rows, Some(gone), false),
+            Some(TracePick::of(&rows[0]))
+        );
         // Nothing to walk: no crash, no pick.
         let empty: VecDeque<TraceRow> = VecDeque::new();
         assert_eq!(step_pick(&empty, None, true), None);
@@ -1039,7 +1042,10 @@ mod tests {
         assert_eq!(cols.len(), 8, "the table's eight columns: {text}");
         assert_eq!(cols[0], "1.500000", "time in seconds, six places");
         assert_eq!(cols[1], "FR0 A", "the bus cell with its reception channel");
-        assert_eq!(cols[2], "13.7", "slot.cycle, the way the ID column prints it");
+        assert_eq!(
+            cols[2], "13.7",
+            "slot.cycle, the way the ID column prints it"
+        );
         assert_eq!(
             cols[3], "ScheduledFrame",
             "the description names the frame, not the log"

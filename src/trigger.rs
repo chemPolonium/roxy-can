@@ -100,6 +100,41 @@ pub enum TriggerAction {
     InsertMarker,
 }
 
+/// The kinds of rule the Triggers window's "+" buttons create. The window
+/// names the kind; the default condition (which bus, id, signal) is still
+/// chosen here, against the live snapshot, so the UI never guesses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerKind {
+    Signal,
+    Id,
+    ErrorFrame,
+    FrFrame,
+    FrSignal,
+    Timeout,
+    SysVar,
+}
+
+/// Everything the Triggers window can ask for. The window draws read-only and
+/// returns these; [`App::apply_trigger_cmds`] is the one place that writes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TriggerCmd {
+    Add(TriggerKind),
+    Remove(usize),
+    SetEnabled {
+        index: usize,
+        on: bool,
+    },
+    Edit {
+        index: usize,
+        cond: TriggerCond,
+        action: TriggerAction,
+    },
+    Rearm,
+    SetPreFrames(usize),
+    SetPostFrames(u32),
+    SetMarkerCap(usize),
+}
+
 /// One armed condition plus its edge state and fire history.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trigger {
@@ -210,15 +245,72 @@ impl TriggerCond {
                 key,
                 threshold,
                 rising,
-            } => format!(
-                "@{key} {} {threshold}",
-                if *rising { ">=" } else { "<=" }
-            ),
+            } => format!("@{key} {} {threshold}", if *rising { ">=" } else { "<=" }),
         }
     }
 }
 
 impl App {
+    /// Applies the Triggers window's collected commands. This is the only
+    /// place the window's edits reach the bus or the run limits.
+    pub(crate) fn apply_trigger_cmds(&mut self, cmds: Vec<TriggerCmd>) {
+        for cmd in cmds {
+            match cmd {
+                TriggerCmd::Add(kind) => match kind {
+                    TriggerKind::Signal => self.add_signal_trigger(),
+                    TriggerKind::Id => self.add_id_trigger(),
+                    TriggerKind::ErrorFrame => self.add_error_trigger(),
+                    TriggerKind::FrFrame => self.add_fr_trigger(),
+                    TriggerKind::FrSignal => self.add_fr_signal_trigger(),
+                    TriggerKind::Timeout => self.add_timeout_trigger(),
+                    TriggerKind::SysVar => self.add_sysvar_trigger(),
+                },
+                TriggerCmd::Remove(index) => self.remove_trigger(index),
+                TriggerCmd::SetEnabled { index, on } => {
+                    self.send(crate::bus::BusCommand::SetTriggerEnabled { index, on });
+                }
+                TriggerCmd::Edit {
+                    index,
+                    cond,
+                    action,
+                } => {
+                    self.send(crate::bus::BusCommand::EditTrigger {
+                        index,
+                        cond,
+                        action,
+                    });
+                }
+                TriggerCmd::Rearm => {
+                    self.send(crate::bus::BusCommand::RearmTriggers);
+                }
+                TriggerCmd::SetPreFrames(pre_frames) => {
+                    self.limits.pre_frames = pre_frames;
+                    self.set_run_limits(
+                        self.limits.pre_frames,
+                        self.limits.post_frames,
+                        self.limits.marker_cap,
+                    );
+                }
+                TriggerCmd::SetPostFrames(post_frames) => {
+                    self.limits.post_frames = post_frames;
+                    self.set_run_limits(
+                        self.limits.pre_frames,
+                        self.limits.post_frames,
+                        self.limits.marker_cap,
+                    );
+                }
+                TriggerCmd::SetMarkerCap(marker_cap) => {
+                    self.limits.marker_cap = marker_cap;
+                    self.set_run_limits(
+                        self.limits.pre_frames,
+                        self.limits.post_frames,
+                        self.limits.marker_cap,
+                    );
+                }
+            }
+        }
+    }
+
     /// One-line description of trigger `i` for the list: bus name plus
     /// the condition's own summary. Reads the snapshot: the rules live
     /// on the bus, the window only shapes them.
@@ -361,8 +453,8 @@ impl App {
             cond: cond.clone(),
             action,
         });
-        self.trig_draft = Some(crate::ui::triggers::TrigDraft::new(index, cond, action));
-        self.show_triggers = true;
+        self.triggers_view.draft = Some(crate::ui::triggers::TrigDraft::new(index, cond, action));
+        self.triggers_view.open = true;
     }
 
     pub fn remove_trigger(&mut self, i: usize) {
@@ -371,8 +463,8 @@ impl App {
         }
         // An editor pointing at the removed row closes; one pointing past
         // it follows the row up.
-        match &mut self.trig_draft {
-            Some(d) if d.index == i => self.trig_draft = None,
+        match &mut self.triggers_view.draft {
+            Some(d) if d.index == i => self.triggers_view.draft = None,
             Some(d) if d.index > i => d.index -= 1,
             _ => {}
         }

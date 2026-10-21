@@ -163,9 +163,7 @@ type FrPicks = Vec<(u8, u16)>;
 /// A window's hand-picked subjects, split for the project file: CAN ids in
 /// `manual`, FlexRay slots in `fr_manual`. Sorted so re-saving an unchanged
 /// project does not shuffle the lists (a `HashSet` has no order of its own).
-fn split_picks(
-    picks: &std::collections::HashSet<crate::workspace::Pick>,
-) -> (CanPicks, FrPicks) {
+fn split_picks(picks: &std::collections::HashSet<crate::workspace::Pick>) -> (CanPicks, FrPicks) {
     let mut can: Vec<_> = picks
         .iter()
         .filter_map(|p| match *p {
@@ -662,7 +660,10 @@ pub struct Config {
     /// 回放通道映射：日志里的通道编号 → 本工程的第几路。日志只记编号，而那是
     /// 录它的那个人工程里的编号，所以这层对应关系属于工程。缺省（没有这一项，
     /// 或空表）= 按编号原样用，旧工程读进来行为不变。
-    #[serde(default, skip_serializing_if = "crate::replay_map::ReplayMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::replay_map::ReplayMap::is_empty"
+    )]
     pub replay_map: crate::replay_map::ReplayMap,
     /// Legacy: the single description file from before FlexRay got a bus
     /// index. It loads as bus 0, which is the only bus a project of that
@@ -768,9 +769,7 @@ fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>) {
 fn sig_key(ch: u8, id: u32, ext: bool, fr_slot: Option<u16>, signal: String) -> SigKey {
     match fr_slot {
         Some(slot) => SigKey::fr(ch, slot, signal),
-        None if id & crate::app::FR_SIG_BASE != 0 => {
-            SigKey::fr(0, (id & 0x3F_FF) as u16, signal)
-        }
+        None if id & crate::app::FR_SIG_BASE != 0 => SigKey::fr(0, (id & 0x3F_FF) as u16, signal),
         None => SigKey::can(ch, id, ext, signal),
     }
 }
@@ -914,13 +913,13 @@ impl Config {
             show_tx: app.show_tx,
             show_network: app.show_network,
             show_measurement: app.show_measurement,
-            show_buses: app.show_buses,
-            show_triggers: app.show_triggers,
-            show_bus_stats: app.show_bus_stats,
-            show_spec: app.show_spec,
+            show_buses: app.buses_view.open,
+            show_triggers: app.triggers_view.open,
+            show_bus_stats: app.busstats_view.open,
+            show_spec: app.spec_view.open,
             show_id_filter: app.show_id_filter,
-            show_sysvars: app.show_sysvars,
-            show_write: app.show_write,
+            show_sysvars: app.sysvars_view.open,
+            show_write: app.write_view.open,
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
             replay_fastest: !app.replay_speed.is_finite(),
             replay_speed: if app.replay_speed.is_finite() {
@@ -1008,7 +1007,8 @@ impl Config {
                 })
                 .collect(),
             monitor_rows: app
-                .monitor_rows
+                .monitor_view
+                .rows
                 .iter()
                 .map(|r| {
                     let (ch, id, ext, fr_slot) = sig_cfg_of(&r.key);
@@ -1434,7 +1434,7 @@ impl Config {
             })
             .collect();
         if !self.monitor_rows.is_empty() {
-            app.monitor_rows = self
+            app.monitor_view.rows = self
                 .monitor_rows
                 .into_iter()
                 .map(|m| crate::app::MonitorRow {
@@ -1493,13 +1493,13 @@ impl Config {
         app.show_tx = self.show_tx;
         app.show_network = self.show_network;
         app.show_measurement = self.show_measurement;
-        app.show_buses = self.show_buses;
-        app.show_triggers = self.show_triggers;
-        app.show_bus_stats = self.show_bus_stats;
-        app.show_spec = self.show_spec;
+        app.buses_view.open = self.show_buses;
+        app.triggers_view.open = self.show_triggers;
+        app.busstats_view.open = self.show_bus_stats;
+        app.spec_view.open = self.show_spec;
         app.show_id_filter = self.show_id_filter;
-        app.show_sysvars = self.show_sysvars;
-        app.show_write = self.show_write;
+        app.sysvars_view.open = self.show_sysvars;
+        app.write_view.open = self.show_write;
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
         app.set_trace_limit(self.trace_limit);
@@ -1586,7 +1586,7 @@ impl Config {
             .collect();
         app.send(crate::bus::BusCommand::SetTriggers(triggers));
         app.settle();
-        app.trig_draft = None;
+        app.triggers_view.draft = None;
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = if self.replay_fastest {
@@ -1603,11 +1603,10 @@ impl Config {
         // A file that moved or broke is reported, not fatal.
         // `fr_buses` is per-bus; the older single path describes bus 0, the
         // only bus that session could have watched.
-        let legacy = (self.fr_buses.is_empty() && self.fr_fibex.is_some())
-            .then(|| FrBusFile {
-                bus: 0,
-                path: self.fr_fibex.clone().unwrap_or_default(),
-            });
+        let legacy = (self.fr_buses.is_empty() && self.fr_fibex.is_some()).then(|| FrBusFile {
+            bus: 0,
+            path: self.fr_fibex.clone().unwrap_or_default(),
+        });
         for file in self.fr_buses.iter().chain(legacy.iter()) {
             let path = &file.path;
             match std::fs::read(path)
@@ -1643,26 +1642,21 @@ impl Config {
         // land, because their name, payload length and send period are read out
         // of the description: restored earlier, every entry would come back as a
         // raw 8-byte filler.
-        let stale_fr: Vec<(u8, u16)> = app
-            .snap
-            .fr_tx
-            .iter()
-            .map(|t| (t.bus, t.slot))
-            .collect();
+        let stale_fr: Vec<(u8, u16)> = app.snap.fr_tx.iter().map(|t| (t.bus, t.slot)).collect();
         for (bus, slot) in stale_fr {
             app.send(crate::bus::BusCommand::RemoveFrEntry { bus, slot });
         }
-        let fr_slots: Vec<(u8, u16)> = self
-            .fr_tx
-            .iter()
-            .map(|t| (t.bus, t.slot))
-            .collect();
+        let fr_slots: Vec<(u8, u16)> = self.fr_tx.iter().map(|t| (t.bus, t.slot)).collect();
         for (bus, slot) in fr_slots {
             app.add_fr_tx(bus, slot);
         }
         app.settle();
         for t in self.fr_tx {
-            let cycle_us = if t.cycle_us == 0 { 0 } else { t.cycle_us.max(1_000) };
+            let cycle_us = if t.cycle_us == 0 {
+                0
+            } else {
+                t.cycle_us.max(1_000)
+            };
             app.send(crate::bus::BusCommand::SetFrEntryCycle {
                 bus: t.bus,
                 slot: t.slot,
@@ -1707,7 +1701,7 @@ impl Config {
                     .iter()
                     .flat_map(|w| w.signals.iter().map(|s| s.key.clone())),
             )
-            .chain(app.monitor_rows.iter().map(|r| r.key.clone()))
+            .chain(app.monitor_view.rows.iter().map(|r| r.key.clone()))
             .collect();
         for key in keys {
             app.subscribe(key);
@@ -1812,14 +1806,16 @@ mod tests {
         assert_eq!(restored.trace_windows[0].filter, "Motor");
         assert_eq!(restored.trace_windows[0].scope, SigScope::Bus(1));
         assert_eq!(restored.stats_windows[0].scope, SigScope::FrBus(2));
-        assert!(restored.trace_windows[0].manual.contains(&crate::workspace::Pick::Can {
-            ch: 1,
-            id: 0x123
-        }));
-        assert!(restored.trace_windows[0].manual.contains(&crate::workspace::Pick::Fr {
-            bus: 2,
-            slot: 71
-        }));
+        assert!(
+            restored.trace_windows[0]
+                .manual
+                .contains(&crate::workspace::Pick::Can { ch: 1, id: 0x123 })
+        );
+        assert!(
+            restored.trace_windows[0]
+                .manual
+                .contains(&crate::workspace::Pick::Fr { bus: 2, slot: 71 })
+        );
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert_eq!(restored.channels.len(), app.channels.len());
@@ -1934,10 +1930,7 @@ mod tests {
         // it was before the field existed.
         app.set_flexray_name(1, "FR1");
         assert_eq!(app.fr_bus_name(1), "FR1");
-        assert!(
-            unnamed(&app),
-            "a 路 called by its own index stores no name"
-        );
+        assert!(unnamed(&app), "a 路 called by its own index stores no name");
         app.set_flexray_name(1, "   ");
         assert_eq!(app.fr_bus_name(1), "FR1");
         assert!(unnamed(&app), "a blank box stores no name");
@@ -1964,9 +1957,8 @@ mod tests {
         // ECU, so the project under test needs its description on disk too --
         // which is also why the restore loads descriptions before entries.
         let arxml = "assets/arxml/PowerTrain.arxml";
-        let text = crate::dbc::text_from_bytes(
-            std::fs::read(arxml).expect("the asset is committed"),
-        );
+        let text =
+            crate::dbc::text_from_bytes(std::fs::read(arxml).expect("the asset is committed"));
         let db = crate::fr_db::FrDb::parse(&text).expect("parses");
         let slot = (0..db.frames.len())
             .find_map(|ix| {
@@ -2030,7 +2022,10 @@ mod tests {
         // The same file with the key removed is the older project: it loads.
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         doc.as_object_mut().unwrap().remove("fr_tx");
-        assert!(!doc.to_string().contains("fr_tx"), "the file really is older");
+        assert!(
+            !doc.to_string().contains("fr_tx"),
+            "the file really is older"
+        );
         let mut legacy = App::headless();
         serde_json::from_value::<Config>(doc)
             .expect("a file without the new key loads")
@@ -2213,20 +2208,20 @@ mod tests {
             SigKey::can(0, 0x100, false, "EngineStatus"),
             true,
         );
-        assert_eq!(app.monitor_rows.len(), 1, "the row was added");
-        app.monitor_rows[0].digits = 2;
-        app.monitor_rows[0].rule_on = true;
-        app.monitor_rows[0].rising = false;
-        app.monitor_rows[0].threshold = 87.5;
-        app.monitor_rows[0].color = 3;
+        assert_eq!(app.monitor_view.rows.len(), 1, "the row was added");
+        app.monitor_view.rows[0].digits = 2;
+        app.monitor_view.rows[0].rule_on = true;
+        app.monitor_view.rows[0].rising = false;
+        app.monitor_view.rows[0].threshold = 87.5;
+        app.monitor_view.rows[0].color = 3;
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
-        assert_eq!(restored.monitor_rows.len(), 1);
-        let r = &restored.monitor_rows[0];
+        assert_eq!(restored.monitor_view.rows.len(), 1);
+        let r = &restored.monitor_view.rows[0];
         assert!(
             matches!(
                 r.key,
@@ -2240,8 +2235,10 @@ mod tests {
             "the round trip keeps a standard-class CAN key"
         );
         assert_eq!(r.key.name(), "EngineStatus");
-        assert_eq!((r.digits, r.rule_on, r.rising, r.threshold, r.color),
-            (2, true, false, 87.5, 3));
+        assert_eq!(
+            (r.digits, r.rule_on, r.rising, r.threshold, r.color),
+            (2, true, false, 87.5, 3)
+        );
     }
 
     /// Which roles a bus declares has to outlive the session, or the bus
@@ -2357,7 +2354,14 @@ mod tests {
         cfg.apply(&mut restored);
         let key = &restored.graphics[0].signals[0].key;
         assert!(
-            matches!(key, crate::observe::SigKey::Fr { bus: 0, slot: 13, .. }),
+            matches!(
+                key,
+                crate::observe::SigKey::Fr {
+                    bus: 0,
+                    slot: 13,
+                    ..
+                }
+            ),
             "the synthetic id loads as a FlexRay key, not a CAN message: {key:?}"
         );
         assert_eq!(key.name(), "CarSpeed");
@@ -2387,10 +2391,11 @@ mod tests {
         let arxml = "assets/arxml/PowerTrain.arxml";
         let fibex = "assets/fibex/PowerTrain_v2.xml";
         if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
-            panic!("{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         }
-        let cfg: Config =
-            serde_json::from_str(&format!(r#"{{"fr_fibex":"{arxml}"}}"#)).unwrap();
+        let cfg: Config = serde_json::from_str(&format!(r#"{{"fr_fibex":"{arxml}"}}"#)).unwrap();
         let mut restored = App::headless();
         cfg.apply(&mut restored);
         assert_eq!(
@@ -2459,7 +2464,9 @@ mod tests {
         let arxml = "assets/arxml/PowerTrain.arxml";
         let fibex = "assets/fibex/PowerTrain_v2.xml";
         if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
-            panic!("{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         }
         let mut app = App::headless();
         assert_eq!(app.load_cluster_description(arxml, Some(0)), Some(0));
@@ -2514,7 +2521,9 @@ mod tests {
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         assert!(
-            json.contains(r#""kind":5"#) && json.contains(r#""id":13"#) && json.contains(r#""ch":1"#),
+            json.contains(r#""kind":5"#)
+                && json.contains(r#""id":13"#)
+                && json.contains(r#""ch":1"#),
             "the slot is stored as a slot: {json}"
         );
         assert!(
@@ -2545,7 +2554,10 @@ mod tests {
             },
             "the FlexRay crossing condition survives whole"
         );
-        assert_eq!(restored.snap.triggers[1].action, TriggerAction::InsertMarker);
+        assert_eq!(
+            restored.snap.triggers[1].action,
+            TriggerAction::InsertMarker
+        );
     }
 
     /// The bitrates feed the load view's arithmetic, so a saved opinion about
@@ -2909,7 +2921,8 @@ mod tests {
             .expect("an old project file loads")
             .apply(&mut from_old);
         assert_eq!(
-            from_old.replay_speed, f64::INFINITY,
+            from_old.replay_speed,
+            f64::INFINITY,
             "文件里的 100.0 就是当年的 ∞"
         );
 

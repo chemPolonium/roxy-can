@@ -351,13 +351,13 @@ impl App {
             w.overrides = remap_key_map(std::mem::take(&mut w.overrides), &remap);
         }
         // Monitor rows carry signal keys too.
-        self.monitor_rows.retain(|r| match &r.key {
+        self.monitor_view.rows.retain(|r| match &r.key {
             // Same rule as the curve lists: the removed CAN channel takes its
             // CAN rows with it and leaves every FlexRay row alone.
             SigKey::Can { ch, .. } => remap(*ch).is_some(),
             SigKey::Fr { .. } => true,
         });
-        for r in &mut self.monitor_rows {
+        for r in &mut self.monitor_view.rows {
             if let SigKey::Can { ch, .. } = &mut r.key
                 && let Some(nc) = remap(*ch)
             {
@@ -574,8 +574,8 @@ impl App {
         let label = self.fr_bus_label(bus);
         self.fr_buses.remove(&bus);
         self.fr_names.remove(&bus);
-        if matches!(&self.fr_name_edit, Some((r, _)) if *r == bus) {
-            self.fr_name_edit = None;
+        if matches!(&self.buses_view.fr_name_edit, Some((r, _)) if *r == bus) {
+            self.buses_view.fr_name_edit = None;
         }
         self.fr_tx_pick.remove(&bus);
         // The picker's remembered port goes with the row: it echoes a choice
@@ -588,11 +588,12 @@ impl App {
         // An open rule editor naming this cluster would offer a bus the tool no
         // longer knows anything about.
         if self
-            .trig_draft
+            .triggers_view
+            .draft
             .as_ref()
             .is_some_and(|d| d.cond.fr_bus() == Some(bus))
         {
-            self.trig_draft = None;
+            self.triggers_view.draft = None;
         }
         // Descriptions move as one map, so the core forgets this 路 here; the
         // command below carries everything keyed by its index that the core
@@ -602,9 +603,7 @@ impl App {
         self.push_fr_db_to_core();
         self.reset_fr_scope(bus);
         let on_bus = |k: &SigKey| matches!(k, SigKey::Fr { bus: b, .. } if *b == bus);
-        let on_bus_pick = |p: &crate::workspace::Pick| {
-            matches!(p, crate::workspace::Pick::Fr { bus: b, .. } if *b == bus)
-        };
+        let on_bus_pick = |p: &crate::workspace::Pick| matches!(p, crate::workspace::Pick::Fr { bus: b, .. } if *b == bus);
         for w in &mut self.trace_windows {
             w.manual.retain(|p| !on_bus_pick(p));
         }
@@ -628,7 +627,7 @@ impl App {
             w.rules.retain(|k, _| !on_bus(k));
             w.overrides.retain(|k, _| !on_bus(k));
         }
-        self.monitor_rows.retain(|r| !on_bus(&r.key));
+        self.monitor_view.rows.retain(|r| !on_bus(&r.key));
         self.send(crate::bus::BusCommand::RemoveFrBus { bus, label });
     }
 

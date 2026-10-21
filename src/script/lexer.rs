@@ -556,7 +556,17 @@ mod tests {
             ]
         );
         // The two-character logical forms still beat the single ones.
-        assert_eq!(kinds("a && b || c"), vec![Tok::Ident("a".into()), Tok::And, Tok::Ident("b".into()), Tok::Or, Tok::Ident("c".into()), Tok::Eof]);
+        assert_eq!(
+            kinds("a && b || c"),
+            vec![
+                Tok::Ident("a".into()),
+                Tok::And,
+                Tok::Ident("b".into()),
+                Tok::Or,
+                Tok::Ident("c".into()),
+                Tok::Eof
+            ]
+        );
         // The switch punctuation.
         assert_eq!(
             kinds("switch (x) { case 1: break; default: }"),

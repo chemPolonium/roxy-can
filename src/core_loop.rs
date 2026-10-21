@@ -194,7 +194,8 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                 match lane.inbox.recv_timeout(Duration::from_micros(wait_us)) {
                     Ok(cmd) => {
                         any = true;
-                        let (reset, panicked) = catch_core_panic("命令处理", || lane.apply(cmd));
+                        let (reset, panicked) =
+                            catch_core_panic("命令处理", || lane.apply(cmd));
                         if panicked {
                             lane.halt_after_internal_error("命令处理");
                         } else if let Some(reset) = reset {

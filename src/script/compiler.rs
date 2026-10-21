@@ -3,7 +3,9 @@
 //! become globals; function bodies use stack locals with block scopes.
 
 use super::parser::{BinOp, Expr, FnDecl, Item, OnDecl, OnKind, Program, SpannedStmt, Stmt, UnOp};
-use super::{Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value, WILDCARD_LABEL};
+use super::{
+    Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value, WILDCARD_LABEL,
+};
 use std::collections::{HashMap, HashSet};
 
 const MAX_LOCALS: usize = u8::MAX as usize;
@@ -242,7 +244,10 @@ fn handler_label(kind: &HandlerKind) -> String {
         HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
         HandlerKind::Oneshot { name } => format!("<on timer \"{name}\">"),
         HandlerKind::FrSlot { bus: None, slot } => format!("<on fr slot {slot}>"),
-        HandlerKind::FrSlot { bus: Some(bus), slot } => format!("<on fr {bus} slot {slot}>"),
+        HandlerKind::FrSlot {
+            bus: Some(bus),
+            slot,
+        } => format!("<on fr {bus} slot {slot}>"),
     }
 }
 
@@ -715,7 +720,7 @@ impl Comp {
                                     return self.err(
                                         &from,
                                         &format!("send id {v} outside the frame-id range"),
-                                    )
+                                    );
                                 }
                             }
                         } else {
@@ -876,7 +881,10 @@ impl Comp {
                 period_ms: *period_ms,
             },
             OnKind::Oneshot { name } => HandlerKind::Oneshot { name: name.clone() },
-            OnKind::FrSlot { bus, slot } => HandlerKind::FrSlot { bus: *bus, slot: *slot },
+            OnKind::FrSlot { bus, slot } => HandlerKind::FrSlot {
+                bus: *bus,
+                slot: *slot,
+            },
         };
         // 接收集（R2 静态事实表）：帧事件 handler 声明监听的 id。
         match &on.kind {
@@ -885,9 +893,7 @@ impl Comp {
                     self.recv_refs.push((*id, false));
                 }
             }
-            OnKind::ExtendedMessage { id }
-                if !self.recv_refs.contains(&(*id, true)) =>
-            {
+            OnKind::ExtendedMessage { id } if !self.recv_refs.contains(&(*id, true)) => {
                 self.recv_refs.push((*id, true));
             }
             _ => {}
@@ -950,7 +956,7 @@ mod tests {
     #[test]
     fn forward_calls_resolve() {
         let script = compile_ok("print(later(1)); fn later(n) { return n + 1; }");
-        assert_eq!(script.functions.len(), 2);        // The call lives in main (chunk 0); `later`'s own body has none.
+        assert_eq!(script.functions.len(), 2); // The call lives in main (chunk 0); `later`'s own body has none.
         assert!(
             script.functions[0]
                 .code
@@ -982,24 +988,31 @@ mod tests {
 
     #[test]
     fn literal_and_arithmetic_sends_are_derived() {
-        let script = compile_ok(
-            "on timer 100 { send(0x100, 1); send_ext(0x100 + 0x20, 1); }",
-        );
+        let script = compile_ok("on timer 100 { send(0x100, 1); send_ext(0x100 + 0x20, 1); }");
         assert!(
             script.opaque_sends.is_empty(),
             "both sends are derivable: {:?}",
             script.opaque_sends
         );
         assert_eq!(script.send_refs.len(), 2);
-        assert_eq!(script.send_refs[0], ("<on timer 100>".to_string(), 0x100, false));
-        assert_eq!(script.send_refs[1], ("<on timer 100>".to_string(), 0x120, true));
+        assert_eq!(
+            script.send_refs[0],
+            ("<on timer 100>".to_string(), 0x100, false)
+        );
+        assert_eq!(
+            script.send_refs[1],
+            ("<on timer 100>".to_string(), 0x120, true)
+        );
     }
 
     #[test]
     fn frame_id_sends_are_bounded_by_the_event() {
         let script = compile_ok("on message 0x6A0 { send(frame_id(), 1); }");
         assert_eq!(script.send_refs.len(), 1);
-        assert_eq!(script.send_refs[0], ("<on message 0x6a0>".to_string(), 0x6A0, false));
+        assert_eq!(
+            script.send_refs[0],
+            ("<on message 0x6a0>".to_string(), 0x6A0, false)
+        );
     }
 
     #[test]
@@ -1154,7 +1167,11 @@ mod tests {
         );
         let mut vm = crate::script::Vm::new(script);
         vm.run().unwrap();
-        assert_eq!(vm.output, vec!["two", "again-two", "1"], "one case each, subject called once");
+        assert_eq!(
+            vm.output,
+            vec!["two", "again-two", "1"],
+            "one case each, subject called once"
+        );
     }
 
     /// R2 spike deliverable: run the static send-set derivation over the
@@ -1164,7 +1181,9 @@ mod tests {
     #[test]
     fn r2_spike_reports_static_send_coverage_on_examples() {
         let Ok(rd) = std::fs::read_dir("examples") else {
-            panic!("examples/ missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "examples/ missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let mut total_derived = 0usize;
         let mut total_opaque = 0usize;

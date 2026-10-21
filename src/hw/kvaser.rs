@@ -67,12 +67,9 @@ fn fd_bitrate_code(kbps: u32) -> Option<i32> {
 type CanInitializeLibrary = unsafe extern "system" fn() -> CanStatus;
 type CanGetNumberOfChannels = unsafe extern "system" fn(*mut i32) -> CanStatus;
 type CanOpenChannel = unsafe extern "system" fn(i32, i32) -> CanHandle;
-type CanSetBusParams =
-    unsafe extern "system" fn(i32, i32, u8, u8, u8, u8, u32) -> CanStatus;
-type CanSetBusParamsFd =
-    unsafe extern "system" fn(i32, i32, u8, u8, u8) -> CanStatus;
-type CanGetChannelData =
-    unsafe extern "system" fn(i32, i32, *mut c_void, *mut usize) -> CanStatus;
+type CanSetBusParams = unsafe extern "system" fn(i32, i32, u8, u8, u8, u8, u32) -> CanStatus;
+type CanSetBusParamsFd = unsafe extern "system" fn(i32, i32, u8, u8, u8) -> CanStatus;
+type CanGetChannelData = unsafe extern "system" fn(i32, i32, *mut c_void, *mut usize) -> CanStatus;
 type CanBusOn = unsafe extern "system" fn(i32) -> CanStatus;
 type CanBusOff = unsafe extern "system" fn(i32) -> CanStatus;
 type CanWrite = unsafe extern "system" fn(i32, u32, *const u8, u32, u32) -> CanStatus;
@@ -115,8 +112,19 @@ struct Canlib {
 impl Canlib {
     unsafe fn load() -> Option<Self> {
         const LOAD_LIBRARY_W_NAME: &[u16] = &[
-            b'c' as u16, b'a' as u16, b'n' as u16, b'l' as u16, b'i' as u16, b'b' as u16,
-            b'3' as u16, b'2' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+            b'c' as u16,
+            b'a' as u16,
+            b'n' as u16,
+            b'l' as u16,
+            b'i' as u16,
+            b'b' as u16,
+            b'3' as u16,
+            b'2' as u16,
+            b'.' as u16,
+            b'd' as u16,
+            b'l' as u16,
+            b'l' as u16,
+            0,
         ];
         #[link(name = "kernel32")]
         unsafe extern "system" {
@@ -173,8 +181,7 @@ impl Canlib {
 
     fn lib() -> Option<&'static Canlib> {
         static LIB: std::sync::OnceLock<Option<Canlib>> = std::sync::OnceLock::new();
-        LIB.get_or_init(|| unsafe { Canlib::load() })
-            .as_ref()
+        LIB.get_or_init(|| unsafe { Canlib::load() }).as_ref()
     }
 }
 
@@ -225,7 +232,11 @@ impl KvaserChannel {
         let fd_code = fd_data_kbps.and_then(fd_bitrate_code);
         unsafe {
             (lib.initialize_library)();
-            let mut flags = if init_access { 0 } else { CAN_OPEN_NO_INIT_ACCESS };
+            let mut flags = if init_access {
+                0
+            } else {
+                CAN_OPEN_NO_INIT_ACCESS
+            };
             if fd_code.is_some() {
                 flags |= CAN_OPEN_CAN_FD;
             }
@@ -389,7 +400,8 @@ impl Drop for KvaserChannel {
 /// result is a valid answer (driver present, no adapters); `Err` means
 /// the driver itself is unavailable.
 pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
-    let lib = Canlib::lib().ok_or_else(|| "Kvaser 驱动不可用（canlib32.dll 未找到）".to_string())?;
+    let lib =
+        Canlib::lib().ok_or_else(|| "Kvaser 驱动不可用（canlib32.dll 未找到）".to_string())?;
     unsafe {
         (lib.initialize_library)();
         let mut num: i32 = 0;
@@ -405,8 +417,8 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             // program is using is not disturbed. canGetChannelData --
             // the non-handle variant -- crashes this process on some
             // driver builds and is never called.
-            let name = probe_channel_name(lib, index)
-                .unwrap_or_else(|| format!("Kvaser 通道 {index}"));
+            let name =
+                probe_channel_name(lib, index).unwrap_or_else(|| format!("Kvaser 通道 {index}"));
             out.push(ChannelInfo { index, name });
         }
         Ok(out)
@@ -567,8 +579,19 @@ mod live {
             fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
         }
         const NAME: &[u16] = &[
-            b'c' as u16, b'a' as u16, b'n' as u16, b'l' as u16, b'i' as u16, b'b' as u16,
-            b'3' as u16, b'2' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+            b'c' as u16,
+            b'a' as u16,
+            b'n' as u16,
+            b'l' as u16,
+            b'i' as u16,
+            b'b' as u16,
+            b'3' as u16,
+            b'2' as u16,
+            b'.' as u16,
+            b'd' as u16,
+            b'l' as u16,
+            b'l' as u16,
+            0,
         ];
         unsafe {
             let module = LoadLibraryW(NAME.as_ptr());

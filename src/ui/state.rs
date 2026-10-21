@@ -122,10 +122,7 @@ fn rule_editor(app: &mut App, ui: &Ui) {
         crate::observe::SigKey::Can { id, ext, .. } => format!("{id}{}", *ext as u8),
         crate::observe::SigKey::Fr { bus, slot, .. } => format!("fr{bus}_{slot}"),
     };
-    let title = format!(
-        "State bands \u{2014} {}###srules{wi}{id_tag}",
-        key.name()
-    );
+    let title = format!("State bands \u{2014} {}###srules{wi}{id_tag}", key.name());
     let mut open = true;
     ui.window(title)
         .opened(&mut open)
@@ -297,10 +294,7 @@ fn default_panel(
             .get(&(*id, *ext))
             .and_then(|m| m.signals.iter().find(|s| &s.name == name))
             .cloned();
-        let table = db
-            .value_tables
-            .get(&((*id, *ext), name.clone()))
-            .cloned();
+        let table = db.value_tables.get(&((*id, *ext), name.clone())).cloned();
         if let (Some(sig), Some(table)) = (sig, table) {
             let mut entries: Vec<(i64, &String)> = table.iter().map(|(r, l)| (*r, l)).collect();
             entries.sort_by_key(|(r, _)| *r);
@@ -583,7 +577,11 @@ fn bands_area(app: &mut App, ui: &Ui, i: usize) {
         } else {
             [0.45, 0.45, 0.5, 1.0]
         };
-        dl.add_text([x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5], name_col, key.name());
+        dl.add_text(
+            [x0 + 4.0, ry + (ROW_H - tsz[1]) * 0.5],
+            name_col,
+            key.name(),
+        );
         dl.add_rect(
             [geo.bx0, ry],
             [geo.bx1, ry + ROW_H],
@@ -717,13 +715,7 @@ pub(crate) fn is_binary(states: &[f64]) -> bool {
 /// row, the low state along the bottom, every transition drops a vertical
 /// edge, and the label sits mid-cell -- the FlashLight row of the CANoe
 /// screenshot.
-fn draw_wave(
-    ui: &Ui,
-    dl: &mut DrawListMut,
-    segs: &[StateSeg],
-    geo: &BandGeo,
-    color: [f32; 4],
-) {
+fn draw_wave(ui: &Ui, dl: &mut DrawListMut, segs: &[StateSeg], geo: &BandGeo, color: [f32; 4]) {
     let ry = geo.ry;
     let high_y = ry + 5.0;
     let low_y = ry + ROW_H - 6.0;

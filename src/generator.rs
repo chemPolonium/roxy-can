@@ -457,9 +457,7 @@ impl App {
             crate::app::GenRow::Can(i) => self.snap.tx.get(i).map(|t| t.srcs.clone()),
             crate::app::GenRow::Fr(i) => self.snap.fr_tx.get(i).map(|t| t.srcs.clone()),
         };
-        srcs?
-            .into_iter()
-            .find(|s| s.name == sig)
+        srcs?.into_iter().find(|s| s.name == sig)
     }
 
     /// Applies a drafted source to whichever row it belongs to.
@@ -728,9 +726,9 @@ pub(crate) fn fr_tx_set_signal(
     name: &str,
     phys: f64,
 ) -> Result<(), String> {
-    let ix = db.frame_ix_of_slot(tx.slot).ok_or_else(|| {
-        format!("这一路的描述未在 slot {} 调度帧：没有信号可写", tx.slot)
-    })?;
+    let ix = db
+        .frame_ix_of_slot(tx.slot)
+        .ok_or_else(|| format!("这一路的描述未在 slot {} 调度帧：没有信号可写", tx.slot))?;
     let mut data = tx.data.clone();
     if !db.encode_signal(ix, name, phys, &mut data) {
         return Err(format!(

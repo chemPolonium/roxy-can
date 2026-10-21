@@ -246,9 +246,8 @@ impl FrPort {
 
 /// The receive queue [`Hardware::attach_fr_mock`] hands back to a test.
 #[cfg(test)]
-pub type MockFrHandles = std::sync::Arc<
-    std::sync::Mutex<std::collections::VecDeque<vector::flexray::FrFrame>>,
->;
+pub type MockFrHandles =
+    std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<vector::flexray::FrFrame>>>;
 
 /// Test double for a FlexRay port: hands back whatever the test queued.
 #[cfg(test)]
@@ -326,13 +325,19 @@ impl Hardware {
 
     /// Whether the bus's attachment has FD data-phase params applied.
     pub fn fd(&self, bus: u8) -> bool {
-        self.buses
-            .get(&bus)
-            .is_some_and(|bh| bh.port.fd())
+        self.buses.get(&bus).is_some_and(|bh| bh.port.fd())
     }
 
     /// Attaches a port to a bus, replacing any previous attachment.
-    pub fn attach(&mut self, bus: u8, driver: HwDriver, adapter: i32, kbps: u32, can_tx: bool, port: HwPort) {
+    pub fn attach(
+        &mut self,
+        bus: u8,
+        driver: HwDriver,
+        adapter: i32,
+        kbps: u32,
+        can_tx: bool,
+        port: HwPort,
+    ) {
         // A new port starts with a clean record, and an announcement queued
         // about the old one must not arrive after the swap.
         self.pending_tx_fail.retain(|&b| b != bus);
@@ -365,8 +370,7 @@ impl Hardware {
         fibex_path: &str,
         db: &crate::fr_db::FrDb,
     ) -> Result<(), String> {
-        let port =
-            crate::hw::vector::flexray::FlexRayChannel::open_rx_with_db(channel_index, db)?;
+        let port = crate::hw::vector::flexray::FlexRayChannel::open_rx_with_db(channel_index, db)?;
         self.fr_watches.insert(
             bus,
             FrWatch {
@@ -384,9 +388,8 @@ impl Hardware {
     /// testable on a machine with no FlexRay hardware.
     #[cfg(test)]
     pub fn attach_fr_mock(&mut self, bus: u8, channel_index: i32) -> MockFrHandles {
-        let incoming = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::VecDeque::new(),
-        ));
+        let incoming =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         self.fr_watches.insert(
             bus,
             FrWatch {
@@ -514,7 +517,10 @@ impl Hardware {
         match &mut bh.tx_fail {
             Some((_, total)) => *total += n,
             None => {
-                bh.tx_fail = Some((format!("发送未被应答（驱动回报 tag 0x{tag:04X}，{n} 条）"), n));
+                bh.tx_fail = Some((
+                    format!("发送未被应答（驱动回报 tag 0x{tag:04X}，{n} 条）"),
+                    n,
+                ));
                 self.pending_tx_fail.push(bus);
             }
         }
@@ -557,14 +563,10 @@ impl Hardware {
     /// Attaches a mock port to a bus and returns shared handles to what
     /// was written and what is queued as received. Tests only.
     #[cfg(test)]
-    pub fn attach_mock(
-        &mut self,
-        bus: u8,
-    ) -> MockHandles {
+    pub fn attach_mock(&mut self, bus: u8) -> MockHandles {
         let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let incoming = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::VecDeque::new(),
-        ));
+        let incoming =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         self.attach(
             bus,
             HwDriver::Kvaser,
@@ -586,9 +588,8 @@ impl Hardware {
     #[cfg(test)]
     pub fn attach_mock_refusing(&mut self, bus: u8, reason: &str) -> MockHandles {
         let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let incoming = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::VecDeque::new(),
-        ));
+        let incoming =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         self.attach(
             bus,
             HwDriver::Vector,

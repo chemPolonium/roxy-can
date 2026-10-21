@@ -20,8 +20,9 @@ pub fn read_file(path: &std::path::Path) -> std::io::Result<String> {
 pub fn text_from_bytes(bytes: Vec<u8>) -> String {
     match String::from_utf8(bytes.clone()) {
         Ok(s) => s,
-        Err(_) => gbk_to_utf8(&bytes)
-            .unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned()),
+        Err(_) => {
+            gbk_to_utf8(&bytes).unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned())
+        }
     }
 }
 
@@ -56,8 +57,14 @@ fn gbk_to_utf8(bytes: &[u8]) -> Option<String> {
             return None;
         }
         let mut buf = vec![0u16; n as usize];
-        let written =
-            MultiByteToWideChar(CP_GBK, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, buf.as_mut_ptr(), n);
+        let written = MultiByteToWideChar(
+            CP_GBK,
+            MB_ERR_INVALID_CHARS,
+            bytes.as_ptr(),
+            len,
+            buf.as_mut_ptr(),
+            n,
+        );
         if written != n {
             return None;
         }
@@ -683,7 +690,8 @@ mod tests {
     /// signal unit. A UTF-8 file passes through untouched.
     #[test]
     fn gbk_dbc_files_decode_with_chinese_names_intact() {
-        let mut gbk = b"VERSION \"\"\nBO_ 100 Engine: 8 ECU\n SG_ S : 0|8@1+ (1,0) [0|255] \"".to_vec();
+        let mut gbk =
+            b"VERSION \"\"\nBO_ 100 Engine: 8 ECU\n SG_ S : 0|8@1+ (1,0) [0|255] \"".to_vec();
         gbk.extend_from_slice(&[0xCE, 0xC2, 0xB6, 0xC8, 0x3B, 0xB3, 0xB5, 0xCB, 0xD9]); // 温度;车速
         gbk.extend_from_slice(b"\" ECU\n");
         let text = text_from_bytes(gbk);
@@ -1269,7 +1277,10 @@ BO_ 441 Tags: 8 ECU
         );
         // A missing part costs nothing, not an empty pair of brackets:
         // FlexRay signals have no type tag, and "0 [] (正常)" read as a defect.
-        assert_eq!(fmt_signal_value(3.5, "Mpa", "", Some("正常")), "3.5 Mpa (正常)");
+        assert_eq!(
+            fmt_signal_value(3.5, "Mpa", "", Some("正常")),
+            "3.5 Mpa (正常)"
+        );
         assert_eq!(fmt_signal_value(3.5, "", "", None), "3.5");
     }
 
@@ -1341,4 +1352,3 @@ VAL_ 420 S States;
         assert!(db.is_err(), "the named-table VAL_ form is unparseable");
     }
 }
-

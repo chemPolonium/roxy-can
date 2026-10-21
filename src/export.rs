@@ -384,15 +384,13 @@ impl App {
             };
             filter[i]
         };
-        let filter = self.write_filter;
+        let filter = self.write_view.filter;
         let lines: Vec<String> = self
             .snap
             .write
             .iter()
             .filter(|l| want(&l.kind, &filter))
-            .map(|l| {
-                format!("[{}] {}", crate::ui::write::wall_stamp(l.wall_us), l.text)
-            })
+            .map(|l| format!("[{}] {}", crate::ui::write::wall_stamp(l.wall_us), l.text))
             .collect();
         if lines.is_empty() {
             self.status = "export: the Write log is empty".to_string();
@@ -474,7 +472,10 @@ impl App {
             let label = sub.label.as_deref().unwrap_or("");
             s.push_str(&format!(
                 "{bus},{},{},{},{},{label}\n",
-                key.name(), sub.latest, sub.unit, sub.type_tag
+                key.name(),
+                sub.latest,
+                sub.unit,
+                sub.type_tag
             ));
         }
         self.write_export(path, s);

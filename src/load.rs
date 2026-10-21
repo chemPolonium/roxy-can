@@ -203,11 +203,19 @@ impl FrLoad {
     }
 
     pub fn load_stats(&self) -> (Option<f64>, Option<f64>, Option<f64>) {
-        (self.load_min, self.load_max, divide(self.load_sum, self.load_n))
+        (
+            self.load_min,
+            self.load_max,
+            divide(self.load_sum, self.load_n),
+        )
     }
 
     pub fn rate_stats(&self) -> (Option<f64>, Option<f64>, Option<f64>) {
-        (self.rate_min, self.rate_max, divide(self.rate_sum, self.rate_n))
+        (
+            self.rate_min,
+            self.rate_max,
+            divide(self.rate_sum, self.rate_n),
+        )
     }
 }
 
@@ -855,7 +863,11 @@ mod tests {
         for i in 0..100u64 {
             load.note((i + 1) * 10_000, Some(40.0));
         }
-        assert!((load.load() - 0.004).abs() < 1e-12, "{} %", load.load() * 100.0);
+        assert!(
+            (load.load() - 0.004).abs() < 1e-12,
+            "{} %",
+            load.load() * 100.0
+        );
         assert_eq!(load.frame_rate(), 100.0);
         assert_eq!(load.frames, 100);
     }
@@ -889,7 +901,11 @@ mod tests {
         load.note(2_000, None);
         assert_eq!(load.frames, 2);
         assert_eq!(load.frame_rate(), 2.0);
-        assert_eq!(load.load(), 0.0, "nothing was charged, so nothing is claimed");
+        assert_eq!(
+            load.load(),
+            0.0,
+            "nothing was charged, so nothing is claimed"
+        );
     }
 
     /// `gstaticSlot` macroticks of `gmacrotick` each, and no invented number

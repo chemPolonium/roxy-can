@@ -1,6 +1,56 @@
 use crate::app::App;
 use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, Ui};
 
+/// The Buses window's own state: open flag, the two rename drafts, and the
+/// cached hardware enumerations. Everything that changes a bus or a port is
+/// returned as a [`BusesCmd`].
+#[derive(Default)]
+pub struct BusesView {
+    pub open: bool,
+    pub bus_name_edit: Option<(usize, String)>,
+    pub fr_name_edit: Option<(u8, String)>,
+    pub hw_channels: Option<Result<Vec<crate::hw::AnyChannelInfo>, String>>,
+    pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
+}
+
+pub enum BusesCmd {
+    AddChannel,
+    RemoveChannel(usize),
+    SetChannelConfig {
+        ch: u8,
+        name: Option<String>,
+        bitrate_kbps: Option<u32>,
+        fd_data_kbps: Option<u32>,
+    },
+    PickDbc(usize),
+    AttachDbc(usize),
+    DetachDbcExtra {
+        bus: usize,
+        extra: usize,
+    },
+    DetachHardware(u8),
+    AttachHardware {
+        bus: u8,
+        driver: crate::hw::HwDriver,
+        index: i32,
+        arb_kbps: u32,
+        data_kbps: u32,
+    },
+    AddFrBus,
+    RemoveFrBus(u8),
+    SetFrName {
+        bus: u8,
+        name: String,
+    },
+    DetachFrWatch(u8),
+    PickClusterDescription(u8),
+    AttachFrWatch {
+        bus: u8,
+        channel_index: i32,
+    },
+    SetReplayMap(crate::replay_map::ReplayMap),
+}
+
 /// The arbitration bit rates a CAN bus is wired for in practice. A pick list,
 /// not a typed number: a wrong bit rate does not fail, it silently mis-decodes
 /// every frame on the wire, so the choices are the standard ones -- plus the
@@ -36,20 +86,55 @@ fn rate_choices(standards: &[u32], current: u32, zero_label: &str) -> (Vec<u32>,
 
 /// Bus management: rename buses, load a DBC per bus, add/remove buses.
 pub fn render(app: &mut App, ui: &Ui) {
-    if !app.show_buses {
-        return;
+    let mut view = std::mem::take(&mut app.buses_view);
+    let cmds = view.show(ui, app);
+    app.buses_view = view;
+    app.apply_buses_cmds(cmds);
+}
+
+impl BusesView {
+    pub fn show(&mut self, ui: &Ui, app: &App) -> Vec<BusesCmd> {
+        let mut cmds = Vec::new();
+        if !self.open {
+            return cmds;
+        }
+        let io = ui.io();
+        let mut open = self.open;
+        ui.window("Buses")
+            .opened(&mut open)
+            .position(
+                [io.display_size()[0] * 0.38, io.display_size()[1] * 0.25],
+                Condition::FirstUseEver,
+            )
+            .size([480.0, 240.0], Condition::FirstUseEver)
+            .build(|| content(self, app, ui, &mut cmds));
+        self.open = open;
+        cmds
     }
-    let io = ui.io();
-    let mut open = app.show_buses;
-    ui.window("Buses")
-        .opened(&mut open)
-        .position(
-            [io.display_size()[0] * 0.38, io.display_size()[1] * 0.25],
-            Condition::FirstUseEver,
-        )
-        .size([480.0, 240.0], Condition::FirstUseEver)
-        .build(|| content(app, ui));
-    app.show_buses = open;
+
+    /// Enumerates the hardware channels of every supported driver once per
+    /// session; later calls reuse the cached answer (including "driver
+    /// unavailable").
+    fn ensure_hw_list(&mut self) -> Result<Vec<crate::hw::AnyChannelInfo>, String> {
+        self.hw_channels.clone().unwrap_or_else(|| {
+            let fresh = crate::hw::enumerate_all();
+            self.hw_channels = Some(fresh.clone());
+            fresh
+        })
+    }
+
+    /// Enumerates the Vector channels once per session, on the same
+    /// cache-or-probe pattern as the CAN list. Portal devices (VN7640...)
+    /// often do not report the FlexRay capability bit at all, so the FR
+    /// section offers every channel -- the attach attempt is the real test,
+    /// and its failure lands in the status line.
+    fn ensure_fr_list(&mut self) -> Result<Vec<crate::hw::vector::ChannelInfo>, String> {
+        self.fr_channels.clone().unwrap_or_else(|| {
+            let fresh = crate::hw::vector::enumerate();
+            self.fr_channels = Some(fresh.clone());
+            fresh
+        })
+    }
 }
 
 fn file_name(p: &str) -> String {
@@ -74,38 +159,12 @@ fn fr_cluster_tag(app: &App, bus: u8) -> String {
     }
 }
 
-/// Enumerates the hardware channels of every supported driver once per
-/// session; later calls reuse the cached answer (including "driver
-/// unavailable").
-fn ensure_hw_list(app: &mut App) -> Result<Vec<crate::hw::AnyChannelInfo>, String> {
-    let cached = app.hw_channels.clone();
-    cached.unwrap_or_else(|| {
-        let fresh = crate::hw::enumerate_all();
-        app.hw_channels = Some(fresh.clone());
-        fresh
-    })
-}
-
-/// Enumerates the Vector channels once per session, on the same
-/// cache-or-probe pattern as the CAN list. Portal devices (VN7640...)
-/// often do not report the FlexRay capability bit at all, so the FR
-/// section offers every channel -- the attach attempt is the real test,
-/// and its failure lands in the status line.
-fn ensure_fr_list(app: &mut App) -> Result<Vec<crate::hw::vector::ChannelInfo>, String> {
-    let cached = app.fr_channels.clone();
-    cached.unwrap_or_else(|| {
-        let fresh = crate::hw::vector::enumerate();
-        app.fr_channels = Some(fresh.clone());
-        fresh
-    })
-}
-
 /// 回放通道映射：日志里的通道编号 → 本工程的哪一路。
 ///
 /// 行来自本次回放真正见过的编号（映射表因此不需要先把文件读第二遍来数通道），
 /// 再加上配过但这次没来过的——那是一份存进工程的选择，删掉就等于悄悄改回原样。
 /// 每一行改完整张表发回核心：正在回放时下一条命令被抽干就生效，已经进环的帧不动。
-fn replay_map_section(app: &mut App, ui: &Ui) {
+fn replay_map_section(app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     use crate::replay_map::LogBusKind;
 
     ui.separator();
@@ -126,18 +185,10 @@ fn replay_map_section(app: &mut App, ui: &Ui) {
     }
 
     // 读进自有值再画，理由与上面两张表一样：下面的下拉框要 `app` 独占。
-    let can_names: Vec<String> = app
-        .snap
-        .channels
-        .iter()
-        .map(|c| c.name.clone())
-        .collect();
+    let can_names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
     let mut fr_buses: Vec<u8> = app.fr_buses.keys().copied().collect();
     fr_buses.sort_unstable();
-    let fr_names: Vec<String> = fr_buses
-        .iter()
-        .map(|bus| app.fr_bus_name(*bus))
-        .collect();
+    let fr_names: Vec<String> = fr_buses.iter().map(|bus| app.fr_bus_name(*bus)).collect();
     let mut edited = map.clone();
 
     // 一行一路。列就三样：日志里的编号、它带来了多少条、回放成哪一路——
@@ -236,7 +287,7 @@ fn replay_map_section(app: &mut App, ui: &Ui) {
         }
     }
     if edited != map {
-        app.set_replay_map(edited);
+        cmds.push(BusesCmd::SetReplayMap(edited));
     }
 }
 
@@ -263,9 +314,9 @@ fn merged_rows(counts: &[(u8, u64)], configured: &[(u8, Option<u8>)]) -> Vec<(u8
     out
 }
 
-fn content(app: &mut App, ui: &Ui) {
+fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     if ui.button("+ Add bus") {
-        app.add_channel();
+        cmds.push(BusesCmd::AddChannel);
     }
     ui.same_line();
     ui.text(format!("{} bus(es)", app.snap.channel_count));
@@ -273,8 +324,8 @@ fn content(app: &mut App, ui: &Ui) {
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
     if ui.button("刷新通道##hwref") {
-        app.hw_channels = None;
-        app.fr_channels = None;
+        view.hw_channels = None;
+        view.fr_channels = None;
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("重新枚举本机硬件通道（Kvaser / Vector）");
@@ -320,27 +371,26 @@ fn content(app: &mut App, ui: &Ui) {
             ui.set_next_item_width(-1.0);
             // The rename draft lives in `bus_name_edit` while the box has
             // focus; the bus sees the new name when the edit commits.
-            let editing = matches!(&app.bus_name_edit, Some((r, _)) if *r == i);
-            let mut name_buf = match &app.bus_name_edit {
+            let editing = matches!(&view.bus_name_edit, Some((r, _)) if *r == i);
+            let mut name_buf = match &view.bus_name_edit {
                 Some((r, s)) if *r == i => s.clone(),
                 _ => name,
             };
-            ui.input_text(format!("##busname{i}"), &mut name_buf).build();
+            ui.input_text(format!("##busname{i}"), &mut name_buf)
+                .build();
             if ui.is_item_active() {
-                app.bus_name_edit = Some((i, name_buf.clone()));
+                view.bus_name_edit = Some((i, name_buf.clone()));
             }
             if ui.is_item_deactivated_after_edit() {
-                app.bus_name_edit = None;
-                app.send(crate::bus::BusCommand::SetChannelConfig {
+                view.bus_name_edit = None;
+                cmds.push(BusesCmd::SetChannelConfig {
                     ch: i as u8,
                     name: Some(name_buf),
-                    dbc_path: None,
                     bitrate_kbps: None,
                     fd_data_kbps: None,
-                    node_roles: None,
                 });
             } else if editing && !ui.is_item_active() {
-                app.bus_name_edit = None;
+                view.bus_name_edit = None;
             }
             ui.table_next_column();
             let path = paths.first().cloned().unwrap_or_default();
@@ -355,14 +405,14 @@ fn content(app: &mut App, ui: &Ui) {
             // out of the cell. No baseline alignment either -- the small
             // buttons are text-height, so they sit level on their own line.
             if ui.button(format!("Open...##busdbc{i}")) {
-                app.pick_dbc_for(i);
+                cmds.push(BusesCmd::PickDbc(i));
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text("换这条总线的主 DBC 文件（解码与查名以它为先）");
             }
             ui.same_line();
             if ui.button(format!("+##busdbadd{i}")) {
-                app.attach_dbc_dialog(i);
+                cmds.push(BusesCmd::AttachDbc(i));
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text("附加更多 DBC 文件到该总线");
@@ -372,7 +422,7 @@ fn content(app: &mut App, ui: &Ui) {
                 ui.text_disabled(file_name(extra));
                 ui.same_line();
                 if ui.button(format!("x##busdbx{i}_{e}")) {
-                    app.detach_dbc_extra(i, e);
+                    cmds.push(BusesCmd::DetachDbcExtra { bus: i, extra: e });
                 }
             }
             ui.table_next_column();
@@ -388,13 +438,11 @@ fn content(app: &mut App, ui: &Ui) {
             let mut arb_pick = arb_at;
             ui.set_next_item_width(76.0);
             if ui.combo_simple_string(format!("##busarb{i}"), &mut arb_pick, &arb_refs) {
-                app.send(crate::bus::BusCommand::SetChannelConfig {
+                cmds.push(BusesCmd::SetChannelConfig {
                     ch: i as u8,
                     name: None,
-                    dbc_path: None,
                     bitrate_kbps: Some(arb_vals[arb_pick.min(arb_vals.len() - 1)].max(1)),
                     fd_data_kbps: None,
-                    node_roles: None,
                 });
             }
             if ui.is_item_hovered() {
@@ -407,13 +455,11 @@ fn content(app: &mut App, ui: &Ui) {
             let mut data_pick = data_at;
             ui.set_next_item_width(96.0);
             if ui.combo_simple_string(format!("##busdata{i}"), &mut data_pick, &data_refs) {
-                app.send(crate::bus::BusCommand::SetChannelConfig {
+                cmds.push(BusesCmd::SetChannelConfig {
                     ch: i as u8,
                     name: None,
-                    dbc_path: None,
                     bitrate_kbps: None,
                     fd_data_kbps: Some(data_vals[data_pick.min(data_vals.len() - 1)]),
-                    node_roles: None,
                 });
             }
             if ui.is_item_hovered() {
@@ -426,21 +472,16 @@ fn content(app: &mut App, ui: &Ui) {
             // the installed driver on first need.
             // Hardware attachment: one adapter per bus, enumerated from
             // the installed driver on first need.
-            let attached = app
-                .snap
-                .hw
-                .iter()
-                .find(|h| h.bus as usize == i)
-                .map(|h| {
-                    (
-                        h.driver,
-                        h.adapter,
-                        h.kbps,
-                        h.can_tx,
-                        h.fd,
-                        h.tx_fail.clone(),
-                    )
-                });
+            let attached = app.snap.hw.iter().find(|h| h.bus as usize == i).map(|h| {
+                (
+                    h.driver,
+                    h.adapter,
+                    h.kbps,
+                    h.can_tx,
+                    h.fd,
+                    h.tx_fail.clone(),
+                )
+            });
             match attached {
                 Some((driver, adapter, kbps, can_tx, fd, tx_fail)) => {
                     // 两行布局：上行状态、下行断开按钮——任何列宽下都完整
@@ -461,11 +502,8 @@ fn content(app: &mut App, ui: &Ui) {
                             );
                         }
                     }
-                    if ui.button(format!(
-                    "{}##hwdet{i}",
-                    crate::channel::DETACH_LABEL
-                )) {
-                        app.detach_hardware(i as u8);
+                    if ui.button(format!("{}##hwdet{i}", crate::channel::DETACH_LABEL)) {
+                        cmds.push(BusesCmd::DetachHardware(i as u8));
                     }
                     if ui.is_item_hovered() {
                         // FD 数据段配在总线上但通道没带上 FD：降级原因
@@ -494,7 +532,7 @@ fn content(app: &mut App, ui: &Ui) {
                     }
                 }
                 None => {
-                    let channels = ensure_hw_list(app).clone();
+                    let channels = view.ensure_hw_list();
                     match channels {
                         Ok(channels) if !channels.is_empty() => {
                             let labels: Vec<String> = channels
@@ -513,16 +551,14 @@ fn content(app: &mut App, ui: &Ui) {
                                 .position(|c| Some((c.driver, c.index)) == want)
                                 .unwrap_or(0);
                             if ui.combo_simple_string(format!("##hw{i}"), &mut pick, &refs) {
-                                let (driver, index) =
-                                    (channels[pick].driver, channels[pick].index);
-                                app.hw_pick.insert(i as u8, (driver, index));
-                                app.set_hardware_channel(
-                                    i as u8,
+                                let (driver, index) = (channels[pick].driver, channels[pick].index);
+                                cmds.push(BusesCmd::AttachHardware {
+                                    bus: i as u8,
                                     driver,
                                     index,
                                     arb_kbps,
-                                    Some(data_kbps),
-                                );
+                                    data_kbps,
+                                });
                             }
                             if ui.is_item_hovered() {
                                 ui.tooltip_text(
@@ -547,7 +583,7 @@ fn content(app: &mut App, ui: &Ui) {
         }
     }
     if let Some(i) = remove {
-        app.remove_channel(i);
+        cmds.push(BusesCmd::RemoveChannel(i));
     }
 
     // FlexRay buses: the same table shape as the CAN one above -- one row per
@@ -565,7 +601,7 @@ fn content(app: &mut App, ui: &Ui) {
     // A channel already feeding a watch is not offered again: the second open
     // would fail in the driver, and two watches on one port are never what
     // "another cluster" means.
-    let listed = ensure_fr_list(app);
+    let listed = view.ensure_fr_list();
     let free: Vec<_> = match &listed {
         Ok(list) => list
             .iter()
@@ -581,7 +617,7 @@ fn content(app: &mut App, ui: &Ui) {
     // rather than inventing one.
     let rows = app.fr_bus_rows();
     if ui.button("+ Add FlexRay") {
-        app.add_flexray_bus();
+        cmds.push(BusesCmd::AddFrBus);
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("添加一条 FlexRay 路：先为它选择集群描述（取消则不添加）。");
@@ -628,8 +664,8 @@ fn content(app: &mut App, ui: &Ui) {
             // under the box: the record filter (`FR0:13`) and a script's
             // `fr_sig(0, ..)` are numbered by that index, so renaming a 路 must
             // not lose the only place on screen that says which number to type.
-            let editing = matches!(&app.fr_name_edit, Some((r, _)) if *r == bus);
-            let mut name_buf = match &app.fr_name_edit {
+            let editing = matches!(&view.fr_name_edit, Some((r, _)) if *r == bus);
+            let mut name_buf = match &view.fr_name_edit {
                 Some((r, s)) if *r == bus => s.clone(),
                 _ => app.fr_bus_name(bus),
             };
@@ -637,13 +673,16 @@ fn content(app: &mut App, ui: &Ui) {
             ui.input_text(format!("##frname{bus}"), &mut name_buf)
                 .build();
             if ui.is_item_active() {
-                app.fr_name_edit = Some((bus, name_buf.clone()));
+                view.fr_name_edit = Some((bus, name_buf.clone()));
             }
             if ui.is_item_deactivated_after_edit() {
-                app.fr_name_edit = None;
-                app.set_flexray_name(bus, &name_buf);
+                view.fr_name_edit = None;
+                cmds.push(BusesCmd::SetFrName {
+                    bus,
+                    name: name_buf,
+                });
             } else if editing && !ui.is_item_active() {
-                app.fr_name_edit = None;
+                view.fr_name_edit = None;
             }
             let mut meta = format!("#{bus}");
             if path.is_empty() && watch.is_none() {
@@ -712,10 +751,7 @@ fn content(app: &mut App, ui: &Ui) {
                             );
                         }
                     }
-                    if ui.button(format!(
-                        "{}##frdet{bus}",
-                        crate::channel::DETACH_LABEL
-                    )) {
+                    if ui.button(format!("{}##frdet{bus}", crate::channel::DETACH_LABEL)) {
                         detach = Some(bus);
                     }
                     if ui.is_item_hovered() {
@@ -738,13 +774,9 @@ fn content(app: &mut App, ui: &Ui) {
                         // no watch behind, and the row would otherwise read
                         // `ch0` while the bar names the port that failed.
                         let want = app.fr_pick.get(&bus).copied();
-                        let mut pick = free
-                            .iter()
-                            .position(|c| Some(c.index) == want)
-                            .unwrap_or(0);
+                        let mut pick = free.iter().position(|c| Some(c.index) == want).unwrap_or(0);
                         if ui.combo_simple_string(format!("##frch{bus}"), &mut pick, &refs) {
                             let idx = free[pick.min(free.len() - 1)].index;
-                            app.fr_pick.insert(bus, idx);
                             attach = Some((bus, idx));
                         }
                         if ui.is_item_hovered() {
@@ -777,16 +809,66 @@ fn content(app: &mut App, ui: &Ui) {
         }
     }
     if let Some(bus) = detach {
-        app.detach_flexray_watch(bus);
+        cmds.push(BusesCmd::DetachFrWatch(bus));
     }
     if let Some(bus) = remove_fr {
-        app.remove_fr_bus(bus);
+        cmds.push(BusesCmd::RemoveFrBus(bus));
     }
     if let Some(bus) = load_for {
-        app.pick_cluster_description(bus);
+        cmds.push(BusesCmd::PickClusterDescription(bus));
     }
     if let Some((bus, channel_index)) = attach {
-        app.attach_fr_watch_on(bus, channel_index);
+        cmds.push(BusesCmd::AttachFrWatch { bus, channel_index });
     }
-    replay_map_section(app, ui);
+    replay_map_section(app, ui, cmds);
+}
+
+impl App {
+    pub(crate) fn apply_buses_cmds(&mut self, cmds: Vec<BusesCmd>) {
+        for cmd in cmds {
+            match cmd {
+                BusesCmd::AddChannel => self.add_channel(),
+                BusesCmd::RemoveChannel(i) => self.remove_channel(i),
+                BusesCmd::SetChannelConfig {
+                    ch,
+                    name,
+                    bitrate_kbps,
+                    fd_data_kbps,
+                } => {
+                    self.send(crate::bus::BusCommand::SetChannelConfig {
+                        ch,
+                        name,
+                        dbc_path: None,
+                        bitrate_kbps,
+                        fd_data_kbps,
+                        node_roles: None,
+                    });
+                }
+                BusesCmd::PickDbc(ch) => self.pick_dbc_for(ch),
+                BusesCmd::AttachDbc(ch) => self.attach_dbc_dialog(ch),
+                BusesCmd::DetachDbcExtra { bus, extra } => self.detach_dbc_extra(bus, extra),
+                BusesCmd::DetachHardware(bus) => self.detach_hardware(bus),
+                BusesCmd::AttachHardware {
+                    bus,
+                    driver,
+                    index,
+                    arb_kbps,
+                    data_kbps,
+                } => {
+                    self.hw_pick.insert(bus, (driver, index));
+                    self.set_hardware_channel(bus, driver, index, arb_kbps, Some(data_kbps));
+                }
+                BusesCmd::AddFrBus => self.add_flexray_bus(),
+                BusesCmd::RemoveFrBus(bus) => self.remove_fr_bus(bus),
+                BusesCmd::SetFrName { bus, name } => self.set_flexray_name(bus, &name),
+                BusesCmd::DetachFrWatch(bus) => self.detach_flexray_watch(bus),
+                BusesCmd::PickClusterDescription(bus) => self.pick_cluster_description(bus),
+                BusesCmd::AttachFrWatch { bus, channel_index } => {
+                    self.fr_pick.insert(bus, channel_index);
+                    self.attach_fr_watch_on(bus, channel_index);
+                }
+                BusesCmd::SetReplayMap(map) => self.set_replay_map(map),
+            }
+        }
+    }
 }

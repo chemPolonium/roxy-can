@@ -198,14 +198,19 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                 });
                 ui.menu("View", || {
-                    if ui.menu_item_enabled_selected("Buses", None::<&str>, app.show_buses, true) {
-                        app.show_buses = !app.show_buses;
+                    if ui.menu_item_enabled_selected("Buses", None::<&str>, app.buses_view.open, true) {
+                        app.buses_view.open = !app.buses_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Triggers", None::<&str>, app.show_triggers, true) {
-                        app.show_triggers = !app.show_triggers;
+                    if ui.menu_item_enabled_selected(
+                        "Triggers",
+                        None::<&str>,
+                        app.triggers_view.open,
+                        true,
+                    ) {
+                        app.triggers_view.open = !app.triggers_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Bus Statistics", None::<&str>, app.show_bus_stats, true) {
-                        app.show_bus_stats = !app.show_bus_stats;
+                    if ui.menu_item_enabled_selected("Bus Statistics", None::<&str>, app.busstats_view.open, true) {
+                        app.busstats_view.open = !app.busstats_view.open;
                     }
                     if ui.menu_item_enabled_selected("Interactive Generator", None::<&str>, app.show_tx, true) {
                         app.show_tx = !app.show_tx;
@@ -213,28 +218,28 @@ pub fn render(app: &mut App, ui: &Ui) {
                     if ui.menu_item_enabled_selected("Network", None::<&str>, app.show_network, true) {
                         app.show_network = !app.show_network;
                     }
-                    if ui.menu_item_enabled_selected("Specification", None::<&str>, app.show_spec, true) {
-                        app.show_spec = !app.show_spec;
+                    if ui.menu_item_enabled_selected("Specification", None::<&str>, app.spec_view.open, true) {
+                        app.spec_view.open = !app.spec_view.open;
                     }
                     if ui.menu_item_enabled_selected("Measurement Setup", None::<&str>, app.show_measurement, true) {
                         app.show_measurement = !app.show_measurement;
                     }
-                    if ui.menu_item_enabled_selected("System Variables", None::<&str>, app.show_sysvars, true) {
-                        app.show_sysvars = !app.show_sysvars;
+                    if ui.menu_item_enabled_selected("System Variables", None::<&str>, app.sysvars_view.open, true) {
+                        app.sysvars_view.open = !app.sysvars_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Write", None::<&str>, app.show_write, true) {
-                        app.show_write = !app.show_write;
+                    if ui.menu_item_enabled_selected("Write", None::<&str>, app.write_view.open, true) {
+                        app.write_view.open = !app.write_view.open;
                     }
-                    if ui.menu_item_enabled_selected("Monitor", None::<&str>, app.show_monitor, true) {
-                        app.show_monitor = !app.show_monitor;
+                    if ui.menu_item_enabled_selected("Monitor", None::<&str>, app.monitor_view.open, true) {
+                        app.monitor_view.open = !app.monitor_view.open;
                     }
                 });
                 ui.menu("Help", || {
                     if ui.menu_item("Shortcuts") {
-                        app.show_shortcuts = true;
+                        app.help_view.shortcuts = true;
                     }
                     if ui.menu_item("About") {
-                        app.show_about = true;
+                        app.help_view.about = true;
                     }
                 });
             });

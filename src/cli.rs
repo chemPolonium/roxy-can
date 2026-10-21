@@ -27,15 +27,11 @@ pub enum Cli {
     /// drain it briefly: the FR-2 field diagnostic. `fibex` names a
     /// cluster description to validate and configure the channel from
     /// instead of the zeroed probe config.
-    VectorProbe {
-        fibex: Option<String>,
-    },
+    VectorProbe { fibex: Option<String> },
     /// Open one Vector CAN channel with init access, transmit a few frames and
     /// report **every** event tag the driver hands back: what a bench says about
     /// a frame nobody acknowledged. `--vector-tx-probe <channel>`.
-    VectorTxProbe {
-        channel: i32,
-    },
+    VectorTxProbe { channel: i32 },
     /// Decode a log's signals through its description database(s) and write
     /// a CSV, with no window and no bus clock: `--export-csv <log> --out
     /// <csv> [--dbc <f> ...] [--fibex <f> ...]`. CAN signals decode through the
@@ -250,13 +246,17 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
             || stats_csv.is_some()
             || speed != 1.0
         {
-            return Err("`--export-csv` decodes a log on its own; drop the other run flags".to_string());
+            return Err(
+                "`--export-csv` decodes a log on its own; drop the other run flags".to_string(),
+            );
         }
         let Some(out) = out else {
             return Err("`--export-csv` needs `--out <file.csv>`".to_string());
         };
         if dbcs.is_empty() && fibex.is_empty() {
-            return Err("`--export-csv` needs a `--dbc` and/or `--fibex` signal definition".to_string());
+            return Err(
+                "`--export-csv` needs a `--dbc` and/or `--fibex` signal definition".to_string(),
+            );
         }
         return Ok(Cli::Export(ExportOpts {
             input,
@@ -290,7 +290,9 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     }
     if let Some(channel) = vector_tx_probe {
         if replay.is_some() || project.is_some() || profile.is_some() || vector_probe {
-            return Err("`--vector-tx-probe` runs on its own; drop the other run flags".to_string());
+            return Err(
+                "`--vector-tx-probe` runs on its own; drop the other run flags".to_string(),
+            );
         }
         if channel < 0 {
             return Err("`--vector-tx-probe` wants a channel index of 0 or above".to_string());
@@ -593,7 +595,10 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     let write_line = |w: &mut std::io::BufWriter<std::fs::File>, row: String| {
         writeln!(w, "{row}").map_err(|e| format!("write failed: {e}"))
     };
-    write_line(&mut w, "time_us,bus,message,signal,value,raw,unit,label".to_string())?;
+    write_line(
+        &mut w,
+        "time_us,bus,message,signal,value,raw,unit,label".to_string(),
+    )?;
 
     let mut rows = 0u64;
     let mut can_frames = 0u64;
@@ -867,12 +872,15 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
             Ok(ch) => {
                 let cfg = ch.channel_config().ok();
                 let valid = cfg.as_ref().is_some_and(|cfg| {
-                    cfg.status
-                        & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG
+                    cfg.status & crate::hw::vector::flexray::FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG
                         != 0
                 });
                 let status_word = match &cfg {
-                    Some(cfg) => format!("status=0x{:08X}{}", cfg.status, if valid { " VALID_CLUSTER_CFG" } else { "" }),
+                    Some(cfg) => format!(
+                        "status=0x{:08X}{}",
+                        cfg.status,
+                        if valid { " VALID_CLUSTER_CFG" } else { "" }
+                    ),
                     None => "config read failed".to_string(),
                 };
                 s.push_str(&format!("  ch{}: open OK, {status_word}\n", c.index));
@@ -895,9 +903,11 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
         s.push_str("FlexRay 权限扫描（申请 → 授予 / 配置结果，数字是驱动原话）:\n");
         for index in refused {
             for request in [0u64, 1, 2, 3, 7, 1u64 << index] {
-                s.push_str(&crate::hw::vector::flexray::FlexRayChannel::access_probe_line(
-                    index, &cfg, request,
-                ));
+                s.push_str(
+                    &crate::hw::vector::flexray::FlexRayChannel::access_probe_line(
+                        index, &cfg, request,
+                    ),
+                );
             }
         }
     }
@@ -987,8 +997,7 @@ pub fn check_scripts(check: &ScriptCheck) -> Result<String, String> {
         for path in &check.dbcs {
             let text = crate::dbc::read_file(std::path::Path::new(path))
                 .map_err(|e| format!("{path}: {e}"))?;
-            let parsed =
-                crate::dbc::load_dbc_str(&text).map_err(|e| format!("{path}: {e}"))?;
+            let parsed = crate::dbc::load_dbc_str(&text).map_err(|e| format!("{path}: {e}"))?;
             match &mut table {
                 Some(t) => crate::dbc::absorb(t, parsed),
                 None => table = Some(parsed),
@@ -1040,11 +1049,19 @@ pub fn check_scripts(check: &ScriptCheck) -> Result<String, String> {
                         .join(", ");
                     lines.push(format!(
                         "        sends: {}",
-                        if sends.is_empty() { "-".to_string() } else { sends }
+                        if sends.is_empty() {
+                            "-".to_string()
+                        } else {
+                            sends
+                        }
                     ));
                     lines.push(format!(
                         "        receives: {}",
-                        if recvs.is_empty() { "-".to_string() } else { recvs }
+                        if recvs.is_empty() {
+                            "-".to_string()
+                        } else {
+                            recvs
+                        }
                     ));
                     // The assembly checks, same code path as the GUI's
                     // node start: only exit-code-relevant failure is the

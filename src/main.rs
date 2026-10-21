@@ -178,12 +178,11 @@ impl State {
         let mut sources = vec![
             // # Safety: embedded font bytes are a complete TTF.
             unsafe {
-                dear_imgui_rs::FontSource::ttf_data_with_size(INCONSOLATA_FONT, 13.0)
-                    .with_config(
-                        dear_imgui_rs::FontConfig::new()
-                            .pixel_snap_h(true)
-                            .oversample_h(1),
-                    )
+                dear_imgui_rs::FontSource::ttf_data_with_size(INCONSOLATA_FONT, 13.0).with_config(
+                    dear_imgui_rs::FontConfig::new()
+                        .pixel_snap_h(true)
+                        .oversample_h(1),
+                )
             },
         ];
         for path in [
@@ -195,9 +194,7 @@ impl State {
             if let Ok(bytes) = std::fs::read(path) {
                 let data: &'static [u8] = Box::leak(bytes.into_boxed_slice());
                 // # Safety: font data outlives the atlas and is a complete font.
-                sources.push(unsafe {
-                    dear_imgui_rs::FontSource::ttf_data_with_size(data, 13.0)
-                });
+                sources.push(unsafe { dear_imgui_rs::FontSource::ttf_data_with_size(data, 13.0) });
                 break;
             }
         }
@@ -295,7 +292,10 @@ impl State {
                         .find(|n| n.id == id)
                         .map(|n| n.channel)
                         .unwrap_or(0);
-                    (id, ui::script_editor::autocomplete_vocabulary(&self.app, ch))
+                    (
+                        id,
+                        ui::script_editor::autocomplete_vocabulary(&self.app, ch),
+                    )
                 })
                 .collect();
             for id in wanted {

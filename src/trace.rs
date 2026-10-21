@@ -372,10 +372,7 @@ impl TraceRing {
             total: self.total,
             dropped: self.dropped,
             first_dropped_t_us: self.first_dropped_t_us,
-            archive: self
-                .spill
-                .as_ref()
-                .map(|s| (s.path.clone(), s.frames)),
+            archive: self.spill.as_ref().map(|s| (s.path.clone(), s.frames)),
         })
     }
 
@@ -453,10 +450,8 @@ pub struct SpillFile {
 impl SpillFile {
     /// The process's archive, created lazily on the first trim.
     fn create() -> std::io::Result<Self> {
-        let path = std::env::temp_dir().join(format!(
-            "roxy-can-trace-archive-{}.bin",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("roxy-can-trace-archive-{}.bin", std::process::id()));
         Self::create_at(path)
     }
 
@@ -516,7 +511,12 @@ impl SpillFile {
         let mut out = Vec::with_capacity(raw.len() / RECORD_LEN);
         for record in raw.as_chunks::<RECORD_LEN>().0 {
             let u32le = |off: usize| {
-                u32::from_le_bytes([record[off], record[off + 1], record[off + 2], record[off + 3]])
+                u32::from_le_bytes([
+                    record[off],
+                    record[off + 1],
+                    record[off + 2],
+                    record[off + 3],
+                ])
             };
             let t_us = u64::from_le_bytes(record[0..8].try_into().expect("fixed stride"));
             let channel = record[8];
@@ -588,9 +588,7 @@ impl TraceView {
     /// `None` while nothing has been trimmed or the archive could not be
     /// created.
     pub fn archive(&self) -> Option<(&std::path::Path, u64)> {
-        self.archive
-            .as_ref()
-            .map(|(p, n)| (p.as_path(), *n))
+        self.archive.as_ref().map(|(p, n)| (p.as_path(), *n))
     }
 
     pub fn last(&self) -> Option<&CanFrame> {
@@ -738,7 +736,9 @@ mod tests {
         }
         ring.enforce_limit(5);
 
-        let (p, n) = ring.archive().expect("the archive was created on first trim");
+        let (p, n) = ring
+            .archive()
+            .expect("the archive was created on first trim");
         assert_eq!(p, path, "the test-scoped path is used");
         assert_eq!(n, 5);
         let archived = SpillFile::read_all(p).expect("read back");

@@ -21,10 +21,7 @@ pub fn render(app: &mut App, ui: &Ui) {
         ui.window("Measurement Setup")
             .opened(&mut open)
             .position(
-                [
-                    io.display_size()[0] * 0.04,
-                    io.display_size()[1] * 0.30,
-                ],
+                [io.display_size()[0] * 0.04, io.display_size()[1] * 0.30],
                 Condition::FirstUseEver,
             )
             .size([620.0, 320.0], Condition::FirstUseEver)

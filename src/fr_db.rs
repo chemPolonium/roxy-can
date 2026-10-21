@@ -304,7 +304,11 @@ impl FrDb {
     /// logged payload begins there, while AUTOSAR START-POSITIONs are measured
     /// from the frame head. A PDU name the database does not declare is skipped,
     /// exactly as the decoders that resolve names at call time skipped it.
-    fn frame_children(frame: &FrFrameDb, pdu_ix: &HashMap<String, usize>, pdus: &[FrPdu]) -> Vec<FrChild> {
+    fn frame_children(
+        frame: &FrFrameDb,
+        pdu_ix: &HashMap<String, usize>,
+        pdus: &[FrPdu],
+    ) -> Vec<FrChild> {
         let base = frame.pdus.iter().map(|(_, b)| *b).min().unwrap_or(0);
         frame
             .pdus
@@ -352,8 +356,7 @@ impl FrDb {
                     continue;
                 }
                 let name = node.tag_name().name().to_uppercase();
-                if name == "FLEXRAY-CLUSTER" || name == "I-SIGNAL-I-PDU" || name == "ECU-INSTANCE"
-                {
+                if name == "FLEXRAY-CLUSTER" || name == "I-SIGNAL-I-PDU" || name == "ECU-INSTANCE" {
                     has_autosar = true;
                     break;
                 }
@@ -473,8 +476,12 @@ impl FrDb {
                 if !Self::bits_fit(c, sig, payload.len()) {
                     return None;
                 }
-                let raw =
-                    crate::decode::extract_raw(payload, c.bit as u64, sig.length_bits as u64, sig.big_endian);
+                let raw = crate::decode::extract_raw(
+                    payload,
+                    c.bit as u64,
+                    sig.length_bits as u64,
+                    sig.big_endian,
+                );
                 let phys = crate::decode::to_physical(
                     raw,
                     sig.length_bits as u64,
@@ -644,7 +651,10 @@ impl FrDb {
     /// slot's payload against this frame's signals; which occupant is actually
     /// there at a given cycle is resolved again when the frame goes out.
     pub fn frame_ix_of_slot(&self, slot: u16) -> Option<usize> {
-        self.slot_ix.get(&(slot as u32)).and_then(|c| c.first()).copied()
+        self.slot_ix
+            .get(&(slot as u32))
+            .and_then(|c| c.first())
+            .copied()
     }
 
     /// `frame_ix`'s signals as the generator needs them to edit a value:
@@ -675,7 +685,13 @@ impl FrDb {
     /// has no such signal or the bytes do not reach it: a value that cannot be
     /// stored is not sent at all, rather than sent as whatever the old bytes
     /// happened to hold.
-    pub fn encode_signal(&self, frame_ix: usize, name: &str, phys: f64, payload: &mut [u8]) -> bool {
+    pub fn encode_signal(
+        &self,
+        frame_ix: usize,
+        name: &str,
+        phys: f64,
+        payload: &mut [u8],
+    ) -> bool {
         let Some(child) = self
             .children_of(frame_ix)
             .iter()
@@ -729,7 +745,11 @@ pub struct FrEditSignal {
 
 /// Collects all descendants with the given tag name (namespace ignored).
 /// For *subtree* searches; whole-document searches go through [`DocIndex`].
-fn collect<'a, 'b>(node: &roxmltree::Node<'a, 'b>, tag: &str, out: &mut Vec<roxmltree::Node<'a, 'b>>) {
+fn collect<'a, 'b>(
+    node: &roxmltree::Node<'a, 'b>,
+    tag: &str,
+    out: &mut Vec<roxmltree::Node<'a, 'b>>,
+) {
     if node.is_element() && node.tag_name().name() == tag {
         out.push(*node);
     }
@@ -795,14 +815,12 @@ impl<'a, 'b> DocIndex<'a, 'b> {
     /// whole-document fallbacks used to re-walk the tree looking for a tag
     /// that is usually absent -- the commonest case, and the most expensive.
     fn text(&self, tag: &str) -> Option<String> {
-        self.nodes(tag)
-            .iter()
-            .find_map(|n| {
-                n.text()
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_string)
-            })
+        self.nodes(tag).iter().find_map(|n| {
+            n.text()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+        })
     }
 }
 
@@ -919,7 +937,9 @@ fn truthy(node: &roxmltree::Node, tags: &[&str]) -> bool {
 fn is_signed_text(t: Option<String>) -> bool {
     t.map(|t| {
         let u = t.to_uppercase();
-        u.contains("TWOS") || u.contains("SYMMETRIC") || (u.contains("SIGNED") && !u.starts_with("UN"))
+        u.contains("TWOS")
+            || u.contains("SYMMETRIC")
+            || (u.contains("SIGNED") && !u.starts_with("UN"))
     })
     .unwrap_or(false)
 }
@@ -947,9 +967,12 @@ fn parse_signal_instances(node: &roxmltree::Node) -> Vec<(String, u32, bool)> {
             continue;
         }
         // FIBEX standard is BIT-POSITION; START-BIT-POSITION is a tool dialect.
-        let start_bit = text_of(si, &["BIT-POSITION", "START-BIT-POSITION", "START-POSITION"])
-            .and_then(|t| parse_u32(&t))
-            .unwrap_or(0);
+        let start_bit = text_of(
+            si,
+            &["BIT-POSITION", "START-BIT-POSITION", "START-POSITION"],
+        )
+        .and_then(|t| parse_u32(&t))
+        .unwrap_or(0);
         let is_high_low = text_of(si, &["IS-HIGH-LOW-BYTE-ORDER"])
             .map(|t| t.eq_ignore_ascii_case("true"))
             .unwrap_or(true);
@@ -1108,7 +1131,8 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         }
 
         // Enumeration labels: scales carrying a VT.
-        let mut seen_vt: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
+        let mut seen_vt: std::collections::HashSet<(i64, String)> =
+            std::collections::HashSet::new();
         for tag in ["COMPU-SCALE", "SCALE-CONSTR", "SCALE"] {
             let mut scales = Vec::new();
             collect(coding, tag, &mut scales);
@@ -1368,7 +1392,9 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     // element, in Vector exports: fall back to the first occurrence in
     // the whole document.
     if params.p_samples_per_microtick == 0
-        && let Some(v) = index.text("SAMPLES-PER-MICROTICK").and_then(|t| parse_u32(&t))
+        && let Some(v) = index
+            .text("SAMPLES-PER-MICROTICK")
+            .and_then(|t| parse_u32(&t))
     {
         params.p_samples_per_microtick = v;
     }
@@ -1526,10 +1552,8 @@ fn fill_extra_params(
         get_u32(&["OFFSET-CORRECTION-OUT", "P-OFFSET-CORRECTION-OUT"]).unwrap_or(0);
     p.p_rate_correction_out =
         get_u32(&["RATE-CORRECTION-OUT", "P-RATE-CORRECTION-OUT"]).unwrap_or(0);
-    p.p_allow_halt_due_to_clock = get_u32(&[
-        "ALLOW-HALT-DUE-TO-CLOCK",
-        "P-ALLOW-HALT-DUE-TO-CLOCK",
-    ]) == Some(1);
+    p.p_allow_halt_due_to_clock =
+        get_u32(&["ALLOW-HALT-DUE-TO-CLOCK", "P-ALLOW-HALT-DUE-TO-CLOCK"]) == Some(1);
     p.p_allow_passive_to_active =
         get_u32(&["ALLOW-PASSIVE-TO-ACTIVE", "P-ALLOW-PASSIVE-TO-ACTIVE"]).unwrap_or(0);
     p.p_key_slot_used_for_startup =
@@ -1609,7 +1633,10 @@ fn parse_compu_method(
     if let Some(coeff) = coeffs.first() {
         let mut vs = Vec::new();
         collect(coeff, "V", &mut vs);
-        let values: Vec<f64> = vs.iter().filter_map(|n| n.text().and_then(parse_f64)).collect();
+        let values: Vec<f64> = vs
+            .iter()
+            .filter_map(|n| n.text().and_then(parse_f64))
+            .collect();
         if values.len() >= 2 {
             cm.offset = values[0];
             cm.factor = values[1];
@@ -1690,7 +1717,11 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         let length_bits = text_of(sig, &["LENGTH"]).and_then(|t| parse_u32(&t));
         let signed = is_signed_text(text_of(
             sig,
-            &["SIGN-CONVENTION", "I-SIGNAL-TYPE", "NETWORK-REPRESENTATION-PROPS"],
+            &[
+                "SIGN-CONVENTION",
+                "I-SIGNAL-TYPE",
+                "NETWORK-REPRESENTATION-PROPS",
+            ],
         ));
         let comment = text_of(sig, &["L-2", "DESC"]).unwrap_or_default();
         let compu = text_of(sig, &["COMPU-METHOD-REF"])
@@ -1773,10 +1804,7 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
         let mut mappings = Vec::new();
         let mut mapping_nodes = Vec::new();
-        for tag in [
-            "I-SIGNAL-TO-PDU-MAPPING",
-            "I-SIGNAL-TO-I-PDU-MAPPING",
-        ] {
+        for tag in ["I-SIGNAL-TO-PDU-MAPPING", "I-SIGNAL-TO-I-PDU-MAPPING"] {
             collect(pdu, tag, &mut mapping_nodes);
         }
         for m in &mapping_nodes {
@@ -1951,8 +1979,10 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         if let Some(v) = get_u32(&["FLEXRAY-G-NUMBER-OF-MINISLOTS", "G-NUMBER-OF-MINISLOTS"]) {
             params.number_of_minislots = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-G-NUMBER-OF-STATIC-SLOTS", "G-NUMBER-OF-STATIC-SLOTS"])
-        {
+        if let Some(v) = get_u32(&[
+            "FLEXRAY-G-NUMBER-OF-STATIC-SLOTS",
+            "G-NUMBER-OF-STATIC-SLOTS",
+        ]) {
             params.number_of_static_slots = v;
         }
         if let Some(v) = get_u32(&["FLEXRAY-GD-MINISLOT"]) {
@@ -1967,15 +1997,19 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
         if let Some(v) = get_u32(&["FLEXRAY-GD-SYMBOL-WINDOW-IDLE-PHASE"]) {
             params.symbol_window_idle_phase = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-OFFSET-CORRECTION-START", "G-OFFSET-CORRECTION-START"])
-        {
+        if let Some(v) = get_u32(&[
+            "FLEXRAY-OFFSET-CORRECTION-START",
+            "G-OFFSET-CORRECTION-START",
+        ]) {
             params.offset_correction_start = v;
         }
         fill_extra_params(&mut params, &get_u32, &get_f64);
     }
     // Same document-level fallback as the FIBEX path.
     if params.p_samples_per_microtick == 0
-        && let Some(v) = index.text("SAMPLES-PER-MICROTICK").and_then(|t| parse_u32(&t))
+        && let Some(v) = index
+            .text("SAMPLES-PER-MICROTICK")
+            .and_then(|t| parse_u32(&t))
     {
         params.p_samples_per_microtick = v;
     }
@@ -2065,9 +2099,7 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
     dedup_frame_names(&mut frames);
     // Index after the dedup: the tables hold positions in `frames`.
-    Ok(
-        FrDb::assemble(params, ecus, pdus, frames).with_pdu_senders(pdu_senders),
-    )
+    Ok(FrDb::assemble(params, ecus, pdus, frames).with_pdu_senders(pdu_senders))
 }
 
 /// Keeps the first frame of each name; duplicates only confuse the
@@ -2201,9 +2233,7 @@ mod tests {
         for frame_ix in 0..db.frames.len() {
             let deferred: Vec<_> = db
                 .frame_values(frame_ix, &payload)
-                .filter_map(|(child_ix, raw, phys)| {
-                    db.child_text(frame_ix, child_ix, raw, phys)
-                })
+                .filter_map(|(child_ix, raw, phys)| db.child_text(frame_ix, child_ix, raw, phys))
                 .collect();
             assert_eq!(
                 deferred,
@@ -2345,7 +2375,9 @@ mod tests {
             );
         }
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).unwrap();
         for ix in 0..db.frames.len() {
@@ -2427,7 +2459,10 @@ mod tests {
     /// frame is `None` and the display must not turn that into an owner.
     #[test]
     fn a_fibex_without_ecu_bindings_names_no_sender() {
-        for asset in ["assets/fibex/PowerTrain_v2.xml", "assets/fibex/PowerTrain2_v2.xml"] {
+        for asset in [
+            "assets/fibex/PowerTrain_v2.xml",
+            "assets/fibex/PowerTrain2_v2.xml",
+        ] {
             let Some(text) = read_asset(asset) else {
                 continue;
             };
@@ -2453,7 +2488,9 @@ mod tests {
     fn one_static_slot_belongs_to_several_frames_in_turn() {
         use std::collections::BTreeSet;
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            panic!("{POWERTRAIN_ARXML} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "{POWERTRAIN_ARXML} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).expect("the asset parses");
         let occupants: BTreeSet<String> = (0..8u8)
@@ -2536,7 +2573,9 @@ mod tests {
     #[test]
     fn parses_the_real_gbk_powertrain_arxml() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).expect("PowerTrain.arxml parses");
         assert_eq!(db.params.speed_kbps, 10000);
@@ -2566,7 +2605,9 @@ mod tests {
     #[test]
     fn arxml_keeps_signal_widths_and_pdu_bit_offsets() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).unwrap();
         // (1) CarSpeed is a 16-bit I-SIGNAL; the SYSTEM-SIGNAL merge must
@@ -2578,7 +2619,10 @@ mod tests {
             .find(|s| s.name == "CarSpeed")
             .expect("CarSpeed signal");
         assert_eq!(car.length_bits, 16, "I-SIGNAL LENGTH survives the merge");
-        assert!((car.factor - 0.5).abs() < 1e-9, "COMPU-METHOD factor parsed");
+        assert!(
+            (car.factor - 0.5).abs() < 1e-9,
+            "COMPU-METHOD factor parsed"
+        );
         // (2)+(3): a payload whose CarSpeed bits read 236 must decode to 118
         // at the frame's first PDU (base 7 subtracted).
         let f13 = db
@@ -2602,7 +2646,10 @@ mod tests {
             .expect("Frame_25_0_2");
         let frame = db.frame_index(f25).expect("Frame_25_0_2");
         assert!(
-            frame.pdus.iter().any(|(n, b)| n == "EngineData" && *b == 71),
+            frame
+                .pdus
+                .iter()
+                .any(|(n, b)| n == "EngineData" && *b == 71),
             "EngineData placed at bit 71: {:?}",
             frame.pdus
         );
@@ -2620,7 +2667,9 @@ mod tests {
     #[test]
     fn parses_the_real_fibex_20d_export() {
         let Some(text) = read_asset(POWERTRAIN_FIBEX_V2) else {
-            panic!("assets/fibex/PowerTrain_v2.xml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/fibex/PowerTrain_v2.xml missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).expect("PowerTrain_v2.xml parses");
         assert_eq!(db.frames.len(), 6, "the demo schedules six static frames");
@@ -2646,7 +2695,9 @@ mod tests {
     #[test]
     fn frame_at_respects_the_real_schedule() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).unwrap();
         // Slot 13 hosts a frame that the logging session carried on the
@@ -2679,7 +2730,9 @@ mod tests {
     #[test]
     fn decodes_a_signal_from_the_real_arxml() {
         let Some(text) = read_asset(POWERTRAIN_ARXML) else {
-            panic!("assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/PowerTrain.arxml missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let db = FrDb::parse(&text).unwrap();
         let (frame_ix, frame, pdu_name, sig) = db

@@ -163,7 +163,10 @@ pub(crate) fn parse_record_filter(text: &str) -> crate::recorder::RecordFilter {
         if token.is_empty() {
             continue;
         }
-        match token.strip_prefix(['f', 'F']).and_then(|t| t.strip_prefix(['r', 'R'])) {
+        match token
+            .strip_prefix(['f', 'F'])
+            .and_then(|t| t.strip_prefix(['r', 'R']))
+        {
             Some(rest) => {
                 // `FR0:13` -- bus before the colon, slot after. Decimal on both
                 // sides, because that is how the schedule and the Trace address

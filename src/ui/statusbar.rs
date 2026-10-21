@@ -62,7 +62,10 @@ pub fn render(app: &App, ui: &Ui) {
                     // The wire's story, in the same words the toolbar switch
                     // uses -- see [`crate::bus::wire_note`].
                     Mode::Virtual => (
-                        format!("MEASURING ({})", crate::bus::wire_note(app.snap.hw.len(), app.snap.real_bus)),
+                        format!(
+                            "MEASURING ({})",
+                            crate::bus::wire_note(app.snap.hw.len(), app.snap.real_bus)
+                        ),
                         if app.snap.hw.is_empty() || app.snap.real_bus {
                             [0.4, 0.95, 0.5, 1.0]
                         } else {
@@ -151,7 +154,11 @@ mod tests {
     fn a_long_message_is_cut_to_the_room_left_and_says_so() {
         let msg = "打开 Vector 通道 0 失败（status 204: XL_ERR_INVALID_CHANNEL_MASK）";
         let shown = fits(msg, 12.0);
-        assert_eq!(ruler(&shown), 12.0, "the cut used the room it was given: {shown}");
+        assert_eq!(
+            ruler(&shown),
+            12.0,
+            "the cut used the room it was given: {shown}"
+        );
         assert!(shown.ends_with('…'), "a cut is marked as one: {shown}");
         assert!(msg.starts_with(shown.trim_end_matches('…')));
     }

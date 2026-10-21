@@ -477,11 +477,26 @@ impl P {
         // the real form instead of a confusing "expected ';'". (`::` lexes
         // as two Colons, so the write shape is $ id : : id = .)
         if self.at(&Tok::Dollar)
-            && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::Colon))
-            && matches!(self.toks.get(self.pos + 3).map(|t| &t.tok), Some(Tok::Colon))
-            && matches!(self.toks.get(self.pos + 4).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(self.toks.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Assign))
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::Colon)
+            )
+            && matches!(
+                self.toks.get(self.pos + 3).map(|t| &t.tok),
+                Some(Tok::Colon)
+            )
+            && matches!(
+                self.toks.get(self.pos + 4).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 5).map(|t| &t.tok),
+                Some(Tok::Assign)
+            )
         {
             return self.err(
                 "signal writes go through set_sig(buffer, id, \"Name\", value); \
@@ -496,13 +511,34 @@ impl P {
                 self.toks.get(self.pos + 1).map(|t| &t.tok),
                 Some(Tok::Ident(f)) if f == "sysvar"
             )
-            && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::Colon))
-            && matches!(self.toks.get(self.pos + 3).map(|t| &t.tok), Some(Tok::Colon))
-            && matches!(self.toks.get(self.pos + 4).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(self.toks.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Colon))
-            && matches!(self.toks.get(self.pos + 6).map(|t| &t.tok), Some(Tok::Colon))
-            && matches!(self.toks.get(self.pos + 7).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(self.toks.get(self.pos + 8).map(|t| &t.tok), Some(Tok::Assign))
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::Colon)
+            )
+            && matches!(
+                self.toks.get(self.pos + 3).map(|t| &t.tok),
+                Some(Tok::Colon)
+            )
+            && matches!(
+                self.toks.get(self.pos + 4).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 5).map(|t| &t.tok),
+                Some(Tok::Colon)
+            )
+            && matches!(
+                self.toks.get(self.pos + 6).map(|t| &t.tok),
+                Some(Tok::Colon)
+            )
+            && matches!(
+                self.toks.get(self.pos + 7).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 8).map(|t| &t.tok),
+                Some(Tok::Assign)
+            )
         {
             self.advance(); // @
             self.advance(); // sysvar
@@ -625,10 +661,7 @@ impl P {
             // `x[i] op= v` compiles as `x[i] = x[i] op v`.
             let op = self.assign_op_here();
             let value = if let Some(op) = op {
-                let lhs = Expr::Index(
-                    Box::new(Expr::Ident(name.clone())),
-                    Box::new(idx.clone()),
-                );
+                let lhs = Expr::Index(Box::new(Expr::Ident(name.clone())), Box::new(idx.clone()));
                 self.advance();
                 let rhs = self.expr()?;
                 Expr::Binary(op, Box::new(lhs), Box::new(rhs))
@@ -735,11 +768,7 @@ impl P {
         // `if (subject == label) { body } else <rest>`.
         let mut rest = default;
         for (label, line, col, body) in cases.into_iter().rev() {
-            let cond = Expr::Binary(
-                BinOp::Eq,
-                Box::new(compare.clone()),
-                Box::new(label),
-            );
+            let cond = Expr::Binary(BinOp::Eq, Box::new(compare.clone()), Box::new(label));
             let stmt = Stmt::If {
                 cond,
                 then: vec![SpannedStmt {
@@ -1292,10 +1321,8 @@ mod tests {
         assert!(matches!(els[0].stmt, Stmt::Block(_)), "default lands last");
 
         // A call subject gets exactly one hidden capture.
-        let toks = super::super::lexer::lex(
-            "switch (frame_byte(0)) { case 1: { } case 2: { } }",
-        )
-        .unwrap();
+        let toks =
+            super::super::lexer::lex("switch (frame_byte(0)) { case 1: { } case 2: { } }").unwrap();
         let mut p = P {
             toks,
             pos: 0,

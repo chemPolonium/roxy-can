@@ -21,3 +21,15 @@
 表格**不给单元格另加 ID 种子**（`TableSetColumnIndex` 只挪光标和裁剪矩形），所以循环里的控件拿显示文本当 ID 迟早撞车，ImGui 会弹 `2 visible items with conflicting ID` 盖住整个窗口。文本重复是常态，不是边角情况：同一份 DBC 挂在两条总线上，Messages 就有两行 `100  EngineStatus`；两条总线或两路 FlexRay 可以改成同名；`on` / `off` 这种状态词两行之间必然一样。
 
 写法：`let _id = ui.push_id(行的身份);` 套住整行——身份用聚合键那种数字（`(通道, id, 帧类)`、`(路, 槽, 占用帧)`），不要用它派生出的名字；或者给 label 加 `##{i}` 后缀。改了 ID 就要在提交信息里说明：ImGui 按 ID 存的展开状态、列宽这些会重置一次。
+
+## 窗口状态与命令：绘制只读，写入集中
+
+新窗口和改旧窗口都按 `ui/triggers.rs` 的形状写：
+
+- 窗口自己的状态（开关、草稿、选中、搜索框）放进 `XxxView`，不要散在 `App` 的大字段里；
+- 绘制签名是 `fn show(&mut self, ui: &Ui, app: &App) -> Vec<XxxCmd>`：`app` 只读，**禁止** `app.send`、**禁止**改 `app` 的任何字段；
+- 用户动作只产出 `XxxCmd`，由 `render` 末尾的 `app.apply_xxx_cmds(cmds)` 统一执行；默认值、合法性、总线写入都留在 `App`，UI 不猜；
+- 视图暂存在 `App` 里时，用 `std::mem::take` 在 `render` 中拿出来、画完放回、再 apply，这样 `&mut view` 与 `&App` 不打架；
+- 每个 `XxxCmd` 至少有一条无头测试走一遍（不依赖 imgui 帧），绘制路径由 `ui_tests` 的 headless 冒烟覆盖。
+
+这样 AI 一次只需要理解一个小状态结构和一个命令枚举；`TriggersView` / `TriggerCmd` 是现成模板。

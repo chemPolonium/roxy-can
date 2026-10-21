@@ -297,8 +297,7 @@ impl FrameStream for BlfStream {
         // Read containers until an FR row queues — but stop as soon as
         // CAN frames are pending, so a sparse-FR log does not read the
         // whole file into memory hunting for the next row.
-        while self.fr_pending.is_empty() && self.pending.is_empty() && self.enter_next_container()
-        {
+        while self.fr_pending.is_empty() && self.pending.is_empty() && self.enter_next_container() {
         }
         let raw = self.fr_pending.front().map(|r| r.t_us);
         raw.map(|t| self.rebase(t))
@@ -403,9 +402,7 @@ fn parse_container_objects(
             let body = &bytes[pos + header_len..next];
             let t_us = object_time(h.timestamp, h.flags);
             let decoded = match h.object_type {
-                OBJ_CAN_MESSAGE | OBJ_CAN_MESSAGE2 => {
-                    decode_can_msg(body, t_us).map(FrOrCan::Can)
-                }
+                OBJ_CAN_MESSAGE | OBJ_CAN_MESSAGE2 => decode_can_msg(body, t_us).map(FrOrCan::Can),
                 OBJ_CAN_FD_MESSAGE => decode_fd_message(body, t_us).map(FrOrCan::Can),
                 OBJ_CAN_FD_MESSAGE_64 => {
                     decode_fd_message_64(body, t_us, header_len, size).map(FrOrCan::Can)
@@ -827,9 +824,7 @@ fn classic_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
     b[0..2].copy_from_slice(&(u16::from(f.channel) + 1).to_le_bytes());
     b[2] = flags;
     b[3] = f.len;
-    b[4..8].copy_from_slice(
-        &(f.id | if f.extended { CAN_ID_EXT } else { 0 }).to_le_bytes(),
-    );
+    b[4..8].copy_from_slice(&(f.id | if f.extended { CAN_ID_EXT } else { 0 }).to_le_bytes());
     let n = f.len.min(8) as usize;
     b[8..8 + n].copy_from_slice(&f.data[..n]);
     obj_header_v1_bytes(OBJ_CAN_MESSAGE, ts_raw, 0, &b)
@@ -850,9 +845,7 @@ fn fd64_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
     let mut b = vec![0u8; FD64_STRUCT_SIZE + payload.len()];
     b[0] = f.channel + 1;
     b[2] = payload.len() as u8;
-    b[4..8].copy_from_slice(
-        &(f.id | if f.extended { CAN_ID_EXT } else { 0 }).to_le_bytes(),
-    );
+    b[4..8].copy_from_slice(&(f.id | if f.extended { CAN_ID_EXT } else { 0 }).to_le_bytes());
     b[12..16].copy_from_slice(&fd_flags.to_le_bytes());
     b[34] = u8::from(matches!(f.dir, Direction::Tx));
     b[FD64_STRUCT_SIZE..].copy_from_slice(payload);
@@ -879,12 +872,14 @@ fn error_ext_event(f: &CanFrame, ts_raw: u64) -> Vec<u8> {
 /// against the cluster description this way).
 fn fr_rcv_event(r: &crate::trace::FrRow, ts_raw: u64) -> Vec<u8> {
     let mut b = vec![0u8; 44 + r.payload.len()];
-    b[4..6].copy_from_slice(&(match r.ab {
-        0 => 1u16,  // channel A
-        1 => 2,     // channel B
-        _ => 3,     // both / unknown
-    })
-    .to_le_bytes());
+    b[4..6].copy_from_slice(
+        &(match r.ab {
+            0 => 1u16, // channel A
+            1 => 2,    // channel B
+            _ => 3,    // both / unknown
+        })
+        .to_le_bytes(),
+    );
     // `wClusterNo`: the FlexRay bus the row arrived on, so a recording of two
     // clusters reads back as two -- the same field [`decode_fr_rcv`] reads.
     b[12..14].copy_from_slice(&u16::from(r.bus).to_le_bytes());
@@ -1118,7 +1113,9 @@ pub(crate) mod tests {
     fn the_real_canoe_flexray_blf_parses() {
         let path = std::path::Path::new("assets/arxml/Logging.blf");
         let Ok(mut stream) = BlfStream::open(path) else {
-            panic!("assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let mut fr = Vec::new();
         let mut can = 0usize;
@@ -1163,7 +1160,9 @@ pub(crate) mod tests {
     fn flexray_only_stream_stays_can_exhausted() {
         let path = std::path::Path::new("assets/arxml/Logging.blf");
         let Ok(mut stream) = BlfStream::open(path) else {
-            panic!("assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         // The first CAN peek scans to EOF and finds none; the flag latches.
         assert!(stream.peek_t().is_none(), "no CAN frames in an FR-only log");
@@ -1202,7 +1201,13 @@ pub(crate) mod tests {
             mk(1_000, 0x100, false, FrameFlags::NONE, 8),
             mk(2_000, 0x1F3D1E5, true, FrameFlags::NONE, 8),
             mk(3_000, 0x200, false, FrameFlags::RTR, 1),
-            mk(4_000, 0x300, true, FrameFlags::FD.union(FrameFlags::BRS), 24),
+            mk(
+                4_000,
+                0x300,
+                true,
+                FrameFlags::FD.union(FrameFlags::BRS),
+                24,
+            ),
             mk(5_000, 0x300, false, FrameFlags::FD, 64),
             mk(6_000, 0xABC, false, FrameFlags::ERROR, 2),
         ];
@@ -1214,7 +1219,8 @@ pub(crate) mod tests {
             }
             w.finish().expect("finish");
         }
-        let mut stream = super::super::blf::BlfStream::open(&path).expect("the writer's file parses");
+        let mut stream =
+            super::super::blf::BlfStream::open(&path).expect("the writer's file parses");
         let mut got = Vec::new();
         while let Some(f) = stream.next_frame() {
             got.push(f);
@@ -1229,7 +1235,10 @@ pub(crate) mod tests {
                 assert!(g.flags.contains(FrameFlags::ERROR), "stays an error");
                 continue;
             }
-            assert_eq!((g.id, g.extended, g.len), (want.id, want.extended, want.len));
+            assert_eq!(
+                (g.id, g.extended, g.len),
+                (want.id, want.extended, want.len)
+            );
             assert_eq!(g.flags, want.flags, "flags for 0x{:X}", g.id);
             assert_eq!(&g.data[..g.len as usize], &want.data[..want.len as usize]);
         }
@@ -2241,7 +2250,9 @@ pub(crate) mod tests {
     fn a_real_two_cluster_recording_keeps_its_clusters_apart() {
         let p = std::path::Path::new("assets/fibex/Logging.blf");
         if !p.exists() {
-            panic!("{p:?} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "{p:?} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         }
         let mut s = BlfStream::open(p).expect("open");
         let mut rows = Vec::new();
@@ -2308,10 +2319,7 @@ pub(crate) mod tests {
     /// the two interleaved in log order.
     #[test]
     fn a_mixed_can_and_flexray_recording_reads_back_in_order() {
-        let path = std::env::temp_dir().join(format!(
-            "roxy_can_mixed_{}.blf",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("roxy_can_mixed_{}.blf", std::process::id()));
         {
             let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
             for i in 0..40u64 {
@@ -2321,10 +2329,11 @@ pub(crate) mod tests {
                     id: 0x100,
                     extended: false,
                     len: 2,
-                    data: [i as u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    data: [
+                        i as u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    ],
                     dir: Direction::Rx,
                     flags: FrameFlags::NONE,
                 };
@@ -2375,8 +2384,7 @@ mod record_times {
     /// collapsed timeline stayed invisible.
     #[test]
     fn a_recording_keeps_its_second_apart_frames_a_second_apart() {
-        let path =
-            std::env::temp_dir().join(format!("roxy_can_ts_gap_{}.blf", std::process::id()));
+        let path = std::env::temp_dir().join(format!("roxy_can_ts_gap_{}.blf", std::process::id()));
         {
             let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
             for i in 1..=3u64 {
@@ -2412,10 +2420,7 @@ mod record_times {
     /// no CAN frame to carry it.
     #[test]
     fn a_flexray_only_recording_states_its_span_too() {
-        let path = std::env::temp_dir().join(format!(
-            "roxy_can_ts_fr_{}.blf",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("roxy_can_ts_fr_{}.blf", std::process::id()));
         {
             let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
             for i in 0..3u64 {

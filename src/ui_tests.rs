@@ -11,8 +11,8 @@
 //! directly, the way a user's first frame would see it.
 
 use crate::app::{App, TraceRow};
-use crate::observe::SigKey;
 use crate::can::frame::CanFrame;
+use crate::observe::SigKey;
 use dear_imgui_rs::{ConfigFlags, Context, FontConfig, FontSource};
 use std::sync::Mutex;
 
@@ -139,7 +139,11 @@ fn drive(
         worst = worst.max(t.elapsed());
         laps += 1;
     }
-    (app.replay_position().expect("a replay timeline").0, laps, worst)
+    (
+        app.replay_position().expect("a replay timeline").0,
+        laps,
+        worst,
+    )
 }
 
 /// Puts a cluster description on one FlexRay bus, the way the Buses window's
@@ -188,7 +192,11 @@ fn siglist_drag_reorders_a_row() {
     assert_eq!(app.graphics[0].signals.len(), 2);
 
     let order = |app: &App| -> Vec<String> {
-        app.graphics[0].signals.iter().map(|s| s.key.name().to_string()).collect()
+        app.graphics[0]
+            .signals
+            .iter()
+            .map(|s| s.key.name().to_string())
+            .collect()
     };
     let before = order(&app);
 
@@ -201,7 +209,9 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0))
+                });
             let _ = ctx.render_legacy();
         }
         ctx.io_mut().add_mouse_pos_event([probe_x, probe_y]);
@@ -212,7 +222,9 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0))
+                });
             let _ = ctx.render_legacy();
         }
         ctx.io_mut().add_mouse_pos_event([probe_x, probe_y + 40.0]);
@@ -221,7 +233,9 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0))
+                });
             let _ = ctx.render_legacy();
         }
         ctx.io_mut()
@@ -231,7 +245,9 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(app, ui, crate::ui::siglist::ListKind::Graphics(0))
+                });
             let _ = ctx.render_legacy();
         }
         order(app) != before
@@ -246,8 +262,7 @@ fn siglist_drag_reorders_a_row() {
                 break 'probe;
             }
         }
-        last_lines = app
-            .graphics[0]
+        last_lines = app.graphics[0]
             .signals
             .iter()
             .map(|s| s.key.name().to_string())
@@ -293,7 +308,13 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(
+                        &mut app,
+                        ui,
+                        crate::ui::siglist::ListKind::Graphics(0),
+                    )
+                });
             let _ = ctx.render_legacy();
         }
         ctx.io_mut().add_mouse_pos_event([90.0, probe_y as f32]);
@@ -304,7 +325,13 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(
+                        &mut app,
+                        ui,
+                        crate::ui::siglist::ListKind::Graphics(0),
+                    )
+                });
             let _ = ctx.render_legacy();
         }
         ctx.io_mut()
@@ -314,7 +341,13 @@ fn siglist_drag_reorders_a_row() {
             ui.set_window_pos([10.0, 10.0]);
             ui.window("siglist probe")
                 .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-                .build(|| crate::ui::siglist::draw(&mut app, ui, crate::ui::siglist::ListKind::Graphics(0)));
+                .build(|| {
+                    crate::ui::siglist::draw(
+                        &mut app,
+                        ui,
+                        crate::ui::siglist::ListKind::Graphics(0),
+                    )
+                });
             let _ = ctx.render_legacy();
         }
         let sigs = &app.graphics[0].signals;
@@ -420,26 +453,28 @@ fn every_window_draws_without_panicking() {
     app.new_graphics_window();
     app.new_data_window();
     app.new_state_window();
-    app.show_buses = true;
-    app.show_triggers = true;
-    app.show_bus_stats = true;
+    app.buses_view.open = true;
+    app.triggers_view.open = true;
+    app.busstats_view.open = true;
     app.show_tx = true;
     app.show_network = true;
-    app.show_spec = true;
+    app.spec_view.open = true;
     app.show_measurement = true;
-    app.show_sysvars = true;
-    app.show_write = true;
+    app.sysvars_view.open = true;
+    app.write_view.open = true;
     // Give the observers something to draw: a defined system variable
     // (its own manager row and observable stream) and a generator row.
-    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
-        namespace: "Demo".to_string(),
-        name: "Speed".to_string(),
-        init: 10.0,
-        min: None,
-        max: None,
-        unit: String::new(),
-        comment: String::new(),
-    }));
+    app.send(crate::bus::BusCommand::DefineSysVar(
+        crate::bus::SysVarDef {
+            namespace: "Demo".to_string(),
+            name: "Speed".to_string(),
+            init: 10.0,
+            min: None,
+            max: None,
+            unit: String::new(),
+            comment: String::new(),
+        },
+    ));
     app.settle();
     frames(&mut app, &mut ctx, 5);
 }
@@ -507,7 +542,10 @@ fn a_fast_drag_keeps_its_cursor_and_leaves_the_view_alone() {
     g.cursor_s = [Some(12.0), None];
     let tw = app.graphics[0].time_window_s;
     let t_now = app.plot_now_s();
-    assert!(t_now >= 20.0, "the playhead has to reach the cursor: {t_now}");
+    assert!(
+        t_now >= 20.0,
+        "the playhead has to reach the cursor: {t_now}"
+    );
 
     frames(&mut app, &mut ctx, 1);
     let [ix0, iy0, iw, ih] = crate::ui::graphics::LAST_PLOT
@@ -731,8 +769,11 @@ fn a_picked_row_draws_on_both_streams_beside_the_marks() {
     app.trace_windows[0].mark_us = [Some(4_000), Some(5_000)];
     // The keys come from the rows themselves: the pick names a row by its bus and
     // address, and a fixture that retyped them would test nothing.
-    let keys: Vec<crate::workspace::TracePick> =
-        app.trace_windows[0].rows.iter().map(TracePick::of).collect();
+    let keys: Vec<crate::workspace::TracePick> = app.trace_windows[0]
+        .rows
+        .iter()
+        .map(TracePick::of)
+        .collect();
     app.trace_windows[0].pick = Some(keys[0]);
     frames(&mut app, &mut ctx, 2);
     app.trace_windows[0].pick = Some(keys[1]);
@@ -787,7 +828,10 @@ fn the_message_picker_offers_flexray_slots() {
     let mut ctx = harness();
     let mut app = App::headless();
     if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
-        let slots = app.fr_db(0).expect("the bus has a description").scheduled_slots();
+        let slots = app
+            .fr_db(0)
+            .expect("the bus has a description")
+            .scheduled_slots();
         assert!(
             slots.iter().any(|(_, f)| !f.is_empty()),
             "the bundled description offers no slot to pick: the section is not covered"
@@ -932,7 +976,7 @@ fn the_buses_window_draws_two_flexray_watches() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    app.show_buses = true;
+    app.buses_view.open = true;
     app.hw.attach_fr_mock(0, 5);
     app.hw.attach_fr_mock(1, 6);
     load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
@@ -1006,20 +1050,20 @@ fn editor_popups_draw_without_panicking() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    app.sysvar_draft = Some(crate::ui::sysvars::SysVarDraft::for_add());
+    app.sysvars_view.draft = Some(crate::ui::sysvars::SysVarDraft::for_add());
     app.settle();
     frames(&mut app, &mut ctx, 3);
-    app.sysvar_draft = None;
+    app.sysvars_view.draft = None;
 
     app.add_signal_trigger();
     app.settle();
-    app.trig_draft = app
+    app.triggers_view.draft = app
         .snap
         .triggers
         .first()
         .map(|t| crate::ui::triggers::TrigDraft::new(0, t.cond.clone(), t.action));
     frames(&mut app, &mut ctx, 3);
-    app.trig_draft = None;
+    app.triggers_view.draft = None;
 
     // The FlexRay editor, twice: once with nothing loaded (the cluster combo
     // has to fall back to the rule's own index instead of an empty list), then
@@ -1047,7 +1091,7 @@ fn editor_popups_draw_without_panicking() {
         ),
         "the row is the crossing kind"
     );
-    assert!(app.trig_draft.is_some(), "and its editor is open");
+    assert!(app.triggers_view.draft.is_some(), "and its editor is open");
     frames(&mut app, &mut ctx, 3);
 }
 
@@ -1062,7 +1106,9 @@ fn a_plot_window_never_starves_the_replay() {
     use std::time::Duration;
     let _ui_lock = ui_lock();
     if !std::path::Path::new("assets/fibex/Logging.blf").exists() {
-        panic!("assets/fibex/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "assets/fibex/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     }
     let mut ctx = harness();
     // The real app: the core runs on its own thread, which is the shape
@@ -1162,8 +1208,7 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
     use crate::log::blf::BlfWriter;
     use crate::trace::FrRow;
     let _ui_lock = ui_lock();
-    let path =
-        std::env::temp_dir().join(format!("roxy_can_pace_{}.blf", std::process::id()));
+    let path = std::env::temp_dir().join(format!("roxy_can_pace_{}.blf", std::process::id()));
     {
         let mut w = BlfWriter::create(&path.to_string_lossy()).expect("create");
         for i in 0..10_000u64 {
@@ -1272,7 +1317,7 @@ fn the_replay_map_tables_draw_the_same_number_from_both_bus_kinds() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    app.show_buses = true;
+    app.buses_view.open = true;
     let mut map = ReplayMap::default();
     map.set(LogBusKind::Can, 0, None);
     map.set(LogBusKind::Fr, 0, None);

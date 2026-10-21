@@ -10,7 +10,7 @@ use windows_sys::Win32::System::DataExchange::{
     SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{
-    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 
 /// CF_UNICODETEXT

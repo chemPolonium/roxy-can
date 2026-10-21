@@ -210,10 +210,7 @@ fn hw_entries_parse_their_channel_field() {
     assert_eq!(hw[0].bus, "A");
     assert_eq!(hw[0].channel, 2);
 
-    assert!(
-        parse("[[hw]]\nbus = \"A\"\n").is_err(),
-        "missing channel"
-    );
+    assert!(parse("[[hw]]\nbus = \"A\"\n").is_err(), "missing channel");
     assert!(
         parse("[[hw]]\nbus = \"A\"\nchannel = -1\n").is_err(),
         "negative channel"
@@ -222,8 +219,5 @@ fn hw_entries_parse_their_channel_field() {
         parse("[[hw]]\nbus = \"A\"\nchannel = \"0\"\n").is_err(),
         "channel must be an integer, not a string"
     );
-    assert!(
-        parse("hw = 3\n").is_err(),
-        "hw must be an array of tables"
-    );
+    assert!(parse("hw = 3\n").is_err(), "hw must be an array of tables");
 }

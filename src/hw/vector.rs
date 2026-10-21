@@ -92,8 +92,7 @@ type XlOpenPort = unsafe extern "system" fn(
     u32,
 ) -> XlStatus;
 type XlCanSetChannelBitrate = unsafe extern "system" fn(XlPortHandle, XlAccess, u32) -> XlStatus;
-type XlActivateChannel =
-    unsafe extern "system" fn(XlPortHandle, XlAccess, u32, u32) -> XlStatus;
+type XlActivateChannel = unsafe extern "system" fn(XlPortHandle, XlAccess, u32, u32) -> XlStatus;
 type XlDeactivateChannel = unsafe extern "system" fn(XlPortHandle, XlAccess) -> XlStatus;
 type XlCanReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
 type XlCanTransmitEx =
@@ -101,27 +100,17 @@ type XlCanTransmitEx =
 type XlFlushReceiveQueue = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlClosePort = unsafe extern "system" fn(XlPortHandle) -> XlStatus;
 type XlGetErrorString = unsafe extern "system" fn(XlStatus) -> *const u8;
-type XlFrSetConfiguration =
-    unsafe extern "system" fn(XlPortHandle, XlAccess, *const flexray::XLfrClusterConfig) -> XlStatus;
+type XlFrSetConfiguration = unsafe extern "system" fn(
+    XlPortHandle,
+    XlAccess,
+    *const flexray::XLfrClusterConfig,
+) -> XlStatus;
 type XlFrGetChannelConfiguration =
     unsafe extern "system" fn(XlPortHandle, XlAccess, *mut flexray::XLfrChannelConfig) -> XlStatus;
 type XlFrReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
-type XlGetApplConfig = unsafe extern "system" fn(
-    *const u8,
-    u32,
-    *mut u32,
-    *mut u32,
-    *mut u32,
-    u32,
-) -> XlStatus;
-type XlSetApplConfig = unsafe extern "system" fn(
-    *const u8,
-    u32,
-    u32,
-    u32,
-    u32,
-    u32,
-) -> XlStatus;
+type XlGetApplConfig =
+    unsafe extern "system" fn(*const u8, u32, *mut u32, *mut u32, *mut u32, u32) -> XlStatus;
+type XlSetApplConfig = unsafe extern "system" fn(*const u8, u32, u32, u32, u32, u32) -> XlStatus;
 /// Returns the channel mask directly (0 = not found), not a status.
 type XlGetChannelIndex = unsafe extern "system" fn(u32, u32, u32) -> XlAccess;
 
@@ -163,13 +152,33 @@ impl Vxlapi {
         const NAMES: [&[u16]; 2] = [
             // vxlapi64.dll — the x64 driver DLL.
             &[
-                b'v' as u16, b'x' as u16, b'l' as u16, b'a' as u16, b'p' as u16, b'i' as u16,
-                b'6' as u16, b'4' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+                b'v' as u16,
+                b'x' as u16,
+                b'l' as u16,
+                b'a' as u16,
+                b'p' as u16,
+                b'i' as u16,
+                b'6' as u16,
+                b'4' as u16,
+                b'.' as u16,
+                b'd' as u16,
+                b'l' as u16,
+                b'l' as u16,
+                0,
             ],
             // vxlapi.dll fallback.
             &[
-                b'v' as u16, b'x' as u16, b'l' as u16, b'a' as u16, b'p' as u16, b'i' as u16,
-                b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+                b'v' as u16,
+                b'x' as u16,
+                b'l' as u16,
+                b'a' as u16,
+                b'p' as u16,
+                b'i' as u16,
+                b'.' as u16,
+                b'd' as u16,
+                b'l' as u16,
+                b'l' as u16,
+                0,
             ],
         ];
         #[link(name = "kernel32")]
@@ -223,7 +232,10 @@ impl Vxlapi {
             set_appl_config: need!(b"xlSetApplConfig", XlSetApplConfig),
             get_channel_index: need!(b"xlGetChannelIndex", XlGetChannelIndex),
             fr_set_configuration: need!(b"xlFrSetConfiguration", XlFrSetConfiguration),
-            fr_get_channel_configuration: need!(b"xlFrGetChannelConfiguration", XlFrGetChannelConfiguration),
+            fr_get_channel_configuration: need!(
+                b"xlFrGetChannelConfiguration",
+                XlFrGetChannelConfiguration
+            ),
             fr_receive: need!(b"xlFrReceive", XlFrReceive),
         })
     }
@@ -255,8 +267,7 @@ impl Vxlapi {
 
     fn lib() -> Option<&'static Vxlapi> {
         static LIB: std::sync::OnceLock<Option<Vxlapi>> = std::sync::OnceLock::new();
-        LIB.get_or_init(|| unsafe { Vxlapi::load() })
-            .as_ref()
+        LIB.get_or_init(|| unsafe { Vxlapi::load() }).as_ref()
     }
 }
 
@@ -465,8 +476,7 @@ impl VectorChannel {
         tx[1] = 0x04;
         // transId + channelIndex + reserved stay zero.
         let can_id = f.id | if f.extended { CAN_ID_EXTENDED } else { 0 };
-        tx[TX_EVENT_CAN_ID..TX_EVENT_CAN_ID + 4]
-            .copy_from_slice(&can_id.to_le_bytes());
+        tx[TX_EVENT_CAN_ID..TX_EVENT_CAN_ID + 4].copy_from_slice(&can_id.to_le_bytes());
         let mut msg_flags = 0u32;
         if f.is_remote() {
             msg_flags |= XL_CAN_MSG_FLAG_RTR;
@@ -480,8 +490,7 @@ impl VectorChannel {
                 msg_flags |= XL_CAN_MSG_FLAG_ESI;
             }
         }
-        tx[TX_EVENT_MSG_FLAGS..TX_EVENT_MSG_FLAGS + 4]
-            .copy_from_slice(&msg_flags.to_le_bytes());
+        tx[TX_EVENT_MSG_FLAGS..TX_EVENT_MSG_FLAGS + 4].copy_from_slice(&msg_flags.to_le_bytes());
         // DLC encodes the payload length: direct up to 8, then the CAN FD
         // length ladder (12/16/20/24/32/48/64 bytes).
         tx[TX_EVENT_DLC] = dlc_from_len(len, f.is_fd());
@@ -490,9 +499,8 @@ impl VectorChannel {
         tx[TX_EVENT_DATA..TX_EVENT_DATA + n].copy_from_slice(&payload[..n]);
 
         let mut sent: u32 = 0;
-        let status = unsafe {
-            (lib.can_transmit_ex)(self.port, self.mask, 1, &mut sent, tx.as_mut_ptr())
-        };
+        let status =
+            unsafe { (lib.can_transmit_ex)(self.port, self.mask, 1, &mut sent, tx.as_mut_ptr()) };
         if status == 0 && sent == 1 {
             Ok(())
         } else if status == 0 {
@@ -525,8 +533,13 @@ impl VectorChannel {
                 *self.tags.entry(tag).or_default() += 1;
                 continue;
             }
-            let raw_id = u32::from_le_bytes(ev[RX_EVENT_CAN_ID..RX_EVENT_CAN_ID + 4].try_into().ok()?);
-            let msg_flags = u32::from_le_bytes(ev[RX_EVENT_MSG_FLAGS..RX_EVENT_MSG_FLAGS + 4].try_into().ok()?);
+            let raw_id =
+                u32::from_le_bytes(ev[RX_EVENT_CAN_ID..RX_EVENT_CAN_ID + 4].try_into().ok()?);
+            let msg_flags = u32::from_le_bytes(
+                ev[RX_EVENT_MSG_FLAGS..RX_EVENT_MSG_FLAGS + 4]
+                    .try_into()
+                    .ok()?,
+            );
             let extended = raw_id & CAN_ID_EXTENDED != 0;
             let id = raw_id & if extended { 0x1FFF_FFFF } else { 0x7FF };
             let is_fd = msg_flags & XL_CAN_MSG_FLAG_EDL != 0;
@@ -536,8 +549,7 @@ impl VectorChannel {
             let dlc = ev[RX_EVENT_DLC];
             let len = fd_num_data_bytes(dlc, is_fd, is_rtr).min(MAX_CAN_FD_LEN) as u8;
             let mut data = [0u8; MAX_CAN_FD_LEN];
-            data[..len as usize]
-                .copy_from_slice(&ev[RX_EVENT_DATA..RX_EVENT_DATA + len as usize]);
+            data[..len as usize].copy_from_slice(&ev[RX_EVENT_DATA..RX_EVENT_DATA + len as usize]);
             let mut flags = FrameFlags::NONE;
             if is_fd {
                 flags = flags.union(FrameFlags::FD);
@@ -579,7 +591,12 @@ impl VectorChannel {
     /// that can be fixed the tag values have to be known for *this* driver --
     /// the vendor header is not on this machine, so this asks the hardware
     /// instead of assuming. Known tags are named; anything else prints raw.
-    pub fn tx_event_dump(index: i32, kbps: u32, frames: u32, millis: u64) -> Result<String, String> {
+    pub fn tx_event_dump(
+        index: i32,
+        kbps: u32,
+        frames: u32,
+        millis: u64,
+    ) -> Result<String, String> {
         let ch = Self::open(index, kbps, None, true)?;
         let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
         let mut out = format!("ch{index}: 已按 {kbps} kbit/s 打开（收发）\n");
@@ -632,7 +649,10 @@ impl VectorChannel {
                     format!("0x{t:04X}{name} ×{n}")
                 })
                 .collect();
-            out.push_str(&format!("  {spent} ms 内收到的事件：{}\n", named.join(", ")));
+            out.push_str(&format!(
+                "  {spent} ms 内收到的事件：{}\n",
+                named.join(", ")
+            ));
         }
         Ok(out)
     }
@@ -655,9 +675,8 @@ impl Drop for VectorChannel {
 /// (driver present, no adapters); `Err` means the driver itself is
 /// unavailable.
 pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
-    let lib = Vxlapi::lib().ok_or_else(|| {
-        "Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）".to_string()
-    })?;
+    let lib = Vxlapi::lib()
+        .ok_or_else(|| "Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）".to_string())?;
     unsafe {
         let status = (lib.open_driver)();
         if status != 0 {
@@ -730,455 +749,472 @@ pub mod flexray {
     #[repr(C)]
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct XLfrClusterConfig {
-    pub bus_guardian_enable: u32,
-    pub baudrate: u32,
-    pub bus_guardian_tick: u32,
-    pub external_clock_correction_mode: u32,
-    pub g_cold_start_attempts: u32,
-    pub g_listen_noise: u32,
-    pub g_macro_per_cycle: u32,
-    pub g_max_without_clock_correction_fatal: u32,
-    pub g_max_without_clock_correction_passive: u32,
-    pub g_network_management_vector_length: u32,
-    pub g_number_of_minislots: u32,
-    pub g_number_of_static_slots: u32,
-    pub g_offset_correction_start: u32,
-    pub g_payload_length_static: u32,
-    pub g_sync_node_max: u32,
-    pub gd_action_point_offset: u32,
-    pub gd_dynamic_slot_idle_phase: u32,
-    pub gd_macrotick: u32,
-    pub gd_minislot: u32,
-    pub gd_mini_slot_action_point_offset: u32,
-    pub gd_nit: u32,
-    pub gd_static_slot: u32,
-    pub gd_symbol_window: u32,
-    pub gd_tss_transmitter: u32,
-    pub gd_wakeup_symbol_rx_idle: u32,
-    pub gd_wakeup_symbol_rx_low: u32,
-    pub gd_wakeup_symbol_rx_window: u32,
-    pub gd_wakeup_symbol_tx_idle: u32,
-    pub gd_wakeup_symbol_tx_low: u32,
-    pub p_allow_halt_due_to_clock: u32,
-    pub p_allow_passive_to_active: u32,
-    pub p_channels: u32,
-    pub p_cluster_drift_damping: u32,
-    pub p_decoding_correction: u32,
-    pub p_delay_compensation_a: u32,
-    pub p_delay_compensation_b: u32,
-    pub p_extern_offset_correction: u32,
-    pub p_extern_rate_correction: u32,
-    pub p_key_slot_used_for_startup: u32,
-    pub p_key_slot_used_for_sync: u32,
-    pub p_latest_tx: u32,
-    pub p_macro_initial_offset_a: u32,
-    pub p_macro_initial_offset_b: u32,
-    pub p_max_payload_length_dynamic: u32,
-    pub p_micro_initial_offset_a: u32,
-    pub p_micro_initial_offset_b: u32,
-    pub p_micro_per_cycle: u32,
-    pub p_micro_per_macro_nom: u32,
-    pub p_offset_correction_out: u32,
-    pub p_rate_correction_out: u32,
-    pub p_samples_per_microtick: u32,
-    pub p_single_slot_enabled: u32,
-    pub p_wakeup_channel: u32,
-    pub p_wakeup_pattern: u32,
-    pub pd_accepted_startup_range: u32,
-    pub pd_listen_timeout: u32,
-    pub pd_max_drift: u32,
-    pub pd_microtick: u32,
-    pub gd_cas_rx_low_max: u32,
-    pub g_channels: u32,
-    pub v_extern_offset_control: u32,
-    pub v_extern_rate_control: u32,
-    pub p_channels_mts: u32,
-    pub frame_preset_data: u32,
-    pub reserved: [u32; 15],
-}
-
-const _: () = assert!(std::mem::size_of::<XLfrClusterConfig>() == 316);
-
-/// `xlFrGetChannelConfiguration`'s answer: the channel status bits plus
-/// the cluster configuration the driver currently holds. When `status`
-/// carries `VALID_CLUSTER_CFG` (0x04), the `cluster` copy is the real
-/// network's parameters -- read them instead of asking the user.
-pub struct XLfrChannelConfig {
-    pub status: u32,
-    pub cfg_mode: u32,
-    pub reserved: [u32; 6],
-    pub cluster: XLfrClusterConfig,
-}
-
-const _: () = assert!(std::mem::size_of::<XLfrChannelConfig>() == 348);
-
-/// `XLfrChannelConfig::status` bits (vxlapi.h 2269-2272).
-pub const FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG: u32 = 0x04;
-
-/// One received FlexRay frame: the static-slot/dynamic-slot address and
-/// the cycle it arrived in, plus the raw payload (RX-only slice -- no
-/// signal decoding).
-#[derive(Clone, Debug, PartialEq)]
-pub struct FrFrame {
-    pub slot: u16,
-    pub cycle: u8,
-    pub payload: Vec<u8>,
-    pub header_crc: u16,
-    pub flags: u16,
-}
-
-/// The FlexRay event buffer: MSVC probe on the shipped vxlapi.h gives
-/// sizeof(XLfrEvent) == 512 (32-byte header + a union whose raw member
-/// spans XL_FR_MAX_EVENT_SIZE - 32). The buffer MUST hold the full event
-/// -- the driver writes the whole struct, not just the received frame.
-pub(super) const FR_EVENT_SIZE: usize = 512;
-pub(super) const FR_EVENT_TAG: usize = 4;
-pub(super) const FR_EVENT_SLOT: usize = 36;
-pub(super) const FR_EVENT_CYCLE: usize = 38;
-pub(super) const FR_EVENT_PAYLOAD_LEN: usize = 39;
-pub(super) const FR_EVENT_DATA: usize = 40;
-pub(super) const FR_EVENT_HEADER_CRC: usize = 34;
-pub(super) const FR_EVENT_FLAGS: usize = 32;
-pub(super) const XL_FR_EV_TAG_RX_FRAME: u16 = 0x0081;
-/// `vxlapi.h`: `#define XL_FR_MAX_DATA_LENGTH 254` -- also the payload
-/// ceiling inside the RX-frame event.
-pub(super) const FR_MAX_DATA_LENGTH: usize = 254;
-
-/// An open, configured FlexRay port (RX-only). Frames leave nothing to
-/// the tool yet -- this slice only watches.
-#[derive(Debug)]
-pub struct FlexRayChannel {
-    port: XlPortHandle,
-    mask: XlAccess,
-}
-
-/// FlexRay frame as received from the wire: slot/cycle address plus the
-/// raw payload, before any signal decoding.
-/// Converts a parsed FlexRay database's cluster parameters into the
-/// driver's config struct. Derived values follow the CANoe demo math:
-/// gdMacroPerCycle = cycle / macrotick, pdMicrotick = sample clock ×
-/// samples (in ns), pMicroPerMacroNom = their ratio; absent fields
-/// stay zero (zero means "driver default" to `xlFrSetConfiguration`),
-/// and the channel pair defaults to A+B like every FIBEX export does.
-pub fn config_from_db(params: &crate::fr_db::FrClusterParams) -> XLfrClusterConfig {
-    let gd_macrotick = (params.macrotick_duration_us * 1000.0) as u32;
-    let g_macro_per_cycle = params.g_macro_per_cycle.unwrap_or_else(|| {
-        ((params.cycle_time_ms * 1000.0) / params.macrotick_duration_us.max(0.001)).round() as u32
-    });
-    let pd_microtick =
-        (params.sample_clock_period_us * params.p_samples_per_microtick as f64 * 1000.0) as u32;
-    let p_micro_per_macro_nom = if params.p_micro_per_macro_nom > 0 {
-        params.p_micro_per_macro_nom
-    } else {
-        gd_macrotick.checked_div(pd_microtick).unwrap_or(0)
-    };
-    let channels = if params.p_channels == 0 { 3 } else { params.p_channels };
-    let g_channels = if params.g_channels == 0 { 3 } else { params.g_channels };
-    XLfrClusterConfig {
-        bus_guardian_enable: 0,
-        baudrate: params.speed_kbps * 1000,
-        bus_guardian_tick: 0,
-        external_clock_correction_mode: 0,
-        g_cold_start_attempts: params.coldstart_attempts,
-        g_listen_noise: params.g_listen_noise,
-        g_macro_per_cycle,
-        g_max_without_clock_correction_fatal: params.g_max_without_clock_correction_fatal,
-        g_max_without_clock_correction_passive: params.g_max_without_clock_correction_passive,
-        g_network_management_vector_length: params.g_network_management_vector_length,
-        g_number_of_minislots: params.number_of_minislots,
-        g_number_of_static_slots: params.number_of_static_slots,
-        g_offset_correction_start: params.offset_correction_start,
-        g_payload_length_static: params.payload_length_static,
-        g_sync_node_max: params.g_sync_node_max,
-        gd_action_point_offset: params.action_point_offset,
-        gd_dynamic_slot_idle_phase: params.dynamic_slot_idle_phase,
-        gd_macrotick,
-        gd_minislot: params.minislot_duration,
-        gd_mini_slot_action_point_offset: params.minislot_action_point_offset,
-        gd_nit: params.network_idle_time,
-        gd_static_slot: params.static_slot_duration,
-        gd_symbol_window: params.symbol_window,
-        gd_tss_transmitter: params.gd_tss_transmitter,
-        gd_wakeup_symbol_rx_idle: params.gd_wakeup_symbol_rx_idle,
-        gd_wakeup_symbol_rx_low: params.gd_wakeup_symbol_rx_low,
-        gd_wakeup_symbol_rx_window: params.gd_wakeup_symbol_rx_window,
-        gd_wakeup_symbol_tx_idle: params.gd_wakeup_symbol_tx_idle,
-        gd_wakeup_symbol_tx_low: params.gd_wakeup_symbol_tx_low,
-        p_allow_halt_due_to_clock: params.p_allow_halt_due_to_clock as u32,
-        p_allow_passive_to_active: params.p_allow_passive_to_active,
-        p_channels: channels,
-        p_cluster_drift_damping: params.p_cluster_drift_damping,
-        p_decoding_correction: params.p_decoding_correction,
-        p_delay_compensation_a: params.p_delay_compensation_a,
-        p_delay_compensation_b: params.p_delay_compensation_b,
-        p_extern_offset_correction: params.p_extern_offset_correction,
-        p_extern_rate_correction: params.p_extern_rate_correction,
-        p_key_slot_used_for_startup: params.p_key_slot_used_for_startup,
-        p_key_slot_used_for_sync: params.p_key_slot_used_for_sync,
-        p_latest_tx: params.p_latest_tx,
-        p_macro_initial_offset_a: params.p_macro_initial_offset_a,
-        p_macro_initial_offset_b: params.p_macro_initial_offset_b,
-        p_max_payload_length_dynamic: 0,
-        p_micro_initial_offset_a: params.p_micro_initial_offset_a,
-        p_micro_initial_offset_b: params.p_micro_initial_offset_b,
-        p_micro_per_cycle: params.g_micro_per_cycle,
-        p_micro_per_macro_nom,
-        p_offset_correction_out: params.p_offset_correction_out,
-        p_rate_correction_out: params.p_rate_correction_out,
-        p_samples_per_microtick: params.p_samples_per_microtick,
-        p_single_slot_enabled: params.p_single_slot_enabled,
-        p_wakeup_channel: params.p_wakeup_channel,
-        p_wakeup_pattern: params.p_wakeup_pattern,
-        pd_accepted_startup_range: params.pd_accepted_startup_range,
-        pd_listen_timeout: params.pd_listen_timeout,
-        pd_max_drift: params.pd_max_drift,
-        pd_microtick,
-        gd_cas_rx_low_max: params.gd_cas_rx_low_max,
-        g_channels,
-        v_extern_offset_control: 0,
-        v_extern_rate_control: 0,
-        p_channels_mts: 0,
-        frame_preset_data: 0,
-        reserved: [0; 15],
-    }
-}
-
-impl FlexRayChannel {
-    /// Opens the channel with the cluster configuration of a parsed
-    /// FlexRay database.
-    pub fn open_rx_with_db(index: i32, db: &crate::fr_db::FrDb) -> Result<FlexRayChannel, String> {
-        Self::open_rx(index, &config_from_db(&db.params))
+        pub bus_guardian_enable: u32,
+        pub baudrate: u32,
+        pub bus_guardian_tick: u32,
+        pub external_clock_correction_mode: u32,
+        pub g_cold_start_attempts: u32,
+        pub g_listen_noise: u32,
+        pub g_macro_per_cycle: u32,
+        pub g_max_without_clock_correction_fatal: u32,
+        pub g_max_without_clock_correction_passive: u32,
+        pub g_network_management_vector_length: u32,
+        pub g_number_of_minislots: u32,
+        pub g_number_of_static_slots: u32,
+        pub g_offset_correction_start: u32,
+        pub g_payload_length_static: u32,
+        pub g_sync_node_max: u32,
+        pub gd_action_point_offset: u32,
+        pub gd_dynamic_slot_idle_phase: u32,
+        pub gd_macrotick: u32,
+        pub gd_minislot: u32,
+        pub gd_mini_slot_action_point_offset: u32,
+        pub gd_nit: u32,
+        pub gd_static_slot: u32,
+        pub gd_symbol_window: u32,
+        pub gd_tss_transmitter: u32,
+        pub gd_wakeup_symbol_rx_idle: u32,
+        pub gd_wakeup_symbol_rx_low: u32,
+        pub gd_wakeup_symbol_rx_window: u32,
+        pub gd_wakeup_symbol_tx_idle: u32,
+        pub gd_wakeup_symbol_tx_low: u32,
+        pub p_allow_halt_due_to_clock: u32,
+        pub p_allow_passive_to_active: u32,
+        pub p_channels: u32,
+        pub p_cluster_drift_damping: u32,
+        pub p_decoding_correction: u32,
+        pub p_delay_compensation_a: u32,
+        pub p_delay_compensation_b: u32,
+        pub p_extern_offset_correction: u32,
+        pub p_extern_rate_correction: u32,
+        pub p_key_slot_used_for_startup: u32,
+        pub p_key_slot_used_for_sync: u32,
+        pub p_latest_tx: u32,
+        pub p_macro_initial_offset_a: u32,
+        pub p_macro_initial_offset_b: u32,
+        pub p_max_payload_length_dynamic: u32,
+        pub p_micro_initial_offset_a: u32,
+        pub p_micro_initial_offset_b: u32,
+        pub p_micro_per_cycle: u32,
+        pub p_micro_per_macro_nom: u32,
+        pub p_offset_correction_out: u32,
+        pub p_rate_correction_out: u32,
+        pub p_samples_per_microtick: u32,
+        pub p_single_slot_enabled: u32,
+        pub p_wakeup_channel: u32,
+        pub p_wakeup_pattern: u32,
+        pub pd_accepted_startup_range: u32,
+        pub pd_listen_timeout: u32,
+        pub pd_max_drift: u32,
+        pub pd_microtick: u32,
+        pub gd_cas_rx_low_max: u32,
+        pub g_channels: u32,
+        pub v_extern_offset_control: u32,
+        pub v_extern_rate_control: u32,
+        pub p_channels_mts: u32,
+        pub frame_preset_data: u32,
+        pub reserved: [u32; 15],
     }
 
-    /// Probe-only: open the port asking for `request` access rights, try to
-    /// apply `config`, and report what the driver answered.
-    ///
-    /// [`Self::open_rx`] asks for **nothing** (`permission = 0`), so a channel
-    /// that refuses `xlFrSetConfiguration` with `XL_ERR_INVALID_ACCESS` has not
-    /// been shown to lack a FlexRay licence -- it may only have been asked for
-    /// too little. This sweeps requests and prints the mask the driver granted,
-    /// which it fills in either way. Raw numbers on purpose: the vendor header
-    /// is not on this machine, so the bits are not named.
-    pub fn access_probe_line(index: i32, config: &XLfrClusterConfig, request: XlAccess) -> String {
-        let Some(lib) = Vxlapi::lib() else {
-            return format!("ch{index} 申请 0x{request:X}：Vector 驱动不可用\n");
+    const _: () = assert!(std::mem::size_of::<XLfrClusterConfig>() == 316);
+
+    /// `xlFrGetChannelConfiguration`'s answer: the channel status bits plus
+    /// the cluster configuration the driver currently holds. When `status`
+    /// carries `VALID_CLUSTER_CFG` (0x04), the `cluster` copy is the real
+    /// network's parameters -- read them instead of asking the user.
+    pub struct XLfrChannelConfig {
+        pub status: u32,
+        pub cfg_mode: u32,
+        pub reserved: [u32; 6],
+        pub cluster: XLfrClusterConfig,
+    }
+
+    const _: () = assert!(std::mem::size_of::<XLfrChannelConfig>() == 348);
+
+    /// `XLfrChannelConfig::status` bits (vxlapi.h 2269-2272).
+    pub const FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG: u32 = 0x04;
+
+    /// One received FlexRay frame: the static-slot/dynamic-slot address and
+    /// the cycle it arrived in, plus the raw payload (RX-only slice -- no
+    /// signal decoding).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct FrFrame {
+        pub slot: u16,
+        pub cycle: u8,
+        pub payload: Vec<u8>,
+        pub header_crc: u16,
+        pub flags: u16,
+    }
+
+    /// The FlexRay event buffer: MSVC probe on the shipped vxlapi.h gives
+    /// sizeof(XLfrEvent) == 512 (32-byte header + a union whose raw member
+    /// spans XL_FR_MAX_EVENT_SIZE - 32). The buffer MUST hold the full event
+    /// -- the driver writes the whole struct, not just the received frame.
+    pub(super) const FR_EVENT_SIZE: usize = 512;
+    pub(super) const FR_EVENT_TAG: usize = 4;
+    pub(super) const FR_EVENT_SLOT: usize = 36;
+    pub(super) const FR_EVENT_CYCLE: usize = 38;
+    pub(super) const FR_EVENT_PAYLOAD_LEN: usize = 39;
+    pub(super) const FR_EVENT_DATA: usize = 40;
+    pub(super) const FR_EVENT_HEADER_CRC: usize = 34;
+    pub(super) const FR_EVENT_FLAGS: usize = 32;
+    pub(super) const XL_FR_EV_TAG_RX_FRAME: u16 = 0x0081;
+    /// `vxlapi.h`: `#define XL_FR_MAX_DATA_LENGTH 254` -- also the payload
+    /// ceiling inside the RX-frame event.
+    pub(super) const FR_MAX_DATA_LENGTH: usize = 254;
+
+    /// An open, configured FlexRay port (RX-only). Frames leave nothing to
+    /// the tool yet -- this slice only watches.
+    #[derive(Debug)]
+    pub struct FlexRayChannel {
+        port: XlPortHandle,
+        mask: XlAccess,
+    }
+
+    /// FlexRay frame as received from the wire: slot/cycle address plus the
+    /// raw payload, before any signal decoding.
+    /// Converts a parsed FlexRay database's cluster parameters into the
+    /// driver's config struct. Derived values follow the CANoe demo math:
+    /// gdMacroPerCycle = cycle / macrotick, pdMicrotick = sample clock ×
+    /// samples (in ns), pMicroPerMacroNom = their ratio; absent fields
+    /// stay zero (zero means "driver default" to `xlFrSetConfiguration`),
+    /// and the channel pair defaults to A+B like every FIBEX export does.
+    pub fn config_from_db(params: &crate::fr_db::FrClusterParams) -> XLfrClusterConfig {
+        let gd_macrotick = (params.macrotick_duration_us * 1000.0) as u32;
+        let g_macro_per_cycle = params.g_macro_per_cycle.unwrap_or_else(|| {
+            ((params.cycle_time_ms * 1000.0) / params.macrotick_duration_us.max(0.001)).round()
+                as u32
+        });
+        let pd_microtick =
+            (params.sample_clock_period_us * params.p_samples_per_microtick as f64 * 1000.0) as u32;
+        let p_micro_per_macro_nom = if params.p_micro_per_macro_nom > 0 {
+            params.p_micro_per_macro_nom
+        } else {
+            gd_macrotick.checked_div(pd_microtick).unwrap_or(0)
         };
-        unsafe {
-            if (lib.open_driver)() != 0 {
-                return format!("ch{index} 申请 0x{request:X}：xlOpenDriver 失败\n");
-            }
-            let mask = 1u64 << index;
-            let mut permission: XlAccess = request;
-            let mut port: XlPortHandle = 0;
-            let status = (lib.open_port)(
-                &mut port,
-                c"roxy-can".as_ptr() as *const u8,
-                mask,
-                &mut permission,
-                65_536,
-                XL_INTERFACE_VERSION_V4,
-                XL_BUS_TYPE_FLEXRAY,
-            );
-            if status != 0 || port == XL_INVALID_PORT {
-                (lib.close_driver)();
-                return format!(
-                    "ch{index} 申请 0x{request:X}：xlOpenPort 被拒（{}）\n",
-                    lib.error(status)
-                );
-            }
-            let granted = permission;
-            let status = (lib.fr_set_configuration)(port, mask, config);
-            (lib.close_port)(port);
-            (lib.close_driver)();
-            let outcome = if status == 0 {
-                "接受".to_string()
-            } else {
-                format!("被拒（{}）", lib.error(status))
+        let channels = if params.p_channels == 0 {
+            3
+        } else {
+            params.p_channels
+        };
+        let g_channels = if params.g_channels == 0 {
+            3
+        } else {
+            params.g_channels
+        };
+        XLfrClusterConfig {
+            bus_guardian_enable: 0,
+            baudrate: params.speed_kbps * 1000,
+            bus_guardian_tick: 0,
+            external_clock_correction_mode: 0,
+            g_cold_start_attempts: params.coldstart_attempts,
+            g_listen_noise: params.g_listen_noise,
+            g_macro_per_cycle,
+            g_max_without_clock_correction_fatal: params.g_max_without_clock_correction_fatal,
+            g_max_without_clock_correction_passive: params.g_max_without_clock_correction_passive,
+            g_network_management_vector_length: params.g_network_management_vector_length,
+            g_number_of_minislots: params.number_of_minislots,
+            g_number_of_static_slots: params.number_of_static_slots,
+            g_offset_correction_start: params.offset_correction_start,
+            g_payload_length_static: params.payload_length_static,
+            g_sync_node_max: params.g_sync_node_max,
+            gd_action_point_offset: params.action_point_offset,
+            gd_dynamic_slot_idle_phase: params.dynamic_slot_idle_phase,
+            gd_macrotick,
+            gd_minislot: params.minislot_duration,
+            gd_mini_slot_action_point_offset: params.minislot_action_point_offset,
+            gd_nit: params.network_idle_time,
+            gd_static_slot: params.static_slot_duration,
+            gd_symbol_window: params.symbol_window,
+            gd_tss_transmitter: params.gd_tss_transmitter,
+            gd_wakeup_symbol_rx_idle: params.gd_wakeup_symbol_rx_idle,
+            gd_wakeup_symbol_rx_low: params.gd_wakeup_symbol_rx_low,
+            gd_wakeup_symbol_rx_window: params.gd_wakeup_symbol_rx_window,
+            gd_wakeup_symbol_tx_idle: params.gd_wakeup_symbol_tx_idle,
+            gd_wakeup_symbol_tx_low: params.gd_wakeup_symbol_tx_low,
+            p_allow_halt_due_to_clock: params.p_allow_halt_due_to_clock as u32,
+            p_allow_passive_to_active: params.p_allow_passive_to_active,
+            p_channels: channels,
+            p_cluster_drift_damping: params.p_cluster_drift_damping,
+            p_decoding_correction: params.p_decoding_correction,
+            p_delay_compensation_a: params.p_delay_compensation_a,
+            p_delay_compensation_b: params.p_delay_compensation_b,
+            p_extern_offset_correction: params.p_extern_offset_correction,
+            p_extern_rate_correction: params.p_extern_rate_correction,
+            p_key_slot_used_for_startup: params.p_key_slot_used_for_startup,
+            p_key_slot_used_for_sync: params.p_key_slot_used_for_sync,
+            p_latest_tx: params.p_latest_tx,
+            p_macro_initial_offset_a: params.p_macro_initial_offset_a,
+            p_macro_initial_offset_b: params.p_macro_initial_offset_b,
+            p_max_payload_length_dynamic: 0,
+            p_micro_initial_offset_a: params.p_micro_initial_offset_a,
+            p_micro_initial_offset_b: params.p_micro_initial_offset_b,
+            p_micro_per_cycle: params.g_micro_per_cycle,
+            p_micro_per_macro_nom,
+            p_offset_correction_out: params.p_offset_correction_out,
+            p_rate_correction_out: params.p_rate_correction_out,
+            p_samples_per_microtick: params.p_samples_per_microtick,
+            p_single_slot_enabled: params.p_single_slot_enabled,
+            p_wakeup_channel: params.p_wakeup_channel,
+            p_wakeup_pattern: params.p_wakeup_pattern,
+            pd_accepted_startup_range: params.pd_accepted_startup_range,
+            pd_listen_timeout: params.pd_listen_timeout,
+            pd_max_drift: params.pd_max_drift,
+            pd_microtick,
+            gd_cas_rx_low_max: params.gd_cas_rx_low_max,
+            g_channels,
+            v_extern_offset_control: 0,
+            v_extern_rate_control: 0,
+            p_channels_mts: 0,
+            frame_preset_data: 0,
+            reserved: [0; 15],
+        }
+    }
+
+    impl FlexRayChannel {
+        /// Opens the channel with the cluster configuration of a parsed
+        /// FlexRay database.
+        pub fn open_rx_with_db(
+            index: i32,
+            db: &crate::fr_db::FrDb,
+        ) -> Result<FlexRayChannel, String> {
+            Self::open_rx(index, &config_from_db(&db.params))
+        }
+
+        /// Probe-only: open the port asking for `request` access rights, try to
+        /// apply `config`, and report what the driver answered.
+        ///
+        /// [`Self::open_rx`] asks for **nothing** (`permission = 0`), so a channel
+        /// that refuses `xlFrSetConfiguration` with `XL_ERR_INVALID_ACCESS` has not
+        /// been shown to lack a FlexRay licence -- it may only have been asked for
+        /// too little. This sweeps requests and prints the mask the driver granted,
+        /// which it fills in either way. Raw numbers on purpose: the vendor header
+        /// is not on this machine, so the bits are not named.
+        pub fn access_probe_line(
+            index: i32,
+            config: &XLfrClusterConfig,
+            request: XlAccess,
+        ) -> String {
+            let Some(lib) = Vxlapi::lib() else {
+                return format!("ch{index} 申请 0x{request:X}：Vector 驱动不可用\n");
             };
-            format!("ch{index} 申请 0x{request:X} → 授予 0x{granted:X}，xlFrSetConfiguration {outcome}\n")
-        }
-    }
-
-    /// Opens the channel and applies the cluster configuration, asking the
-    /// driver for `request` access rights. The worker behind
-    /// [`Self::open_rx`]; probe code calls it with a single request to see what
-    /// comes back.
-    fn open_at(
-        index: i32,
-        config: &XLfrClusterConfig,
-        request: XlAccess,
-    ) -> Result<FlexRayChannel, String> {
-        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
-        unsafe {
-            let status = (lib.open_driver)();
-            if status != 0 {
-                return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
-            }
-            let mask = 1u64 << index;
-            let mut permission: XlAccess = request;
-            let mut port: XlPortHandle = 0;
-            let status = (lib.open_port)(
-                &mut port,
-                c"roxy-can".as_ptr() as *const u8,
-                mask,
-                &mut permission,
-                65_536,
-                XL_INTERFACE_VERSION_V4,
-                XL_BUS_TYPE_FLEXRAY,
-            );
-            if status != 0 || port == XL_INVALID_PORT {
-                (lib.close_driver)();
-                return Err(format!(
-                    "打开 FlexRay 通道 {index} 失败（{}）",
-                    lib.error(status)
-                ));
-            }
-            let status = (lib.fr_set_configuration)(port, mask, config);
-            if status != 0 {
-                (lib.close_port)(port);
-                (lib.close_driver)();
-                // The granted access mask is the diagnosis, so it travels with
-                // the error. Measured on a VN7640 (2026-10-08): a port opened
-                // with `permission = 0` is granted 0 and every
-                // `xlFrSetConfiguration` on it answers `XL_ERR_INVALID_ACCESS`,
-                // while the same open asking for the channel's own bit is
-                // granted and the configuration is accepted. So a zero here
-                // means somebody else holds the channel (or it is not assigned
-                // to this application), not that the parameters are wrong.
-                let granted = if permission == 0 {
-                    "驱动只给到被动权限（授予 0）：这一路多半被别的程序占着，或在 Vector Hardware Config 里没分给本应用——集群配置要的是该通道的 init 权限位"
-                        .to_string()
-                } else {
-                    format!(
-                        "授予权限 0x{permission:016X}：权限在手，那就检查集群参数与目标网络是否一致"
-                    )
-                };
-                return Err(format!(
-                    "FlexRay 集群配置被拒绝（{}）——{granted}",
-                    lib.error(status)
-                ));
-            }
-            let status = (lib.activate_channel)(port, mask, XL_BUS_TYPE_FLEXRAY, 0);
-            if status != 0 {
-                (lib.close_port)(port);
-                (lib.close_driver)();
-                return Err(format!("激活通道失败（{}）", lib.error(status)));
-            }
-            (lib.flush_receive_queue)(port);
-            Ok(FlexRayChannel { port, mask })
-        }
-    }
-
-    /// Opens the channel and applies the cluster configuration.
-    ///
-    /// The port asks for **the channel's own access bit** first, because that
-    /// is what makes `xlFrSetConfiguration` take at all -- measured on a
-    /// VN7640 (2026-10-08), an open that requests nothing is granted nothing and
-    /// every configuration is then refused with `XL_ERR_INVALID_ACCESS`, while
-    /// the same open requesting `1 << channel` is granted and the configuration
-    /// is accepted. (The rights mask is per channel: bits outside the channel
-    /// mask are rejected outright with `XL_ERR_WRONG_PARAMETER`, which is why
-    /// this carries the channel bit rather than a bare `1`.)
-    ///
-    /// If that open fails the channel is owned by another program, so the
-    /// passive port is retried -- the watch then reports who holds it instead of
-    /// the open failing with the first error's number alone.
-    pub fn open_rx(index: i32, config: &XLfrClusterConfig) -> Result<FlexRayChannel, String> {
-        let init = Self::open_at(index, config, 1u64 << index);
-        match init {
-            Ok(ch) => Ok(ch),
-            Err(e) => Self::open_at(index, config, 0).map_err(|_| e),
-        }
-    }
-
-    /// Reads the channel's current configuration. When the status carries
-    /// `VALID_CLUSTER_CFG`, `cluster` holds the parameters the channel
-    /// actually runs -- the driver's answer to "what are this network's
-    /// timings", removing the need for the user to transcribe them.
-    pub fn channel_config(&self) -> Result<XLfrChannelConfig, String> {
-        let lib = Vxlapi::lib().ok_or("Vector 驱动不可用")?;
-        let mut cfg = flexray::XLfrChannelConfig {
-            status: 0,
-            cfg_mode: 0,
-            reserved: [0; 6],
-            cluster: XLfrClusterConfig::default(),
-        };
-        let status = unsafe {
-            (lib.fr_get_channel_configuration)(self.port, self.mask, &mut cfg)
-        };
-        if status != 0 {
-            return Err(format!(
-                "xlFrGetChannelConfiguration 失败（{}）",
-                lib.error(status)
-            ));
-        }
-        Ok(cfg)
-    }
-
-    /// Takes one FlexRay frame off the queue. Start-cycle and other
-    /// non-frame events are skipped; `None` when the queue is drained.
-    pub fn try_read(&mut self) -> Option<FrFrame> {
-        self.try_read_with_raw().map(|(f, _)| f)
-    }
-
-    /// Like `try_read`, but also hands back the event's first 64 raw
-    /// bytes -- the diagnostic dump `--vector-probe` prints for the
-    /// first received frame, so a real session pins down the fields the
-    /// header layout left unverified (the reception channel A/B lives
-    /// somewhere in there).
-    pub fn try_read_with_raw(&mut self) -> Option<(FrFrame, [u8; 64])> {
-        let lib = Vxlapi::lib()?;
-        loop {
-            let mut ev = [0u8; FR_EVENT_SIZE];
-            let status = unsafe { (lib.fr_receive)(self.port, ev.as_mut_ptr()) };
-            if status == XL_ERR_QUEUE_IS_EMPTY || status != 0 {
-                return None;
-            }
-            if let Some(frame) = parse_fr_event(&ev) {
-                let mut head = [0u8; 64];
-                head.copy_from_slice(&ev[..64]);
-                return Some((frame, head));
-            }
-        }
-    }
-}
-
-/// Parses one raw `XLfrEvent` buffer into a frame, skipping other event
-/// kinds (start-cycle markers, status). The offsets are the pshpack8
-/// layout: 32-byte header, then flags/headerCRC/slotID/cycle/len/data.
-pub(super) fn parse_fr_event(ev: &[u8; FR_EVENT_SIZE]) -> Option<FrFrame> {
-    let tag = u16::from_le_bytes([ev[FR_EVENT_TAG], ev[FR_EVENT_TAG + 1]]);
-    if tag != XL_FR_EV_TAG_RX_FRAME {
-        return None;
-    }
-            let slot = u16::from_le_bytes([ev[FR_EVENT_SLOT], ev[FR_EVENT_SLOT + 1]]);
-            let cycle = ev[FR_EVENT_CYCLE];
-            let len = ev[FR_EVENT_PAYLOAD_LEN] as usize;
-            let len = len.min(FR_MAX_DATA_LENGTH);
-            let payload = ev[FR_EVENT_DATA..FR_EVENT_DATA + len].to_vec();
-    let flags = u16::from_le_bytes([ev[FR_EVENT_FLAGS], ev[FR_EVENT_FLAGS + 1]]);
-    let header_crc =
-        u16::from_le_bytes([ev[FR_EVENT_HEADER_CRC], ev[FR_EVENT_HEADER_CRC + 1]]);
-    Some(FrFrame {
-        slot,
-        cycle,
-        payload,
-        header_crc,
-        flags,
-    })
-}
-
-impl Drop for FlexRayChannel {
-    fn drop(&mut self) {
-        if let Some(lib) = Vxlapi::lib() {
             unsafe {
-                (lib.deactivate_channel)(self.port, self.mask);
-                (lib.close_port)(self.port);
+                if (lib.open_driver)() != 0 {
+                    return format!("ch{index} 申请 0x{request:X}：xlOpenDriver 失败\n");
+                }
+                let mask = 1u64 << index;
+                let mut permission: XlAccess = request;
+                let mut port: XlPortHandle = 0;
+                let status = (lib.open_port)(
+                    &mut port,
+                    c"roxy-can".as_ptr() as *const u8,
+                    mask,
+                    &mut permission,
+                    65_536,
+                    XL_INTERFACE_VERSION_V4,
+                    XL_BUS_TYPE_FLEXRAY,
+                );
+                if status != 0 || port == XL_INVALID_PORT {
+                    (lib.close_driver)();
+                    return format!(
+                        "ch{index} 申请 0x{request:X}：xlOpenPort 被拒（{}）\n",
+                        lib.error(status)
+                    );
+                }
+                let granted = permission;
+                let status = (lib.fr_set_configuration)(port, mask, config);
+                (lib.close_port)(port);
                 (lib.close_driver)();
+                let outcome = if status == 0 {
+                    "接受".to_string()
+                } else {
+                    format!("被拒（{}）", lib.error(status))
+                };
+                format!(
+                    "ch{index} 申请 0x{request:X} → 授予 0x{granted:X}，xlFrSetConfiguration {outcome}\n"
+                )
+            }
+        }
+
+        /// Opens the channel and applies the cluster configuration, asking the
+        /// driver for `request` access rights. The worker behind
+        /// [`Self::open_rx`]; probe code calls it with a single request to see what
+        /// comes back.
+        fn open_at(
+            index: i32,
+            config: &XLfrClusterConfig,
+            request: XlAccess,
+        ) -> Result<FlexRayChannel, String> {
+            let lib =
+                Vxlapi::lib().ok_or("Vector 驱动不可用（vxlapi64.dll / vxlapi.dll 未找到）")?;
+            unsafe {
+                let status = (lib.open_driver)();
+                if status != 0 {
+                    return Err(format!("xlOpenDriver 失败（{}）", lib.error(status)));
+                }
+                let mask = 1u64 << index;
+                let mut permission: XlAccess = request;
+                let mut port: XlPortHandle = 0;
+                let status = (lib.open_port)(
+                    &mut port,
+                    c"roxy-can".as_ptr() as *const u8,
+                    mask,
+                    &mut permission,
+                    65_536,
+                    XL_INTERFACE_VERSION_V4,
+                    XL_BUS_TYPE_FLEXRAY,
+                );
+                if status != 0 || port == XL_INVALID_PORT {
+                    (lib.close_driver)();
+                    return Err(format!(
+                        "打开 FlexRay 通道 {index} 失败（{}）",
+                        lib.error(status)
+                    ));
+                }
+                let status = (lib.fr_set_configuration)(port, mask, config);
+                if status != 0 {
+                    (lib.close_port)(port);
+                    (lib.close_driver)();
+                    // The granted access mask is the diagnosis, so it travels with
+                    // the error. Measured on a VN7640 (2026-10-08): a port opened
+                    // with `permission = 0` is granted 0 and every
+                    // `xlFrSetConfiguration` on it answers `XL_ERR_INVALID_ACCESS`,
+                    // while the same open asking for the channel's own bit is
+                    // granted and the configuration is accepted. So a zero here
+                    // means somebody else holds the channel (or it is not assigned
+                    // to this application), not that the parameters are wrong.
+                    let granted = if permission == 0 {
+                        "驱动只给到被动权限（授予 0）：这一路多半被别的程序占着，或在 Vector Hardware Config 里没分给本应用——集群配置要的是该通道的 init 权限位"
+                        .to_string()
+                    } else {
+                        format!(
+                            "授予权限 0x{permission:016X}：权限在手，那就检查集群参数与目标网络是否一致"
+                        )
+                    };
+                    return Err(format!(
+                        "FlexRay 集群配置被拒绝（{}）——{granted}",
+                        lib.error(status)
+                    ));
+                }
+                let status = (lib.activate_channel)(port, mask, XL_BUS_TYPE_FLEXRAY, 0);
+                if status != 0 {
+                    (lib.close_port)(port);
+                    (lib.close_driver)();
+                    return Err(format!("激活通道失败（{}）", lib.error(status)));
+                }
+                (lib.flush_receive_queue)(port);
+                Ok(FlexRayChannel { port, mask })
+            }
+        }
+
+        /// Opens the channel and applies the cluster configuration.
+        ///
+        /// The port asks for **the channel's own access bit** first, because that
+        /// is what makes `xlFrSetConfiguration` take at all -- measured on a
+        /// VN7640 (2026-10-08), an open that requests nothing is granted nothing and
+        /// every configuration is then refused with `XL_ERR_INVALID_ACCESS`, while
+        /// the same open requesting `1 << channel` is granted and the configuration
+        /// is accepted. (The rights mask is per channel: bits outside the channel
+        /// mask are rejected outright with `XL_ERR_WRONG_PARAMETER`, which is why
+        /// this carries the channel bit rather than a bare `1`.)
+        ///
+        /// If that open fails the channel is owned by another program, so the
+        /// passive port is retried -- the watch then reports who holds it instead of
+        /// the open failing with the first error's number alone.
+        pub fn open_rx(index: i32, config: &XLfrClusterConfig) -> Result<FlexRayChannel, String> {
+            let init = Self::open_at(index, config, 1u64 << index);
+            match init {
+                Ok(ch) => Ok(ch),
+                Err(e) => Self::open_at(index, config, 0).map_err(|_| e),
+            }
+        }
+
+        /// Reads the channel's current configuration. When the status carries
+        /// `VALID_CLUSTER_CFG`, `cluster` holds the parameters the channel
+        /// actually runs -- the driver's answer to "what are this network's
+        /// timings", removing the need for the user to transcribe them.
+        pub fn channel_config(&self) -> Result<XLfrChannelConfig, String> {
+            let lib = Vxlapi::lib().ok_or("Vector 驱动不可用")?;
+            let mut cfg = flexray::XLfrChannelConfig {
+                status: 0,
+                cfg_mode: 0,
+                reserved: [0; 6],
+                cluster: XLfrClusterConfig::default(),
+            };
+            let status =
+                unsafe { (lib.fr_get_channel_configuration)(self.port, self.mask, &mut cfg) };
+            if status != 0 {
+                return Err(format!(
+                    "xlFrGetChannelConfiguration 失败（{}）",
+                    lib.error(status)
+                ));
+            }
+            Ok(cfg)
+        }
+
+        /// Takes one FlexRay frame off the queue. Start-cycle and other
+        /// non-frame events are skipped; `None` when the queue is drained.
+        pub fn try_read(&mut self) -> Option<FrFrame> {
+            self.try_read_with_raw().map(|(f, _)| f)
+        }
+
+        /// Like `try_read`, but also hands back the event's first 64 raw
+        /// bytes -- the diagnostic dump `--vector-probe` prints for the
+        /// first received frame, so a real session pins down the fields the
+        /// header layout left unverified (the reception channel A/B lives
+        /// somewhere in there).
+        pub fn try_read_with_raw(&mut self) -> Option<(FrFrame, [u8; 64])> {
+            let lib = Vxlapi::lib()?;
+            loop {
+                let mut ev = [0u8; FR_EVENT_SIZE];
+                let status = unsafe { (lib.fr_receive)(self.port, ev.as_mut_ptr()) };
+                if status == XL_ERR_QUEUE_IS_EMPTY || status != 0 {
+                    return None;
+                }
+                if let Some(frame) = parse_fr_event(&ev) {
+                    let mut head = [0u8; 64];
+                    head.copy_from_slice(&ev[..64]);
+                    return Some((frame, head));
+                }
             }
         }
     }
-}
+
+    /// Parses one raw `XLfrEvent` buffer into a frame, skipping other event
+    /// kinds (start-cycle markers, status). The offsets are the pshpack8
+    /// layout: 32-byte header, then flags/headerCRC/slotID/cycle/len/data.
+    pub(super) fn parse_fr_event(ev: &[u8; FR_EVENT_SIZE]) -> Option<FrFrame> {
+        let tag = u16::from_le_bytes([ev[FR_EVENT_TAG], ev[FR_EVENT_TAG + 1]]);
+        if tag != XL_FR_EV_TAG_RX_FRAME {
+            return None;
+        }
+        let slot = u16::from_le_bytes([ev[FR_EVENT_SLOT], ev[FR_EVENT_SLOT + 1]]);
+        let cycle = ev[FR_EVENT_CYCLE];
+        let len = ev[FR_EVENT_PAYLOAD_LEN] as usize;
+        let len = len.min(FR_MAX_DATA_LENGTH);
+        let payload = ev[FR_EVENT_DATA..FR_EVENT_DATA + len].to_vec();
+        let flags = u16::from_le_bytes([ev[FR_EVENT_FLAGS], ev[FR_EVENT_FLAGS + 1]]);
+        let header_crc = u16::from_le_bytes([ev[FR_EVENT_HEADER_CRC], ev[FR_EVENT_HEADER_CRC + 1]]);
+        Some(FrFrame {
+            slot,
+            cycle,
+            payload,
+            header_crc,
+            flags,
+        })
+    }
+
+    impl Drop for FlexRayChannel {
+        fn drop(&mut self) {
+            if let Some(lib) = Vxlapi::lib() {
+                unsafe {
+                    (lib.deactivate_channel)(self.port, self.mask);
+                    (lib.close_port)(self.port);
+                    (lib.close_driver)();
+                }
+            }
+        }
+    }
 }
 
 /// Lists the FlexRay-capable channels (a VN7640 port reports the
@@ -1189,10 +1225,7 @@ impl Drop for FlexRayChannel {
 /// probes and tests reach it.
 #[allow(dead_code)]
 pub fn enumerate_flexray() -> Result<Vec<ChannelInfo>, String> {
-    Ok(enumerate()?
-        .into_iter()
-        .filter(|c| c.flexray)
-        .collect())
+    Ok(enumerate()?.into_iter().filter(|c| c.flexray).collect())
 }
 
 #[cfg(test)]
@@ -1212,7 +1245,11 @@ mod tests {
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         assert_eq!(refused_tag(&t(&[(0x0404, 900), (0x0409, 30)])), None);
-        assert_eq!(refused_tag(&t(&[(0x0402, 3)])), None, "a few is not a verdict");
+        assert_eq!(
+            refused_tag(&t(&[(0x0402, 3)])),
+            None,
+            "a few is not a verdict"
+        );
         assert_eq!(
             refused_tag(&t(&[(0x0402, 4001), (0x0409, 16)])),
             Some((0x0402, 4001)),
@@ -1254,7 +1291,8 @@ mod tests {
                                 cfg.cluster.g_number_of_static_slots,
                             );
                         }
-                        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(2);
                         let mut frames = 0usize;
                         while std::time::Instant::now() < deadline {
                             if let Some(f) = ch.try_read() {
@@ -1434,7 +1472,10 @@ mod tests {
             }
             let got = got.expect("the looped frame never arrived on the second channel");
             assert_eq!((got.id, got.len, got.data[0]), (0x123, 2, 0xAB));
-            println!("loopback ok: id=0x{:X} len={} data[0]=0x{:02X}", got.id, got.len, got.data[0]);
+            println!(
+                "loopback ok: id=0x{:X} len={} data[0]=0x{:02X}",
+                got.id, got.len, got.data[0]
+            );
         }
     }
 }

@@ -1,7 +1,16 @@
 use crate::app::App;
-use crate::trigger::{TriggerAction, TriggerCond};
+use crate::trigger::{TriggerAction, TriggerCmd, TriggerCond, TriggerKind};
 use crate::ui::help::popup_is_open;
 use dear_imgui_rs::{Condition, Key, NumericFormat, StyleVar, TableColumnFlags, TableFlags, Ui};
+
+/// The Triggers window's own state: whether it is open and which row, if
+/// any, the editor popup is drafting. Drawn read-only against [`App`]; the
+/// draw returns [`TriggerCmd`]s and never mutates the bus itself.
+#[derive(Default)]
+pub struct TriggersView {
+    pub open: bool,
+    pub(crate) draft: Option<TrigDraft>,
+}
 
 /// Draft state of the trigger editor popup: which row it edits plus the
 /// not-yet-applied shape of the condition and action. Nothing reaches the
@@ -42,27 +51,43 @@ impl TrigDraft {
 }
 
 /// Trigger management: the armed condition list plus a popup editor. The
-/// evaluation itself lives in `trigger.rs`; this window only shapes
-/// `App.triggers`.
+/// evaluation itself lives in `trigger.rs`; this window only shapes the
+/// trigger list, and it does so by returning commands -- never by writing
+/// to `App` while drawing.
 pub fn render(app: &mut App, ui: &Ui) {
-    if !app.show_triggers {
-        return;
+    // The view is taken out for the draw so it can be borrowed mutably while
+    // `App` is read immutably; commands are applied after it is put back.
+    let mut view = std::mem::take(&mut app.triggers_view);
+    let cmds = view.show(ui, app);
+    app.triggers_view = view;
+    app.apply_trigger_cmds(cmds);
+}
+
+impl TriggersView {
+    /// Draws the window and returns everything the user asked for. `app` is
+    /// read-only here: no command, no draft write, no bus mutation.
+    pub fn show(&mut self, ui: &Ui, app: &App) -> Vec<TriggerCmd> {
+        let mut cmds = Vec::new();
+        if !self.open {
+            return cmds;
+        }
+        let io = ui.io();
+        let mut open = self.open;
+        // The table cannot compress below its own columns; a floor keeps the
+        // drag handle from folding everything into unreadability.
+        let min = ui.push_style_var(StyleVar::WindowMinSize([460.0, 200.0]));
+        ui.window("Triggers")
+            .opened(&mut open)
+            .position(
+                [io.display_size()[0] * 0.3, io.display_size()[1] * 0.3],
+                Condition::FirstUseEver,
+            )
+            .size([560.0, 320.0], Condition::FirstUseEver)
+            .build(|| content(self, app, ui, &mut cmds));
+        min.pop();
+        self.open = open;
+        cmds
     }
-    let io = ui.io();
-    let mut open = app.show_triggers;
-    // The table cannot compress below its own columns; a floor keeps the
-    // drag handle from folding everything into unreadability.
-    let min = ui.push_style_var(StyleVar::WindowMinSize([460.0, 200.0]));
-    ui.window("Triggers")
-        .opened(&mut open)
-        .position(
-            [io.display_size()[0] * 0.3, io.display_size()[1] * 0.3],
-            Condition::FirstUseEver,
-        )
-        .size([560.0, 320.0], Condition::FirstUseEver)
-        .build(|| content(app, ui));
-    min.pop();
-    app.show_triggers = open;
 }
 
 fn parse_hex(s: &str) -> Option<u32> {
@@ -86,40 +111,42 @@ fn flow(ui: &Ui, label: &str) {
     }
 }
 
-fn content(app: &mut App, ui: &Ui) {
+fn content(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCmd>) {
     if ui.button("+ Signal") {
-        app.add_signal_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::Signal));
     }
     flow(ui, "+ ID");
     if ui.button("+ ID") {
-        app.add_id_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::Id));
     }
     flow(ui, "+ Error frames");
     if ui.button("+ Error frames") {
-        app.add_error_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::ErrorFrame));
     }
     flow(ui, "+ FlexRay frame");
     if ui.button("+ FlexRay frame") {
-        app.add_fr_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::FrFrame));
     }
     flow(ui, "+ FlexRay signal");
     if ui.button("+ FlexRay signal") {
-        app.add_fr_signal_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::FrSignal));
     }
     flow(ui, "+ Timeout");
     if ui.button("+ Timeout") {
-        app.add_timeout_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::Timeout));
     }
     flow(ui, "+ SysVar");
     if ui.button("+ SysVar") {
-        app.add_sysvar_trigger();
+        cmds.push(TriggerCmd::Add(TriggerKind::SysVar));
     }
     flow(ui, "Re-arm latched");
     if ui.button("Re-arm latched") {
-        app.send(crate::bus::BusCommand::RearmTriggers);
+        cmds.push(TriggerCmd::Rearm);
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("重置出现类条件的锁存（CAN ID / 错误帧 / FlexRay 槽）：下一个对应事件再次触发");
+        ui.tooltip_text(
+            "重置出现类条件的锁存（CAN ID / 错误帧 / FlexRay 槽）：下一个对应事件再次触发",
+        );
     }
     // Trigger-recording context: pre-trigger frames, post-roll frames,
     // and the marker cap. Each accepted edit is its own command, like the
@@ -132,8 +159,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.set_next_item_width(64.0);
     let mut pre = app.limits.pre_frames as i32;
     if ui.input_int_config("##prelim").step(64).build(&mut pre) {
-        app.limits.pre_frames = pre.max(0) as usize;
-        app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
+        cmds.push(TriggerCmd::SetPreFrames(pre.max(0) as usize));
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("触发启动的录制：文件以事件前这么多帧开头");
@@ -145,8 +171,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.set_next_item_width(64.0);
     let mut post = app.limits.post_frames as i32;
     if ui.input_int_config("##postlim").step(8).build(&mut post) {
-        app.limits.post_frames = post.max(0) as u32;
-        app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
+        cmds.push(TriggerCmd::SetPostFrames(post.max(0) as u32));
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("触发停止的录制：边沿后再滚这么多帧才闭文件");
@@ -158,8 +183,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.set_next_item_width(64.0);
     let mut cap = app.limits.marker_cap as i32;
     if ui.input_int_config("##marklim").step(16).build(&mut cap) {
-        app.limits.marker_cap = cap.max(8) as usize;
-        app.set_run_limits(app.limits.pre_frames, app.limits.post_frames, app.limits.marker_cap);
+        cmds.push(TriggerCmd::SetMarkerCap(cap.max(8) as usize));
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("Graphics 标记竖线最多保留这么多条");
@@ -172,14 +196,19 @@ fn content(app: &mut App, ui: &Ui) {
         | TableFlags::NO_BORDERS_IN_BODY;
     let table_opts = dear_imgui_rs::TableOptions::from(flags)
         .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
-    let mut remove: Option<usize> = None;
     let n = app.snap.triggers.len();
     {
         let Some(_table) = ui.begin_table_with_flags("trig_table", 6, table_opts) else {
             return;
         };
         ui.table_setup_column_stretch_weight("Condition", TableColumnFlags::NONE, 1.0);
-        for (label, w) in [("On", 26.0), ("Action", 90.0), ("Fired", 44.0), ("Edit", 42.0), ("", 18.0)] {
+        for (label, w) in [
+            ("On", 26.0),
+            ("Action", 90.0),
+            ("Fired", 44.0),
+            ("Edit", 42.0),
+            ("", 18.0),
+        ] {
             ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, w);
         }
         ui.table_headers_row();
@@ -198,7 +227,7 @@ fn content(app: &mut App, ui: &Ui) {
             ui.table_next_column();
             let mut on = app.snap.triggers[i].enabled;
             if ui.checkbox(format!("##trigon{i}"), &mut on) {
-                app.send(crate::bus::BusCommand::SetTriggerEnabled { index: i, on });
+                cmds.push(TriggerCmd::SetEnabled { index: i, on });
             }
             ui.table_next_column();
             let action_text = match app.snap.triggers[i].action {
@@ -215,28 +244,25 @@ fn content(app: &mut App, ui: &Ui) {
             ui.text(format!("{}", app.snap.triggers[i].fired));
             ui.table_next_column();
             if ui.button(format!("edit##triged{i}")) {
-                app.trig_draft = TrigDraft::for_index(app, i);
+                view.draft = TrigDraft::for_index(app, i);
             }
             ui.table_next_column();
             if ui.button(format!("x##trigrm{i}")) {
-                remove = Some(i);
+                cmds.push(TriggerCmd::Remove(i));
             }
         }
     }
-    if let Some(i) = remove {
-        app.remove_trigger(i);
-    }
 
-    editor_modal(app, ui);
+    editor_modal(view, app, ui, cmds);
 }
 
 /// The editor popup for one trigger. Drafted like the send-cycle modal:
 /// the widgets shape a local copy, Apply crosses it to the bus in one
 /// command, Cancel or Escape throws it away. Nothing here writes while it
 /// edits, and the list position of the row is irrelevant.
-fn editor_modal(app: &mut App, ui: &Ui) {
+fn editor_modal(view: &mut TriggersView, app: &App, ui: &Ui, cmds: &mut Vec<TriggerCmd>) {
     const ID: &str = "Edit trigger##trigmodal";
-    let Some(mut draft) = app.trig_draft.clone() else {
+    let Some(mut draft) = view.draft.clone() else {
         return;
     };
     if !popup_is_open(ui, ID) {
@@ -265,11 +291,8 @@ fn editor_modal(app: &mut App, ui: &Ui) {
         if ui.is_window_appearing() {
             ui.set_keyboard_focus_here();
         }
-        let Some(_grid) = ui.begin_table_with_flags(
-            "##trigedit",
-            2,
-            TableFlags::BORDERS_INNER_V,
-        ) else {
+        let Some(_grid) = ui.begin_table_with_flags("##trigedit", 2, TableFlags::BORDERS_INNER_V)
+        else {
             return;
         };
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 84.0);
@@ -290,8 +313,7 @@ fn editor_modal(app: &mut App, ui: &Ui) {
                 // The index rides along in parentheses: a rule stores a cluster
                 // *index*, and two 路 the user named alike must still be
                 // distinguishable in the list they pick from.
-                let names: Vec<String> =
-                    buses.iter().map(|b| app.fr_bus_label(*b)).collect();
+                let names: Vec<String> = buses.iter().map(|b| app.fr_bus_label(*b)).collect();
                 let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
                 let mut pick = buses.iter().position(|b| *b == fr_bus).unwrap_or(0);
                 ui.set_next_item_width(-1.0);
@@ -303,8 +325,8 @@ fn editor_modal(app: &mut App, ui: &Ui) {
             row(ui, "Bus", |ui| {
                 let names: Vec<String> = app.snap.channels.iter().map(|c| c.name.clone()).collect();
                 let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                let mut bus = (draft.cond.can_bus().unwrap_or(0) as usize)
-                    .min(refs.len().saturating_sub(1));
+                let mut bus =
+                    (draft.cond.can_bus().unwrap_or(0) as usize).min(refs.len().saturating_sub(1));
                 ui.set_next_item_width(-1.0);
                 if ui.combo_simple_string("##trigbus", &mut bus, &refs) {
                     set_bus(&mut draft.cond, bus as u8);
@@ -532,19 +554,19 @@ fn editor_modal(app: &mut App, ui: &Ui) {
     });
     min.pop();
     if confirmed {
-        app.send(crate::bus::BusCommand::EditTrigger {
+        cmds.push(TriggerCmd::Edit {
             index: draft.index,
             cond: draft.cond,
             action: draft.action,
         });
-        app.trig_draft = None;
+        view.draft = None;
     } else if dismissed || !open {
-        app.trig_draft = None;
+        view.draft = None;
     } else {
         // Write the edited draft back: the widgets type into this
         // frame's clone, and without this the next frame would restart
         // from the stale copy -- typed text lost, Apply a no-op.
-        app.trig_draft = Some(draft);
+        view.draft = Some(draft);
     }
 }
 

@@ -3,134 +3,190 @@
 //! (`>=`/`<=` a threshold repaints the row in a palette color). No plots,
 //! no tables: rows a user glances at from across the lab.
 
-use crate::app::{App, PALETTE};
+use crate::app::{App, MonitorRow, PALETTE};
+use crate::observe::SigKey;
 use dear_imgui_rs::{Condition, StyleVar, Ui};
 
-pub fn render(app: &mut App, ui: &Ui) {
-    if !app.show_monitor {
-        return;
-    }
-    let io = ui.io();
-    let mut open = app.show_monitor;
-    let min = ui.push_style_var(StyleVar::WindowMinSize([360.0, 160.0]));
-    ui.window("Monitor")
-        .opened(&mut open)
-        .position(
-            [io.display_size()[0] * 0.45,
-             io.display_size()[1] * 0.12],
-            Condition::FirstUseEver,
-        )
-        .size([420.0, 360.0], Condition::FirstUseEver)
-        .build(|| content(app, ui));
-    min.pop();
-    app.show_monitor = open;
+/// The Monitor's rows and open flag. Row edits (rule, threshold, direction,
+/// digits) are UI/project state and happen in place; only adding/removing a
+/// signal touches the bus, so those come back as commands.
+#[derive(Default)]
+pub struct MonitorView {
+    pub open: bool,
+    pub rows: Vec<MonitorRow>,
 }
 
-fn content(app: &mut App, ui: &Ui) {
-    if ui.button("+ Add signal") {
-        app.popup_target = Some(crate::workspace::PopupTarget::Monitor);
-        app.show_id_filter = true;
+pub enum MonitorCmd {
+    OpenPicker,
+    Clear,
+    Remove(SigKey),
+}
+
+pub fn render(app: &mut App, ui: &Ui) {
+    let mut view = std::mem::take(&mut app.monitor_view);
+    let cmds = view.show(ui, app);
+    app.monitor_view = view;
+    app.apply_monitor_cmds(cmds);
+}
+
+impl MonitorView {
+    pub fn show(&mut self, ui: &Ui, app: &App) -> Vec<MonitorCmd> {
+        let mut cmds = Vec::new();
+        if !self.open {
+            return cmds;
+        }
+        let io = ui.io();
+        let mut open = self.open;
+        let min = ui.push_style_var(StyleVar::WindowMinSize([360.0, 160.0]));
+        ui.window("Monitor")
+            .opened(&mut open)
+            .position(
+                [io.display_size()[0] * 0.45, io.display_size()[1] * 0.12],
+                Condition::FirstUseEver,
+            )
+            .size([420.0, 360.0], Condition::FirstUseEver)
+            .build(|| self.content(app, ui, &mut cmds));
+        min.pop();
+        self.open = open;
+        cmds
     }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("从信号选择器挑一行监控（数据库信号 / 派生信号 / 系统变量）");
-    }
-    ui.same_line();
-    if ui.button("Clear") {
-        let keys: Vec<crate::observe::SigKey> =
-            app.monitor_rows.iter().map(|r| r.key.clone()).collect();
-        for key in keys {
-            app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
+
+    fn content(&mut self, app: &App, ui: &Ui, cmds: &mut Vec<MonitorCmd>) {
+        if ui.button("+ Add signal") {
+            cmds.push(MonitorCmd::OpenPicker);
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("从信号选择器挑一行监控（数据库信号 / 派生信号 / 系统变量）");
+        }
+        ui.same_line();
+        if ui.button("Clear") {
+            cmds.push(MonitorCmd::Clear);
+        }
+        ui.separator();
+
+        for i in 0..self.rows.len() {
+            let key = self.rows[i].key.clone();
+            let sub = app.sub_view(&key);
+            let (value, unit) = match sub {
+                Some(s) => (s.latest, s.unit.clone()),
+                None => (0.0, String::new()),
+            };
+            let (label, digits, rule_on, rising, threshold, color) = {
+                let row = &self.rows[i];
+                (
+                    row.label.clone(),
+                    row.digits,
+                    row.rule_on,
+                    row.rising,
+                    row.threshold,
+                    row.color,
+                )
+            };
+            // Coloring: a rule that holds repaints the whole row in its
+            // palette color; the default text color otherwise.
+            let hot =
+                rule_on && ((rising && value >= threshold) || (!rising && value <= threshold));
+            let text_color = if hot {
+                PALETTE[color % PALETTE.len()]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            };
+            let chip = if hot {
+                PALETTE[color % PALETTE.len()]
+            } else {
+                [0.35, 0.35, 0.4, 1.0]
+            };
+            let dl = ui.get_window_draw_list();
+            let p = ui.cursor_screen_pos();
+            dl.add_rect([p[0], p[1] + 3.0], [p[0] + 6.0, p[1] + 17.0], chip)
+                .filled(true)
+                .build();
+            ui.dummy([10.0, 0.0]);
+            ui.same_line();
+            ui.text_colored(text_color, &label);
+            ui.same_line();
+            ui.text_colored(text_color, format!("{:.*} {}", digits, value, unit));
+
+            self.rule_controls(ui, i, cmds);
+        }
+        if self.rows.is_empty() {
+            ui.text_disabled("no rows -- add a signal to watch");
         }
     }
-    ui.separator();
 
-    let rows = app.monitor_rows.clone();
-    for (i, row) in rows.iter().enumerate() {
-        let sub = app.sub_view(&row.key);
-        let (value, unit) = match sub {
-            Some(s) => (s.latest, s.unit.clone()),
-            None => (0.0, String::new()),
-        };
-        // Coloring: a rule that holds repaints the whole row in its
-        // palette color; the default text color otherwise.
-        let hot = row.rule_on
-            && ((row.rising && value >= row.threshold)
-                || (!row.rising && value <= row.threshold));
-        let text_color = if hot {
-            PALETTE[row.color % PALETTE.len()]
-        } else {
-            [1.0, 1.0, 1.0, 1.0]
-        };
-        let chip = if hot { PALETTE[row.color % PALETTE.len()] } else { [0.35, 0.35, 0.4, 1.0] };
-        let dl = ui.get_window_draw_list();
-        let p = ui.cursor_screen_pos();
-        dl.add_rect([p[0], p[1] + 3.0], [p[0] + 6.0, p[1] + 17.0], chip)
-            .filled(true)
-            .build();
-        ui.dummy([10.0, 0.0]);
+    /// The per-row right-aligned controls: rule on/off, threshold, direction,
+    /// color cycle, digits, remove.
+    fn rule_controls(&mut self, ui: &Ui, i: usize, cmds: &mut Vec<MonitorCmd>) {
+        let width = ui.content_region_avail()[0];
+        ui.same_line_with_pos(width - 268.0);
+        // The label is a state, so two rows agree on it -- the suffix keeps them on
+        // separate IDs.
+        let toggle = if self.rows[i].rule_on { "on" } else { "off" };
+        if ui.button(format!("{toggle}##mrule{i}")) {
+            self.rows[i].rule_on = !self.rows[i].rule_on;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("开关着色规则");
+        }
         ui.same_line();
-        ui.text_colored(text_color, &row.label);
+        ui.set_next_item_width(66.0);
+        let mut th = self.rows[i].threshold as f32;
+        if ui
+            .input_float_config(format!("##mthr{i}"))
+            .display_format(dear_imgui_rs::NumericFormat::new("%g").expect("static format"))
+            .build(&mut th)
+        {
+            self.rows[i].threshold = th as f64;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("着色阈值");
+        }
         ui.same_line();
-        ui.text_colored(
-            text_color,
-            format!("{:.*} {}", row.digits, value, unit),
-        );
-
-        // Right-aligned row controls: rule toggle, threshold, direction,
-        // color, remove.
-        rule_controls(app, ui, i);
-    }
-    if app.monitor_rows.is_empty() {
-        ui.text_disabled("no rows -- add a signal to watch");
+        let dir = if self.rows[i].rising { ">=" } else { "<=" };
+        if ui.button(format!("{dir}##mdir{i}")) {
+            self.rows[i].rising = !self.rows[i].rising;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("切换方向");
+        }
+        ui.same_line();
+        let digits = self.rows[i].digits;
+        if ui.button(format!("{digits}##mdig{i}")) {
+            self.rows[i].digits = (digits + 1) % 4;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("小数位数");
+        }
+        ui.same_line();
+        if ui.button(format!("x##mrm{i}")) {
+            cmds.push(MonitorCmd::Remove(self.rows[i].key.clone()));
+        }
     }
 }
 
-/// The per-row right-aligned controls: rule on/off, threshold, direction,
-/// color cycle, digits, remove.
-fn rule_controls(app: &mut App, ui: &Ui, i: usize) {
-    let width = ui.content_region_avail()[0];
-    ui.same_line_with_pos(width - 268.0);
-    // The label is a state, so two rows agree on it -- the suffix keeps them on
-    // separate IDs.
-    let toggle = if app.monitor_rows[i].rule_on { "on" } else { "off" };
-    if ui.button(format!("{toggle}##mrule{i}")) {
-        app.monitor_rows[i].rule_on = !app.monitor_rows[i].rule_on;
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("开关着色规则");
-    }
-    ui.same_line();
-    ui.set_next_item_width(66.0);
-    let mut th = app.monitor_rows[i].threshold as f32;
-    if ui
-        .input_float_config(format!("##mthr{i}"))
-        .display_format(dear_imgui_rs::NumericFormat::new("%g").expect("static format"))
-        .build(&mut th)
-    {
-        app.monitor_rows[i].threshold = th as f64;
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("着色阈值");
-    }
-    ui.same_line();
-    let dir = if app.monitor_rows[i].rising { ">=" } else { "<=" };
-    if ui.button(format!("{dir}##mdir{i}")) {
-        app.monitor_rows[i].rising = !app.monitor_rows[i].rising;
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("切换方向");
-    }
-    ui.same_line();
-    let digits = app.monitor_rows[i].digits;
-    if ui.button(format!("{digits}##mdig{i}")) {
-        app.monitor_rows[i].digits = (digits + 1) % 4;
-    }
-    if ui.is_item_hovered() {
-        ui.tooltip_text("小数位数");
-    }
-    ui.same_line();
-    if ui.button(format!("x##mrm{i}")) {
-        let key = app.monitor_rows[i].key.clone();
-        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
+impl App {
+    pub(crate) fn apply_monitor_cmds(&mut self, cmds: Vec<MonitorCmd>) {
+        for cmd in cmds {
+            match cmd {
+                MonitorCmd::OpenPicker => {
+                    self.popup_target = Some(crate::workspace::PopupTarget::Monitor);
+                    self.show_id_filter = true;
+                }
+                MonitorCmd::Clear => {
+                    let keys: Vec<SigKey> = self
+                        .monitor_view
+                        .rows
+                        .iter()
+                        .map(|r| r.key.clone())
+                        .collect();
+                    for key in keys {
+                        self.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
+                    }
+                }
+                MonitorCmd::Remove(key) => {
+                    self.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
+                }
+            }
+        }
     }
 }

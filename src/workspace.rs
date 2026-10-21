@@ -140,7 +140,10 @@ pub(crate) fn step_pick(
 /// *after* cache entry `i`, and the return value is the total the list covers.
 /// `ends` is a buffer the caller reuses (the Trace window's scratch pad, never
 /// read between draws), so a 50 000-row list costs no allocation per frame.
-pub(crate) fn table_row_spans(rows: &std::collections::VecDeque<TraceRow>, ends: &mut Vec<usize>) -> usize {
+pub(crate) fn table_row_spans(
+    rows: &std::collections::VecDeque<TraceRow>,
+    ends: &mut Vec<usize>,
+) -> usize {
     ends.clear();
     ends.reserve(rows.len());
     let mut total = 0usize;
@@ -297,11 +300,7 @@ pub fn parse_value_cond(text: &str) -> Option<ValueCond> {
             if signal.is_empty() {
                 return None;
             }
-            return Some(ValueCond {
-                signal,
-                op,
-                value,
-            });
+            return Some(ValueCond { signal, op, value });
         }
     }
     None
@@ -384,8 +383,7 @@ impl TraceWin {
     pub fn filter_lens(&self) -> TraceFilter {
         // A `Name>10` style text is a signal-value condition, not an id/name
         // search.
-        let value_conds: Vec<ValueCond> =
-            parse_value_cond(&self.filter).into_iter().collect();
+        let value_conds: Vec<ValueCond> = parse_value_cond(&self.filter).into_iter().collect();
         // So is an exact address: `id:1AB` says which rows to keep, and searching
         // the text "ID:1AB" through the table as a substring would match nothing.
         let exact = parse_exact_addr(&self.filter);
@@ -649,13 +647,13 @@ impl App {
             show_tx: self.show_tx,
             show_network: self.show_network,
             show_measurement: self.show_measurement,
-            show_buses: self.show_buses,
-            show_triggers: self.show_triggers,
-            show_bus_stats: self.show_bus_stats,
-            show_spec: self.show_spec,
+            show_buses: self.buses_view.open,
+            show_triggers: self.triggers_view.open,
+            show_bus_stats: self.busstats_view.open,
+            show_spec: self.spec_view.open,
             show_id_filter: self.show_id_filter,
-            show_sysvars: self.show_sysvars,
-            show_write: self.show_write,
+            show_sysvars: self.sysvars_view.open,
+            show_write: self.write_view.open,
         }
     }
 
@@ -685,13 +683,13 @@ impl App {
         self.show_tx = d.show_tx;
         self.show_network = d.show_network;
         self.show_measurement = d.show_measurement;
-        self.show_buses = d.show_buses;
-        self.show_triggers = d.show_triggers;
-        self.show_bus_stats = d.show_bus_stats;
-        self.show_spec = d.show_spec;
+        self.buses_view.open = d.show_buses;
+        self.triggers_view.open = d.show_triggers;
+        self.busstats_view.open = d.show_bus_stats;
+        self.spec_view.open = d.show_spec;
         self.show_id_filter = d.show_id_filter;
-        self.show_sysvars = d.show_sysvars;
-        self.show_write = d.show_write;
+        self.sysvars_view.open = d.show_sysvars;
+        self.write_view.open = d.show_write;
         let layout = if d.layout.is_empty() {
             self.default_layout.clone()
         } else {
@@ -793,17 +791,17 @@ impl App {
         // so its bookkeeping runs before the shared GfxSignal lists.
         if let PopupTarget::Monitor = target {
             if on {
-                if self.monitor_rows.iter().any(|r| r.key == key) {
+                if self.monitor_view.rows.iter().any(|r| r.key == key) {
                     return;
                 }
-                self.monitor_rows.push(crate::app::MonitorRow {
+                self.monitor_view.rows.push(crate::app::MonitorRow {
                     key: key.clone(),
                     label: key.name().to_string(),
                     ..Default::default()
                 });
                 self.subscribe(key);
             } else {
-                self.monitor_rows.retain(|r| r.key != key);
+                self.monitor_view.rows.retain(|r| r.key != key);
                 self.prune_signal(&key);
             }
             return;
@@ -962,12 +960,7 @@ impl App {
     /// The FlexRay side of [`Self::scope_match`]: `FrBus` keeps one
     /// cluster's rows, `Bus` (a CAN channel pick) drops them, and `Manual`
     /// admits exactly the slots hand-picked for this window.
-    pub fn scope_match_fr(
-        scope: SigScope,
-        manual: &HashSet<Pick>,
-        bus: u8,
-        slot: u16,
-    ) -> bool {
+    pub fn scope_match_fr(scope: SigScope, manual: &HashSet<Pick>, bus: u8, slot: u16) -> bool {
         match scope {
             SigScope::All => true,
             SigScope::FrBus(b) => b == bus,
@@ -1079,9 +1072,11 @@ impl App {
         }
         // Frame-kind filter: 0 any / 1 classic data / 2 FD / 3 RTR / 4 error.
         if let Some(ok) = (match flt.flags_kind {
-            1 => Some(!f.flags.contains(FrameFlags::FD)
-                && !f.flags.contains(FrameFlags::RTR)
-                && !f.flags.contains(FrameFlags::ERROR)),
+            1 => Some(
+                !f.flags.contains(FrameFlags::FD)
+                    && !f.flags.contains(FrameFlags::RTR)
+                    && !f.flags.contains(FrameFlags::ERROR),
+            ),
             2 => Some(f.flags.contains(FrameFlags::FD)),
             3 => Some(f.flags.contains(FrameFlags::RTR)),
             4 => Some(f.flags.contains(FrameFlags::ERROR)),
@@ -1283,7 +1278,11 @@ mod tests {
         assert_eq!(locate_row(&ends, 0), (0, 0), "the frame row itself");
         assert_eq!(locate_row(&ends, 1), (0, 1), "its first child");
         assert_eq!(locate_row(&ends, 2), (0, 2), "its second child");
-        assert_eq!(locate_row(&ends, 3), (1, 0), "the CAN row is its own table row");
+        assert_eq!(
+            locate_row(&ends, 3),
+            (1, 0),
+            "the CAN row is its own table row"
+        );
         assert_eq!(locate_row(&ends, 4), (2, 0), "no children, no extra row");
     }
 }

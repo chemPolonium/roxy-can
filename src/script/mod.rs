@@ -958,12 +958,12 @@ mod tests {
     /// spellings exist to prevent, so it names itself at compile time.
     #[test]
     fn flexray_handlers_get_the_same_sanity_checks() {
-        let dup = compile("on fr slot 13 { }\n on fr slot 13 { }")
-            .expect_err("one address, one handler");
+        let dup =
+            compile("on fr slot 13 { }\n on fr slot 13 { }").expect_err("one address, one handler");
         assert!(dup.msg.contains("duplicate"), "{dup}");
 
-        let fwd = compile("on fr slot 13 { send(frame_id()); }")
-            .expect_err("a slot is not a CAN id");
+        let fwd =
+            compile("on fr slot 13 { send(frame_id()); }").expect_err("a slot is not a CAN id");
         assert!(fwd.msg.contains("slot"), "{fwd}");
 
         assert!(

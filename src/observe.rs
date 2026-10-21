@@ -698,7 +698,9 @@ impl App {
                 (sig.min, sig.max)
             }
             SigKey::Fr { bus, slot, name } => {
-                let sig = self.fr_db(*bus).and_then(|db| db.slot_signal(*slot, name))?;
+                let sig = self
+                    .fr_db(*bus)
+                    .and_then(|db| db.slot_signal(*slot, name))?;
                 (sig.min, sig.max)
             }
         };
@@ -806,7 +808,7 @@ impl App {
                 .state_trackers
                 .iter()
                 .any(|w| w.signals.iter().any(|s| &s.key == key))
-            || self.monitor_rows.iter().any(|r| &r.key == key);
+            || self.monitor_view.rows.iter().any(|r| &r.key == key);
         if !in_use {
             self.send(crate::bus::BusCommand::Unsubscribe { key: key.clone() });
         }

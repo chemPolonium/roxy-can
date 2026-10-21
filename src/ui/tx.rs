@@ -2,7 +2,9 @@ use crate::app::{App, GenRow, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::dbc::SignalInfo;
 use crate::sim::{KINDS, SrcKind, ValueSrc};
 use crate::ui::help::popup_is_open;
-use dear_imgui_rs::{Condition, Drag, InputTextFlags, Key, NumericFormat, StyleVar, TreeNodeFlags, Ui};
+use dear_imgui_rs::{
+    Condition, Drag, InputTextFlags, Key, NumericFormat, StyleVar, TreeNodeFlags, Ui,
+};
 
 /// Combo entries for a signal's source: "Constant" first so picking index 0
 /// means "hold the base value", the rest in [`KINDS`] order.
@@ -128,10 +130,7 @@ fn render_overview(app: &mut App, ui: &Ui) -> bool {
     ui.window("Interactive Generator")
         .opened(&mut open)
         .position(
-            [
-                io.display_size()[0] * 0.62,
-                TOOLBAR_H + 10.0,
-            ],
+            [io.display_size()[0] * 0.62, TOOLBAR_H + 10.0],
             Condition::FirstUseEver,
         )
         .size([560.0, 340.0], Condition::FirstUseEver)
@@ -296,7 +295,7 @@ pub fn render_node_generator(app: &mut App, ui: &Ui, nch: u8, nname: &str) {
             ui.text(format!("  · {r}"));
         }
         if ui.button("在 Triggers 窗口管理##noder") {
-            app.show_triggers = true;
+            app.triggers_view.open = true;
         }
     }
 }
@@ -521,15 +520,21 @@ struct RowSignals<'a> {
 /// `tag` keeps the two lists' widget ids apart (`c3` and `f3` are different
 /// rows); `data` is the payload actually going out, so a driven row reads its
 /// displayed value back out of the bytes the bus will send, truncation and all.
-fn signal_rows(app: &mut App, ui: &Ui, row: GenRow, tag: &str, kinds: &[String], s: RowSignals<'_>) {
+fn signal_rows(
+    app: &mut App,
+    ui: &Ui,
+    row: GenRow,
+    tag: &str,
+    kinds: &[String],
+    s: RowSignals<'_>,
+) {
     let RowSignals { sigs, data, srcs } = s;
     let id = row_index(row);
     for sig in sigs {
         let name = sig.name.as_str();
         let held = srcs.iter().find(|x| x.name == name).cloned();
         let raw = crate::decode::extract_raw(data, sig.bit, sig.size, sig.big_endian);
-        let cur =
-            crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
+        let cur = crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
         let (lo, hi) = sig_range(sig);
         // What the handle shows is the value in the bytes going out this
         // instant. For a driven signal that is the wave's own value, so the
@@ -636,7 +641,9 @@ pub fn render_fr_ecu_generator(app: &mut App, ui: &Ui, bus: u8, ecu: &str) {
     let active_n = mine.iter().filter(|(_, t)| t.active).count();
     ui.text(format!("生成器：{active_n}/{} 发送中", mine.len()));
     if ui.is_item_hovered() {
-        ui.tooltip_text("端口仅接收：这些帧只进入本会话（Trace、统计、规格、脚本、录制），不会发到总线上。");
+        ui.tooltip_text(
+            "端口仅接收：这些帧只进入本会话（Trace、统计、规格、脚本、录制），不会发到总线上。",
+        );
     }
     ui.separator();
 
@@ -749,11 +756,7 @@ fn fr_row(
     ui.indent();
     let mut act = view.active;
     if ui.checkbox(format!("On##fron{i}"), &mut act) {
-        app.send(crate::bus::BusCommand::SetFrEntryActive {
-            bus,
-            slot,
-            on: act,
-        });
+        app.send(crate::bus::BusCommand::SetFrEntryActive { bus, slot, on: act });
     }
     ui.same_line();
     let cycle = view.cycle_us;
@@ -839,9 +842,9 @@ fn fr_row(
             // The width is the schedule's, not the operator's: say so before the
             // first refusal, not after. An undescribed slot falls back to the
             // length its entry carries.
-            let wide = app.fr_declared_len(bus, slot).unwrap_or_else(|| {
-                crate::generator::hex_len_of(&view.data_text)
-            });
+            let wide = app
+                .fr_declared_len(bus, slot)
+                .unwrap_or_else(|| crate::generator::hex_len_of(&view.data_text));
             ui.tooltip_text(format!(
                 "载荷 {wide} 字节（这个槽的宽度由调度表规定）：不足补 0，多出来的不收"
             ));
@@ -926,11 +929,17 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         return;
     };
     let title = edit.title;
-    let (current, declared, declared_by, cycle_us) =
-        (edit.current_us, edit.declared_us, edit.declared_by, edit.cycle_us);
+    let (current, declared, declared_by, cycle_us) = (
+        edit.current_us,
+        edit.declared_us,
+        edit.declared_by,
+        edit.cycle_us,
+    );
     // The draft box's meaning, and the period Apply writes.
     let draft = match cycle_us {
-        Some(ct) => crate::generator::fr_cycle_draft(&app.tx_cycle_buf, ct).ok().map(|(_, us)| us),
+        Some(ct) => crate::generator::fr_cycle_draft(&app.tx_cycle_buf, ct)
+            .ok()
+            .map(|(_, us)| us),
         None => cycle_from_ms_text(&app.tx_cycle_buf),
     };
     let note = match cycle_us {
@@ -939,10 +948,7 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
             Err(why) => (why.to_string(), true),
         },
         None => match draft {
-            Some(0) => (
-                "event-triggered: never sent on a timer".to_string(),
-                false,
-            ),
+            Some(0) => ("event-triggered: never sent on a timer".to_string(), false),
             Some(us) => (
                 format!(
                     "every {} ms  ({:.2} frames/s)",
@@ -958,28 +964,29 @@ fn cycle_modal(app: &mut App, ui: &Ui) {
         },
     };
     // What the schedule declares, in the unit this dialog edits.
-    let declared_line = declared
-        .filter(|d| *d != current)
-        .map(|d| match cycle_us {
-            Some(ct) => match crate::generator::cycles_of(d, ct) {
-                Some(n) => (format!("{declared_by} 声明的周期：每 {n} 周期（{} ms）", d / 1000), n.to_string()),
-                None => (
-                    format!("{declared_by} 声明的周期：{} ms", d / 1000),
-                    (d / 1000).to_string(),
-                ),
-            },
+    let declared_line = declared.filter(|d| *d != current).map(|d| match cycle_us {
+        Some(ct) => match crate::generator::cycles_of(d, ct) {
+            Some(n) => (
+                format!("{declared_by} 声明的周期：每 {n} 周期（{} ms）", d / 1000),
+                n.to_string(),
+            ),
             None => (
-                format!(
-                    "{declared_by} 声明的周期：{}",
-                    if d == 0 {
-                        "event（无周期）".to_string()
-                    } else {
-                        format!("{} ms", d / 1000)
-                    }
-                ),
+                format!("{declared_by} 声明的周期：{} ms", d / 1000),
                 (d / 1000).to_string(),
             ),
-        });
+        },
+        None => (
+            format!(
+                "{declared_by} 声明的周期：{}",
+                if d == 0 {
+                    "event（无周期）".to_string()
+                } else {
+                    format!("{} ms", d / 1000)
+                }
+            ),
+            (d / 1000).to_string(),
+        ),
+    });
 
     if !popup_is_open(ui, ID) {
         ui.open_popup(ID);

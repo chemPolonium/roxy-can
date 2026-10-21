@@ -32,7 +32,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ],
                 Condition::FirstUseEver,
             )
-            .size([640.0, io.display_size()[1] * 0.42], Condition::FirstUseEver);
+            .size(
+                [640.0, io.display_size()[1] * 0.42],
+                Condition::FirstUseEver,
+            );
         if focus {
             window = window.focused(true);
         }

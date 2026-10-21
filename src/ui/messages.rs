@@ -1,9 +1,7 @@
 use crate::app::{App, PopupTarget};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
-use dear_imgui_rs::{
-    Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui,
-};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui};
 
 /// The Messages table's columns, and the one an expanded row puts its value in.
 /// A table cell is clipped to its own column, so the long text belongs in the
@@ -40,7 +38,10 @@ pub fn render(app: &mut App, ui: &Ui) {
                 ],
                 Condition::FirstUseEver,
             )
-            .size([700.0, io.display_size()[1] * 0.42], Condition::FirstUseEver);
+            .size(
+                [700.0, io.display_size()[1] * 0.42],
+                Condition::FirstUseEver,
+            );
         if focus {
             window = window.focused(true);
         }

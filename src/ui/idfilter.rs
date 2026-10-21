@@ -90,10 +90,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     ui.window(title)
         .opened(&mut open)
         .position(
-            [
-                io.display_size()[0] * 0.35,
-                io.display_size()[1] * 0.18,
-            ],
+            [io.display_size()[0] * 0.35, io.display_size()[1] * 0.18],
             Condition::FirstUseEver,
         )
         .size([460.0, 480.0], Condition::FirstUseEver)
@@ -337,8 +334,8 @@ fn fr_slot_hits(app: &App, q: &str) -> Vec<(u8, u16, String)> {
         .iter()
         .flat_map(|(bus, cfg)| cfg.db.scheduled_slots().into_iter().map(move |s| (*bus, s)))
         .filter_map(|(bus, (slot, frames))| {
-            let hit = frames.iter().any(|f| f.to_ascii_uppercase().contains(q))
-                || slot.to_string() == q;
+            let hit =
+                frames.iter().any(|f| f.to_ascii_uppercase().contains(q)) || slot.to_string() == q;
             hit.then(|| (bus, slot, frames.join(" / ")))
         })
         .collect()
@@ -373,7 +370,12 @@ fn signal_content(app: &mut App, ui: &Ui) {
             };
             w.signals.iter().map(|s| s.key.clone()).collect()
         }
-        PopupTarget::Monitor => app.monitor_rows.iter().map(|r| r.key.clone()).collect(),
+        PopupTarget::Monitor => app
+            .monitor_view
+            .rows
+            .iter()
+            .map(|r| r.key.clone())
+            .collect(),
         _ => return,
     };
 
@@ -530,7 +532,11 @@ fn emitted_section(
     ui.separator();
     ui.text_colored(
         [0.75, 0.55, 1.0, 1.0],
-        format!("派生信号  ({}/{})", streams.iter().filter(|(k, _)| sel.contains(k)).count(), streams.len()),
+        format!(
+            "派生信号  ({}/{})",
+            streams.iter().filter(|(k, _)| sel.contains(k)).count(),
+            streams.len()
+        ),
     );
     ui.text_disabled("脚本节点 emit_value 发布的派生信号");
     for (key, node_name) in &streams {

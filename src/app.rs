@@ -242,20 +242,24 @@ pub struct App {
     /// Named workspace arrangements; always holds at least one desktop.
     pub desktops: Vec<Desktop>,
     pub active_desktop: usize,
-    /// Target index of the rename popup; buffer holds the edited name.
-    pub desktop_rename_target: Option<usize>,
-    pub desktop_rename_buf: String,
     pub replay_speed: f64,
-    /// The Triggers window's editor popup, if open: the row it edits plus
-    /// the not-yet-applied shape. `None` while the popup is closed.
-    pub(crate) trig_draft: Option<crate::ui::triggers::TrigDraft>,
-    /// The System Variables manager's add/edit popup, if open. Session
-    /// state, like the trigger editor's.
-    pub(crate) sysvar_draft: Option<crate::ui::sysvars::SysVarDraft>,
-    /// Which violation kinds the report window lists, indexed by
-    /// [`crate::spec::Kind::ALL`]. A noise control, deliberately not part of the
-    /// project: hiding third-party traffic today should not hide it next week.
-    pub spec_show: [bool; 4],
+    /// The Triggers window's own state: open flag and the editor draft.
+    pub(crate) triggers_view: crate::ui::triggers::TriggersView,
+    /// The Write window's own state: open flag and per-kind filters.
+    pub(crate) write_view: crate::ui::write::WriteView,
+    /// Bus Statistics and the two help popups: open flags only.
+    pub(crate) busstats_view: crate::ui::busstats::BusStatsView,
+    pub(crate) help_view: crate::ui::help::HelpView,
+    /// The Monitor window's rows and open flag.
+    pub(crate) monitor_view: crate::ui::monitor::MonitorView,
+    /// The Specification window's filters and drag draft.
+    pub(crate) spec_view: crate::ui::spec::SpecView,
+    /// The System Variables manager's state and editor draft.
+    pub(crate) sysvars_view: crate::ui::sysvars::SysVarsView,
+    /// The Buses window's state: rename drafts and hardware caches.
+    pub(crate) buses_view: crate::ui::buses::BusesView,
+    /// The desktop strip's rename popup.
+    pub(crate) desktops_view: crate::ui::desktops::DesktopsView,
     /// How far an observed period may stray from the declared one, in percent.
     pub spec_tol_pct: u64,
     /// How many declared periods of silence count as a dropped message.
@@ -264,22 +268,10 @@ pub struct App {
     pub show_tx: bool,
     pub show_network: bool,
     pub show_measurement: bool,
-    pub show_buses: bool,
-    pub show_triggers: bool,
-    pub show_bus_stats: bool,
-    pub show_spec: bool,
     pub show_id_filter: bool,
-    pub show_sysvars: bool,
-    pub show_write: bool,
-    pub show_monitor: bool,
     /// The recording file format: 0 = ASC, 1 = BLF. The toolbar combo
     /// selects this; the recorder picks the backend by extension.
     pub record_format: usize,
-    pub show_shortcuts: bool,
-    pub show_about: bool,
-    /// The Monitor window's rows: label + value + optional coloring rule
-    /// per selected signal. The lightweight big-screen panel (v1).
-    pub monitor_rows: Vec<MonitorRow>,
     pub id_filter_search: String,
     pub gen_search: String,
     pub popup_target: Option<PopupTarget>,
@@ -313,16 +305,6 @@ pub struct App {
     /// keyed by node id and re-derived from the editor text when its hash
     /// changes. Session state.
     pub(crate) editor_facts: HashMap<u64, crate::ui::script_editor::EditorFacts>,
-    /// Write window's per-kind visibility, ordered
-    /// `[Script, Info, Warning, Error]`. Session state.
-    pub write_filter: [bool; 4],
-    /// Hardware channels discovered on this machine across every
-    /// supported driver, enumerated once on first need. `Err` = no
-    /// driver is available at all.
-    pub hw_channels: Option<Result<Vec<crate::hw::AnyChannelInfo>, String>>,
-    /// FlexRay-capable Vector channels, enumerated once on first need
-    /// (a real vxlapi call). `Err` = the Vector driver is unavailable.
-    pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
     /// The port each CAN row's 硬件 picker last chose, by bus. A failed attach
     /// leaves the driver holding nothing, so without this the cell falls back
     /// to the list's first entry and the row ends up showing a channel while
@@ -342,9 +324,6 @@ pub struct App {
     /// replayed log -- which is exactly the case where `FR0`/`FR1` say nothing
     /// -- can still be named. Unnamed 路 fall back to `FR{n}`.
     pub fr_names: std::collections::BTreeMap<u8, String>,
-    /// FlexRay name draft: the 路 whose Name box has focus, plus its text.
-    /// Mirrors `bus_name_edit` for the CAN rows.
-    pub fr_name_edit: Option<(u8, String)>,
     /// Profile names from the project's `profiles/` directory, listed
     /// once on first need (`Err` = driver/unavailable? no — parse or IO
     /// failure of the directory scan). Session cache; refresh via
@@ -398,9 +377,6 @@ pub struct App {
     /// The same draft box for a FlexRay row's payload, kept apart so a CAN row
     /// and a FlexRay row with the same index never read each other's text.
     pub fr_data_edit: Option<(usize, String)>,
-    /// Buses-window rename draft: `(row, text)` while the field has
-    /// focus, committed as a `SetChannelConfig` command on focus loss.
-    pub bus_name_edit: Option<(usize, String)>,
     /// The record file's stem as the input box shows it -- frontend
     /// draft state; the recorder receives a copy via `SetRecordPath`
     /// when recording arms.
@@ -545,29 +521,23 @@ impl App {
             baseline: String::new(),
             desktops: Vec::new(),
             active_desktop: 0,
-            desktop_rename_target: None,
-            desktop_rename_buf: String::new(),
             replay_speed: 1.0,
-            trig_draft: None,
-            sysvar_draft: None,
-            spec_show: [true; 4],
+            triggers_view: Default::default(),
+            write_view: Default::default(),
+            busstats_view: Default::default(),
+            help_view: Default::default(),
+            monitor_view: Default::default(),
+            spec_view: Default::default(),
+            sysvars_view: Default::default(),
+            buses_view: Default::default(),
+            desktops_view: Default::default(),
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
             symbol_search: String::new(),
             show_tx: true,
             show_network: true,
             show_measurement: true,
-            show_buses: false,
-            show_triggers: false,
-            show_bus_stats: false,
-            show_spec: false,
             show_id_filter: false,
-            show_sysvars: false,
-            show_write: true,
-            show_monitor: false,
-            show_shortcuts: false,
-            show_about: false,
-            monitor_rows: Vec::new(),
             id_filter_search: String::new(),
             gen_search: String::new(),
             popup_target: None,
@@ -575,13 +545,11 @@ impl App {
             state_rule_edit: None,
             state_rule_pick: None,
             editors: HashMap::new(),
-        pending_editors: Vec::new(),
-        editor_synced: HashMap::new(),
+            pending_editors: Vec::new(),
+            editor_synced: HashMap::new(),
             block_drafts: HashMap::new(),
             open_editors: Vec::new(),
-        editor_facts: HashMap::new(),
-            write_filter: [true; 4],
-            hw_channels: None,
+            editor_facts: HashMap::new(),
             profile_names: None,
             profile_pick: 0,
             profile_draft_name: String::new(),
@@ -599,9 +567,6 @@ impl App {
             tx_cycle_buf: String::new(),
             tx_data_edit: None,
             fr_data_edit: None,
-            // Buses-window rename draft: (row, text) while the field is
-            // being typed in, committed as a command on focus loss.
-            bus_name_edit: None,
             // The record draft: a file name, shown as-is in the toolbar
             // input. The directory is implicit (the open project's
             // Record/ folder, resolved when recording arms); the
@@ -610,15 +575,10 @@ impl App {
             // Toolbar combo: 0 = ASC, 1 = BLF. Decides the extension
             // `toggle_record` stamps onto the draft stem.
             record_format: 0,
-            // FlexRay watch drafts: the cached FR channel enumeration (the
-            // Vector probe is a real driver call). The combo pick is not
-            // cached -- each row's 硬件 column picks its own port, per frame.
-            fr_channels: None,
             hw_pick: std::collections::BTreeMap::new(),
             fr_pick: std::collections::BTreeMap::new(),
             fr_buses: Default::default(),
             fr_names: Default::default(),
-            fr_name_edit: None,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),
@@ -697,7 +657,13 @@ impl App {
         let knobs = std::sync::Arc::new(crate::core_loop::BusKnobs::default());
         let mut lane = crate::core_loop::CoreLoop::new(core, inbox_rx, mail.clone());
         lane.publish();
-        Self::shell(CoreDrive::Manual(Box::new(lane)), inbox_tx, mail, knobs, true)
+        Self::shell(
+            CoreDrive::Manual(Box::new(lane)),
+            inbox_tx,
+            mail,
+            knobs,
+            true,
+        )
     }
 
     pub fn now_us(&self) -> u64 {
@@ -880,7 +846,11 @@ impl App {
         // ASC vs BLF: its extension is stamped onto the stem, and the
         // recorder follows whatever extension it receives.
         let stem = strip_record_ext(self.record_path_buf.trim());
-        let ext = if self.record_format == 1 { "blf" } else { "asc" };
+        let ext = if self.record_format == 1 {
+            "blf"
+        } else {
+            "asc"
+        };
         let path = self.record_full_path(&format!("{stem}.{ext}"));
         self.send(crate::bus::BusCommand::SetRecordPath(path));
         self.send(crate::bus::BusCommand::ToggleRecord);
@@ -895,11 +865,7 @@ impl App {
         if std::path::Path::new(name).is_absolute() {
             return name.to_string();
         }
-        match self
-            .project_path
-            .as_ref()
-            .and_then(|p| p.parent())
-        {
+        match self.project_path.as_ref().and_then(|p| p.parent()) {
             Some(dir) => dir
                 .join("Record")
                 .join(if name.is_empty() { "record" } else { name })
@@ -1197,12 +1163,12 @@ impl App {
     /// both ways a row can be undescribed: no description loaded on this bus, or
     /// one that does not schedule this slot's cycle phase. The Messages window
     /// and its CSV export gate "仅 DBC" on this, so the file matches the table.
-    pub(crate) fn fr_described_frame(
-        &self,
-        agg: &crate::aggregate::FrFrameAgg,
-    ) -> Option<usize> {
-        self.fr_db(agg.bus)
-            .and_then(|db| agg.occupant.frame_ix().filter(|&i| db.frame_index(i).is_some()))
+    pub(crate) fn fr_described_frame(&self, agg: &crate::aggregate::FrFrameAgg) -> Option<usize> {
+        self.fr_db(agg.bus).and_then(|db| {
+            agg.occupant
+                .frame_ix()
+                .filter(|&i| db.frame_index(i).is_some())
+        })
     }
 
     /// Does this row's own cluster description account for the arrival -- that
@@ -1399,7 +1365,11 @@ impl App {
                 },
                 count: agg.count.to_string(),
                 cycle: if agg.count > 1 {
-                    format!("{:.1} ±{:.1}", agg.cycle_us / 1000.0, agg.jitter_us / 1000.0)
+                    format!(
+                        "{:.1} ±{:.1}",
+                        agg.cycle_us / 1000.0,
+                        agg.jitter_us / 1000.0
+                    )
                 } else {
                     "-".to_string()
                 },
@@ -1559,7 +1529,10 @@ impl App {
             .iter()
             .map(|(b, c)| (*b, std::sync::Arc::as_ptr(&c.db) as usize))
             .collect();
-        let since = match (&self.trace_windows[i].rows_build, self.trace_windows[i].rows_sorted) {
+        let since = match (
+            &self.trace_windows[i].rows_build,
+            self.trace_windows[i].rows_sorted,
+        ) {
             (Some(b), false) if b.extends_to(&flt, fr_expand, can_len, fr_len, top, &fr_dbs) => {
                 Some(b.through())
             }
@@ -1572,7 +1545,9 @@ impl App {
         }
         self.walk_rows(i, &flt, fr_expand, since, &mut rows);
         let w = &mut self.trace_windows[i];
-        w.rows_build = Some(RowsBuild::new(&flt, fr_expand, top, can_len, fr_len, &fr_dbs));
+        w.rows_build = Some(RowsBuild::new(
+            &flt, fr_expand, top, can_len, fr_len, &fr_dbs,
+        ));
         // The walk produced this list; the cache is it, in the same order.
         w.rows_sorted = false;
         w.shown_count = rows.len();

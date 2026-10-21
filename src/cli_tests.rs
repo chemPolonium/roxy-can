@@ -3,8 +3,8 @@
 //! in milliseconds.
 
 use super::{
-    ExportOpts, check_scripts, convert_log, export_signals_csv, parse_args, run, Cli, CliOpts,
-    ScriptCheck,
+    Cli, CliOpts, ExportOpts, ScriptCheck, check_scripts, convert_log, export_signals_csv,
+    parse_args, run,
 };
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::channel::NodeRole;
@@ -158,7 +158,10 @@ on start {
     // The report carries the findings either way; only compile failures
     // flip the exit code, and this script compiles.
     let report = check_scripts(&check).unwrap_or_else(|r| r);
-    assert!(report.contains("0x101"), "reverse check names EngineCmd: {report}");
+    assert!(
+        report.contains("0x101"),
+        "reverse check names EngineCmd: {report}"
+    );
     assert!(report.contains("脚本未发送"), "{report}");
     assert!(report.contains("9999"), "range check named: {report}");
     assert!(report.contains("sends: 0x100"), "the send set is printed");
@@ -520,19 +523,10 @@ fn a_project_needs_a_duration_and_refuses_a_log() {
             "mutually exclusive",
         ),
         (
-            &[
-                "--convert",
-                "a.blf",
-                "b.asc",
-                "--replay",
-                "a.asc",
-            ],
+            &["--convert", "a.blf", "b.asc", "--replay", "a.asc"],
             "on its own",
         ),
-        (
-            &["--convert", "a.blf", "b.csv"],
-            "must end in .asc",
-        ),
+        (&["--convert", "a.blf", "b.csv"], "must end in .asc"),
     ];
     for (args, needle) in cases {
         let err = parse_args(&flag_set(args)).unwrap_err();
@@ -629,7 +623,8 @@ fn convert_carries_flexray_rows_across() {
     assert_eq!(can[3].t_us, 6_000);
     assert_eq!(fr[3].t_us, 7_000);
     assert!(
-        fr.windows(2).all(|w| w[1].t_us > w[0].t_us) && can.windows(2).all(|w| w[1].t_us > w[0].t_us),
+        fr.windows(2).all(|w| w[1].t_us > w[0].t_us)
+            && can.windows(2).all(|w| w[1].t_us > w[0].t_us),
         "both sides keep their order"
     );
     std::fs::remove_file(&src).ok();
@@ -653,8 +648,11 @@ fn convert_reports_a_broken_input() {
 #[test]
 fn convert_refuses_input_equal_to_output() {
     let src = write_log("roxy_can_convert_same.asc", 3, 1_000);
-    let err = convert_log(src.to_string_lossy().as_ref(), src.to_string_lossy().as_ref())
-        .unwrap_err();
+    let err = convert_log(
+        src.to_string_lossy().as_ref(),
+        src.to_string_lossy().as_ref(),
+    )
+    .unwrap_err();
     assert!(err.contains("same file"), "{err}");
     let text = std::fs::read_to_string(&src).unwrap();
     assert!(text.contains("End TriggerBlock"), "the input survived");
@@ -757,7 +755,10 @@ fn a_profile_overlay_drives_a_muted_project() {
         stats_csv: None,
     })
     .unwrap();
-    assert!(report.contains("profile    : profile `ci` applied"), "{report}");
+    assert!(
+        report.contains("profile    : profile `ci` applied"),
+        "{report}"
+    );
     let frames: u64 = report
         .lines()
         .find_map(|l| l.strip_prefix("  frames     : "))
@@ -846,9 +847,21 @@ fn export_csv_flag_set_parses_and_collects_definitions() {
 fn export_csv_validates_its_inputs() {
     let cases: &[(&[&str], &str)] = &[
         (&["--export-csv", "a.blf"], "--out"),
-        (&["--export-csv", "a.blf", "--out", "c.csv"], "signal definition"),
         (
-            &["--export-csv", "a.blf", "--out", "c.csv", "--replay", "a.asc", "--dbc", "x.dbc"],
+            &["--export-csv", "a.blf", "--out", "c.csv"],
+            "signal definition",
+        ),
+        (
+            &[
+                "--export-csv",
+                "a.blf",
+                "--out",
+                "c.csv",
+                "--replay",
+                "a.asc",
+                "--dbc",
+                "x.dbc",
+            ],
             "on its own",
         ),
         (&["--out", "c.csv"], "--export-csv"),

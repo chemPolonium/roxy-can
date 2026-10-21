@@ -223,11 +223,7 @@ fn draw_flexray_section(app: &mut App, ui: &Ui, bus: u8) {
         }
     }
     let Some(db) = app.fr_db(bus) else {
-        let seen: u64 = app
-            .snap
-            .fr_loads
-            .get(&bus)
-            .map_or(0, |l| l.frames);
+        let seen: u64 = app.snap.fr_loads.get(&bus).map_or(0, |l| l.frames);
         ui.text_disabled(if seen > 0 {
             "该路正在接收帧，但未加载集群描述，ECU 与帧归属无法显示"
         } else {
@@ -277,7 +273,11 @@ fn draw_ecu_leaves(app: &mut App, ui: &Ui, bus: u8, nodes: &[String], counts: &[
         };
         if ui
             .selectable_config(format!("{text}##freculeaf{bus}_{i}"))
-            .selected(app.net_fr_sel.as_ref().is_some_and(|(b, e)| *b == bus && e == ecu))
+            .selected(
+                app.net_fr_sel
+                    .as_ref()
+                    .is_some_and(|(b, e)| *b == bus && e == ecu),
+            )
             .build()
         {
             app.net_fr_sel = Some((bus, ecu.clone()));

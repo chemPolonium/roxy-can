@@ -95,11 +95,15 @@ fn parse(text: &str) -> Result<(Vec<RoleOverride>, Vec<HwOverride>), String> {
                     None => {
                         return Err(format!(
                             "[[hw]] #{i}: unknown driver `{w}` (want Kvaser / Vector)"
-                        ))
+                        ));
                     }
                 },
             };
-            hw.push(HwOverride { bus, driver, channel });
+            hw.push(HwOverride {
+                bus,
+                driver,
+                channel,
+            });
         }
     }
     Ok((roles, hw))
@@ -209,10 +213,12 @@ pub fn save_profile(app: &App, project_dir: &Path, name: &str) -> Result<String,
     if trimmed.is_empty() {
         return Err("profile 名不能为空".to_string());
     }
-    if trimmed
-        .chars()
-        .any(|c| matches!(c, '/' | '\\' | '.' | ':' | '"' | '<' | '>' | '|' | '?' | '*'))
-    {
+    if trimmed.chars().any(|c| {
+        matches!(
+            c,
+            '/' | '\\' | '.' | ':' | '"' | '<' | '>' | '|' | '?' | '*'
+        )
+    }) {
         return Err(format!("profile 名含非法字符: `{trimmed}`"));
     }
     let mut text = String::from("# saved from the current state\n\n");

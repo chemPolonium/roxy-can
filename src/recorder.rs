@@ -3,8 +3,8 @@
 //! writes Vector's binary container format, anything else writes ASC.
 
 use crate::can::frame::CanFrame;
-use crate::log::blf::BlfWriter;
 use crate::log::AscWriter;
+use crate::log::blf::BlfWriter;
 
 enum Backend {
     Asc(AscWriter),
@@ -161,7 +161,11 @@ impl Recorder {
             (false, 0)
         };
         let base_raw = &b[..b.len() - cut];
-        let base = if base_raw.is_empty() { "record" } else { base_raw };
+        let base = if base_raw.is_empty() {
+            "record"
+        } else {
+            base_raw
+        };
         let path = if blf {
             format!(
                 "{}_{}.blf",

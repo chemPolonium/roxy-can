@@ -65,8 +65,16 @@ fn frames(bytes: &[u8]) -> Vec<Frame> {
             continue;
         };
         // A zero in the directory means 256.
-        let width = if raw_width == 0 { 256 } else { usize::from(raw_width) };
-        let height = if raw_height == 0 { 256 } else { usize::from(raw_height) };
+        let width = if raw_width == 0 {
+            256
+        } else {
+            usize::from(raw_width)
+        };
+        let height = if raw_height == 0 {
+            256
+        } else {
+            usize::from(raw_height)
+        };
         let start = offset as usize;
         if size < 40 || bytes.len() < start + size as usize {
             continue;
@@ -80,13 +88,7 @@ fn frames(bytes: &[u8]) -> Vec<Frame> {
 
 /// An entry is a headerless BMP: BGRA rows stored bottom-up, then a 1-bit
 /// AND mask.
-fn decode_bmp(
-    bytes: &[u8],
-    start: usize,
-    width: usize,
-    height: usize,
-    bits: u16,
-) -> Option<Frame> {
+fn decode_bmp(bytes: &[u8], start: usize, width: usize, height: usize, bits: u16) -> Option<Frame> {
     if bits != 32 || width == 0 || height == 0 {
         return None;
     }

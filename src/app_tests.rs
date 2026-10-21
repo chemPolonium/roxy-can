@@ -2,16 +2,18 @@ use super::*;
 // The tests rely on the parent's imports through `use super::*`; the
 // ones app.rs itself no longer needs are imported directly here.
 use crate::bus::MAX_TX_CATCHUP;
-use crate::observe::SigKey;
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
 use crate::config::Config;
 use crate::generator::TxMsg;
 use crate::log::AscWriter;
+use crate::observe::SigKey;
 use crate::observe::Subscription;
 use crate::observe::YMode;
 use crate::sim::ValueSrc;
 use crate::source::FrameSource;
-use crate::trigger::{Trigger, TriggerAction, TriggerCond};
+use crate::trigger::{Trigger, TriggerAction, TriggerCmd, TriggerCond, TriggerKind};
+use crate::ui::buses::BusesCmd;
+use crate::ui::monitor::MonitorCmd;
 
 #[test]
 fn record_survives_start_and_writes_frames() {
@@ -147,9 +149,7 @@ fn a_record_filter_can_keep_only_some_flexray_slots() {
     let text = std::fs::read_to_string(&actual).expect("the recording exists");
     let (_, rows) = crate::log::asc::parse_asc_full(&text);
     assert_eq!(
-        rows.iter()
-            .map(|r| (r.bus, r.slot))
-            .collect::<Vec<_>>(),
+        rows.iter().map(|r| (r.bus, r.slot)).collect::<Vec<_>>(),
         vec![(0, 13)],
         "only the whitelisted cluster+slot landed in the file"
     );
@@ -585,7 +585,12 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(0u8, id, false, db.messages[&(id, false)].signals[0].name.clone())
+        SigKey::can(
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -1383,8 +1388,7 @@ fn export_trace_writes_parseable_asc() {
 /// description says a frame belongs.
 fn write_mixed_fr_asc(name: &str, rows: u64, slot: u16) -> std::path::PathBuf {
     use crate::trace::FrRow;
-    let path = std::env::temp_dir()
-        .join(format!("{name}_{}.asc", std::process::id()));
+    let path = std::env::temp_dir().join(format!("{name}_{}.asc", std::process::id()));
     let mut w = AscWriter::new(&path.to_string_lossy()).unwrap();
     for i in 0..rows {
         let mut f = CanFrame {
@@ -1469,11 +1473,16 @@ fn the_statistics_window_lists_flexray_slots() {
     assert_eq!(fr.count, "4");
     // Four arrivals 2 ms apart: every interval is the same, so min, avg and
     // max all read 2.00 ms.
-    assert_eq!((fr.min.as_str(), fr.avg.as_str(), fr.max.as_str()), ("2.00", "2.00", "2.00"));
+    assert_eq!(
+        (fr.min.as_str(), fr.avg.as_str(), fr.max.as_str()),
+        ("2.00", "2.00", "2.00")
+    );
     assert_eq!(fr.len, "2");
     assert_eq!(fr.share, "50.0%", "half the run's frames are FlexRay");
     assert!(
-        app.stats_windows[0].text_header.starts_with(&format!("{} messages", rows.len())),
+        app.stats_windows[0]
+            .text_header
+            .starts_with(&format!("{} messages", rows.len())),
         "the header counts the rows it shows: {:?}",
         app.stats_windows[0].text_header
     );
@@ -1680,7 +1689,8 @@ fn trace_filter_matches_by_name_id_and_direction() {
     assert!(!app.trace_match(&w, &rx_ch1), "Bus scope drops other buses");
 
     w.scope = SigScope::Manual;
-    w.manual.insert(crate::workspace::Pick::Can { ch: 0, id: 0x320 });
+    w.manual
+        .insert(crate::workspace::Pick::Can { ch: 0, id: 0x320 });
     assert!(
         !app.trace_match(&w, &rx),
         "Manual selection drops unselected IDs"
@@ -1729,7 +1739,10 @@ fn the_trace_row_menu_filters_to_the_row_it_was_opened_on() {
     assert_eq!(app.trace_windows[0].filter, "id:1AB");
     let w = app.trace_windows[0].clone();
     assert!(app.trace_match(&w, &std_frame));
-    assert!(!app.trace_match(&w, &ext), "now the extended twin is the one out");
+    assert!(
+        !app.trace_match(&w, &ext),
+        "now the extended twin is the one out"
+    );
     let loose = {
         let mut win = app.trace_windows[0].clone();
         win.filter = "1AB".to_string();
@@ -1807,7 +1820,10 @@ fn the_trace_filter_takes_an_exact_slot_or_id() {
     // A signal really can be named `Slot`, and `Slot=3` must stay the value
     // condition it has always been -- which is why the exact form uses a colon.
     let flt = mk(&app, "Slot=3");
-    assert_eq!(flt.exact, None, "an `=` text is a condition, not an address");
+    assert_eq!(
+        flt.exact, None,
+        "an `=` text is a condition, not an address"
+    );
     assert!(!flt.value_conds.is_empty());
     // A half-typed address falls back to the substring search it would have
     // been: the table goes empty and the box still shows exactly what was
@@ -1846,13 +1862,10 @@ fn the_row_menu_clear_filter_lifts_every_condition() {
         ("帧类型", |w| w.flags_kind = 2),
         ("仅 DBC", |w| w.dbc_only = true),
         ("方向", |w| w.dir = 2),
-        (
-            "时间范围",
-            |w| {
-                w.time_from = "1.0".into();
-                w.time_to = "2.5".into();
-            },
-        ),
+        ("时间范围", |w| {
+            w.time_from = "1.0".into();
+            w.time_to = "2.5".into();
+        }),
         ("作用域", |w| w.scope = SigScope::Bus(1)),
     ];
     for (what, set) in cases {
@@ -1874,7 +1887,8 @@ fn the_row_menu_clear_filter_lifts_every_condition() {
     // operator built, not a condition they typed.
     let mut w = base.clone();
     w.scope = SigScope::Manual;
-    w.manual.insert(crate::workspace::Pick::Fr { bus: 0, slot: 13 });
+    w.manual
+        .insert(crate::workspace::Pick::Fr { bus: 0, slot: 13 });
     app.trace_windows[0] = w;
     crate::ui::trace::clear_filter(&mut app, 0);
     assert_eq!(app.trace_windows[0].scope, SigScope::All);
@@ -1892,7 +1906,10 @@ fn the_row_menu_clear_filter_lifts_every_condition() {
 fn a_closed_filter_row_names_the_conditions_still_working() {
     let mut app = App::headless();
     let w = &mut app.trace_windows[0];
-    assert!(w.hidden_conds().is_empty(), "an untouched window hides nothing");
+    assert!(
+        w.hidden_conds().is_empty(),
+        "an untouched window hides nothing"
+    );
     // Filled in but not filtering: unparseable payload text, an unparsable
     // second, a frame kind left on Any.
     w.payload = "zz".to_string();
@@ -1941,7 +1958,9 @@ fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
         let db = app.fr_db(0).expect("loaded above");
         let mut found = None;
         for ix in 0..db.frames.len() {
-            let Some(f) = db.frame_index(ix) else { continue };
+            let Some(f) = db.frame_index(ix) else {
+                continue;
+            };
             let bytes = vec![0u8; (f.length as usize).max(1)];
             if let Some(sig) = db.decode_signals(ix, &bytes).into_iter().next() {
                 found = Some((
@@ -2007,7 +2026,10 @@ fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
     );
     // ...while the same row is still visible under a filter that asks nothing of
     // its values -- the condition, not the missing file, is what hides it.
-    assert!(app.trace_fr_match(&mk(&app, ""), &bare), "no condition: it shows");
+    assert!(
+        app.trace_fr_match(&mk(&app, ""), &bare),
+        "no condition: it shows"
+    );
 }
 
 #[test]
@@ -2177,7 +2199,10 @@ fn play_after_a_finished_run_restarts_from_the_top() {
     );
 
     app.toggle_play(); // Play, with no Stop in between
-    assert!(app.measuring, "Play restarts a finished replay, not a no-op");
+    assert!(
+        app.measuring,
+        "Play restarts a finished replay, not a no-op"
+    );
     let (pos_top, _) = app.replay_position().unwrap();
     assert!(
         pos_top < pos_end,
@@ -2386,7 +2411,12 @@ fn app_with_replayable_recording(
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(0u8, id, false, db.messages[&(id, false)].signals[0].name.clone())
+        SigKey::can(
+            0u8,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     let out = std::env::temp_dir().join(format!("roxy_can_{name}.asc"));
@@ -2818,7 +2848,7 @@ fn desktops_round_trip_through_config() {
     let mut app = App::headless();
     app.add_desktop();
     app.switch_desktop(0);
-    app.show_bus_stats = true;
+    app.busstats_view.open = true;
     let cfg = Config::from_app(&app, None);
     let mut restored = App::headless();
     cfg.apply(&mut restored);
@@ -2831,7 +2861,7 @@ fn desktops_round_trip_through_config() {
         app.desktops[0].open_windows.len()
     );
     assert!(
-        restored.show_bus_stats,
+        restored.busstats_view.open,
         "panel visibility rides the desktop like every other flag"
     );
 }
@@ -2946,7 +2976,12 @@ fn signal_stats_track_min_avg_max() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(0, id, false, db.messages[&(id, false)].signals[0].name.clone())
+        SigKey::can(
+            0,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -2975,7 +3010,12 @@ fn restored_signals_are_resubscribed() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(0, id, false, db.messages[&(id, false)].signals[0].name.clone())
+        SigKey::can(
+            0,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
@@ -4716,7 +4756,8 @@ fn adding_a_signal_trigger_picks_the_first_database_signal() {
     app.add_signal_trigger();
     assert_eq!(app.triggers.len(), 1);
     let draft = app
-        .trig_draft
+        .triggers_view
+        .draft
         .as_ref()
         .expect("the new row is up for editing");
     assert_eq!(draft.index, 0);
@@ -4738,26 +4779,117 @@ fn adding_a_signal_trigger_picks_the_first_database_signal() {
 
     app.add_error_trigger();
     assert_eq!(
-        app.trig_draft.as_ref().map(|d| d.index),
+        app.triggers_view.draft.as_ref().map(|d| d.index),
         Some(1),
         "the newest row is up for editing"
     );
-    if let Some(d) = &mut app.trig_draft {
+    if let Some(d) = &mut app.triggers_view.draft {
         d.index = 0;
     }
     app.remove_trigger(1);
     assert_eq!(
-        app.trig_draft.as_ref().map(|d| d.index),
+        app.triggers_view.draft.as_ref().map(|d| d.index),
         Some(0),
         "deleting another row keeps the editor"
     );
     app.remove_trigger(0);
-    assert_eq!(app.trig_draft, None, "nothing left to edit");
+    assert_eq!(app.triggers_view.draft, None, "nothing left to edit");
     assert_eq!(
         app.trigger_summary(0),
         "",
         "a summary for a missing row is empty, not a panic"
     );
+}
+
+/// The Buses window's draw is read-only; add/configure/remove all land
+/// through the command boundary.
+#[test]
+fn buses_window_commands_apply_in_one_place() {
+    let mut app = quiet_app();
+    let before = app.snap.channel_count;
+    app.apply_buses_cmds(vec![BusesCmd::AddChannel]);
+    app.settle();
+    assert_eq!(app.snap.channel_count, before + 1);
+
+    app.apply_buses_cmds(vec![BusesCmd::SetChannelConfig {
+        ch: 0,
+        name: Some("Bench".to_string()),
+        bitrate_kbps: Some(500),
+        fd_data_kbps: Some(0),
+    }]);
+    app.settle();
+    assert_eq!(app.channel_name(0), "Bench");
+
+    app.apply_buses_cmds(vec![BusesCmd::RemoveChannel(before)]);
+    app.settle();
+    assert_eq!(app.snap.channel_count, before);
+}
+
+/// The Monitor's add/remove/clear commands are the only paths that touch
+/// subscriptions; the row controls are view state.
+#[test]
+fn monitor_commands_apply_in_one_place() {
+    let mut app = quiet_app();
+    app.apply_monitor_cmds(vec![MonitorCmd::OpenPicker]);
+    assert!(matches!(
+        app.popup_target,
+        Some(crate::workspace::PopupTarget::Monitor)
+    ));
+    assert!(app.show_id_filter);
+
+    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+    app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
+    assert_eq!(app.monitor_view.rows.len(), 1);
+    app.apply_monitor_cmds(vec![MonitorCmd::Remove(key.clone())]);
+    assert!(app.monitor_view.rows.is_empty());
+    assert!(
+        app.sub_view(&key).is_none(),
+        "the feed is pruned with the row"
+    );
+}
+
+/// The Triggers window's draw never writes; everything it collects lands
+/// through `apply_trigger_cmds`. This walks the command set once so the
+/// boundary is testable without an imgui frame.
+#[test]
+fn trigger_commands_apply_in_one_place() {
+    let mut app = quiet_app();
+    app.apply_trigger_cmds(vec![TriggerCmd::Add(TriggerKind::Id)]);
+    assert_eq!(app.triggers.len(), 1);
+    assert!(app.triggers_view.open, "adding a rule opens its window");
+    assert_eq!(
+        app.triggers_view.draft.as_ref().map(|d| d.index),
+        Some(0),
+        "and its editor"
+    );
+    assert!(matches!(
+        app.triggers[0].cond,
+        TriggerCond::IdPresent { .. }
+    ));
+
+    app.apply_trigger_cmds(vec![TriggerCmd::SetEnabled {
+        index: 0,
+        on: false,
+    }]);
+    assert!(!app.triggers[0].enabled);
+
+    app.apply_trigger_cmds(vec![TriggerCmd::SetPreFrames(64)]);
+    assert_eq!(app.limits.pre_frames, 64);
+
+    let action = app.triggers[0].action;
+    app.apply_trigger_cmds(vec![TriggerCmd::Edit {
+        index: 0,
+        cond: TriggerCond::IdPresent { ch: 0, id: 0x123 },
+        action,
+    }]);
+    assert!(matches!(
+        app.triggers[0].cond,
+        TriggerCond::IdPresent { id: 0x123, .. }
+    ));
+
+    app.apply_trigger_cmds(vec![TriggerCmd::Remove(0)]);
+    assert!(app.triggers.is_empty());
+    assert_eq!(app.triggers_view.draft, None);
 }
 
 /// The editor's one Apply lands as one `EditTrigger`: flipping the crossing
@@ -4962,7 +5094,10 @@ fn triggers_round_trip_through_a_project() {
         TriggerAction::Send { ch: 1, id: 0x300 },
         "the send target survives as data, not an index"
     );
-    assert_eq!(restored.trig_draft, None, "runtime editor state does not");
+    assert_eq!(
+        restored.triggers_view.draft, None,
+        "runtime editor state does not"
+    );
     std::fs::remove_file(&path).ok();
 }
 
@@ -5176,7 +5311,12 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(0, id, false, db.messages[&(id, false)].signals[0].name.clone())
+        SigKey::can(
+            0,
+            id,
+            false,
+            db.messages[&(id, false)].signals[0].name.clone(),
+        )
     };
     app.subscribe(key.clone());
     for tx in &mut app.tx_list {
@@ -5715,7 +5855,12 @@ fn emit_value_publishes_a_derived_signal_stream() {
         app.tick(t * 1_000);
     }
 
-    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | id as u32, false, "SpeedKmh".to_string());
+    let key = SigKey::can(
+        0,
+        crate::app::EMITTED_ID_BASE | id as u32,
+        false,
+        "SpeedKmh".to_string(),
+    );
     assert!(
         app.snap
             .emitted
@@ -5749,15 +5894,17 @@ fn emit_value_publishes_a_derived_signal_stream() {
 #[test]
 fn a_sysvar_condition_fires_when_the_operator_raises_it() {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
-        namespace: "Demo".to_string(),
-        name: "Setpoint".to_string(),
-        init: 0.0,
-        min: Some(0.0),
-        max: Some(100.0),
-        unit: String::new(),
-        comment: String::new(),
-    }));
+    app.send(crate::bus::BusCommand::DefineSysVar(
+        crate::bus::SysVarDef {
+            namespace: "Demo".to_string(),
+            name: "Setpoint".to_string(),
+            init: 0.0,
+            min: Some(0.0),
+            max: Some(100.0),
+            unit: String::new(),
+            comment: String::new(),
+        },
+    ));
     app.settle();
     app.send(crate::bus::BusCommand::AddTrigger {
         cond: crate::trigger::TriggerCond::SysVar {
@@ -5795,7 +5942,10 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
     // Holding above the threshold is a level, not repeated edges.
     let next = t + 100_000;
     run_to(&mut app, next);
-    assert_eq!(app.snap.triggers[0].fired, 1, "holding high does not refire");
+    assert_eq!(
+        app.snap.triggers[0].fired, 1,
+        "holding high does not refire"
+    );
 
     // Drop below and raise again: a fresh edge.
     set(&mut app, 10.0);
@@ -5804,7 +5954,10 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
     set(&mut app, 80.0);
     let t = app.now_us() + 1_000;
     run_to(&mut app, t);
-    assert_eq!(app.snap.triggers[0].fired, 2, "a second crossing fires again");
+    assert_eq!(
+        app.snap.triggers[0].fired, 2,
+        "a second crossing fires again"
+    );
     app.stop();
 }
 
@@ -5818,7 +5971,7 @@ fn monitor_rows_hold_the_subscription_against_data_removal() {
     let key = SigKey::can(0, 0x100, false, "EngineStatus");
     app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
     app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
-    assert_eq!(app.monitor_rows.len(), 1, "the Monitor row was added");
+    assert_eq!(app.monitor_view.rows.len(), 1, "the Monitor row was added");
 
     app.set_win_signal(PopupTarget::Data(0), key.clone(), false);
     app.settle();
@@ -5838,15 +5991,17 @@ fn monitor_rows_hold_the_subscription_against_data_removal() {
 #[test]
 fn sysvars_define_clamp_and_reset_on_run_start() {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
-        namespace: "Demo".to_string(),
-        name: "Setpoint".to_string(),
-        init: 100.0,
-        min: Some(0.0),
-        max: Some(500.0),
-        unit: "rpm".to_string(),
-        comment: "target speed".to_string(),
-    }));
+    app.send(crate::bus::BusCommand::DefineSysVar(
+        crate::bus::SysVarDef {
+            namespace: "Demo".to_string(),
+            name: "Setpoint".to_string(),
+            init: 100.0,
+            min: Some(0.0),
+            max: Some(500.0),
+            unit: "rpm".to_string(),
+            comment: "target speed".to_string(),
+        },
+    ));
     app.settle();
     assert_eq!(app.snap.sysvars.len(), 1, "defined");
     assert_eq!(app.snap.sysvars[0].value, 100.0, "starts at init");
@@ -5894,15 +6049,17 @@ fn sysvars_define_clamp_and_reset_on_run_start() {
 #[test]
 fn a_script_sys_set_publishes_the_value_and_the_stream() {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
-        namespace: "Demo".to_string(),
-        name: "Setpoint".to_string(),
-        init: 10.0,
-        min: None,
-        max: None,
-        unit: String::new(),
-        comment: String::new(),
-    }));
+    app.send(crate::bus::BusCommand::DefineSysVar(
+        crate::bus::SysVarDef {
+            namespace: "Demo".to_string(),
+            name: "Setpoint".to_string(),
+            init: 10.0,
+            min: None,
+            max: None,
+            unit: String::new(),
+            comment: String::new(),
+        },
+    ));
     app.send(crate::bus::BusCommand::AddNode {
         name: "calc".to_string(),
         channel: 0,
@@ -5921,11 +6078,13 @@ fn a_script_sys_set_publishes_the_value_and_the_stream() {
         app.advance_clock(t * 1_000);
         app.tick(t * 1_000);
     }
-    assert_eq!(
-        app.snap.sysvars[0].value, 42.0,
-        "the script write landed"
+    assert_eq!(app.snap.sysvars[0].value, 42.0, "the script write landed");
+    let key = SigKey::can(
+        0,
+        crate::app::EMITTED_ID_BASE | (crate::bus::SYSVAR_STREAM_ID as u32),
+        false,
+        "Setpoint".to_string(),
     );
-    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | (crate::bus::SYSVAR_STREAM_ID as u32), false, "Setpoint".to_string());
     assert!(
         app.snap
             .emitted
@@ -5962,9 +6121,10 @@ fn the_write_ring_collects_node_and_command_lines() {
     app.start_virtual();
     app.settle();
     assert!(
-        app.snap.write.iter().any(|l| {
-            l.kind == crate::bus::WriteKind::Info && l.text.contains("measuring")
-        }),
+        app.snap
+            .write
+            .iter()
+            .any(|l| { l.kind == crate::bus::WriteKind::Info && l.text.contains("measuring") }),
         "run start news lands as info"
     );
     for t in 1..=20 {
@@ -6006,7 +6166,8 @@ fn a_step_message_stays_in_the_write_window() {
             l.kind == crate::bus::WriteKind::Info && l.text.starts_with("replay finished")
         }),
         "the message the step produced is still readable: {:?}",
-        app.snap.write
+        app.snap
+            .write
             .iter()
             .map(|l| l.text.as_str())
             .collect::<Vec<_>>()
@@ -6124,26 +6285,25 @@ fn the_write_export_honours_the_kind_filter() {
         "one line per ring entry"
     );
     assert!(
-        content.lines().all(|l| l.starts_with('[') && l.contains("] ")),
+        content
+            .lines()
+            .all(|l| l.starts_with('[') && l.contains("] ")),
         "lines carry the wall stamp: {content:?}"
     );
 
     // Script prints off: they leave the file too.
-    app.write_filter[0] = false;
+    app.write_view.filter[0] = false;
     app.export_write_txt(&path.to_string_lossy());
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
         !content.contains("beat"),
         "the filtered kind is not exported: {content:?}"
     );
-    assert!(
-        !content.is_empty(),
-        "the unfiltered kinds still land"
-    );
+    assert!(!content.is_empty(), "the unfiltered kinds still land");
 
     // Everything filtered off: refuse, keep the old file.
     let stale = std::fs::read_to_string(&path).unwrap();
-    for slot in app.write_filter.iter_mut() {
+    for slot in app.write_view.filter.iter_mut() {
         *slot = false;
     }
     app.export_write_txt(&path.to_string_lossy());
@@ -6159,7 +6319,8 @@ fn the_write_export_honours_the_kind_filter() {
 /// A script writing an undefined variable gets a warning in its log and
 /// the write is dropped; the node keeps running.
 #[test]
-fn an_undefined_sysvar_write_warns_and_is_dropped() {    let mut app = App::headless();
+fn an_undefined_sysvar_write_warns_and_is_dropped() {
+    let mut app = App::headless();
     app.send(crate::bus::BusCommand::AddNode {
         name: "loose".to_string(),
         channel: 0,
@@ -6179,10 +6340,7 @@ fn an_undefined_sysvar_write_warns_and_is_dropped() {    let mut app = App::head
         app.tick(t * 1_000);
     }
     let node = app.snap.nodes.first().expect("node present");
-    assert!(
-        !node.errored,
-        "a bad sysvar write does not stop the node"
-    );
+    assert!(!node.errored, "a bad sysvar write does not stop the node");
     assert!(
         node.log.iter().any(|l| l.contains("Nowhere::X")),
         "the undefined write is named in the log: {:?}",
@@ -6196,15 +6354,17 @@ fn an_undefined_sysvar_write_warns_and_is_dropped() {    let mut app = App::head
 #[test]
 fn sysvars_survive_a_project_roundtrip() {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::DefineSysVar(crate::bus::SysVarDef {
-        namespace: "Demo".to_string(),
-        name: "Rate".to_string(),
-        init: 2.5,
-        min: Some(0.0),
-        max: Some(10.0),
-        unit: "Hz".to_string(),
-        comment: String::new(),
-    }));
+    app.send(crate::bus::BusCommand::DefineSysVar(
+        crate::bus::SysVarDef {
+            namespace: "Demo".to_string(),
+            name: "Rate".to_string(),
+            init: 2.5,
+            min: Some(0.0),
+            max: Some(10.0),
+            unit: "Hz".to_string(),
+            comment: String::new(),
+        },
+    ));
     app.settle();
     let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
     assert!(json.contains("\"sysvars\""), "the section is in the file");
@@ -6258,7 +6418,12 @@ fn emit_value_works_from_message_handlers() {
     );
     app.settle();
 
-    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | id as u32, false, "Seen".to_string());
+    let key = SigKey::can(
+        0,
+        crate::app::EMITTED_ID_BASE | id as u32,
+        false,
+        "Seen".to_string(),
+    );
     let sub = app.subs.get(&key).expect("frame-driven emission published");
     assert_eq!(sub.latest, 7.0, "the handler ran once for the frame");
     app.stop();
@@ -6289,9 +6454,7 @@ fn derived_streams_follow_their_node_across_edits() {
         app.advance_clock(t * 1_000);
         app.tick(t * 1_000);
     }
-    let key = |ch: u8| {
-        SigKey::can(ch, crate::app::EMITTED_ID_BASE | id as u32, false, "X")
-    };
+    let key = |ch: u8| SigKey::can(ch, crate::app::EMITTED_ID_BASE | id as u32, false, "X");
     assert!(
         app.snap.emitted.iter().any(|(k, _)| *k == key(0)),
         "the stream opened on the node's bus"
@@ -6390,7 +6553,10 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
         app.tick(t * 1_000);
     }
     assert!(
-        app.snap.emitted.iter().any(|(k, _)| matches!(k, SigKey::Can { ch: 1, .. })),
+        app.snap
+            .emitted
+            .iter()
+            .any(|(k, _)| matches!(k, SigKey::Can { ch: 1, .. })),
         "the surviving node emitted on bus CAN2"
     );
 
@@ -6406,7 +6572,10 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     assert_eq!(app.snap.blocks.len(), 1);
     assert_eq!(app.snap.blocks[0].channel, 0, "the block shifted down too");
     assert!(
-        app.snap.emitted.iter().all(|(k, _)| matches!(k, SigKey::Can { ch: 0, .. })),
+        app.snap
+            .emitted
+            .iter()
+            .all(|(k, _)| matches!(k, SigKey::Can { ch: 0, .. })),
         "derived streams follow their node's bus"
     );
     app.stop();
@@ -6434,8 +6603,7 @@ fn an_orphan_script_is_adopted_by_the_first_dbc_node_on_its_bus() {
         .find(|n| n.name == "orphan")
         .expect("node");
     assert_eq!(
-        node.attached,
-        None,
+        node.attached, None,
         "fixture precondition: the script restored unbound"
     );
 
@@ -6650,12 +6818,7 @@ fn two_flexray_watches_feed_their_own_buses() {
         app.tick(t * 1_000);
     }
     app.refresh_snapshot();
-    let slots: Vec<(u8, u16)> = app
-        .snap
-        .fr_aggs
-        .iter()
-        .map(|a| (a.bus, a.slot))
-        .collect();
+    let slots: Vec<(u8, u16)> = app.snap.fr_aggs.iter().map(|a| (a.bus, a.slot)).collect();
     assert!(slots.contains(&(0, 14)), "bus 0 keeps feeding: {slots:?}");
     assert!(
         !slots.contains(&(1, 99)),
@@ -6675,11 +6838,13 @@ fn two_flexray_watches_feed_their_own_buses() {
         .map(|r| (r.bus.as_str(), r.label.as_str()))
         .collect();
     assert!(
-        fr.iter().any(|(b, l)| *b == "FR0" && l.starts_with("slot 13")),
+        fr.iter()
+            .any(|(b, l)| *b == "FR0" && l.starts_with("slot 13")),
         "bus 0's slot 13: {fr:?}"
     );
     assert!(
-        fr.iter().any(|(b, l)| *b == "FR1" && l.starts_with("slot 13")),
+        fr.iter()
+            .any(|(b, l)| *b == "FR1" && l.starts_with("slot 13")),
         "bus 1's slot 13, told apart by its bus: {fr:?}"
     );
     assert_eq!(
@@ -6776,7 +6941,9 @@ fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     app.fr_buses.insert(
@@ -6831,7 +6998,9 @@ fn an_empty_flexray_message_row_names_its_reason() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     // A slot the description schedules but does not name any signals for, when
@@ -6994,7 +7163,12 @@ fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
 
     // Baseline: Real bus, the node's frames reach the wire.
     let wire_ids = || -> Vec<u32> {
-        written.lock().expect("mock lock").iter().map(|f| f.id).collect()
+        written
+            .lock()
+            .expect("mock lock")
+            .iter()
+            .map(|f| f.id)
+            .collect()
     };
     for t in 1..=500u64 {
         app.advance_clock(t * 1_000);
@@ -7031,7 +7205,10 @@ fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
         "Simulated: no wire writes while parked"
     );
     assert!(
-        !app.snap.aggs.iter().any(|a| a.channel == 0 && a.id == 0x555),
+        !app.snap
+            .aggs
+            .iter()
+            .any(|a| a.channel == 0 && a.id == 0x555),
         "Simulated: wire frames never reach the internal bus"
     );
 
@@ -7057,7 +7234,10 @@ fn the_bus_mode_switch_parks_and_reconnects_the_wire() {
         app.tick(t);
     }
     assert!(
-        app.snap.aggs.iter().any(|a| a.channel == 0 && a.id == 0x556),
+        app.snap
+            .aggs
+            .iter()
+            .any(|a| a.channel == 0 && a.id == 0x556),
         "Real bus: fresh wire frames are ingested again"
     );
     assert!(
@@ -7164,7 +7344,10 @@ fn a_wire_that_takes_writes_leaves_no_complaint() {
         "and nothing was refused, so the row stays quiet"
     );
     assert!(
-        !app.snap.write.iter().any(|l| l.text.contains("发送被线路拒绝")),
+        !app.snap
+            .write
+            .iter()
+            .any(|l| l.text.contains("发送被线路拒绝")),
         "and the log says nothing about it"
     );
 }
@@ -7235,7 +7418,10 @@ fn removing_a_bus_remaps_state_trackers() {
     app.settle();
 
     let sig = &app.state_trackers[0].signals[0];
-    assert!(matches!(sig.key, SigKey::Can { ch: 0, .. }), "the row is a CAN key that shifted down with the bus");
+    assert!(
+        matches!(sig.key, SigKey::Can { ch: 0, .. }),
+        "the row is a CAN key that shifted down with the bus"
+    );
     let shifted = SigKey::can(0, 0x200, false, "VehicleSpeed");
     assert!(
         app.state_trackers[0].color_slots.contains_key(&shifted),
@@ -7623,7 +7809,9 @@ fn the_trace_row_cache_extends_in_place_without_losing_rows() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     // Slots whose frame actually declares signals, with the cycle that frame is
@@ -7738,10 +7926,7 @@ fn an_edited_filter_or_a_cleared_trace_rebuilds_the_row_cache() {
     // A sorted cache is no longer time-ordered, so a refresh has to rebuild it
     // rather than prepend: turned oldest-first here, where prepending the new
     // row would leave a list that runs backwards right after the newest row.
-    app.trace_windows[0]
-        .rows
-        .make_contiguous()
-        .reverse();
+    app.trace_windows[0].rows.make_contiguous().reverse();
     app.trace_windows[0].rows_sorted = true;
     feed_rpm(&mut app, &[(150_000, 120.0)]);
     app.text_fresh = true;
@@ -7775,7 +7960,9 @@ fn an_edited_filter_or_a_cleared_trace_rebuilds_the_row_cache() {
 /// frame row owns, which name each one prints, and what the cluster's occupancy
 /// is charged.
 fn one_slot_db(signals: &[&str], slot_wire_us: f64) -> std::sync::Arc<crate::fr_db::FrDb> {
-    use crate::fr_db::{FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+    use crate::fr_db::{
+        FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering,
+    };
     let sig = |name: &str| FrSignal {
         name: name.into(),
         start_bit: 0,
@@ -7951,13 +8138,19 @@ fn a_node_script_reads_a_flexray_signal() {
         app.tick(t);
     }
     app.refresh_snapshot();
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
-    assert!(
-        !node.errored,
-        "the read did not fail: {:?}",
-        node.log
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
+    assert!(!node.errored, "the read did not fail: {:?}", node.log);
+    let key = SigKey::can(
+        0,
+        crate::app::EMITTED_ID_BASE | id as u32,
+        false,
+        "FromFr".to_string(),
     );
-    let key = SigKey::can(0, crate::app::EMITTED_ID_BASE | id as u32, false, "FromFr".to_string());
     let sub = app.subs.get(&key).expect("the derived stream");
     assert_eq!(
         sub.latest, 42.0,
@@ -8008,7 +8201,12 @@ fn a_flexray_arrival_drives_a_script_reaction() {
     app.advance_clock(20_000);
     app.tick(20_000);
     app.refresh_snapshot();
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
     assert!(
         !node.errored,
         "the handler read the value its own arrival carried: {:?}",
@@ -8018,7 +8216,10 @@ fn a_flexray_arrival_drives_a_script_reaction() {
         .aggs
         .get(&(0, 0x320, false))
         .expect("the reaction frame reached the CAN bus");
-    assert_eq!(agg.data[0], 42, "the decoded physical value, truncated to a byte");
+    assert_eq!(
+        agg.data[0], 42,
+        "the decoded physical value, truncated to a byte"
+    );
     assert_eq!(agg.count, 1, "one arrival, one reaction");
     app.stop();
 }
@@ -8100,7 +8301,12 @@ fn a_script_frame_enters_the_session_like_any_arrival() {
             .any(|a| a.bus == 0 && a.slot == 6 && a.count == 1),
         "and it is tallied in Messages like any arrival"
     );
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
     assert!(!node.errored, "the handler ran clean: {:?}", node.log);
     app.stop();
 }
@@ -8157,7 +8363,12 @@ fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
         !lengths.contains(&3),
         "no three-byte frame was ever admitted: {lengths:?}"
     );
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
     assert!(
         node.log
             .iter()
@@ -8165,7 +8376,11 @@ fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
         "the reason is in the node's log: {:?}",
         node.log
     );
-    assert!(!node.errored, "a dropped frame is advice, not a fault: {:?}", node.log);
+    assert!(
+        !node.errored,
+        "a dropped frame is advice, not a fault: {:?}",
+        node.log
+    );
     app.stop();
 }
 
@@ -8223,7 +8438,12 @@ fn a_script_frame_for_an_unconfigured_bus_is_refused() {
         [0],
         "and the Buses table lists only the 路 that exists"
     );
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
     assert!(
         node.log
             .iter()
@@ -8245,7 +8465,9 @@ fn a_script_writes_a_flexray_signal_into_its_entry() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     };
     let parsed = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     let (slot, sig, declared_len) = (0..parsed.frames.len())
@@ -8293,7 +8515,12 @@ fn a_script_writes_a_flexray_signal_into_its_entry() {
         app.tick(n * 10_000);
     }
     app.refresh_snapshot();
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
     assert!(!node.errored, "the handler ran clean: {:?}", node.log);
     assert!(
         node.log.iter().all(|l| !l.contains("set_fr_sig]")),
@@ -8359,8 +8586,17 @@ fn a_flexray_signal_write_without_its_entry_is_refused() {
         app.tick(n * 10_000);
     }
     app.refresh_snapshot();
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
-    let lines: Vec<&String> = node.log.iter().filter(|l| l.contains("set_fr_sig]")).collect();
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
+    let lines: Vec<&String> = node
+        .log
+        .iter()
+        .filter(|l| l.contains("set_fr_sig]"))
+        .collect();
     assert!(
         lines.iter().any(|l| l.contains("FR0 slot 5 没有发送条目")),
         "the slot nobody fills: {lines:?}"
@@ -8403,7 +8639,12 @@ fn replaying_a_flexray_log_drives_the_slot_handlers() {
     app.settle();
     let src = write_mixed_fr_asc("roxy_can_fr_handler", 4, 13);
     replay_to_the_end(&mut app, &src);
-    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("the node");
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .expect("the node");
     assert!(!node.errored, "the handler ran clean: {:?}", node.log);
     assert_eq!(
         node.log,
@@ -8439,10 +8680,7 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
             let ecu = db.frame_sender(ix).map(str::to_string)?;
             let f = db.frame_index(ix)?;
             // Wide enough that the raw numbers below are all representable.
-            let sig = db
-                .edit_signals(ix)
-                .into_iter()
-                .find(|s| s.size >= 4)?;
+            let sig = db.edit_signals(ix).into_iter().find(|s| s.size >= 4)?;
             let rep = f.triggering.cycle_repetition.max(1) as u64;
             Some((
                 f.triggering.slot_id as u16,
@@ -8456,9 +8694,8 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     // Values named in raw code words and converted with the signal's own
     // encoding, so every one of them is exactly representable whatever the
     // coding's factor, offset, sign or declared range says.
-    let phys = |raw: u64| {
-        crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset)
-    };
+    let phys =
+        |raw: u64| crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
     let (lo, hi, want) = (phys(0), phys(10), phys(5));
     let one_lsb = (phys(1) - phys(0)).abs() * 1.5;
     assert!(declared_us > 0, "the cluster declares a cycle time");
@@ -8669,7 +8906,10 @@ fn a_flexray_payload_is_bounded_by_its_slot_width() {
     let (slot, _) = fr_bound_slot(&mut app);
     app.add_fr_tx(0, slot);
     let wide = app.fr_tx_list[0].len;
-    assert!(wide > 3, "the asset needs a slot wider than 3 bytes: {wide}");
+    assert!(
+        wide > 3,
+        "the asset needs a slot wider than 3 bytes: {wide}"
+    );
 
     app.set_fr_tx_hex(0, slot, "11 22 33");
     assert_eq!(
@@ -8717,9 +8957,15 @@ fn the_flexray_cycle_box_counts_cycles_and_refuses_event_fills() {
     let zero = fr_cycle_draft("0", ct).expect_err("0 is not a period");
     assert!(zero.contains("事件触发"), "{zero}");
     assert!(zero.contains("On"), "{zero}");
-    assert!(fr_cycle_draft("", ct).is_err(), "an empty box is not a period");
+    assert!(
+        fr_cycle_draft("", ct).is_err(),
+        "an empty box is not a period"
+    );
     assert!(fr_cycle_draft("abc", ct).is_err());
-    assert!(fr_cycle_draft("1e6", ct).is_err(), "and neither is scientific");
+    assert!(
+        fr_cycle_draft("1e6", ct).is_err(),
+        "and neither is scientific"
+    );
     assert!(
         fr_cycle_draft("60001", ct).is_err(),
         "the same ceiling the ms box has, in cycles"
@@ -8730,7 +8976,11 @@ fn the_flexray_cycle_box_counts_cycles_and_refuses_event_fills() {
 
     assert_eq!(cycles_of(10_000, ct), Some(2));
     assert_eq!(cycles_of(7_500, ct), None, "off the grid: no cycle count");
-    assert_eq!(cycles_of(0, ct), None, "never sending is not every 0 cycles");
+    assert_eq!(
+        cycles_of(0, ct),
+        None,
+        "never sending is not every 0 cycles"
+    );
     assert_eq!(cycles_of(10_000, 0), None, "and no grid means no counting");
 }
 
@@ -8818,7 +9068,9 @@ fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
-        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
     // The declared period comes out of the schedule itself, so the test states
@@ -8880,7 +9132,7 @@ fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
             .spec
             .fr_rows
             .iter()
-            .filter(|(k, _)| k.0 .0 == 0 && k.0 .1 == slot)
+            .filter(|(k, _)| k.0.0 == 0 && k.0.1 == slot)
             .map(|(k, _)| k.1)
             .collect()
     };
@@ -9059,10 +9311,7 @@ fn dbc_only_keeps_the_flexray_rows_a_description_covers() {
     let db = crate::fr_db::FrDb::parse(&text).expect("the asset parses");
     let (slot, cycle) = {
         let f = &db.frames[0];
-        (
-            f.triggering.slot_id as u16,
-            f.triggering.base_cycle as u8,
-        )
+        (f.triggering.slot_id as u16, f.triggering.base_cycle as u8)
     };
     let ix = db
         .frame_ix_at(slot, cycle, 0)
@@ -9205,7 +9454,10 @@ fn the_trace_text_filter_matches_fr_frame_names() {
     let flt = mk_flt(&app, &format!("slot {slot}"));
     assert!(app.trace_fr_match(&flt, &row), "slot text matches");
     let flt = mk_flt(&app, "\u{7f}no-such-frame\u{7f}");
-    assert!(!app.trace_fr_match(&flt, &row), "another name filters it out");
+    assert!(
+        !app.trace_fr_match(&flt, &row),
+        "another name filters it out"
+    );
     let flt = mk_flt(&app, "EngineSpeed>=200");
     assert!(
         !app.trace_fr_match(&flt, &row),
@@ -9360,7 +9612,10 @@ fn an_analysis_window_can_be_scoped_to_one_flexray_cluster() {
     app.msg_windows[0].scope = SigScope::FrBus(1);
     app.text_fresh = true;
     app.sync_msg_text(0);
-    assert_eq!(shown(&app), vec![("FR1".to_string(), "slot 13".to_string())]);
+    assert_eq!(
+        shown(&app),
+        vec![("FR1".to_string(), "slot 13".to_string())]
+    );
     app.msg_windows[0].scope = SigScope::FrBus(0);
     app.text_fresh = true;
     app.sync_msg_text(0);
@@ -9380,7 +9635,10 @@ fn an_analysis_window_can_be_scoped_to_one_flexray_cluster() {
     app.sync_stats_text(0);
     let stats = &app.stats_windows[0].text_rows;
     assert_eq!(stats.len(), 1, "one row for that cluster");
-    assert_eq!((stats[0].bus.as_str(), stats[0].share.as_str()), ("FR1", "100.0%"));
+    assert_eq!(
+        (stats[0].bus.as_str(), stats[0].share.as_str()),
+        ("FR1", "100.0%")
+    );
     app.stats_windows[0].scope = SigScope::All;
     app.text_fresh = true;
     app.sync_stats_text(0);
@@ -9460,7 +9718,9 @@ fn a_send_to_another_nodes_message_logs_a_warning() {
     app.update();
     let node = app.snap.nodes.iter().find(|n| n.id == id).expect("node");
     assert!(
-        node.log.iter().any(|l| l.contains("0x200") && l.contains("ChassisECU")),
+        node.log
+            .iter()
+            .any(|l| l.contains("0x200") && l.contains("ChassisECU")),
         "log should warn about the foreign message: {:?}",
         node.log
     );
@@ -9720,7 +9980,11 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     assert_ne!(on_first, on_second, "the two assets are told apart");
     // Replacing is how a misplaced file gets moved off a 路.
     assert_eq!(app.load_cluster_description(first, Some(0)), Some(0));
-    assert_eq!(sig(&app, 0), on_first, "bus 0 now carries the file it was given");
+    assert_eq!(
+        sig(&app, 0),
+        on_first,
+        "bus 0 now carries the file it was given"
+    );
     assert_eq!(
         app.fr_dbs.keys().copied().collect::<Vec<_>>(),
         [0, 1],
@@ -9766,7 +10030,9 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
 fn a_flexray_bus_can_be_detached_and_removed() {
     let arxml = "assets/arxml/PowerTrain.arxml";
     if !std::path::Path::new(arxml).exists() {
-        panic!("{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+        panic!(
+            "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+        );
     }
     let mut app = quiet_app();
     assert_eq!(app.load_cluster_description(arxml, None), Some(0));
@@ -9803,7 +10069,11 @@ fn a_flexray_bus_can_be_detached_and_removed() {
     assert!(app.fr_buses.is_empty(), "the frontend forgot it");
     assert!(app.fr_dbs.is_empty(), "and told the core");
     assert!(app.snap.fr_watches.is_empty(), "the port went with it");
-    assert!(app.status.contains("FR0"), "the bar names it: {}", app.status);
+    assert!(
+        app.status.contains("FR0"),
+        "the bar names it: {}",
+        app.status
+    );
     app.stop();
 }
 
@@ -9947,11 +10217,16 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     assert!(
         app.fr_aggs.values().any(|a| a.bus == 1 && a.count >= 1),
         "FR1 is still tallied: {:?}",
-        app.fr_aggs.values().map(|a| (a.bus, a.count)).collect::<Vec<_>>()
+        app.fr_aggs
+            .values()
+            .map(|a| (a.bus, a.count))
+            .collect::<Vec<_>>()
     );
     // No subscription, curve or hand-picked row names the deleted cluster.
     assert!(
-        !app.subs.keys().any(|k| matches!(k, SigKey::Fr { bus: 0, .. })),
+        !app.subs
+            .keys()
+            .any(|k| matches!(k, SigKey::Fr { bus: 0, .. })),
         "FR0's subscription is gone"
     );
     assert!(app.subs.contains_key(&SigKey::Fr {

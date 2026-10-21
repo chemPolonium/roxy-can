@@ -547,7 +547,9 @@ pub enum BusCommand {
     /// CANoe-style bus mode: `real` connects every attachment to its
     /// adapter (RX feeds the bus, directed TX goes to the wire);
     /// `!real` (Simulated) parks them while keeping the configuration.
-    SetBusMode { real: bool },
+    SetBusMode {
+        real: bool,
+    },
 }
 
 /// The synthetic stream id system variables publish under: an id no node
@@ -1558,7 +1560,8 @@ impl BusCore {
             }
             BusCommand::AddFrEntry { bus, slot, node } => self.add_fr_entry(bus, slot, node),
             BusCommand::RemoveFrEntry { bus, slot } => {
-                self.fr_tx_list.retain(|t| !(t.bus == bus && t.slot == slot));
+                self.fr_tx_list
+                    .retain(|t| !(t.bus == bus && t.slot == slot));
             }
             BusCommand::SetFrEntryActive { bus, slot, on } => {
                 // Same anchoring as the CAN entry: re-enabling starts from now,
@@ -1571,7 +1574,11 @@ impl BusCore {
                     }
                 }
             }
-            BusCommand::SetFrEntryCycle { bus, slot, cycle_us } => {
+            BusCommand::SetFrEntryCycle {
+                bus,
+                slot,
+                cycle_us,
+            } => {
                 if let Some(tx) = self.fr_entry_mut(bus, slot) {
                     tx.cycle_us = cycle_us;
                     tx.next_t_us = 0;
@@ -1597,7 +1604,12 @@ impl BusCore {
                     tx.srcs.retain(|s| s.name != name);
                 }
             }
-            BusCommand::PinFrEntrySignal { bus, slot, name, phys } => {
+            BusCommand::PinFrEntrySignal {
+                bus,
+                slot,
+                name,
+                phys,
+            } => {
                 self.pin_fr_entry_signal(bus, slot, &name, phys);
             }
             BusCommand::SendFrNow { bus, slot } => {
@@ -1651,18 +1663,20 @@ impl BusCore {
                                 let fd = p.fd;
                                 (crate::hw::HwPort::Kvaser(p), fd)
                             })
-                            .map_err(|e| (e, {
-                                crate::hw::kvaser::KvaserChannel::open(
-                                    adapter,
-                                    kbps,
-                                    fd_data_kbps,
-                                    false,
-                                )
-                                .map(|p| {
-                                    let fd = p.fd;
-                                    (crate::hw::HwPort::Kvaser(p), fd)
+                            .map_err(|e| {
+                                (e, {
+                                    crate::hw::kvaser::KvaserChannel::open(
+                                        adapter,
+                                        kbps,
+                                        fd_data_kbps,
+                                        false,
+                                    )
+                                    .map(|p| {
+                                        let fd = p.fd;
+                                        (crate::hw::HwPort::Kvaser(p), fd)
+                                    })
                                 })
-                            }))
+                            })
                     }
                     crate::hw::HwDriver::Vector => {
                         // Vector classic CAN first cut: init access only
@@ -1672,18 +1686,20 @@ impl BusCore {
                                 let fd = p.fd;
                                 (crate::hw::HwPort::Vector(p), fd)
                             })
-                            .map_err(|e| (e, {
-                                crate::hw::vector::VectorChannel::open(
-                                    adapter,
-                                    kbps,
-                                    fd_data_kbps,
-                                    false,
-                                )
-                                .map(|p| {
-                                    let fd = p.fd;
-                                    (crate::hw::HwPort::Vector(p), fd)
+                            .map_err(|e| {
+                                (e, {
+                                    crate::hw::vector::VectorChannel::open(
+                                        adapter,
+                                        kbps,
+                                        fd_data_kbps,
+                                        false,
+                                    )
+                                    .map(|p| {
+                                        let fd = p.fd;
+                                        (crate::hw::HwPort::Vector(p), fd)
+                                    })
                                 })
-                            }))
+                            })
                     }
                 };
                 match opened {
@@ -1692,8 +1708,7 @@ impl BusCore {
                             crate::hw::HwDriver::Kvaser => "Kvaser",
                             crate::hw::HwDriver::Vector => "Vector",
                         };
-                        self.hw
-                            .attach(bus, driver, adapter, kbps, true, port);
+                        self.hw.attach(bus, driver, adapter, kbps, true, port);
                         *status = format!(
                             "hardware attached to {bus}: {driver_name} ch{adapter} @ {kbps} kbit/s (收发){}",
                             hw_fd_note(fd_data_kbps, fd)
@@ -1701,16 +1716,13 @@ impl BusCore {
                     }
                     Err((init_err, retry)) => match retry {
                         Ok((port, fd)) => {
-                            self.hw
-                                .attach(bus, driver, adapter, kbps, false, port);
+                            self.hw.attach(bus, driver, adapter, kbps, false, port);
                             *status = format!(
                                 "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s（仅接收——通道被其他程序占用）{}",
                                 hw_fd_note(fd_data_kbps, fd)
                             );
                         }
-                        Err(e) => {
-                            *status = format!("hardware attach failed: {init_err} / {e}")
-                        }
+                        Err(e) => *status = format!("hardware attach failed: {init_err} / {e}"),
                     },
                 }
             }
@@ -1731,17 +1743,15 @@ impl BusCore {
                     match self.fr_dbs.get(&bus) {
                         Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, db) {
                             Ok(()) => {
-                                *status =
-                                    format!("FlexRay 监听已连接: FR{bus} / Vector ch{idx}（仅接收）");
+                                *status = format!(
+                                    "FlexRay 监听已连接: FR{bus} / Vector ch{idx}（仅接收）"
+                                );
                             }
                             Err(e) => {
                                 *status = format!("FlexRay 监听连接失败: FR{bus} {e}");
                             }
                         },
-                        None => {
-                            *status =
-                                format!("FlexRay 监听连接失败: FR{bus} 尚未解析描述文件")
-                        }
+                        None => *status = format!("FlexRay 监听连接失败: FR{bus} 尚未解析描述文件"),
                     }
                 }
                 None => {
@@ -2075,7 +2085,11 @@ impl BusCore {
     /// the local wall clock (the Write window displays the wall time).
     pub(crate) fn write_push(&mut self, kind: WriteKind, text: String) {
         let wall_us = wall_us_now();
-        self.write_log.push_back(WriteLine { wall_us, kind, text });
+        self.write_log.push_back(WriteLine {
+            wall_us,
+            kind,
+            text,
+        });
         if self.write_log.len() > WRITE_LOG_CAP {
             self.write_log.pop_front();
         }
@@ -2111,7 +2125,8 @@ impl BusCore {
 
     /// Arms every enabled node for a measurement: recompile from source,
     /// run the main chunk, fire `on start`.
-    fn nodes_start(&mut self) {        let keys = self.sysvar_keys();
+    fn nodes_start(&mut self) {
+        let keys = self.sysvar_keys();
         for node in &mut self.nodes {
             if node.enabled {
                 let dbc = self
@@ -2287,12 +2302,8 @@ impl BusCore {
                     .get(*ach as usize)
                     .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
             });
-            let input = inputs
-                .get(&node.channel)
-                .cloned()
-                .unwrap_or_default();
-            let node_out =
-                node.dispatch_fr_row(row.bus, row.slot, row.cycle, &row.payload, &input);
+            let input = inputs.get(&node.channel).cloned().unwrap_or_default();
+            let node_out = node.dispatch_fr_row(row.bus, row.slot, row.cycle, &row.payload, &input);
             for (id, ext, data) in &node_out {
                 let frame = Self::node_frame(node.channel, *id, *ext, data, row.t_us);
                 if script_allowed {
@@ -2597,12 +2608,8 @@ impl BusCore {
             sub_count: self.subs.len(),
             replay,
             replay_map: self.replay_map.clone(),
-            replay_census_can: self
-                .log_census
-                .rows(crate::replay_map::LogBusKind::Can),
-            replay_census_fr: self
-                .log_census
-                .rows(crate::replay_map::LogBusKind::Fr),
+            replay_census_can: self.log_census.rows(crate::replay_map::LogBusKind::Can),
+            replay_census_fr: self.log_census.rows(crate::replay_map::LogBusKind::Fr),
             channel_count: self.channels.len(),
             laps: self.laps,
             bus_counter: self.bus_counter,
@@ -2765,18 +2772,12 @@ impl BusCore {
         let ids: std::collections::HashSet<(u8, u32)> = self
             .log_ids_file
             .iter()
-            .filter_map(|(ch, id)| {
-                map.target(LogBusKind::Can, *ch)
-                    .map(|t| (t, *id))
-            })
+            .filter_map(|(ch, id)| map.target(LogBusKind::Can, *ch).map(|t| (t, *id)))
             .collect();
         let fr: std::collections::HashSet<(u8, u16)> = self
             .log_fr_ids_file
             .iter()
-            .filter_map(|(bus, slot)| {
-                map.target(LogBusKind::Fr, *bus)
-                    .map(|t| (t, *slot))
-            })
+            .filter_map(|(bus, slot)| map.target(LogBusKind::Fr, *bus).map(|t| (t, *slot)))
             .collect();
         self.replay_ids = ids;
         self.replay_fr_ids = fr;
@@ -3647,7 +3648,11 @@ impl BusCore {
     /// payload length and period come from the description when this bus has one
     /// here; without it the entry is the raw filler its row says it is.
     fn add_fr_entry(&mut self, bus: u8, slot: u16, node: String) {
-        if self.fr_tx_list.iter().any(|t| t.bus == bus && t.slot == slot) {
+        if self
+            .fr_tx_list
+            .iter()
+            .any(|t| t.bus == bus && t.slot == slot)
+        {
             return;
         }
         let (name, len, period_us) = self
@@ -3780,7 +3785,10 @@ impl BusCore {
         *status = if block_notes.is_empty() {
             format!("measuring ({note})")
         } else {
-            format!("measuring ({note}); replay block {}", block_notes.join("; "))
+            format!(
+                "measuring ({note}); replay block {}",
+                block_notes.join("; ")
+            )
         };
         if self.recorder.recording {
             match self.recorder.open() {
@@ -4226,12 +4234,7 @@ impl BusCore {
             }
             let muted = replaying && self.replay_fr_ids.contains(&(tx.bus, tx.slot));
             let mut budget = MAX_TX_CATCHUP;
-            while budget > 0
-                && tx.active
-                && !muted
-                && tx.cycle_us != 0
-                && tx.next_t_us <= sim
-            {
+            while budget > 0 && tx.active && !muted && tx.cycle_us != 0 && tx.next_t_us <= sim {
                 budget -= 1;
                 // Values are read at the slot's own stamp, exactly as on the CAN
                 // side: a frame dated `at` must carry the waveform at `at`.
@@ -4239,9 +4242,9 @@ impl BusCore {
                 tx.next_t_us += tx.cycle_us;
                 let payload = crate::generator::fr_tx_payload(dbs, tx, at);
                 tx.last_sent = payload.clone();
-                let cycle = dbs.get(&tx.bus).map_or(0, |db| {
-                    crate::generator::fr_cycle_at(db, at)
-                });
+                let cycle = dbs
+                    .get(&tx.bus)
+                    .map_or(0, |db| crate::generator::fr_cycle_at(db, at));
                 fr_gen.push(crate::trace::FrRow {
                     bus: tx.bus,
                     t_us: at,
@@ -4259,7 +4262,10 @@ impl BusCore {
             }
         }
         for (bus, slot) in inject {
-            let Some(tx) = self.fr_tx_list.iter_mut().find(|t| t.bus == bus && t.slot == slot)
+            let Some(tx) = self
+                .fr_tx_list
+                .iter_mut()
+                .find(|t| t.bus == bus && t.slot == slot)
             else {
                 continue;
             };
@@ -5222,7 +5228,8 @@ mod tests {
     #[test]
     fn a_slot_held_by_two_frames_counts_two_rows() {
         let mut core = BusCore::new(Vec::new());
-        core.fr_dbs.insert(0, crate::fr_db::two_frames_one_slot_db(10));
+        core.fr_dbs
+            .insert(0, crate::fr_db::two_frames_one_slot_db(10));
         for (i, cycle) in [0u8, 2, 4, 6].iter().enumerate() {
             let mut r = fr_row(1_000_000 + (i as u64) * 2_000_000, 10);
             r.cycle = *cycle;
@@ -5274,13 +5281,19 @@ mod tests {
         let snap = core.snapshot();
         assert_eq!(snap.fr_aggs.len(), 2, "one row per (bus, slot)");
         assert_eq!(
-            snap.fr_aggs.iter().map(|a| (a.bus, a.slot)).collect::<Vec<_>>(),
+            snap.fr_aggs
+                .iter()
+                .map(|a| (a.bus, a.slot))
+                .collect::<Vec<_>>(),
             vec![(0, 10), (1, 10)],
             "ordered by bus first, so the Messages list groups one cluster's slots together"
         );
         let second = snap.fr_aggs.iter().find(|a| a.bus == 1).expect("bus 1 row");
         assert_eq!(second.count, 2);
-        assert_eq!(second.cycle_us, 2000.0, "its cycle mixes only its own arrivals");
+        assert_eq!(
+            second.cycle_us, 2000.0,
+            "its cycle mixes only its own arrivals"
+        );
     }
 
     /// A one-PDU, one-frame description whose single 8-bit signal at slot
@@ -5335,7 +5348,11 @@ mod tests {
         ))
     }
 
-    fn fr_db_one_signal(slot: u16, sig_name: &str, unit: &str) -> std::sync::Arc<crate::fr_db::FrDb> {
+    fn fr_db_one_signal(
+        slot: u16,
+        sig_name: &str,
+        unit: &str,
+    ) -> std::sync::Arc<crate::fr_db::FrDb> {
         fr_db_one_signal_on(slot, sig_name, unit, crate::fr_db::FrChannel::Both)
     }
 
@@ -5713,7 +5730,10 @@ mod tests {
     }
 
     /// 一条总线、一段日志。日志自带的编号换成本工程的第几路，回放时钟照常推进。
-    fn replay_core(frames: Vec<crate::can::frame::CanFrame>, rows: Vec<crate::trace::FrRow>) -> BusCore {
+    fn replay_core(
+        frames: Vec<crate::can::frame::CanFrame>,
+        rows: Vec<crate::trace::FrRow>,
+    ) -> BusCore {
         let mut core = BusCore::new(Vec::new());
         let mut status = String::new();
         core.add_channel(&mut status);

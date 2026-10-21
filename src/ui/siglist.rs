@@ -146,21 +146,13 @@ pub fn draw(app: &mut App, ui: &Ui, kind: ListKind) {
                     app.state_trackers.iter().map(|w| w.name.clone()).collect();
                 for (ti, name) in names.iter().enumerate() {
                     if ui.menu_item(name) {
-                        app.set_win_signal(
-                            crate::app::PopupTarget::State(ti),
-                            key.clone(),
-                            true,
-                        );
+                        app.set_win_signal(crate::app::PopupTarget::State(ti), key.clone(), true);
                     }
                 }
                 if ui.menu_item("+ 新建 State Tracker") {
                     app.new_state_window();
                     let ti = app.state_trackers.len() - 1;
-                    app.set_win_signal(
-                        crate::app::PopupTarget::State(ti),
-                        key.clone(),
-                        true,
-                    );
+                    app.set_win_signal(crate::app::PopupTarget::State(ti), key.clone(), true);
                 }
             });
         }

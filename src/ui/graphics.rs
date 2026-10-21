@@ -238,8 +238,7 @@ const CURSOR_GRAB_PX: f32 = 6.0;
 /// The plot rect of the first Graphics window, as of the last frame that drew
 /// it -- so a headless test can put the pointer where the user would.
 #[cfg(test)]
-pub(crate) static LAST_PLOT: std::sync::Mutex<Option<[f32; 4]>> =
-    std::sync::Mutex::new(None);
+pub(crate) static LAST_PLOT: std::sync::Mutex<Option<[f32; 4]>> = std::sync::Mutex::new(None);
 
 /// The time under a pointer x. The same mapping `draw_plot` lays curves out
 /// with, so a cursor placed where the pointer was sits exactly there.
@@ -408,8 +407,7 @@ fn window_content(app: &mut App, ui: &Ui, i: usize) {
         // reverse push order.
         let colors = selected.then(|| {
             let button = ui.push_style_color(StyleColor::Button, [0.2, 0.45, 0.75, 1.0]);
-            let hovered =
-                ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]);
+            let hovered = ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.55, 0.85, 1.0]);
             let active = ui.push_style_color(StyleColor::ButtonActive, [0.15, 0.4, 0.7, 1.0]);
             (active, hovered, button)
         });
@@ -1038,16 +1036,10 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
     // one readout block giving every curve's value at each. A cursor whose time
     // has left the view draws no line -- the time it holds stays in the block,
     // which is where the reading comes from.
-    const CURSOR_COLOR: [[f32; 4]; 2] = [
-        [0.95, 0.85, 0.40, 0.95],
-        [0.45, 0.80, 0.95, 0.95],
-    ];
+    const CURSOR_COLOR: [[f32; 4]; 2] = [[0.95, 0.85, 0.40, 0.95], [0.45, 0.80, 0.95, 0.95]];
     if cursors.iter().any(Option::is_some) {
         if let (Some(a), Some(b)) = (cursors[0], cursors[1]) {
-            let (xa, xb) = (
-                x_at_t(a, x0, w, t_min, tw),
-                x_at_t(b, x0, w, t_min, tw),
-            );
+            let (xa, xb) = (x_at_t(a, x0, w, t_min, tw), x_at_t(b, x0, w, t_min, tw));
             let lo = xa.min(xb).clamp(x0, x0 + w);
             let hi = xa.max(xb).clamp(x0, x0 + w);
             if hi - lo > 0.5 {
@@ -1056,7 +1048,11 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
                     .build();
             }
         }
-        for (n, (t, x)) in cursors.iter().zip(cursor_xs(&cursors, x0, w, t_min, tw)).enumerate() {
+        for (n, (t, x)) in cursors
+            .iter()
+            .zip(cursor_xs(&cursors, x0, w, t_min, tw))
+            .enumerate()
+        {
             let (Some(t), Some(x)) = (t, x) else {
                 continue;
             };
@@ -1106,9 +1102,13 @@ fn draw_plot(dl: &DrawListMut<'_>, app: &App, pane: PlotPane<'_>) {
         let box_h = rows.len() as f32 * 13.0 + 6.0;
         let rx1 = x0 + w - 2.0;
         let rx0 = rx1 - wide - 8.0;
-        dl.add_rect([rx0, y0 + 2.0], [rx1, y0 + 2.0 + box_h], [0.10, 0.10, 0.14, 0.85])
-            .filled(true)
-            .build();
+        dl.add_rect(
+            [rx0, y0 + 2.0],
+            [rx1, y0 + 2.0 + box_h],
+            [0.10, 0.10, 0.14, 0.85],
+        )
+        .filled(true)
+        .build();
         for (n, (color, text)) in rows.iter().enumerate() {
             dl.add_text(
                 [rx0 + 4.0, y0 + 5.0 + n as f32 * 13.0],
@@ -1130,9 +1130,9 @@ fn value_at(history: &crate::app::SampleCache, t_us: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_SIDE_PX, MAX_CURVE_POINTS, axis_inset,
-        bucket_extremes, curve_runs, cursor_claim, cursor_row, cursor_xs, dots_readable,
-        grab_cursor, place_cursor, t_at_x, x_at_t, zoom_offset, zoom_step, PointerClaim,
+        AXIS_GUTTER_W, AXIS_LABEL_H, CurveBudget, MARKER_SIDE_PX, MAX_CURVE_POINTS, PointerClaim,
+        axis_inset, bucket_extremes, cursor_claim, cursor_row, cursor_xs, curve_runs,
+        dots_readable, grab_cursor, place_cursor, t_at_x, x_at_t, zoom_offset, zoom_step,
     };
 
     #[test]
@@ -1170,7 +1170,10 @@ mod tests {
         );
         assert!(x_at_t(19.0, x0, w, t_left, tw) > x0 + w);
         let xs = cursor_xs(&[Some(14.0), None], x0, w, t_left, tw);
-        assert!(xs[0].is_some() && xs[1].is_none(), "an unplaced cursor has no x");
+        assert!(
+            xs[0].is_some() && xs[1].is_none(),
+            "an unplaced cursor has no x"
+        );
     }
 
     /// A drag takes the nearest line, and only within a hand width: a press on
@@ -1190,7 +1193,11 @@ mod tests {
             Some(1),
             "a cursor that was never placed cannot be grabbed"
         );
-        assert_eq!(grab_cursor(100.0, [Some(100.0), Some(100.0)]), Some(0), "a tie takes the first");
+        assert_eq!(
+            grab_cursor(100.0, [Some(100.0), Some(100.0)]),
+            Some(0),
+            "a tie takes the first"
+        );
     }
 
     /// A double-click fills the free slot first (A, then B); once the pair
@@ -1198,7 +1205,11 @@ mod tests {
     /// dragging is for. Either way one gesture has one unambiguous target.
     #[test]
     fn a_double_click_chooses_which_cursor_it_moves() {
-        assert_eq!(place_cursor(500.0, [None, None]), 0, "the pair starts with A");
+        assert_eq!(
+            place_cursor(500.0, [None, None]),
+            0,
+            "the pair starts with A"
+        );
         assert_eq!(place_cursor(500.0, [Some(100.0), None]), 1, "then B");
         assert_eq!(
             place_cursor(102.0, [Some(100.0), Some(400.0)]),

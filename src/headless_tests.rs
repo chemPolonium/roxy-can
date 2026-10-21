@@ -5,9 +5,9 @@
 //! imgui, winit or the real wall clock.
 
 use crate::app::{App, Mode, NodeRole};
-use crate::observe::SigKey;
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::log::AscWriter;
+use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 
 /// What `update` does for the frame loop, minus the imgui-facing text
@@ -945,7 +945,9 @@ fn perf_flexray_readouts_under_load() {
     let blf = std::path::Path::new("assets/fibex/Logging.blf");
     let arxml = "assets/arxml/PowerTrain.arxml";
     let fibex = "assets/fibex/PowerTrain_v2.xml";
-    if !blf.exists() || !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists()
+    if !blf.exists()
+        || !std::path::Path::new(arxml).exists()
+        || !std::path::Path::new(fibex).exists()
     {
         eprintln!("assets absent -- skipped");
         return;
@@ -1057,9 +1059,9 @@ fn perf_flexray_readouts_under_load() {
 #[test]
 #[ignore = "measurement probe"]
 fn perf_flexray_child_build_split() {
+    use crate::workspace::TraceRow;
     use std::cell::Cell;
     use std::time::Instant;
-    use crate::workspace::TraceRow;
     let blf = std::path::Path::new("assets/fibex/Logging.blf");
     let arxml = "assets/arxml/PowerTrain.arxml";
     let fibex = "assets/fibex/PowerTrain_v2.xml";
@@ -1152,15 +1154,24 @@ fn perf_flexray_child_build_split() {
         frames.get(),
         ring.len()
     );
-    eprintln!("read values   : {values:9.1} us ({} child rows)", kids.get());
+    eprintln!(
+        "read values   : {values:9.1} us ({} child rows)",
+        kids.get()
+    );
     eprintln!(
         "build rows    : {build:9.1} us ({} cache rows, {} table rows, {} B each)",
         ring.len(),
         kids.get(),
         std::mem::size_of::<TraceRow>()
     );
-    eprintln!("format text   : {decode:9.1} us ({} child rows)", kids.get());
-    eprintln!("sink (kept so nothing above is optimised out): {}", sink.get());
+    eprintln!(
+        "format text   : {decode:9.1} us ({} child rows)",
+        kids.get()
+    );
+    eprintln!(
+        "sink (kept so nothing above is optimised out): {}",
+        sink.get()
+    );
     app.stop();
 }
 

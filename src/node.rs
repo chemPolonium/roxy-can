@@ -391,7 +391,12 @@ impl ScriptNode {
         let pending: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
         for op in pending {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
+                Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    warn,
+                );
             }
         }
         let matches: Vec<u16> = rt
@@ -434,11 +439,13 @@ impl ScriptNode {
     /// step: a FlexRay-heavy log must not pay a dispatch scan (let alone a
     /// `build_node_inputs`) while no script has an `on fr slot` handler.
     pub fn waits_on_flexray(&self) -> bool {
-        self.enabled && !self.errored && self.runtime.as_ref().is_some_and(|rt| {
-            rt.handlers
-                .iter()
-                .any(|h| matches!(h.kind, HandlerKind::FrSlot { .. }))
-        })
+        self.enabled
+            && !self.errored
+            && self.runtime.as_ref().is_some_and(|rt| {
+                rt.handlers
+                    .iter()
+                    .any(|h| matches!(h.kind, HandlerKind::FrSlot { .. }))
+            })
     }
 
     /// Delivers one FlexRay arrival to this node's `on fr slot` handlers.
@@ -557,7 +564,12 @@ impl ScriptNode {
         let pending: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
         for op in pending {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
+                Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    warn,
+                );
             }
         }
         let due: Vec<(usize, u16)> = rt
@@ -603,7 +615,12 @@ impl ScriptNode {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
             rt.vm.timer_ops.clear();
             if let Err(e) = rt.vm.run_handler(chunk) {
-                Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,format!("[error] {e}"));
+                Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    format!("[error] {e}"),
+                );
                 self.errored = true;
                 return out;
             }
@@ -612,7 +629,12 @@ impl ScriptNode {
             let ops: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
             for op in ops {
                 if let Some(warn) = Self::apply_timer_op(rt, op, now_us, Some(slot_index)) {
-                    Self::push_log_into(&mut self.log, &mut self.log_dirty, &mut self.pending_lines,warn);
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        warn,
+                    );
                 }
             }
             Self::drain_vm(
@@ -831,7 +853,10 @@ pub fn dbc_checks(
             .iter()
             .filter(|(k, m)| {
                 m.transmitter == attached_node
-                    && !script.send_refs.iter().any(|(_, id, ext)| (*id, *ext) == **k)
+                    && !script
+                        .send_refs
+                        .iter()
+                        .any(|(_, id, ext)| (*id, *ext) == **k)
             })
             .map(|(k, m)| (k.0, k.1, m.name.as_str()))
             .collect();
@@ -991,8 +1016,9 @@ mod tests {
     /// Two-node mini database: EngineECU transmits 0x100 + 0x101, GearBox
     /// transmits 0x200. RPM is range-limited to 0..8000.
     fn engine_dbc() -> std::sync::Arc<crate::dbc::SymbolTable> {
-        std::sync::Arc::new(crate::dbc::load_dbc_str(
-            r#"
+        std::sync::Arc::new(
+            crate::dbc::load_dbc_str(
+                r#"
 VERSION ""
 
 BS_:
@@ -1008,8 +1034,9 @@ BO_ 257 EngineCmd: 8 EngineECU
 BO_ 512 GearInfo: 8 GearBox
  SG_ Ratio : 0|8@1+ (1,0) [0|255] "" EngineECU
 "#,
+            )
+            .expect("test dbc parses"),
         )
-        .expect("test dbc parses"))
     }
 
     /// R2 reverse check: DBC traffic the bound node declares but the
@@ -1022,16 +1049,21 @@ BO_ 512 GearInfo: 8 GearBox
         n.start(Some(engine_dbc()));
         let logs = n.log_snapshot();
         assert!(
-            logs.iter().any(|l| l.contains("0x101") && l.contains("脚本未发送")),
+            logs.iter()
+                .any(|l| l.contains("0x101") && l.contains("脚本未发送")),
             "EngineCmd (0x101) is named: {logs:?}"
         );
         assert!(
-            !logs.iter().any(|l| l.contains("未发送") && l.contains("0x100")),
+            !logs
+                .iter()
+                .any(|l| l.contains("未发送") && l.contains("0x100")),
             "the implemented EngineStatus is not flagged"
         );
         // Foreign DBC traffic (GearBox's 0x200) is nobody's business here.
         assert!(
-            !logs.iter().any(|l| l.contains("未发送") && l.contains("0x200")),
+            !logs
+                .iter()
+                .any(|l| l.contains("未发送") && l.contains("0x200")),
             "another node's messages are not this script's job"
         );
     }
@@ -1068,7 +1100,8 @@ BO_ 512 GearInfo: 8 GearBox
         n.start(Some(engine_dbc()));
         let logs = n.log_snapshot();
         assert!(
-            logs.iter().any(|l| l.contains("转发者") && l.contains("接收集")),
+            logs.iter()
+                .any(|l| l.contains("转发者") && l.contains("接收集")),
             "the forwarder classification line is there: {logs:?}"
         );
         assert!(
@@ -1082,9 +1115,7 @@ BO_ 512 GearInfo: 8 GearBox
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
-            !n.log_snapshot()
-                .iter()
-                .any(|l| l.contains("自激成环")),
+            !n.log_snapshot().iter().any(|l| l.contains("自激成环")),
             "no send, no loop hint"
         );
     }
@@ -1097,9 +1128,7 @@ BO_ 512 GearInfo: 8 GearBox
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
-            n.log_snapshot()
-                .iter()
-                .any(|l| l.contains("自激成环")),
+            n.log_snapshot().iter().any(|l| l.contains("自激成环")),
             "an unguarded pure forward is the textbook loop: {logs:?}",
             logs = n.log_snapshot()
         );
@@ -1122,7 +1151,8 @@ BO_ 512 GearInfo: 8 GearBox
         n.start(Some(engine_dbc()));
         let logs = n.log_snapshot();
         assert!(
-            logs.iter().any(|l| l.contains("9999") && l.contains("超出")),
+            logs.iter()
+                .any(|l| l.contains("9999") && l.contains("超出")),
             "the out-of-range literal is named: {logs:?}"
         );
         assert!(
@@ -1703,7 +1733,10 @@ BO_ 256 Real: 2 ECU
         let mut n2 = node(r#"on message 0x100 { print(fr_sig(0, 9, "Never")); }"#);
         n2.start(None);
         n2.dispatch_frame(0, 0x100, false, false, &[], &input);
-        assert!(n2.errored(), "a slot that never arrived must not read as zero");
+        assert!(
+            n2.errored(),
+            "a slot that never arrived must not read as zero"
+        );
     }
 
     /// `$Message::Signal` reads the same published value `sig` would,

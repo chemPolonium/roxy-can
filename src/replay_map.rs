@@ -34,10 +34,7 @@ pub struct ReplayMap {
 impl ReplayMap {
     /// 文件里的通道 `raw` 落到工程里的哪一路；`None` = 丢掉。
     pub fn target(&self, kind: LogBusKind, raw: u8) -> Option<u8> {
-        self.table(kind)
-            .get(&raw)
-            .copied()
-            .unwrap_or(Some(raw))
+        self.table(kind).get(&raw).copied().unwrap_or(Some(raw))
     }
 
     /// 日志里第 `raw` 号 CAN 通道回放成本工程的第几路；`None` = 不回放。
@@ -85,7 +82,10 @@ impl ReplayMap {
 
     /// 配过的通道（编号升序）。文件还没回放时，映射表靠它列出已有的选择。
     pub fn configured(&self, kind: LogBusKind) -> Vec<(u8, Option<u8>)> {
-        self.table(kind).iter().map(|(raw, to)| (*raw, *to)).collect()
+        self.table(kind)
+            .iter()
+            .map(|(raw, to)| (*raw, *to))
+            .collect()
     }
 
     fn table(&self, kind: LogBusKind) -> &BTreeMap<u8, Option<u8>> {
@@ -193,7 +193,10 @@ mod tests {
             c if c > 1 => Some(c - 1),
             c => Some(c),
         });
-        assert_eq!(map.configured(LogBusKind::Can), vec![(4, None), (5, Some(1))]);
+        assert_eq!(
+            map.configured(LogBusKind::Can),
+            vec![(4, None), (5, Some(1))]
+        );
         // FlexRay 的编号不跟着 CAN 挪，各自的表各管自己。
         assert_eq!(map.configured(LogBusKind::Fr), vec![(0, Some(1))]);
         assert_eq!(map.target(LogBusKind::Can, 4), None);
@@ -206,10 +209,18 @@ mod tests {
         assert_eq!(map.can_channel(2, 2), None, "两路的工程里没有第 3 路");
         let mut moved = ReplayMap::default();
         moved.set(LogBusKind::Can, 5, Some(1));
-        assert_eq!(moved.can_channel(5, 2), Some(1), "指过来的也过同一道范围检查");
+        assert_eq!(
+            moved.can_channel(5, 2),
+            Some(1),
+            "指过来的也过同一道范围检查"
+        );
         assert_eq!(moved.can_channel(0, 2), Some(0), "没配的通道不受这条影响");
         moved.set(LogBusKind::Can, 3, None);
-        assert_eq!(moved.can_channel(3, 8), None, "选了不回放就是 None，与范围无关");
+        assert_eq!(
+            moved.can_channel(3, 8),
+            None,
+            "选了不回放就是 None，与范围无关"
+        );
     }
 
     #[test]

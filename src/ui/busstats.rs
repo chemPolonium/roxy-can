@@ -1,6 +1,13 @@
 use crate::app::App;
 use crate::load::{BusLoad, FrameClass};
-use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableSizingPolicy, TableOptions, Ui};
+use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableOptions, TableSizingPolicy, Ui};
+
+/// The Bus Statistics window has no state beyond whether it is open; every
+/// number comes from the snapshot.
+#[derive(Default)]
+pub struct BusStatsView {
+    pub open: bool,
+}
 
 /// The CAN statistics window, laid out like the reference: one row per
 /// statistic, columns Current/Last, Min, Max, Avg, one section per bus.
@@ -11,26 +18,31 @@ use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, TableSizingPolicy, 
 /// Simulated; transmit/receive error counters and transceiver
 /// errors/delay) have no meaning on a simulated bus and are not listed.
 pub fn render(app: &mut App, ui: &Ui) {
-    if !app.show_bus_stats {
-        return;
-    }
-    let io = ui.io();
-    let mut open = app.show_bus_stats;
-    ui.window("Bus Statistics###busstats")
-        .opened(&mut open)
-        .position(
-            [
-                io.display_size()[0] * 0.55,
-                io.display_size()[1] * 0.12,
-            ],
-            Condition::FirstUseEver,
-        )
-        .size([520.0, 420.0], Condition::FirstUseEver)
-        .build(|| content(app, ui));
-    app.show_bus_stats = open;
+    let mut view = std::mem::take(&mut app.busstats_view);
+    view.show(ui, app);
+    app.busstats_view = view;
 }
 
-fn content(app: &mut App, ui: &Ui) {
+impl BusStatsView {
+    pub fn show(&mut self, ui: &Ui, app: &App) {
+        if !self.open {
+            return;
+        }
+        let io = ui.io();
+        let mut open = self.open;
+        ui.window("Bus Statistics###busstats")
+            .opened(&mut open)
+            .position(
+                [io.display_size()[0] * 0.55, io.display_size()[1] * 0.12],
+                Condition::FirstUseEver,
+            )
+            .size([520.0, 420.0], Condition::FirstUseEver)
+            .build(|| content(app, ui));
+        self.open = open;
+    }
+}
+
+fn content(app: &App, ui: &Ui) {
     load_history_section(app, ui);
     ui.separator();
 
@@ -185,7 +197,9 @@ fn content(app: &mut App, ui: &Ui) {
         stat_row(
             ui,
             "静态段占用 [%]",
-            slot_us.map(|_| pct(load.load())).unwrap_or_else(|| "-".into()),
+            slot_us
+                .map(|_| pct(load.load()))
+                .unwrap_or_else(|| "-".into()),
             slot_us
                 .map(|_| opt_pct(l_min))
                 .unwrap_or_else(|| "-".into()),
@@ -216,7 +230,9 @@ fn content(app: &mut App, ui: &Ui) {
         stat_row(
             ui,
             "Slot wire time [µs]",
-            slot_us.map(|v| format!("{v:.2}")).unwrap_or_else(|| "-".into()),
+            slot_us
+                .map(|v| format!("{v:.2}"))
+                .unwrap_or_else(|| "-".into()),
             "-".to_string(),
             "-".to_string(),
             "-".to_string(),
@@ -305,7 +321,7 @@ fn opt_num_u(v: Option<u64>) -> String {
 /// 100 ms buckets) drawn as a polyline. Y scales to the window's own
 /// peak (floor 25%) so light loads stay readable; the 100% overload line
 /// appears only when the peak reaches it.
-fn load_history_section(app: &mut App, ui: &Ui) {
+fn load_history_section(app: &App, ui: &Ui) {
     for (i, ch) in app.snap.channels.iter().enumerate() {
         let Some(load) = app.snap.bus_loads.get(i) else {
             continue;

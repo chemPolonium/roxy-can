@@ -262,7 +262,7 @@ fn parse_fr_rmsg(t_us: u64, toks: &[&str], base: u32) -> Option<crate::trace::Fr
             usize::from_str_radix(toks[j], base),
             usize::from_str_radix(toks[j + 1], base),
         ) else {
-            continue
+            continue;
         };
         if data_count > 254 || byte_count > 254 || toks.len() < j + 2 + data_count {
             continue;
@@ -587,7 +587,9 @@ mod tests {
     #[test]
     fn the_real_canoe_flexray_asc_parses() {
         let Ok(text) = std::fs::read_to_string("assets/arxml/Logging.asc") else {
-            panic!("assets/arxml/Logging.asc missing -- it is tracked in the repository, so a broken checkout must fail, not skip");
+            panic!(
+                "assets/arxml/Logging.asc missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
+            );
         };
         let (frames, fr) = parse_asc_full(&text);
         assert!(
@@ -690,7 +692,10 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let (can, fr) = parse_asc_full(&content);
-        assert_eq!(can.iter().map(|f| f.id).collect::<Vec<_>>(), vec![0x1A4, 0x1A5]);
+        assert_eq!(
+            can.iter().map(|f| f.id).collect::<Vec<_>>(),
+            vec![0x1A4, 0x1A5]
+        );
         assert_eq!(fr.len(), 2);
         assert_eq!(fr[0].slot, 13);
         assert_eq!(fr[1].slot, 16);

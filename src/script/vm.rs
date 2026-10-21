@@ -1235,7 +1235,8 @@ fn pad(spec: FmtSpec, body: String, numeric: bool) -> String {
         s.push_str(&" ".repeat(fill));
         s
     } else if spec.zero && numeric {
-        let (sign, digits) = body.split_at(body.chars().position(|c| c == '-' || c == '+').unwrap_or(0));
+        let (sign, digits) =
+            body.split_at(body.chars().position(|c| c == '-' || c == '+').unwrap_or(0));
         let mut s = String::from(sign);
         s.push_str(&"0".repeat(fill));
         s.push_str(digits);
@@ -1278,16 +1279,20 @@ fn convert(spec: FmtSpec, v: &Value) -> Result<String, String> {
         'd' | 'i' | 'u' => pad(spec, int_of(v)?.to_string(), true),
         'x' => pad(spec, format!("{:x}", int_of(v)?), true),
         'X' => pad(spec, format!("{:X}", int_of(v)?), true),
-        'f' | 'F' => pad(
+        'f' | 'F' => pad(spec, format!("{:.*}", prec, float_of(v)?), true),
+        'e' => pad(spec, format!("{:.*e}", prec, float_of(v)?), true),
+        'E' => pad(
             spec,
-            format!("{:.*}", prec, float_of(v)?),
+            format!("{:.*e}", prec, float_of(v)?).to_uppercase(),
             true,
         ),
-        'e' => pad(spec, format!("{:.*e}", prec, float_of(v)?), true),
-        'E' => pad(spec, format!("{:.*e}", prec, float_of(v)?).to_uppercase(), true),
         'g' | 'G' => {
             let body = float_of(v)?.to_string();
-            let body = if spec.conv == 'G' { body.to_uppercase() } else { body };
+            let body = if spec.conv == 'G' {
+                body.to_uppercase()
+            } else {
+                body
+            };
             pad(spec, body, true)
         }
         's' => {
@@ -1323,7 +1328,10 @@ fn render_format(fmt: &str, args: &[Value]) -> Result<String, String> {
             i += 1;
             continue;
         }
-        let mut spec = FmtSpec { conv: chars[i], ..Default::default() };
+        let mut spec = FmtSpec {
+            conv: chars[i],
+            ..Default::default()
+        };
         // Flags.
         while i < chars.len() && (chars[i] == '-' || chars[i] == '0') {
             if chars[i] == '-' {
@@ -1383,7 +1391,7 @@ fn arith(a: Value, b: Value, op: Arith) -> Result<Value, String> {
         Arith::Mul => "*",
         Arith::Div => "/",
         Arith::Mod => "%",
-    };    // String concatenation on '+' with either side a string: the other
+    }; // String concatenation on '+' with either side a string: the other
     // value renders as it would in print, so log lines read naturally.
     if matches!(op, Arith::Add) && (matches!(a, Value::Str(_)) || matches!(b, Value::Str(_))) {
         let mut s = match a {
@@ -1592,10 +1600,7 @@ mod tests {
         vm.run().unwrap();
         assert_eq!(
             vm.emitted,
-            vec![
-                ("Speed".to_string(), 7.0),
-                ("Zero".to_string(), 0.0),
-            ]
+            vec![("Speed".to_string(), 7.0), ("Zero".to_string(), 0.0),]
         );
     }
 
@@ -1635,8 +1640,8 @@ mod tests {
     /// `emit_value` one.
     #[test]
     fn sys_set_queues_a_write() {
-        let script = compile("sys_set(\"Demo::Setpoint\", 12); sys_set(\"Demo::Rate\", 1.5);")
-            .unwrap();
+        let script =
+            compile("sys_set(\"Demo::Setpoint\", 12); sys_set(\"Demo::Rate\", 1.5);").unwrap();
         let mut vm = Vm::new(script);
         vm.run().unwrap();
         assert_eq!(

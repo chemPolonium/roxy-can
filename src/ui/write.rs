@@ -7,6 +7,32 @@ use crate::app::App;
 use crate::bus::WriteKind;
 use dear_imgui_rs::{Condition, StyleColor, StyleVar, Ui};
 
+/// The Write window's own state: open flag and per-kind visibility. Drawing
+/// is read-only against [`App`]; the two actions that touch the core or the
+/// filesystem come back as commands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WriteView {
+    pub open: bool,
+    pub filter: [bool; 4],
+}
+
+impl Default for WriteView {
+    fn default() -> Self {
+        Self {
+            open: true,
+            filter: [true; 4],
+        }
+    }
+}
+
+/// What the Write window asks for. `Clear` reaches the core's log ring;
+/// `Export` opens the native save dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteCmd {
+    Clear,
+    Export,
+}
+
 /// `wall_us` (local microseconds since midnight) as `HH:MM:SS.mmm`.
 /// Shared with the Write log's text export so the file lines match the
 /// window's.
@@ -23,34 +49,55 @@ pub(crate) fn wall_stamp(us: u64) -> String {
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
-    if !app.show_write {
-        return;
-    }
-    let io = ui.io();
-    let mut open = app.show_write;
-    let min = ui.push_style_var(StyleVar::WindowMinSize([420.0, 160.0]));
-    ui.window("Write")
-        .opened(&mut open)
-        .position(
-            [
-                io.display_size()[0] * 0.55,
-                io.display_size()[1] * 0.35,
-            ],
-            Condition::FirstUseEver,
-        )
-        .size([640.0, 280.0], Condition::FirstUseEver)
-        .build(|| content(app, ui));
-    min.pop();
-    app.show_write = open;
+    let mut view = std::mem::take(&mut app.write_view);
+    let cmds = view.show(ui, app);
+    app.write_view = view;
+    app.apply_write_cmds(cmds);
 }
 
-fn content(app: &mut App, ui: &Ui) {
+impl WriteView {
+    /// Draw the window and collect its two actions. `app` is read-only: the
+    /// filter checkboxes live in `self`, and nothing here mutates the bus.
+    pub fn show(&mut self, ui: &Ui, app: &App) -> Vec<WriteCmd> {
+        let mut cmds = Vec::new();
+        if !self.open {
+            return cmds;
+        }
+        let io = ui.io();
+        let mut open = self.open;
+        let min = ui.push_style_var(StyleVar::WindowMinSize([420.0, 160.0]));
+        ui.window("Write")
+            .opened(&mut open)
+            .position(
+                [io.display_size()[0] * 0.55, io.display_size()[1] * 0.35],
+                Condition::FirstUseEver,
+            )
+            .size([640.0, 280.0], Condition::FirstUseEver)
+            .build(|| content(self, app, ui, &mut cmds));
+        min.pop();
+        self.open = open;
+        cmds
+    }
+}
+
+impl App {
+    pub(crate) fn apply_write_cmds(&mut self, cmds: Vec<WriteCmd>) {
+        for cmd in cmds {
+            match cmd {
+                WriteCmd::Clear => self.send(crate::bus::BusCommand::ClearWrite),
+                WriteCmd::Export => self.export_write_dialog(),
+            }
+        }
+    }
+}
+
+fn content(view: &mut WriteView, app: &App, ui: &Ui, cmds: &mut Vec<WriteCmd>) {
     if ui.button("清空") {
-        app.send(crate::bus::BusCommand::ClearWrite);
+        cmds.push(WriteCmd::Clear);
     }
     ui.same_line();
     if ui.button("导出") {
-        app.export_write_dialog();
+        cmds.push(WriteCmd::Export);
     }
     if ui.is_item_hovered() {
         ui.tooltip_text("把当前过滤视图导出为文本文件");
@@ -60,7 +107,7 @@ fn content(app: &mut App, ui: &Ui) {
     ui.text_disabled("按类别：");
     // Per-kind visibility; the order mirrors WriteKind's variants.
     const LABELS: [&str; 4] = ["脚本", "信息", "告警", "错误"];
-    for (slot, label) in app.write_filter.iter_mut().zip(LABELS) {
+    for (slot, label) in view.filter.iter_mut().zip(LABELS) {
         ui.same_line();
         ui.checkbox(label, slot);
     }
@@ -78,7 +125,7 @@ fn content(app: &mut App, ui: &Ui) {
             WriteKind::Warning => 2,
             WriteKind::Error => 3,
         };
-        app.write_filter[i]
+        view.filter[i]
     };
     let lines: Vec<&crate::bus::WriteLine> =
         app.snap.write.iter().filter(|l| want(&l.kind)).collect();

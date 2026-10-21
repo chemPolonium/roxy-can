@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{state_path, AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile};
+use crate::config::{AUTOSAVE_PATH, Config, META_PATH, Meta, PROJECT_EXT, ProjectFile, state_path};
 
 use crate::app::App;
 
