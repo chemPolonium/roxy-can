@@ -56,6 +56,13 @@ pub struct FrBusCfg {
     pub path: String,
     pub db: std::sync::Arc<crate::fr_db::FrDb>,
 }
+
+/// One Ethernet bus and the AUTOSAR communication matrix that describes it.
+/// Ethernet has its own bus index space; it never shares a CAN channel.
+pub struct EthBusCfg {
+    pub path: String,
+    pub db: std::sync::Arc<crate::eth::db::EthDb>,
+}
 /// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 /// The replay speed ladder. The last entry is "as fast as possible":
 /// infinity makes the replay clock jump to the end immediately while the
@@ -319,6 +326,9 @@ pub struct App {
     /// replayed log -- which is exactly the case where `FR0`/`FR1` say nothing
     /// -- can still be named. Unnamed 路 fall back to `FR{n}`.
     pub fr_names: std::collections::BTreeMap<u8, String>,
+    /// Ethernet buses and the ARXML matrices loaded for them. Separate index
+    /// space from CAN and FlexRay.
+    pub eth_buses: std::collections::BTreeMap<u8, EthBusCfg>,
     /// The record file's stem as the input box shows it -- frontend
     /// draft state; the recorder receives a copy via `SetRecordPath`
     /// when recording arms.
@@ -501,6 +511,7 @@ impl App {
             fr_pick: std::collections::BTreeMap::new(),
             fr_buses: Default::default(),
             fr_names: Default::default(),
+            eth_buses: Default::default(),
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,
             limits: Default::default(),

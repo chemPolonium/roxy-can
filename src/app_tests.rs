@@ -10343,3 +10343,27 @@ fn a_started_session_boots_with_trace_and_messages_only() {
         "the extra kinds arrive only on the full workspace"
     );
 }
+
+/// The Ethernet side of the data path: a captured frame reaches the shared
+/// snapshot the Trace window reads.
+#[test]
+fn ethernet_frames_reach_the_snapshot() {
+    let mut app = App::headless();
+    let frame = crate::eth::EthFrame::new(
+        1_234,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0xAA; 8],
+    );
+    app.ingest_eth(frame);
+    app.refresh_snapshot();
+    assert_eq!(app.snap.eth_trace.len(), 1);
+    let f = app.snap.eth_trace.last().expect("frame");
+    assert_eq!(f.vlan, Some(100));
+    assert_eq!(f.ethertype, 0x0800);
+    assert_eq!(f.len(), 8);
+}

@@ -598,6 +598,14 @@ pub struct FrBusFile {
     pub path: String,
 }
 
+/// One Ethernet bus's AUTOSAR matrix, stored like a FlexRay description.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct EthBusFile {
+    #[serde(default)]
+    pub bus: u8,
+    pub path: String,
+}
+
 /// Trigger-recording context sizes: pre-trigger frames kept for
 /// trigger-started recordings, post-roll frames after a trigger-stopped
 /// edge, and the marker list cap.
@@ -657,6 +665,9 @@ pub struct Config {
     /// default, so an older project file reads unchanged.
     #[serde(default)]
     pub fr_names: Vec<(u8, String)>,
+    /// Ethernet buses and their AUTOSAR matrices. Separate index space.
+    #[serde(default)]
+    pub eth_buses: Vec<EthBusFile>,
     /// 回放通道映射：日志里的通道编号 → 本工程的第几路。日志只记编号，而那是
     /// 录它的那个人工程里的编号，所以这层对应关系属于工程。缺省（没有这一项，
     /// 或空表）= 按编号原样用，旧工程读进来行为不变。
@@ -905,6 +916,14 @@ impl Config {
                 .fr_names
                 .iter()
                 .map(|(bus, name)| (*bus, name.clone()))
+                .collect(),
+            eth_buses: app
+                .eth_buses
+                .iter()
+                .map(|(bus, c)| EthBusFile {
+                    bus: *bus,
+                    path: c.path.clone(),
+                })
                 .collect(),
             replay_map: app.snap.replay_map.clone(),
             // Written only by the legacy loader; a save drops it in favour of
@@ -1624,6 +1643,27 @@ impl Config {
                     );
                 }
                 Err(e) => problems.push(format!("FlexRay 描述加载失败: {e}")),
+            }
+        }
+        // Ethernet matrices load the same way; a moved or broken file is a
+        // problem row, not a failed project load.
+        for file in &self.eth_buses {
+            let path = &file.path;
+            match std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .map(crate::dbc::text_from_bytes)
+                .and_then(|t| crate::eth::db::EthDb::parse(&t).map_err(|e| e.to_string()))
+            {
+                Ok(db) => {
+                    app.eth_buses.insert(
+                        file.bus,
+                        crate::app::EthBusCfg {
+                            path: path.clone(),
+                            db: std::sync::Arc::new(db),
+                        },
+                    );
+                }
+                Err(e) => problems.push(format!("Ethernet ARXML 加载失败: {e}")),
             }
         }
         // Names come back before anything that labels a bus, and they survive a
@@ -2936,5 +2976,37 @@ mod tests {
             .unwrap()
             .apply(&mut back);
         assert_eq!(back.replay_speed, 4.0);
+    }
+}
+
+#[cfg(test)]
+mod eth_config_tests {
+    use super::*;
+
+    const ETH_SAMPLE: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>N</SHORT-NAME><ELEMENTS>
+<ETHERNET-CLUSTER><SHORT-NAME>C</SHORT-NAME></ETHERNET-CLUSTER>
+<ETHERNET-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH></ETHERNET-FRAME>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+
+    #[test]
+    fn an_ethernet_matrix_round_trips_with_the_project() {
+        let path =
+            std::env::temp_dir().join(format!("roxy_can_eth_cfg_{}.arxml", std::process::id()));
+        std::fs::write(&path, ETH_SAMPLE).expect("write fixture");
+        let path_s = path.to_string_lossy().to_string();
+
+        let mut app = App::headless();
+        assert_eq!(app.load_eth_description(&path_s, Some(2)), Some(2));
+        assert_eq!(app.eth_buses.len(), 1);
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert!(restored.eth_buses.contains_key(&2));
+        assert_eq!(restored.eth_db(2).unwrap().frames.len(), 1);
+        std::fs::remove_file(path).ok();
     }
 }

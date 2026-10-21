@@ -164,6 +164,14 @@ impl EthTraceView {
             .flat_map(|c| c.iter())
             .chain(self.tail.iter())
     }
+
+    /// Newest first, for the Trace section and future merged rows.
+    pub fn iter_rev(&self) -> impl Iterator<Item = &EthFrame> {
+        self.tail
+            .iter()
+            .rev()
+            .chain(self.chunks.iter().rev().flat_map(|c| c.iter().rev()))
+    }
 }
 
 #[cfg(test)]

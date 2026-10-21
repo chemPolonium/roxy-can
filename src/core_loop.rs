@@ -142,6 +142,7 @@ impl CoreLoop {
         self.core.publish_loads();
         self.core.publish_nodes();
         self.core.publish_write();
+        self.core.publish_trace();
         let status = self.pending_status.take();
         let snap = Arc::new(self.core.snapshot_with_status(status));
         *self.mail.lock().expect("snapshot mailbox poisoned") = snap;

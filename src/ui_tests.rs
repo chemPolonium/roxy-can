@@ -1339,3 +1339,25 @@ fn the_replay_map_tables_draw_the_same_number_from_both_bus_kinds() {
     );
     frames(&mut app, &mut ctx, 3);
 }
+
+/// The Ethernet section in Trace draws frames from the snapshot without
+/// touching the CAN/FlexRay row cache.
+#[test]
+fn trace_draws_ethernet_frames() {
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_trace_window();
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0xAA; 8],
+    ));
+    app.refresh_snapshot();
+    frames(&mut app, &mut ctx, 2);
+}

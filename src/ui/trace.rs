@@ -8,7 +8,7 @@ use crate::ui::idfilter::scope_combo;
 use crate::workspace::TraceWin;
 use dear_imgui_rs::{
     Condition, ListClipper, SortDirection, TableColumnFlags, TableFlags, TableOptions,
-    TableSizingPolicy, Ui,
+    TableSizingPolicy, TreeNodeFlags, Ui,
 };
 
 /// Window index and frame targeted by the row context menu; must survive
@@ -251,6 +251,13 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         };
         ui.text_colored([0.55, 0.8, 1.0, 1.0], fr_note);
     }
+    if !app.snap.eth_trace.is_empty() {
+        ui.same_line();
+        ui.text_colored(
+            [0.55, 0.9, 0.7, 1.0],
+            format!("· Ethernet {} 帧", app.snap.eth_trace.len()),
+        );
+    }
     // The cursor pair, worded as the plot words it -- to the microsecond here,
     // because that is what separates two rows. Only once something is marked:
     // an empty readout next to the frame count reads as a broken counter.
@@ -405,6 +412,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
     if ui.button(format!("Export##tx{i}")) {
         cmds.push(TraceCmd::Export(i));
     }
+    eth_section(app, ui, win);
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -899,6 +907,133 @@ impl App {
                 }
             }
         }
+    }
+}
+
+/// A first Ethernet view inside Trace: the newest captured frames, with the
+/// ARXML frame name when the flow matches exactly one definition. It lives
+/// above the CAN/FlexRay table until the three streams are merged into one.
+fn eth_section(app: &App, ui: &Ui, win: &TraceWin) {
+    let total = app.snap.eth_trace.len();
+    if total == 0 {
+        return;
+    }
+    if !ui.collapsing_header(
+        format!("Ethernet（{total} 帧）##trace_eth"),
+        TreeNodeFlags::DEFAULT_OPEN,
+    ) {
+        return;
+    }
+    let query = win.filter.trim().to_ascii_lowercase();
+    let rows: Vec<&crate::eth::EthFrame> = app
+        .snap
+        .eth_trace
+        .iter_rev()
+        .filter(|f| {
+            if query.is_empty() {
+                return true;
+            }
+            let name = eth_frame_name(app, f).to_ascii_lowercase();
+            let hay = format!(
+                "eth{} {} {} vlan {:?} 0x{:04X}",
+                f.bus,
+                mac_text(&f.src),
+                mac_text(&f.dst),
+                f.vlan,
+                f.ethertype
+            )
+            .to_ascii_lowercase();
+            hay.contains(&query) || name.contains(&query)
+        })
+        .take(500)
+        .collect();
+    ui.text_disabled(format!(
+        "显示最新 {} 条（环共 {total} 条，受上方过滤文本约束）",
+        rows.len()
+    ));
+    let flags = TableFlags::BORDERS_INNER
+        | TableFlags::ROW_BG
+        | TableFlags::RESIZABLE
+        | TableFlags::NO_BORDERS_IN_BODY
+        | TableFlags::SCROLL_Y;
+    let opts = TableOptions::from(flags).sizing_policy(TableSizingPolicy::StretchProp);
+    ui.child_window("trace_eth_child")
+        .size([0.0, 160.0])
+        .build(ui, || {
+            let Some(_t) = ui.begin_table_with_flags("trace_eth_table", 9, opts) else {
+                return;
+            };
+            for (label, width) in [
+                ("Time", 90.0),
+                ("Bus", 50.0),
+                ("Source", 120.0),
+                ("Destination", 120.0),
+                ("VLAN", 50.0),
+                ("Type", 62.0),
+                ("Len", 36.0),
+                ("Name", 130.0),
+            ] {
+                ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, width);
+            }
+            ui.table_setup_column_stretch_weight("Data", TableColumnFlags::NONE, 1.0);
+            ui.table_headers_row();
+            for f in rows {
+                ui.table_next_row();
+                if !ui.table_next_column() {
+                    continue;
+                }
+                ui.text(format!("{:.6}", f.t_us as f64 / 1e6));
+                ui.table_next_column();
+                ui.text(format!("ETH{}", f.bus));
+                ui.table_next_column();
+                ui.text(mac_text(&f.src));
+                ui.table_next_column();
+                ui.text(mac_text(&f.dst));
+                ui.table_next_column();
+                ui.text(
+                    f.vlan
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                );
+                ui.table_next_column();
+                ui.text(format!("0x{:04X}", f.ethertype));
+                ui.table_next_column();
+                ui.text(f.len().to_string());
+                ui.table_next_column();
+                ui.text(eth_frame_name(app, f));
+                ui.table_next_column();
+                ui.text(
+                    f.payload
+                        .iter()
+                        .map(|b| format!("{b:02X} "))
+                        .collect::<String>(),
+                );
+            }
+        });
+}
+
+fn mac_text(mac: &[u8; 6]) -> String {
+    mac.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn eth_frame_name(app: &App, f: &crate::eth::EthFrame) -> String {
+    let Some(db) = app.eth_db(f.bus) else {
+        return "-".to_string();
+    };
+    let flow = crate::eth::db::EthFlow {
+        vlan: f.vlan,
+        dst: f.dst,
+        src: f.src,
+        ethertype: f.ethertype,
+        payload_len: f.len(),
+    };
+    match db.match_flow(&flow, false) {
+        crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
+        crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} 个候选>"),
+        crate::eth::db::EthMatch::None => "-".to_string(),
     }
 }
 

@@ -443,6 +443,76 @@ impl App {
         Some(p.to_string_lossy().into_owned())
     }
 
+    /// Loads one Ethernet AUTOSAR matrix. A `None` bus picks the first free
+    /// Ethernet index; cancelling the picker adds nothing.
+    pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
+        let Ok(bytes) = std::fs::read(path) else {
+            self.fail(format!("ARXML 读取失败: {path}"));
+            return None;
+        };
+        let text = crate::dbc::text_from_bytes(bytes);
+        let db = match crate::eth::db::EthDb::parse(&text) {
+            Ok(db) => db,
+            Err(e) => {
+                self.fail(format!("Ethernet ARXML 解析失败: {e}"));
+                return None;
+            }
+        };
+        let bus = bus.unwrap_or_else(|| {
+            (0..=u8::MAX)
+                .find(|b| !self.eth_buses.contains_key(b))
+                .unwrap_or(u8::MAX)
+        });
+        let cluster = db
+            .clusters
+            .first()
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "-".to_string());
+        let frames = db.frames.len();
+        let vlans: usize = db.clusters.iter().map(|c| c.vlans.len()).sum();
+        self.eth_buses.insert(
+            bus,
+            crate::app::EthBusCfg {
+                path: path.to_string(),
+                db: std::sync::Arc::new(db),
+            },
+        );
+        self.status = format!(
+            "已加载 Ethernet 矩阵 ETH{bus}（{cluster}，{vlans} VLAN，{frames} 帧）: {path}"
+        );
+        Some(bus)
+    }
+
+    pub fn pick_eth_arxml(&mut self, bus: Option<u8>) -> Option<u8> {
+        let p = rfd::FileDialog::new()
+            .set_title("Open Ethernet communication matrix")
+            .add_filter("AUTOSAR ARXML", &["arxml", "xml"])
+            .pick_file()?;
+        self.load_eth_description(&p.to_string_lossy(), bus)
+    }
+
+    pub fn add_eth_bus(&mut self) {
+        let _ = self.pick_eth_arxml(None);
+    }
+
+    pub fn remove_eth_bus(&mut self, bus: u8) {
+        if self.eth_buses.remove(&bus).is_some() {
+            self.status = format!("已移除 Ethernet 总线 ETH{bus}");
+        }
+    }
+
+    pub fn eth_bus_label(&self, bus: u8) -> String {
+        format!("ETH{bus}")
+    }
+
+    pub fn eth_db(&self, bus: u8) -> Option<&crate::eth::db::EthDb> {
+        self.eth_buses.get(&bus).map(|cfg| cfg.db.as_ref())
+    }
+
+    pub fn eth_bus_rows(&self) -> Vec<u8> {
+        self.eth_buses.keys().copied().collect()
+    }
+
     /// The FlexRay twin of "+ Add bus". A FlexRay 路 *is* its cluster
     /// description -- there is no such thing as an empty one -- so adding a bus
     /// means picking that file, and it lands on the first index that carries

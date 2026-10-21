@@ -49,6 +49,9 @@ pub enum BusesCmd {
         channel_index: i32,
     },
     SetReplayMap(crate::replay_map::ReplayMap),
+    AddEthBus,
+    PickEthArxml(u8),
+    RemoveEthBus(u8),
 }
 
 /// The arbitration bit rates a CAN bus is wired for in practice. A pick list,
@@ -820,6 +823,71 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     if let Some((bus, channel_index)) = attach {
         cmds.push(BusesCmd::AttachFrWatch { bus, channel_index });
     }
+
+    // Ethernet buses: one row per loaded AUTOSAR matrix. No hardware column:
+    // this build reads Ethernet from offline logs, not from a live port.
+    ui.separator();
+    ui.text("Ethernet");
+    ui.same_line();
+    if ui.button("+ Add Ethernet") {
+        cmds.push(BusesCmd::AddEthBus);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text("选择 AUTOSAR Ethernet 通信矩阵（ARXML）");
+    }
+    ui.same_line();
+    let eth_rows = app.eth_bus_rows();
+    ui.text(format!("{} 路", eth_rows.len()));
+    if !eth_rows.is_empty() {
+        let table_flags =
+            TableFlags::RESIZABLE | TableFlags::BORDERS_INNER | TableFlags::NO_BORDERS_IN_BODY;
+        let opts = dear_imgui_rs::TableOptions::from(table_flags)
+            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
+        if let Some(_t) = ui.begin_table_with_flags("eth_table", 5, opts) {
+            ui.table_setup_column_fixed_width("Eth", TableColumnFlags::NONE, 46.0);
+            ui.table_setup_column_stretch_weight("ARXML", TableColumnFlags::NONE, 1.6);
+            ui.table_setup_column_stretch_weight("VLAN / 帧", TableColumnFlags::NONE, 1.0);
+            ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 70.0);
+            ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
+            ui.table_headers_row();
+            for bus in eth_rows {
+                let Some(cfg) = app.eth_buses.get(&bus) else {
+                    continue;
+                };
+                let Some(db) = app.eth_db(bus) else {
+                    continue;
+                };
+                let cluster = db
+                    .clusters
+                    .first()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| "-".to_string());
+                let vlans: usize = db.clusters.iter().map(|c| c.vlans.len()).sum();
+                let frames = db.frames.len();
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text(app.eth_bus_label(bus));
+                ui.table_next_column();
+                ui.text(file_name(&cfg.path));
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(format!("{cluster}\n{}", cfg.path));
+                }
+                ui.table_next_column();
+                ui.text(format!("{vlans} VLAN / {frames} 帧"));
+                ui.table_next_column();
+                if ui.button(format!("Open...##ethopen{bus}")) {
+                    cmds.push(BusesCmd::PickEthArxml(bus));
+                }
+                ui.table_next_column();
+                if ui.button(format!("x##ethrm{bus}")) {
+                    cmds.push(BusesCmd::RemoveEthBus(bus));
+                }
+            }
+        }
+    } else {
+        ui.text_disabled("尚未加载 Ethernet 通信矩阵");
+    }
+
     replay_map_section(app, ui, cmds);
 }
 
@@ -868,6 +936,11 @@ impl App {
                     self.attach_fr_watch_on(bus, channel_index);
                 }
                 BusesCmd::SetReplayMap(map) => self.set_replay_map(map),
+                BusesCmd::AddEthBus => self.add_eth_bus(),
+                BusesCmd::PickEthArxml(bus) => {
+                    let _ = self.pick_eth_arxml(Some(bus));
+                }
+                BusesCmd::RemoveEthBus(bus) => self.remove_eth_bus(bus),
             }
         }
     }

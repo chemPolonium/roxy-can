@@ -754,7 +754,6 @@ pub struct Snapshot {
     /// window's FR section. Shared like `trace`.
     pub fr_trace: std::sync::Arc<crate::trace::FrTraceView>,
     /// Ethernet frames as of the last publish, oldest first, byte-capped.
-    #[allow(dead_code)] // wired into the Ethernet UI in the next step
     pub eth_trace: std::sync::Arc<crate::eth::EthTraceView>,
     /// FR rows the ring trimmed from its head since the run began.
     pub fr_dropped: u64,
@@ -1852,7 +1851,7 @@ impl BusCore {
     /// Republishes the shared ring view. Called on steps that ingested
     /// frames (and on resets); the copy is one sealed tail plus chunk
     /// refcounts -- the ring itself is shared, never deep-copied.
-    fn publish_trace(&mut self) {
+    pub(crate) fn publish_trace(&mut self) {
         self.published_trace = self.trace.publish();
         self.published_fr = self.fr_trace.publish();
         self.published_eth = self.eth_trace.publish();
@@ -3828,6 +3827,7 @@ impl BusCore {
         self.paused_at_us = None;
         self.trace.clear();
         self.fr_trace.clear();
+        self.eth_trace.clear();
         self.publish_trace();
         self.frame_counter = 0;
         self.aggs.clear();
@@ -3923,6 +3923,7 @@ impl BusCore {
     fn clear_trace_view(&mut self, status: &mut String) {
         self.trace.clear();
         self.fr_trace.clear();
+        self.eth_trace.clear();
         self.publish_trace();
         *status = "trace cleared".to_string();
     }
@@ -5087,6 +5088,7 @@ impl BusCore {
                 TriggerAction::ClearTrace => {
                     self.trace.clear();
                     self.fr_trace.clear();
+                    self.eth_trace.clear();
                     self.publish_trace();
                     // Clearing the view is also the re-arm: appearance
                     // watches fire again on their next occurrence.
