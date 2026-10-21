@@ -44,6 +44,15 @@ pub trait FrameStream: Send {
     fn peek_fr_t(&mut self) -> Option<u64> {
         None
     }
+
+    /// Drains Ethernet frames the underlying container carried. Like the
+    /// FlexRay rows, they are paced by the replay clock.
+    fn poll_eth_frames(&mut self, _upto_t_us: u64, _out: &mut Vec<crate::eth::EthFrame>) {}
+
+    /// Timestamp of the next undelivered Ethernet frame without consuming it.
+    fn peek_eth_t(&mut self) -> Option<u64> {
+        None
+    }
 }
 
 /// One bus input. `Send` because stage 3 moves the whole core -- sources
@@ -85,4 +94,7 @@ pub trait FrameSource: Send {
     /// FR_RCVMESSAGE objects); delivered already paced like the CAN side.
     /// The default source has none.
     fn poll_fr(&mut self, _now_us: u64, _out: &mut Vec<crate::trace::FrRow>) {}
+
+    /// Ethernet frames from a source that carries them; already paced.
+    fn poll_eth(&mut self, _now_us: u64, _out: &mut Vec<crate::eth::EthFrame>) {}
 }

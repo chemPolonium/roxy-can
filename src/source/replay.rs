@@ -49,10 +49,8 @@ impl ReplaySource {
         // FlexRay log has no CAN timestamps at all.
         let can = self.stream.peek_t();
         let fr = self.stream.peek_fr_t();
-        self.next_t = match (can, fr) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let eth = self.stream.peek_eth_t();
+        self.next_t = [can, fr, eth].into_iter().flatten().min();
     }
 }
 
@@ -84,7 +82,10 @@ impl FrameSource for ReplaySource {
         // The done latch fires only when neither stream side has
         // anything left, so a pure FlexRay replay runs its full length.
         // The rows themselves drain through `poll_fr`.
-        if self.stream.peek_t().is_none() && self.stream.peek_fr_t().is_none() {
+        if self.stream.peek_t().is_none()
+            && self.stream.peek_fr_t().is_none()
+            && self.stream.peek_eth_t().is_none()
+        {
             self.done = true;
         }
         self.refresh_next();
@@ -128,6 +129,11 @@ impl FrameSource for ReplaySource {
         // FR rows stream in log order interleaved with the CAN frames.
         let target = self.pos_us as u64;
         self.stream.poll_fr_rows(target, out);
+    }
+
+    fn poll_eth(&mut self, _now_us: u64, out: &mut Vec<crate::eth::EthFrame>) {
+        let target = self.pos_us as u64;
+        self.stream.poll_eth_frames(target, out);
     }
 
     fn duration(&self) -> Option<u64> {

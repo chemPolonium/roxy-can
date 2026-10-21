@@ -753,6 +753,9 @@ pub struct Snapshot {
     /// FlexRay frames as of the last publish, oldest first -- the Trace
     /// window's FR section. Shared like `trace`.
     pub fr_trace: std::sync::Arc<crate::trace::FrTraceView>,
+    /// Ethernet frames as of the last publish, oldest first, byte-capped.
+    #[allow(dead_code)] // wired into the Ethernet UI in the next step
+    pub eth_trace: std::sync::Arc<crate::eth::EthTraceView>,
     /// FR rows the ring trimmed from its head since the run began.
     pub fr_dropped: u64,
     /// Which timeline the bus runs on this frame.
@@ -1031,6 +1034,10 @@ pub struct BusCore {
     pub(crate) fr_trace: crate::trace::FrRing,
     /// The FR ring as of the last publish, shared with snapshots.
     pub(crate) published_fr: Arc<crate::trace::FrTraceView>,
+    /// Ethernet frames received this run, in their own byte-capped ring.
+    pub(crate) eth_trace: crate::eth::EthRing,
+    /// The Ethernet ring as of the last publish, shared with snapshots.
+    pub(crate) published_eth: Arc<crate::eth::EthTraceView>,
     /// Per-(bus, slot) FlexRay tallies behind the Messages window's FR rows.
     /// Per FlexRay **frame**, not per slot -- see
     /// [`crate::aggregate::FrFrameAgg`] for why a slot is not the unit.
@@ -1196,6 +1203,8 @@ impl BusCore {
             published_trace: Arc::new(crate::trace::TraceView::default()),
             fr_trace: crate::trace::FrRing::default(),
             published_fr: Arc::new(crate::trace::FrTraceView::default()),
+            eth_trace: crate::eth::EthRing::default(),
+            published_eth: Arc::new(crate::eth::EthTraceView::default()),
             fr_aggs: HashMap::new(),
             fr_dbs: Default::default(),
             trace_paused: false,
@@ -1846,6 +1855,7 @@ impl BusCore {
     fn publish_trace(&mut self) {
         self.published_trace = self.trace.publish();
         self.published_fr = self.fr_trace.publish();
+        self.published_eth = self.eth_trace.publish();
     }
 
     /// One FlexRay frame lands: stamped against the sim clock when the
@@ -2579,6 +2589,12 @@ impl BusCore {
         snap
     }
 
+    /// Appends an Ethernet frame to the run's ring. The next publish hands
+    /// the ring to every observer; no CAN/FlexRay aggregate is touched.
+    pub(crate) fn ingest_eth(&mut self, frame: crate::eth::EthFrame) {
+        self.eth_trace.push(frame);
+    }
+
     /// One frame-shaped read of the bus for the frontend.
     pub(crate) fn snapshot(&self) -> Snapshot {
         let replay = match (self.source.position(), self.source.duration()) {
@@ -2590,6 +2606,7 @@ impl BusCore {
             trace_len: self.trace.len(),
             trace: Arc::clone(&self.published_trace),
             fr_trace: Arc::clone(&self.published_fr),
+            eth_trace: Arc::clone(&self.published_eth),
             fr_dropped: self.fr_trace.dropped(),
             fr_watches: {
                 let mut watches: Vec<FrWatchView> = self
@@ -4031,6 +4048,11 @@ impl BusCore {
         // they skip the CAN pipeline and land in the FR ring directly.
         let mut fr_replay: Vec<crate::trace::FrRow> = Vec::new();
         self.source.poll_fr(now_us, &mut fr_replay);
+        let mut eth_replay: Vec<crate::eth::EthFrame> = Vec::new();
+        self.source.poll_eth(now_us, &mut eth_replay);
+        for frame in eth_replay {
+            self.ingest_eth(frame);
+        }
         // 日志的每条帧只带一个通道**编号**，那是录它的那个人工程里的编号，
         // 文件里没有总线名可对照。所以在进环之前换成本工程的第几路，让解码、
         // 负载、Trace、聚合看见的都是自己这几条路；对不上任何一路的不回放

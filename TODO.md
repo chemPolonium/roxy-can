@@ -23,6 +23,20 @@
 - CSV 口径细化（State Tracker 等）：等明确诉求。
 - 独立的时间范围双输入框：现有跳转已覆盖，低优先级。
 
+## 以太网（进行中）
+
+- **范围**：ARXML + 离线 Vector BLF；L2 + AUTOSAR PDU/信号；不做实时硬件、ASC/PCAP、SOME/IP/SD/DoIP/TSN/SoAd、Container/Multiplexed/Secured 解码、ARXML 写回。
+- **真实样本**：目前没有真实 CANoe 以太网 BLF，导入先按规范 + 合成 fixture，标记 experimental；拿到样本后确认对象布局。
+- **帧匹配**：AUTOSAR 的 `ETHERNET-FRAME` 不含 MAC/EtherType，捕获帧只能按 flow key + 打分匹配；歧义必须由项目覆盖解决，不能猜。
+- **FRAME-LENGTH**：不同 OEM 可能含/不含 14 字节 L2 头，需要项目级开关。
+- **后续**：Container/Multiplexed/Secured 以太网解码；SoAd/socket/SOME-IP；TSN/交换机拓扑；ARXML 写回与完整矩阵往返。
+
+## ARXML 通信层（审计见 `docs/arxml-communication-audit.md`）
+
+- FlexRay 现有缺口的代码修复：`PDU-TRIGGERING` 周期、ECU 端口/连接器、Signal Group、update bit、SystemSignal 扇出、min/max、cluster 引用。
+- CAN / CAN FD ARXML cluster 支持。
+- 以太网必需的子集随以太网功能实现；其余只记录，不在本次补。
+
 ## 远期候选
 
 - 带判定的测试单元：把"发送集符合 DBC 声明"做成断言——要不要从编译期检查长成"跑完仿真再给结论"，待决策。
@@ -30,7 +44,7 @@
 
 ## 边界外（定位变了才重启，不许逐步混入）
 
-面板设计器 / HMI 控件；换脚本底座（Lua / JS / Python）；工业级测试报告（HTML / XML / PDF）；多机分布式与 PTP / GPS 时间同步；用户与权限、国际化；网关与跨总线路由；诊断层（UDS / CDD / ODX / 刷写）；MF4 读取（缺真实样本，无从验证）；LIN / 以太网。
+面板设计器 / HMI 控件；换脚本底座（Lua / JS / Python）；工业级测试报告（HTML / XML / PDF）；多机分布式与 PTP / GPS 时间同步；用户与权限、国际化；网关与跨总线路由；诊断层（UDS / CDD / ODX / 刷写）；MF4 读取（缺真实样本，无从验证）；LIN。（以太网已单独立项，见上。）
 
 ## CI 的规矩
 
