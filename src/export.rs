@@ -4,19 +4,24 @@ use crate::log::AscWriter;
 
 impl App {
     /// Exports the frames and FlexRay rows that pass the given Trace window's
-    /// filter as ASC. Frames the ring archived to disk (the ones the live view
+    /// filter as ASC; an Ethernet capture goes to PCAP instead, chosen by the
+    /// file extension. Frames the ring archived to disk (the ones the live view
     /// already trimmed) come first, in trim order -- the export covers
-    /// the whole run, not just the hot ring's window. FlexRay rows have no
-    /// archive, so the export covers the ring for them.
+    /// the whole run, not just the hot ring's window. FlexRay and Ethernet rows
+    /// have no archive, so the export covers the ring for them.
     pub fn export_trace(&mut self, win: usize, path: &str) {
-        if self.snap.trace.is_empty() && self.snap.fr_trace.is_empty() {
-            self.status = "export: trace is empty".to_string();
-            return;
-        }
         let Some(w) = self.trace_windows.get(win) else {
             return;
         };
         let flt = w.filter_lens();
+        if path.to_ascii_lowercase().ends_with(".pcap") {
+            self.export_trace_pcap(path, &flt);
+            return;
+        }
+        if self.snap.trace.is_empty() && self.snap.fr_trace.is_empty() {
+            self.status = "export: trace is empty".to_string();
+            return;
+        }
         // The archive leads: its frames are strictly older than anything
         // in the hot ring.
         let (archived, archived_total): (Vec<CanFrame>, u64) = match self.snap.trace.archive() {
@@ -87,11 +92,77 @@ impl App {
         }
     }
 
+    /// Exports Ethernet frames that pass the same Trace filter as a classic
+    /// PCAP file (link type 1, Ethernet). This is the format that can carry
+    /// MACs, VLAN tags, EtherType and payload -- ASC has no Ethernet records.
+    ///
+    /// Timestamps stay relative to the run but are anchored so the newest
+    /// frame is "now": a capture opened in Wireshark then reads as a recent
+    /// log instead of 1970. The capture has no direction field; Rx and Tx both
+    /// become ordinary wire frames, as a physical capture would show them.
+    fn export_trace_pcap(&mut self, path: &str, flt: &crate::workspace::TraceFilter) {
+        let frames: Vec<crate::eth::EthFrame> = self
+            .snap
+            .eth_trace
+            .iter()
+            .filter(|f| self.trace_eth_match(flt, f))
+            .cloned()
+            .collect();
+        if frames.is_empty() {
+            self.status = "export: no Ethernet frames pass the trace filter".to_string();
+            return;
+        }
+        let newest_us = frames.last().map(|f| f.t_us).unwrap_or(0);
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros())
+            .unwrap_or(0);
+        let base_us = u64::try_from(now_us)
+            .unwrap_or(u64::MAX)
+            .saturating_sub(newest_us);
+        let file = match std::fs::File::create(path) {
+            Ok(f) => f,
+            Err(e) => {
+                self.fail(format!("export failed: {e}"));
+                return;
+            }
+        };
+        let mut w = std::io::BufWriter::new(file);
+        let result = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            // Classic PCAP, little-endian, microsecond resolution:
+            // magic, version 2.4, thiszone 0, sigfigs 0, snaplen, LINKTYPE_ETHERNET.
+            w.write_all(&0xa1b2_c3d4u32.to_le_bytes())?;
+            w.write_all(&2u16.to_le_bytes())?;
+            w.write_all(&4u16.to_le_bytes())?;
+            w.write_all(&0i32.to_le_bytes())?;
+            w.write_all(&0u32.to_le_bytes())?;
+            w.write_all(&262_144u32.to_le_bytes())?;
+            w.write_all(&1u32.to_le_bytes())?;
+            for f in &frames {
+                let l2 = eth_l2_bytes(f);
+                let t_us = base_us.saturating_add(f.t_us);
+                let len = l2.len() as u32;
+                w.write_all(&((t_us / 1_000_000) as u32).to_le_bytes())?;
+                w.write_all(&((t_us % 1_000_000) as u32).to_le_bytes())?;
+                w.write_all(&len.to_le_bytes())?;
+                w.write_all(&len.to_le_bytes())?;
+                w.write_all(&l2)?;
+            }
+            w.flush()
+        })();
+        match result {
+            Ok(()) => self.status = format!("exported {} Ethernet frames to {path}", frames.len()),
+            Err(e) => self.fail(format!("export failed: {e}")),
+        }
+    }
+
     pub fn export_trace_dialog(&mut self, win: usize) {
         if let Some(p) = rfd::FileDialog::new()
-            .set_title("Export Trace as ASC")
+            .set_title("Export Trace")
             .set_file_name("trace_export.asc")
-            .add_filter("ASC files", &["asc"])
+            .add_filter("ASC (CAN / FlexRay)", &["asc"])
+            .add_filter("PCAP (Ethernet)", &["pcap"])
             .save_file()
         {
             let path = p.to_string_lossy().to_string();
@@ -175,6 +246,37 @@ impl App {
                 a.count,
                 a.payload.len(),
                 crate::can::frame::FrameFlags::NONE.tag(),
+            ));
+        }
+        // Ethernet flows follow the same scope rule as the other two kinds:
+        // All buses includes them, a CAN or cluster scope does not, and an
+        // Ethernet scope keeps its own. There is no address column in a flow,
+        // so `id` carries the EtherType and the VLAN lives in the name.
+        for a in self
+            .snap
+            .eth_aggs
+            .iter()
+            .filter(|a| Self::scope_match_eth(scope, manual, &a.key))
+        {
+            let (cmin, cavg, cmax) = if a.count > 1 {
+                (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            let name = format!(
+                "VLAN {}  {}",
+                a.key
+                    .vlan
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                self.eth_flow_name(&a.key)
+            );
+            s.push_str(&format!(
+                "{},0x{:04X},{name},{},{cmin:.3},{cavg:.3},{cmax:.3},{},-\n",
+                self.eth_bus_label(a.key.bus),
+                a.key.ethertype,
+                a.count,
+                a.key.len,
             ));
         }
         self.write_export(path, s);
@@ -289,6 +391,61 @@ impl App {
                     data
                 ));
             }
+        }
+        // Ethernet flows join the same table after CAN and FlexRay. A flow
+        // has no id, so the EtherType fills that column and the VLAN rides
+        // in the name -- the same facts the window's text filter matches.
+        for agg in &self.snap.eth_aggs {
+            if !Self::scope_match_eth(scope, manual, &agg.key) {
+                continue;
+            }
+            if dbc_only && self.eth_flow_def(agg.key.bus, &agg.key).is_none() {
+                continue;
+            }
+            let macs = format!(
+                "{} > {}",
+                crate::eth::db::mac_text(&agg.key.src),
+                crate::eth::db::mac_text(&agg.key.dst)
+            );
+            let name = format!(
+                "VLAN {}  {}",
+                agg.key
+                    .vlan
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                self.eth_flow_name(&agg.key)
+            );
+            if !filter.is_empty() {
+                let hay = format!(
+                    "eth{} {} {} vlan {:?} 0x{:04X}",
+                    agg.key.bus, macs, name, agg.key.vlan, agg.key.ethertype
+                )
+                .to_lowercase();
+                if !hay.contains(&filter) {
+                    continue;
+                }
+            }
+            let cycle = if agg.count > 1 {
+                agg.cycle_us / 1000.0
+            } else {
+                0.0
+            };
+            let data: String = agg
+                .payload
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            s.push_str(&format!(
+                "{},0x{:04X},{},{},{},{cycle:.3},{},-,{}\n",
+                self.eth_bus_label(agg.key.bus),
+                agg.key.ethertype,
+                name,
+                "-",
+                agg.count,
+                agg.key.len,
+                data
+            ));
         }
         self.write_export(path, s);
     }
@@ -546,4 +703,21 @@ impl App {
             self.export_spec_csv(&p.to_string_lossy());
         }
     }
+}
+
+/// One captured frame as Ethernet II bytes for a PCAP record: MACs, an
+/// 802.1Q tag when the frame carried a VLAN (the capture model keeps the vid,
+/// not the original TPID), EtherType and payload. The FCS is not stored in the
+/// ring and is not invented here.
+fn eth_l2_bytes(f: &crate::eth::EthFrame) -> Vec<u8> {
+    let mut out = Vec::with_capacity(14 + usize::from(f.vlan.is_some()) * 4 + f.payload.len());
+    out.extend_from_slice(&f.dst);
+    out.extend_from_slice(&f.src);
+    if let Some(vlan) = f.vlan {
+        out.extend_from_slice(&f.vlan_tpid.unwrap_or(0x8100).to_be_bytes());
+        out.extend_from_slice(&vlan.to_be_bytes());
+    }
+    out.extend_from_slice(&f.ethertype.to_be_bytes());
+    out.extend_from_slice(&f.payload);
+    out
 }

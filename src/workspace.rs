@@ -1320,16 +1320,21 @@ impl App {
     /// when the flow matches exactly one definition, the count when it is
     /// ambiguous, and the MAC pair when nothing describes it.
     pub(crate) fn eth_row_name(&self, f: &crate::eth::EthFrame) -> String {
-        let key = crate::aggregate::EthFlowKey::of_frame(f);
+        self.eth_flow_name(&crate::aggregate::EthFlowKey::of_frame(f))
+    }
+
+    /// The same label for a flow key, shared by rows, pickers and CSV exports
+    /// so a name cannot differ between what is shown and what is written.
+    pub(crate) fn eth_flow_name(&self, key: &crate::aggregate::EthFlowKey) -> String {
         let macs = format!(
             "{} > {}",
-            crate::eth::db::mac_text(&f.src),
-            crate::eth::db::mac_text(&f.dst)
+            crate::eth::db::mac_text(&key.src),
+            crate::eth::db::mac_text(&key.dst)
         );
-        let Some(db) = self.eth_db(f.bus) else {
+        let Some(db) = self.eth_db(key.bus) else {
             return macs;
         };
-        match db.match_flow(&eth_flow(&key), self.eth_length_includes_header) {
+        match db.match_flow(&eth_flow(key), self.eth_length_includes_header) {
             crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
             crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} 个候选>  {macs}"),
             crate::eth::db::EthMatch::None => macs,

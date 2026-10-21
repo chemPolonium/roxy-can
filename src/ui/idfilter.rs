@@ -452,15 +452,15 @@ fn message_content(view: &mut IdFilterView, app: &App, ui: &Ui, cmds: &mut Vec<I
 /// What an Ethernet flow's picker row says: its matrix frame name when the
 /// flow matches exactly one definition, else the MAC pair, always with the bus.
 fn eth_flow_label(app: &App, key: &crate::aggregate::EthFlowKey) -> String {
-    let macs = format!(
-        "{} > {}",
-        crate::eth::db::mac_text(&key.src),
-        crate::eth::db::mac_text(&key.dst)
-    );
-    match app.eth_flow_def(key.bus, key) {
-        Some(def) => format!("{}  {}  {macs}", app.eth_bus_label(key.bus), def.name),
-        None => format!("{}  {macs}", app.eth_bus_label(key.bus)),
-    }
+    let vlan = key
+        .vlan
+        .map(|v| format!("VLAN {v}"))
+        .unwrap_or_else(|| "无 VLAN".to_string());
+    format!(
+        "{}  {vlan}  {}",
+        app.eth_bus_label(key.bus),
+        app.eth_flow_name(key)
+    )
 }
 
 /// Whether an Ethernet flow answers a picker query: its frame name, MAC pair,

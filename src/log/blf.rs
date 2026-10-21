@@ -510,6 +510,9 @@ fn decode_eth_frame(body: &[u8], t_us: u64) -> Option<crate::eth::EthFrame> {
         payload,
     );
     frame.truncated = take < payload_len;
+    if vlan.is_some() {
+        frame.vlan_tpid = Some(tpid);
+    }
     Some(frame)
 }
 
@@ -2553,8 +2556,14 @@ mod eth_tests {
         assert_eq!(f.src, [1, 2, 3, 4, 5, 6]);
         assert_eq!(f.dst, [9, 8, 7, 6, 5, 4]);
         assert_eq!(f.vlan, Some(100));
+        assert_eq!(f.vlan_tpid, Some(0x8100), "the C-VLAN tag is preserved");
         assert_eq!(f.ethertype, 0x88B5);
         assert_eq!(&*f.payload, &[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        // An S-VLAN is a different tag and must not come back as a C-VLAN.
+        body[18..20].copy_from_slice(&0x88A8u16.to_le_bytes());
+        let s = decode_eth_frame(&body, 1_234).expect("decoded");
+        assert_eq!(s.vlan_tpid, Some(0x88A8));
         assert!(!f.truncated);
     }
 }

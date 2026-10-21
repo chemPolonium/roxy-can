@@ -20,6 +20,7 @@
 - **Profile 与硬件映射**：`profiles/<名>.toml` 存角色覆盖与硬件映射，配合 `--profile` 让同一份工程在仿真 / 台架 / CI 之间零修改切换；错配整份拒绝，绝不只生效一半。
 - **Kvaser / Vector 硬件连接**：Buses 窗口选通道即连接；通道被别的程序占用时自动降级为仅接收并在行上标注；CAN FD 按总线的数据段波特率申请，硬件不支持就降级经典并标注。连接期间收到的帧照常进入所有视图，真实节点不必被模拟。发送被线路拒绝不再是静默的：第一次写入 Write 窗口带驱动给的原因，之后只在 Buses 行上累计次数。
 - **FlexRay**：可同时监听多路，每路一份自己的集群描述（FIBEX 2.x/3.x 或 AUTOSAR ARXML，中文编码无碍）。帧名与信号都按该路的描述解码，与 CAN 帧在 Trace 里按时间混排；Messages 逐帧给计数与周期均值±抖动，负载与规格照常判定；信号可订阅画曲线、进 State Tracker；帧到达与信号越阈都能作触发条件。**目前仅接收**：生成器条目与脚本发的 FlexRay 帧只进入本会话（所有视图与录制都看得见），但不出端口、不会被另一台设备收到。
+- **车载以太网**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML），离线 BLF 的以太网帧按 VLAN/长度/EtherType 匹配帧定义并解码 PDU/I-Signal；帧与 CAN/FlexRay 在 Trace 同表按时间混排，Messages/Statistics 有 flow 行，信号可订阅画曲线；Trace 导出 `.pcap`（MAC/VLAN/EtherType/载荷），ASC 导出负责 CAN/FlexRay。`FRAME-LENGTH 含 L2 头` 随工程保存。
 - **回放块**：依附于 DBC 节点——把该节点录制过的日志按 id 过滤后重新发到仿真总线上，按录制间距发送，仿真 restbus 的落地方案。
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Graphics / Data / State Tracker。
@@ -27,7 +28,7 @@
 - **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色规则让"温度超 90 变红"这类告警一眼可见。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
-- **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧，以及 FlexRay 收帧），自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、as-fast-as-possible；回放按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，Buses 窗口底部的**回放通道映射**把那些编号指到本工程的各路（随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
+- **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧，以及 FlexRay 收帧），自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、as-fast-as-possible；回放按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，Buses 窗口底部的**回放通道映射**把那些编号指到本工程的各路（CAN、FlexRay、以太网各一张表，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
 - **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON；DBC 路径相对工程目录，工程文件夹可整体移动；30 秒自动保存。
 - **多桌面**：多个桌面工作区，各自记住窗口开关与布局。
 - **中文字体**：内嵌中文字形，支持中文输入法。
@@ -41,7 +42,7 @@
 | - / + | 回放减速 / 加速一档 |
 | Home | 图形窗口回到实时边缘 |
 | Ctrl+R | 切换录制 |
-| Ctrl+E | 导出第一个 Trace 窗口为 ASC |
+| Ctrl+E | 导出第一个 Trace 窗口（ASC 或 PCAP） |
 | Ctrl+O | 打开 DBC |
 | Ctrl+N / Ctrl+Shift+O | 新建 / 打开工程 |
 | Ctrl+S / Ctrl+Shift+S | 保存 / 另存工程 |

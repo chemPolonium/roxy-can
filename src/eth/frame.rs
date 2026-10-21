@@ -19,6 +19,10 @@ pub struct EthFrame {
     pub dst: [u8; 6],
     pub src: [u8; 6],
     pub vlan: Option<u16>,
+    /// The VLAN tag protocol id the capture carried (0x8100 C-VLAN,
+    /// 0x88A8 S-VLAN). Kept so an export writes the tag back with the same
+    /// meaning; absent on frames created by this program without a capture.
+    pub vlan_tpid: Option<u16>,
     pub ethertype: u16,
     pub payload: Arc<[u8]>,
     /// Assignment order in the capture ring: the identity a Trace pick uses
@@ -47,6 +51,7 @@ impl EthFrame {
             dst,
             src,
             vlan,
+            vlan_tpid: None,
             ethertype,
             payload: payload.into(),
             seq: 0,

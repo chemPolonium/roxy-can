@@ -10723,3 +10723,148 @@ fn script_commands_reach_the_node_model_and_file() {
     app.settle();
     assert!(app.snap.nodes.iter().all(|n| n.id != id));
 }
+
+/// Trace export speaks PCAP when the chosen name ends in `.pcap`: Ethernet
+/// frames keep their MACs, VLAN tag, EtherType and payload, and the same
+/// Trace filter decides which records land in the file.
+#[test]
+fn export_trace_writes_pcap_for_ethernet() {
+    let mut app = App::headless();
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0xDE, 0xAD, 0xBE, 0xEF],
+    ));
+    app.ingest_eth(crate::eth::EthFrame::new(
+        2_000,
+        1,
+        crate::can::frame::Direction::Tx,
+        [0xAA; 6],
+        [0xBB; 6],
+        None,
+        0x88B5,
+        vec![0x01, 0x02],
+    ));
+    app.refresh_snapshot();
+
+    let path = std::env::temp_dir().join(format!("roxy_can_eth_{}.pcap", std::process::id()));
+    app.export_trace(0, &path.to_string_lossy());
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        &bytes[0..4],
+        &[0xd4, 0xc3, 0xb2, 0xa1],
+        "little-endian magic"
+    );
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 2);
+    assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), 4);
+    assert_eq!(
+        u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
+        1,
+        "LINKTYPE_ETHERNET"
+    );
+
+    fn records(bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut off = 24usize;
+        while off + 16 <= bytes.len() {
+            let len = u32::from_le_bytes(bytes[off + 8..off + 12].try_into().unwrap()) as usize;
+            let orig = u32::from_le_bytes(bytes[off + 12..off + 16].try_into().unwrap()) as usize;
+            assert_eq!(len, orig, "nothing was truncated in the record header");
+            off += 16;
+            out.push(bytes[off..off + len].to_vec());
+            off += len;
+        }
+        assert_eq!(off, bytes.len(), "no trailing bytes");
+        out
+    }
+
+    let all = records(&bytes);
+    assert_eq!(all.len(), 2, "both frames exported, oldest first");
+    let tagged = &all[0];
+    assert_eq!(&tagged[0..6], &[9, 8, 7, 6, 5, 4], "destination MAC");
+    assert_eq!(&tagged[6..12], &[1, 2, 3, 4, 5, 6], "source MAC");
+    assert_eq!(&tagged[12..14], &[0x81, 0x00], "802.1Q TPID");
+    assert_eq!(&tagged[14..16], &[0x00, 0x64], "VLAN 100");
+    assert_eq!(&tagged[16..18], &[0x08, 0x00], "EtherType");
+    assert_eq!(&tagged[18..], &[0xDE, 0xAD, 0xBE, 0xEF]);
+    let plain = &all[1];
+    assert_eq!(plain.len(), 14 + 2, "untagged frame has no VLAN tag");
+    assert_eq!(&plain[0..6], &[0xAA; 6]);
+    assert_eq!(&plain[6..12], &[0xBB; 6]);
+    assert_eq!(&plain[12..14], &[0x88, 0xB5]);
+
+    // The Trace filter narrows the capture: only the 0x88B5 flow remains.
+    app.trace_windows[0].filter = "88B5".to_string();
+    let filtered =
+        std::env::temp_dir().join(format!("roxy_can_eth_filtered_{}.pcap", std::process::id()));
+    app.export_trace(0, &filtered.to_string_lossy());
+    let filtered_bytes = std::fs::read(&filtered).unwrap();
+    let only = records(&filtered_bytes);
+    assert_eq!(only.len(), 1);
+    assert_eq!(&only[0][12..14], &[0x88, 0xB5]);
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&filtered).ok();
+}
+
+/// Messages and Statistics CSV include Ethernet flows under the same scope
+/// rules as their windows, with the EtherType in the id column and the VLAN
+/// in the name.
+#[test]
+fn ethernet_flows_reach_messages_and_statistics_csv() {
+    let mut app = App::headless();
+    for t in [1_000u64, 2_000] {
+        app.ingest_eth(crate::eth::EthFrame::new(
+            t,
+            0,
+            crate::can::frame::Direction::Rx,
+            [9, 8, 7, 6, 5, 4],
+            [1, 2, 3, 4, 5, 6],
+            Some(100),
+            0x0800,
+            vec![0xAA; 8],
+        ));
+    }
+    app.refresh_snapshot();
+
+    let msgs = std::env::temp_dir().join(format!("roxy_eth_msgs_{}.csv", std::process::id()));
+    app.export_messages_csv(0, &msgs.to_string_lossy());
+    let text = std::fs::read_to_string(&msgs).unwrap();
+    let row = text
+        .lines()
+        .find(|l| l.starts_with("ETH0,0x0800,"))
+        .unwrap_or_else(|| panic!("no Ethernet row in Messages CSV:\n{text}"));
+    assert!(row.contains("VLAN 100"), "the VLAN rides the name: {row}");
+    assert!(row.contains("01:02:03:04:05:06 > 09:08:07:06:05:04"));
+    assert!(row.contains(",2,"), "two arrivals counted: {row}");
+    std::fs::remove_file(&msgs).ok();
+
+    let stats = std::env::temp_dir().join(format!("roxy_eth_stats_{}.csv", std::process::id()));
+    app.export_stats_csv(0, &stats.to_string_lossy());
+    let text = std::fs::read_to_string(&stats).unwrap();
+    let row = text
+        .lines()
+        .find(|l| l.starts_with("ETH0,0x0800,"))
+        .unwrap_or_else(|| panic!("no Ethernet row in Statistics CSV:\n{text}"));
+    assert!(row.contains("VLAN 100"));
+    assert!(row.contains(",2,"), "two arrivals counted: {row}");
+    std::fs::remove_file(&stats).ok();
+
+    // A CAN-bus scope is a different cable: Ethernet leaves both exports.
+    app.msg_windows[0].scope = crate::app::SigScope::Bus(0);
+    app.stats_windows[0].scope = crate::app::SigScope::Bus(0);
+    let msgs =
+        std::env::temp_dir().join(format!("roxy_eth_msgs_scoped_{}.csv", std::process::id()));
+    app.export_messages_csv(0, &msgs.to_string_lossy());
+    assert!(!std::fs::read_to_string(&msgs).unwrap().contains("ETH0"));
+    std::fs::remove_file(&msgs).ok();
+    let stats =
+        std::env::temp_dir().join(format!("roxy_eth_stats_scoped_{}.csv", std::process::id()));
+    app.export_stats_csv(0, &stats.to_string_lossy());
+    assert!(!std::fs::read_to_string(&stats).unwrap().contains("ETH0"));
+    std::fs::remove_file(&stats).ok();
+}

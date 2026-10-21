@@ -30,7 +30,8 @@
 - **帧匹配**：AUTOSAR 的 `ETHERNET-FRAME` 不含 MAC/EtherType，捕获帧只能按 flow key + 打分匹配；歧义必须由项目覆盖解决，不能猜。
 - **FRAME-LENGTH**：项目级开关已加（Buses「FRAME-LENGTH 含 L2 头」，随工程保存），声明长度含 14 字节头时按「-14」匹配。
 - **回放通道映射**：CAN / FlexRay / 以太网三套日志编号都能在 Buses 映射到本工程的路；以太网帧先映射再解码，静音与计数按文件编号。
-- **Trace/作用域**：CAN/FlexRay/Ethernet 已合并在同一张按时间排序的表；作用域提供 `Ethernet: ETHn`，Manual 以 L2 flow 为选择键并随工程保存。Export Trace 仍只写 CAN/FlexRay（ASC 尚无以太网记录格式）。
+- **Trace/作用域**：CAN/FlexRay/Ethernet 已合并在同一张按时间排序的表；作用域提供 `Ethernet: ETHn`，Manual 以 L2 flow 为选择键并随工程保存。Trace 导出按扩展名选格式：`.asc` 写 CAN/FlexRay，`.pcap` 写以太网；Messages/Statistics CSV 同样包含以太网 flow。
+- **导出保真**：PCAP 为经典格式，不写 FCS，也不带方向位（Rx/Tx 都按线上帧导出）；S-VLAN/C-VLAN 的 TPID 从 BLF 保留。
 - **后续**：Container/Multiplexed/Secured 以太网解码；SoAd/socket/SOME-IP；TSN/交换机拓扑；ARXML 写回与完整矩阵往返。
 
 ## ARXML 通信层（审计见 `docs/arxml-communication-audit.md`）
