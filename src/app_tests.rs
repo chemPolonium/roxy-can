@@ -7791,6 +7791,7 @@ fn cache_shape(app: &App) -> Vec<(u64, u8, u32, String)> {
                     out.push((f.t_us, 2, u32::from(f.slot), format!("{signal}={value}")));
                 }
             }
+            TraceRow::Eth(f) => out.push((f.t_us, 3, u32::from(f.ethertype), app.eth_row_name(f))),
         }
     }
     out
@@ -10426,4 +10427,102 @@ fn messages_and_statistics_list_ethernet_flows() {
             .any(|r| r.bus == "ETH0"),
         "Statistics lists the Ethernet flow"
     );
+}
+
+/// The three streams share one Trace list, interleaved by time, and the
+/// scope/manual filters name Ethernet flows by their L2 identity. A frame
+/// stamped between a CAN and a FlexRay arrival must land between them, or the
+/// merged table is just three tables wearing one header.
+#[test]
+fn trace_merges_ethernet_rows_and_scopes_them_by_flow() {
+    let mut app = App::headless();
+    app.new_trace_window();
+    app.trace_windows[0].manual.clear();
+    app.trace_windows[0].scope = SigScope::All;
+    {
+        let mut f = crate::can::frame::CanFrame {
+            t_us: 1_000,
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            len: 2,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: crate::can::frame::Direction::Rx,
+            flags: FrameFlags::NONE,
+        };
+        f.data[0] = 0xAA;
+        app.ingest(f, 1_000);
+    }
+    app.ingest_fr_row(crate::trace::FrRow {
+        t_us: 1_500,
+        bus: 0,
+        slot: 13,
+        cycle: 0,
+        ab: 0,
+        payload: vec![0x11; 8],
+        header_crc: 0,
+        flags: 0,
+        name: None,
+    });
+    app.ingest_eth(crate::eth::EthFrame::new(
+        2_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0x22; 8],
+    ));
+    app.refresh_snapshot();
+    app.text_fresh = true;
+    app.sync_trace_rows(0);
+
+    let shape: Vec<(u64, u8)> = app.trace_windows[0]
+        .rows
+        .iter()
+        .map(|r| match r {
+            TraceRow::Can(f) => (f.t_us, 0),
+            TraceRow::Fr(r, _) => (r.t_us, 1),
+            TraceRow::Eth(f) => (f.t_us, 2),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [(2_000, 2), (1_500, 1), (1_000, 0)],
+        "newest first, with Ethernet between the other two arrivals"
+    );
+    let eth_frame = match &app.trace_windows[0].rows[0] {
+        TraceRow::Eth(f) => f.clone(),
+        other => panic!("newest row should be Ethernet, got {other:?}"),
+    };
+
+    // One Ethernet bus scope keeps that bus's flow and drops the other
+    // streams; the cache rebuilds because the lens changed.
+    app.trace_windows[0].scope = SigScope::EthBus(0);
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 1);
+    assert!(matches!(app.trace_windows[0].rows[0], TraceRow::Eth(_)));
+
+    // A CAN bus scope is a different cable and drops Ethernet entirely.
+    app.trace_windows[0].scope = SigScope::Bus(0);
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 1);
+    assert!(matches!(app.trace_windows[0].rows[0], TraceRow::Can(_)));
+
+    // Manual picks the captured flow, the same key Messages/Statistics use.
+    let pick = crate::workspace::Pick::Eth(crate::aggregate::EthFlowKey::of_frame(&eth_frame));
+    app.trace_windows[0].manual.insert(pick);
+    app.trace_windows[0].scope = SigScope::Manual;
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 1);
+    assert!(matches!(app.trace_windows[0].rows[0], TraceRow::Eth(_)));
+
+    // Text finds the row through the Ethernet numbers the columns show,
+    // which no CAN name or id would match.
+    app.trace_windows[0].scope = SigScope::All;
+    app.trace_windows[0].filter = "0800".to_string();
+    app.sync_trace_rows(0);
+    assert_eq!(app.trace_windows[0].rows.len(), 1);
+    assert!(matches!(app.trace_windows[0].rows[0], TraceRow::Eth(_)));
 }

@@ -18,15 +18,15 @@ struct TreeMsg {
 }
 
 /// Shared "Signals" selector used by Trace/Messages/Statistics: All buses /
-/// one CAN channel / one FlexRay cluster / Manual selection. The "…" button
-/// opens the Message Selection popup bound to `target`; selecting messages
-/// there switches the window to Manual.
+/// one CAN channel / one FlexRay cluster / one Ethernet bus / Manual
+/// selection. The "…" button opens the Message Selection popup bound to
+/// `target`; selecting messages there switches the window to Manual.
 ///
-/// The two bus numbering spaces are separate entries: a FlexRay cluster index
-/// and a CAN channel index are different numbers for different cables, so
-/// picking one here must not silently decide what the other shows. A scope
-/// naming a channel that no longer exists reads back as All buses -- the
-/// widest view, never a hidden row.
+/// The three bus numbering spaces are separate entries: a FlexRay cluster
+/// index and an Ethernet bus index are different numbers for different
+/// cables, so picking one here must not silently decide what the others
+/// show. A scope naming a bus that no longer exists reads back as All buses
+/// -- the widest view, never a hidden row.
 pub fn scope_combo(
     app: &App,
     ui: &Ui,
@@ -44,6 +44,10 @@ pub fn scope_combo(
     for bus in app.fr_scope_buses(scope) {
         items.push(format!("FlexRay: {}", app.fr_bus_name(bus)));
         kinds.push(SigScope::FrBus(bus));
+    }
+    for bus in app.eth_scope_buses(scope) {
+        items.push(format!("Ethernet: {}", app.eth_bus_label(bus)));
+        kinds.push(SigScope::EthBus(bus));
     }
     let n = app.win_manual(target).map(|m| m.len()).unwrap_or(0);
     items.push(format!("Manual ({n})"));
@@ -194,6 +198,15 @@ fn message_content(app: &mut App, ui: &Ui) {
                 .into_iter()
                 .map(|(bus, slot, _)| crate::workspace::Pick::Fr { bus, slot }),
         );
+        // Ethernet flows the same query offers: one pick per captured L2
+        // flow, which is the unit a Trace row and a Messages tally share.
+        keys.extend(
+            app.snap
+                .eth_aggs
+                .iter()
+                .filter(|a| eth_flow_matches(app, &a.key, &q))
+                .map(|a| crate::workspace::Pick::Eth(a.key)),
+        );
         if let Some(m) = app.win_manual_mut(target) {
             for k in keys {
                 m.insert(k);
@@ -322,6 +335,77 @@ fn message_content(app: &mut App, ui: &Ui) {
             }
         }
     }
+
+    // The Ethernet flows the same query offers. A flow has no address or
+    // slot, so its L2 identity is the pick -- the identical key Messages,
+    // Statistics and Trace filter that row by.
+    let eth_rows: Vec<(crate::aggregate::EthFlowKey, String)> = app
+        .snap
+        .eth_aggs
+        .iter()
+        .filter(|a| eth_flow_matches(app, &a.key, &q))
+        .map(|a| (a.key, eth_flow_label(app, &a.key)))
+        .collect();
+    if !eth_rows.is_empty() {
+        ui.separator();
+        ui.text_colored([0.90, 0.70, 0.30, 1.0], "Ethernet");
+        for (flow, label) in &eth_rows {
+            let key = crate::workspace::Pick::Eth(*flow);
+            let mut on = app.win_manual(target).is_some_and(|m| m.contains(&key));
+            let label = format!("{label}##ethsel{}", eth_flow_tag(flow));
+            if ui.checkbox(label, &mut on) {
+                if let Some(m) = app.win_manual_mut(target) {
+                    if on {
+                        m.insert(key);
+                    } else {
+                        m.remove(&key);
+                    }
+                }
+                set_target_scope(app, SigScope::Manual);
+            }
+        }
+    }
+}
+
+/// What an Ethernet flow's picker row says: its matrix frame name when the
+/// flow matches exactly one definition, else the MAC pair, always with the bus.
+fn eth_flow_label(app: &App, key: &crate::aggregate::EthFlowKey) -> String {
+    let macs = format!(
+        "{} > {}",
+        crate::eth::db::mac_text(&key.src),
+        crate::eth::db::mac_text(&key.dst)
+    );
+    match app.eth_flow_def(key.bus, key) {
+        Some(def) => format!("{}  {}  {macs}", app.eth_bus_label(key.bus), def.name),
+        None => format!("{}  {macs}", app.eth_bus_label(key.bus)),
+    }
+}
+
+/// Whether an Ethernet flow answers a picker query: its frame name, MAC pair,
+/// bus label, VLAN and EtherType -- the same facts the Trace text filter reads.
+fn eth_flow_matches(app: &App, key: &crate::aggregate::EthFlowKey, q: &str) -> bool {
+    q.is_empty()
+        || eth_flow_label(app, key).to_ascii_uppercase().contains(q)
+        || format!("{:04X}", key.ethertype).contains(q)
+        || key.vlan.is_some_and(|v| v.to_string().contains(q))
+}
+
+/// A compact, stable widget-id token for one flow. Names repeat (two VLANs can
+/// carry the same frame definition), so the label alone cannot key the row.
+fn eth_flow_tag(key: &crate::aggregate::EthFlowKey) -> String {
+    let macs: String = key.src.iter().map(|b| format!("{b:02X}")).collect();
+    let dmacs: String = key.dst.iter().map(|b| format!("{b:02X}")).collect();
+    format!(
+        "{}_{}_{}_{}_{:04X}_{}",
+        key.bus,
+        key.vlan
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".into()),
+        macs,
+        dmacs,
+        key.ethertype,
+        key.len
+    )
 }
 
 /// The FlexRay slots a query offers, as `(bus, slot, frame names)`. Both the

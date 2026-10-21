@@ -8,7 +8,7 @@ use crate::ui::idfilter::scope_combo;
 use crate::workspace::TraceWin;
 use dear_imgui_rs::{
     Condition, ListClipper, SortDirection, TableColumnFlags, TableFlags, TableOptions,
-    TableSizingPolicy, TreeNodeFlags, Ui,
+    TableSizingPolicy, Ui,
 };
 
 /// Window index and frame targeted by the row context menu; must survive
@@ -16,6 +16,8 @@ use dear_imgui_rs::{
 static CTX: Mutex<Option<(usize, CanFrame)>> = Mutex::new(None);
 /// Same, for FlexRay rows (their menu only copies address and payload).
 static CTX_FR: Mutex<Option<(usize, crate::trace::FrRow)>> = Mutex::new(None);
+/// Same, for Ethernet rows.
+static CTX_ETH: Mutex<Option<(usize, crate::eth::EthFrame)>> = Mutex::new(None);
 
 pub enum TraceCmd {
     ClearTrace,
@@ -198,6 +200,25 @@ fn fmt_fr_row(app: &App, r: &crate::trace::FrRow) -> String {
     )
 }
 
+/// One Ethernet frame as plain text, [`fmt_row`]'s L2 twin.
+fn fmt_eth_row(app: &App, f: &crate::eth::EthFrame) -> String {
+    let hex: String = f.payload.iter().map(|b| format!("{b:02X} ")).collect();
+    format!(
+        "{:.6}  {}  {} > {}  vlan {}  0x{:04X}  {}  {}  {}",
+        f.t_us as f64 / 1e6,
+        app.eth_bus_label(f.bus),
+        crate::eth::db::mac_text(&f.src),
+        crate::eth::db::mac_text(&f.dst),
+        f.vlan
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        f.ethertype,
+        app.eth_row_name(f),
+        f.len(),
+        hex.trim_end()
+    )
+}
+
 /// One trace row as plain text, used for "Copy row".
 fn fmt_row(app: &App, f: &CanFrame) -> String {
     let tag = f.flags.tag();
@@ -220,9 +241,9 @@ fn fmt_row(app: &App, f: &CanFrame) -> String {
 
 impl TraceWin {
     fn content(&mut self, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<TraceCmd>) {
-        // CAN and FlexRay rows share the one table, interleaved by time --
-        // the row cache is a merged, filtered TraceRow list (see
-        // `App::sync_trace_rows`), so no separate FR section exists here.
+        // CAN, FlexRay and Ethernet rows share the one table, interleaved by
+        // time -- the row cache is a merged, filtered TraceRow list (see
+        // `App::sync_trace_rows`), so no separate Ethernet/FR section exists.
         can_table(self, app, ui, i, cmds);
     }
 }
@@ -412,7 +433,6 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
     if ui.button(format!("Export##tx{i}")) {
         cmds.push(TraceCmd::Export(i));
     }
-    eth_section(app, ui, win);
     ui.separator();
 
     // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
@@ -666,6 +686,79 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
                 }
                 can_ctx = None;
             }
+            TraceRow::Eth(f) => {
+                // A warm tint keeps the Ethernet stream apart from the CAN and
+                // FlexRay rows it is interleaved with.
+                ui.table_set_row_bg1_color([0.65, 0.45, 0.10, 0.18]);
+                if let Some(tint) = mark_tint(mark_us, f.t_us) {
+                    ui.table_set_row_bg1_color(tint);
+                }
+                let here = TracePick::of(row);
+                if picked == Some(here) {
+                    ui.table_set_row_bg0_color(PICK_COLOR);
+                }
+                if !ui.table_next_column() {
+                    continue;
+                }
+                ui.text(format!("{:.6}", f.t_us as f64 / 1e6));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text_colored([0.95, 0.75, 0.35, 1.0], app.eth_bus_label(f.bus));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(format!("0x{:04X}", f.ethertype));
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(app.eth_row_name(f));
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(format!(
+                        "{} > {}   VLAN {}",
+                        crate::eth::db::mac_text(&f.src),
+                        crate::eth::db::mac_text(&f.dst),
+                        f.vlan
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    ));
+                }
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                ui.text(f.len().to_string());
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                if f.truncated {
+                    ui.text_colored([1.0, 0.55, 0.35, 1.0], "Trunc");
+                } else {
+                    ui.text("-");
+                }
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                // Jumbo frames are legal here; the cell previews the head of
+                // the payload rather than formatting thousands of bytes per
+                // row per frame. Copy takes the whole thing.
+                let shown = f.len().min(64);
+                let mut hex: String = f.payload[..shown]
+                    .iter()
+                    .map(|b| format!("{b:02X} "))
+                    .collect();
+                if shown < f.len() {
+                    hex.push('…');
+                }
+                ui.text(hex.trim_end());
+                hovered |= ui.is_item_hovered();
+                ui.table_next_column();
+                match f.dir {
+                    Direction::Rx => ui.text_colored([0.6, 0.65, 0.7, 1.0], "Rx"),
+                    Direction::Tx => ui.text_colored([1.0, 0.65, 0.2, 1.0], "Tx"),
+                }
+                if hovered && ui.is_mouse_released(dear_imgui_rs::MouseButton::Right) {
+                    *CTX_ETH.lock().unwrap() = Some((i, f.clone()));
+                    ui.open_popup(format!("trace_eth_ctx{i}"));
+                }
+                if hovered && ui.is_mouse_clicked(dear_imgui_rs::MouseButton::Left) {
+                    picked = Some(here);
+                }
+                can_ctx = None;
+            }
         }
         if let Some(f) = can_ctx {
             *CTX.lock().unwrap() = Some((i, f));
@@ -693,6 +786,7 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
             let text = match row {
                 TraceRow::Can(f) => fmt_row(app, f),
                 TraceRow::Fr(r, _) => fmt_fr_row(app, r),
+                TraceRow::Eth(f) => fmt_eth_row(app, f),
             };
             crate::clipboard::Clipboard.set(&text);
         }
@@ -818,20 +912,69 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
             crate::clipboard::Clipboard.set(&fmt_id(&f));
         }
     }
+
+    // The Ethernet row menu: the flow's identity, the window narrowed to it,
+    // and its payload/copy actions.
+    if let Some(_p) = ui.begin_popup(format!("trace_eth_ctx{i}"))
+        && let Some((pi, f)) = CTX_ETH.lock().unwrap().clone()
+        && pi == i
+    {
+        let name = app.eth_row_name(&f);
+        ui.text(format!(
+            "{}  {} > {}  0x{:04X}",
+            app.eth_bus_label(f.bus),
+            crate::eth::db::mac_text(&f.src),
+            crate::eth::db::mac_text(&f.dst),
+            f.ethertype
+        ));
+        ui.text_disabled(&name);
+        ui.separator();
+        if ui.menu_item("Watch this flow") {
+            // The Ethernet twin of the FlexRay row's pick: the L2 flow, not a
+            // name, so the window's Manual scope admits exactly this stream.
+            let w = &mut *win;
+            w.manual.insert(crate::workspace::Pick::Eth(
+                crate::aggregate::EthFlowKey::of_frame(&f),
+            ));
+            w.scope = SigScope::Manual;
+        }
+        cursor_menu(win, ui, f.t_us);
+        if ui.menu_item("Clear filter") {
+            clear_filter_win(win);
+        }
+        let hex: String = f.payload.iter().map(|b| format!("{b:02X} ")).collect();
+        if ui.menu_item("Copy payload") {
+            crate::clipboard::Clipboard.set(hex.trim_end());
+        }
+        if ui.menu_item("Copy MACs") {
+            crate::clipboard::Clipboard.set(&format!(
+                "{} > {}",
+                crate::eth::db::mac_text(&f.src),
+                crate::eth::db::mac_text(&f.dst)
+            ));
+        }
+        ui.separator();
+        if ui.menu_item("Copy row") {
+            crate::clipboard::Clipboard.set(&fmt_eth_row(app, &f));
+        }
+    }
 }
 
 fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> Ordering {
-    // Bus sort keeps FR rows together after every CAN bus; the address
-    // column is a CAN id or an FR slot, both u32s. A FlexRay frame row sorts as
-    // the frame -- its decoded children are not rows of the list, so they follow
-    // their parent instead of scattering among the rows its value sorts next to.
+    // Bus sort keeps FR rows together after every CAN bus and Ethernet rows
+    // after every FlexRay cluster; the address column is a CAN id, an FR slot
+    // or an EtherType. A frame row sorts as the frame -- its decoded children
+    // are not rows of the list, so they follow their parent instead of
+    // scattering among the rows its value sorts next to.
     let bus = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.channel as u32,
         TraceRow::Fr(r, _) => 0x1000 + u32::from(r.ab),
+        TraceRow::Eth(f) => 0x2000 + u32::from(f.bus),
     };
     let addr = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.id,
         TraceRow::Fr(r, _) => u32::from(r.slot),
+        TraceRow::Eth(f) => u32::from(f.ethertype),
     };
     let name = |r: &TraceRow| match r {
         TraceRow::Can(f) => app
@@ -839,22 +982,26 @@ fn sort_frame(app: &App, col: usize, a: &TraceRow, b: &TraceRow, asc: bool) -> O
             .unwrap_or_default()
             .to_string(),
         TraceRow::Fr(f, _) => app.fr_row_name(f).unwrap_or_default().to_string(),
+        TraceRow::Eth(f) => app.eth_row_name(f),
     };
     let len = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.len as usize,
         TraceRow::Fr(r, _) => r.payload.len(),
+        TraceRow::Eth(f) => f.len(),
     };
     let flags_rank = |r: &TraceRow| match r {
         TraceRow::Can(f) => (f.is_fd(), f.esi(), f.brs()),
-        TraceRow::Fr(_, _) => (false, false, false),
+        TraceRow::Fr(_, _) | TraceRow::Eth(_) => (false, false, false),
     };
     let payload = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.payload().to_vec(),
         TraceRow::Fr(r, _) => r.payload.clone(),
+        TraceRow::Eth(f) => f.payload.to_vec(),
     };
     let dir = |r: &TraceRow| match r {
         TraceRow::Can(f) => f.dir as u8,
         TraceRow::Fr(_, _) => 0,
+        TraceRow::Eth(f) => f.dir as u8,
     };
     let ord = match col {
         0 => a.t_us().cmp(&b.t_us()),
@@ -910,133 +1057,6 @@ impl App {
     }
 }
 
-/// A first Ethernet view inside Trace: the newest captured frames, with the
-/// ARXML frame name when the flow matches exactly one definition. It lives
-/// above the CAN/FlexRay table until the three streams are merged into one.
-fn eth_section(app: &App, ui: &Ui, win: &TraceWin) {
-    let total = app.snap.eth_trace.len();
-    if total == 0 {
-        return;
-    }
-    if !ui.collapsing_header(
-        format!("Ethernet（{total} 帧）##trace_eth"),
-        TreeNodeFlags::DEFAULT_OPEN,
-    ) {
-        return;
-    }
-    let query = win.filter.trim().to_ascii_lowercase();
-    let rows: Vec<&crate::eth::EthFrame> = app
-        .snap
-        .eth_trace
-        .iter_rev()
-        .filter(|f| {
-            if query.is_empty() {
-                return true;
-            }
-            let name = eth_frame_name(app, f).to_ascii_lowercase();
-            let hay = format!(
-                "eth{} {} {} vlan {:?} 0x{:04X}",
-                f.bus,
-                mac_text(&f.src),
-                mac_text(&f.dst),
-                f.vlan,
-                f.ethertype
-            )
-            .to_ascii_lowercase();
-            hay.contains(&query) || name.contains(&query)
-        })
-        .take(500)
-        .collect();
-    ui.text_disabled(format!(
-        "显示最新 {} 条（环共 {total} 条，受上方过滤文本约束）",
-        rows.len()
-    ));
-    let flags = TableFlags::BORDERS_INNER
-        | TableFlags::ROW_BG
-        | TableFlags::RESIZABLE
-        | TableFlags::NO_BORDERS_IN_BODY
-        | TableFlags::SCROLL_Y;
-    let opts = TableOptions::from(flags).sizing_policy(TableSizingPolicy::StretchProp);
-    ui.child_window("trace_eth_child")
-        .size([0.0, 160.0])
-        .build(ui, || {
-            let Some(_t) = ui.begin_table_with_flags("trace_eth_table", 9, opts) else {
-                return;
-            };
-            for (label, width) in [
-                ("Time", 90.0),
-                ("Bus", 50.0),
-                ("Source", 120.0),
-                ("Destination", 120.0),
-                ("VLAN", 50.0),
-                ("Type", 62.0),
-                ("Len", 36.0),
-                ("Name", 130.0),
-            ] {
-                ui.table_setup_column_fixed_width(label, TableColumnFlags::NONE, width);
-            }
-            ui.table_setup_column_stretch_weight("Data", TableColumnFlags::NONE, 1.0);
-            ui.table_headers_row();
-            for f in rows {
-                ui.table_next_row();
-                if !ui.table_next_column() {
-                    continue;
-                }
-                ui.text(format!("{:.6}", f.t_us as f64 / 1e6));
-                ui.table_next_column();
-                ui.text(format!("ETH{}", f.bus));
-                ui.table_next_column();
-                ui.text(mac_text(&f.src));
-                ui.table_next_column();
-                ui.text(mac_text(&f.dst));
-                ui.table_next_column();
-                ui.text(
-                    f.vlan
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                );
-                ui.table_next_column();
-                ui.text(format!("0x{:04X}", f.ethertype));
-                ui.table_next_column();
-                ui.text(f.len().to_string());
-                ui.table_next_column();
-                ui.text(eth_frame_name(app, f));
-                ui.table_next_column();
-                ui.text(
-                    f.payload
-                        .iter()
-                        .map(|b| format!("{b:02X} "))
-                        .collect::<String>(),
-                );
-            }
-        });
-}
-
-fn mac_text(mac: &[u8; 6]) -> String {
-    mac.iter()
-        .map(|b| format!("{b:02X}"))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
-fn eth_frame_name(app: &App, f: &crate::eth::EthFrame) -> String {
-    let Some(db) = app.eth_db(f.bus) else {
-        return "-".to_string();
-    };
-    let flow = crate::eth::db::EthFlow {
-        vlan: f.vlan,
-        dst: f.dst,
-        src: f.src,
-        ethertype: f.ethertype,
-        payload_len: f.len(),
-    };
-    match db.match_flow(&flow, false) {
-        crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
-        crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} 个候选>"),
-        crate::eth::db::EthMatch::None => "-".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::mark_tint;
@@ -1078,6 +1098,21 @@ mod tests {
         )
     }
 
+    fn eth(t_us: u64, seq: u64) -> TraceRow {
+        let mut f = crate::eth::EthFrame::new(
+            t_us,
+            0,
+            Direction::Rx,
+            [0; 6],
+            [1; 6],
+            Some(1),
+            0x0800,
+            vec![0; 8],
+        );
+        f.seq = seq;
+        TraceRow::Eth(f)
+    }
+
     /// Up/Down walk the rows on screen, which is the cache list: newest-first,
     /// clamped at both ends, starting from the newest when nothing is picked, and
     /// re-anchoring at the newest when the picked row has left the list.
@@ -1116,6 +1151,8 @@ mod tests {
             bus: 0,
             addr: 0x7FF,
             fr: false,
+            eth: false,
+            seq: 0,
         };
         assert_eq!(
             step_pick(&rows, Some(gone), true),
@@ -1142,7 +1179,13 @@ mod tests {
     /// click -- the case the address now separates.)
     #[test]
     fn a_pick_names_one_row_at_a_shared_instant() {
-        let at_40 = [can(40, 0x100), can(40, 0x200), fr(40, 13, 3)];
+        let at_40 = [
+            can(40, 0x100),
+            can(40, 0x200),
+            fr(40, 13, 3),
+            eth(40, 0),
+            eth(40, 1),
+        ];
         let keys: Vec<TracePick> = at_40.iter().map(TracePick::of).collect();
         assert_ne!(keys[0], keys[1], "two CAN ids in the same microsecond");
         assert_ne!(
@@ -1150,6 +1193,11 @@ mod tests {
             "a CAN id and a FlexRay slot are two numbering spaces"
         );
         assert_ne!(keys[1], keys[2]);
+        assert_ne!(
+            keys[3], keys[4],
+            "two Ethernet frames in one microsecond are separated by capture sequence"
+        );
+        assert_ne!(keys[2], keys[3], "Ethernet is its own stream");
         // Two children of the same frame: same cache entry, same key.
         assert_eq!(TracePick::of(&fr(40, 13, 3)), keys[2]);
         let rows: VecDeque<TraceRow> = at_40.into();
@@ -1162,6 +1210,11 @@ mod tests {
             step_pick(&rows, Some(keys[1]), true),
             Some(keys[2]),
             "and the FlexRay frame is the next single step, children and all"
+        );
+        assert_eq!(
+            step_pick(&rows, Some(keys[2]), true),
+            Some(keys[3]),
+            "Ethernet rows step one capture at a time"
         );
     }
 

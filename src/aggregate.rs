@@ -43,7 +43,20 @@ impl MessageAgg {
 /// The L2 identity one Ethernet aggregate row counts: bus, VLAN, MAC pair,
 /// EtherType and payload length. AUTOSAR adds no address of its own, so this
 /// is the only key a capture offers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(default)]
 pub struct EthFlowKey {
     pub bus: u8,
     pub vlan: Option<u16>,
@@ -51,6 +64,20 @@ pub struct EthFlowKey {
     pub src: [u8; 6],
     pub ethertype: u16,
     pub len: usize,
+}
+
+impl EthFlowKey {
+    /// The flow one captured frame belongs to: its L2 identity and length.
+    pub fn of_frame(f: &crate::eth::EthFrame) -> Self {
+        Self {
+            bus: f.bus,
+            vlan: f.vlan,
+            dst: f.dst,
+            src: f.src,
+            ethertype: f.ethertype,
+            len: f.len(),
+        }
+    }
 }
 
 /// One Ethernet flow's running tally behind Messages/Statistics. Cycle and

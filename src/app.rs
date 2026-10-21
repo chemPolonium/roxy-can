@@ -969,12 +969,15 @@ impl App {
             .collect();
         aggs.sort_by_key(|a| (a.channel, a.id));
         let keys: Vec<(u8, u32)> = aggs.iter().map(|a| (a.channel, a.id)).collect();
-        // Ethernet has no CAN-style scope picker yet; All buses includes it.
-        let eth_aggs: Vec<&crate::aggregate::EthAgg> = if matches!(scope, SigScope::All) {
-            self.snap.eth_aggs.iter().collect()
-        } else {
-            Vec::new()
-        };
+        // Ethernet flows follow the same scope rules as the other two
+        // streams: an Ethernet bus scope keeps its own, a CAN or cluster
+        // scope drops them, and Manual admits exactly the hand-picked flows.
+        let eth_aggs: Vec<&crate::aggregate::EthAgg> = self
+            .snap
+            .eth_aggs
+            .iter()
+            .filter(|a| App::scope_match_eth(scope, &manual, &a.key))
+            .collect();
         if self.stats_windows[i].text_keys == keys && !self.text_fresh && eth_aggs.is_empty() {
             return;
         }
@@ -1497,95 +1500,98 @@ impl App {
                 });
             }
         }
-        // Ethernet flows: no CAN-style scope picker yet, so they appear under
-        // All buses only. The ARXML match names the row when it is unique.
-        if matches!(scope, SigScope::All) {
-            for agg in &self.snap.eth_aggs {
-                let flow = crate::eth::db::EthFlow {
-                    vlan: agg.key.vlan,
-                    dst: agg.key.dst,
-                    src: agg.key.src,
-                    ethertype: agg.key.ethertype,
-                    payload_len: agg.key.len,
-                };
-                let db = self.eth_db(agg.key.bus);
-                let matched = db.and_then(|db| match db.match_flow(&flow, false) {
-                    crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
-                    crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
-                    crate::eth::db::EthMatch::None => None,
-                });
-                let macs = format!(
-                    "{} > {}",
-                    crate::eth::db::mac_text(&agg.key.src),
-                    crate::eth::db::mac_text(&agg.key.dst)
-                );
-                let name = matched.clone().unwrap_or_else(|| macs.clone());
-                if dbc_only && matched.is_none() {
+        // Ethernet flows follow the window's scope and text filter like the
+        // other two streams. The ARXML match names the row when it is unique.
+        for agg in &self.snap.eth_aggs {
+            if !App::scope_match_eth(scope, &manual, &agg.key) {
+                continue;
+            }
+            let flow = crate::eth::db::EthFlow {
+                vlan: agg.key.vlan,
+                dst: agg.key.dst,
+                src: agg.key.src,
+                ethertype: agg.key.ethertype,
+                payload_len: agg.key.len,
+            };
+            let db = self.eth_db(agg.key.bus);
+            let matched = db.and_then(|db| match db.match_flow(&flow, false) {
+                crate::eth::db::EthMatch::Unique(i) => Some(db.frames[i].name.clone()),
+                crate::eth::db::EthMatch::Ambiguous(n) => Some(format!("<{n} 个候选>")),
+                crate::eth::db::EthMatch::None => None,
+            });
+            let macs = format!(
+                "{} > {}",
+                crate::eth::db::mac_text(&agg.key.src),
+                crate::eth::db::mac_text(&agg.key.dst)
+            );
+            let name = matched.clone().unwrap_or_else(|| macs.clone());
+            if dbc_only && matched.is_none() {
+                continue;
+            }
+            if !filter.is_empty() {
+                let hay = format!(
+                    "eth{} {} {} vlan {:?} 0x{:04X}",
+                    agg.key.bus, macs, name, agg.key.vlan, agg.key.ethertype
+                )
+                .to_lowercase();
+                if !hay.contains(&filter) {
                     continue;
                 }
-                if !filter.is_empty() {
-                    let hay = format!(
-                        "eth{} {} {} vlan {:?} 0x{:04X}",
-                        agg.key.bus, macs, name, agg.key.vlan, agg.key.ethertype
-                    )
-                    .to_lowercase();
-                    if !hay.contains(&filter) {
-                        continue;
-                    }
-                }
-                let decoded = db.and_then(|db| db.decode(&flow, &agg.payload, false));
-                let signals: Vec<(String, String)> = decoded
-                    .map(|d| {
-                        d.signals
-                            .into_iter()
-                            .map(|s| {
-                                let text = match &s.label {
-                                    Some(label) => format!("{} {} ({})", s.physical, s.unit, label),
-                                    None => format!("{} {}", s.physical, s.unit),
-                                };
-                                (s.name, text.trim().to_string())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let empty_note = if !signals.is_empty() {
-                    None
-                } else if db.is_none() {
-                    Some(format!("（ETH{} 未加载 ARXML）", agg.key.bus))
-                } else if matched.is_none() {
-                    Some("（多个或没有 ARXML 帧匹配该 flow）".to_string())
-                } else {
-                    Some("（该帧不声明信号）".to_string())
-                };
-                rows.push(MsgRowText {
-                    label: format!("ETH{}  {name}", agg.key.bus),
-                    id_key: format!(
-                        "e{}:{:?}:{:?}:{:?}:{:04X}:{}",
-                        agg.key.bus,
-                        agg.key.vlan,
-                        agg.key.src,
-                        agg.key.dst,
-                        agg.key.ethertype,
-                        agg.key.len
-                    ),
-                    bus: format!("ETH{}", agg.key.bus),
-                    dir: "Rx",
-                    count: agg.count.to_string(),
-                    cycle: if agg.count > 1 {
-                        format!(
-                            "{:.1} ±{:.1}",
-                            agg.cycle_us / 1000.0,
-                            agg.jitter_us / 1000.0
-                        )
-                    } else {
-                        "-".to_string()
-                    },
-                    flags: crate::can::frame::FrameFlags::NONE,
-                    data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
-                    signals,
-                    empty_note,
-                });
             }
+            let decoded = db.and_then(|db| db.decode(&flow, &agg.payload, false));
+            let signals: Vec<(String, String)> = decoded
+                .map(|d| {
+                    d.signals
+                        .into_iter()
+                        .map(|s| {
+                            let text = match &s.label {
+                                Some(label) => format!("{} {} ({})", s.physical, s.unit, label),
+                                None => format!("{} {}", s.physical, s.unit),
+                            };
+                            (s.name, text.trim().to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let empty_note = if !signals.is_empty() {
+                None
+            } else if db.is_none() {
+                Some(format!("（ETH{} 未加载 ARXML）", agg.key.bus))
+            } else if matched.is_none() {
+                Some("（多个或没有 ARXML 帧匹配该 flow）".to_string())
+            } else {
+                Some("（该帧不声明信号）".to_string())
+            };
+            rows.push(MsgRowText {
+                label: format!("ETH{}  {name}", agg.key.bus),
+                id_key: format!(
+                    "e{}:{:?}:{:?}:{:?}:{:04X}:{}",
+                    agg.key.bus,
+                    agg.key.vlan,
+                    agg.key.src,
+                    agg.key.dst,
+                    agg.key.ethertype,
+                    agg.key.len
+                ),
+                bus: format!("ETH{}", agg.key.bus),
+                // The flow tally merges both capture directions, so it cannot
+                // name one; the Trace row carries the per-frame direction.
+                dir: "-",
+                count: agg.count.to_string(),
+                cycle: if agg.count > 1 {
+                    format!(
+                        "{:.1} ±{:.1}",
+                        agg.cycle_us / 1000.0,
+                        agg.jitter_us / 1000.0
+                    )
+                } else {
+                    "-".to_string()
+                },
+                flags: crate::can::frame::FrameFlags::NONE,
+                data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
+                signals,
+                empty_note,
+            });
         }
         let win = &mut self.msg_windows[i];
         win.text_keys = keys;
@@ -1598,11 +1604,11 @@ impl App {
     /// Refreshes Trace window `i`'s filtered row cache on the text gate.
     ///
     /// A steady run only *prepends*: when the filter, the expansion setting, the
-    /// cluster descriptions and both rings are unchanged since the last build
-    /// and no column sort has reordered the cache, the walk covers just the rows
-    /// that arrived after the build point. Walking the whole ring every gate tick
-    /// cost 7 ms on a 50 000-row FlexRay replay and 70 ms with the FR signal
-    /// expansion on (measured, `--release`, see
+    /// cluster/matrix descriptions and all three rings are unchanged since the
+    /// last build and no column sort has reordered the cache, the walk covers
+    /// just the rows that arrived after the build point. Walking the whole ring
+    /// every gate tick cost 7 ms on a 50 000-row FlexRay replay and 70 ms with the
+    /// FR signal expansion on (measured, `--release`, see
     /// [`crate::headless_tests::perf_flexray_readouts_under_load`]) against a 10
     /// Hz text gate.
     ///
@@ -1616,18 +1622,32 @@ impl App {
         if !self.text_fresh {
             return;
         }
-        let newest = self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX);
-        let (can_len, fr_len) = (self.snap.trace.len(), self.snap.fr_trace.len());
-        // The point a new walk starts above: the newest row of either ring at
-        // the last build. A CAN-empty run never advances `newest`, which is why
-        // the FlexRay ring counts here too.
+        let newest = self
+            .snap
+            .trace
+            .last()
+            .map(|f| f.t_us)
+            .into_iter()
+            .chain(self.snap.fr_trace.last().map(|r| r.t_us))
+            .chain(self.snap.eth_trace.last().map(|f| f.t_us))
+            .max()
+            .unwrap_or(u64::MAX);
+        let (can_len, fr_len, eth_len) = (
+            self.snap.trace.len(),
+            self.snap.fr_trace.len(),
+            self.snap.eth_trace.len(),
+        );
+        // The point a new walk starts above: the newest row of any ring at
+        // the last build. A CAN-empty run never advances `newest`, which is
+        // why the FlexRay and Ethernet rings count here too.
         let top = self
             .snap
             .trace
             .last()
             .map(|f| f.t_us)
             .unwrap_or(0)
-            .max(self.snap.fr_trace.last().map(|r| r.t_us).unwrap_or(0));
+            .max(self.snap.fr_trace.last().map(|r| r.t_us).unwrap_or(0))
+            .max(self.snap.eth_trace.last().map(|f| f.t_us).unwrap_or(0));
         self.trace_windows[i].shown_t_us = newest;
         self.trace_windows[i].shown_count = can_len;
         let flt = self.trace_windows[i].filter_lens();
@@ -1639,11 +1659,22 @@ impl App {
             .iter()
             .map(|(b, c)| (*b, std::sync::Arc::as_ptr(&c.db) as usize))
             .collect();
+        // And the same swap check for the Ethernet matrices behind names and
+        // decoded signal conditions.
+        let eth_dbs: Vec<(u8, usize)> = self
+            .eth_buses
+            .iter()
+            .map(|(b, c)| (*b, std::sync::Arc::as_ptr(&c.db) as usize))
+            .collect();
         let since = match (
             &self.trace_windows[i].rows_build,
             self.trace_windows[i].rows_sorted,
         ) {
-            (Some(b), false) if b.extends_to(&flt, fr_expand, can_len, fr_len, top, &fr_dbs) => {
+            (Some(b), false)
+                if b.extends_to(
+                    &flt, fr_expand, can_len, fr_len, eth_len, top, &fr_dbs, &eth_dbs,
+                ) =>
+            {
                 Some(b.through())
             }
             _ => None,
@@ -1656,7 +1687,7 @@ impl App {
         self.walk_rows(i, &flt, fr_expand, since, &mut rows);
         let w = &mut self.trace_windows[i];
         w.rows_build = Some(RowsBuild::new(
-            &flt, fr_expand, top, can_len, fr_len, &fr_dbs,
+            &flt, fr_expand, top, can_len, fr_len, eth_len, &fr_dbs, &eth_dbs,
         ));
         // The walk produced this list; the cache is it, in the same order.
         w.rows_sorted = false;
@@ -1664,10 +1695,10 @@ impl App {
         w.rows = rows;
     }
 
-    /// Merges the two rings into the window's row list, newest first, CANoe's
-    /// Trace shape: walk both newest-first lists taking whichever frame is the
-    /// more recent, so the merge is linear in the kept rows. `since` bounds the
-    /// walk to rows strictly newer than that timestamp (see
+    /// Merges the three rings into the window's row list, newest first,
+    /// CANoe's Trace shape: walk the newest-first lists taking whichever frame
+    /// is the more recent, so the merge is linear in the kept rows. `since`
+    /// bounds the walk to rows strictly newer than that timestamp (see
     /// [`App::sync_trace_rows`]); the result is prepended to `rows` in that
     /// case, and becomes the whole list otherwise.
     fn walk_rows(
@@ -1678,7 +1709,7 @@ impl App {
         since: Option<u64>,
         rows: &mut std::collections::VecDeque<TraceRow>,
     ) {
-        // Both lists newest first, cut at the window's reveal watermark and at
+        // All lists newest first, cut at the window's reveal watermark and at
         // `since`, so an extending walk looks at the rows that arrived since
         // the last build and nothing else. `since` is that build's newest
         // timestamp; a full walk has no lower bound.
@@ -1699,35 +1730,46 @@ impl App {
             .take_while(|r| above(r.t_us))
             .filter(|r| self.trace_fr_match(flt, r))
             .collect();
+        let eth: Vec<_> = self
+            .snap
+            .eth_trace
+            .iter_rev()
+            .take_while(|f| above(f.t_us))
+            .filter(|f| self.trace_eth_match(flt, f))
+            .collect();
         let mut merged: Vec<TraceRow> = Vec::with_capacity(1_024);
-        let (mut ci, mut fi) = (0usize, 0usize);
+        let (mut ci, mut fi, mut ei) = (0usize, 0usize, 0usize);
         while merged.len() < MAX_CACHED_ROWS {
-            // Whichever ring still has a row, and of the two the more recent --
-            // both lists are newest first, so this merge is linear in the kept
-            // rows.
-            let take_can = match (can.get(ci), fr.get(fi)) {
-                (None, None) => break,
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (Some(c), Some(r)) => c.t_us >= r.t_us,
+            let tc = can.get(ci).map(|f| f.t_us);
+            let tf = fr.get(fi).map(|r| r.t_us);
+            let te = eth.get(ei).map(|f| f.t_us);
+            let Some(top) = tc.into_iter().chain(tf).chain(te).max() else {
+                break;
             };
-            if take_can {
+            // Ties keep the historical CAN-first, then-FlexRay order, with
+            // Ethernet last; all three are ordered streams either way.
+            if tc == Some(top) {
                 merged.push(TraceRow::Can(*can[ci]));
                 ci += 1;
                 continue;
             }
-            let row = (*fr[fi]).clone();
-            fi += 1;
-            // A FlexRay frame row expands into its decoded signal child rows,
-            // the CANoe trace shape, when the window asks and that bus's
-            // description database is loaded. Only the count of them travels in
-            // the list -- see [`TraceRow::Fr`].
-            let kids = if fr_expand {
-                self.fr_child_count(&row)
-            } else {
-                0
-            };
-            merged.push(TraceRow::Fr(row, kids));
+            if tf == Some(top) {
+                let row = (*fr[fi]).clone();
+                fi += 1;
+                // A FlexRay frame row expands into its decoded signal child
+                // rows, the CANoe trace shape, when the window asks and that
+                // bus's description database is loaded. Only the count of them
+                // travels in the list -- see [`TraceRow::Fr`].
+                let kids = if fr_expand {
+                    self.fr_child_count(&row)
+                } else {
+                    0
+                };
+                merged.push(TraceRow::Fr(row, kids));
+                continue;
+            }
+            merged.push(TraceRow::Eth((*eth[ei]).clone()));
+            ei += 1;
         }
         if since.is_some() {
             // Newest first on both sides: prepend the fresh batch by walking it

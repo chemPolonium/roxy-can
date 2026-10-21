@@ -3,37 +3,53 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Which buses/messages an analysis window looks at. The two bus numbering
+/// Which buses/messages an analysis window looks at. The three bus numbering
 /// spaces are separate variants on purpose: `Bus` is a CAN channel index,
 /// `FrBus` a FlexRay cluster index (the number the tables print as
-/// `FR{n}`) -- the same integer means a different cable in each.
+/// `FR{n}`), `EthBus` an Ethernet bus index (`ETH{n}`) -- the same integer
+/// means a different cable in each.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SigScope {
     All,
     Bus(u8),
     /// One FlexRay cluster: its rows only, no CAN rows.
     FrBus(u8),
+    /// One Ethernet bus: its rows only, no CAN or FlexRay rows.
+    EthBus(u8),
     Manual,
 }
 
 /// What one analysis window's hand-picked selection set can name.
 ///
-/// A type rather than the `(bus, index)` tuple it grew out of because the two
+/// A type rather than the `(bus, index)` tuple it grew out of because the
 /// numbering spaces overlap on arbitrary integers: `(0, 5)` is both CAN channel
 /// 0 with id 5 *and* FlexRay cluster 0 with slot 5. One tuple-keyed set would
 /// let a CAN pick admit a FlexRay row and vice versa; naming the bus kind in the
 /// element makes that impossible, and it also says which of them a CAN channel
 /// being added or removed may renumber (only `Can` -- a cluster index is not a
-/// channel index).
+/// channel index). An Ethernet row is identified by its L2 flow, the same key
+/// its Messages/Statistics tally uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Pick {
     Can { ch: u8, id: u32 },
     Fr { bus: u8, slot: u16 },
+    Eth(crate::aggregate::EthFlowKey),
 }
 
-/// One Trace row: a CAN frame or a FlexRay frame. The two share the
-/// Trace window's table, interleaved by time -- CANoe's Trace shape --
-/// while their storage and the rest of the CAN pipeline stay apart.
+/// The captured-flow view of one Ethernet identity.
+fn eth_flow(key: &crate::aggregate::EthFlowKey) -> crate::eth::db::EthFlow {
+    crate::eth::db::EthFlow {
+        vlan: key.vlan,
+        dst: key.dst,
+        src: key.src,
+        ethertype: key.ethertype,
+        payload_len: key.len,
+    }
+}
+
+/// One Trace row: a CAN, FlexRay or Ethernet frame. The three share the Trace
+/// window's table, interleaved by time -- CANoe's Trace shape -- while their
+/// storage and the rest of each pipeline stay apart.
 #[derive(Clone, Debug)]
 pub enum TraceRow {
     Can(crate::can::frame::CanFrame),
@@ -49,6 +65,9 @@ pub enum TraceRow {
     /// list has to remember; the draw resolves an ordinal against the frame row's
     /// own payload ([`crate::app::App::fr_child_cell`]).
     Fr(crate::trace::FrRow, u32),
+    /// An Ethernet frame as captured; its decoded signals are reachable
+    /// through the flow's matrix definition rather than cached as child rows.
+    Eth(crate::eth::EthFrame),
 }
 
 impl TraceRow {
@@ -56,6 +75,7 @@ impl TraceRow {
         match self {
             TraceRow::Can(f) => f.t_us,
             TraceRow::Fr(r, _) => r.t_us,
+            TraceRow::Eth(f) => f.t_us,
         }
     }
 
@@ -63,7 +83,7 @@ impl TraceRow {
     /// it carries that its payload actually holds.
     pub fn kids(&self) -> u32 {
         match self {
-            TraceRow::Can(_) => 0,
+            TraceRow::Can(_) | TraceRow::Eth(_) => 0,
             TraceRow::Fr(_, kids) => *kids,
         }
     }
@@ -90,12 +110,16 @@ impl TraceRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TracePick {
     pub t_us: u64,
-    /// The CAN channel, or the FlexRay cluster -- never both in one comparison,
-    /// which is what [`TracePick::fr`] is for.
+    /// The CAN channel, FlexRay cluster or Ethernet bus -- never more than one
+    /// in a comparison, which is what the stream flags are for.
     pub bus: u8,
-    /// CAN id, or slot number.
+    /// CAN id, FlexRay slot, or the frame's EtherType.
     pub addr: u32,
     pub fr: bool,
+    pub eth: bool,
+    /// Ethernet ring sequence, which names one frame at a shared microsecond;
+    /// zero for the other two streams.
+    pub seq: u64,
 }
 
 impl TracePick {
@@ -107,12 +131,24 @@ impl TracePick {
                 bus: f.channel,
                 addr: f.id,
                 fr: false,
+                eth: false,
+                seq: 0,
             },
             TraceRow::Fr(r, _) => Self {
                 t_us: r.t_us,
                 bus: r.bus,
                 addr: u32::from(r.slot),
                 fr: true,
+                eth: false,
+                seq: 0,
+            },
+            TraceRow::Eth(f) => Self {
+                t_us: f.t_us,
+                bus: f.bus,
+                addr: u32::from(f.ethertype),
+                fr: false,
+                eth: true,
+                seq: f.seq,
             },
         }
     }
@@ -459,6 +495,7 @@ pub struct RowsBuild {
     through_us: u64,
     can_len: usize,
     fr_len: usize,
+    eth_len: usize,
     /// Whether FlexRay rows were expanded into signal child rows, which the
     /// lens does not carry.
     fr_expand: bool,
@@ -470,47 +507,65 @@ pub struct RowsBuild {
     /// about the filter or the rings changed. The new `Arc` is allocated while
     /// the old one is still alive, so a reused address cannot hide a swap.
     fr_dbs: Vec<(u8, usize)>,
+    /// The same identity for each Ethernet matrix: names, decode and DBC-only
+    /// answers all come from it, so swapping the file must rebuild the rows.
+    eth_dbs: Vec<(u8, usize)>,
 }
 
 impl RowsBuild {
     /// A record of the walk that just produced a cache.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         lens: &TraceFilter,
         fr_expand: bool,
         through_us: u64,
         can_len: usize,
         fr_len: usize,
+        eth_len: usize,
         fr_dbs: &[(u8, usize)],
+        eth_dbs: &[(u8, usize)],
     ) -> Self {
         Self {
             lens: lens.clone(),
             through_us,
             can_len,
             fr_len,
+            eth_len,
             fr_expand,
             fr_dbs: fr_dbs.to_vec(),
+            eth_dbs: eth_dbs.to_vec(),
         }
     }
 
     /// Whether a cache built here can be extended by a refresh with the given
     /// lens and rings: same filter, same expansion, the same description behind
-    /// every FlexRay bus, and both rings still holding everything this build saw
-    /// (a cleared or restarted run does not).
+    /// every FlexRay and Ethernet bus, and all three rings still holding
+    /// everything this build saw (a cleared or restarted run does not).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extends_to(
         &self,
         flt: &TraceFilter,
         fr_expand: bool,
         can_len: usize,
         fr_len: usize,
+        eth_len: usize,
         top_us: u64,
         fr_dbs: &[(u8, usize)],
+        eth_dbs: &[(u8, usize)],
     ) -> bool {
         self.lens == *flt
             && self.fr_expand == fr_expand
             && self.fr_dbs == fr_dbs
+            && self.eth_dbs == eth_dbs
             && top_us >= self.through_us
+            // A batch stamped in the same microsecond as the last build is
+            // newer by arrival order but invisible to the `t_us > through`
+            // bound, so a growing ring at an unchanged top forces a rebuild.
+            && !(top_us == self.through_us
+                && (can_len != self.can_len || fr_len != self.fr_len || eth_len != self.eth_len))
             && can_len >= self.can_len
             && fr_len >= self.fr_len
+            && eth_len >= self.eth_len
     }
 
     /// The timestamp a new row must be strictly after to be unseen.
@@ -947,25 +1002,42 @@ impl App {
 
     /// Scope check shared by all analysis windows: All passes everything,
     /// Bus passes one CAN channel, Manual uses that window's own selection
-    /// set, FrBus passes nothing on this side of the table.
+    /// set, the other two bus kinds pass nothing on this side of the table.
     pub fn scope_match(scope: SigScope, manual: &HashSet<Pick>, channel: u8, id: u32) -> bool {
         match scope {
             SigScope::All => true,
             SigScope::Bus(ch) => channel == ch,
-            SigScope::FrBus(_) => false,
+            SigScope::FrBus(_) | SigScope::EthBus(_) => false,
             SigScope::Manual => manual.contains(&Pick::Can { ch: channel, id }),
         }
     }
 
     /// The FlexRay side of [`Self::scope_match`]: `FrBus` keeps one
-    /// cluster's rows, `Bus` (a CAN channel pick) drops them, and `Manual`
-    /// admits exactly the slots hand-picked for this window.
+    /// cluster's rows, `Bus` and `EthBus` (picks for the other cables) drop
+    /// them, and `Manual` admits exactly the slots hand-picked for this
+    /// window.
     pub fn scope_match_fr(scope: SigScope, manual: &HashSet<Pick>, bus: u8, slot: u16) -> bool {
         match scope {
             SigScope::All => true,
             SigScope::FrBus(b) => b == bus,
-            SigScope::Bus(_) => false,
+            SigScope::Bus(_) | SigScope::EthBus(_) => false,
             SigScope::Manual => manual.contains(&Pick::Fr { bus, slot }),
+        }
+    }
+
+    /// The Ethernet side of the same scope: an Ethernet bus keeps its own
+    /// flows, the CAN and FlexRay scopes drop them, and Manual admits exactly
+    /// the flows hand-picked for this window.
+    pub fn scope_match_eth(
+        scope: SigScope,
+        manual: &HashSet<Pick>,
+        flow: &crate::aggregate::EthFlowKey,
+    ) -> bool {
+        match scope {
+            SigScope::All => true,
+            SigScope::EthBus(b) => b == flow.bus,
+            SigScope::Bus(_) | SigScope::FrBus(_) => false,
+            SigScope::Manual => manual.contains(&Pick::Eth(*flow)),
         }
     }
 
@@ -984,6 +1056,24 @@ impl App {
             .chain(self.snap.fr_aggs.iter().map(|a| a.bus))
             .collect();
         if let SigScope::FrBus(b) = chosen {
+            buses.push(b);
+        }
+        buses.sort_unstable();
+        buses.dedup();
+        buses
+    }
+
+    /// The Ethernet buses the scope combo can offer: configured matrices and
+    /// buses that currently carry flows, plus the window's own choice so its
+    /// label survives the last row aging out.
+    pub fn eth_scope_buses(&self, chosen: SigScope) -> Vec<u8> {
+        let mut buses: Vec<u8> = self
+            .eth_buses
+            .keys()
+            .copied()
+            .chain(self.snap.eth_aggs.iter().map(|a| a.key.bus))
+            .collect();
+        if let SigScope::EthBus(b) = chosen {
             buses.push(b);
         }
         buses.sort_unstable();
@@ -1199,6 +1289,129 @@ impl App {
             return false;
         }
         let t_s = r.t_us as f64 / 1e6;
+        if t_s < flt.from_s.unwrap_or(f64::MIN) || t_s > flt.to_s.unwrap_or(f64::MAX) {
+            return false;
+        }
+        true
+    }
+
+    /// The ARXML frame definition a captured flow matches uniquely, if any.
+    pub(crate) fn eth_flow_def(
+        &self,
+        bus: u8,
+        key: &crate::aggregate::EthFlowKey,
+    ) -> Option<&crate::eth::db::EthFrameDef> {
+        let db = self.eth_db(bus)?;
+        let flow = eth_flow(key);
+        match db.match_flow(&flow, false) {
+            crate::eth::db::EthMatch::Unique(i) => db.frames.get(i),
+            crate::eth::db::EthMatch::Ambiguous(_) | crate::eth::db::EthMatch::None => None,
+        }
+    }
+
+    /// The Name cell for one captured Ethernet frame: its matrix frame name
+    /// when the flow matches exactly one definition, the count when it is
+    /// ambiguous, and the MAC pair when nothing describes it.
+    pub(crate) fn eth_row_name(&self, f: &crate::eth::EthFrame) -> String {
+        let key = crate::aggregate::EthFlowKey::of_frame(f);
+        let macs = format!(
+            "{} > {}",
+            crate::eth::db::mac_text(&f.src),
+            crate::eth::db::mac_text(&f.dst)
+        );
+        let Some(db) = self.eth_db(f.bus) else {
+            return macs;
+        };
+        match db.match_flow(&eth_flow(&key), false) {
+            crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
+            crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} 个候选>  {macs}"),
+            crate::eth::db::EthMatch::None => macs,
+        }
+    }
+
+    /// The Ethernet side of the same filter lens. Ethernet rows carry no CAN
+    /// id or frame kind, so `id:`, `slot:` and a frame-kind pick hide them;
+    /// direction, payload, time range, DBC-only and signal conditions apply
+    /// as they do to CAN rows. "DBC only" means the capture flow matches
+    /// exactly one ARXML frame, the same condition under which a row can be
+    /// named and decoded. Text searches the Name cell's inputs (frame name,
+    /// MAC pair, VLAN and EtherType) and the bus label.
+    pub fn trace_eth_match(&self, flt: &TraceFilter, f: &crate::eth::EthFrame) -> bool {
+        let key = crate::aggregate::EthFlowKey::of_frame(f);
+        if !Self::scope_match_eth(flt.scope, &flt.manual, &key) {
+            return false;
+        }
+        match (flt.dir, f.dir) {
+            (1, crate::can::frame::Direction::Tx) => return false,
+            (2, crate::can::frame::Direction::Rx) => return false,
+            _ => {}
+        }
+        if flt.flags_kind != 0 || flt.exact.is_some() {
+            return false;
+        }
+        let def = self.eth_flow_def(f.bus, &key);
+        if flt.dbc_only && def.is_none() {
+            return false;
+        }
+        // The Name cell shows either the definition's name or the MAC pair;
+        // the search reads the same facts plus the L2 numbers the row's
+        // identity is made of, so `0x0800` or a MAC finds the row too.
+        if let Some(q) = &flt.query {
+            let macs = format!(
+                "{} {}",
+                crate::eth::db::mac_text(&f.src),
+                crate::eth::db::mac_text(&f.dst)
+            )
+            .to_ascii_uppercase();
+            let named = def.is_some_and(|d| d.name.to_ascii_uppercase().contains(q));
+            let numbered = macs.contains(q)
+                || format!("ETH{}", f.bus).contains(q.as_str())
+                || format!("{:04X}", f.ethertype).contains(q)
+                || format!("0X{:04X}", f.ethertype).contains(q)
+                || f.vlan.is_some_and(|v| v.to_string().contains(q));
+            if !named && !numbered {
+                return false;
+            }
+        }
+        for cond in &flt.value_conds {
+            let Some(def) = self.eth_flow_def(f.bus, &key) else {
+                return false;
+            };
+            let Some(sig) = def
+                .pdus
+                .iter()
+                .flat_map(|p| p.signals.iter())
+                .find(|s| s.name == cond.signal)
+            else {
+                return false;
+            };
+            let Some(decoded) = self
+                .eth_db(f.bus)
+                .and_then(|db| db.decode(&eth_flow(&key), &f.payload, false))
+            else {
+                return false;
+            };
+            let Some(v) = decoded
+                .signals
+                .iter()
+                .find(|s| s.name == sig.name)
+                .map(|s| s.physical)
+            else {
+                return false;
+            };
+            if !cond.op.holds(v, cond.value) {
+                return false;
+            }
+        }
+        if let Some(needle) = &flt.needle
+            && !f
+                .payload
+                .windows(needle.len().max(1))
+                .any(|w| w == needle.as_slice())
+        {
+            return false;
+        }
+        let t_s = f.t_us as f64 / 1e6;
         if t_s < flt.from_s.unwrap_or(f64::MIN) || t_s > flt.to_s.unwrap_or(f64::MAX) {
             return false;
         }

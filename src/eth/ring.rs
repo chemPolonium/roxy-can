@@ -16,6 +16,7 @@ pub struct EthRing {
     total: usize,
     bytes: usize,
     dropped: u64,
+    next_seq: u64,
     cap_bytes: usize,
     cap_rows: usize,
 }
@@ -28,6 +29,7 @@ impl Default for EthRing {
             total: 0,
             bytes: 0,
             dropped: 0,
+            next_seq: 0,
             cap_bytes: DEFAULT_ETH_RING_BYTES,
             cap_rows: DEFAULT_ETH_RING_ROWS,
         }
@@ -35,7 +37,9 @@ impl Default for EthRing {
 }
 
 impl EthRing {
-    pub fn push(&mut self, frame: EthFrame) {
+    pub fn push(&mut self, mut frame: EthFrame) {
+        frame.seq = self.next_seq;
+        self.next_seq += 1;
         self.bytes += frame.len();
         self.total += 1;
         self.tail.push(frame);
@@ -90,6 +94,7 @@ impl EthRing {
         self.total = 0;
         self.bytes = 0;
         self.dropped = 0;
+        self.next_seq = 0;
     }
 
     pub fn len(&self) -> usize {
@@ -237,5 +242,22 @@ mod tests {
         }
         assert_eq!(ring.len(), 4);
         assert_eq!(ring.iter().next().map(|f| f.t_us), Some(6));
+    }
+
+    /// Two frames captured in the same microsecond still get distinct pick
+    /// identities: the Trace row key includes the ring's sequence number.
+    #[test]
+    fn every_pushed_frame_gets_its_own_sequence() {
+        let mut ring = EthRing::default();
+        ring.push(frame(1_000, 8));
+        ring.push(frame(1_000, 8));
+        let seqs: Vec<u64> = ring.iter().map(|f| f.seq).collect();
+        assert_eq!(seqs, [0, 1]);
+        let published = ring.publish();
+        assert_eq!(
+            published.iter().map(|f| f.seq).collect::<Vec<_>>(),
+            [0, 1],
+            "the identity survives the snapshot"
+        );
     }
 }

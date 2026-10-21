@@ -295,6 +295,7 @@ impl App {
                         remap(ch).map(|nc| crate::workspace::Pick::Can { ch: nc, id })
                     }
                     fr @ crate::workspace::Pick::Fr { .. } => Some(fr),
+                    eth @ crate::workspace::Pick::Eth(_) => Some(eth),
                 })
                 .collect();
         };

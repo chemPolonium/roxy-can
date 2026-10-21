@@ -817,6 +817,45 @@ fn flexray_signal_picker_draws_without_panicking() {
     frames(&mut app, &mut ctx, 3);
 }
 
+/// The message picker's Ethernet section lists captured L2 flows and stores a
+/// `Pick::Eth`; the scope combo offers an `Ethernet: ETHn` choice. Both draw
+/// against a real snapshot without panicking, and the pick survives the draw.
+#[test]
+fn the_message_picker_offers_ethernet_flows() {
+    use crate::app::PopupTarget;
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![0xAA; 8],
+    ));
+    app.refresh_snapshot();
+    let flow = app.snap.eth_aggs[0].key;
+    let pick = crate::workspace::Pick::Eth(flow);
+    app.new_trace_window();
+    app.trace_windows[0].manual.clear();
+    app.trace_windows[0].manual.insert(pick);
+    app.trace_windows[0].scope = crate::app::SigScope::Manual;
+    app.settle();
+    app.popup_target = Some(PopupTarget::Trace(0));
+    app.show_id_filter = true;
+    frames(&mut app, &mut ctx, 3);
+    assert!(
+        app.trace_windows[0].manual.contains(&pick),
+        "the picker draws the picked flow and leaves it selected"
+    );
+    // The same window's scope combo now offers the Ethernet bus.
+    app.trace_windows[0].scope = crate::app::SigScope::EthBus(0);
+    frames(&mut app, &mut ctx, 2);
+}
+
 /// The message-level selection popup renders its FlexRay section -- one
 /// checkbox per scheduled slot, labelled with the frames that hold it -- against
 /// a real cluster description without panicking, and the pick it stores is a

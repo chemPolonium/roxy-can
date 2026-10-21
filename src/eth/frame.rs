@@ -21,6 +21,9 @@ pub struct EthFrame {
     pub vlan: Option<u16>,
     pub ethertype: u16,
     pub payload: Arc<[u8]>,
+    /// Assignment order in the capture ring: the identity a Trace pick uses
+    /// to name one row when several frames share a microsecond.
+    pub seq: u64,
     /// The capture said the frame was cut short (snaplen/hardware loss).
     pub truncated: bool,
 }
@@ -46,6 +49,7 @@ impl EthFrame {
             vlan,
             ethertype,
             payload: payload.into(),
+            seq: 0,
             truncated: false,
         }
     }

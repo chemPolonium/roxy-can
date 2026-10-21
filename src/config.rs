@@ -156,41 +156,59 @@ fn default_fd_data_bitrate() -> u32 {
 }
 
 /// One window's hand-picked subjects as the file stores them: the two buses
-/// each get their own key, so each half is its own list of tuples.
+/// each get their own key, so each half is its own list of tuples; Ethernet
+/// flows carry their full L2 identity.
 type CanPicks = Vec<(u8, u32)>;
 type FrPicks = Vec<(u8, u16)>;
+type EthPicks = Vec<crate::aggregate::EthFlowKey>;
 
 /// A window's hand-picked subjects, split for the project file: CAN ids in
-/// `manual`, FlexRay slots in `fr_manual`. Sorted so re-saving an unchanged
-/// project does not shuffle the lists (a `HashSet` has no order of its own).
-fn split_picks(picks: &std::collections::HashSet<crate::workspace::Pick>) -> (CanPicks, FrPicks) {
+/// `manual`, FlexRay slots in `fr_manual`, Ethernet flows in `eth_manual`.
+/// Sorted so re-saving an unchanged project does not shuffle the lists (a
+/// `HashSet` has no order of its own).
+fn split_picks(
+    picks: &std::collections::HashSet<crate::workspace::Pick>,
+) -> (CanPicks, FrPicks, EthPicks) {
     let mut can: Vec<_> = picks
         .iter()
         .filter_map(|p| match *p {
             crate::workspace::Pick::Can { ch, id } => Some((ch, id)),
-            crate::workspace::Pick::Fr { .. } => None,
+            crate::workspace::Pick::Fr { .. } | crate::workspace::Pick::Eth(_) => None,
         })
         .collect();
     let mut fr: Vec<_> = picks
         .iter()
         .filter_map(|p| match *p {
             crate::workspace::Pick::Fr { bus, slot } => Some((bus, slot)),
-            crate::workspace::Pick::Can { .. } => None,
+            crate::workspace::Pick::Can { .. } | crate::workspace::Pick::Eth(_) => None,
+        })
+        .collect();
+    let mut eth: Vec<_> = picks
+        .iter()
+        .filter_map(|p| match *p {
+            crate::workspace::Pick::Eth(flow) => Some(flow),
+            crate::workspace::Pick::Can { .. } | crate::workspace::Pick::Fr { .. } => None,
         })
         .collect();
     can.sort_unstable();
     fr.sort_unstable();
-    (can, fr)
+    eth.sort_unstable();
+    (can, fr, eth)
 }
 
 /// ...and merged back on load.
-fn merge_picks(can: CanPicks, fr: FrPicks) -> std::collections::HashSet<crate::workspace::Pick> {
+fn merge_picks(
+    can: CanPicks,
+    fr: FrPicks,
+    eth: EthPicks,
+) -> std::collections::HashSet<crate::workspace::Pick> {
     can.into_iter()
         .map(|(ch, id)| crate::workspace::Pick::Can { ch, id })
         .chain(
             fr.into_iter()
                 .map(|(bus, slot)| crate::workspace::Pick::Fr { bus, slot }),
         )
+        .chain(eth.into_iter().map(crate::workspace::Pick::Eth))
         .collect()
 }
 
@@ -207,6 +225,9 @@ pub struct TraceCfg {
     pub manual: CanPicks,
     #[serde(default)]
     pub fr_manual: FrPicks,
+    /// Ethernet flow picks, absent from projects saved before Ethernet analysis.
+    #[serde(default)]
+    pub eth_manual: EthPicks,
     #[serde(default)]
     pub filter: String,
     #[serde(default)]
@@ -241,6 +262,8 @@ pub struct MsgCfg {
     #[serde(default)]
     pub fr_manual: FrPicks,
     #[serde(default)]
+    pub eth_manual: EthPicks,
+    #[serde(default)]
     pub filter: String,
     #[serde(default)]
     pub dbc_only: bool,
@@ -255,6 +278,8 @@ pub struct StatsCfg {
     pub manual: CanPicks,
     #[serde(default)]
     pub fr_manual: FrPicks,
+    #[serde(default)]
+    pub eth_manual: EthPicks,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -980,13 +1005,14 @@ impl Config {
                 .trace_windows
                 .iter()
                 .map(|w| {
-                    let (manual, fr_manual) = split_picks(&w.manual);
+                    let (manual, fr_manual, eth_manual) = split_picks(&w.manual);
                     TraceCfg {
                         name: w.name.clone(),
                         opened: w.opened,
                         scope: w.scope,
                         manual,
                         fr_manual,
+                        eth_manual,
                         filter: w.filter.clone(),
                         dir: w.dir,
                         dbc_only: w.dbc_only,
@@ -1003,13 +1029,14 @@ impl Config {
                 .msg_windows
                 .iter()
                 .map(|w| {
-                    let (manual, fr_manual) = split_picks(&w.manual);
+                    let (manual, fr_manual, eth_manual) = split_picks(&w.manual);
                     MsgCfg {
                         name: w.name.clone(),
                         opened: w.opened,
                         scope: w.scope,
                         manual,
                         fr_manual,
+                        eth_manual,
                         filter: w.filter.clone(),
                         dbc_only: w.dbc_only,
                     }
@@ -1019,13 +1046,14 @@ impl Config {
                 .stats_windows
                 .iter()
                 .map(|w| {
-                    let (manual, fr_manual) = split_picks(&w.manual);
+                    let (manual, fr_manual, eth_manual) = split_picks(&w.manual);
                     StatsCfg {
                         name: w.name.clone(),
                         opened: w.opened,
                         scope: w.scope,
                         manual,
                         fr_manual,
+                        eth_manual,
                     }
                 })
                 .collect(),
@@ -1402,7 +1430,7 @@ impl Config {
                 name: w.name,
                 opened: w.opened,
                 scope: w.scope,
-                manual: merge_picks(w.manual, w.fr_manual),
+                manual: merge_picks(w.manual, w.fr_manual, w.eth_manual),
                 filter: w.filter,
                 dir: w.dir.min(2),
                 dbc_only: w.dbc_only,
@@ -1429,7 +1457,7 @@ impl Config {
                 name: w.name,
                 opened: w.opened,
                 scope: w.scope,
-                manual: merge_picks(w.manual, w.fr_manual),
+                manual: merge_picks(w.manual, w.fr_manual, w.eth_manual),
                 filter: w.filter,
                 dbc_only: w.dbc_only,
                 text_keys: Vec::new(),
@@ -1444,7 +1472,7 @@ impl Config {
                 name: w.name,
                 opened: w.opened,
                 scope: w.scope,
-                manual: merge_picks(w.manual, w.fr_manual),
+                manual: merge_picks(w.manual, w.fr_manual, w.eth_manual),
                 text_keys: Vec::new(),
                 text_header: String::new(),
                 text_rows: Vec::new(),
@@ -3063,5 +3091,37 @@ mod eth_config_tests {
         );
         let back: SignalCfg = serde_json::from_str(&json).unwrap();
         assert_eq!(sig_keys(&[back])[0].key, key);
+    }
+
+    /// A hand-picked Ethernet flow is part of the window's Manual selection,
+    /// so it must survive a project round trip -- otherwise a scoped window
+    /// comes back showing All buses and a different set of rows.
+    #[test]
+    fn ethernet_manual_picks_round_trip_with_the_project() {
+        let flow = crate::aggregate::EthFlowKey {
+            bus: 0,
+            vlan: Some(100),
+            dst: [9, 8, 7, 6, 5, 4],
+            src: [1, 2, 3, 4, 5, 6],
+            ethertype: 0x0800,
+            len: 8,
+        };
+        let pick = crate::workspace::Pick::Eth(flow);
+        let mut app = App::headless();
+        app.trace_windows[0].manual.clear();
+        app.trace_windows[0].manual.insert(pick);
+        app.trace_windows[0].scope = SigScope::Manual;
+
+        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        assert!(json.contains("eth_manual"), "the pick has its own list");
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert!(
+            restored.trace_windows[0].manual.contains(&pick),
+            "the Ethernet flow comes back with the window"
+        );
+        assert_eq!(restored.trace_windows[0].scope, SigScope::Manual);
     }
 }
