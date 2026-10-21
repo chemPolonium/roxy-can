@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -288,24 +287,11 @@ pub struct App {
     pub focus_title: Option<String>,
     /// The State Tracker row whose state editor is open is tracked by
     /// [`crate::ui::state::StateUi`], alongside the color picker.
-    /// CTE text editors, keyed by the node's stable id. They bind to the
-    /// ImGui context, which `App::new` does not have: rendering a script
-    /// editor queues the id in `pending_editors`, and main creates the
-    /// editor before the next frame's `Ui` borrow starts. Session state.
-    pub editors: HashMap<u64, dear_imgui_cte::TextEditor>,
-    /// Node ids whose editor the UI asked for; main drains this queue.
-    pub pending_editors: Vec<u64>,
-    /// The `node.source` each editor was last seeded with. An external
-    /// change (project load, Apply) re-seeds the editor; without this
-    /// bookkeeping the editor and the model would fight over the text.
-    pub(crate) editor_synced: HashMap<u64, String>,
-    /// Script-node editors currently open, by node id in open order.
-    /// Session state; an id whose node is gone closes its editor.
-    pub open_editors: Vec<u64>,
-    /// Per-editor static facts (outline, send/receive/sysvar sets),
-    /// keyed by node id and re-derived from the editor text when its hash
-    /// changes. Session state.
-    pub(crate) editor_facts: HashMap<u64, crate::ui::script_editor::EditorFacts>,
+    /// Script windows: open node ids, CTE editors, text/facts caches. The
+    /// editors bind to the ImGui context, which `App::new` does not have:
+    /// rendering queues the id in `pending`, and main creates the editor
+    /// before the next frame's `Ui` borrow starts.
+    pub script_editor: crate::ui::script_editor::ScriptEditorView,
     /// The port each CAN row's 硬件 picker last chose, by bus. A failed attach
     /// leaves the driver holding nothing, so without this the cell falls back
     /// to the list's first entry and the row ends up showing a channel while
@@ -494,11 +480,7 @@ impl App {
             spec_grace: GRACE_CYCLES,
             id_filter: Default::default(),
             focus_title: None,
-            editors: HashMap::new(),
-            pending_editors: Vec::new(),
-            editor_synced: HashMap::new(),
-            open_editors: Vec::new(),
-            editor_facts: HashMap::new(),
+            script_editor: Default::default(),
             // The record draft: a file name, shown as-is in the toolbar
             // input. The directory is implicit (the open project's
             // Record/ folder, resolved when recording arms); the
@@ -1951,18 +1933,7 @@ impl App {
 impl App {
     /// Opens the node's script editor (no-op when already open).
     pub fn open_script_editor(&mut self, id: u64) {
-        if !self.open_editors.contains(&id) {
-            self.open_editors.push(id);
-        }
-    }
-
-    /// Closes the node's script editor and drops its CTE editor with all
-    /// cached state; the next open starts from the node's saved source.
-    pub fn close_script_editor(&mut self, id: u64) {
-        self.open_editors.retain(|&x| x != id);
-        self.editors.remove(&id);
-        self.editor_synced.remove(&id);
-        self.editor_facts.remove(&id);
+        self.script_editor.open(id);
     }
 }
 

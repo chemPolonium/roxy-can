@@ -73,12 +73,12 @@ fn frames(app: &mut App, ctx: &mut Context, n: usize) {
     for _ in 0..n {
         // Script editors bind to the context and are created by main
         // outside the frame; the harness does that queue's work here.
-        if !app.pending_editors.is_empty() {
-            let wanted: Vec<u64> = std::mem::take(&mut app.pending_editors);
+        if !app.script_editor.pending.is_empty() {
+            let wanted: Vec<u64> = std::mem::take(&mut app.script_editor.pending);
             for id in wanted {
                 let mut editor = dear_imgui_cte::TextEditor::create(ctx);
                 crate::ui::script_editor::configure_new_editor(&mut editor);
-                app.editors.entry(id).or_insert(editor);
+                app.script_editor.editors.entry(id).or_insert(editor);
             }
         }
         let ui = ctx.frame();
@@ -1065,22 +1065,23 @@ fn the_flexray_tab_lists_the_slots_a_script_can_read() {
             "the bundled description offers nothing for the tab to list"
         );
     }
-    let a = &mut app;
+    let mut view = crate::ui::script_editor::ScriptEditorView::default();
+    let a = &app;
     for _ in 0..3 {
         let ui = ctx.frame();
         ui.window("fr tab probe")
             .size([320.0, 400.0], dear_imgui_rs::Condition::Always)
-            .build(|| crate::ui::script_editor::fr_tab(a, ui, 0));
+            .build(|| crate::ui::script_editor::fr_tab(a, &mut view, ui, 0));
         let _ = ctx.render_legacy();
     }
     // Empty on purpose too: the tab has to say why it is empty rather than
     // render a blank panel when no description is loaded.
-    let mut bare = App::headless();
-    let b = &mut bare;
+    let bare = App::headless();
+    let b = &bare;
     let ui = ctx.frame();
     ui.window("fr tab bare")
         .size([320.0, 200.0], dear_imgui_rs::Condition::Always)
-        .build(|| crate::ui::script_editor::fr_tab(b, ui, 0));
+        .build(|| crate::ui::script_editor::fr_tab(b, &mut view, ui, 0));
     let _ = ctx.render_legacy();
 }
 

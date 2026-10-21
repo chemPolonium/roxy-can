@@ -278,8 +278,8 @@ impl State {
         // CTE text editors bind to the context, which the frame's `Ui`
         // borrows exclusively; create the ones the UI requested last frame
         // out here, before the borrow starts.
-        if !self.app.pending_editors.is_empty() {
-            let wanted: Vec<u64> = std::mem::take(&mut self.app.pending_editors);
+        if !self.app.script_editor.pending.is_empty() {
+            let wanted: Vec<u64> = std::mem::take(&mut self.app.script_editor.pending);
             // Autocomplete vocabulary is snapshotted per editor before the
             // entry borrow starts.
             let vocab: std::collections::HashMap<u64, Vec<String>> = wanted
@@ -300,7 +300,7 @@ impl State {
                 })
                 .collect();
             for id in wanted {
-                self.app.editors.entry(id).or_insert_with(|| {
+                self.app.script_editor.editors.entry(id).or_insert_with(|| {
                     let mut editor = dear_imgui_cte::TextEditor::create(&self.context);
                     ui::script_editor::configure_new_editor(&mut editor);
                     ui::script_editor::install_autocomplete(
@@ -371,7 +371,7 @@ impl State {
     /// Releases render-loop resources that must die before the context.
     /// Safe to call twice.
     fn shutdown(&mut self) {
-        self.app.editors.clear();
+        self.app.script_editor.clear_editors();
         let _ = self.renderer.shutdown(&mut self.context);
         let _ = self.platform.shutdown(&mut self.context);
     }

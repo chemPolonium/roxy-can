@@ -7490,7 +7490,7 @@ fn a_script_node_round_trips_through_a_project() {
         source: source.to_string(),
     });
     // An unapplied editor is session state and must not leak into the file.
-    app.editor_synced.insert(id, "garbage".to_string());
+    app.script_editor.synced.insert(id, "garbage".to_string());
     let path = std::env::temp_dir().join("roxy_can_node.rxproj");
     assert!(app.save_project(Some(path.clone())));
 
@@ -7510,7 +7510,7 @@ fn a_script_node_round_trips_through_a_project() {
         "the node binding rides the round trip"
     );
     assert!(
-        restored.editor_synced.is_empty(),
+        restored.script_editor.synced.is_empty(),
         "editor sync state is keyed by id and ids are minted fresh"
     );
     std::fs::remove_file(&path).ok();
@@ -10664,4 +10664,62 @@ fn id_filter_commands_toggle_picks_and_signals() {
     }]);
     assert_eq!(app.graphics[0].signals.len(), 1);
     assert_eq!(app.graphics[0].signals[0].key, b);
+}
+
+/// Each script-window control that changes the model or writes a file goes
+/// through one command type; the editor's own text and cursor never do.
+#[test]
+fn script_commands_reach_the_node_model_and_file() {
+    use crate::ui::script_editor::{ScriptCmd, ScriptEditorView};
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gen".into(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+
+    app.apply_script_cmds(vec![
+        ScriptCmd::SetName {
+            id,
+            name: "renamed".into(),
+        },
+        ScriptCmd::SetEnabled { id, on: false },
+        ScriptCmd::Apply {
+            id,
+            source: "on start { }".into(),
+        },
+    ]);
+    app.settle();
+    let node = app.snap.nodes.iter().find(|n| n.id == id).unwrap();
+    assert_eq!(node.name, "renamed");
+    assert!(!node.enabled);
+    assert_eq!(node.source, "on start { }");
+
+    let path =
+        std::env::temp_dir().join(format!("roxy_can_scriptcmd_{}.rxcan", std::process::id()));
+    app.apply_script_cmds(vec![ScriptCmd::Save {
+        path: path.to_string_lossy().into_owned(),
+        source: "on timer 1 { }".into(),
+    }]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "on timer 1 { }");
+    assert!(app.status.starts_with("已保存"));
+    std::fs::remove_file(&path).ok();
+
+    app.apply_script_cmds(vec![ScriptCmd::Status("loaded".into())]);
+    assert_eq!(app.status, "loaded");
+
+    // The view owns open/editor state; dropping a node's editor is local,
+    // while removing the node still goes through the bus core.
+    let mut view = ScriptEditorView::default();
+    view.open(id);
+    view.open(id);
+    assert_eq!(view.open, vec![id], "opening twice keeps one window");
+    view.close(id);
+    assert!(view.open.is_empty());
+
+    app.apply_script_cmds(vec![ScriptCmd::Remove { id }]);
+    app.settle();
+    assert!(app.snap.nodes.iter().all(|n| n.id != id));
 }

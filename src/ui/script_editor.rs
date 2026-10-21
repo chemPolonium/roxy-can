@@ -11,10 +11,62 @@
 use crate::app::App;
 use dear_imgui_cte::{CteUiExt, Position, ScrollAlignment, Selection};
 use dear_imgui_rs::{Condition, Ui};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 const SOURCE_HEIGHT: f32 = 260.0;
 const LOG_LINES: usize = 10;
+
+/// The script windows' own state: which nodes have an editor open, the CTE
+/// widgets (bound to the ImGui context), and the per-editor text/facts
+/// bookkeeping. Kept out of `App` so the draw path only reads the application
+/// and emits [`ScriptCmd`]s (see `AGENTS.md`).
+#[derive(Default)]
+pub struct ScriptEditorView {
+    /// Node ids with an editor open, in open order.
+    pub open: Vec<u64>,
+    /// CTE editors, keyed by node id. Main creates them outside the frame's
+    /// `Ui` borrow; the draw queues an id in `pending` for it.
+    pub editors: HashMap<u64, dear_imgui_cte::TextEditor>,
+    /// Node ids whose editor the UI asked for; main drains this queue.
+    pub pending: Vec<u64>,
+    /// The `node.source` each editor was last seeded with.
+    pub(crate) synced: HashMap<u64, String>,
+    /// Per-editor static facts (outline, send/receive/sysvar sets).
+    pub(crate) facts: HashMap<u64, EditorFacts>,
+}
+
+impl ScriptEditorView {
+    pub fn open(&mut self, id: u64) {
+        if !self.open.contains(&id) {
+            self.open.push(id);
+        }
+    }
+
+    pub fn close(&mut self, id: u64) {
+        self.open.retain(|&x| x != id);
+        self.editors.remove(&id);
+        self.synced.remove(&id);
+        self.facts.remove(&id);
+    }
+
+    /// Drops the context-bound widgets when the render context goes away.
+    pub fn clear_editors(&mut self) {
+        self.editors.clear();
+    }
+}
+
+/// What a script window's controls ask the application to change. Editor
+/// text, cursor moves and palette inserts are view state and stay in the
+/// draw; anything that touches the node model or writes a file is a command.
+pub enum ScriptCmd {
+    SetName { id: u64, name: String },
+    SetEnabled { id: u64, on: bool },
+    Remove { id: u64 },
+    Apply { id: u64, source: String },
+    Save { path: String, source: String },
+    Status(String),
+}
 
 /// Compile-error marker colors, packed ABGR (the native ImColor32
 /// layout). The second color fills the whole line opaquely and doubles
@@ -222,34 +274,44 @@ fn compute_facts(src: &str, hash: u64) -> EditorFacts {
 
 /// Cached facts for an editor's text, recomputed when the text changed
 /// (the widget reports `changed`) or never derived before.
-fn facts_for(app: &mut App, id: u64, changed: bool) -> EditorFacts {
-    let missing = !app.editor_facts.contains_key(&id);
+fn facts_for(view: &mut ScriptEditorView, id: u64, changed: bool) -> EditorFacts {
+    let missing = !view.facts.contains_key(&id);
     if (changed || missing)
-        && let Some(editor) = app.editors.get(&id)
+        && let Some(editor) = view.editors.get(&id)
     {
         let src = editor.text().unwrap_or_default();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         src.hash(&mut h);
         let facts = compute_facts(&src, h.finish());
-        app.editor_facts.insert(id, facts.clone());
+        view.facts.insert(id, facts.clone());
     }
-    app.editor_facts.get(&id).cloned().unwrap_or_default()
+    view.facts.get(&id).cloned().unwrap_or_default()
 }
 
 pub fn render(app: &mut App, ui: &Ui) {
-    let ids = app.open_editors.clone();
+    let mut view = std::mem::take(&mut app.script_editor);
+    let mut cmds = Vec::new();
+    let ids = view.open.clone();
     for id in ids {
         let Some(node) = app.snap.nodes.iter().find(|n| n.id == id).cloned() else {
             // The node went away (deleted, project replaced): its editor
             // has nothing left to edit.
-            app.close_script_editor(id);
+            view.close(id);
             continue;
         };
-        editor_window(app, ui, &node);
+        editor_window(&mut view, app, ui, &node, &mut cmds);
     }
+    app.script_editor = view;
+    app.apply_script_cmds(cmds);
 }
 
-fn editor_window(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
+fn editor_window(
+    view: &mut ScriptEditorView,
+    app: &App,
+    ui: &Ui,
+    node: &crate::bus::NodeView,
+    cmds: &mut Vec<ScriptCmd>,
+) {
     let id = node.id;
     // `###` pins the window identity to the node, so a rename moves the
     // title without losing position or open state.
@@ -264,36 +326,42 @@ fn editor_window(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             Condition::FirstUseEver,
         )
         .size([640.0, 500.0], Condition::FirstUseEver)
-        .build(|| content(app, ui, node));
+        .build(|| content(view, app, ui, node, cmds));
     if !open {
-        app.close_script_editor(id);
+        view.close(id);
     }
 }
 
 /// Seeds the editor from the node's source when the model moved under it
 /// (project load, Apply, a fresh Load). The editor owns the text while
 /// being edited; this only reconciles external changes.
-fn sync_from_model(app: &mut App, id: u64, source: &str) {
-    let stale = app.editor_synced.get(&id).is_none_or(|s| s != source);
+fn sync_from_model(view: &mut ScriptEditorView, id: u64, source: &str) {
+    let stale = view.synced.get(&id).is_none_or(|s| s != source);
     if !stale {
         return;
     }
-    if let Some(editor) = app.editors.get_mut(&id) {
+    if let Some(editor) = view.editors.get_mut(&id) {
         let _ = editor.set_text(source);
-        app.editor_synced.insert(id, source.to_string());
-        app.editor_facts.remove(&id);
+        view.synced.insert(id, source.to_string());
+        view.facts.remove(&id);
     }
 }
 
-fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
+fn content(
+    view: &mut ScriptEditorView,
+    app: &App,
+    ui: &Ui,
+    node: &crate::bus::NodeView,
+    cmds: &mut Vec<ScriptCmd>,
+) {
     let id = node.id;
 
     // The editor is created by main, outside the frame's Ui borrow; the
     // first frame(s) show the sidebar alone until it exists.
-    if !app.editors.contains_key(&id) && !app.pending_editors.contains(&id) {
-        app.pending_editors.push(id);
+    if !view.editors.contains_key(&id) && !view.pending.contains(&id) {
+        view.pending.push(id);
     }
-    sync_from_model(app, id, &node.source);
+    sync_from_model(view, id, &node.source);
 
     // Header: node name, channel binding, run switch, delete. The name
     // commits per keystroke -- it is a cheap string write and the
@@ -301,7 +369,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     let mut name = node.name.clone();
     ui.set_next_item_width(140.0);
     if ui.input_text(format!("##ename{id}"), &mut name).build() {
-        app.send(crate::bus::BusCommand::SetNodeName { id, name });
+        cmds.push(ScriptCmd::SetName { id, name });
     }
     ui.same_line();
     // The script lives where its node lives: the binding is shown
@@ -323,12 +391,12 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.same_line();
     let mut enabled = node.enabled;
     if ui.checkbox(format!("运行##een{id}"), &mut enabled) {
-        app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: enabled });
+        cmds.push(ScriptCmd::SetEnabled { id, on: enabled });
     }
     ui.same_line();
     if ui.button(format!("删除##erm{id}")) {
-        app.send(crate::bus::BusCommand::RemoveNode { id });
-        app.close_script_editor(id);
+        cmds.push(ScriptCmd::Remove { id });
+        view.close(id);
         return;
     }
 
@@ -359,7 +427,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.child_window(format!("##eleft{id}"))
         .size([LEFT_W, avail[1]])
         .border(true)
-        .build(ui, || left_tabs(app, ui, id, node));
+        .build(ui, || left_tabs(app, view, ui, id, node));
 
     ui.same_line();
 
@@ -369,7 +437,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
         .build(ui, || {
             // The widget reports whether its text changed this frame;
             // only then do the facts need re-deriving.
-            let changed = match app.editors.get_mut(&id) {
+            let changed = match view.editors.get_mut(&id) {
                 Some(editor) => {
                     let w = ui.content_region_avail()[0].max(1.0);
                     match ui
@@ -386,14 +454,14 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                 }
                 None => false,
             };
-            let facts = facts_for(app, id, changed);
+            let facts = facts_for(view, id, changed);
 
             // The compile-error line gets the editor's own marker (a red
             // line highlight plus a gutter mark, both with the tooltip).
             // Refreshed every frame: markers are frame state, not layout
             // -- and the clear runs unconditionally, so the band lifts
             // the moment the draft compiles again.
-            if let Some(editor) = app.editors.get_mut(&id) {
+            if let Some(editor) = view.editors.get_mut(&id) {
                 editor.clear_markers();
                 if let Some(line) = facts.error_line {
                     let tip = facts.error.clone().unwrap_or_default();
@@ -414,11 +482,11 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             node.source.hash(&mut src_hash);
             let unsaved = facts.hash != src_hash.finish();
             if ui.button(format!("Apply##eapply{id}"))
-                && let Some(editor) = app.editors.get(&id)
+                && let Some(editor) = view.editors.get(&id)
             {
                 let source = editor.text().unwrap_or_default();
-                app.editor_synced.insert(id, source.clone());
-                app.send(crate::bus::BusCommand::SetNodeSource { id, source });
+                view.synced.insert(id, source.clone());
+                cmds.push(ScriptCmd::Apply { id, source });
             }
             if unsaved {
                 ui.same_line();
@@ -426,7 +494,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
             }
             ui.same_line();
             if ui.button(format!("保存##esave{id}"))
-                && let Some(editor) = app.editors.get(&id)
+                && let Some(editor) = view.editors.get(&id)
             {
                 let source = editor.text().unwrap_or_default();
                 if let Some(path) = rfd::FileDialog::new()
@@ -434,12 +502,10 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                     .add_filter("节点脚本", &["rxcan"])
                     .save_file()
                 {
-                    let path = path.to_string_lossy().into_owned();
-                    if let Err(e) = std::fs::write(&path, &source) {
-                        app.status = format!("保存失败: {e}");
-                    } else {
-                        app.status = format!("已保存 {path}");
-                    }
+                    cmds.push(ScriptCmd::Save {
+                        path: path.to_string_lossy().into_owned(),
+                        source,
+                    });
                 }
             }
             ui.same_line();
@@ -457,14 +523,14 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
                         .map(crate::dbc::text_from_bytes)
                     {
                         Ok(src) => {
-                            if let Some(editor) = app.editors.get_mut(&id) {
+                            if let Some(editor) = view.editors.get_mut(&id) {
                                 let _ = editor.set_text(&src);
                             }
-                            app.editor_synced.insert(id, src);
-                            app.editor_facts.remove(&id);
+                            view.synced.insert(id, src);
+                            view.facts.remove(&id);
                         }
                         Err(e) => {
-                            app.status = format!("加载失败: {e}");
+                            cmds.push(ScriptCmd::Status(format!("加载失败: {e}")));
                         }
                     }
                 }
@@ -487,7 +553,7 @@ fn content(app: &mut App, ui: &Ui, node: &crate::bus::NodeView) {
     ui.child_window(format!("##epalette{id}"))
         .size([PALETTE_W, avail[1]])
         .border(true)
-        .build(ui, || palette_tabs(app, ui, id, node));
+        .build(ui, || palette_tabs(app, view, ui, id, node));
 }
 
 /// One insertable sidebar entry: display label and the text that goes
@@ -567,19 +633,25 @@ const SIDEBAR_ITEMS: &[(&str, &str, &str)] = &[
 /// The left column: the source's handler outline and the static
 /// send/receive/sysvar fact table. Each tab's content scrolls in a child
 /// of its own so the tab bar stays pinned at the top.
-fn left_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+fn left_tabs(
+    app: &App,
+    view: &mut ScriptEditorView,
+    ui: &Ui,
+    id: u64,
+    node: &crate::bus::NodeView,
+) {
     let Some(_bar) = ui.tab_bar(format!("##elefttab{id}")) else {
         return;
     };
     if let Some(_t) = ui.tab_item("大纲") {
         ui.child_window(format!("##esbscroll{id}o"))
             .size([0.0, 0.0])
-            .build(ui, || outline_tab(app, ui, id));
+            .build(ui, || outline_tab(view, ui, id));
     }
     if let Some(_t) = ui.tab_item("收发") {
         ui.child_window(format!("##esbscroll{id}i"))
             .size([0.0, 0.0])
-            .build(ui, || io_tab(app, ui, id, node));
+            .build(ui, || io_tab(app, view, ui, id, node));
     }
 }
 
@@ -587,29 +659,66 @@ fn left_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
 /// bus's databases declare, and the FlexRay signals the loaded cluster
 /// descriptions decode -- click one to push it into the source at the editor
 /// cursor.
-fn palette_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+fn palette_tabs(
+    app: &App,
+    view: &mut ScriptEditorView,
+    ui: &Ui,
+    id: u64,
+    node: &crate::bus::NodeView,
+) {
     let Some(_bar) = ui.tab_bar(format!("##esbtab{id}")) else {
         return;
     };
     if let Some(_t) = ui.tab_item("函数") {
         ui.child_window(format!("##esbscroll{id}f"))
             .size([0.0, 0.0])
-            .build(ui, || fns_tab(app, ui, id));
+            .build(ui, || fns_tab(app, view, ui, id));
     }
     if let Some(_t) = ui.tab_item("SysVar") {
         ui.child_window(format!("##esbscroll{id}s"))
             .size([0.0, 0.0])
-            .build(ui, || sysvar_tab(app, ui, id));
+            .build(ui, || sysvar_tab(app, view, ui, id));
     }
     if let Some(_t) = ui.tab_item("报文") {
         ui.child_window(format!("##esbscroll{id}b"))
             .size([0.0, 0.0])
-            .build(ui, || bus_tab(app, ui, id, node));
+            .build(ui, || bus_tab(app, view, ui, id, node));
     }
     if let Some(_t) = ui.tab_item("FlexRay") {
         ui.child_window(format!("##esbscroll{id}r"))
             .size([0.0, 0.0])
-            .build(ui, || fr_tab(app, ui, id));
+            .build(ui, || fr_tab(app, view, ui, id));
+    }
+}
+
+impl App {
+    /// Applies a script window's model/file actions after its draw put the
+    /// view back. Cursor, text and palette edits never reach here.
+    pub(crate) fn apply_script_cmds(&mut self, cmds: Vec<ScriptCmd>) {
+        for cmd in cmds {
+            match cmd {
+                ScriptCmd::SetName { id, name } => {
+                    self.send(crate::bus::BusCommand::SetNodeName { id, name });
+                }
+                ScriptCmd::SetEnabled { id, on } => {
+                    self.send(crate::bus::BusCommand::SetNodeEnabled { id, on });
+                }
+                ScriptCmd::Remove { id } => {
+                    self.send(crate::bus::BusCommand::RemoveNode { id });
+                }
+                ScriptCmd::Apply { id, source } => {
+                    self.send(crate::bus::BusCommand::SetNodeSource { id, source });
+                }
+                ScriptCmd::Save { path, source } => {
+                    if let Err(e) = std::fs::write(&path, &source) {
+                        self.status = format!("保存失败: {e}");
+                    } else {
+                        self.status = format!("已保存 {path}");
+                    }
+                }
+                ScriptCmd::Status(text) => self.status = text,
+            }
+        }
     }
 }
 
@@ -617,8 +726,8 @@ fn palette_tabs(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
 /// click in the sidebar never throws the text at the file end), replacing
 /// the selection when one is active. The snippet always lands on its own
 /// line, and the cursor parks after it so the next insert chains on.
-fn insert(app: &mut App, id: u64, text: &str) {
-    let Some(editor) = app.editors.get_mut(&id) else {
+fn insert(view: &mut ScriptEditorView, id: u64, text: &str) {
+    let Some(editor) = view.editors.get_mut(&id) else {
         return;
     };
     let at = editor.main_cursor_position();
@@ -653,7 +762,7 @@ fn insert(app: &mut App, id: u64, text: &str) {
 }
 
 /// The insertable templates: categories with clickable items.
-fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
+fn fns_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
     let mut last_cat = "";
     for (cat, label, insert_text) in SIDEBAR_ITEMS {
         if *cat != last_cat {
@@ -664,7 +773,7 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
             last_cat = *cat;
         }
         if ui.selectable_config(*label).build() {
-            insert(app, id, insert_text);
+            insert(view, id, insert_text);
         }
     }
 
@@ -679,14 +788,14 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
                 .selectable_config(format!("{} {}##dbcmsg{}", msg_name, id_str, msg_id))
                 .build()
             {
-                insert(app, id, &format!("send({:#x});", msg_id));
+                insert(view, id, &format!("send({:#x});", msg_id));
             }
             for (sig_name, _) in sigs {
                 if ui
                     .selectable_config(format!("  {}##dbcsig{}_{}", sig_name, msg_id, sig_name))
                     .build()
                 {
-                    insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                    insert(view, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
                 }
             }
         }
@@ -707,7 +816,7 @@ fn fns_tab(app: &mut App, ui: &Ui, id: u64) {
 /// `pub(crate)` for the smoke test only: a tab body draws just while its tab is
 /// selected, which no headless frame can arrange, so the list is drawn directly
 /// the way the siglist probe draws its table.
-pub(crate) fn fr_tab(app: &mut App, ui: &Ui, id: u64) {
+pub(crate) fn fr_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
     let fr_items: Vec<(u8, u16, String, Vec<String>)> = app
         .fr_buses
         .iter()
@@ -731,7 +840,7 @@ pub(crate) fn fr_tab(app: &mut App, ui: &Ui, id: u64) {
                 .selectable_config(format!("  {sig}##frsig{bus}_{slot}_{frame}_{sig}"))
                 .build()
             {
-                insert(app, id, &format!("fr_sig({bus}, {slot}, \"{sig}\")"));
+                insert(view, id, &format!("fr_sig({bus}, {slot}, \"{sig}\")"));
             }
         }
     }
@@ -739,7 +848,7 @@ pub(crate) fn fr_tab(app: &mut App, ui: &Ui, id: u64) {
 
 /// The whole bus: every message/signal the bus's databases declare -- a
 /// script may read (`sig`) or send (`send`) anything on its wire.
-fn bus_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+fn bus_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
     let bus_items = bus_dbc_items(app, node.channel);
     if bus_items.is_empty() {
         ui.text_disabled("（本总线无 DBC 报文）");
@@ -754,7 +863,7 @@ fn bus_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
             ))
             .build()
         {
-            insert(app, id, &format!("send({:#x});", msg_id));
+            insert(view, id, &format!("send({:#x});", msg_id));
         }
         for (sig_name, _) in sigs {
             if ui
@@ -764,7 +873,7 @@ fn bus_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
                 ))
                 .build()
             {
-                insert(app, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
+                insert(view, id, &format!("sig({:#x}, \"{}\")", msg_id, sig_name));
             }
         }
     }
@@ -826,8 +935,8 @@ fn bus_dbc_items(app: &App, ch: u8) -> Vec<DbcItem> {
 /// The source's handler outline: every event handler and function with
 /// its line number. Works on half-typed source; a compile error shows
 /// alongside so the outline degrades gracefully.
-fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
-    let facts = facts_for(app, id, false);
+fn outline_tab(view: &mut ScriptEditorView, ui: &Ui, id: u64) {
+    let facts = facts_for(view, id, false);
     if let Some(e) = &facts.error {
         ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
         if ui.is_item_hovered() {
@@ -840,7 +949,7 @@ fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
     }
     for (line, label) in &facts.outline {
         if ui.selectable_config(format!("{label}##ol{line}")).build()
-            && let Some(editor) = app.editors.get_mut(&id)
+            && let Some(editor) = view.editors.get_mut(&id)
         {
             // Jump to the handler's line, centered in the viewport.
             let target = *line as usize - 1;
@@ -857,8 +966,8 @@ fn outline_tab(app: &mut App, ui: &Ui, id: u64) {
 /// and which system variables it touches. Sends are marked against the
 /// DBC's transmitter declaration when the script is bound: `*` own,
 /// `!` foreign, `-` unknown.
-fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
-    let facts = facts_for(app, id, false);
+fn io_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
+    let facts = facts_for(view, id, false);
     if let Some(e) = &facts.error {
         ui.text_colored([1.0, 0.55, 0.3, 1.0], "草稿未编译通过");
         if ui.is_item_hovered() {
@@ -1003,7 +1112,7 @@ fn io_tab(app: &mut App, ui: &Ui, id: u64, node: &crate::bus::NodeView) {
 
 /// The defined system variables, grouped by namespace: 读 inserts a
 /// `sys_get`, 写 inserts a `sys_set` template.
-fn sysvar_tab(app: &mut App, ui: &Ui, id: u64) {
+fn sysvar_tab(app: &App, view: &mut ScriptEditorView, ui: &Ui, id: u64) {
     let mut vars: Vec<(String, Vec<(String, bool)>)> = Vec::new(); // (ns, [(name, has_bounds)])
     for v in &app.snap.sysvars {
         match vars.iter_mut().find(|(ns, _)| *ns == v.def.namespace) {
@@ -1032,13 +1141,13 @@ fn sysvar_tab(app: &mut App, ui: &Ui, id: u64) {
                 .selectable_config(format!("读  {name}##svr{ns}{name}"))
                 .build()
             {
-                insert(app, id, &format!("sys_get(\"{ns}::{name}\")"));
+                insert(view, id, &format!("sys_get(\"{ns}::{name}\")"));
             }
             if ui
                 .selectable_config(format!("写  {name}##svw{ns}{name}"))
                 .build()
             {
-                insert(app, id, &format!("sys_set(\"{ns}::{name}\", 0)"));
+                insert(view, id, &format!("sys_set(\"{ns}::{name}\", 0)"));
             }
         }
     }
