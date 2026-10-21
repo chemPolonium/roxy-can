@@ -5,18 +5,17 @@
 //! Ethernet frame triggering, PDU-to-frame and I-Signal mappings) without
 //! depending on that editor crate. Container/Multiplexed/Secured PDUs are
 //! deliberately not decoded here.
-#![allow(dead_code)] // wired into the UI in the next step
 
 use roxmltree::{Document, Node};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EthCluster {
     pub name: String,
     pub vlans: Vec<u16>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EthFrameDef {
     pub name: String,
     pub cluster: String,
@@ -29,7 +28,7 @@ pub struct EthFrameDef {
     pub pdus: Vec<EthPdu>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EthPdu {
     pub name: String,
     pub length: usize,
@@ -37,7 +36,7 @@ pub struct EthPdu {
     pub signals: Vec<EthSignal>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EthSignal {
     pub name: String,
     /// Bit offset inside the PDU.
@@ -51,7 +50,7 @@ pub struct EthSignal {
     pub values: Vec<(i64, String)>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EthDb {
     pub clusters: Vec<EthCluster>,
     pub frames: Vec<EthFrameDef>,
@@ -74,19 +73,20 @@ pub enum EthMatch {
     None,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DecodedEth {
     pub frame_name: String,
     pub signals: Vec<DecodedSignal>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecodedSignal {
     pub name: String,
     pub raw: i64,
     pub physical: f64,
     pub unit: String,
     pub label: Option<String>,
+    pub type_tag: String,
 }
 
 impl EthDb {
@@ -290,6 +290,7 @@ impl EthDb {
                         .iter()
                         .find(|(v, _)| *v == raw as i64)
                         .map(|(_, s)| s.clone()),
+                    type_tag: format!("{}{}", if sig.signed { "i" } else { "u" }, sig.size),
                 });
             }
         }

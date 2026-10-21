@@ -509,6 +509,7 @@ fn signal_content(app: &mut App, ui: &Ui) {
 
     emitted_section(app, ui, &sel, &mut actions);
     flexray_section(app, ui, &sel, &mut actions, &q);
+    eth_section(app, ui, &sel, &mut actions, &q);
 
     for (key, on) in actions {
         app.set_win_signal(target, key, on);
@@ -547,6 +548,7 @@ fn emitted_section(
         let (ch, id) = match key {
             crate::observe::SigKey::Can { ch, id, .. } => (*ch, *id),
             crate::observe::SigKey::Fr { bus, slot, .. } => (*bus, u32::from(*slot)),
+            crate::observe::SigKey::Eth { bus, .. } => (*bus, 0),
         };
         if ui.checkbox(
             format!("{}##emit{ch}_{id:X}_{node_name}", key.name()),
@@ -644,6 +646,91 @@ fn flexray_section(
             for (s, k) in sigs.iter().zip(&keys) {
                 let mut son = sel.contains(k);
                 if ui.checkbox(format!("{s}##frsig{bus}_{slot}_{frame}"), &mut son) {
+                    actions.push((k.clone(), son));
+                }
+            }
+        }
+    }
+}
+
+/// Adds a checkbox per signal in every loaded ARXML Ethernet frame, grouped
+/// by bus and frame below the FlexRay section. The identity is
+/// `SigKey::Eth { bus, frame, name }`, the same key the core folds decoded
+/// frames into, so a selection here samples and plots exactly like a DBC
+/// signal. Hidden until an Ethernet matrix loads.
+fn eth_section(
+    app: &mut App,
+    ui: &Ui,
+    sel: &HashSet<crate::observe::SigKey>,
+    actions: &mut Vec<(crate::observe::SigKey, bool)>,
+    q: &str,
+) {
+    if app.eth_buses.is_empty() {
+        return;
+    }
+    let hits: Vec<(u8, String, Vec<String>)> = app
+        .eth_buses
+        .iter()
+        .flat_map(|(bus, cfg)| {
+            cfg.db.frames.iter().map(move |f| {
+                let sigs: Vec<String> = f
+                    .pdus
+                    .iter()
+                    .flat_map(|p| p.signals.iter().map(|s| s.name.clone()))
+                    .collect();
+                (*bus, f.name.clone(), sigs)
+            })
+        })
+        .filter(|(_, frame, sigs)| {
+            q.is_empty()
+                || frame.to_ascii_uppercase().contains(q)
+                || sigs.iter().any(|s| s.to_ascii_uppercase().contains(q))
+        })
+        .collect();
+    if hits.is_empty() {
+        return;
+    }
+    let key = |bus: u8, frame: &str, s: &str| crate::observe::SigKey::eth(bus, frame, s);
+    let total: usize = hits.iter().map(|(_, _, s)| s.len()).sum();
+    let sel_n: usize = hits
+        .iter()
+        .flat_map(|(bus, frame, sigs)| sigs.iter().map(move |s| key(*bus, frame, s)))
+        .filter(|k| sel.contains(k))
+        .count();
+    let multi = app.eth_buses.len() > 1;
+    ui.spacing();
+    ui.separator();
+    ui.text_colored(
+        [0.90, 0.70, 0.30, 1.0],
+        format!("Ethernet ({sel_n}/{total})"),
+    );
+    ui.text_disabled("ARXML 以太网矩阵解析出的信号");
+    for (bus, frame, sigs) in &hits {
+        let keys: Vec<_> = sigs.iter().map(|s| key(*bus, frame, s)).collect();
+        let m_sel = keys.iter().filter(|k| sel.contains(k)).count();
+        let mut msg_on = m_sel == keys.len() && !keys.is_empty();
+        if ui.checkbox(format!("##ethmsgchk{bus}_{frame}"), &mut msg_on) {
+            for k in &keys {
+                actions.push((k.clone(), msg_on));
+            }
+        }
+        ui.same_line();
+        let mtoken = ui
+            .tree_node_config(format!(
+                "{}{frame} ({m_sel}/{})",
+                if multi {
+                    format!("{}  ", app.eth_bus_label(*bus))
+                } else {
+                    String::new()
+                },
+                keys.len()
+            ))
+            .default_open(!q.is_empty())
+            .push();
+        if mtoken.is_some() {
+            for (s, k) in sigs.iter().zip(&keys) {
+                let mut son = sel.contains(k);
+                if ui.checkbox(format!("{s}##ethsig{bus}_{frame}"), &mut son) {
                     actions.push((k.clone(), son));
                 }
             }

@@ -242,6 +242,7 @@ impl App {
         match key {
             SigKey::Can { ch, .. } => self.channel_name(*ch),
             SigKey::Fr { bus, .. } => self.fr_bus_name(*bus),
+            SigKey::Eth { bus, .. } => self.eth_bus_label(*bus),
         }
     }
 
@@ -312,7 +313,7 @@ impl App {
             // manage, so such a curve is neither dropped nor shifted.
             signals.retain(|s| match &s.key {
                 SigKey::Can { ch, .. } => remap(*ch).is_some(),
-                SigKey::Fr { .. } => true,
+                SigKey::Fr { .. } | SigKey::Eth { .. } => true,
             });
             for s in signals.iter_mut() {
                 if let SigKey::Can { ch, .. } = &mut s.key {
@@ -353,9 +354,9 @@ impl App {
         // Monitor rows carry signal keys too.
         self.monitor_view.rows.retain(|r| match &r.key {
             // Same rule as the curve lists: the removed CAN channel takes its
-            // CAN rows with it and leaves every FlexRay row alone.
+            // CAN rows with it and leaves every FlexRay and Ethernet row alone.
             SigKey::Can { ch, .. } => remap(*ch).is_some(),
-            SigKey::Fr { .. } => true,
+            SigKey::Fr { .. } | SigKey::Eth { .. } => true,
         });
         for r in &mut self.monitor_view.rows {
             if let SigKey::Can { ch, .. } = &mut r.key
@@ -477,6 +478,7 @@ impl App {
                 db: std::sync::Arc::new(db),
             },
         );
+        self.push_eth_db_to_core();
         self.status = format!(
             "已加载 Ethernet 矩阵 ETH{bus}（{cluster}，{vlans} VLAN，{frames} 帧）: {path}"
         );
@@ -497,8 +499,20 @@ impl App {
 
     pub fn remove_eth_bus(&mut self, bus: u8) {
         if self.eth_buses.remove(&bus).is_some() {
+            self.push_eth_db_to_core();
             self.status = format!("已移除 Ethernet 总线 ETH{bus}");
         }
+    }
+
+    /// Copies the frontend's parsed Ethernet matrices into the bus core,
+    /// which decodes each arriving frame against the one for its own bus.
+    pub(crate) fn push_eth_db_to_core(&mut self) {
+        let dbs: std::collections::BTreeMap<u8, _> = self
+            .eth_buses
+            .iter()
+            .map(|(b, c)| (*b, std::sync::Arc::clone(&c.db)))
+            .collect();
+        self.send(crate::bus::BusCommand::SetEthDbs(dbs));
     }
 
     pub fn eth_bus_label(&self, bus: u8) -> String {

@@ -168,6 +168,9 @@ pub enum BusCommand {
     /// observers during replay and live watch. The whole map moves at once so
     /// the core's view can never hold a bus the frontend dropped.
     SetFrDbs(std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>),
+    /// Replaces the Ethernet matrices the core decodes captured frames
+    /// against, one per Ethernet bus.
+    SetEthDbs(std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>),
     /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
     /// dedupes on that pair, so the key is stable where an index would
     /// shift under the sender's feet.
@@ -1052,6 +1055,8 @@ pub struct BusCore {
     /// folded into subscriptions for the Graphics / Data / State observers,
     /// exactly like a CAN frame's signals.
     pub(crate) fr_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
+    /// Ethernet matrices, pushed from the frontend when ARXML files load.
+    pub(crate) eth_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
     /// Trace-window freeze: arrivals keep coming but are stamped at the
     /// pause instant instead of their own time, so the view stays still and
     /// resuming does not dump a burst of backdated rows.
@@ -1175,7 +1180,7 @@ pub struct BusCore {
 fn emitted_node_id(key: &SigKey) -> Option<u64> {
     match key {
         SigKey::Can { id, .. } => Some((id & !crate::app::EMITTED_ID_BASE) as u64),
-        SigKey::Fr { .. } => None,
+        SigKey::Fr { .. } | SigKey::Eth { .. } => None,
     }
 }
 
@@ -1211,6 +1216,7 @@ impl BusCore {
             fr_aggs: HashMap::new(),
             eth_aggs: HashMap::new(),
             fr_dbs: Default::default(),
+            eth_dbs: Default::default(),
             trace_paused: false,
             paused_at_us: None,
             frame_counter: 0,
@@ -1514,6 +1520,7 @@ impl BusCore {
                 // mid-run re-tallies the rows that are on screen.
                 self.rebuild_fr_aggs();
             }
+            BusCommand::SetEthDbs(dbs) => self.eth_dbs = dbs,
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
                 // `next_t_us` still sits at the last slot before the entry
@@ -2631,6 +2638,44 @@ impl BusCore {
         agg.count += 1;
         agg.last_t_us = frame.t_us;
         agg.payload = std::sync::Arc::clone(&frame.payload);
+
+        // Decode the matched ARXML frame and fold its signals into the same
+        // subscription space CAN/FlexRay use. An ambiguous or unknown flow is
+        // watched as raw L2 only, never guessed into a frame definition.
+        if !self.subs.is_empty()
+            && let Some(db) = self.eth_dbs.get(&frame.bus).cloned()
+        {
+            let flow = crate::eth::db::EthFlow {
+                vlan: frame.vlan,
+                dst: frame.dst,
+                src: frame.src,
+                ethertype: frame.ethertype,
+                payload_len: frame.len(),
+            };
+            if let crate::eth::db::EthMatch::Unique(ix) = db.match_flow(&flow, false) {
+                let frame_name = db.frames[ix].name.clone();
+                if let Some(decoded) = db.decode(&flow, &frame.payload, false) {
+                    let stride = self.applied_stride_us;
+                    let t_us = frame.t_us;
+                    for d in decoded.signals {
+                        let key =
+                            crate::observe::SigKey::eth(frame.bus, frame_name.clone(), d.name);
+                        if let Some(entry) = self.subs.get_mut(&key) {
+                            entry.latest = d.physical;
+                            entry.last_raw = d.raw;
+                            entry.unit = d.unit;
+                            entry.type_tag = d.type_tag;
+                            entry.label = d.label;
+                            entry.last_update_us = t_us;
+                            if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
+                                entry.push_sample(t_us, d.physical, stride);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         self.eth_trace.push(frame);
     }
 
@@ -2939,20 +2984,32 @@ impl BusCore {
     /// until the first frame refreshes it -- and forever when no database
     /// names it.
     fn signal_meta(&self, key: &SigKey) -> String {
-        // A type tag is a DBC concept; the FlexRay database has no equivalent
-        // and `decode_signals` leaves it empty, so only a CAN key can declare
-        // one.
-        let SigKey::Can { ch, id, ext, name } = key else {
-            return String::new();
-        };
-        let msg = self
-            .channels
-            .get(*ch as usize)
-            .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.messages.get(&(*id, *ext)));
-        msg.and_then(|m| m.signals.iter().find(|s| &s.name == name))
-            .map(|s| s.type_tag.clone())
-            .unwrap_or_default()
+        match key {
+            // The FlexRay database carries no display type and
+            // `decode_signals` leaves it empty; the Ethernet matrix states
+            // signedness and width, the same pair its decoder tags.
+            SigKey::Fr { .. } => String::new(),
+            SigKey::Eth { bus, frame, name } => self
+                .eth_dbs
+                .get(bus)
+                .and_then(|db| db.frames.iter().find(|f| &f.name == frame))
+                .and_then(|f| {
+                    f.pdus
+                        .iter()
+                        .flat_map(|p| p.signals.iter())
+                        .find(|s| &s.name == name)
+                })
+                .map(|s| format!("{}{}", if s.signed { "i" } else { "u" }, s.size))
+                .unwrap_or_default(),
+            SigKey::Can { ch, id, ext, name } => self
+                .channels
+                .get(*ch as usize)
+                .and_then(|c| c.dbc.as_ref())
+                .and_then(|db| db.messages.get(&(*id, *ext)))
+                .and_then(|m| m.signals.iter().find(|s| &s.name == name))
+                .map(|s| s.type_tag.clone())
+                .unwrap_or_default(),
+        }
     }
 
     /// Adds a bus with the sample DBC path, loads it and pre-populates its
@@ -3322,7 +3379,7 @@ impl BusCore {
                 SigKey::Can { ch, id, ext, name } => {
                     remap(ch).map(|nc| (SigKey::can(nc, id, ext, name), s))
                 }
-                k @ SigKey::Fr { .. } => Some((k, s)),
+                k @ (SigKey::Fr { .. } | SigKey::Eth { .. }) => Some((k, s)),
             })
             .collect();
         self.spec.drop_channel(ch as u8);
@@ -5636,6 +5693,64 @@ mod tests {
             2,
             "an undecodable signal holds the level and never fires"
         );
+    }
+
+    /// An Ethernet frame matched to its ARXML frame definition decodes into
+    /// the same subscription space as CAN and FlexRay, keyed by the Ethernet
+    /// bus and the frame the matrix matched -- so the observers plot it.
+    #[test]
+    fn ethernet_frames_fold_signals_into_subscriptions() {
+        let mut core = BusCore::new(Vec::new());
+        let db = crate::eth::db::EthDb {
+            clusters: vec![crate::eth::db::EthCluster {
+                name: "Cluster".into(),
+                vlans: vec![100],
+            }],
+            frames: vec![crate::eth::db::EthFrameDef {
+                name: "SpeedFrame".into(),
+                cluster: "Cluster".into(),
+                vlan: Some(100),
+                length: 8,
+                ethertype_hint: Some(0x0800),
+                pdus: vec![crate::eth::db::EthPdu {
+                    name: "SpeedPdu".into(),
+                    length: 8,
+                    start_bit: 0,
+                    signals: vec![crate::eth::db::EthSignal {
+                        name: "Speed".into(),
+                        start_bit: 0,
+                        size: 8,
+                        big_endian: false,
+                        signed: false,
+                        factor: 2.0,
+                        offset: 1.0,
+                        unit: "km/h".into(),
+                        values: vec![],
+                    }],
+                }],
+            }],
+        };
+        core.eth_dbs.insert(0, std::sync::Arc::new(db));
+        let key = crate::observe::SigKey::eth(0, "SpeedFrame", "Speed");
+        core.subscribe_signal(key.clone());
+
+        core.ingest_eth(crate::eth::EthFrame::new(
+            1_000,
+            0,
+            crate::can::frame::Direction::Rx,
+            [9, 8, 7, 6, 5, 4],
+            [1, 2, 3, 4, 5, 6],
+            Some(100),
+            0x0800,
+            vec![42, 0, 0, 0, 0, 0, 0, 0],
+        ));
+
+        let sub = core.subs.get(&key).expect("Ethernet signal subscribed");
+        assert_eq!(sub.latest, 85.0, "factor and offset applied");
+        assert_eq!(sub.last_raw, 42);
+        assert_eq!(sub.unit, "km/h", "unit carried from the matrix");
+        assert_eq!(sub.type_tag, "u8");
+        assert_eq!(sub.history.len(), 1, "sampled like a CAN signal");
     }
 
     /// Two clusters, two descriptions, the same slot number: each bus decodes

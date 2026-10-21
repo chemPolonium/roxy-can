@@ -10240,7 +10240,7 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
             .iter()
             .map(|s| match &s.key {
                 SigKey::Fr { bus, .. } => *bus,
-                SigKey::Can { .. } => 255,
+                _ => 255,
             })
             .collect::<Vec<_>>(),
         [1],

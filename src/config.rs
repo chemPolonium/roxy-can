@@ -271,6 +271,10 @@ pub struct SignalCfg {
     /// [`sig_key`] migrates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fr_slot: Option<u16>,
+    /// The ARXML Ethernet frame the signal was decoded from, with `ch`
+    /// naming the Ethernet bus. Absent for CAN and FlexRay signals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eth_frame: Option<String>,
     pub signal: String,
     #[serde(default = "true_default")]
     pub visible: bool,
@@ -341,6 +345,9 @@ pub struct MonitorRowCfg {
     /// See [`SignalCfg::fr_slot`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fr_slot: Option<u16>,
+    /// See [`SignalCfg::eth_frame`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eth_frame: Option<String>,
     pub signal: String,
     #[serde(default)]
     pub label: String,
@@ -763,12 +770,14 @@ pub struct Config {
 }
 
 /// The project-file fields a signal key writes: the CAN triple, or the
-/// FlexRay bus in `ch` with its slot in `fr_slot`. A FlexRay signal no longer
-/// borrows an arbitration id, so nothing here can be mistaken for one.
-fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>) {
+/// FlexRay bus in `ch` with its slot in `fr_slot`, or the Ethernet bus in
+/// `ch` with the frame name in `eth_frame`. A FlexRay or Ethernet signal no
+/// longer borrows an arbitration id, so nothing here can be mistaken for one.
+fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>, Option<String>) {
     match key {
-        SigKey::Can { ch, id, ext, .. } => (*ch, *id, *ext, None),
-        SigKey::Fr { bus, slot, .. } => (*bus, 0, false, Some(*slot)),
+        SigKey::Can { ch, id, ext, .. } => (*ch, *id, *ext, None, None),
+        SigKey::Fr { bus, slot, .. } => (*bus, 0, false, Some(*slot), None),
+        SigKey::Eth { bus, frame, .. } => (*bus, 0, false, None, Some(frame.clone())),
     }
 }
 
@@ -777,7 +786,17 @@ fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>) {
 /// `FR_SIG_BASE`, with the slot in the low bits and the bus fixed to the only
 /// one a FlexRay watch could have. Loading those as FlexRay keys is what keeps
 /// their curves.
-fn sig_key(ch: u8, id: u32, ext: bool, fr_slot: Option<u16>, signal: String) -> SigKey {
+fn sig_key(
+    ch: u8,
+    id: u32,
+    ext: bool,
+    fr_slot: Option<u16>,
+    eth_frame: Option<String>,
+    signal: String,
+) -> SigKey {
+    if let Some(frame) = eth_frame {
+        return SigKey::eth(ch, frame, signal);
+    }
     match fr_slot {
         Some(slot) => SigKey::fr(ch, slot, signal),
         None if id & crate::app::FR_SIG_BASE != 0 => SigKey::fr(0, (id & 0x3F_FF) as u16, signal),
@@ -789,12 +808,13 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
     signals
         .iter()
         .map(|s| {
-            let (ch, id, ext, fr_slot) = sig_cfg_of(&s.key);
+            let (ch, id, ext, fr_slot, eth_frame) = sig_cfg_of(&s.key);
             SignalCfg {
                 ch,
                 id,
                 ext,
                 fr_slot,
+                eth_frame,
                 signal: s.key.name().to_string(),
                 visible: s.visible,
                 y_mode: s.y_mode.to_u8(),
@@ -860,7 +880,14 @@ fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
     signals
         .iter()
         .map(|s| GfxSignal {
-            key: sig_key(s.ch, s.id, s.ext, s.fr_slot, s.signal.clone()),
+            key: sig_key(
+                s.ch,
+                s.id,
+                s.ext,
+                s.fr_slot,
+                s.eth_frame.clone(),
+                s.signal.clone(),
+            ),
             visible: s.visible,
             y_mode: YMode::from_u8(s.y_mode),
         })
@@ -1030,12 +1057,13 @@ impl Config {
                 .rows
                 .iter()
                 .map(|r| {
-                    let (ch, id, ext, fr_slot) = sig_cfg_of(&r.key);
+                    let (ch, id, ext, fr_slot, eth_frame) = sig_cfg_of(&r.key);
                     MonitorRowCfg {
                         ch,
                         id,
                         ext,
                         fr_slot,
+                        eth_frame,
                         signal: r.key.name().to_string(),
                         label: r.label.clone(),
                         digits: r.digits,
@@ -1058,12 +1086,13 @@ impl Config {
                         .signals
                         .iter()
                         .map(|s| {
-                            let (ch, id, ext, fr_slot) = sig_cfg_of(&s.key);
+                            let (ch, id, ext, fr_slot, eth_frame) = sig_cfg_of(&s.key);
                             SignalCfg {
                                 ch,
                                 id,
                                 ext,
                                 fr_slot,
+                                eth_frame,
                                 signal: s.key.name().to_string(),
                                 visible: s.visible,
                                 y_mode: s.y_mode.to_u8(),
@@ -1457,7 +1486,7 @@ impl Config {
                 .monitor_rows
                 .into_iter()
                 .map(|m| crate::app::MonitorRow {
-                    key: sig_key(m.ch, m.id, m.ext, m.fr_slot, m.signal),
+                    key: sig_key(m.ch, m.id, m.ext, m.fr_slot, m.eth_frame, m.signal),
                     label: m.label,
                     digits: m.digits,
                     rule_on: m.rule_on,
@@ -1678,6 +1707,7 @@ impl Config {
         // state, so a replay or a watch attach finds them where the user left
         // them -- no lazy re-push at the moment of use.
         app.push_fr_db_to_core();
+        app.push_eth_db_to_core();
         // The FlexRay generator entries are rebuilt *after* the descriptions
         // land, because their name, payload length and send period are read out
         // of the description: restored earlier, every entry would come back as a
@@ -3008,5 +3038,30 @@ mod eth_config_tests {
         assert!(restored.eth_buses.contains_key(&2));
         assert_eq!(restored.eth_db(2).unwrap().frames.len(), 1);
         std::fs::remove_file(path).ok();
+    }
+
+    /// An Ethernet signal's project fields name its bus and ARXML frame, and
+    /// rebuild the very same `SigKey::Eth` -- otherwise a saved curve would
+    /// come back pointing at a CAN id no frame ever carries.
+    #[test]
+    fn ethernet_signal_keys_round_trip_through_project_fields() {
+        let key = SigKey::eth(2, "SpeedFrame", "Speed");
+        let gfx = GfxSignal {
+            key: key.clone(),
+            visible: true,
+            y_mode: YMode::Auto,
+        };
+        let cfg = sig_cfgs(&[gfx]);
+        assert_eq!(cfg[0].ch, 2);
+        assert_eq!(cfg[0].eth_frame.as_deref(), Some("SpeedFrame"));
+        assert_eq!(cfg[0].fr_slot, None);
+
+        let json = serde_json::to_string(&cfg[0]).unwrap();
+        assert!(
+            json.contains("\"eth_frame\":\"SpeedFrame\""),
+            "the frame is stated in the file: {json}"
+        );
+        let back: SignalCfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(sig_keys(&[back])[0].key, key);
     }
 }

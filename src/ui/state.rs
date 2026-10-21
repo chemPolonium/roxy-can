@@ -146,6 +146,7 @@ fn rule_editor(state: &mut StateUi, wins: &mut [StateWin], app: &App, ui: &Ui) {
     let id_tag = match &key {
         crate::observe::SigKey::Can { id, ext, .. } => format!("{id}{}", *ext as u8),
         crate::observe::SigKey::Fr { bus, slot, .. } => format!("fr{bus}_{slot}"),
+        crate::observe::SigKey::Eth { bus, frame, .. } => format!("eth{bus}_{frame}"),
     };
     let title = format!("State bands \u{2014} {}###srules{wi}{id_tag}", key.name());
     let mut open = true;
@@ -184,10 +185,10 @@ fn rule_editor(state: &mut StateUi, wins: &mut [StateWin], app: &App, ui: &Ui) {
                     .channels
                     .get(*ch as usize)
                     .and_then(|c| c.dbc.clone()),
-                // Only a CAN key can name a DBC message; a FlexRay signal has
-                // no VAL_ table, so its default states come from the observed
-                // values alone.
-                crate::observe::SigKey::Fr { .. } => None,
+                // Only a CAN key can name a DBC message; a FlexRay or
+                // Ethernet signal has no VAL_ table here, so its default
+                // states come from the observed values alone.
+                crate::observe::SigKey::Fr { .. } | crate::observe::SigKey::Eth { .. } => None,
             };
             if mode == 0 {
                 default_panel(ui, dbc.as_deref(), w, &key, &mut state.rule_pick, wi);

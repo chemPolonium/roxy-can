@@ -400,6 +400,12 @@ pub enum SigKey {
         slot: u16,
         name: String,
     },
+    /// A signal decoded from one ARXML Ethernet frame on an Ethernet bus.
+    Eth {
+        bus: u8,
+        frame: String,
+        name: String,
+    },
 }
 
 impl SigKey {
@@ -420,9 +426,17 @@ impl SigKey {
         }
     }
 
+    pub fn eth(bus: u8, frame: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::Eth {
+            bus,
+            frame: frame.into(),
+            name: name.into(),
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
-            Self::Can { name, .. } | Self::Fr { name, .. } => name,
+            Self::Can { name, .. } | Self::Fr { name, .. } | Self::Eth { name, .. } => name,
         }
     }
 }
@@ -703,6 +717,9 @@ impl App {
                     .and_then(|db| db.slot_signal(*slot, name))?;
                 (sig.min, sig.max)
             }
+            // The Ethernet matrix declares compu methods but no min..max, so
+            // an Ethernet signal falls back to its observed extremes.
+            SigKey::Eth { .. } => return None,
         };
         (max > min).then_some((min, max))
     }

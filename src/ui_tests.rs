@@ -857,6 +857,89 @@ fn the_message_picker_offers_flexray_slots() {
     );
 }
 
+/// The signal-level selection popup renders its Ethernet section against a
+/// loaded matrix: one row per ARXML frame, one checkbox per I-Signal, and a
+/// pick stores the `SigKey::Eth` the core decodes into.
+#[test]
+fn ethernet_signal_picker_draws_without_panicking() {
+    use crate::app::PopupTarget;
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.new_graphics_window();
+    let db = crate::eth::db::EthDb {
+        clusters: vec![crate::eth::db::EthCluster {
+            name: "Cluster".into(),
+            vlans: vec![100],
+        }],
+        frames: vec![
+            crate::eth::db::EthFrameDef {
+                name: "SpeedFrame".into(),
+                cluster: "Cluster".into(),
+                vlan: Some(100),
+                length: 8,
+                ethertype_hint: Some(0x0800),
+                pdus: vec![crate::eth::db::EthPdu {
+                    name: "SpeedPdu".into(),
+                    length: 8,
+                    start_bit: 0,
+                    signals: vec![crate::eth::db::EthSignal {
+                        name: "Speed".into(),
+                        start_bit: 0,
+                        size: 16,
+                        big_endian: false,
+                        signed: false,
+                        factor: 0.1,
+                        offset: 0.0,
+                        unit: "km/h".into(),
+                        values: vec![],
+                    }],
+                }],
+            },
+            crate::eth::db::EthFrameDef {
+                name: "TorqueFrame".into(),
+                cluster: "Cluster".into(),
+                vlan: Some(101),
+                length: 8,
+                ethertype_hint: Some(0x0800),
+                pdus: vec![crate::eth::db::EthPdu {
+                    name: "TorquePdu".into(),
+                    length: 8,
+                    start_bit: 0,
+                    signals: vec![crate::eth::db::EthSignal {
+                        name: "Torque".into(),
+                        start_bit: 0,
+                        size: 12,
+                        big_endian: true,
+                        signed: true,
+                        factor: 1.0,
+                        offset: 0.0,
+                        unit: "Nm".into(),
+                        values: vec![],
+                    }],
+                }],
+            },
+        ],
+    };
+    app.eth_buses.insert(
+        0,
+        crate::app::EthBusCfg {
+            path: "synthetic.arxml".to_string(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    let key = crate::observe::SigKey::eth(0, "SpeedFrame", "Speed");
+    app.set_win_signal(PopupTarget::Graphics(0), key.clone(), true);
+    app.settle();
+    assert!(
+        app.subs.contains_key(&key),
+        "the pick subscribes the Ethernet key the core decodes"
+    );
+    app.popup_target = Some(PopupTarget::Graphics(0));
+    app.show_id_filter = true;
+    frames(&mut app, &mut ctx, 3);
+}
+
 /// A FlexRay ECU's generator panel in the Network detail: the same cycle dialog,
 /// payload box and signal handles a CAN node's panel has, reached by selecting
 /// the ECU in the tree. Drawing it is the point -- the two panels share the
