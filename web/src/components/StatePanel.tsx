@@ -6,6 +6,7 @@ interface Props {
   windowS: number;
   onWindow: (seconds: number) => void;
   onRemove: (row: StateRow) => void;
+  onRule: (row: StateRow) => void;
 }
 
 /** Few-state fills are deliberately high-contrast: a 0/1 signal reads as a
@@ -80,7 +81,7 @@ function StateStrip({ bands }: { bands: StateBand[] }) {
   return <canvas class="state-strip" ref={ref} />;
 }
 
-export function StatePanel({ rows, windowS, onWindow, onRemove }: Props) {
+export function StatePanel({ rows, windowS, onWindow, onRemove, onRule }: Props) {
   const options = WINDOWS.some(([seconds]) => seconds === windowS)
     ? WINDOWS
     : [...WINDOWS, [windowS, `${windowS} s`] as [number, string]].sort(
@@ -127,6 +128,14 @@ export function StatePanel({ rows, windowS, onWindow, onRemove }: Props) {
               <span class="state-current" title="Current state">
                 {row.current}
               </span>
+              <button
+                type="button"
+                class={`mini state-bands ${row.rule ? "on" : ""}`}
+                title="Edit value-definition bands"
+                onClick={() => onRule(row)}
+              >
+                bands
+              </button>
               <button
                 type="button"
                 class="mini"

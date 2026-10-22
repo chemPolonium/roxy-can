@@ -99,7 +99,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   band per pixel column, and drawn on a canvas over a 5 s–30 min trailing
   window (persisted in the project). Few states get distinct high-contrast
   colors and in-band labels; an analog sweep collapses to one neutral band.
-  Custom value-definition bands are not here yet.
+  **bands** opens the Value Definition editor: ascending cut points, a name
+  per band and Default to return to quantized values.
 - **Scripts…** (from the Buses dialog) manages simulation node scripts:
   create an unbound script or bind it to a DBC node, edit the C-like source
   in a plain textarea, enable/disable it, apply while measuring (the node
@@ -151,10 +152,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 A native browser file picker (opening, saving and DBC loading use host paths
-and recents; the CLI flags also work), FlexRay/Ethernet attachment, state
-value-definition bands, docking/desktops, and syntax highlighting or `.rxcan`
-loading in the web script editor. Hardware, Data, State and the Monitor cover
-CAN only for now.
+and recents; the CLI flags also work), FlexRay/Ethernet attachment,
+docking/desktops, and syntax highlighting or `.rxcan` loading in the web
+script editor. Hardware, Data, State and the Monitor cover CAN only for now.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

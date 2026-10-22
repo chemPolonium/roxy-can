@@ -29,6 +29,7 @@ import { SignalPicker } from "./components/SignalPicker";
 import { SpecPanel } from "./components/SpecPanel";
 import { ScriptsModal } from "./components/ScriptsModal";
 import { StatePanel } from "./components/StatePanel";
+import { StateRuleModal } from "./components/StateRuleModal";
 import { StatsTable } from "./components/StatsTable";
 import { SysVarsModal } from "./components/SysVarsModal";
 import type { SysVarEdit } from "./components/SysVarsModal";
@@ -40,6 +41,7 @@ import {
   traceFilterActive,
 } from "./components/TraceFilterModal";
 import type { TraceFilter } from "./components/TraceFilterModal";
+import type { StateRow } from "./types";
 
 type RightTab = "messages" | "statistics" | "bus" | "spec" | "activity";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
@@ -168,6 +170,7 @@ export function App() {
   const [scriptsOpen, setScriptsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportKind, setExportKind] = useState("trace");
+  const [stateRule, setStateRule] = useState<StateRow | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -1155,6 +1158,7 @@ export function App() {
                 onWindow={(seconds) =>
                   void run({ type: "set_state_window", seconds })
                 }
+                onRule={setStateRule}
                 onRemove={(row) =>
                   void run({
                     type: "remove_state",
@@ -1515,6 +1519,36 @@ export function App() {
           filter={traceFilter}
           onApply={setTraceFilter}
           onClose={() => setTraceFilterOpen(false)}
+        />
+      )}
+
+      {stateRule && (
+        <StateRuleModal
+          signal={`${stateRule.name} · ${stateRule.bus}`}
+          rule={stateRule.rule}
+          onApply={(cuts, names) => {
+            void run({
+              type: "set_state_rule",
+              ch: stateRule.ch,
+              id: stateRule.id,
+              ext: stateRule.ext,
+              name: stateRule.name,
+              cuts,
+              names,
+            });
+            setStateRule(null);
+          }}
+          onClear={() => {
+            void run({
+              type: "clear_state_rule",
+              ch: stateRule.ch,
+              id: stateRule.id,
+              ext: stateRule.ext,
+              name: stateRule.name,
+            });
+            setStateRule(null);
+          }}
+          onClose={() => setStateRule(null)}
         />
       )}
 

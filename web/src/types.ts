@@ -186,6 +186,11 @@ export interface StateBand {
   color: number;
 }
 
+export interface StateRule {
+  cuts: number[];
+  names: string[];
+}
+
 export interface StateRow {
   ch: number;
   id: number;
@@ -194,6 +199,7 @@ export interface StateRow {
   bus: string;
   current: string;
   bands: StateBand[];
+  rule: StateRule | null;
 }
 
 export interface ScriptInfo {
@@ -433,6 +439,16 @@ export type Command =
   | { type: "remove_state"; ch: number; id: number; ext: boolean; name: string }
   | { type: "clear_state" }
   | { type: "set_state_window"; seconds: number }
+  | {
+      type: "set_state_rule";
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+      cuts: number[];
+      names: string[];
+    }
+  | { type: "clear_state_rule"; ch: number; id: number; ext: boolean; name: string }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }

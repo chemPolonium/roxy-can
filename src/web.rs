@@ -537,6 +537,37 @@ fn chart_unselect(app: &mut App, key: &SigKey) {
     app.prune_signal(key);
 }
 
+/// Replaces a State row's custom value-definition bands. Cuts are sorted
+/// and deduplicated; names are padded so every band has a label.
+fn set_state_rule(app: &mut App, key: &SigKey, cuts: Vec<f64>, names: Vec<String>) {
+    let Some(window) = app.state_trackers.first_mut() else {
+        app.status = "state rule needs a State Tracker window".to_string();
+        return;
+    };
+    let mut cuts: Vec<f64> = cuts.into_iter().filter(|value| value.is_finite()).collect();
+    cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    cuts.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+    let mut names = names;
+    names.truncate(cuts.len() + 1);
+    while names.len() < cuts.len() + 1 {
+        names.push(format!("state {}", names.len()));
+    }
+    window.rules.insert(
+        key.clone(),
+        crate::observe::StateRule {
+            colors: vec![None; cuts.len() + 1],
+            cuts,
+            names,
+        },
+    );
+}
+
+fn clear_state_rule(app: &mut App, key: &SigKey) {
+    if let Some(window) = app.state_trackers.first_mut() {
+        window.rules.remove(key);
+    }
+}
+
 fn pct_text(v: f64) -> String {
     format!("{:.2}", v * 100.0)
 }
@@ -664,6 +695,76 @@ fn bus_stat_rows(load: &crate::load::BusLoad) -> Vec<WebBusStatRow> {
         avg: "-".to_string(),
     });
     rows
+}
+
+/// Turns visible samples into at most one band per pixel column (360) using
+/// explicit cut points: the band index is the state, its name the label.
+fn state_bands_custom(
+    held: Option<f64>,
+    samples: &[(u64, f64)],
+    lo: u64,
+    hi: u64,
+    rule: &crate::observe::StateRule,
+) -> (String, Vec<WebStateBand>) {
+    const COLS: usize = 360;
+    let span = hi.saturating_sub(lo).max(1);
+    let mut values: Vec<Option<f64>> = vec![None; COLS];
+    for &(t, v) in samples {
+        let idx =
+            (((t.saturating_sub(lo)) as u128 * COLS as u128 / span as u128) as usize).min(COLS - 1);
+        values[idx] = Some(v);
+    }
+    let mut last = held;
+    for slot in &mut values {
+        if let Some(v) = *slot {
+            last = Some(v);
+        } else {
+            *slot = last;
+        }
+    }
+    let label_of = |v: f64| {
+        let band = rule.band(v);
+        rule.names
+            .get(band)
+            .cloned()
+            .unwrap_or_else(|| format!("band {band}"))
+    };
+    let mut bands = Vec::new();
+    let mut open: Option<(usize, usize)> = None;
+    for (i, slot) in values.iter().enumerate() {
+        let band = slot.map(|v| rule.band(v));
+        match open {
+            Some((open_band, _)) if Some(open_band) == band => {}
+            Some((open_band, start)) => {
+                bands.push(WebStateBand {
+                    start: start as f64 / COLS as f64,
+                    end: i as f64 / COLS as f64,
+                    label: rule
+                        .names
+                        .get(open_band)
+                        .cloned()
+                        .unwrap_or_else(|| format!("band {open_band}")),
+                    color: open_band % 8,
+                });
+                open = band.map(|band| (band, i));
+            }
+            None => open = band.map(|band| (band, i)),
+        }
+    }
+    if let Some((open_band, start)) = open {
+        bands.push(WebStateBand {
+            start: start as f64 / COLS as f64,
+            end: 1.0,
+            label: rule
+                .names
+                .get(open_band)
+                .cloned()
+                .unwrap_or_else(|| format!("band {open_band}")),
+            color: open_band % 8,
+        });
+    }
+    let current = last.map(label_of).unwrap_or_else(|| "-".to_string());
+    (current, bands)
 }
 
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
@@ -1065,6 +1166,20 @@ enum WebCommand {
     ClearState,
     SetStateWindow {
         seconds: f64,
+    },
+    SetStateRule {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+        cuts: Vec<f64>,
+        names: Vec<String>,
+    },
+    ClearStateRule {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
     },
     SetEntryActive {
         ch: u8,
@@ -1620,6 +1735,19 @@ fn app_loop(
                     if let Some(window) = app.state_trackers.first_mut() {
                         window.time_window_s = seconds.clamp(0.1, 3600.0);
                     }
+                }
+                WebCommand::SetStateRule {
+                    ch,
+                    id,
+                    ext,
+                    name,
+                    cuts,
+                    names,
+                } => {
+                    set_state_rule(&mut app, &SigKey::can(ch, id, ext, name), cuts, names);
+                }
+                WebCommand::ClearStateRule { ch, id, ext, name } => {
+                    clear_state_rule(&mut app, &SigKey::can(ch, id, ext, name));
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
                     app.send(BusCommand::SetEntryActive { ch, id, on });
@@ -2727,6 +2855,13 @@ struct WebStateBand {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebStateRule {
+    cuts: Vec<f64>,
+    names: Vec<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebStateRow {
     ch: u8,
     id: u32,
@@ -2735,6 +2870,7 @@ struct WebStateRow {
     bus: String,
     current: String,
     bands: Vec<WebStateBand>,
+    rule: Option<WebStateRule>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -3217,12 +3353,16 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     let SigKey::Can { ch, id, ext, name } = &signal.key else {
                         return None;
                     };
+                    let rule = window.rules.get(&signal.key);
                     let (current, bands) = match signal_sub(app, &signal.key) {
                         Some(sub) => {
                             let held = sub.history.at(lo);
                             let samples: Vec<(u64, f64)> =
                                 sub.history.range(lo, hi).copied().collect();
-                            state_bands_from(held, &samples, lo, hi)
+                            match rule {
+                                Some(rule) => state_bands_custom(held, &samples, lo, hi, rule),
+                                None => state_bands_from(held, &samples, lo, hi),
+                            }
                         }
                         None => ("-".to_string(), Vec::new()),
                     };
@@ -3234,6 +3374,10 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         bus: bus_name(app, *ch),
                         current,
                         bands,
+                        rule: rule.map(|rule| WebStateRule {
+                            cuts: rule.cuts.clone(),
+                            names: rule.names.clone(),
+                        }),
                     })
                 })
                 .collect()
@@ -3877,6 +4021,47 @@ mod tests {
         assert_eq!(state.spec_tolerance, app.spec_tol_pct);
         assert_eq!(state.spec_grace, app.spec_grace);
         assert!(state.spec_rows.is_empty(), "a clean demo has no verdicts");
+    }
+
+    /// Custom cuts replace the quantized value with a band index and use the
+    /// band's own name, exactly like the desktop Value Definition editor.
+    #[test]
+    fn state_custom_bands_use_cut_names() {
+        let rule = crate::observe::StateRule {
+            cuts: vec![1.0],
+            names: vec!["low".to_string(), "high".to_string()],
+            colors: vec![None, None],
+        };
+        let (current, bands) =
+            state_bands_custom(Some(0.0), &[(10_000, 0.0), (20_000, 2.0)], 0, 40_000, &rule);
+        assert_eq!(current, "high");
+        assert_eq!(bands.len(), 2);
+        assert_eq!(bands[0].label, "low");
+        assert_eq!(bands[1].label, "high");
+    }
+
+    /// A saved custom rule reaches the state and can be removed again.
+    #[test]
+    fn state_rules_reach_the_web_and_clear() {
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut app = App::headless();
+        app.new_state_window();
+        app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
+        app.settle();
+        set_state_rule(
+            &mut app,
+            &key,
+            vec![1000.0, 5000.0],
+            vec!["idle".into(), "cruise".into(), "fast".into()],
+        );
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let rule = state.state_rows[0].rule.as_ref().expect("rule saved");
+        assert_eq!(rule.cuts, vec![1000.0, 5000.0]);
+        assert_eq!(rule.names[2], "fast");
+
+        clear_state_rule(&mut app, &key);
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(state.state_rows[0].rule.is_none());
     }
 
     /// A replay path must open the log and start playback in Replay mode,

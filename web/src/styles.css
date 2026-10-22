@@ -1855,9 +1855,9 @@ button.danger:hover:not(:disabled) {
 .state-row {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 100px minmax(60px, 1fr) 56px 18px;
+  grid-template-columns: 100px minmax(60px, 1fr) 56px 40px 18px;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .state-name {
@@ -1914,6 +1914,90 @@ button.danger:hover:not(:disabled) {
   color: var(--muted);
   font-size: 10.5px;
   text-align: center;
+}
+
+.state-bands {
+  padding: 0 3px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.state-bands.on {
+  background: #142334;
+  border-color: #2d5c88;
+  color: #cfe6ff;
+}
+
+.state-rule-modal {
+  width: min(560px, 100%);
+  max-height: 88vh;
+  overflow: auto;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.state-rule-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.state-band-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.state-band-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.state-band-edit label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.state-band-edit input {
+  width: 80px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.state-band-name {
+  flex: 1 1 auto;
+}
+
+.state-band-name input {
+  width: 100%;
+}
+
+.state-band-range {
+  color: #9fb0c2;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.state-rule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.state-rule-actions .spacer {
+  flex: 1;
 }
 
 /* Data: value/raw/min-avg-max plus a database-scaled bar. Cards instead of
