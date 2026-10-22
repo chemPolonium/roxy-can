@@ -849,6 +849,26 @@ export function App() {
           <span class="replay-pos">{replayText || "no position"}</span>
           <div class="replay-nav">
             <label>
+              Speed
+              <select
+                value={state.replaySpeed >= 1e8 ? "fast" : String(state.replaySpeed)}
+                onChange={(event) => {
+                  const value = (event.target as HTMLSelectElement).value;
+                  void run({
+                    type: "set_replay_speed",
+                    speed: value === "fast" ? 1e9 : Number(value),
+                  });
+                }}
+              >
+                {[0.5, 1, 2, 4].map((speed) => (
+                  <option key={speed} value={speed}>
+                    {speed}x
+                  </option>
+                ))}
+                <option value="fast">Fast</option>
+              </select>
+            </label>
+            <label>
               Step
               <select
                 value={replayStepMs}

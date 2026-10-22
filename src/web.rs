@@ -480,6 +480,7 @@ fn export_file(app: &mut App, kind: &str, path: &str) {
         "write" => app.export_write_txt(path),
         "data" => app.export_data_csv(0, path),
         "state" => app.export_state_csv(0, path),
+        "graphics" => app.export_graphics_csv(0, path),
         "spec" => app.export_spec_csv(path),
         other => app.status = format!("unknown export kind: {other}"),
     }
@@ -1033,6 +1034,9 @@ enum WebCommand {
     ReplayPlayFor {
         duration_us: u64,
     },
+    SetReplaySpeed {
+        speed: f64,
+    },
     RecordToggle {
         name: Option<String>,
         format: Option<u8>,
@@ -1426,6 +1430,15 @@ fn app_loop(
                 }
                 WebCommand::ReplayPlayFor { duration_us } => {
                     app.send(BusCommand::ReplayPlayFor { duration_us });
+                }
+                WebCommand::SetReplaySpeed { speed } => {
+                    let speed = if speed.is_finite() && speed > 0.0 {
+                        speed
+                    } else {
+                        1.0
+                    };
+                    app.replay_speed = speed;
+                    app.send(BusCommand::SetReplaySpeed(speed));
                 }
                 WebCommand::RecordToggle { name, format } => {
                     if let Some(name) = name {
@@ -2858,6 +2871,7 @@ struct WebState {
     run_mode: String,
     replay_pos_us: Option<u64>,
     replay_total_us: Option<u64>,
+    replay_speed: f64,
     recent_projects: Vec<String>,
     recent_logs: Vec<String>,
     buses: Vec<WebBus>,
@@ -3949,6 +3963,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         replay_pos_us: snap.replay.map(|(pos, _)| pos),
         replay_total_us: snap.replay.map(|(_, total)| total),
+        replay_speed: if app.replay_speed.is_finite() {
+            app.replay_speed
+        } else {
+            1e9
+        },
         recent_projects: app.recent_projects.clone(),
         recent_logs: app.recent_log.clone(),
         buses,
@@ -4350,6 +4369,7 @@ mod tests {
         for _ in 0..20 {
             app.update();
         }
+        chart_select(&mut app, 0, 0x100, false, "EngineSpeed");
         let dir = std::env::temp_dir();
         let files = [
             (
@@ -4371,6 +4391,11 @@ mod tests {
                 "data",
                 dir.join("roxy_web_export_data.csv"),
                 "bus,signal,value,unit",
+            ),
+            (
+                "graphics",
+                dir.join("roxy_web_export_graphics.csv"),
+                "time_us,bus,signal,value",
             ),
             ("spec", dir.join("roxy_web_export_spec.csv"), "# database"),
         ];

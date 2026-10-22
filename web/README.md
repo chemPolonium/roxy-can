@@ -31,8 +31,9 @@ The toolbar's **Session…** dialog can switch sessions without restarting the
 server: enter a host path or pick a recent project/log. Opening a project or
 log stops the current measurement and clears the trace; a log starts playing
 immediately. A loaded replay also gets a second, slim bar with the playhead,
-a forward **Step** (10 ms–5 s), **Play for** (1–60 s) and **Play to** an
-absolute log time; both timed plays resume playback and pause at the target.
+a speed ladder (0.5x/1x/2x/4x/Fast), a forward **Step** (10 ms–5 s), **Play
+for** (1–60 s) and **Play to** an absolute log time; both timed plays resume
+playback and pause at the target.
 **Save** writes the open project and **Save as** writes a copy to a typed host
 path; the dialog marks unsaved changes next to the current name. The
 **Recording** section starts/stops an ASC or BLF capture with a typed file
@@ -130,9 +131,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   verdicts, with per-rule filters, Clear and CSV export.
 - **Export…** sits in the Trace header and the lower panel: it writes the
   trace as ASC (or PCAP when the path ends in `.pcap`), and Messages,
-  Statistics, Data, State or the Write log as CSV/TXT. Paths are host paths;
-  relative ones resolve against the server's working directory. Exports use
-  the first desktop window of that kind, which is All buses by default.
+  Statistics, Data, State, the Signals chart or the Write log as CSV/TXT.
+  Paths are host paths; relative ones resolve against the server's working
+  directory. Exports use the first desktop window of that kind, which is All
+  buses by default.
 - Trace/Messages tables, bus and text filtering, the extra **Filters** dialog
   (direction, decoded-only, payload substring, time range, only/exclude hex
   ids), a canvas chart

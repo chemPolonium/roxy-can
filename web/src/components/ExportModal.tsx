@@ -12,6 +12,7 @@ const KINDS: [string, string, string][] = [
   ["stats", "Statistics (CSV)", ".csv"],
   ["data", "Data (CSV)", ".csv"],
   ["state", "State (CSV)", ".csv"],
+  ["graphics", "Signals chart (CSV)", ".csv"],
   ["spec", "Specification (CSV)", ".csv"],
   ["write", "Write log (TXT)", ".txt"],
 ];

@@ -18,6 +18,7 @@ export interface State {
   runMode: string;
   replayPosUs: number | null;
   replayTotalUs: number | null;
+  replaySpeed: number;
   recentProjects: string[];
   recentLogs: string[];
   buses: Bus[];
@@ -412,6 +413,7 @@ export type Command =
   | { type: "replay_step"; delta_us: number }
   | { type: "replay_play_to"; target_us: number }
   | { type: "replay_play_for"; duration_us: number }
+  | { type: "set_replay_speed"; speed: number }
   | { type: "record_toggle"; name: string | null; format: number | null }
   | { type: "set_record_filter"; text: string }
   | {
