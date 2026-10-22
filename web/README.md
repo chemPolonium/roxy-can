@@ -17,7 +17,7 @@ cd web
 npm install
 npm run build
 cd ..
-cargo run -- --web          # http://127.0.0.1:7817
+cargo run -- --web          # http://127.0.0.1:2010
 ```
 
 `--port <n>` changes the port. For hot reload, keep the server running and
@@ -25,7 +25,7 @@ start Vite in a second terminal:
 
 ```bash
 cd web
-npm run dev                 # http://127.0.0.1:5173, proxies /api to :7817
+npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ```
 
 ## What this slice proves

@@ -21,7 +21,7 @@ use crate::app::{App, Mode, NodeRole};
 use crate::bus::BusCommand;
 use crate::can::frame::Direction;
 
-const PORT: u16 = 7817;
+const PORT: u16 = 2010;
 const SERIES_POINTS: usize = 60;
 const TRACE_ROWS: usize = 240;
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
