@@ -621,6 +621,26 @@ enum WebCommand {
         threshold: Option<f64>,
         color: Option<usize>,
     },
+    AddData {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    RemoveData {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    ClearData,
+    SetDataVisible {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+        visible: bool,
+    },
     SetEntryActive {
         ch: u8,
         id: u32,
@@ -989,6 +1009,55 @@ fn app_loop(
                         threshold,
                         color,
                     );
+                }
+                WebCommand::AddData { ch, id, ext, name } => {
+                    if app.data_windows.is_empty() {
+                        app.new_data_window();
+                    }
+                    app.set_win_signal(
+                        crate::workspace::PopupTarget::Data(0),
+                        SigKey::can(ch, id, ext, name),
+                        true,
+                    );
+                }
+                WebCommand::RemoveData { ch, id, ext, name } => {
+                    app.set_win_signal(
+                        crate::workspace::PopupTarget::Data(0),
+                        SigKey::can(ch, id, ext, name),
+                        false,
+                    );
+                }
+                WebCommand::ClearData => {
+                    let keys: Vec<SigKey> = app
+                        .data_windows
+                        .first()
+                        .map(|window| {
+                            window
+                                .signals
+                                .iter()
+                                .map(|signal| signal.key.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for key in keys {
+                        app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, false);
+                    }
+                }
+                WebCommand::SetDataVisible {
+                    ch,
+                    id,
+                    ext,
+                    name,
+                    visible,
+                } => {
+                    let key = SigKey::can(ch, id, ext, name);
+                    if let Some(signal) = app
+                        .data_windows
+                        .first_mut()
+                        .and_then(|window| window.signals.iter_mut().find(|row| row.key == key))
+                    {
+                        signal.visible = visible;
+                    }
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
                     app.send(BusCommand::SetEntryActive { ch, id, on });
@@ -1816,6 +1885,7 @@ struct WebState {
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
     monitor: Vec<WebMonitorRow>,
+    data: Vec<WebDataRow>,
     stats: Vec<WebStatsRow>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
@@ -1942,6 +2012,24 @@ struct WebMonitorRow {
     rising: bool,
     threshold: f64,
     color: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDataRow {
+    ch: u8,
+    id: u32,
+    ext: bool,
+    name: String,
+    bus: String,
+    value: String,
+    unit: String,
+    raw: String,
+    min: String,
+    avg: String,
+    max: String,
+    frac: f64,
+    visible: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -2226,6 +2314,74 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
 
+    // The web's value table mirrors the first desktop Data window. Missing
+    // values keep the row but print dashes, so a freshly added signal does
+    // not flicker in and out before its first frame.
+    let data: Vec<WebDataRow> = app
+        .data_windows
+        .first()
+        .map(|window| {
+            window
+                .signals
+                .iter()
+                .filter_map(|signal| {
+                    let SigKey::Can { ch, id, ext, name } = &signal.key else {
+                        return None;
+                    };
+                    let sub = signal_sub(app, &signal.key);
+                    let (value, unit, raw, min, avg, max, frac) = match sub {
+                        Some(sub) => {
+                            let frac = match app.declared_range(&signal.key) {
+                                Some((lo, hi)) if hi > lo => {
+                                    ((sub.latest - lo) / (hi - lo)).clamp(0.0, 1.0)
+                                }
+                                _ if sub.max > sub.min => {
+                                    ((sub.latest - sub.min) / (sub.max - sub.min)).clamp(0.0, 1.0)
+                                }
+                                _ => 0.0,
+                            };
+                            (
+                                sub.label.clone().unwrap_or_else(|| {
+                                    crate::dbc::fmt_decoded(&sub.type_tag, sub.latest)
+                                }),
+                                sub.unit.clone(),
+                                sub.last_raw.to_string(),
+                                crate::dbc::fmt_decoded(&sub.type_tag, sub.min),
+                                crate::dbc::fmt_decoded(&sub.type_tag, sub.avg),
+                                crate::dbc::fmt_decoded(&sub.type_tag, sub.max),
+                                frac,
+                            )
+                        }
+                        None => (
+                            "-".to_string(),
+                            String::new(),
+                            "-".to_string(),
+                            "-".to_string(),
+                            "-".to_string(),
+                            "-".to_string(),
+                            0.0,
+                        ),
+                    };
+                    Some(WebDataRow {
+                        ch: *ch,
+                        id: *id,
+                        ext: *ext,
+                        name: name.clone(),
+                        bus: bus_name(app, *ch),
+                        value,
+                        unit,
+                        raw,
+                        min,
+                        avg,
+                        max,
+                        frac,
+                        visible: signal.visible,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -2362,6 +2518,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         sysvars,
         monitor,
+        data,
         stats,
         channels,
         messages,
@@ -2565,6 +2722,32 @@ mod tests {
         app.settle();
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert!(state.monitor.is_empty());
+    }
+
+    /// The value table mirrors the first Data window: selected rows, their
+    /// live strings and the visibility toggle all reach the web state.
+    #[test]
+    fn the_state_lists_data_rows_and_visibility() {
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut app = App::headless();
+        app.new_data_window();
+        app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.data.len(), 1);
+        let row = &state.data[0];
+        assert_eq!(row.name, "EngineSpeed");
+        assert!(row.visible);
+        assert!((0.0..=1.0).contains(&row.frac));
+
+        app.data_windows[0].signals[0].visible = false;
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(!state.data[0].visible);
+
+        app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, false);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(state.data.is_empty());
     }
 
     /// A replay path must open the log and start playback in Replay mode,

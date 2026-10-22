@@ -15,6 +15,7 @@ import type {
 import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
+import { DataPanel } from "./components/DataPanel";
 import { GeneratorModal } from "./components/GeneratorModal";
 import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
@@ -29,7 +30,7 @@ import type { SysVarEdit } from "./components/SysVarsModal";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "statistics" | "activity";
-type ChartTab = "rate" | "signals" | "monitor";
+type ChartTab = "rate" | "signals" | "monitor" | "data";
 type Drag = "main" | "right" | null;
 
 interface Layout {
@@ -139,6 +140,7 @@ export function App() {
   const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
+  const [dataPickerOpen, setDataPickerOpen] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -335,6 +337,7 @@ export function App() {
     setTriggersOpen(false);
     setSysvarsOpen(false);
     setMonitorPickerOpen(false);
+    setDataPickerOpen(false);
     setPickerOpen(true);
     void loadCatalog();
   };
@@ -344,6 +347,7 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
+    setDataPickerOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
     setGeneratorOpen(true);
@@ -355,6 +359,7 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
+    setDataPickerOpen(false);
     setGeneratorOpen(false);
     setSysvarsOpen(false);
     setTriggersOpen(true);
@@ -366,6 +371,7 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
+    setDataPickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(true);
@@ -375,10 +381,23 @@ export function App() {
     setSessionOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
+    setDataPickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
     setMonitorPickerOpen(true);
+    void loadCatalog();
+  };
+
+  const openDataPicker = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setMonitorPickerOpen(false);
+    setGeneratorOpen(false);
+    setTriggersOpen(false);
+    setSysvarsOpen(false);
+    setDataPickerOpen(true);
     void loadCatalog();
   };
 
@@ -555,6 +574,9 @@ export function App() {
   const monitorKeys = new Set(
     (state?.monitor ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
   );
+  const dataKeys = new Set(
+    (state?.data ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
+  );
 
   return (
     <div class="app">
@@ -595,6 +617,7 @@ export function App() {
               setSessionOpen(false);
               setPickerOpen(false);
               setMonitorPickerOpen(false);
+              setDataPickerOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
               setSysvarsOpen(false);
@@ -616,6 +639,7 @@ export function App() {
             onClick={() => {
               setPickerOpen(false);
               setMonitorPickerOpen(false);
+              setDataPickerOpen(false);
               setBusesOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
@@ -769,6 +793,13 @@ export function App() {
                 >
                   Monitor
                 </button>
+                <button
+                  type="button"
+                  class={chartTab === "data" ? "on" : ""}
+                  onClick={() => setChartTab("data")}
+                >
+                  Data
+                </button>
               </div>
               {chartTab === "signals" && (
                 <button
@@ -798,12 +829,34 @@ export function App() {
                   </button>
                 </>
               )}
+              {chartTab === "data" && (
+                <>
+                  <button
+                    type="button"
+                    class="mini"
+                    onClick={() => void openDataPicker()}
+                  >
+                    + Signal
+                  </button>
+                  <button
+                    type="button"
+                    class="mini"
+                    disabled={!(state?.data.length ?? 0)}
+                    onClick={() => void run({ type: "clear_data" })}
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
               <span class="meta">
                 {chartTab === "rate"
                   ? "solid f/s · dashed load"
                   : chartTab === "signals"
                     ? `${signals.length} channels · wheel zoom`
-                    : `${state?.monitor.length ?? 0} rows · colored rules`}              </span>
+                    : chartTab === "monitor"
+                      ? `${state?.monitor.length ?? 0} rows · colored rules`
+                      : `${state?.data.length ?? 0} rows · min/avg/max`}
+              </span>
               {chartTab === "rate" && (
                 <strong class="readout">
                   {state ? state.fps.toFixed(0) : "—"} f/s
@@ -837,13 +890,36 @@ export function App() {
               </>
             ) : chartTab === "signals" ? (
               <SignalChart series={signals} />
-            ) : (
+            ) : chartTab === "monitor" ? (
               <MonitorPanel
                 rows={state?.monitor ?? []}
                 onEdit={editMonitor}
                 onRemove={(row) =>
                   void run({
                     type: "remove_monitor",
+                    ch: row.ch,
+                    id: row.id,
+                    ext: row.ext,
+                    name: row.name,
+                  })
+                }
+              />
+            ) : (
+              <DataPanel
+                rows={state?.data ?? []}
+                onVisible={(row, visible) =>
+                  void run({
+                    type: "set_data_visible",
+                    ch: row.ch,
+                    id: row.id,
+                    ext: row.ext,
+                    name: row.name,
+                    visible,
+                  })
+                }
+                onRemove={(row) =>
+                  void run({
+                    type: "remove_data",
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
@@ -1038,6 +1114,36 @@ export function App() {
             )
           }
           onClose={() => setMonitorPickerOpen(false)}
+        />
+      )}
+
+      {dataPickerOpen && (
+        <SignalPicker
+          catalog={catalog}
+          loading={catalogLoading}
+          error={catalogError}
+          selected={dataKeys}
+          title="Data signals"
+          onToggle={(ch, message, signal, on) =>
+            void run(
+              on
+                ? {
+                    type: "add_data",
+                    ch,
+                    id: message.id,
+                    ext: message.extended,
+                    name: signal.name,
+                  }
+                : {
+                    type: "remove_data",
+                    ch,
+                    id: message.id,
+                    ext: message.extended,
+                    name: signal.name,
+                  },
+            )
+          }
+          onClose={() => setDataPickerOpen(false)}
         />
       )}
 

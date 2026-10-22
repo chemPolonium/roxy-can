@@ -78,6 +78,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
   actions including Send-to-generator-entry, and the pre/post/marker limits.
+- The **Data** tab mirrors the first Data window: per selected CAN signal it
+  shows the live value (or enum label), unit, raw wire value, min/avg/max and
+  a bar scaled by the database's declared range (observed range as fallback).
+  Rows can be hidden without unsubscribing, removed, or cleared; selection
+  uses the same catalog as Signals and the Monitor.
 - **SysVars…** manages system variables through the real core: add/edit
   definitions (namespace, name, init, clamped min/max, unit, comment), edit
   live values in place (writes clamp), rename by deleting the old key, and
@@ -111,8 +116,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet attachment, generator
-signal sources, node scripts, and docking/desktops. Hardware and the Monitor
-cover CAN only for now; signal selection is session-only.
+signal sources, node scripts, and docking/desktops. Hardware, Data and the
+Monitor cover CAN only for now; signal selection is session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

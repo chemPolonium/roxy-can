@@ -1427,6 +1427,151 @@ button.mini {
   line-height: 1.55;
 }
 
+/* Data: value/raw/min-avg-max plus a database-scaled bar. Cards instead of
+   a wide table so the right column stays readable at 1024 px. */
+.data-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px;
+}
+
+.data-row {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-areas:
+    "check name value raw remove"
+    "check stats stats stats remove"
+    "check bar bar bar remove";
+  grid-template-columns: 16px minmax(70px, 1fr) auto auto 20px;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 4px 6px;
+  background: #121923;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+}
+
+.data-row.hidden {
+  opacity: 0.5;
+}
+
+.data-check {
+  display: flex;
+  grid-area: check;
+  align-items: center;
+  justify-content: center;
+}
+
+.data-check input {
+  width: 12px;
+  height: 12px;
+  accent-color: #2f7fe0;
+}
+
+.data-name {
+  display: flex;
+  grid-area: name;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.data-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dfe8f2;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.data-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.data-value {
+  grid-area: value;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-value em {
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.data-raw {
+  grid-area: raw;
+  padding-left: 6px;
+  border-left: 1px solid #263140;
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.data-row > .mini {
+  grid-area: remove;
+  padding: 0 4px;
+  color: var(--muted);
+  line-height: 15px;
+}
+
+.data-stats {
+  display: flex;
+  grid-area: stats;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.data-stats span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-bar {
+  grid-area: bar;
+  height: 4px;
+  margin-top: 2px;
+  overflow: hidden;
+  background: #1a2330;
+  border-radius: 2px;
+}
+
+.data-bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2f7fe0, #56b6ff);
+  border-radius: 2px;
+  transition: width 0.12s linear;
+}
+
+.data-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: center;
+}
+
 /* Monitor: big live values with an optional coloring rule. The right column
    is narrower than the desktop window, so each row stacks its value line over
    a compact rule line. */

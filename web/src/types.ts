@@ -25,6 +25,7 @@ export interface State {
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
   monitor: MonitorRow[];
+  data: DataRow[];
   stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
@@ -143,6 +144,22 @@ export interface MonitorRow {
   rising: boolean;
   threshold: number;
   color: number;
+}
+
+export interface DataRow {
+  ch: number;
+  id: number;
+  ext: boolean;
+  name: string;
+  bus: string;
+  value: string;
+  unit: string;
+  raw: string;
+  min: string;
+  avg: string;
+  max: string;
+  frac: number;
+  visible: boolean;
 }
 
 export interface StatsRow {  label: string;
@@ -287,6 +304,17 @@ export type Command =
       rising?: boolean;
       threshold?: number;
       color?: number;
+    }
+  | { type: "add_data"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "remove_data"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "clear_data" }
+  | {
+      type: "set_data_visible";
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+      visible: boolean;
     }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
