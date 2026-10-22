@@ -1085,10 +1085,31 @@ struct DownloadQuery {
     name: Option<String>,
 }
 
+/// Files the browser exchanges with the host live in the per-user data
+/// folder, not the temp folder: a project saved after picking a DBC must
+/// still find that DBC after the next reboot.
+fn web_data_dir(sub: &str) -> std::path::PathBuf {
+    let root = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(".local").join("share"))
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    root.join("roxy-can").join(sub)
+}
+
+fn upload_dir() -> std::path::PathBuf {
+    web_data_dir("web-uploads")
+}
+
+fn download_dir() -> std::path::PathBuf {
+    web_data_dir("web-downloads")
+}
+
 fn to_download_dir(file: &str) -> std::path::PathBuf {
-    std::env::temp_dir()
-        .join("roxy-can-web-downloads")
-        .join(upload_name(file))
+    download_dir().join(upload_name(file))
 }
 
 /// A bare file name from the export or save dialog is written to the
@@ -1099,8 +1120,7 @@ fn download_file_path(path: &str) -> String {
     if std::path::Path::new(trimmed).components().count() != 1 {
         return trimmed.to_string();
     }
-    let dir = std::env::temp_dir().join("roxy-can-web-downloads");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::create_dir_all(download_dir());
     to_download_dir(trimmed).to_string_lossy().into_owned()
 }
 
@@ -1189,7 +1209,7 @@ async fn upload(
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<Json<UploadReply>, (StatusCode, String)> {
-    let dir = std::env::temp_dir().join("roxy-can-web-uploads");
+    let dir = upload_dir();
     std::fs::create_dir_all(&dir).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5380,7 +5400,7 @@ mod tests {
 
     #[test]
     fn bare_file_names_land_in_the_download_folder() {
-        let folder = std::env::temp_dir().join("roxy-can-web-downloads");
+        let folder = download_dir();
         let path = std::path::PathBuf::from(download_file_path("export.csv"));
         assert_eq!(path.parent(), Some(folder.as_path()));
         assert_eq!(
