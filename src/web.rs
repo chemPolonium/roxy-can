@@ -2,7 +2,8 @@
 //!
 //! The bus core is unchanged: this module starts an `App` on a manual drive
 //! in its own thread, publishes a small JSON snapshot, and serves the Vite
-//! build from `web/dist`.
+//! build embedded at compile time. Debug builds read `web/dist` from disk so
+//! frontend edits need no Rust rebuild.
 
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -12,13 +13,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE};
+use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use tower_http::services::{ServeDir, ServeFile};
 
 use crate::app::{App, Mode, NodeRole};
 use crate::bus::{BusCommand, SubView};
@@ -162,7 +163,7 @@ const TICK_EVERY: Duration = Duration::from_millis(5);
 
 /// Serve the web UI until the process is killed. `--port <n>` overrides the
 /// default, `--web` itself is already consumed by the caller.
-pub fn run(args: &[String], open: bool) {
+pub fn run(args: &[String], open: bool) -> Result<(), String> {
     let port = args
         .iter()
         .position(|arg| arg == "--port")
@@ -172,9 +173,6 @@ pub fn run(args: &[String], open: bool) {
     let project = flag_value(args, "--project");
     let replay = flag_value(args, "--replay");
     let profile = flag_value(args, "--profile");
-    if !std::path::Path::new("web/dist/index.html").exists() {
-        eprintln!("web/dist is missing; run `npm install && npm run build` in web/ first");
-    }
     if let Some(path) = &replay {
         println!("web session replay: {path}");
     } else if let Some(path) = &project {
@@ -211,13 +209,13 @@ pub fn run(args: &[String], open: bool) {
                     profile,
                 )
             })
-            .expect("spawn web core thread");
+            .map_err(|error| format!("Could not start the core thread: {error}"))?;
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("build tokio runtime");
+        .map_err(|error| format!("Could not start the async runtime: {error}"))?;
     runtime.block_on(async move {
         let api = Router::new()
             .route("/state", get(state))
@@ -240,12 +238,19 @@ pub fn run(args: &[String], open: bool) {
                 scripts,
                 commands: tx,
             });
-        let app = Router::new().nest("/api", api).fallback_service(
-            ServeDir::new("web/dist").not_found_service(ServeFile::new("web/dist/index.html")),
-        );
+        let app = Router::new().nest("/api", api).fallback(static_file);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
-            .unwrap_or_else(|e| panic!("bind 127.0.0.1:{port}: {e}"));
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AddrInUse {
+                    format!(
+                        "Could not listen on 127.0.0.1:{port}: the port is already in use. \
+                         Close the other program or pass --port <n>."
+                    )
+                } else {
+                    format!("Could not listen on 127.0.0.1:{port}: {error}")
+                }
+            })?;
         let url = format!("http://127.0.0.1:{port}");
         println!("roxy-can {} is serving on {url}", env!("CARGO_PKG_VERSION"));
         if open {
@@ -260,13 +265,50 @@ pub fn run(args: &[String], open: bool) {
                 let _ = tokio::signal::ctrl_c().await;
             })
             .await
-            .expect("web server");
-    });
+            .map_err(|error| format!("HTTP server stopped: {error}"))
+    })
 }
 
-/// The default launch has no terminal to copy the URL from (release builds
-/// are windowless), so opening the browser is how double-click reaches the
-/// UI. `--web` and `ROXY_WEB_NO_OPEN=1` keep scripted runs silent.
+/// The Vite bundle lives inside the binary in release builds, so the exe can
+/// be copied anywhere on its own.
+#[derive(RustEmbed)]
+#[folder = "web/dist"]
+struct Assets;
+
+/// Hashed assets never change under the same name; `index.html` must be
+/// revalidated so an updated binary's new bundle is picked up.
+async fn static_file(uri: Uri) -> Response {
+    let requested = uri.path().trim_start_matches('/');
+    let path = if requested.is_empty() {
+        "index.html"
+    } else {
+        requested
+    };
+    let (served, file) = match Assets::get(path) {
+        Some(file) => (path, file),
+        None if !requested.contains('.') => match Assets::get("index.html") {
+            Some(file) => ("index.html", file),
+            None => return StatusCode::NOT_FOUND.into_response(),
+        },
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let mime = mime_guess::from_path(served).first_or_octet_stream();
+    let cache = if served == "index.html" {
+        "no-cache"
+    } else {
+        "public, max-age=31536000, immutable"
+    };
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, mime.as_ref()), (CACHE_CONTROL, cache)],
+        file.data.into_owned(),
+    )
+        .into_response()
+}
+
+/// A double-click has no terminal to copy the URL from, so opening the browser
+/// is how it reaches the UI. `--web` and `ROXY_WEB_NO_OPEN=1` keep scripted
+/// runs silent.
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let mut command = {

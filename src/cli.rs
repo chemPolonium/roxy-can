@@ -1107,69 +1107,6 @@ pub fn check_scripts(check: &ScriptCheck) -> Result<String, String> {
     if failed { Err(report) } else { Ok(report) }
 }
 
-/// Release builds ship with `windows_subsystem = "windows"`: no console is
-/// attached, so a headless run's prints would go nowhere. When a parent
-/// console exists (the exe was launched from a terminal), adopt it and
-/// point the standard handles at it. Debug builds already have a console
-/// and the attach call fails harmlessly.
-#[cfg(windows)]
-pub fn attach_parent_console() {
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-    const OPEN_EXISTING: u32 = 3;
-    const STD_OUTPUT_HANDLE: u32 = u32::MAX - 10; // (DWORD)-11
-    const STD_ERROR_HANDLE: u32 = u32::MAX - 11; // (DWORD)-12
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn AttachConsole(process: u32) -> i32;
-        fn CreateFileW(
-            name: *const u16,
-            access: u32,
-            share: u32,
-            security: *const u8,
-            disposition: u32,
-            flags: u32,
-            template: isize,
-        ) -> isize;
-        fn SetStdHandle(which: u32, handle: isize) -> i32;
-        fn GetStdHandle(which: u32) -> isize;
-        fn GetFileType(handle: isize) -> u32;
-    }
-    const FILE_TYPE_CHAR: u32 = 2;
-    unsafe {
-        // Only take the parent's console when our own standard handles still
-        // point at one. A GUI-subsystem binary launched from a shell has no
-        // console of its own, so without the attach its report goes nowhere --
-        // but `roxy-can --vector-probe > report.txt` has already redirected us,
-        // and re-pointing stdout at CONOUT$ there throws the report away.
-        if GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_CHAR {
-            return;
-        }
-        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-            return;
-        }
-        let mut conout: Vec<u16> = "CONOUT$".encode_utf16().collect();
-        conout.push(0);
-        let handle = CreateFileW(
-            conout.as_ptr(),
-            GENERIC_WRITE,
-            FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            0,
-        );
-        if handle != -1 {
-            SetStdHandle(STD_OUTPUT_HANDLE, handle);
-            SetStdHandle(STD_ERROR_HANDLE, handle);
-        }
-    }
-}
-
-#[cfg(not(windows))]
-pub fn attach_parent_console() {}
-
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;

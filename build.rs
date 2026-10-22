@@ -4,6 +4,15 @@
 fn main() {
     println!("cargo:rerun-if-changed=roxy-can.ico");
     println!("cargo:rerun-if-changed=build.rs");
+    // rust-embed reads the bundle at compile time; a stale binary must not be
+    // built after the frontend changed.
+    println!("cargo:rerun-if-changed=web/dist");
+    println!("cargo:rerun-if-changed=web/dist/index.html");
+    if !std::path::Path::new("web/dist/index.html").exists() {
+        panic!(
+            "web/dist is missing; run `npm install && npm run build` in web/ before building roxy-can"
+        );
+    }
 
     #[cfg(windows)]
     {

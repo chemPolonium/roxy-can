@@ -7,7 +7,9 @@ edition = "2024"
 # The local axum host for the Vite build, and the async runtime it needs.
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal"] }
-tower-http = { version = "0.6", features = ["fs"] }
+# The Vite build is embedded in release binaries so the exe works on its own.
+rust-embed = "8"
+mime_guess = "2"
 # Hardware probing uses the Windows device enumeration API.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",

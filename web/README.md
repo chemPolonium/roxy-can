@@ -223,5 +223,6 @@ At 5 ms the demo runs around 1,800 frames/s, so the 50k buffer fills in
 under 30 seconds. The same period drives the eight signal curves at 200 Hz,
 so each series reaches its 12k-point cap in about a minute. The page keeps
 a UI frame-rate readout in the status bar.
-The Vite build is served from disk (`web/dist`) rather than embedded, so the
-trial avoids a Rust rebuild for every frontend change.
+The Vite build is embedded into the release binary, so the exe runs on its
+own. Debug builds read `web/dist` from disk instead, so frontend edits need no
+Rust rebuild.

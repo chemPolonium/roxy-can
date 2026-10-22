@@ -1,8 +1,9 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // The core keeps observer and project-file models that the retired desktop UI
 // used to populate. They still participate in project compatibility and tests;
 // pruning them is separate from the web migration.
 #![allow(dead_code)]
+
+use std::io::IsTerminal;
 
 mod aggregate;
 mod app;
@@ -56,87 +57,60 @@ mod test_assets_data;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        cli::attach_parent_console();
         let open = std::env::var_os("ROXY_WEB_NO_OPEN").is_none();
-        web::run(&args, open);
+        run_web(&args, open);
         return;
     }
     if args.iter().any(|arg| arg == "--web") {
-        cli::attach_parent_console();
-        web::run(&args, false);
+        run_web(&args, false);
         return;
     }
     match cli::parse_args(&args) {
-        Ok(cli::Cli::Gui) => {
-            cli::attach_parent_console();
-            println!("{}", cli::usage());
-        }
-        Ok(cli::Cli::Help(text)) => {
-            cli::attach_parent_console();
-            println!("{text}");
-        }
-        Ok(cli::Cli::Run(opts)) => {
-            cli::attach_parent_console();
-            match cli::run(&opts) {
-                Ok(report) => println!("{report}"),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
+        Ok(cli::Cli::Gui) => println!("{}", cli::usage()),
+        Ok(cli::Cli::Help(text)) => println!("{text}"),
+        Ok(cli::Cli::Run(opts)) => match cli::run(&opts) {
+            Ok(report) => println!("{report}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
-        }
-        Ok(cli::Cli::CheckScripts(check)) => {
-            cli::attach_parent_console();
-            match cli::check_scripts(&check) {
-                Ok(report) => println!("{report}"),
-                Err(report) => {
-                    eprintln!("{report}");
-                    std::process::exit(2);
-                }
+        },
+        Ok(cli::Cli::CheckScripts(check)) => match cli::check_scripts(&check) {
+            Ok(report) => println!("{report}"),
+            Err(report) => {
+                eprintln!("{report}");
+                std::process::exit(2);
             }
-        }
-        Ok(cli::Cli::Convert(input, output)) => {
-            cli::attach_parent_console();
-            match cli::convert_log(&input, &output) {
-                Ok(report) => println!("{report}"),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
+        },
+        Ok(cli::Cli::Convert(input, output)) => match cli::convert_log(&input, &output) {
+            Ok(report) => println!("{report}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
-        }
-        Ok(cli::Cli::Export(opts)) => {
-            cli::attach_parent_console();
-            match cli::export_signals_csv(&opts) {
-                Ok(report) => println!("{report}"),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
+        },
+        Ok(cli::Cli::Export(opts)) => match cli::export_signals_csv(&opts) {
+            Ok(report) => println!("{report}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
-        }
-        Ok(cli::Cli::KvaserProbe) => {
-            cli::attach_parent_console();
-            match cli::kvaser_probe() {
-                Ok(report) => println!("{report}"),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
+        },
+        Ok(cli::Cli::KvaserProbe) => match cli::kvaser_probe() {
+            Ok(report) => println!("{report}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
-        }
-        Ok(cli::Cli::VectorProbe { fibex }) => {
-            cli::attach_parent_console();
-            match cli::vector_probe(fibex.as_deref()) {
-                Ok(report) => println!("{report}"),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
+        },
+        Ok(cli::Cli::VectorProbe { fibex }) => match cli::vector_probe(fibex.as_deref()) {
+            Ok(report) => println!("{report}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
-        }
+        },
         Ok(cli::Cli::VectorTxProbe { channel }) => {
-            cli::attach_parent_console();
             match hw::vector::VectorChannel::tx_event_dump(channel, 500, 3, 1_000) {
                 Ok(report) => println!("{report}"),
                 Err(e) => {
@@ -146,9 +120,21 @@ fn main() {
             }
         }
         Err(msg) => {
-            cli::attach_parent_console();
             eprintln!("{msg}\n\n{}", cli::usage());
             std::process::exit(2);
         }
+    }
+}
+
+/// A double-clicked exe owns its console, so an error would disappear with the
+/// window. Bare launches pause before closing; `--web` scripts do not.
+fn run_web(args: &[String], open: bool) {
+    if let Err(error) = web::run(args, open) {
+        eprintln!("error: {error}");
+        if open && std::io::stdin().is_terminal() {
+            eprintln!("Press Enter to close this window.");
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+        std::process::exit(1);
     }
 }

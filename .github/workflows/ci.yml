@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Build web frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
       - name: Build all targets
         run: cargo build --all-targets
 
