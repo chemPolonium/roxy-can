@@ -280,6 +280,38 @@ fn checked_sysvar(
     })
 }
 
+/// Applies the editable parts of a Monitor row (not its signal). The row is
+/// UI/project state, so the web edit lands in place; only adding/removing a
+/// signal touches the bus.
+fn edit_monitor_row(
+    app: &mut App,
+    key: &SigKey,
+    digits: Option<usize>,
+    rule_on: Option<bool>,
+    rising: Option<bool>,
+    threshold: Option<f64>,
+    color: Option<usize>,
+) {
+    let Some(row) = app.monitor_view.rows.iter_mut().find(|row| &row.key == key) else {
+        return;
+    };
+    if let Some(digits) = digits {
+        row.digits = digits.min(3);
+    }
+    if let Some(on) = rule_on {
+        row.rule_on = on;
+    }
+    if let Some(rising) = rising {
+        row.rising = rising;
+    }
+    if let Some(threshold) = threshold {
+        row.threshold = threshold;
+    }
+    if let Some(color) = color {
+        row.color = color;
+    }
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -564,6 +596,30 @@ enum WebCommand {
     DeleteSysVar {
         namespace: String,
         name: String,
+    },
+    AddMonitor {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    RemoveMonitor {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    ClearMonitor,
+    EditMonitor {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+        digits: Option<usize>,
+        rule_on: Option<bool>,
+        rising: Option<bool>,
+        threshold: Option<f64>,
+        color: Option<usize>,
     },
     SetEntryActive {
         ch: u8,
@@ -887,6 +943,52 @@ fn app_loop(
                 },
                 WebCommand::DeleteSysVar { namespace, name } => {
                     app.send(BusCommand::DeleteSysVar { namespace, name });
+                }
+                WebCommand::AddMonitor { ch, id, ext, name } => {
+                    app.set_win_signal(
+                        crate::workspace::PopupTarget::Monitor,
+                        SigKey::can(ch, id, ext, name),
+                        true,
+                    );
+                }
+                WebCommand::RemoveMonitor { ch, id, ext, name } => {
+                    app.set_win_signal(
+                        crate::workspace::PopupTarget::Monitor,
+                        SigKey::can(ch, id, ext, name),
+                        false,
+                    );
+                }
+                WebCommand::ClearMonitor => {
+                    let keys: Vec<SigKey> = app
+                        .monitor_view
+                        .rows
+                        .iter()
+                        .map(|row| row.key.clone())
+                        .collect();
+                    for key in keys {
+                        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
+                    }
+                }
+                WebCommand::EditMonitor {
+                    ch,
+                    id,
+                    ext,
+                    name,
+                    digits,
+                    rule_on,
+                    rising,
+                    threshold,
+                    color,
+                } => {
+                    edit_monitor_row(
+                        &mut app,
+                        &SigKey::can(ch, id, ext, name),
+                        digits,
+                        rule_on,
+                        rising,
+                        threshold,
+                        color,
+                    );
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
                     app.send(BusCommand::SetEntryActive { ch, id, on });
@@ -1713,6 +1815,7 @@ struct WebState {
     triggers: Vec<WebTrigger>,
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
+    monitor: Vec<WebMonitorRow>,
     stats: Vec<WebStatsRow>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
@@ -1821,6 +1924,24 @@ struct WebStatsRow {
     jitter_ms: String,
     share: String,
     len: u8,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebMonitorRow {
+    ch: u8,
+    id: u32,
+    ext: bool,
+    name: String,
+    label: String,
+    bus: String,
+    value: f64,
+    unit: String,
+    digits: usize,
+    rule_on: bool,
+    rising: bool,
+    threshold: f64,
+    color: usize,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -2123,6 +2244,37 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     };
     let db = |bus: u8| snap.channels.get(bus as usize).and_then(|c| c.dbc.as_ref());
 
+    // The web monitor covers CAN rows; a project's FlexRay/Ethernet rows are
+    // left untouched in the file and simply stay desktop-only for now.
+    let monitor: Vec<WebMonitorRow> = app
+        .monitor_view
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let SigKey::Can { ch, id, ext, name } = &row.key else {
+                return None;
+            };
+            let (value, unit) = signal_sub(app, &row.key)
+                .map(|sub| (sub.latest, sub.unit.clone()))
+                .unwrap_or((0.0, String::new()));
+            Some(WebMonitorRow {
+                ch: *ch,
+                id: *id,
+                ext: *ext,
+                name: name.clone(),
+                label: row.label.clone(),
+                bus: bus_name(*ch),
+                value,
+                unit,
+                digits: row.digits,
+                rule_on: row.rule_on,
+                rising: row.rising,
+                threshold: row.threshold,
+                color: row.color,
+            })
+        })
+        .collect();
+
     let mut messages: Vec<WebMessage> = snap
         .aggs
         .iter()
@@ -2209,6 +2361,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             marker_cap: app.limits.marker_cap,
         },
         sysvars,
+        monitor,
         stats,
         channels,
         messages,
@@ -2375,6 +2528,43 @@ mod tests {
         assert_eq!(v.value, 500.0, "writes clamp into the declared bounds");
         assert_eq!((v.min, v.max), (Some(0.0), Some(500.0)));
         assert_eq!(v.unit, "rpm");
+    }
+
+    /// Monitor rows carry their identity, live value and coloring rule to
+    /// the web; edits stay in row state and removal unsubscribes the signal.
+    #[test]
+    fn the_state_lists_monitor_rows_and_edits_them() {
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut app = App::headless();
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.monitor.len(), 1);
+        assert_eq!(state.monitor[0].name, "EngineSpeed");
+        assert_eq!(state.monitor[0].label, "EngineSpeed");
+        assert_eq!(state.monitor[0].digits, 1, "desktop default");
+
+        edit_monitor_row(
+            &mut app,
+            &key,
+            Some(2),
+            Some(true),
+            Some(false),
+            Some(87.5),
+            Some(3),
+        );
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let row = &state.monitor[0];
+        assert_eq!(row.digits, 2);
+        assert!(row.rule_on);
+        assert!(!row.rising);
+        assert_eq!(row.threshold, 87.5);
+        assert_eq!(row.color, 3);
+
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(state.monitor.is_empty());
     }
 
     /// A replay path must open the log and start playback in Replay mode,

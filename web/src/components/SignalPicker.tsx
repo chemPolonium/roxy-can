@@ -6,6 +6,7 @@ interface Props {
   loading: boolean;
   error: string;
   selected: Set<string>;
+  title?: string;
   onToggle: (
     ch: number,
     message: CatalogMessage,
@@ -25,6 +26,7 @@ export function SignalPicker({
   loading,
   error,
   selected,
+  title = "Signals",
   onToggle,
   onClose,
 }: Props) {
@@ -76,7 +78,7 @@ export function SignalPicker({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header class="modal-head">
-          <h2>Signals</h2>
+          <h2>{title}</h2>
           <div class="picker-head-right">
             <span>{selected.size} selected</span>
             <button type="button" onClick={onClose}>

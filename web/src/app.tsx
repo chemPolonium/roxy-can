@@ -18,6 +18,8 @@ import { BusesModal } from "./components/BusesModal";
 import { GeneratorModal } from "./components/GeneratorModal";
 import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
+import { MonitorPanel } from "./components/MonitorPanel";
+import type { MonitorPatch } from "./components/MonitorPanel";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
@@ -27,7 +29,7 @@ import type { SysVarEdit } from "./components/SysVarsModal";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "statistics" | "activity";
-type ChartTab = "rate" | "signals";
+type ChartTab = "rate" | "signals" | "monitor";
 type Drag = "main" | "right" | null;
 
 interface Layout {
@@ -136,6 +138,7 @@ export function App() {
   const [savePath, setSavePath] = useState("");
   const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -331,6 +334,7 @@ export function App() {
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
+    setMonitorPickerOpen(false);
     setPickerOpen(true);
     void loadCatalog();
   };
@@ -339,6 +343,7 @@ export function App() {
     setSessionOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
+    setMonitorPickerOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
     setGeneratorOpen(true);
@@ -349,6 +354,7 @@ export function App() {
     setSessionOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
+    setMonitorPickerOpen(false);
     setGeneratorOpen(false);
     setSysvarsOpen(false);
     setTriggersOpen(true);
@@ -359,9 +365,39 @@ export function App() {
     setSessionOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
+    setMonitorPickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(true);
+  };
+
+  const openMonitorPicker = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setGeneratorOpen(false);
+    setTriggersOpen(false);
+    setSysvarsOpen(false);
+    setMonitorPickerOpen(true);
+    void loadCatalog();
+  };
+
+  const editMonitor = (
+    row: { ch: number; id: number; ext: boolean; name: string },
+    patch: MonitorPatch,
+  ) => {
+    void run({
+      type: "edit_monitor",
+      ch: row.ch,
+      id: row.id,
+      ext: row.ext,
+      name: row.name,
+      digits: patch.digits,
+      rule_on: patch.ruleOn,
+      rising: patch.rising,
+      threshold: patch.threshold,
+      color: patch.color,
+    });
   };
 
   const defineSysVar = (edit: SysVarEdit) => {
@@ -516,6 +552,9 @@ export function App() {
       ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
       : "";
   const selectedKeys = new Set(signals.map((signal) => signal.key));
+  const monitorKeys = new Set(
+    (state?.monitor ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
+  );
 
   return (
     <div class="app">
@@ -555,6 +594,7 @@ export function App() {
             onClick={() => {
               setSessionOpen(false);
               setPickerOpen(false);
+              setMonitorPickerOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
               setSysvarsOpen(false);
@@ -575,6 +615,7 @@ export function App() {
             disabled={!online}
             onClick={() => {
               setPickerOpen(false);
+              setMonitorPickerOpen(false);
               setBusesOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
@@ -721,6 +762,13 @@ export function App() {
                 >
                   Signals
                 </button>
+                <button
+                  type="button"
+                  class={chartTab === "monitor" ? "on" : ""}
+                  onClick={() => setChartTab("monitor")}
+                >
+                  Monitor
+                </button>
               </div>
               {chartTab === "signals" && (
                 <button
@@ -731,11 +779,31 @@ export function App() {
                   Pick signals…
                 </button>
               )}
+              {chartTab === "monitor" && (
+                <>
+                  <button
+                    type="button"
+                    class="mini"
+                    onClick={() => void openMonitorPicker()}
+                  >
+                    + Signal
+                  </button>
+                  <button
+                    type="button"
+                    class="mini"
+                    disabled={!(state?.monitor.length ?? 0)}
+                    onClick={() => void run({ type: "clear_monitor" })}
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
               <span class="meta">
                 {chartTab === "rate"
                   ? "solid f/s · dashed load"
-                  : `${signals.length} channels · wheel zoom`}
-              </span>
+                  : chartTab === "signals"
+                    ? `${signals.length} channels · wheel zoom`
+                    : `${state?.monitor.length ?? 0} rows · colored rules`}              </span>
               {chartTab === "rate" && (
                 <strong class="readout">
                   {state ? state.fps.toFixed(0) : "—"} f/s
@@ -767,8 +835,22 @@ export function App() {
                   channels={state?.channels ?? []}
                 />
               </>
-            ) : (
+            ) : chartTab === "signals" ? (
               <SignalChart series={signals} />
+            ) : (
+              <MonitorPanel
+                rows={state?.monitor ?? []}
+                onEdit={editMonitor}
+                onRemove={(row) =>
+                  void run({
+                    type: "remove_monitor",
+                    ch: row.ch,
+                    id: row.id,
+                    ext: row.ext,
+                    name: row.name,
+                  })
+                }
+              />
             )}
           </section>
 
@@ -926,6 +1008,36 @@ export function App() {
           selected={selectedKeys}
           onToggle={toggleSignal}
           onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {monitorPickerOpen && (
+        <SignalPicker
+          catalog={catalog}
+          loading={catalogLoading}
+          error={catalogError}
+          selected={monitorKeys}
+          title="Monitor signals"
+          onToggle={(ch, message, signal, on) =>
+            void run(
+              on
+                ? {
+                    type: "add_monitor",
+                    ch,
+                    id: message.id,
+                    ext: message.extended,
+                    name: signal.name,
+                  }
+                : {
+                    type: "remove_monitor",
+                    ch,
+                    id: message.id,
+                    ext: message.extended,
+                    name: signal.name,
+                  },
+            )
+          }
+          onClose={() => setMonitorPickerOpen(false)}
         />
       )}
 

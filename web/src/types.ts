@@ -24,6 +24,7 @@ export interface State {
   triggers: TriggerEntry[];
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
+  monitor: MonitorRow[];
   stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
@@ -126,6 +127,22 @@ export interface SysVar {
   max: number | null;
   unit: string;
   comment: string;
+}
+
+export interface MonitorRow {
+  ch: number;
+  id: number;
+  ext: boolean;
+  name: string;
+  label: string;
+  bus: string;
+  value: number;
+  unit: string;
+  digits: number;
+  ruleOn: boolean;
+  rising: boolean;
+  threshold: number;
+  color: number;
 }
 
 export interface StatsRow {  label: string;
@@ -256,6 +273,21 @@ export type Command =
       old_name: string | null;
     }
   | { type: "delete_sys_var"; namespace: string; name: string }
+  | { type: "add_monitor"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "remove_monitor"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "clear_monitor" }
+  | {
+      type: "edit_monitor";
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+      digits?: number;
+      rule_on?: boolean;
+      rising?: boolean;
+      threshold?: number;
+      color?: number;
+    }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }

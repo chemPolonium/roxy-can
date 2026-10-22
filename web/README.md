@@ -100,14 +100,19 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   column. Wheel zoom and drag pan freeze the view; double-click returns to
   live. With eight full series and continuous wheel zoom, 1024x768 and
   1200x800 both hold ~60 UI fps.
+- The **Monitor** tab watches selected CAN signals as large live values with
+  an optional coloring rule (`>=`/`<=` a threshold), decimal places and a
+  rule color; rows are project state, so the rule survives a save. Selection
+  reuses the same searchable catalog, and Clear unsubscribes every row. The
+  row layout stacks controls under the value at narrow widths.
 - The layout has been checked at 1024x768, 1200x800 and 1440x900.
 
 ## Not here yet
 
 A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet attachment, generator
-signal sources, the monitor, node scripts, and docking/desktops. Hardware is
-CAN attach/detach only for now; signal selection is CAN-only and session-only.
+signal sources, node scripts, and docking/desktops. Hardware and the Monitor
+cover CAN only for now; signal selection is session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

@@ -311,6 +311,21 @@ input::placeholder {
   white-space: nowrap;
 }
 
+.chart-panel .panel-head .tabs,
+.chart-panel .panel-head > button {
+  flex: 0 0 auto;
+}
+
+.chart-panel .panel-head > button {
+  white-space: nowrap;
+}
+
+.chart-panel .panel-head .meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .panel-tools {
   display: flex;
   gap: 5px;
@@ -1412,6 +1427,116 @@ button.mini {
   line-height: 1.55;
 }
 
+/* Monitor: big live values with an optional coloring rule. The right column
+   is narrower than the desktop window, so each row stacks its value line over
+   a compact rule line. */
+.monitor-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px;
+}
+
+.monitor-row {
+  flex: 0 0 auto;
+  padding: 5px 8px 5px 10px;
+  background: #121923;
+  border: 1px solid #202a36;
+  border-left: 3px solid #4c9dff;
+  border-radius: 4px;
+}
+
+.monitor-row.hot {
+  background: #15202c;
+}
+
+.monitor-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.monitor-label {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  color: #cdd8e4;
+  font-size: 11px;
+}
+
+.monitor-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.monitor-value {
+  flex: 0 0 auto;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-value em {
+  margin-left: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.monitor-rule {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.monitor-rule .mini {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 16px;
+}
+
+.monitor-rule .mini.on {
+  background: #142334;
+  border-color: #2d5c88;
+  color: #cfe6ff;
+}
+
+.monitor-threshold {
+  width: 64px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+.monitor-color {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 3px;
+}
+
+.monitor-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: center;
+}
+
 /* System Variables manager: one compact row per variable plus an inline
    add/edit form. Values stay editable in place; definitions cross the host
    boundary through define_sysvar. */
@@ -1622,6 +1747,14 @@ button.mini {
   }
 
   .sv-range {
+    display: none;
+  }
+}
+
+@media (max-width: 1280px) {
+  /* The right column is too narrow for the tab strip, actions and meta at
+     once; the count disappears before a button is allowed to wrap. */
+  .chart-panel .panel-head .meta {
     display: none;
   }
 }
