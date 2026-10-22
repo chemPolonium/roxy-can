@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { Command, Frame, SignalSeries, State } from "./types";
-import { fetchState, sendCommand } from "./api";
+import type {
+  Catalog,
+  CatalogMessage,
+  CatalogSignal,
+  Command,
+  Frame,
+  SignalSeries,
+  State,
+} from "./types";
+import { fetchCatalog, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { MessageTable } from "./components/MessageTable";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
+import { SignalPicker } from "./components/SignalPicker";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "activity";
@@ -115,6 +124,10 @@ export function App() {
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [logPath, setLogPath] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
   const uiFps = useUiFps();
@@ -257,6 +270,45 @@ export function App() {
     setSessionOpen(false);
   };
 
+  const openPicker = async () => {
+    setSessionOpen(false);
+    setPickerOpen(true);
+    setCatalogLoading(true);
+    try {
+      setCatalog(await fetchCatalog());
+      setCatalogError("");
+    } catch (e) {
+      setCatalogError(String(e));
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  const toggleSignal = (
+    ch: number,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+    selected: boolean,
+  ) => {
+    void run(
+      selected
+        ? {
+            type: "select_signal",
+            ch,
+            id: message.id,
+            ext: message.extended,
+            name: signal.name,
+          }
+        : {
+            type: "unselect_signal",
+            ch,
+            id: message.id,
+            ext: message.extended,
+            name: signal.name,
+          },
+    );
+  };
+
   const recent = (paths: string[], open: (path: string) => void) =>
     paths.length > 0 && (
       <div class="recent">
@@ -296,6 +348,7 @@ export function App() {
     state?.replayPosUs != null && state?.replayTotalUs != null
       ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
       : "";
+  const selectedKeys = new Set(signals.map((signal) => signal.key));
 
   return (
     <div class="app">
@@ -318,7 +371,10 @@ export function App() {
           <button
             type="button"
             disabled={!online}
-            onClick={() => setSessionOpen(true)}
+            onClick={() => {
+              setPickerOpen(false);
+              setSessionOpen(true);
+            }}
           >
             Session…
           </button>
@@ -460,6 +516,15 @@ export function App() {
                   Signals
                 </button>
               </div>
+              {chartTab === "signals" && (
+                <button
+                  type="button"
+                  class="mini"
+                  onClick={() => void openPicker()}
+                >
+                  Pick signals…
+                </button>
+              )}
               <span class="meta">
                 {chartTab === "rate"
                   ? "solid f/s · dashed load"
@@ -559,6 +624,17 @@ export function App() {
         <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
       </footer>
+
+      {pickerOpen && (
+        <SignalPicker
+          catalog={catalog}
+          loading={catalogLoading}
+          error={catalogError}
+          selected={selectedKeys}
+          onToggle={toggleSignal}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
 
       {sessionOpen && (
         <div class="modal-backdrop" onMouseDown={() => setSessionOpen(false)}>

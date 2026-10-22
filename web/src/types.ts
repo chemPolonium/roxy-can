@@ -31,6 +31,30 @@ export interface SignalSeries {
   points: [number, number][];
 }
 
+export interface CatalogSignal {
+  key: string;
+  name: string;
+  unit: string;
+  min: number;
+  max: number;
+}
+
+export interface CatalogMessage {
+  id: number;
+  extended: boolean;
+  name: string;
+  signals: CatalogSignal[];
+}
+
+export interface CatalogChannel {
+  name: string;
+  messages: CatalogMessage[];
+}
+
+export interface Catalog {
+  channels: CatalogChannel[];
+}
+
 /** Light state plus the incremental trace/signal hand-off. */
 export interface Snapshot extends State {
   traceEpoch: number;
@@ -93,4 +117,6 @@ export type Command =
   | { type: "pause"; on: boolean }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
-  | { type: "open_log"; path: string };
+  | { type: "open_log"; path: string }
+  | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string };

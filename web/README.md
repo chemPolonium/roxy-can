@@ -59,20 +59,22 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
   desktop UI. The status bar reports the browser's own UI frame rate.
-- The Signals tab plots eight real DBC signals driven by the generator's
-  Sine/Ramp/Triangle/Random sources. The core samples them at up to 200 Hz;
-  each series keeps 12k points (one minute at that rate), and the canvas
-  reduces them to one min/max span per pixel column. Wheel zoom and drag
-  pan freeze the view; double-click returns to live. With eight full series
-  and continuous wheel zoom, 1024x768 and 1200x800 both hold ~60 UI fps.
+- The Signals tab plots real DBC signals from the loaded project. **Pick
+  signals…** opens a searchable bus → message → signal catalog fetched from
+  the backend; the selection is session-only. The demo starts with eight
+  auto-selected generator sources, while real projects start empty. The
+  core samples at up to 200 Hz; each series keeps 12k points (one minute at
+  that rate), and the canvas reduces them to one min/max span per pixel
+  column. Wheel zoom and drag pan freeze the view; double-click returns to
+  live. With eight full series and continuous wheel zoom, 1024x768 and
+  1200x800 both hold ~60 UI fps.
 - The layout has been checked at 1024x768, 1200x800 and 1440x900.
 
 ## Not here yet
 
 Saving projects, a native browser file picker (opening uses host paths and
-recents; the CLI flags also work), hardware channels, signal selection for
-real projects (the demo pins eight curves), node scripts, and
-docking/desktops.
+recents; the CLI flags also work), hardware channels, node scripts, and
+docking/desktops. Signal selection is CAN-only and session-only for now.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

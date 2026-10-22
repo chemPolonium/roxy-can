@@ -678,6 +678,128 @@ input::placeholder {
   box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
 }
 
+.picker-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(760px, 92vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.picker-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.picker-tools {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.picker-tools input {
+  width: 100%;
+}
+
+.picker-body {
+  flex: 1 1 auto;
+  min-height: 200px;
+  overflow: auto;
+  padding: 4px 12px 10px;
+}
+
+.picker-channel h4 {
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.picker-message {
+  margin-bottom: 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.picker-message-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 8px;
+  background: #0e131a;
+  border-bottom: 1px solid var(--line-soft);
+  color: #aab7c7;
+  font-size: 10.5px;
+}
+
+.picker-message-head em {
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.picker-signal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  color: #aebccd;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.picker-signal:hover {
+  background: #16202b;
+}
+
+.picker-signal.on {
+  color: #e0e9f5;
+}
+
+.picker-signal input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.picker-signal span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-signal em {
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.picker-hint {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+}
+
+button.mini {
+  padding: 2px 7px;
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
 .modal-head {
   display: flex;
   align-items: center;

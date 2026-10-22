@@ -175,13 +175,15 @@ pub fn run(args: &[String]) {
     let shared = Arc::new(Mutex::new(WebState::default()));
     let trace = Arc::new(Mutex::new(TraceStore::default()));
     let signals = Arc::new(Mutex::new(SignalStore::default()));
+    let catalog = Arc::new(Mutex::new(WebCatalog::default()));
     {
         let shared = shared.clone();
         let trace = trace.clone();
         let signals = signals.clone();
+        let catalog = catalog.clone();
         std::thread::Builder::new()
             .name("roxy-web-core".to_string())
-            .spawn(move || app_loop(rx, shared, trace, signals, project, replay))
+            .spawn(move || app_loop(rx, shared, trace, signals, catalog, project, replay))
             .expect("spawn web core thread");
     }
 
@@ -192,11 +194,13 @@ pub fn run(args: &[String]) {
     runtime.block_on(async move {
         let api = Router::new()
             .route("/state", get(state))
+            .route("/catalog", get(catalog_handler))
             .route("/command", post(command))
             .with_state(ApiState {
                 shared,
                 trace,
                 signals,
+                catalog,
                 commands: tx,
             });
         let app = Router::new().nest("/api", api).fallback_service(
@@ -210,16 +214,12 @@ pub fn run(args: &[String]) {
     });
 }
 
-fn reset_web_stores(
+fn reset_visual_stores(
     trace: &Arc<Mutex<TraceStore>>,
-    signals: &Arc<Mutex<SignalStore>>,
     series: &mut VecDeque<WebSeriesPoint>,
     rate_window: &mut VecDeque<(Instant, u64)>,
 ) {
     if let Ok(mut store) = trace.lock() {
-        store.reset();
-    }
-    if let Ok(mut store) = signals.lock() {
         store.reset();
     }
     series.clear();
@@ -258,7 +258,17 @@ struct ApiState {
     shared: Arc<Mutex<WebState>>,
     trace: Arc<Mutex<TraceStore>>,
     signals: Arc<Mutex<SignalStore>>,
+    catalog: Arc<Mutex<WebCatalog>>,
     commands: Sender<WebCommand>,
+}
+
+async fn catalog_handler(State(api): State<ApiState>) -> Json<WebCatalog> {
+    Json(
+        api.catalog
+            .lock()
+            .map(|catalog| catalog.clone())
+            .unwrap_or_default(),
+    )
 }
 
 #[derive(Default, Deserialize)]
@@ -343,10 +353,28 @@ async fn state(State(api): State<ApiState>, Query(query): Query<TraceQuery>) -> 
 enum WebCommand {
     Start,
     Stop,
-    Pause { on: bool },
+    Pause {
+        on: bool,
+    },
     ClearTrace,
-    OpenProject { path: String },
-    OpenLog { path: String },
+    OpenProject {
+        path: String,
+    },
+    OpenLog {
+        path: String,
+    },
+    SelectSignal {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    UnselectSignal {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -364,11 +392,32 @@ fn app_loop(
     shared: Arc<Mutex<WebState>>,
     trace: Arc<Mutex<TraceStore>>,
     signals: Arc<Mutex<SignalStore>>,
+    catalog: Arc<Mutex<WebCatalog>>,
     project: Option<String>,
     replay: Option<String>,
 ) {
     let mut app = App::headless();
     prepare_session(&mut app, project.as_deref(), replay.as_deref());
+    // The web plot window is independent of the desktop layout. A 1 s
+    // Graphics window requests the 5 ms sampling stride; no project needs
+    // to carry a hidden desktop window just to get fine curves.
+    if app.graphics.is_empty() {
+        app.new_graphics_window();
+    }
+    if let Some(window) = app.graphics.first_mut() {
+        window.opened = true;
+        window.time_window_s = 1.0;
+    }
+    if project.is_none()
+        && replay.is_none()
+        && let Ok(mut store) = signals.lock()
+    {
+        for spec in &SIGNALS {
+            store.select(&app, spec.ch, spec.id, false, spec.name);
+        }
+    }
+    let mut catalog_sig = String::new();
+    refresh_catalog(&app, &catalog, &mut catalog_sig);
     let mut series: VecDeque<WebSeriesPoint> = VecDeque::with_capacity(SERIES_POINTS);
     let mut rate_window: VecDeque<(Instant, u64)> = VecDeque::new();
     let mut last_publish = Instant::now() - PUBLISH_EVERY;
@@ -403,13 +452,20 @@ fn app_loop(
                     if app.snap.measuring {
                         app.stop();
                     }
+                    let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
+                    for key in keys {
+                        app.send(BusCommand::Unsubscribe { key });
+                    }
+                    if let Ok(mut store) = signals.lock() {
+                        store.clear_selection();
+                    }
                     app.send(BusCommand::ClearTrace);
                     app.send(BusCommand::ClearAggregates);
                     app.open_project_path(std::path::Path::new(&path));
                     app.log_path.clear();
                     app.log_info = None;
                     app.send(BusCommand::SetRunMode(Mode::Virtual));
-                    reset_web_stores(&trace, &signals, &mut series, &mut rate_window);
+                    reset_visual_stores(&trace, &mut series, &mut rate_window);
                 }
                 WebCommand::OpenLog { path } => {
                     if app.snap.measuring {
@@ -417,11 +473,44 @@ fn app_loop(
                     }
                     app.load_log(&path);
                     if app.log_path == path && !app.status.contains("failed") {
+                        let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
+                        for key in &keys {
+                            app.subscribe(key.clone());
+                        }
+                        if let Ok(mut store) = signals.lock() {
+                            store.reset();
+                        }
                         app.send(BusCommand::ClearTrace);
                         app.send(BusCommand::ClearAggregates);
                         app.send(BusCommand::SetRunMode(Mode::Replay));
-                        reset_web_stores(&trace, &signals, &mut series, &mut rate_window);
+                        reset_visual_stores(&trace, &mut series, &mut rate_window);
                         app.start_selected();
+                    }
+                }
+                WebCommand::SelectSignal { ch, id, ext, name } => {
+                    let key = SigKey::can(ch, id, ext, name.clone());
+                    let already = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if !already {
+                        app.subscribe(key);
+                        if let Ok(mut store) = signals.lock() {
+                            store.select(&app, ch, id, ext, &name);
+                        }
+                    }
+                }
+                WebCommand::UnselectSignal { ch, id, ext, name } => {
+                    let key = SigKey::can(ch, id, ext, name);
+                    let selected = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if selected {
+                        app.send(BusCommand::Unsubscribe { key: key.clone() });
+                        if let Ok(mut store) = signals.lock() {
+                            store.unselect(&key);
+                        }
                     }
                 }
             }
@@ -486,6 +575,7 @@ fn app_loop(
             if let Ok(mut store) = signals.lock() {
                 store.sync(&app);
             }
+            refresh_catalog(&app, &catalog, &mut catalog_sig);
             let next = build_state(&app, &series, fps);
             if let Ok(mut slot) = shared.lock() {
                 *slot = next;
@@ -693,23 +783,92 @@ struct SignalBuffer {
     points: VecDeque<(u64, f64)>,
 }
 
-/// Incremental cache of the subscribed signal histories. The frontend asks
-/// once for a seed and then for everything newer than its last timestamp;
-/// the server never resends the two-hour sample ring.
+#[derive(Clone)]
+struct SelectedSignal {
+    key: SigKey,
+    name: String,
+    bus: String,
+    unit: String,
+    color: usize,
+}
+
+const SIGNAL_PALETTE: usize = 8;
+
+/// Incremental cache of the chosen signals. Unlike a Graphics window this is
+/// a session-level selection: real projects start empty and the demo selects
+/// its eight DBC signals once. The frontend asks for a seed and then only
+/// for samples newer than its last timestamp.
 #[derive(Default)]
 struct SignalStore {
     epoch: u64,
     primed: bool,
+    selected: Vec<SelectedSignal>,
     buffers: Vec<SignalBuffer>,
     last_t: Vec<u64>,
 }
 
 impl SignalStore {
+    fn is_selected(&self, key: &SigKey) -> bool {
+        self.selected.iter().any(|signal| &signal.key == key)
+    }
+
+    fn keys(&self) -> Vec<SigKey> {
+        self.selected
+            .iter()
+            .map(|signal| signal.key.clone())
+            .collect()
+    }
+
+    /// Adds a selection without subscribing; the command handler owns the
+    /// bus subscription so this stays a pure cache operation.
+    fn select(&mut self, app: &App, ch: u8, id: u32, ext: bool, name: &str) {
+        let key = SigKey::can(ch, id, ext, name);
+        if self.is_selected(&key) {
+            return;
+        }
+        let color = (0..SIGNAL_PALETTE)
+            .find(|color| !self.selected.iter().any(|signal| signal.color == *color))
+            .unwrap_or(self.selected.len() % SIGNAL_PALETTE);
+        self.selected.push(SelectedSignal {
+            key,
+            name: name.to_string(),
+            bus: bus_name(app, ch),
+            unit: signal_unit(app, ch, id, ext, name),
+            color,
+        });
+        self.primed = false;
+    }
+
+    fn unselect(&mut self, key: &SigKey) {
+        if let Some(pos) = self.selected.iter().position(|signal| &signal.key == key) {
+            self.selected.remove(pos);
+        }
+        self.primed = false;
+    }
+
+    /// Drops selected signals and buffers; used when the bus set changes.
+    fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.primed = false;
+    }
+
+    /// Keeps the selection but forgets sampled history; used when a new log
+    /// starts on the same project.
+    fn reset(&mut self) {
+        self.primed = false;
+    }
+
     fn sync(&mut self, app: &App) {
+        for signal in &mut self.selected {
+            signal.bus = bus_name(app, key_channel(&signal.key));
+            if let Some(sub) = signal_sub(app, &signal.key) {
+                signal.unit = sub.unit.clone();
+            }
+        }
         let mut reset = !self.primed;
         if self.primed {
-            for (i, spec) in SIGNALS.iter().enumerate() {
-                let Some(sub) = signal_sub(app, spec) else {
+            for (i, signal) in self.selected.iter().enumerate() {
+                let Some(sub) = signal_sub(app, &signal.key) else {
                     continue;
                 };
                 let last = sub.history.iter().last().map(|(t, _)| *t).unwrap_or(0);
@@ -722,10 +881,10 @@ impl SignalStore {
             self.primed = true;
             self.epoch = self.epoch.wrapping_add(1).max(1);
             self.buffers.clear();
-            self.last_t = vec![0; SIGNALS.len()];
-            for (i, spec) in SIGNALS.iter().enumerate() {
-                let sub = signal_sub(app, spec);
-                let meta = signal_meta(app, spec, sub);
+            self.last_t = vec![0; self.selected.len()];
+            for (i, signal) in self.selected.iter().enumerate() {
+                let sub = signal_sub(app, &signal.key);
+                let meta = signal_meta(signal);
                 let mut points = VecDeque::new();
                 if let Some(sub) = sub {
                     let all: Vec<(u64, f64)> = sub.history.iter().copied().collect();
@@ -740,14 +899,14 @@ impl SignalStore {
             return;
         }
 
-        for (i, spec) in SIGNALS.iter().enumerate() {
-            let Some(sub) = signal_sub(app, spec) else {
+        for (i, signal) in self.selected.iter().enumerate() {
+            let Some(sub) = signal_sub(app, &signal.key) else {
                 continue;
             };
             let Some(buffer) = self.buffers.get_mut(i) else {
                 continue;
             };
-            buffer.meta = signal_meta(app, spec, Some(sub));
+            buffer.meta = signal_meta(signal);
             let last = self.last_t.get(i).copied().unwrap_or(0);
             for &(t, value) in sub.history.iter() {
                 if t > last {
@@ -763,12 +922,6 @@ impl SignalStore {
         }
     }
 
-    fn reset(&mut self) {
-        self.primed = false;
-        self.buffers.clear();
-        self.last_t.clear();
-    }
-
     fn max_t(&self) -> u64 {
         self.last_t.iter().copied().max().unwrap_or(0)
     }
@@ -781,10 +934,11 @@ impl SignalStore {
             .unwrap_or(self.max_t())
     }
 
+    /// Includes selected signals with no samples yet; the lane has to exist
+    /// before the first frame arrives.
     fn seed(&self) -> Vec<SignalSeries> {
         self.buffers
             .iter()
-            .filter(|buffer| !buffer.points.is_empty())
             .map(|buffer| Self::dto(buffer, 0))
             .collect()
     }
@@ -809,26 +963,162 @@ impl SignalStore {
     }
 }
 
-fn signal_sub<'a>(app: &'a App, spec: &SignalSpec) -> Option<&'a SubView> {
-    app.snap
-        .subs
-        .iter()
-        .find(|sub| sub.key == SigKey::can(spec.ch, spec.id, false, spec.name))
+fn key_channel(key: &SigKey) -> u8 {
+    match key {
+        SigKey::Can { ch, .. } => *ch,
+        SigKey::Fr { bus, .. } | SigKey::Eth { bus, .. } => *bus,
+    }
 }
 
-fn signal_meta(app: &App, spec: &SignalSpec, sub: Option<&SubView>) -> SignalSeries {
+fn bus_name(app: &App, ch: u8) -> String {
+    app.snap
+        .channels
+        .get(ch as usize)
+        .map(|channel| channel.name.clone())
+        .unwrap_or_else(|| format!("CAN{}", ch + 1))
+}
+
+fn signal_unit(app: &App, ch: u8, id: u32, ext: bool, name: &str) -> String {
+    app.snap
+        .channels
+        .get(ch as usize)
+        .and_then(|channel| channel.dbc.as_ref())
+        .and_then(|db| db.messages.get(&(id, ext)))
+        .and_then(|message| message.signals.iter().find(|signal| signal.name == name))
+        .map(|signal| signal.unit.clone())
+        .unwrap_or_default()
+}
+
+fn signal_sub<'a>(app: &'a App, key: &SigKey) -> Option<&'a SubView> {
+    app.snap.subs.iter().find(|sub| &sub.key == key)
+}
+
+fn signal_meta(signal: &SelectedSignal) -> SignalSeries {
     SignalSeries {
-        key: format!("{}:{}:{}", spec.ch, spec.id, spec.name),
-        name: spec.name.to_string(),
-        bus: app
+        key: format!(
+            "{}:{}:{}",
+            key_channel(&signal.key),
+            key_id(&signal.key),
+            signal.name
+        ),
+        name: signal.name.clone(),
+        bus: signal.bus.clone(),
+        unit: signal.unit.clone(),
+        color: signal.color,
+        points: Vec::new(),
+    }
+}
+
+fn key_id(key: &SigKey) -> u32 {
+    match key {
+        SigKey::Can { id, .. } => *id,
+        SigKey::Fr { slot, .. } => *slot as u32,
+        SigKey::Eth { .. } => 0,
+    }
+}
+
+/// Build the DBC signal tree for the picker. Only CAN is exposed for now;
+/// the store and commands carry the same key format so FlexRay/Ethernet can
+/// join later without changing the frontend contract.
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCatalog {
+    channels: Vec<WebCatalogChannel>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCatalogChannel {
+    name: String,
+    messages: Vec<WebCatalogMessage>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCatalogMessage {
+    id: u32,
+    extended: bool,
+    name: String,
+    signals: Vec<WebCatalogSignal>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCatalogSignal {
+    key: String,
+    name: String,
+    unit: String,
+    min: f64,
+    max: f64,
+}
+
+fn channel_signature(app: &App) -> String {
+    let parts: Vec<String> = app
+        .snap
+        .channels
+        .iter()
+        .map(|channel| {
+            let table = channel
+                .dbc
+                .as_ref()
+                .map(|db| Arc::as_ptr(db) as usize)
+                .unwrap_or(0);
+            format!("{}:{}:{table}", channel.name, channel.dbc_paths.join(","))
+        })
+        .collect();
+    parts.join(";")
+}
+
+fn refresh_catalog(app: &App, catalog: &Arc<Mutex<WebCatalog>>, signature: &mut String) {
+    let next = channel_signature(app);
+    if next == *signature {
+        return;
+    }
+    *signature = next;
+    if let Ok(mut slot) = catalog.lock() {
+        *slot = build_catalog(app);
+    }
+}
+
+fn build_catalog(app: &App) -> WebCatalog {
+    WebCatalog {
+        channels: app
             .snap
             .channels
-            .get(spec.ch as usize)
-            .map(|channel| channel.name.clone())
-            .unwrap_or_else(|| format!("CAN{}", spec.ch + 1)),
-        unit: sub.map(|sub| sub.unit.clone()).unwrap_or_default(),
-        color: spec.color,
-        points: Vec::new(),
+            .iter()
+            .enumerate()
+            .map(|(ch, channel)| WebCatalogChannel {
+                name: channel.name.clone(),
+                messages: channel
+                    .dbc
+                    .as_ref()
+                    .map(|db| {
+                        db.order
+                            .iter()
+                            .filter_map(|&(id, ext)| {
+                                let message = db.messages.get(&(id, ext))?;
+                                Some(WebCatalogMessage {
+                                    id,
+                                    extended: ext,
+                                    name: message.name.clone(),
+                                    signals: message
+                                        .signals
+                                        .iter()
+                                        .map(|signal| WebCatalogSignal {
+                                            key: format!("{ch}:{id}:{}", signal.name),
+                                            name: signal.name.clone(),
+                                            unit: signal.unit.clone(),
+                                            min: signal.min,
+                                            max: signal.max,
+                                        })
+                                        .collect(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect(),
     }
 }
 
@@ -1084,6 +1374,44 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// Selecting a signal creates its lane metadata even before the first
+    /// sample, and unselecting removes it again.
+    #[test]
+    fn the_store_tracks_the_selected_signals() {
+        let app = App::headless();
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut store = SignalStore::default();
+        store.select(&app, 0, 0x100, false, "EngineSpeed");
+        assert!(store.is_selected(&key));
+        store.sync(&app);
+        let seeded = store.seed();
+        assert_eq!(seeded.len(), 1);
+        assert_eq!(seeded[0].name, "EngineSpeed");
+        assert_eq!(seeded[0].unit, "rpm");
+        store.unselect(&key);
+        store.sync(&app);
+        assert!(store.seed().is_empty());
+    }
+
+    /// The picker catalog comes from the loaded DBCs, not a hard-coded list.
+    #[test]
+    fn the_catalog_lists_the_dbc_signals() {
+        let app = App::headless();
+        let catalog = build_catalog(&app);
+        let message = catalog
+            .channels
+            .iter()
+            .flat_map(|channel| &channel.messages)
+            .find(|message| message.name == "EngineStatus")
+            .expect("EngineStatus is in sample.dbc");
+        assert!(
+            message
+                .signals
+                .iter()
+                .any(|signal| signal.name == "EngineSpeed" && signal.unit == "rpm")
+        );
+    }
+
     /// The demo must actually drive and sample the plotted signals; an empty
     /// SignalStore would draw eight empty lanes forever.
     #[test]
@@ -1095,6 +1423,9 @@ mod tests {
             app.update();
         }
         let mut signals = SignalStore::default();
+        for spec in &SIGNALS {
+            signals.select(&app, spec.ch, spec.id, false, spec.name);
+        }
         signals.sync(&app);
         let seeded = signals.seed();
         assert_eq!(seeded.len(), SIGNALS.len());

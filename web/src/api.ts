@@ -1,4 +1,4 @@
-import type { Command, Snapshot } from "./types";
+import type { Catalog, Command, Snapshot } from "./types";
 
 export async function fetchState(
   epoch: number | null,
@@ -21,6 +21,14 @@ export async function fetchState(
     throw new Error(`state: ${response.status}`);
   }
   return (await response.json()) as Snapshot;
+}
+
+export async function fetchCatalog(): Promise<Catalog> {
+  const response = await fetch("/api/catalog", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`catalog: ${response.status}`);
+  }
+  return (await response.json()) as Catalog;
 }
 
 export async function sendCommand(command: Command): Promise<void> {
