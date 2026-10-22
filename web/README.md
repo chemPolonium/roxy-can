@@ -36,15 +36,17 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - A fixed shell with one main table and two resizable right-hand panes covers
   the common "watch Trace + Messages + a curve" flow without window
   management. Pane sizes persist in `localStorage`.
-- Trace/Messages tables, a canvas frame-rate chart, bus filtering, text
-  filtering, and Start/Stop/Pause/Clear trace are wired to the same core
-  commands as the desktop UI.
+- Trace/Messages tables, a canvas chart with total and per-bus frame rates
+  plus dashed bus-load lines, bus filtering, text filtering, and
+  Start/Stop/Pause/Clear trace are wired to the same core commands as the
+  desktop UI. The status bar reports the browser's own UI frame rate.
 - The layout has been checked at 1024x768, 1200x800 and 1440x900.
 
 ## Not here yet
 
 Project open/save, replay, hardware channels, signal plots, node scripts,
 docking/desktops, and virtualization for the full 50k trace ring. Snapshots
-are polled at 5 Hz; SSE is the obvious next step if the frontend is adopted.
+are polled at 10 Hz over a 120-sample window; SSE is the obvious next step
+if the frontend is adopted.
 The Vite build is served from disk (`web/dist`) rather than embedded, so the
 trial avoids a Rust rebuild for every frontend change.

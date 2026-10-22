@@ -326,6 +326,45 @@ input::placeholder {
   width: 190px;
 }
 
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 14px;
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.legend-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.legend-key i {
+  width: 13px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.legend-key b {
+  color: #cbd7e6;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.legend-key em {
+  color: #7f8da0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  font-style: normal;
+}
+
 .readout {
   margin-left: auto;
   color: var(--accent);

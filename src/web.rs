@@ -22,7 +22,7 @@ use crate::bus::BusCommand;
 use crate::can::frame::Direction;
 
 const PORT: u16 = 2010;
-const SERIES_POINTS: usize = 60;
+const SERIES_POINTS: usize = 120;
 const TRACE_ROWS: usize = 240;
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
 const TICK_EVERY: Duration = Duration::from_millis(5);
@@ -107,7 +107,7 @@ fn app_loop(inbox: Receiver<WebCommand>, shared: Arc<Mutex<WebState>>) {
     let mut app = App::headless();
     seed_demo(&mut app);
     app.start_virtual();
-    let mut series: VecDeque<f64> = VecDeque::with_capacity(SERIES_POINTS);
+    let mut series: VecDeque<WebSeriesPoint> = VecDeque::with_capacity(SERIES_POINTS);
     let mut rate_window: VecDeque<(Instant, u64)> = VecDeque::new();
     let mut last_publish = Instant::now() - PUBLISH_EVERY;
 
@@ -148,12 +148,43 @@ fn app_loop(inbox: Receiver<WebCommand>, shared: Arc<Mutex<WebState>>) {
             // A one-second window reads as the bus rate; the per-lap EMA
             // swings with the generator's batch arrivals and makes the
             // chart look like noise.
-            let fps = if elapsed >= 0.2 {
+            // A one-second window needs a moment to fill; feeding the
+            // frontend the per-lap EMA before that put a 500 f/s spike at
+            // the left edge and squashed the whole chart.
+            let mut fps = if elapsed >= 0.5 {
                 app.snap.frame_counter.saturating_sub(frames_then) as f64 / elapsed
             } else {
-                app.frame_rate
+                0.0
             };
-            series.push_back(fps);
+            let bus_count = app.snap.channels.len();
+            let (mut bus_rates, mut bus_loads) = if app.snap.measuring {
+                (
+                    app.snap
+                        .bus_loads
+                        .iter()
+                        .map(|load| load.frame_rate())
+                        .collect(),
+                    app.snap
+                        .bus_loads
+                        .iter()
+                        .map(|load| load.load() * 100.0)
+                        .collect(),
+                )
+            } else {
+                fps = 0.0;
+                (vec![0.0; bus_count], vec![0.0; bus_count])
+            };
+            if bus_rates.len() < bus_count {
+                bus_rates.resize(bus_count, 0.0);
+            }
+            if bus_loads.len() < bus_count {
+                bus_loads.resize(bus_count, 0.0);
+            }
+            series.push_back(WebSeriesPoint {
+                total: fps,
+                bus_rates,
+                bus_loads,
+            });
             if series.len() > SERIES_POINTS {
                 series.pop_front();
             }
@@ -216,7 +247,17 @@ struct WebState {
     trace: Vec<WebFrame>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
-    series: Vec<f64>,
+    series: Vec<WebSeriesPoint>,
+}
+
+/// One chart sample: total plus every bus. Rates are frames/s, loads are
+/// percent. The frontend draws solid rate lines and dashed load lines.
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSeriesPoint {
+    total: f64,
+    bus_rates: Vec<f64>,
+    bus_loads: Vec<f64>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -265,7 +306,7 @@ struct WebLine {
     text: String,
 }
 
-fn build_state(app: &App, series: &VecDeque<f64>, fps: f64) -> WebState {
+fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
     let snap = &app.snap;
     let channels: Vec<WebChannel> = snap
         .channels
@@ -364,7 +405,7 @@ fn build_state(app: &App, series: &VecDeque<f64>, fps: f64) -> WebState {
         trace,
         messages,
         write,
-        series: series.iter().copied().collect(),
+        series: series.iter().cloned().collect(),
     }
 }
 
@@ -395,7 +436,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
             app.update();
         }
-        let series = VecDeque::from([app.frame_rate]);
+        let series = VecDeque::new();
         let state = build_state(&app, &series, app.frame_rate);
         assert_eq!(state.channels.len(), 2);
         assert!(state.frames > 0, "the generator ran");

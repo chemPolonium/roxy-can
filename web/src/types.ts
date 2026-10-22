@@ -11,7 +11,13 @@ export interface State {
   trace: Frame[];
   messages: Message[];
   write: WriteLine[];
-  series: number[];
+  series: SeriesPoint[];
+}
+
+export interface SeriesPoint {
+  total: number;
+  busRates: number[];
+  busLoads: number[];
 }
 
 export interface Channel {

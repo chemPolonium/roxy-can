@@ -3,7 +3,7 @@ import type { Command, Frame, State } from "./types";
 import { fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { MessageTable } from "./components/MessageTable";
-import { RateChart } from "./components/RateChart";
+import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "activity";
@@ -51,6 +51,27 @@ function seconds(us: number, digits = 3): string {
   return (us / 1e6).toFixed(digits);
 }
 
+function useUiFps(): number {
+  const [fps, setFps] = useState(0);
+  useEffect(() => {
+    let frames = 0;
+    let last = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      frames += 1;
+      if (now - last >= 500) {
+        setFps(Math.round((frames * 1000) / (now - last)));
+        frames = 0;
+        last = now;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
+  return fps;
+}
+
 function clock(wallUs: number): string {
   const total = wallUs / 1e6;
   const h = Math.floor(total / 3600);
@@ -70,6 +91,7 @@ export function App() {
   const [tab, setTab] = useState<RightTab>("messages");
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
+  const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
 
@@ -97,7 +119,7 @@ export function App() {
       }
     };
     void tick();
-    const timer = window.setInterval(tick, 200);
+    const timer = window.setInterval(tick, 100);
     return () => {
       alive = false;
       window.clearInterval(timer);
@@ -147,6 +169,9 @@ export function App() {
 
   const canControl = Boolean(state) && online && !busy;
   const measuring = state?.measuring ?? false;
+  const latest = state?.series.length
+    ? state.series[state.series.length - 1]
+    : undefined;
 
   return (
     <div class="app">
@@ -282,12 +307,28 @@ export function App() {
           <section class="panel chart-panel">
             <div class="panel-head">
               <div class="panel-title">
-                <h2>Frames per second</h2>
-                <span>last {state?.series.length ?? 0} samples</span>
+                <h2>Bus activity</h2>
+                <span>solid f/s · dashed load</span>
               </div>
               <strong class="readout">{state ? state.fps.toFixed(0) : "—"} f/s</strong>
             </div>
-            <RateChart values={state?.series ?? []} />
+            <div class="chart-legend">
+              <span class="legend-key">
+                <i style={{ background: "#4c9dff" }} />
+                Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
+              </span>
+              {state?.channels.map((channel, index) => (
+                <span class="legend-key" key={channel.name}>
+                  <i style={{ background: BUS_COLORS[index % BUS_COLORS.length] }} />
+                  {channel.name} <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
+                  <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
+                </span>
+              ))}
+            </div>
+            <RateChart
+              points={state?.series ?? []}
+              channels={state?.channels ?? []}
+            />
           </section>
 
           <div
@@ -341,7 +382,8 @@ export function App() {
             : state?.status || "waiting for core"}
         </span>
         <span class="spacer" />
-        <span>poll 5 Hz</span>
+        <span>poll 10 Hz</span>
+        <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
       </footer>
     </div>
