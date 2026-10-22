@@ -1218,6 +1218,46 @@ button.mini.on {
   font-size: 10px;
 }
 
+.replay-group {
+  margin: 5px 0 8px;
+}
+
+.replay-group-title {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.replay-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid #161d26;
+  font-size: 10.5px;
+}
+
+.replay-row > span {
+  flex: 0 0 82px;
+  color: #cfe6ff;
+}
+
+.replay-row > em {
+  flex: 0 0 70px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.replay-row select {
+  flex: 0 1 220px;
+  min-width: 0;
+  font-size: 10px;
+}
+
 .fr-watch {
   color: #8fd3a8 !important;
 }

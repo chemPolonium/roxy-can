@@ -21,6 +21,7 @@ export interface State {
   replaySpeed: number;
   recentProjects: string[];
   recentLogs: string[];
+  replayMap: ReplayMap;
   buses: Bus[];
   frBuses: FrBus[];
   ethBuses: EthBus[];
@@ -83,6 +84,18 @@ export interface CatalogChannel {
 
 export interface Catalog {
   channels: CatalogChannel[];
+}
+
+export interface ReplayMapRow {
+  raw: number;
+  count: number;
+  target: number | null;
+}
+
+export interface ReplayMap {
+  can: ReplayMapRow[];
+  fr: ReplayMapRow[];
+  eth: ReplayMapRow[];
 }
 
 export interface FrBus {
@@ -427,6 +440,12 @@ export type Command =
   | { type: "replay_play_to"; target_us: number }
   | { type: "replay_play_for"; duration_us: number }
   | { type: "set_replay_speed"; speed: number }
+  | {
+      type: "set_replay_channel";
+      kind: string;
+      raw: number;
+      target: number | null;
+    }
   | { type: "record_toggle"; name: string | null; format: number | null }
   | { type: "set_record_filter"; text: string }
   | {

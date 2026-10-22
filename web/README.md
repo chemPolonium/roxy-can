@@ -86,8 +86,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   an AUTOSAR matrix (host path or browser picker) and list the resulting bus,
   cluster and frame count; loading or removing a description stops the
   measurement. A loaded FlexRay bus can attach a Vector FlexRay port in
-  receive-only mode and detach it again. It uses the same core commands as
-  the desktop Buses/Network windows.
+  receive-only mode and detach it again. The **Replay channel map** lists the
+  CAN, FlexRay and Ethernet channels the current log carries, their frame
+  counts, and maps each to a project bus, as-is, or No replay; choices apply
+  immediately and are saved with the project. It uses the same core commands
+  as the desktop Buses/Network windows.
 - **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
   cycle, FD and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
   action, and FR slots added by number to a loaded cluster description. The

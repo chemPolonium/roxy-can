@@ -1245,6 +1245,11 @@ enum WebCommand {
     SetReplaySpeed {
         speed: f64,
     },
+    SetReplayChannel {
+        kind: String,
+        raw: u8,
+        target: Option<u8>,
+    },
     RecordToggle {
         name: Option<String>,
         format: Option<u8>,
@@ -1694,6 +1699,15 @@ fn app_loop(
                     };
                     app.replay_speed = speed;
                     app.send(BusCommand::SetReplaySpeed(speed));
+                }
+                WebCommand::SetReplayChannel { kind, raw, target } => {
+                    let Some(kind) = crate::replay_map::LogBusKind::parse(&kind) else {
+                        app.status = format!("unknown replay bus kind: {kind}");
+                        continue;
+                    };
+                    let mut map = app.snap.replay_map.clone();
+                    map.set(kind, raw, target);
+                    app.send(BusCommand::SetReplayMap(map));
                 }
                 WebCommand::RecordToggle { name, format } => {
                     if let Some(name) = name {
@@ -3426,6 +3440,7 @@ struct WebState {
     replay_speed: f64,
     recent_projects: Vec<String>,
     recent_logs: Vec<String>,
+    replay_map: WebReplayMap,
     buses: Vec<WebBus>,
     fr_buses: Vec<WebFrBus>,
     eth_buses: Vec<WebEthBus>,
@@ -3507,6 +3522,42 @@ struct WebNode {
     name: String,
     simulated: bool,
     entries: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebReplayRow {
+    raw: u8,
+    count: u64,
+    target: Option<u8>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebReplayMap {
+    can: Vec<WebReplayRow>,
+    fr: Vec<WebReplayRow>,
+    eth: Vec<WebReplayRow>,
+}
+
+/// Census rows plus configured rows whose channel has not arrived yet, with
+/// the target the core would actually use (`None` = no replay).
+fn replay_rows(
+    census: &[(u8, u64)],
+    configured: Vec<(u8, Option<u8>)>,
+    effective: impl Fn(u8) -> Option<u8>,
+) -> Vec<WebReplayRow> {
+    let mut rows: std::collections::BTreeMap<u8, u64> = census.iter().copied().collect();
+    for (raw, _) in configured {
+        rows.entry(raw).or_insert(0);
+    }
+    rows.into_iter()
+        .map(|(raw, count)| WebReplayRow {
+            raw,
+            count,
+            target: effective(raw),
+        })
+        .collect()
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4155,6 +4206,27 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             frames: cfg.db.frames.len(),
         })
         .collect();
+    let replay_map = {
+        use crate::replay_map::LogBusKind;
+        let map = &snap.replay_map;
+        WebReplayMap {
+            can: replay_rows(
+                &snap.replay_census_can,
+                map.configured(LogBusKind::Can),
+                |raw| map.can_channel(raw, snap.channels.len()),
+            ),
+            fr: replay_rows(
+                &snap.replay_census_fr,
+                map.configured(LogBusKind::Fr),
+                |raw| map.target(LogBusKind::Fr, raw),
+            ),
+            eth: replay_rows(
+                &snap.replay_census_eth,
+                map.configured(LogBusKind::Eth),
+                |raw| map.target(LogBusKind::Eth, raw),
+            ),
+        }
+    };
 
     let bus_stats: Vec<WebBusStats> = snap
         .bus_loads
@@ -4560,6 +4632,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         recent_projects: app.recent_projects.clone(),
         recent_logs: app.recent_log.clone(),
+        replay_map,
         buses,
         fr_buses,
         eth_buses,
@@ -5334,6 +5407,25 @@ mod tests {
         let bus = state.fr_buses.first().expect("FR bus row");
         assert!(bus.attached);
         assert_eq!(bus.channel, 5);
+    }
+
+    #[test]
+    fn replay_rows_merge_census_and_configured_channels() {
+        let rows = replay_rows(&[(2, 5), (0, 9)], vec![(2, None), (4, Some(1))], |raw| {
+            if raw == 2 { None } else { Some(1) }
+        });
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.raw, row.count, row.target))
+                .collect::<Vec<_>>(),
+            [(0, 9, Some(1)), (2, 5, None), (4, 0, Some(1))],
+            "census and remembered rows share one sorted table"
+        );
+        assert_eq!(
+            crate::replay_map::LogBusKind::parse("FlexRay"),
+            Some(crate::replay_map::LogBusKind::Fr)
+        );
+        assert!(crate::replay_map::LogBusKind::parse("lin").is_none());
     }
 
     #[test]

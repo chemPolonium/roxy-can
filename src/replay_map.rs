@@ -23,6 +23,17 @@ pub enum LogBusKind {
     Eth,
 }
 
+impl LogBusKind {
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.to_ascii_lowercase().as_str() {
+            "can" => Some(LogBusKind::Can),
+            "fr" | "flexray" => Some(LogBusKind::Fr),
+            "eth" | "ethernet" => Some(LogBusKind::Eth),
+            _ => None,
+        }
+    }
+}
+
 /// 文件通道 → 工程里的一路。值 `None` 表示这一路文件通道不回放。
 /// `#[serde(default)]`：工程文件里没有这一项时读成"没配过映射"，
 /// 而不是解析失败——旧工程文件正是这样。

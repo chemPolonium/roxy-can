@@ -1546,6 +1546,9 @@ export function App() {
           buses={state?.buses ?? []}
           frBuses={state?.frBuses ?? []}
           ethBuses={state?.ethBuses ?? []}
+          replayMap={
+            state?.replayMap ?? { can: [], fr: [], eth: [] }
+          }
           realBus={state?.realBus ?? false}
           hardware={hardware}
           loading={hardwareLoading}
@@ -1572,6 +1575,9 @@ export function App() {
           onDetach={detachHardware}
           onAttachFr={attachFrHardware}
           onDetachFr={detachFrHardware}
+          onSetReplay={(kind, raw, target) =>
+            void run({ type: "set_replay_channel", kind, raw, target })
+          }
           onSetReal={setRealBus}
           onOpenScripts={() => {
             setBusesOpen(false);

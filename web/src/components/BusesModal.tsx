@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Bus, EthBus, FrBus, Hardware, HwChannel } from "../types";
+import type {
+  Bus,
+  EthBus,
+  FrBus,
+  Hardware,
+  HwChannel,
+  ReplayMap,
+} from "../types";
 import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
   frBuses: FrBus[];
   ethBuses: EthBus[];
+  replayMap: ReplayMap;
   realBus: boolean;
   hardware: Hardware | null;
   loading: boolean;
@@ -26,6 +34,7 @@ interface Props {
   onDetach: (bus: number) => void;
   onAttachFr: (bus: number, index: number) => void;
   onDetachFr: (bus: number) => void;
+  onSetReplay: (kind: string, raw: number, target: number | null) => void;
   onSetReal: (real: boolean) => void;
   onOpenScripts: () => void;
   onClose: () => void;
@@ -325,6 +334,7 @@ export function BusesModal({
   buses,
   frBuses,
   ethBuses,
+  replayMap,
   realBus,
   hardware,
   loading,
@@ -345,6 +355,7 @@ export function BusesModal({
   onDetach,
   onAttachFr,
   onDetachFr,
+  onSetReplay,
   onSetReal,
   onOpenScripts,
   onClose,
@@ -589,6 +600,104 @@ export function BusesModal({
                 }}
               />
             </form>
+          </section>
+
+          <section class="bus-proto replay-map">
+            <h3>Replay channel map</h3>
+            {replayMap.can.length === 0 &&
+            replayMap.fr.length === 0 &&
+            replayMap.eth.length === 0 ? (
+              <p class="hint">
+                Replay a log and the channels it contains are listed here.
+              </p>
+            ) : (
+              [
+                {
+                  kind: "can",
+                  title: "CAN channels in the log",
+                  rows: replayMap.can,
+                  targets: buses.map((bus) => ({
+                    id: bus.index,
+                    label: bus.name,
+                  })),
+                  channel: (raw: number) => `Channel ${raw + 1}`,
+                },
+                {
+                  kind: "fr",
+                  title: "FlexRay channels in the log",
+                  rows: replayMap.fr,
+                  targets: frBuses.map((bus) => ({
+                    id: bus.bus,
+                    label: bus.name,
+                  })),
+                  channel: (raw: number) => `#${raw}`,
+                },
+                {
+                  kind: "eth",
+                  title: "Ethernet channels in the log",
+                  rows: replayMap.eth,
+                  targets: ethBuses.map((bus) => ({
+                    id: bus.bus,
+                    label: bus.name,
+                  })),
+                  channel: (raw: number) => `#${raw}`,
+                },
+              ].map((group) =>
+                group.rows.length === 0 ? null : (
+                  <div class="replay-group" key={group.kind}>
+                    <span class="replay-group-title">{group.title}</span>
+                    {group.rows.map((row) => {
+                      const value =
+                        row.target == null
+                          ? "none"
+                          : row.target === row.raw
+                            ? "raw"
+                            : `b${row.target}`;
+                      return (
+                        <div
+                          class="replay-row"
+                          key={`${group.kind}:${row.raw}`}
+                          title="Which project bus replays this log channel"
+                        >
+                          <span>{group.channel(row.raw)}</span>
+                          <em>{row.count} frames</em>
+                          <select
+                            value={value}
+                            onChange={(event) => {
+                              const next = (
+                                event.target as HTMLSelectElement
+                              ).value;
+                              onSetReplay(
+                                group.kind,
+                                row.raw,
+                                next === "raw"
+                                  ? row.raw
+                                  : next === "none"
+                                    ? null
+                                    : Number(next.slice(1)),
+                              );
+                            }}
+                          >
+                            <option value="raw">
+                              As-is ({group.channel(row.raw)})
+                            </option>
+                            {group.targets.map((target) => (
+                              <option
+                                key={target.id}
+                                value={`b${target.id}`}
+                              >
+                                {target.label}
+                              </option>
+                            ))}
+                            <option value="none">No replay</option>
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ),
+              )
+            )}
           </section>
         </div>
 
