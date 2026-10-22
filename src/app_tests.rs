@@ -10014,7 +10014,7 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     assert_eq!(sig(&app, 1), on_first, "the live 路 kept its file");
     // The rows the Buses table lists: the 路 that exist as state -- the two
     // configured ones. No placeholder for "the next free index"; a bus nobody
-    // added is not a bus, and "+ Add FlexRay" is what adds one.
+    // added is not a bus, and "+ FlexRay" is what adds one.
     assert_eq!(app.fr_bus_rows(), [0, 1]);
     assert_eq!(
         app.next_flexray_bus(),

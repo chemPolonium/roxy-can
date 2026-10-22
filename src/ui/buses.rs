@@ -370,7 +370,7 @@ const BUS_HW_W: f32 = 140.0;
 const BUS_RM_W: f32 = 22.0;
 
 fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
-    if ui.button("+ Add CAN bus") {
+    if ui.button("+ CAN bus") {
         cmds.push(BusesCmd::AddChannel);
     }
     ui.same_line();
@@ -729,7 +729,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     // nothing, exactly as cancelling CAN's DBC dialog leaves the bus empty
     // rather than inventing one.
     let rows = app.fr_bus_rows();
-    if ui.button("+ Add FlexRay") {
+    if ui.button("+ FlexRay") {
         cmds.push(BusesCmd::AddFrBus);
     }
     if ui.is_item_hovered() {
@@ -942,7 +942,7 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     // The add button names the section, as it does for CAN and FlexRay; a
     // separate "Ethernet" label made this row the only one with two leads.
     ui.separator();
-    if ui.button("+ Add Ethernet") {
+    if ui.button("+ Ethernet") {
         cmds.push(BusesCmd::AddEthBus);
     }
     if ui.is_item_hovered() {

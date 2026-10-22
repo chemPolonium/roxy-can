@@ -56,7 +56,7 @@ impl MonitorView {
     }
 
     fn content(&mut self, app: &App, ui: &Ui, cmds: &mut Vec<MonitorCmd>) {
-        if ui.button("+ Add signal") {
+        if ui.button("+ Signal") {
             cmds.push(MonitorCmd::OpenPicker);
         }
         if ui.is_item_hovered() {
