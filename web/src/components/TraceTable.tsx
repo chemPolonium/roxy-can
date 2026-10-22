@@ -1,13 +1,20 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { Frame } from "../types";
 
 const ROW_H = 21;
 const OVERSCAN = 8;
 const COLUMNS = 7;
+/// New rows arrive at the head every 100 ms. Only a live feed prepends this
+/// many, so the anchor search does not need to scan the whole 50k buffer.
+const ANCHOR_SCAN = 10_000;
 
 function hexId(frame: Frame): string {
   const width = frame.extended ? 8 : 3;
   return `0x${frame.id.toString(16).toUpperCase().padStart(width, "0")}`;
+}
+
+function frameKey(frame: Frame): string {
+  return `${frame.tUs}:${frame.bus}:${frame.kind}:${frame.id}:${frame.data}`;
 }
 
 function TraceRow({ frame }: { frame: Frame }) {
@@ -36,9 +43,41 @@ function TraceRow({ frame }: { frame: Frame }) {
 /// carry the unrendered height. Five thousand rows cost about thirty nodes.
 export function TraceTable({ rows }: { rows: Frame[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollTopRef = useRef(0);
+  const previousFirst = useRef<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(480);
   const total = rows.length;
+
+  // New rows are prepended. A reader who scrolled down to inspect an older
+  // frame must not be pushed away by that insertion: keep the same frame at
+  // the same viewport offset, while a reader at the live edge stays at 0.
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    const first = rows.length > 0 ? frameKey(rows[0]) : null;
+    const previous = previousFirst.current;
+    previousFirst.current = first;
+    if (!element || !previous || first === previous) return;
+    const limit = Math.min(rows.length, ANCHOR_SCAN);
+    let prepended = 0;
+    for (let i = 1; i < limit; i += 1) {
+      if (frameKey(rows[i]) === previous) {
+        prepended = i;
+        break;
+      }
+    }
+    if (prepended === 0) return;
+    if (scrollTopRef.current <= 2) {
+      element.scrollTop = 0;
+      scrollTopRef.current = 0;
+      setScrollTop(0);
+      return;
+    }
+    const next = scrollTopRef.current + prepended * ROW_H;
+    element.scrollTop = next;
+    scrollTopRef.current = next;
+    setScrollTop(next);
+  }, [rows]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -58,6 +97,7 @@ export function TraceTable({ rows }: { rows: Frame[] }) {
     const max = Math.max(0, total * ROW_H - element.clientHeight);
     if (element.scrollTop > max) {
       element.scrollTop = max;
+      scrollTopRef.current = max;
       setScrollTop(max);
     }
   }, [total]);
@@ -83,9 +123,11 @@ export function TraceTable({ rows }: { rows: Frame[] }) {
     <div
       class="table-scroll"
       ref={scrollRef}
-      onScroll={(event) =>
-        setScrollTop((event.currentTarget as HTMLDivElement).scrollTop)
-      }
+      onScroll={(event) => {
+        const top = (event.currentTarget as HTMLDivElement).scrollTop;
+        scrollTopRef.current = top;
+        setScrollTop(top);
+      }}
     >
       <table class="data-table trace-table">
         <colgroup>

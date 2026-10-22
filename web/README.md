@@ -71,7 +71,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - Trace uses a hand-rolled fixed-row-height virtualizer (no table library):
   50,000 buffered rows render as roughly 30 DOM rows between two spacer
   rows. The server seeds the buffer once and then sends only new frames, so
-  the 100 ms poll stays small as the table grows.
+  the 100 ms poll stays small as the table grows. A scrolled-away reader keeps
+  the same frame in view when rows are prepended; the live edge follows new
+  frames.
 - A project or log can be loaded from the Session dialog by host path or
   from recents. The header, mode chip and status bar carry the session name
   and replay playhead; switching sessions resets the trace and curve buffers.
@@ -188,9 +190,8 @@ Ethernet hardware attachment and generation (descriptions, replay rows,
 read-only Trace/Messages/Statistics and the FR generator are supported)
 and docking/desktops.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
-it needs a different storage layout than per-row JSON strings. Scroll
-anchoring while new rows arrive is left to the browser. Snapshots are polled
-at 10 Hz over a 120-sample window; SSE is the obvious next step.
+it needs a different storage layout than per-row JSON strings. Snapshots are
+polled at 10 Hz over a 120-sample window; SSE is the obvious next step.
 
 ## Performance testing
 
