@@ -70,6 +70,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
   actions including Send-to-generator-entry, and the pre/post/marker limits.
+- The lower panel has **Messages / Statistics / Write**. Statistics shows
+  CAN aggregate count, min/avg/max/jitter and share; Jitter folds away
+  below 1280 px and the row tooltip keeps the full values.
 - Trace/Messages tables, a canvas chart with total and per-bus frame rates
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the

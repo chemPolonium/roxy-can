@@ -21,6 +21,7 @@ export interface State {
   tx: TxEntry[];
   triggers: TriggerEntry[];
   triggerLimits: TriggerLimits;
+  stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];
@@ -111,6 +112,18 @@ export interface TriggerEntry {
   actionKind: string;
   sendCh: number;
   sendId: number;
+}
+
+export interface StatsRow {
+  label: string;
+  bus: string;
+  count: number;
+  minMs: string;
+  avgMs: string;
+  maxMs: string;
+  jitterMs: string;
+  share: string;
+  len: number;
 }
 
 export interface TriggerLimits {

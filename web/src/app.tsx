@@ -21,9 +21,10 @@ import { MessageTable } from "./components/MessageTable";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
+import { StatsTable } from "./components/StatsTable";
 import { TraceTable } from "./components/TraceTable";
 
-type RightTab = "messages" | "activity";
+type RightTab = "messages" | "statistics" | "activity";
 type ChartTab = "rate" | "signals";
 type Drag = "main" | "right" | null;
 
@@ -747,6 +748,13 @@ export function App() {
                 </button>
                 <button
                   type="button"
+                  class={tab === "statistics" ? "on" : ""}
+                  onClick={() => setTab("statistics")}
+                >
+                  Statistics
+                </button>
+                <button
+                  type="button"
                   class={tab === "activity" ? "on" : ""}
                   onClick={() => setTab("activity")}
                 >
@@ -756,11 +764,15 @@ export function App() {
               <span class="meta">
                 {tab === "messages"
                   ? `${state?.messages.length ?? 0} ids`
-                  : `${state?.write.length ?? 0} lines`}
+                  : tab === "statistics"
+                    ? `${state?.stats.length ?? 0} rows`
+                    : `${state?.write.length ?? 0} lines`}
               </span>
             </div>
             {tab === "messages" ? (
               <MessageTable rows={state?.messages ?? []} />
+            ) : tab === "statistics" ? (
+              <StatsTable rows={state?.stats ?? []} />
             ) : (
               <Activity rows={state?.write ?? []} clock={clock} />
             )}

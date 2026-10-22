@@ -490,6 +490,12 @@ input::placeholder {
   text-align: right;
 }
 
+.stats-table th,
+.stats-table td {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
 .data-table .mono {
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
   font-size: 11px;

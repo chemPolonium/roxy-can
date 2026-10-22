@@ -1574,6 +1574,7 @@ struct WebState {
     tx: Vec<WebTx>,
     triggers: Vec<WebTrigger>,
     trigger_limits: WebTriggerLimits,
+    stats: Vec<WebStatsRow>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -1667,6 +1668,20 @@ struct WebTriggerLimits {
     pre_frames: usize,
     post_frames: u32,
     marker_cap: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebStatsRow {
+    label: String,
+    bus: String,
+    count: u64,
+    min_ms: String,
+    avg_ms: String,
+    max_ms: String,
+    jitter_ms: String,
+    share: String,
+    len: u8,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1789,6 +1804,54 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
     tx.sort_by_key(|entry| (entry.channel, entry.id));
+
+    let total_frames: u64 = snap.aggs.iter().map(|agg| agg.count).sum();
+    let ms = |value: f64, count: u64| {
+        if count >= 2 {
+            format!("{:.2}", value / 1000.0)
+        } else {
+            "-".to_string()
+        }
+    };
+    let stats: Vec<WebStatsRow> = snap
+        .aggs
+        .iter()
+        .map(|agg| {
+            let name = snap
+                .channels
+                .get(agg.channel as usize)
+                .and_then(|channel| channel.dbc.as_ref())
+                .and_then(|db| db.message_name(agg.id))
+                .unwrap_or("-");
+            let id = if agg.extended {
+                format!("{:08X}x", agg.id)
+            } else {
+                format!("{:03X}", agg.id)
+            };
+            WebStatsRow {
+                label: format!("{id}  {name}"),
+                bus: snap
+                    .channels
+                    .get(agg.channel as usize)
+                    .map(|channel| channel.name.clone())
+                    .unwrap_or_else(|| format!("CAN{}", agg.channel + 1)),
+                count: agg.count,
+                min_ms: ms(agg.min_us, agg.count),
+                avg_ms: ms(agg.cycle_us, agg.count),
+                max_ms: ms(agg.max_us, agg.count),
+                jitter_ms: ms(agg.jitter_us, agg.count),
+                share: format!(
+                    "{:.1}%",
+                    if total_frames > 0 {
+                        agg.count as f64 / total_frames as f64 * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+                len: agg.len,
+            }
+        })
+        .collect();
 
     let triggers: Vec<WebTrigger> = snap
         .triggers
@@ -1972,6 +2035,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             post_frames: app.limits.post_frames,
             marker_cap: app.limits.marker_cap,
         },
+        stats,
         channels,
         messages,
         write,
@@ -2011,6 +2075,7 @@ mod tests {
         assert_eq!(state.channels.len(), 2);
         assert!(state.frames > 0, "the generator ran");
         assert!(!state.messages.is_empty(), "the aggregates saw traffic");
+        assert!(!state.stats.is_empty(), "statistics share the aggregates");
 
         let mut trace = TraceStore::default();
         trace.sync(&app);
