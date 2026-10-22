@@ -818,6 +818,10 @@ fn open_probe_channel(
 pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     let channels = crate::hw::vector::enumerate()?;
     let mut s = format!("{} Vector channel(s):\n", channels.len());
+    match crate::hw::vector::present_usb_pids() {
+        Some(pids) => s.push_str(&format!("present Vector USB PIDs: {pids:04X?}\n")),
+        None => s.push_str("present Vector USB PIDs: PnP query unavailable\n"),
+    }
     for c in &channels {
         s.push_str(&format!(
             "  ch{}: {} [hw={} caps=0x{:08X} fd:{} bus=0x{:08X} can:{} flexray:{} on_bus:{} connected:0x{:X}]\n",

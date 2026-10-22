@@ -110,10 +110,13 @@ impl BusesView {
         if !self.open {
             return cmds;
         }
-        if self.refresh_pending && self.last_hw_refresh != app.snap.hw_refresh {
+        if !self.refresh_pending {
+            self.last_hw_refresh = app.snap.hw_refresh;
+        } else if self.last_hw_refresh != app.snap.hw_refresh {
             // The core has closed the Vector ports and reopened the driver;
-            // only now is it safe to enumerate again. Clearing on the click
-            // would race the reopen and cache the old device list.
+            // enumerate again after the reopen. (The click also clears the
+            // list immediately so an unplugged device disappears without
+            // waiting for the core.)
             self.last_hw_refresh = app.snap.hw_refresh;
             self.hw_channels = None;
             self.fr_channels = None;
@@ -408,6 +411,11 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     // machine-wide, not per bus.
     if ui.button("Refresh channels##hwref") {
         view.refresh_pending = true;
+        // PnP already hides a physically absent adapter, so the immediate
+        // re-enumeration is correct; the generation clear after the core
+        // reset refreshes the FD capabilities.
+        view.hw_channels = None;
+        view.fr_channels = None;
         cmds.push(BusesCmd::RefreshHardware);
     }
     if ui.is_item_hovered() {

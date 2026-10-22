@@ -404,11 +404,23 @@ fn vector_usb_pid(hw_type: u8) -> Option<u16> {
 }
 
 /// Whether a channel should be listed given the present USB product IDs.
-/// `None` means the PnP query failed, so nothing is hidden.
-fn channel_present(hw_type: u8, present_pids: Option<&std::collections::HashSet<u16>>) -> bool {
-    match (vector_usb_pid(hw_type), present_pids) {
-        (Some(pid), Some(present)) => present.contains(&pid),
-        _ => true,
+/// `None` means the PnP query failed, so nothing is hidden. The VN16xx
+/// name fallback covers a stale record whose hwType the driver no longer
+/// reports (the whole VN1600 family is USB).
+fn channel_present(
+    hw_type: u8,
+    name: &str,
+    present_pids: Option<&std::collections::HashSet<u16>>,
+) -> bool {
+    match present_pids {
+        Some(present) => {
+            if let Some(pid) = vector_usb_pid(hw_type) {
+                present.contains(&pid)
+            } else {
+                !(present.is_empty() && name.starts_with("VN16"))
+            }
+        }
+        None => true,
     }
 }
 
@@ -473,6 +485,16 @@ fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
 #[cfg(not(windows))]
 fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
     None
+}
+
+/// Sorted present Vector USB PIDs for the diagnostic probe; None means the
+/// PnP query itself failed.
+pub fn present_usb_pids() -> Option<Vec<u16>> {
+    present_vector_usb_pids().map(|set| {
+        let mut pids: Vec<u16> = set.into_iter().collect();
+        pids.sort_unstable();
+        pids
+    })
 }
 
 /// An open, activated Vector port for one CAN channel. Frames written
@@ -988,7 +1010,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
             let name = String::from_utf8_lossy(&name_bytes[..end]).into_owned();
             let hw_type = config[rec + 32];
-            if !channel_present(hw_type, present_pids.as_ref()) {
+            if !channel_present(hw_type, &name, present_pids.as_ref()) {
                 continue;
             }
             let channel_index = config[rec + 41];
@@ -1574,19 +1596,27 @@ mod tests {
         use std::collections::HashSet;
         assert_eq!(vector_usb_pid(55), Some(0x1050), "VN1610");
         let present: HashSet<u16> = [0x1050].into_iter().collect();
-        assert!(channel_present(55, Some(&present)));
-        assert!(!channel_present(55, Some(&HashSet::new())));
+        assert!(channel_present(55, "VN1610 Channel 1", Some(&present)));
+        assert!(!channel_present(
+            55,
+            "VN1610 Channel 1",
+            Some(&HashSet::new())
+        ));
         assert!(
-            channel_present(55, None),
+            channel_present(55, "VN1610 Channel 1", None),
             "a failed PnP query must not hide hardware"
         );
         assert!(
-            channel_present(1, Some(&HashSet::new())),
+            channel_present(1, "Virtual Channel 1", Some(&HashSet::new())),
             "virtual channels are not PnP devices"
         );
         assert!(
-            channel_present(99, Some(&HashSet::new())),
+            channel_present(99, "Other adapter", Some(&HashSet::new())),
             "unknown hw types stay visible"
+        );
+        assert!(
+            !channel_present(0, "VN1610 Channel 1", Some(&HashSet::new())),
+            "VN16xx name survives a changed hw type"
         );
     }
 
