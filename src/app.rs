@@ -87,11 +87,17 @@ pub const PALETTE: [[f32; 4]; 8] = [
 ];
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::{Channel, NodeRole};
+#[cfg(test)]
+pub use crate::generator::{TX_CYCLE_MAX_MS, cycle_from_ms_text};
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, StateWin, YMode};
+#[cfg(test)]
+pub use crate::observe::{PickTarget, SampleCache, StateRule};
 pub use crate::project::PendingAction;
 pub use crate::workspace::{
     Desktop, MsgWin, RowsBuild, SigScope, StatsWin, TraceFilter, TraceRow, TraceWin, WindowKind,
 };
+#[cfg(test)]
+pub use crate::workspace::{PopupTarget, TracePick};
 
 /// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot
 /// builders below.
