@@ -8,6 +8,8 @@ import type {
   Hardware,
   SignalSeries,
   State,
+  TriggerEdit,
+  TriggerLimits,
   TxEntry,
 } from "./types";
 import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
@@ -338,6 +340,7 @@ export function App() {
     setPickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(true);
+    void loadCatalog();
   };
 
   const toggleSignal = (
@@ -411,6 +414,31 @@ export function App() {
   const removeTrigger = (index: number) =>
     void run({ type: "remove_trigger", index });
   const rearmTriggers = () => void run({ type: "rearm_triggers" });
+  const editTrigger = (edit: TriggerEdit) =>
+    void run({
+      type: "edit_trigger",
+      index: edit.index,
+      kind: edit.kind,
+      ch: edit.ch,
+      id: edit.id,
+      ext: edit.ext,
+      signal: edit.signal,
+      threshold: edit.threshold,
+      rising: edit.rising,
+      bus: edit.bus,
+      slot: edit.slot,
+      key: edit.key,
+      action: edit.action,
+      send_ch: edit.sendCh,
+      send_id: edit.sendId,
+    });
+  const setTriggerLimits = (limits: TriggerLimits) =>
+    void run({
+      type: "set_trigger_limits",
+      pre_frames: limits.preFrames,
+      post_frames: limits.postFrames,
+      marker_cap: limits.markerCap,
+    });
 
   const recent = (paths: string[], open: (path: string) => void) =>
     paths.length > 0 && (
@@ -761,10 +789,23 @@ export function App() {
       {triggersOpen && (
         <TriggersModal
           triggers={state?.triggers ?? []}
+          limits={
+            state?.triggerLimits ?? {
+              preFrames: 0,
+              postFrames: 0,
+              markerCap: 8,
+            }
+          }
+          buses={state?.buses ?? []}
+          txEntries={state?.tx ?? []}
+          catalog={catalog}
+          catalogLoading={catalogLoading}
           onAdd={addTrigger}
           onToggle={setTriggerEnabled}
           onRemove={removeTrigger}
           onRearm={rearmTriggers}
+          onEdit={editTrigger}
+          onLimits={setTriggerLimits}
           onClose={() => setTriggersOpen(false)}
         />
       )}

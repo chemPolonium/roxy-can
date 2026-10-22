@@ -1159,10 +1159,95 @@ button.mini {
 .trig-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 5px;
   flex: 0 0 auto;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.trig-actions .spacer {
+  flex: 1;
+}
+
+.trig-limit {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.trig-limit input {
+  width: 58px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.trig-editor {
+  margin: 8px 12px;
+  padding: 8px;
+  background: #101a26;
+  border: 1px solid #2d5c88;
+  border-radius: 4px;
+}
+
+.trig-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: #d8e4f2;
+  font-size: 11px;
+}
+
+.trig-editor-head .spacer {
+  flex: 1;
+}
+
+.trig-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.trig-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.trig-field select {
+  max-width: 190px;
+}
+
+.trig-field input[type="number"] {
+  width: 82px;
+}
+
+.trig-field input[type="number"],
+.trig-field input:not([type]) {
+  padding: 2px 4px;
+  font-size: 10.5px;
+}
+
+.trig-wide {
+  flex: 1 1 220px;
+}
+
+.trig-wide select,
+.trig-wide input {
+  flex: 1 1 160px;
+  min-width: 100px;
+}
+
+.trig-hex {
+  width: 82px;
+  font-family: "Cascadia Mono", Consolas, monospace;
 }
 
 .trig-body {

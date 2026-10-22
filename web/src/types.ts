@@ -20,6 +20,7 @@ export interface State {
   hwRefresh: number;
   tx: TxEntry[];
   triggers: TriggerEntry[];
+  triggerLimits: TriggerLimits;
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];
@@ -98,6 +99,41 @@ export interface TriggerEntry {
   fired: number;
   level: boolean;
   lastFireUs: number;
+  ch: number;
+  id: number;
+  ext: boolean;
+  signal: string;
+  threshold: number;
+  rising: boolean;
+  bus: number;
+  slot: number;
+  varKey: string;
+  actionKind: string;
+  sendCh: number;
+  sendId: number;
+}
+
+export interface TriggerLimits {
+  preFrames: number;
+  postFrames: number;
+  markerCap: number;
+}
+
+export interface TriggerEdit {
+  index: number;
+  kind: string;
+  ch: number;
+  id: number;
+  ext: boolean;
+  signal: string;
+  threshold: number;
+  rising: boolean;
+  bus: number;
+  slot: number;
+  key: string;
+  action: string;
+  sendCh: number;
+  sendId: number;
 }
 
 export interface TxEntry {
@@ -205,4 +241,27 @@ export type Command =
   | { type: "add_trigger"; kind: string }
   | { type: "set_trigger_enabled"; index: number; on: boolean }
   | { type: "remove_trigger"; index: number }
-  | { type: "rearm_triggers" };
+  | { type: "rearm_triggers" }
+  | {
+      type: "edit_trigger";
+      index: number;
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      signal: string;
+      threshold: number;
+      rising: boolean;
+      bus: number;
+      slot: number;
+      key: string;
+      action: string;
+      send_ch: number;
+      send_id: number;
+    }
+  | {
+      type: "set_trigger_limits";
+      pre_frames: number;
+      post_frames: number;
+      marker_cap: number;
+    };

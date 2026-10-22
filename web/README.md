@@ -67,8 +67,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   events). Signal-source editing remains desktop-only for now.
 - **Triggers…** shows the live rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
-  enabled/disabled, removed and re-armed. Condition/action editing and the
-  pre/post-trigger limits are the next slice.
+  enabled/disabled, removed and re-armed. The editor covers every condition
+  kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
+  actions including Send-to-generator-entry, and the pre/post/marker limits.
 - Trace/Messages tables, a canvas chart with total and per-bus frame rates
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
@@ -88,10 +89,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 Saving projects, a native browser file picker (opening and DBC loading use
 host paths and recents; the CLI flags also work), FlexRay/Ethernet
-attachment, generator signal sources, trigger condition/action editing,
-pre/post-trigger limits, system variables, the monitor, node scripts, and
-docking/desktops. Hardware is CAN attach/detach only for now; signal
-selection is CAN-only and session-only.
+attachment, generator signal sources, system variables, the monitor, node
+scripts, and docking/desktops. Hardware is CAN attach/detach only for now;
+signal selection is CAN-only and session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

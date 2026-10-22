@@ -521,6 +521,27 @@ enum WebCommand {
         index: usize,
     },
     RearmTriggers,
+    EditTrigger {
+        index: usize,
+        kind: String,
+        ch: u8,
+        id: u32,
+        ext: bool,
+        signal: String,
+        threshold: f64,
+        rising: bool,
+        bus: u8,
+        slot: u16,
+        key: String,
+        action: String,
+        send_ch: u8,
+        send_id: u32,
+    },
+    SetTriggerLimits {
+        pre_frames: usize,
+        post_frames: u32,
+        marker_cap: usize,
+    },
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -756,6 +777,85 @@ fn app_loop(
                 }
                 WebCommand::RearmTriggers => {
                     app.apply_trigger_cmds(vec![TriggerCmd::Rearm]);
+                }
+                WebCommand::EditTrigger {
+                    index,
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    signal,
+                    threshold,
+                    rising,
+                    bus,
+                    slot,
+                    key,
+                    action,
+                    send_ch,
+                    send_id,
+                } => {
+                    let cond = match kind.as_str() {
+                        "signal" => TriggerCond::SignalCross {
+                            ch,
+                            id,
+                            ext,
+                            signal,
+                            threshold,
+                            rising,
+                        },
+                        "id" => TriggerCond::IdPresent { ch, id },
+                        "error" => TriggerCond::ErrorFrame { ch },
+                        "timeout" => TriggerCond::CycleTimeout { ch, id },
+                        "fr_frame" => TriggerCond::FrFramePresent { bus, slot },
+                        "fr_signal" => TriggerCond::FrSignalCross {
+                            bus,
+                            slot,
+                            signal,
+                            threshold,
+                            rising,
+                        },
+                        "sysvar" => TriggerCond::SysVar {
+                            key,
+                            threshold,
+                            rising,
+                        },
+                        _ => {
+                            app.status = format!("unknown trigger kind: {kind}");
+                            continue;
+                        }
+                    };
+                    let action = match action.as_str() {
+                        "start_recording" => TriggerAction::StartRecording,
+                        "stop_recording" => TriggerAction::StopRecording,
+                        "send" => TriggerAction::Send {
+                            ch: send_ch,
+                            id: send_id,
+                        },
+                        "clear_trace" => TriggerAction::ClearTrace,
+                        "insert_marker" => TriggerAction::InsertMarker,
+                        _ => {
+                            app.status = format!("unknown trigger action: {action}");
+                            continue;
+                        }
+                    };
+                    if index < app.snap.triggers.len() {
+                        app.apply_trigger_cmds(vec![TriggerCmd::Edit {
+                            index,
+                            cond,
+                            action,
+                        }]);
+                    }
+                }
+                WebCommand::SetTriggerLimits {
+                    pre_frames,
+                    post_frames,
+                    marker_cap,
+                } => {
+                    app.apply_trigger_cmds(vec![
+                        TriggerCmd::SetPreFrames(pre_frames),
+                        TriggerCmd::SetPostFrames(post_frames),
+                        TriggerCmd::SetMarkerCap(marker_cap),
+                    ]);
                 }
                 WebCommand::SimulateBusNodes { ch } => {
                     let nodes = app
@@ -1473,6 +1573,7 @@ struct WebState {
     hw_refresh: u64,
     tx: Vec<WebTx>,
     triggers: Vec<WebTrigger>,
+    trigger_limits: WebTriggerLimits,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -1546,6 +1647,26 @@ struct WebTrigger {
     fired: u64,
     level: bool,
     last_fire_us: u64,
+    ch: u8,
+    id: u32,
+    ext: bool,
+    signal: String,
+    threshold: f64,
+    rising: bool,
+    bus: u8,
+    slot: u16,
+    var_key: String,
+    action_kind: String,
+    send_ch: u8,
+    send_id: u32,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebTriggerLimits {
+    pre_frames: usize,
+    post_frames: u32,
+    marker_cap: usize,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1673,20 +1794,84 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .triggers
         .iter()
         .enumerate()
-        .map(|(index, trigger)| WebTrigger {
-            summary: app.trigger_summary(index),
-            action: match &trigger.action {
-                TriggerAction::StartRecording => "start recording".to_string(),
-                TriggerAction::StopRecording => "stop recording".to_string(),
-                TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
-                TriggerAction::ClearTrace => "clear trace".to_string(),
-                TriggerAction::InsertMarker => "insert marker".to_string(),
-            },
-            kind: trigger_kind(&trigger.cond).to_string(),
-            enabled: trigger.enabled,
-            fired: trigger.fired,
-            level: trigger.level,
-            last_fire_us: trigger.last_fire_t_us,
+        .map(|(index, trigger)| {
+            let mut view = WebTrigger {
+                summary: app.trigger_summary(index),
+                action: match &trigger.action {
+                    TriggerAction::StartRecording => "start recording".to_string(),
+                    TriggerAction::StopRecording => "stop recording".to_string(),
+                    TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
+                    TriggerAction::ClearTrace => "clear trace".to_string(),
+                    TriggerAction::InsertMarker => "insert marker".to_string(),
+                },
+                kind: trigger_kind(&trigger.cond).to_string(),
+                enabled: trigger.enabled,
+                fired: trigger.fired,
+                level: trigger.level,
+                last_fire_us: trigger.last_fire_t_us,
+                action_kind: match trigger.action {
+                    TriggerAction::StartRecording => "start_recording",
+                    TriggerAction::StopRecording => "stop_recording",
+                    TriggerAction::Send { .. } => "send",
+                    TriggerAction::ClearTrace => "clear_trace",
+                    TriggerAction::InsertMarker => "insert_marker",
+                }
+                .to_string(),
+                ..Default::default()
+            };
+            match &trigger.cond {
+                TriggerCond::SignalCross {
+                    ch,
+                    id,
+                    ext,
+                    signal,
+                    threshold,
+                    rising,
+                } => {
+                    view.ch = *ch;
+                    view.id = *id;
+                    view.ext = *ext;
+                    view.signal = signal.clone();
+                    view.threshold = *threshold;
+                    view.rising = *rising;
+                }
+                TriggerCond::IdPresent { ch, id } | TriggerCond::CycleTimeout { ch, id } => {
+                    view.ch = *ch;
+                    view.id = *id;
+                }
+                TriggerCond::ErrorFrame { ch } => view.ch = *ch,
+                TriggerCond::FrFramePresent { bus, slot } => {
+                    view.bus = *bus;
+                    view.slot = *slot;
+                }
+                TriggerCond::FrSignalCross {
+                    bus,
+                    slot,
+                    signal,
+                    threshold,
+                    rising,
+                } => {
+                    view.bus = *bus;
+                    view.slot = *slot;
+                    view.signal = signal.clone();
+                    view.threshold = *threshold;
+                    view.rising = *rising;
+                }
+                TriggerCond::SysVar {
+                    key,
+                    threshold,
+                    rising,
+                } => {
+                    view.var_key = key.clone();
+                    view.threshold = *threshold;
+                    view.rising = *rising;
+                }
+            }
+            if let TriggerAction::Send { ch, id } = trigger.action {
+                view.send_ch = ch;
+                view.send_id = id;
+            }
+            view
         })
         .collect();
 
@@ -1782,6 +1967,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         hw_refresh: snap.hw_refresh,
         tx,
         triggers,
+        trigger_limits: WebTriggerLimits {
+            pre_frames: app.limits.pre_frames,
+            post_frames: app.limits.post_frames,
+            marker_cap: app.limits.marker_cap,
+        },
         channels,
         messages,
         write,
@@ -1887,12 +2077,27 @@ mod tests {
     #[test]
     fn the_state_lists_triggers() {
         let mut app = App::headless();
-        app.apply_trigger_cmds(vec![TriggerCmd::Add(TriggerKind::Id)]);
+        app.apply_trigger_cmds(vec![
+            TriggerCmd::Add(TriggerKind::Id),
+            TriggerCmd::Edit {
+                index: 0,
+                cond: TriggerCond::ErrorFrame { ch: 1 },
+                action: TriggerAction::InsertMarker,
+            },
+            TriggerCmd::SetPreFrames(128),
+            TriggerCmd::SetPostFrames(16),
+            TriggerCmd::SetMarkerCap(64),
+        ]);
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert_eq!(state.triggers.len(), 1);
         assert!(state.triggers[0].enabled);
-        assert_eq!(state.triggers[0].kind, "id");
+        assert_eq!(state.triggers[0].kind, "error");
+        assert_eq!(state.triggers[0].ch, 1);
+        assert_eq!(state.triggers[0].action_kind, "insert_marker");
         assert!(!state.triggers[0].summary.is_empty());
+        assert_eq!(state.trigger_limits.pre_frames, 128);
+        assert_eq!(state.trigger_limits.post_frames, 16);
+        assert_eq!(state.trigger_limits.marker_cap, 64);
     }
 
     /// The generator panel reads live TxView rows, including their cycle,
