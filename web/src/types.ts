@@ -156,4 +156,14 @@ export type Command =
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
   | { type: "refresh_hardware" }
-  | { type: "set_bus_mode"; real: boolean };
+  | { type: "set_bus_mode"; real: boolean }
+  | { type: "add_bus" }
+  | { type: "remove_bus"; ch: number }
+  | { type: "rename_bus"; ch: number; name: string }
+  | {
+      type: "set_bus_rates";
+      ch: number;
+      bitrate_kbps: number;
+      fd_data_kbps: number;
+    }
+  | { type: "load_dbc"; ch: number; path: string };

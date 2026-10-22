@@ -344,6 +344,19 @@ export function App() {
     void run({ type: "detach_hardware", bus });
   const setRealBus = (real: boolean) =>
     void run({ type: "set_bus_mode", real });
+  const addBus = () => void run({ type: "add_bus" });
+  const removeBus = (bus: number) => void run({ type: "remove_bus", ch: bus });
+  const renameBus = (bus: number, name: string) =>
+    void run({ type: "rename_bus", ch: bus, name });
+  const setBusRates = (bus: number, arb: number, fd: number) =>
+    void run({
+      type: "set_bus_rates",
+      ch: bus,
+      bitrate_kbps: arb,
+      fd_data_kbps: fd,
+    });
+  const loadDbc = (bus: number, path: string) =>
+    void run({ type: "load_dbc", ch: bus, path });
 
   const recent = (paths: string[], open: (path: string) => void) =>
     paths.length > 0 && (
@@ -681,6 +694,11 @@ export function App() {
           loading={hardwareLoading}
           error={hardwareError}
           onRefresh={refreshHardware}
+          onAddBus={addBus}
+          onRemoveBus={removeBus}
+          onRenameBus={renameBus}
+          onSetRates={setBusRates}
+          onLoadDbc={loadDbc}
           onAttach={attachHardware}
           onDetach={detachHardware}
           onSetReal={setRealBus}

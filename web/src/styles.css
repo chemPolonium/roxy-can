@@ -893,12 +893,64 @@ button.mini {
 
 .bus-dbcs {
   margin-left: auto;
-  max-width: 45%;
+  max-width: 38%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
   font-size: 10px;
+}
+
+.bus-name-input {
+  width: 96px;
+  padding: 2px 5px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.rate-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.rate-field select {
+  padding: 1px 3px;
+  font-size: 10.5px;
+}
+
+.bus-remove {
+  padding: 2px 7px;
+  font-size: 10px;
+  color: #d8a0a0;
+}
+
+.bus-dbc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bus-dbc-row > span {
+  flex: 0 0 54px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.bus-dbc-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10.5px;
+}
+
+.bus-dbc-row button {
+  padding: 2px 7px;
+  font-size: 10.5px;
 }
 
 .bus-attach,

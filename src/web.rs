@@ -436,6 +436,23 @@ enum WebCommand {
     SetBusMode {
         real: bool,
     },
+    AddBus,
+    RemoveBus {
+        ch: u8,
+    },
+    RenameBus {
+        ch: u8,
+        name: String,
+    },
+    SetBusRates {
+        ch: u8,
+        bitrate_kbps: u32,
+        fd_data_kbps: u32,
+    },
+    LoadDbc {
+        ch: u8,
+        path: String,
+    },
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -595,6 +612,73 @@ fn app_loop(
                 }
                 WebCommand::SetBusMode { real } => {
                     app.send(BusCommand::SetBusMode { real });
+                }
+                WebCommand::AddBus => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.add_channel();
+                }
+                WebCommand::RemoveBus { ch } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.remove_channel(ch as usize);
+                    if let Ok(mut store) = signals.lock() {
+                        store.remap_after_remove(ch);
+                    }
+                    if let Ok(mut store) = trace.lock() {
+                        store.reset();
+                    }
+                    series.clear();
+                    rate_window.clear();
+                }
+                WebCommand::RenameBus { ch, name } => {
+                    app.send(BusCommand::SetChannelConfig {
+                        ch,
+                        name: Some(name),
+                        dbc_path: None,
+                        bitrate_kbps: None,
+                        fd_data_kbps: None,
+                        node_roles: None,
+                    });
+                }
+                WebCommand::SetBusRates {
+                    ch,
+                    bitrate_kbps,
+                    fd_data_kbps,
+                } => {
+                    app.send(BusCommand::SetChannelConfig {
+                        ch,
+                        name: None,
+                        dbc_path: None,
+                        bitrate_kbps: Some(bitrate_kbps),
+                        fd_data_kbps: Some(fd_data_kbps),
+                        node_roles: None,
+                    });
+                }
+                WebCommand::LoadDbc { ch, path } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.open_dbc_for(ch as usize, path);
+                    let (keep, drop) = signals
+                        .lock()
+                        .map(|mut store| {
+                            store.reset();
+                            let drop = store.prune_missing(&app);
+                            (store.keys(), drop)
+                        })
+                        .unwrap_or_default();
+                    for key in keep {
+                        app.subscribe(key);
+                    }
+                    for key in drop {
+                        app.send(BusCommand::Unsubscribe { key });
+                    }
+                    if let Ok(mut store) = trace.lock() {
+                        store.reset();
+                    }
                 }
             }
         }
@@ -927,6 +1011,54 @@ impl SignalStore {
             self.selected.remove(pos);
         }
         self.primed = false;
+    }
+
+    /// CAN channel indices shift down when a bus is removed. Drop signals on
+    /// the removed bus and renumber the rest to match the core's remap.
+    fn remap_after_remove(&mut self, removed: u8) {
+        self.selected.retain_mut(|signal| {
+            if let SigKey::Can { ch, .. } = &mut signal.key {
+                if *ch == removed {
+                    return false;
+                }
+                if *ch > removed {
+                    *ch -= 1;
+                }
+            }
+            true
+        });
+        self.primed = false;
+    }
+
+    /// A loaded database can replace the signals under a selection. Drop the
+    /// ones it no longer declares and return their keys for unsubscription.
+    fn prune_missing(&mut self, app: &App) -> Vec<SigKey> {
+        let mut dropped = Vec::new();
+        self.selected.retain(|signal| {
+            let exists = match &signal.key {
+                SigKey::Can { ch, id, ext, name } => app
+                    .snap
+                    .channels
+                    .get(*ch as usize)
+                    .and_then(|channel| channel.dbc.as_ref())
+                    .and_then(|db| db.messages.get(&(*id, *ext)))
+                    .is_some_and(|message| {
+                        message
+                            .signals
+                            .iter()
+                            .any(|candidate| &candidate.name == name)
+                    }),
+                _ => true,
+            };
+            if !exists {
+                dropped.push(signal.key.clone());
+            }
+            exists
+        });
+        if !dropped.is_empty() {
+            self.primed = false;
+        }
+        dropped
     }
 
     /// Drops selected signals and buffers; used when the bus set changes.
@@ -1557,6 +1689,34 @@ mod tests {
         store.unselect(&key);
         store.sync(&app);
         assert!(store.seed().is_empty());
+    }
+
+    /// Reloading a database must retire selections it no longer declares,
+    /// otherwise the lane can never be removed from the picker.
+    #[test]
+    fn a_database_reload_drops_missing_signals() {
+        let app = App::headless();
+        let mut store = SignalStore::default();
+        store.select(&app, 0, 0x100, false, "NoSuchSignal");
+        let dropped = store.prune_missing(&app);
+        assert_eq!(dropped.len(), 1);
+        assert!(store.selected.is_empty());
+    }
+
+    /// Removing a CAN bus shifts every higher channel down; selected signal
+    /// keys must follow or their curves point at the wrong bus.
+    #[test]
+    fn removing_a_bus_remaps_the_selection() {
+        let app = App::headless();
+        let mut store = SignalStore::default();
+        store.select(&app, 0, 0x100, false, "EngineSpeed");
+        store.select(&app, 1, 0x64, false, "EngSpeed");
+        assert_eq!(store.selected.len(), 2);
+        store.remap_after_remove(0);
+        assert_eq!(store.selected.len(), 1);
+        assert_eq!(store.selected[0].name, "EngSpeed");
+        assert_eq!(key_channel(&store.selected[0].key), 0);
+        assert_eq!(key_id(&store.selected[0].key), 0x64);
     }
 
     /// The Buses panel gets its rows from the snapshot, including the DBC
