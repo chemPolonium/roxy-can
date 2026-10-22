@@ -417,7 +417,10 @@ fn channel_present(
             if let Some(pid) = vector_usb_pid(hw_type) {
                 present.contains(&pid)
             } else {
-                !(present.is_empty() && name.starts_with("VN16"))
+                // A disconnected adapter can lose both its name and its
+                // hwType in the driver record; the UI would otherwise show
+                // the synthetic "Vector channel N" entry forever.
+                !(present.is_empty() && (name.starts_with("VN16") || name.trim().is_empty()))
             }
         }
         None => true,
@@ -1617,6 +1620,14 @@ mod tests {
         assert!(
             !channel_present(0, "VN1610 Channel 1", Some(&HashSet::new())),
             "VN16xx name survives a changed hw type"
+        );
+        assert!(
+            !channel_present(0, "", Some(&HashSet::new())),
+            "an unnamed offline record disappears with no USB present"
+        );
+        assert!(
+            channel_present(0, "", Some(&present)),
+            "an unnamed channel stays while a Vector USB device is present"
         );
     }
 
