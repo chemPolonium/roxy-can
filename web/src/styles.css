@@ -1412,6 +1412,220 @@ button.mini {
   line-height: 1.55;
 }
 
+/* System Variables manager: one compact row per variable plus an inline
+   add/edit form. Values stay editable in place; definitions cross the host
+   boundary through define_sysvar. */
+.sysvars-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 100%);
+  max-height: min(760px, 90vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.sv-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sv-hint {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.sv-hint code {
+  padding: 1px 3px;
+  background: #151c24;
+  border-radius: 3px;
+  color: #a9bdd2;
+  font: inherit;
+}
+
+.sv-form {
+  flex: 0 0 auto;
+  margin: 8px 12px;
+  padding: 8px;
+  background: #101a26;
+  border: 1px solid #2d5c88;
+  border-radius: 4px;
+}
+
+.sv-form-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sv-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sv-form-grid label.wide {
+  grid-column: span 6;
+}
+
+.sv-form-grid input {
+  width: 100%;
+  min-width: 0;
+}
+
+.sv-form-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.sv-form-foot .spacer {
+  flex: 1;
+}
+
+.sv-error {
+  color: #ff9b63;
+  font-size: 10.5px;
+}
+
+.sv-table {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: auto;
+  padding: 0 12px 10px;
+}
+
+.sv-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.3fr) 92px 104px minmax(100px, 1.2fr) 78px;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 0;
+  border-bottom: 1px solid #1c242e;
+  font-size: 11px;
+}
+
+.sv-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 24px;
+  padding: 4px 0;
+  background: #10141a;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sv-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sv-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dfe8f2;
+  font-weight: 500;
+}
+
+.sv-name small {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.sv-value {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 5px;
+  font-size: 11px;
+}
+
+.sv-range {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #9fb0c2;
+  font-size: 10.5px;
+}
+
+.sv-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.sv-meta em {
+  margin-right: 4px;
+  color: #b8cbe0;
+  font-style: normal;
+}
+
+.sv-empty {
+  opacity: 0.5;
+}
+
+.sv-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.sv-actions button {
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
+.sv-actions button.danger {
+  color: #ff8f7a;
+}
+
+.sv-empty-row {
+  padding: 12px 0;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+@media (max-width: 760px) {
+  .sv-form-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .sv-form-grid label.wide {
+    grid-column: span 3;
+  }
+
+  .sv-row {
+    grid-template-columns: minmax(100px, 1.2fr) 80px minmax(90px, 1fr) 74px;
+  }
+
+  .sv-range {
+    display: none;
+  }
+}
+
 /* The web spike must also survive a narrow window; below this width the
    fixed shell stacks instead of shrinking the Trace table to two columns. */
 @media (max-width: 900px) {

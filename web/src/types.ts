@@ -23,6 +23,7 @@ export interface State {
   tx: TxEntry[];
   triggers: TriggerEntry[];
   triggerLimits: TriggerLimits;
+  sysvars: SysVar[];
   stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
@@ -116,8 +117,18 @@ export interface TriggerEntry {
   sendId: number;
 }
 
-export interface StatsRow {
-  label: string;
+export interface SysVar {
+  namespace: string;
+  name: string;
+  value: number;
+  init: number;
+  min: number | null;
+  max: number | null;
+  unit: string;
+  comment: string;
+}
+
+export interface StatsRow {  label: string;
   bus: string;
   count: number;
   minMs: string;
@@ -231,6 +242,20 @@ export type Command =
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
   | { type: "save_project"; path: string | null }
+  | { type: "set_sys_var"; namespace: string; name: string; value: number }
+  | {
+      type: "define_sys_var";
+      namespace: string;
+      name: string;
+      init: number;
+      min: number | null;
+      max: number | null;
+      unit: string;
+      comment: string;
+      old_namespace: string | null;
+      old_name: string | null;
+    }
+  | { type: "delete_sys_var"; namespace: string; name: string }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }

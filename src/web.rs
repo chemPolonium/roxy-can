@@ -244,6 +244,42 @@ fn read_project_layout(path: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
+/// Validates a system-variable definition coming from the web form. The
+/// desktop editor applies the same rules; the host is the boundary, so the
+/// web path checks them again instead of trusting the page.
+fn checked_sysvar(
+    namespace: String,
+    name: String,
+    init: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    unit: String,
+    comment: String,
+) -> Result<crate::bus::SysVarDef, String> {
+    let namespace = namespace.trim().to_string();
+    let name = name.trim().to_string();
+    if namespace.is_empty() || name.is_empty() {
+        return Err("namespace and name must not be empty".into());
+    }
+    if namespace.contains("::") || name.contains("::") {
+        return Err("namespace and name must not contain \"::\"".into());
+    }
+    if let (Some(lo), Some(hi)) = (min, max)
+        && lo > hi
+    {
+        return Err(format!("lower bound {lo} is greater than upper bound {hi}"));
+    }
+    Ok(crate::bus::SysVarDef {
+        namespace,
+        name,
+        init,
+        min,
+        max,
+        unit: unit.trim().to_string(),
+        comment: comment.trim().to_string(),
+    })
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -508,6 +544,26 @@ enum WebCommand {
     },
     SaveProject {
         path: Option<String>,
+    },
+    SetSysVar {
+        namespace: String,
+        name: String,
+        value: f64,
+    },
+    DefineSysVar {
+        namespace: String,
+        name: String,
+        init: f64,
+        min: Option<f64>,
+        max: Option<f64>,
+        unit: String,
+        comment: String,
+        old_namespace: Option<String>,
+        old_name: Option<String>,
+    },
+    DeleteSysVar {
+        namespace: String,
+        name: String,
     },
     SetEntryActive {
         ch: u8,
@@ -790,6 +846,47 @@ fn app_loop(
                             app.status = "save needs a project path".to_string();
                         }
                     }
+                }
+                WebCommand::SetSysVar {
+                    namespace,
+                    name,
+                    value,
+                } => {
+                    app.send(BusCommand::SetSysVar {
+                        namespace,
+                        name,
+                        value,
+                    });
+                }
+                WebCommand::DefineSysVar {
+                    namespace,
+                    name,
+                    init,
+                    min,
+                    max,
+                    unit,
+                    comment,
+                    old_namespace,
+                    old_name,
+                } => match checked_sysvar(namespace, name, init, min, max, unit, comment) {
+                    Ok(def) => {
+                        // A rename deletes the old key first, like the
+                        // desktop editor: leaving it would keep a phantom
+                        // variable scripts could still write.
+                        if let (Some(old_ns), Some(old_name)) = (old_namespace, old_name)
+                            && (old_ns != def.namespace || old_name != def.name)
+                        {
+                            app.send(BusCommand::DeleteSysVar {
+                                namespace: old_ns,
+                                name: old_name,
+                            });
+                        }
+                        app.send(BusCommand::DefineSysVar(def));
+                    }
+                    Err(error) => app.status = format!("sysvar: {error}"),
+                },
+                WebCommand::DeleteSysVar { namespace, name } => {
+                    app.send(BusCommand::DeleteSysVar { namespace, name });
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
                     app.send(BusCommand::SetEntryActive { ch, id, on });
@@ -1615,6 +1712,7 @@ struct WebState {
     tx: Vec<WebTx>,
     triggers: Vec<WebTrigger>,
     trigger_limits: WebTriggerLimits,
+    sysvars: Vec<WebSysVar>,
     stats: Vec<WebStatsRow>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
@@ -1723,6 +1821,19 @@ struct WebStatsRow {
     jitter_ms: String,
     share: String,
     len: u8,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSysVar {
+    namespace: String,
+    name: String,
+    value: f64,
+    init: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    unit: String,
+    comment: String,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1979,6 +2090,21 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
 
+    let sysvars: Vec<WebSysVar> = snap
+        .sysvars
+        .iter()
+        .map(|v| WebSysVar {
+            namespace: v.def.namespace.clone(),
+            name: v.def.name.clone(),
+            value: v.value,
+            init: v.def.init,
+            min: v.def.min,
+            max: v.def.max,
+            unit: v.def.unit.clone(),
+            comment: v.def.comment.clone(),
+        })
+        .collect();
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -2082,6 +2208,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             post_frames: app.limits.post_frames,
             marker_cap: app.limits.marker_cap,
         },
+        sysvars,
         stats,
         channels,
         messages,
@@ -2159,6 +2286,95 @@ mod tests {
         assert!(!app.is_dirty(), "web startup must not edit desktop config");
         app.plot_stride_us = Some(5_000);
         assert!(!app.is_dirty(), "the plot stride is frontend state");
+    }
+
+    /// The web form's rules match the desktop editor, so a bad shape is
+    /// rejected at the host boundary instead of becoming a broken variable.
+    #[test]
+    fn web_sysvar_definitions_follow_the_desktop_rules() {
+        let ok = checked_sysvar(
+            " Demo ".into(),
+            "Setpoint".into(),
+            100.0,
+            Some(0.0),
+            Some(500.0),
+            " rpm ".into(),
+            "target".into(),
+        )
+        .expect("valid definition");
+        assert_eq!(ok.namespace, "Demo");
+        assert_eq!(ok.unit, "rpm");
+        assert!(
+            checked_sysvar(
+                String::new(),
+                "x".into(),
+                0.0,
+                None,
+                None,
+                String::new(),
+                String::new()
+            )
+            .is_err()
+        );
+        assert!(
+            checked_sysvar(
+                "A::B".into(),
+                "x".into(),
+                0.0,
+                None,
+                None,
+                String::new(),
+                String::new()
+            )
+            .is_err()
+        );
+        assert!(
+            checked_sysvar(
+                "A".into(),
+                "x".into(),
+                0.0,
+                Some(5.0),
+                Some(1.0),
+                String::new(),
+                String::new()
+            )
+            .is_err()
+        );
+    }
+
+    /// Definitions and live values reach the web state through the same
+    /// core commands the desktop manager uses.
+    #[test]
+    fn the_state_lists_system_variables_and_live_values() {
+        let mut app = App::headless();
+        app.send(BusCommand::DefineSysVar(
+            checked_sysvar(
+                "Demo".into(),
+                "Setpoint".into(),
+                100.0,
+                Some(0.0),
+                Some(500.0),
+                "rpm".into(),
+                "target speed".into(),
+            )
+            .expect("definition"),
+        ));
+        app.send(BusCommand::SetSysVar {
+            namespace: "Demo".into(),
+            name: "Setpoint".into(),
+            value: 900.0,
+        });
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.sysvars.len(), 1);
+        let v = &state.sysvars[0];
+        assert_eq!(
+            (v.namespace.as_str(), v.name.as_str()),
+            ("Demo", "Setpoint")
+        );
+        assert_eq!(v.value, 500.0, "writes clamp into the declared bounds");
+        assert_eq!((v.min, v.max), (Some(0.0), Some(500.0)));
+        assert_eq!(v.unit, "rpm");
     }
 
     /// A replay path must open the log and start playback in Replay mode,

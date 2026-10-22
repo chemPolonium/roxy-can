@@ -22,6 +22,8 @@ import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
 import { StatsTable } from "./components/StatsTable";
+import { SysVarsModal } from "./components/SysVarsModal";
+import type { SysVarEdit } from "./components/SysVarsModal";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "statistics" | "activity";
@@ -140,6 +142,7 @@ export function App() {
   const [busesOpen, setBusesOpen] = useState(false);
   const [generatorOpen, setGeneratorOpen] = useState(false);
   const [triggersOpen, setTriggersOpen] = useState(false);
+  const [sysvarsOpen, setSysvarsOpen] = useState(false);
   const [hardware, setHardware] = useState<Hardware | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareError, setHardwareError] = useState("");
@@ -327,6 +330,7 @@ export function App() {
     setBusesOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
+    setSysvarsOpen(false);
     setPickerOpen(true);
     void loadCatalog();
   };
@@ -336,6 +340,7 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setTriggersOpen(false);
+    setSysvarsOpen(false);
     setGeneratorOpen(true);
     void loadCatalog();
   };
@@ -345,8 +350,33 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setGeneratorOpen(false);
+    setSysvarsOpen(false);
     setTriggersOpen(true);
     void loadCatalog();
+  };
+
+  const openSysvars = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setGeneratorOpen(false);
+    setTriggersOpen(false);
+    setSysvarsOpen(true);
+  };
+
+  const defineSysVar = (edit: SysVarEdit) => {
+    void run({
+      type: "define_sys_var",
+      namespace: edit.namespace,
+      name: edit.name,
+      init: edit.init,
+      min: edit.min,
+      max: edit.max,
+      unit: edit.unit,
+      comment: edit.comment,
+      old_namespace: edit.oldNamespace,
+      old_name: edit.oldName,
+    });
   };
 
   const toggleSignal = (
@@ -527,10 +557,18 @@ export function App() {
               setPickerOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
+              setSysvarsOpen(false);
               setBusesOpen(true);
             }}
           >
             Buses…
+          </button>
+          <button
+            type="button"
+            disabled={!online}
+            onClick={openSysvars}
+          >
+            SysVars…
           </button>
           <button
             type="button"
@@ -540,6 +578,7 @@ export function App() {
               setBusesOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
+              setSysvarsOpen(false);
               setSessionOpen(true);
             }}
           >
@@ -862,6 +901,20 @@ export function App() {
           onDetach={detachHardware}
           onSetReal={setRealBus}
           onClose={() => setBusesOpen(false)}
+        />
+      )}
+
+      {sysvarsOpen && (
+        <SysVarsModal
+          vars={state?.sysvars ?? []}
+          onSetValue={(namespace, name, value) =>
+            void run({ type: "set_sys_var", namespace, name, value })
+          }
+          onDefine={defineSysVar}
+          onDelete={(namespace, name) =>
+            void run({ type: "delete_sys_var", namespace, name })
+          }
+          onClose={() => setSysvarsOpen(false)}
         />
       )}
 

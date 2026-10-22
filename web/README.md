@@ -78,6 +78,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
   actions including Send-to-generator-entry, and the pre/post/marker limits.
+- **SysVars…** manages system variables through the real core: add/edit
+  definitions (namespace, name, init, clamped min/max, unit, comment), edit
+  live values in place (writes clamp), rename by deleting the old key, and
+  delete. The same validation rules as the desktop editor run on the host;
+  definitions are saved with the project. Values reset to Init when a
+  measurement starts, and scripts reach them through `sys_get` / `sys_set`.
 - The lower panel has **Messages / Statistics / Write**. Statistics shows
   CAN aggregate count, min/avg/max/jitter and share; Jitter folds away
   below 1280 px and the row tooltip keeps the full values.
@@ -100,9 +106,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet attachment, generator
-signal sources, system variables, the monitor, node scripts, and
-docking/desktops. Hardware is CAN attach/detach only for now; signal selection
-is CAN-only and session-only.
+signal sources, the monitor, node scripts, and docking/desktops. Hardware is
+CAN attach/detach only for now; signal selection is CAN-only and session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled
