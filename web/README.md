@@ -36,8 +36,9 @@ immediately. A loaded replay also gets a second, slim bar with the playhead,
 a speed ladder (0.5x/1x/2x/4x/Fast), a forward **Step** (10 ms–5 s), **Play
 for** (1–60 s) and **Play to** an absolute log time; both timed plays resume
 playback and pause at the target.
-**Save** writes the open project and **Save as** writes a copy to a typed host
-path; the dialog marks unsaved changes next to the current name. The
+**Save** writes the open project; **Save as** writes a copy to a typed path,
+and a bare file name plus **Save & download** hands that copy to the browser.
+The dialog marks unsaved changes next to the current name. The
 **Recording** section starts/stops an ASC or BLF capture with a typed file
 name and an optional whitelist (`100, 3F4x, FR0:13`); relative names land in
 `Record/` beside the project, and arming while stopped creates the file on
@@ -45,9 +46,9 @@ the next Start. The live badge in the top bar turns red while recording.
 Saving keeps
 the project's desktop dock layout and Graphics-window settings untouched: the
 web plot asks the core for its sampling stride instead of editing desktop
-config. Save, Save as, recording names and exports still take host paths;
-opening projects, logs, DBCs and ARXML descriptions can use the browser
-picker.
+config. Recording names still take host paths; opening projects, logs, DBCs
+and ARXML descriptions can use the browser picker, and bare export/save
+names download through the browser.
 
 For hot reload, keep the server running and start Vite in a second terminal:
 
@@ -173,10 +174,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 ## Not here yet
 
-Browser downloads for project saves (they still write host paths; the CLI
-flags also work), FlexRay/Ethernet hardware attachment and Ethernet
-generation (descriptions, replay rows, read-only Trace/Messages/Statistics
-and the FR generator are supported), docking/desktops, and syntax
+FlexRay/Ethernet hardware attachment and Ethernet generation
+(descriptions, replay rows, read-only Trace/Messages/Statistics and the FR
+generator are supported), docking/desktops, and syntax
 highlighting or `.rxcan` loading in the web script editor. Hardware remains
 CAN-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising

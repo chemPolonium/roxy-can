@@ -1,4 +1,10 @@
 import { useState } from "preact/hooks";
+import {
+  clearDownload,
+  isDownloadName,
+  triggerDownload,
+  waitForDownload,
+} from "../download";
 
 interface Props {
   initialKind: string;
@@ -35,33 +41,21 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
   const [downloadError, setDownloadError] = useState("");
   const current = KINDS.find(([value]) => value === kind) ?? KINDS[0];
   const name = path.trim();
-  const canDownload = name.length > 0 && !/[\\/]/.test(name);
+  const canDownload = isDownloadName(name);
 
-  // The export runs on the core thread, so poll the download folder until
-  // the file appears instead of guessing a fixed delay.
   const exportAndDownload = async () => {
     setDownloading(true);
     setDownloadError("");
+    await clearDownload(name);
     onExport(kind, name);
-    const url = `/api/download?name=${encodeURIComponent(name)}`;
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      try {
-        const response = await fetch(url, { method: "HEAD", cache: "no-store" });
-        if (!response.ok) continue;
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = name;
-        link.click();
-        setDownloading(false);
-        onClose();
-        return;
-      } catch {
-        // The file is not there yet; keep waiting.
-      }
-    }
+    const url = await waitForDownload(name);
     setDownloading(false);
-    setDownloadError("The export did not produce a file in time.");
+    if (!url) {
+      setDownloadError("The export did not produce a file in time.");
+      return;
+    }
+    triggerDownload(url, name);
+    onClose();
   };
 
   return (

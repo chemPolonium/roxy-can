@@ -228,7 +228,7 @@ pub fn run(args: &[String]) {
                 "/upload",
                 post(upload).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
             )
-            .route("/download", get(download))
+            .route("/download", get(download).delete(discard_download))
             .with_state(ApiState {
                 shared,
                 trace,
@@ -1056,10 +1056,10 @@ fn to_download_dir(file: &str) -> std::path::PathBuf {
         .join(upload_name(file))
 }
 
-/// A bare file name from the export dialog is written to the download
-/// folder so the browser can fetch it back. Paths with a directory part are
-/// the user's own host paths and stay untouched.
-fn export_path(path: &str) -> String {
+/// A bare file name from the export or save dialog is written to the
+/// download folder so the browser can fetch it back. Paths with a directory
+/// part are the user's own host paths and stay untouched.
+fn download_file_path(path: &str) -> String {
     let trimmed = path.trim();
     if std::path::Path::new(trimmed).components().count() != 1 {
         return trimmed.to_string();
@@ -1100,6 +1100,27 @@ async fn download(Query(query): Query<DownloadQuery>) -> Result<Response, (Statu
         .headers_mut()
         .insert(CONTENT_DISPOSITION, disposition);
     Ok(response)
+}
+
+async fn discard_download(
+    Query(query): Query<DownloadQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let name = upload_name(query.name.as_deref().unwrap_or(""));
+    let path = to_download_dir(&name);
+    tokio::task::spawn_blocking(move || match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("discard task: {e}"),
+        )
+    })?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("discard: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn upload_name(raw: &str) -> String {
@@ -1846,7 +1867,7 @@ fn app_loop(
                 WebCommand::SaveProject { path } => {
                     let target = path
                         .filter(|value| !value.trim().is_empty())
-                        .map(std::path::PathBuf::from)
+                        .map(|value| std::path::PathBuf::from(download_file_path(&value)))
                         .or_else(|| app.project_path.clone());
                     match target {
                         Some(target) => {
@@ -1905,7 +1926,7 @@ fn app_loop(
                     app.send(BusCommand::ClearSpec);
                 }
                 WebCommand::Export { kind, path } => {
-                    export_file(&mut app, &kind, &export_path(&path));
+                    export_file(&mut app, &kind, &download_file_path(&path));
                 }
                 WebCommand::SetSysVar {
                     namespace,
@@ -5228,16 +5249,16 @@ mod tests {
     }
 
     #[test]
-    fn bare_export_names_land_in_the_download_folder() {
+    fn bare_file_names_land_in_the_download_folder() {
         let folder = std::env::temp_dir().join("roxy-can-web-downloads");
-        let path = std::path::PathBuf::from(export_path("export.csv"));
+        let path = std::path::PathBuf::from(download_file_path("export.csv"));
         assert_eq!(path.parent(), Some(folder.as_path()));
         assert_eq!(
             path.file_name().and_then(|n| n.to_str()),
             Some("export.csv")
         );
-        assert_eq!(export_path("logs/export.csv"), "logs/export.csv");
-        assert_eq!(export_path(""), "");
+        assert_eq!(download_file_path("logs/export.csv"), "logs/export.csv");
+        assert_eq!(download_file_path(""), "");
         let nested = to_download_dir("../../secret.csv");
         assert_eq!(nested.parent(), Some(folder.as_path()));
         assert_eq!(

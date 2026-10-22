@@ -14,6 +14,12 @@ import type {
   TxEntry,
 } from "./types";
 import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
+import {
+  clearDownload,
+  isDownloadName,
+  triggerDownload,
+  waitForDownload,
+} from "./download";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
@@ -174,6 +180,8 @@ export function App() {
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [savePath, setSavePath] = useState("");
+  const [saveDownloading, setSaveDownloading] = useState(false);
+  const [saveDownloadError, setSaveDownloadError] = useState("");
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
@@ -367,6 +375,23 @@ export function App() {
 
   const saveProject = (path: string | null) => {
     void run({ type: "save_project", path });
+  };
+
+  const saveAndDownload = async () => {
+    const name = savePath.trim();
+    if (!isDownloadName(name)) return;
+    setSaveDownloading(true);
+    setSaveDownloadError("");
+    await clearDownload(name);
+    saveProject(name);
+    const url = await waitForDownload(name);
+    setSaveDownloading(false);
+    if (!url) {
+      setSaveDownloadError("The project was not written in time.");
+      return;
+    }
+    triggerDownload(url, name);
+    setSessionOpen(false);
   };
 
   const loadCatalog = async () => {
@@ -1807,7 +1832,7 @@ export function App() {
                   </button>
                   <input
                     value={savePath}
-                    placeholder={state?.projectPath || "Save as host path…"}
+                    placeholder={state?.projectPath || "Save as file name or host path…"}
                     onInput={(event) =>
                       setSavePath((event.target as HTMLInputElement).value)
                     }
@@ -1819,7 +1844,18 @@ export function App() {
                   >
                     Save as
                   </button>
+                  <button
+                    type="button"
+                    disabled={!isDownloadName(savePath) || saveDownloading}
+                    title="A bare file name lands in the host's web download folder"
+                    onClick={() => void saveAndDownload()}
+                  >
+                    {saveDownloading ? "Waiting…" : "Save & download"}
+                  </button>
                 </div>
+                {saveDownloadError && (
+                  <p class="modal-error">{saveDownloadError}</p>
+                )}
                 {recent(state?.recentProjects ?? [], loadProject)}
               </section>
 
