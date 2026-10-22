@@ -9,6 +9,10 @@ use crate::log::open_stream;
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
 pub const TRACE_LIMIT: usize = 50_000;
+/// Initial/first-frame toolbar height; the toolbar measures its own content
+/// every frame and stores the result in [`App::toolbar_h`]. The dock space
+/// and first-use windows read the measured value, so font/DPI changes and
+/// extra rows do not need a magic constant.
 pub const TOOLBAR_H: f32 = 70.0;
 pub const STATUSBAR_H: f32 = 28.0;
 pub const TABSTRIP_H: f32 = 22.0;

@@ -103,6 +103,20 @@ pub(crate) fn text_wrapped_disabled(ui: &Ui, text: &str) {
     ui.text_wrapped(text);
 }
 
+/// The toolbar measures its own content every frame and publishes the
+/// height here. Layout code reads it instead of assuming a fixed number of
+/// rows: the font/DPI and the contents may change without a magic constant.
+static TOOLBAR_H: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(crate::app::TOOLBAR_H.to_bits());
+
+pub(crate) fn toolbar_height() -> f32 {
+    f32::from_bits(TOOLBAR_H.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub(crate) fn set_toolbar_height(h: f32) {
+    TOOLBAR_H.store(h.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Clamp a window's first-use rectangle into the space between the toolbar,
 /// status bar and desktop tab strip. Percentage-based default positions put
 /// several windows partly off-screen on a 1228x768 viewport (Network's bottom,
@@ -114,7 +128,7 @@ pub(crate) fn fit_first_use(
     size: [f32; 2],
 ) -> ([f32; 2], [f32; 2]) {
     const MARGIN: f32 = 12.0;
-    let top = crate::app::TOOLBAR_H + MARGIN;
+    let top = toolbar_height() + MARGIN;
     let bottom = (display[1] - crate::app::STATUSBAR_H - crate::app::TABSTRIP_H - MARGIN).max(top);
     let width = size[0]
         .min((display[0] - 2.0 * MARGIN).max(200.0))

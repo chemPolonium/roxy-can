@@ -1,4 +1,4 @@
-use crate::app::{App, GenRow, TOOLBAR_H, TX_CYCLE_MAX_MS, cycle_from_ms_text};
+use crate::app::{App, GenRow, TX_CYCLE_MAX_MS, cycle_from_ms_text};
 use crate::dbc::SignalInfo;
 use crate::sim::{KINDS, SrcKind, ValueSrc};
 use crate::ui::help::popup_is_open;
@@ -264,7 +264,10 @@ impl GeneratorView {
         }
         let (pos, size) = crate::ui::fit_first_use(
             io.display_size(),
-            [io.display_size()[0] * 0.62, TOOLBAR_H + 10.0],
+            [
+                io.display_size()[0] * 0.62,
+                crate::ui::toolbar_height() + 10.0,
+            ],
             [560.0, 340.0],
         );
         ui.window("Interactive Generator")

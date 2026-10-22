@@ -1,4 +1,4 @@
-use crate::app::{App, Mode, PopupTarget, REPLAY_SPEEDS, TOOLBAR_H};
+use crate::app::{App, Mode, PopupTarget, REPLAY_SPEEDS};
 use dear_imgui_rs::{Condition, Ui, WindowFlags};
 
 fn vsep(ui: &Ui) {
@@ -83,11 +83,14 @@ pub fn render(app: &mut App, ui: &Ui) {
         | WindowFlags::NO_COLLAPSE
         | WindowFlags::NO_SCROLLBAR
         | WindowFlags::NO_DOCKING
-        | WindowFlags::NO_SAVED_SETTINGS;
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::ALWAYS_AUTO_RESIZE;
+    let bar_w = io.display_size()[0];
     ui.window("Toolbar")
         .flags(flags)
         .position([0.0, 0.0], Condition::Always)
-        .size([io.display_size()[0], TOOLBAR_H], Condition::Always)
+        // Width stays the full viewport; height follows the menu + rows.
+        .size_constraints([bar_w, 1.0], [bar_w, f32::MAX])
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu("File", || {
@@ -626,6 +629,14 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                 }
             }
+            // Publish the measured height for the next frame's dock space
+            // and first-use placement. Auto-resize makes the window itself
+            // fit this content; this value is its expected outer height.
+            let style = ui.clone_style();
+            let measured = (ui.cursor_pos()[1] - ui.window_pos()[1] - style.item_spacing()[1])
+                + style.window_padding()[1] * 2.0
+                + style.window_border_size() * 2.0;
+            crate::ui::set_toolbar_height(measured.max(1.0));
         });
 }
 

@@ -1,4 +1,4 @@
-use crate::app::{App, STATUSBAR_H, TABSTRIP_H, TOOLBAR_H};
+use crate::app::{App, STATUSBAR_H, TABSTRIP_H};
 use dear_imgui_rs::{Condition, StyleVar, Ui, WindowFlags, sys};
 use std::ffi::CString;
 
@@ -11,7 +11,8 @@ use std::ffi::CString;
 pub fn render(app: &mut App, ui: &Ui) {
     let io = ui.io();
     let w = io.display_size()[0];
-    let h = (io.display_size()[1] - TOOLBAR_H - STATUSBAR_H - TABSTRIP_H).max(50.0);
+    let toolbar_h = crate::ui::toolbar_height();
+    let h = (io.display_size()[1] - toolbar_h - STATUSBAR_H - TABSTRIP_H).max(50.0);
     let dock_default = app.dock_default_pending;
     if app.dock_focus_pending {
         // The layout was built last frame, so the window now exists and can
@@ -36,7 +37,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     let mut applied = false;
     ui.window("##dockspace_host")
         .flags(flags)
-        .position([0.0, TOOLBAR_H], Condition::Always)
+        .position([0.0, toolbar_h], Condition::Always)
         .size([w, h], Condition::Always)
         .build(|| unsafe {
             let id = dear_imgui_rs::sys::igGetID_Str(c"##dockspace".as_ptr());
@@ -47,7 +48,7 @@ pub fn render(app: &mut App, ui: &Ui) {
                 std::ptr::null(),
             );
             if dock_default {
-                apply_default_layout(id, w, h, &names);
+                apply_default_layout(id, w, h, toolbar_h, &names);
                 applied = true;
             }
         });
@@ -108,14 +109,20 @@ fn native(title: &str, id: &str) -> CString {
 /// underneath Network and Measurement's + buttons were clipped. Network keeps a
 /// full-width tab because its tree pane is a fixed 320px: a side column would
 /// leave nothing for the node details.
-unsafe fn apply_default_layout(root: sys::ImGuiID, w: f32, h: f32, names: &DefaultWindows) {
+unsafe fn apply_default_layout(
+    root: sys::ImGuiID,
+    w: f32,
+    h: f32,
+    toolbar_h: f32,
+    names: &DefaultWindows,
+) {
     let bottom_h = (h * 0.30).clamp(180.0, 340.0).min(h * 0.5);
     unsafe {
         sys::igDockBuilderSetNodePos(
             root,
             sys::ImVec2 {
                 x: 0.0,
-                y: TOOLBAR_H,
+                y: toolbar_h,
             },
         );
         sys::igDockBuilderSetNodeSize(root, sys::ImVec2 { x: w, y: h });

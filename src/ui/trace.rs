@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Mutex;
 
-use crate::app::{App, PopupTarget, SigScope, TOOLBAR_H, TracePick, TraceRow};
+use crate::app::{App, PopupTarget, SigScope, TracePick, TraceRow};
 use crate::can::frame::{CanFrame, Direction};
 use crate::ui::flags_color;
 use crate::ui::idfilter::scope_combo;
@@ -64,10 +64,10 @@ impl TraceWin {
         }
         let (pos, size) = crate::ui::fit_first_use(
             io.display_size(),
-            [off, TOOLBAR_H + off],
+            [off, crate::ui::toolbar_height() + off],
             [
                 io.display_size()[0] * 0.55,
-                io.display_size()[1] * 0.5 - TOOLBAR_H,
+                io.display_size()[1] * 0.5 - crate::ui::toolbar_height(),
             ],
         );
         let mut window = ui

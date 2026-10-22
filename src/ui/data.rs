@@ -1,4 +1,4 @@
-use crate::app::{App, TOOLBAR_H};
+use crate::app::App;
 use crate::ui::siglist::{self, ListKind, SigListCmd};
 use dear_imgui_rs::{Condition, TableColumnFlags, TableFlags, Ui};
 
@@ -40,7 +40,10 @@ impl crate::observe::DataWindow {
         // 190 px signal panel; the old 480 px default could not show them.
         let (pos, size) = crate::ui::fit_first_use(
             io.display_size(),
-            [io.display_size()[0] - 840.0, TOOLBAR_H + i as f32 * 28.0],
+            [
+                io.display_size()[0] - 840.0,
+                crate::ui::toolbar_height() + i as f32 * 28.0,
+            ],
             [840.0, 380.0],
         );
         let mut window = ui
