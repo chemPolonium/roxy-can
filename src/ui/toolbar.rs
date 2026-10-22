@@ -415,8 +415,8 @@ pub fn render(app: &mut App, ui: &Ui) {
             }
             // Two rows keep the recording controls on screen. With one row the
             // record path/format/filter ran past the right edge even at 1440px,
-            // and nothing on the toolbar said they existed.
-            ui.new_line();
+            // and nothing on the toolbar said they existed. The combo above
+            // already ended its row; a NewLine here would add a blank line.
             if matches!(app.snap.run_mode, Mode::Virtual) {
                 let mut rec = app.snap.recording;
                 if ui.checkbox("Record", &mut rec) {

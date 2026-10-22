@@ -9,7 +9,7 @@ use crate::log::open_stream;
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
 pub const TRACE_LIMIT: usize = 50_000;
-pub const TOOLBAR_H: f32 = 80.0;
+pub const TOOLBAR_H: f32 = 70.0;
 pub const STATUSBAR_H: f32 = 28.0;
 pub const TABSTRIP_H: f32 = 22.0;
 /// How far back sampled signal history is kept. Deliberately in seconds, not
