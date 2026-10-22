@@ -1805,11 +1805,19 @@ impl BusCore {
                 self.hw.detach_vector_ports();
                 let result = crate::hw::vector::reset_driver();
                 self.hw.refresh_seq += 1;
+                // Put the presence scan in the status line as well as the
+                // probe: when an offline channel still appears on screen,
+                // this says whether PnP sees the adapter or the list is
+                // stale.
+                let pnp = match crate::hw::vector::present_usb_pids() {
+                    Some(pids) => format!("Vector USB PIDs {pids:04X?}"),
+                    None => "Vector PnP query unavailable".to_string(),
+                };
                 *status = match result {
-                    Ok(()) => "Vector driver reopened; channel list refreshed".to_string(),
-                    Err(e) => {
-                        format!("Vector connections closed, but the driver could not reopen: {e}")
-                    }
+                    Ok(()) => format!("Vector driver reopened; {pnp}"),
+                    Err(e) => format!(
+                        "Vector connections closed, but the driver could not reopen: {e}; {pnp}"
+                    ),
                 };
             }
             BusCommand::SetFrWatch {
