@@ -31,6 +31,11 @@ export interface State {
   stateRows: StateRow[];
   stateWindowS: number;
   scripts: ScriptInfo[];
+  busStats: BusStats[];
+  specRows: SpecRow[];
+  specTolerance: number;
+  specGrace: number;
+  specPeriodic: number;
   stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
@@ -210,6 +215,34 @@ export interface Script extends ScriptInfo {
   log: string[];
 }
 
+export interface BusStatRow {
+  label: string;
+  current: string;
+  min: string;
+  max: string;
+  avg: string;
+}
+
+export interface BusStats {
+  name: string;
+  kbps: number;
+  loadNow: number;
+  loadHistory: number[];
+  rows: BusStatRow[];
+}
+
+export interface SpecRow {
+  name: string;
+  addr: string;
+  bus: string;
+  rule: string;
+  declared: string;
+  measured: string;
+  count: number;
+  first: string;
+  last: string;
+}
+
 export interface StatsRow {  label: string;
   bus: string;
   count: number;
@@ -348,6 +381,9 @@ export type Command =
   | { type: "set_script_enabled"; id: number; on: boolean }
   | { type: "remove_script"; id: number }
   | { type: "save_script_file"; path: string; source: string }
+  | { type: "set_spec_tolerance"; value: number }
+  | { type: "set_spec_grace"; value: number }
+  | { type: "clear_spec" }
   | { type: "export"; kind: string; path: string }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }

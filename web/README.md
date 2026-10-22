@@ -113,9 +113,13 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   delete. The same validation rules as the desktop editor run on the host;
   definitions are saved with the project. Values reset to Init when a
   measurement starts, and scripts reach them through `sys_get` / `sys_set`.
-- The lower panel has **Messages / Statistics / Write**. Statistics shows
-  CAN aggregate count, min/avg/max/jitter and share; Jitter folds away
-  below 1280 px and the row tooltip keeps the full values.
+- The lower panel has **Messages / Statistics / Bus / Spec / Write**.
+  Statistics shows CAN aggregate count, min/avg/max/jitter and share; Jitter
+  folds away below 1280 px and the row tooltip keeps the full values. Bus
+  shows per-bus load, send distance, bursts and per-class frame rates with a
+  one-minute load sparkline. Spec reads the project's tolerance/grace, the
+  periodic-message count and the latched Unknown id / DLC / Cycle / Dropped
+  verdicts, with per-rule filters, Clear and CSV export.
 - **Export…** sits in the Trace header and the lower panel: it writes the
   trace as ASC (or PCAP when the path ends in `.pcap`), and Messages,
   Statistics, Data, State or the Write log as CSV/TXT. Paths are host paths;

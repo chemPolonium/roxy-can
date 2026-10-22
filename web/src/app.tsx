@@ -15,6 +15,7 @@ import type {
 import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
+import { BusStatsPanel } from "./components/BusStatsPanel";
 import { DataPanel } from "./components/DataPanel";
 import { ExportModal } from "./components/ExportModal";
 import { GeneratorModal } from "./components/GeneratorModal";
@@ -25,6 +26,7 @@ import type { MonitorPatch } from "./components/MonitorPanel";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
+import { SpecPanel } from "./components/SpecPanel";
 import { ScriptsModal } from "./components/ScriptsModal";
 import { StatePanel } from "./components/StatePanel";
 import { StatsTable } from "./components/StatsTable";
@@ -38,7 +40,7 @@ import {
 } from "./components/TraceFilterModal";
 import type { TraceFilter } from "./components/TraceFilterModal";
 
-type RightTab = "messages" | "statistics" | "activity";
+type RightTab = "messages" | "statistics" | "bus" | "spec" | "activity";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
 type Drag = "main" | "right" | null;
 
@@ -1188,6 +1190,20 @@ export function App() {
                 </button>
                 <button
                   type="button"
+                  class={tab === "bus" ? "on" : ""}
+                  onClick={() => setTab("bus")}
+                >
+                  Bus
+                </button>
+                <button
+                  type="button"
+                  class={tab === "spec" ? "on" : ""}
+                  onClick={() => setTab("spec")}
+                >
+                  Spec
+                </button>
+                <button
+                  type="button"
                   class={tab === "activity" ? "on" : ""}
                   onClick={() => setTab("activity")}
                 >
@@ -1199,29 +1215,52 @@ export function App() {
                   ? `${state?.messages.length ?? 0} ids`
                   : tab === "statistics"
                     ? `${state?.stats.length ?? 0} rows`
-                    : `${state?.write.length ?? 0} lines`}
+                    : tab === "bus"
+                      ? `${state?.busStats.length ?? 0} buses`
+                      : tab === "spec"
+                        ? `${state?.specRows.length ?? 0} violations`
+                        : `${state?.write.length ?? 0} lines`}
               </span>
-              <button
-                type="button"
-                class="mini"
-                onClick={() =>
-                  openExport(
-                    tab === "messages"
-                      ? "messages"
-                      : tab === "statistics"
-                        ? "stats"
-                        : "write",
-                  )
-                }
-                title="Export this panel to a host file"
-              >
-                Export…
-              </button>
+              {tab !== "bus" && tab !== "spec" && (
+                <button
+                  type="button"
+                  class="mini"
+                  onClick={() =>
+                    openExport(
+                      tab === "messages"
+                        ? "messages"
+                        : tab === "statistics"
+                          ? "stats"
+                          : "write",
+                    )
+                  }
+                  title="Export this panel to a host file"
+                >
+                  Export…
+                </button>
+              )}
             </div>
             {tab === "messages" ? (
               <MessageTable rows={state?.messages ?? []} />
             ) : tab === "statistics" ? (
               <StatsTable rows={state?.stats ?? []} />
+            ) : tab === "bus" ? (
+              <BusStatsPanel buses={state?.busStats ?? []} />
+            ) : tab === "spec" ? (
+              <SpecPanel
+                rows={state?.specRows ?? []}
+                tolerance={state?.specTolerance ?? 5}
+                grace={state?.specGrace ?? 3}
+                periodic={state?.specPeriodic ?? 0}
+                onTolerance={(value) =>
+                  void run({ type: "set_spec_tolerance", value })
+                }
+                onGrace={(value) =>
+                  void run({ type: "set_spec_grace", value })
+                }
+                onClear={() => void run({ type: "clear_spec" })}
+                onExport={() => openExport("spec")}
+              />
             ) : (
               <Activity rows={state?.write ?? []} clock={clock} />
             )}

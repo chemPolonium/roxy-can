@@ -480,6 +480,7 @@ fn export_file(app: &mut App, kind: &str, path: &str) {
         "write" => app.export_write_txt(path),
         "data" => app.export_data_csv(0, path),
         "state" => app.export_state_csv(0, path),
+        "spec" => app.export_spec_csv(path),
         other => app.status = format!("unknown export kind: {other}"),
     }
 }
@@ -534,6 +535,135 @@ fn chart_unselect(app: &mut App, key: &SigKey) {
     // Demo lanes never lived in a Graphics window; prune still drops the
     // subscription unless another observer (Monitor/Data/State) uses it.
     app.prune_signal(key);
+}
+
+fn pct_text(v: f64) -> String {
+    format!("{:.2}", v * 100.0)
+}
+
+fn opt_pct_text(v: Option<f64>) -> String {
+    v.map(pct_text).unwrap_or_else(|| "-".to_string())
+}
+
+fn num_text(v: f64) -> String {
+    format!("{v:.0}")
+}
+
+fn opt_num_text(v: Option<f64>) -> String {
+    v.map(num_text).unwrap_or_else(|| "-".to_string())
+}
+
+fn us_ms_text(us: u64) -> String {
+    format!("{:.3}", us as f64 / 1000.0)
+}
+
+fn opt_ms_text(us: Option<u64>) -> String {
+    us.map(us_ms_text).unwrap_or_else(|| "-".to_string())
+}
+
+fn opt_ms_f_text(us: Option<f64>) -> String {
+    us.map(|v| format!("{:.3}", v / 1000.0))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn opt_num_u_text(v: Option<u64>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_else(|| "-".to_string())
+}
+
+fn class_stat_rows(
+    rows: &mut Vec<WebBusStatRow>,
+    load: &crate::load::BusLoad,
+    label: &str,
+    class: crate::load::FrameClass,
+) {
+    let (min, max, avg) = load.rate_stats(class);
+    rows.push(WebBusStatRow {
+        label: format!("{label} [n/s]"),
+        current: num_text(load.class_rate(class)),
+        min: opt_num_text(min),
+        max: opt_num_text(max),
+        avg: opt_num_text(avg),
+    });
+    rows.push(WebBusStatRow {
+        label: format!("{label} [total]"),
+        current: load.class_total(class).to_string(),
+        min: "-".to_string(),
+        max: "-".to_string(),
+        avg: "-".to_string(),
+    });
+}
+
+/// The CAN section of the desktop Bus Statistics window, one row per
+/// statistic. The reference's hardware-only rows have no meaning here.
+fn bus_stat_rows(load: &crate::load::BusLoad) -> Vec<WebBusStatRow> {
+    use crate::load::FrameClass;
+    let mut rows = Vec::new();
+    let (min, max, avg) = load.load_stats();
+    rows.push(WebBusStatRow {
+        label: "Busload [%]".to_string(),
+        current: pct_text(load.load()),
+        min: opt_pct_text(min),
+        max: opt_pct_text(max),
+        avg: opt_pct_text(avg),
+    });
+    let (last, min, max, avg) = load.send_dist_us();
+    rows.push(WebBusStatRow {
+        label: "Min. Send Dist. [ms]".to_string(),
+        current: opt_ms_text(last),
+        min: opt_ms_text(min),
+        max: opt_ms_text(max),
+        avg: opt_ms_f_text(avg),
+    });
+    rows.push(WebBusStatRow {
+        label: "Bursts [total]".to_string(),
+        current: load.bursts_total().to_string(),
+        min: "-".to_string(),
+        max: "-".to_string(),
+        avg: "-".to_string(),
+    });
+    let (last, min, max, avg) = load.burst_time_us();
+    rows.push(WebBusStatRow {
+        label: "Burst Time [ms]".to_string(),
+        current: us_ms_text(last),
+        min: opt_ms_text(min),
+        max: opt_ms_text(max),
+        avg: opt_ms_f_text(avg),
+    });
+    let (cur, min, max, avg) = load.frames_per_burst();
+    rows.push(WebBusStatRow {
+        label: "Frames per Burst".to_string(),
+        current: cur.to_string(),
+        min: opt_num_u_text(min),
+        max: opt_num_u_text(max),
+        avg: opt_num_text(avg),
+    });
+    class_stat_rows(&mut rows, load, "Std. Data", FrameClass::StdData);
+    class_stat_rows(&mut rows, load, "Ext. Data", FrameClass::ExtData);
+    class_stat_rows(&mut rows, load, "Std. Remote", FrameClass::StdRemote);
+    class_stat_rows(&mut rows, load, "Ext. Remote", FrameClass::ExtRemote);
+    let (min, max, avg) = load.rate_stats(FrameClass::Error);
+    rows.push(WebBusStatRow {
+        label: "Errorframes [n/s]".to_string(),
+        current: num_text(load.class_rate(FrameClass::Error)),
+        min: opt_num_text(min),
+        max: opt_num_text(max),
+        avg: opt_num_text(avg),
+    });
+    rows.push(WebBusStatRow {
+        label: "Errorframes [total]".to_string(),
+        current: load.errors.to_string(),
+        min: "-".to_string(),
+        max: "-".to_string(),
+        avg: "-".to_string(),
+    });
+    rows.push(WebBusStatRow {
+        label: "Chip State".to_string(),
+        current: "Simulated".to_string(),
+        min: "-".to_string(),
+        max: "-".to_string(),
+        avg: "-".to_string(),
+    });
+    rows
 }
 
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
@@ -845,6 +975,13 @@ enum WebCommand {
         path: String,
         source: String,
     },
+    SetSpecTolerance {
+        value: u64,
+    },
+    SetSpecGrace {
+        value: u64,
+    },
+    ClearSpec,
     Export {
         kind: String,
         path: String,
@@ -1297,6 +1434,15 @@ fn app_loop(
                             Err(error) => app.status = format!("script save failed: {error}"),
                         }
                     }
+                }
+                WebCommand::SetSpecTolerance { value } => {
+                    app.spec_tol_pct = value.min(100);
+                }
+                WebCommand::SetSpecGrace { value } => {
+                    app.spec_grace = value.clamp(1, 20);
+                }
+                WebCommand::ClearSpec => {
+                    app.send(BusCommand::ClearSpec);
                 }
                 WebCommand::Export { kind, path } => {
                     export_file(&mut app, &kind, &path);
@@ -2363,6 +2509,11 @@ struct WebState {
     state_window_s: f64,
     scripts: Vec<WebScriptInfo>,
     stats: Vec<WebStatsRow>,
+    bus_stats: Vec<WebBusStats>,
+    spec_rows: Vec<WebSpecRow>,
+    spec_tolerance: u64,
+    spec_grace: u64,
+    spec_periodic: usize,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -2479,6 +2630,40 @@ struct WebTriggerLimits {
     pre_frames: usize,
     post_frames: u32,
     marker_cap: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSpecRow {
+    name: String,
+    addr: String,
+    bus: String,
+    rule: String,
+    declared: String,
+    measured: String,
+    count: u64,
+    first: String,
+    last: String,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebBusStatRow {
+    label: String,
+    current: String,
+    min: String,
+    max: String,
+    avg: String,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebBusStats {
+    name: String,
+    kbps: u32,
+    load_now: f64,
+    load_history: Vec<f64>,
+    rows: Vec<WebBusStatRow>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -2885,6 +3070,49 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
 
+    let bus_stats: Vec<WebBusStats> = snap
+        .bus_loads
+        .iter()
+        .enumerate()
+        .filter_map(|(index, load)| {
+            let channel = snap.channels.get(index)?;
+            Some(WebBusStats {
+                name: channel.name.clone(),
+                kbps: channel.bitrate_kbps,
+                load_now: load.load(),
+                load_history: load.history().map(|(_, value)| value).collect(),
+                rows: bus_stat_rows(load),
+            })
+        })
+        .collect();
+
+    let spec_rows: Vec<WebSpecRow> = app
+        .spec_rows()
+        .into_iter()
+        .map(|row| WebSpecRow {
+            name: row.name,
+            addr: row.addr,
+            bus: row.bus,
+            rule: row.kind.label().to_string(),
+            declared: crate::spec::qty(row.kind, row.declared),
+            measured: crate::spec::qty(row.kind, row.measured),
+            count: row.count,
+            first: format!("{:.3} s", row.first_t_us as f64 / 1e6),
+            last: format!("{:.3} s", row.last_t_us as f64 / 1e6),
+        })
+        .collect();
+    let spec_periodic: usize = snap
+        .channels
+        .iter()
+        .filter_map(|channel| channel.dbc.as_ref())
+        .map(|db| {
+            db.messages
+                .values()
+                .filter(|message| message.cycle_us.is_some_and(|cycle| cycle > 0))
+                .count()
+        })
+        .sum();
+
     let sysvars: Vec<WebSysVar> = snap
         .sysvars
         .iter()
@@ -3173,6 +3401,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         state_window_s,
         scripts,
         stats,
+        bus_stats,
+        spec_rows,
+        spec_tolerance: app.spec_tol_pct,
+        spec_grace: app.spec_grace,
+        spec_periodic,
         channels,
         messages,
         write,
@@ -3564,6 +3797,7 @@ mod tests {
                 dir.join("roxy_web_export_data.csv"),
                 "bus,signal,value,unit",
             ),
+            ("spec", dir.join("roxy_web_export_spec.csv"), "# database"),
         ];
         for (kind, path, header) in &files {
             export_file(&mut app, kind, path.to_str().unwrap());
@@ -3601,6 +3835,48 @@ mod tests {
                 .first()
                 .is_none_or(|window| window.signals.iter().all(|row| row.key != key))
         );
+    }
+
+    /// The Bus Statistics tab reads the same BusLoad numbers as the desktop
+    /// window: load, send distance, bursts and per-class rates.
+    #[test]
+    fn the_state_lists_bus_load_statistics() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..30 {
+            app.update();
+        }
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(!state.bus_stats.is_empty());
+        let bus = &state.bus_stats[0];
+        assert_eq!(bus.name, "CAN1");
+        assert!(!bus.load_history.is_empty(), "the sparkline has buckets");
+        assert!(
+            bus.rows.iter().any(|row| row.label == "Busload [%]"),
+            "the load row is present"
+        );
+        assert!(
+            bus.rows
+                .iter()
+                .any(|row| row.label == "Errorframes [total]"),
+            "error counters are present"
+        );
+    }
+
+    /// The Specification tab reads the project's tolerance/grace, the
+    /// periodic-message count and the latched verdict rows.
+    #[test]
+    fn the_state_lists_specification_controls() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..20 {
+            app.update();
+        }
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(state.spec_periodic > 0, "the DBC declares periodic frames");
+        assert_eq!(state.spec_tolerance, app.spec_tol_pct);
+        assert_eq!(state.spec_grace, app.spec_grace);
+        assert!(state.spec_rows.is_empty(), "a clean demo has no verdicts");
     }
 
     /// A replay path must open the log and start playback in Replay mode,

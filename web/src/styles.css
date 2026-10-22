@@ -2061,6 +2061,255 @@ button.danger:hover:not(:disabled) {
   text-align: center;
 }
 
+/* Specification: latched database-promise verdicts with the tolerance and
+   grace controls that produced them. */
+.spec-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding: 6px 10px;
+}
+
+.spec-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.spec-tools label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.spec-tools input {
+  width: 46px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.spec-label {
+  margin-right: 3px;
+}
+
+.spec-periodic {
+  color: #9fb0c2;
+  white-space: nowrap;
+}
+
+.spec-tools .spacer,
+.spec-filters .spacer {
+  flex: 1;
+}
+
+.spec-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.spec-filters label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid #263140;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.spec-filters label.on {
+  background: #142334;
+  border-color: #2d5c88;
+  color: #cfe6ff;
+}
+
+.spec-filters input {
+  width: 10px;
+  height: 10px;
+  accent-color: #2f7fe0;
+}
+
+.spec-count {
+  white-space: nowrap;
+}
+
+.spec-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.spec-row {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  background: #121923;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
+.spec-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.spec-main strong {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dfe8f2;
+  font-weight: 500;
+}
+
+.spec-main em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.spec-rule {
+  padding: 0 4px;
+  border: 1px solid #7d3535;
+  border-radius: 3px;
+  color: #ff9b83;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.spec-bus {
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.spec-detail {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.spec-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+/* Bus Statistics: one card per bus with a load sparkline and compact
+   current/min/max/avg rows (same values as the desktop window). */
+.busstat-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px;
+}
+
+.busstat-bus {
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: #0d1218;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+}
+
+.busstat-head {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 5px 8px;
+  background: #111821;
+  border-bottom: 1px solid #1c242e;
+}
+
+.busstat-head strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.busstat-head span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.busstat-head em {
+  color: #cfe6ff;
+  font-size: 10.5px;
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.busstat-spark {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 28px;
+  border-radius: 3px;
+}
+
+.busstat-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 64px;
+  gap: 1px 6px;
+  padding: 3px 8px;
+  border-bottom: 1px solid #161d26;
+}
+
+.busstat-row:last-child {
+  border-bottom: 0;
+}
+
+.busstat-label {
+  color: #cdd8e4;
+  font-size: 10.5px;
+}
+
+.busstat-current {
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.busstat-range {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.busstat-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: center;
+}
+
 /* Monitor: big live values with an optional coloring rule. The right column
    is narrower than the desktop window, so each row stacks its value line over
    a compact rule line. */
