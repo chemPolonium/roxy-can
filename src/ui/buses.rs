@@ -952,7 +952,8 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     let eth_rows = app.eth_bus_rows();
     ui.align_text_to_frame_padding();
     ui.text_disabled(bus_count(eth_rows.len()));
-    ui.new_line();
+    // No NewLine here: the count already ended the row. Calling it again
+    // inserts a full blank line before the FRAME-LENGTH checkbox.
     let mut len_includes_header = app.eth_length_includes_header;
     if ui.checkbox(
         "FRAME-LENGTH includes L2 header##ethlen",

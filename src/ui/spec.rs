@@ -101,8 +101,8 @@ impl SpecView {
         ui.text(format!("{periodic} periodic messages declared"));
         // The four rule checkboxes and the two buttons need their own row:
         // together with the tolerance pair they overflow the default width
-        // and the last rule's label was cut off.
-        ui.new_line();
+        // and the last rule's label was cut off. The count already ended
+        // this row; a NewLine here would add a blank line.
 
         // One checkbox per rule, session-only: real logs carry other people's
         // traffic, and being able to stop looking at it without editing the project

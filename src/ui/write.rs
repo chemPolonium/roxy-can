@@ -113,7 +113,6 @@ fn content(view: &mut WriteView, app: &App, ui: &Ui, cmds: &mut Vec<WriteCmd>) {
         ui.same_line();
         ui.checkbox(label, slot);
     }
-    ui.new_line();
     ui.text_disabled("Script output, checks and system events");
 
     // Stick to the bottom while the user hasn't scrolled up to read

@@ -380,10 +380,9 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
     }
     // The main row is the filter lens; its extra conditions, Reset, Clear and
     // Export live on the second row so English labels never run past the
-    // window edge.
-    ui.new_line();
+    // window edge. The first item starts that row by itself -- a NewLine
+    // here would add a blank line between the two rows.
     if win.filters_open {
-        ui.same_line();
         const PAYLOAD_HINT: &str = "payload 11 22";
         ui.set_next_item_width(crate::ui::hint_width(ui, PAYLOAD_HINT, 84.0));
         ui.input_text(format!("##tpayload{i}"), &mut win.payload)
@@ -433,8 +432,9 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
         if ui.is_item_hovered() {
             ui.tooltip_text("Upper time bound (s): later frames stay hidden; empty = unbounded");
         }
+        // Reset/Clear/Export continue the extras row.
+        ui.same_line();
     }
-    ui.same_line();
     let filters_active = !win.filter.trim().is_empty()
         || win.scope != SigScope::All
         || win.dir != 0
