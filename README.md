@@ -44,7 +44,7 @@
 | Home | 图形窗口回到实时边缘 |
 | Ctrl+R | 切换录制 |
 | Ctrl+E | 导出第一个 Trace 窗口（ASC 或 PCAP） |
-| Ctrl+O | 打开 DBC |
+| Ctrl+O | 打开 CAN 数据库（DBC 或单 cluster ARXML） |
 | Ctrl+N / Ctrl+Shift+O | 新建 / 打开工程 |
 | Ctrl+S / Ctrl+Shift+S | 保存 / 另存工程 |
 

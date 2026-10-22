@@ -398,23 +398,76 @@ impl App {
         let ch = 0;
         let name = self.channel_name(ch as u8);
         if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Open DBC for {name}"))
-            .add_filter("DBC files", &["dbc"])
+            .set_title(format!("Open database for {name}"))
+            .add_filter("CAN databases", &["dbc", "arxml", "xml"])
             .pick_file()
         {
-            self.open_dbc_for(ch, p.to_string_lossy().into_owned());
+            self.open_can_database_for(ch, p.to_string_lossy().into_owned());
         }
     }
 
-    /// Open a DBC directly for a given channel (used by the Buses window).
+    /// Open a database directly for a given channel (used by the Buses window).
     pub fn pick_dbc_for(&mut self, ch: usize) {
         let name = self.channel_name(ch as u8);
         if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Open DBC for {name}"))
-            .add_filter("DBC files", &["dbc"])
+            .set_title(format!("Open database for {name}"))
+            .add_filter("CAN databases", &["dbc", "arxml", "xml"])
             .pick_file()
         {
-            self.open_dbc_for(ch, p.to_string_lossy().into_owned());
+            self.open_can_database_for(ch, p.to_string_lossy().into_owned());
+        }
+    }
+
+    /// Opens either a DBC or a CAN ARXML on one existing bus. An ARXML with
+    /// exactly one CAN cluster loads that cluster; a multi-cluster matrix is
+    /// refused here with a pointer to the unified importer, which creates one
+    /// bus per cluster instead of silently choosing one.
+    pub fn open_can_database_for(&mut self, ch: usize, path: String) {
+        let ext = std::path::Path::new(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        if !matches!(ext.as_deref(), Some("arxml" | "xml")) {
+            self.open_dbc_for(ch, path);
+            return;
+        }
+        let text = match std::fs::read(&path) {
+            Ok(bytes) => crate::dbc::text_from_bytes(bytes),
+            Err(e) => {
+                self.fail(format!("ARXML read failed: {path}: {e}"));
+                return;
+            }
+        };
+        let clusters = match crate::can_arxml::scan(&text) {
+            Ok(clusters) => clusters,
+            Err(e) => {
+                self.fail(format!("ARXML parse failed: {e}"));
+                return;
+            }
+        };
+        let cans: Vec<_> = clusters
+            .into_iter()
+            .filter(|c| c.kind == crate::can_arxml::ClusterKind::Can)
+            .collect();
+        match cans.as_slice() {
+            [] => self.fail(format!("No CAN cluster found in {path}")),
+            [one] => {
+                if let Err(e) = self.load_can_arxml_on_bus(&path, &one.name, ch as u8) {
+                    self.fail(format!("CAN ARXML load failed: {e}"));
+                } else {
+                    self.status = format!(
+                        "Loaded CAN ARXML cluster `{}` on {}",
+                        one.name,
+                        self.channel_name(ch as u8)
+                    );
+                }
+            }
+            many => {
+                self.status = format!(
+                    "This ARXML declares {} CAN clusters; use Import ARXML... to add one bus per cluster",
+                    many.len()
+                );
+            }
         }
     }
 
@@ -1168,6 +1221,9 @@ impl App {
             }
             Some("asc") | Some("blf") | Some("mf4") => {
                 self.load_log(&path.to_string_lossy());
+            }
+            Some("arxml") => {
+                self.import_arxml_path(&path.to_string_lossy());
             }
             _ => {
                 let name = path

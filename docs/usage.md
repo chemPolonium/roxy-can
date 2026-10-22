@@ -54,7 +54,7 @@ roxy-can -h                               完整帮助
 
 ## 总线与数据库（Buses 窗口）
 
-- 一条总线可加载**多个 DBC**：`Open...` 换主库，拖放或 `+` 附加扩展库。解码按库序进行，重名报文先到先得。
+- 一条总线可加载**多个 DBC**：`Open...` 换主库（也接受只含一个 CAN cluster 的 ARXML），拖放或 `+` 附加扩展库。解码按库序进行，重名报文先到先得。
 - **一次导入全部 ARXML cluster**：Buses 顶部的 `Import ARXML...` 扫描文件里的 `CAN-CLUSTER` / `FLEXRAY-CLUSTER` / `ETHERNET-CLUSTER`，每个 cluster 建自己的总线。CAN cluster 读成 CAN 路（标识符/帧类、帧长、帧→PDU、I-Signal、compu/单位、PDU 周期、ECU 端口的发送方），FlexRay/Ethernet 落在各自编号空间的下一个空索引；同一文件与 cluster 再次导入会刷新那一路的数据库，不会重复建路。CAN 行的 `Open...` 仍可换成 DBC（会离开 ARXML 源），ARXML 源在 DBC 单元格里标明路径与 cluster。Container/Multiplexed/Secured PDU 不在此读取范围。
 - **比特率是选的不是输的**：仲裁段下拉给 `10/50/100/125/250/500/800/1000` kbit/s，FD 数据段给 `0（无 FD 段）/1000/2000/4000/5000/8000`。选错比特率不会报错，只会把整条总线的帧全部解错。工程里已存的值一定在列表里，打开旧工程时也不会被自动改成相近值。
 - **DBC 自动重载**：每 2 秒比对校验和，外部修改自动生效（测量停止时同样比对）；库里新增的发送报文会出现为生成器条目，但**不自动发送**。

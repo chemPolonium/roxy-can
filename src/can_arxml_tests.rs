@@ -266,3 +266,37 @@ fn unified_import_adds_a_flexray_cluster_from_the_committed_asset() {
         app.status
     );
 }
+
+const ONE_CLUSTER: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><ELEMENTS>
+ <CAN-CLUSTER><SHORT-NAME>Solo</SHORT-NAME><CAN-CLUSTER-VARIANTS><CAN-CLUSTER-CONDITIONAL>
+  <BAUDRATE>500000</BAUDRATE><PHYSICAL-CHANNELS><CAN-PHYSICAL-CHANNEL><SHORT-NAME>CH</SHORT-NAME>
+   <FRAME-TRIGGERINGS><CAN-FRAME-TRIGGERING><SHORT-NAME>FT</SHORT-NAME>
+    <FRAME-REF>/F</FRAME-REF><CAN-ADDRESSING-MODE>STANDARD</CAN-ADDRESSING-MODE><IDENTIFIER>256</IDENTIFIER>
+   </CAN-FRAME-TRIGGERING></FRAME-TRIGGERINGS>
+  </CAN-PHYSICAL-CHANNEL></PHYSICAL-CHANNELS>
+ </CAN-CLUSTER-CONDITIONAL></CAN-CLUSTER-VARIANTS></CAN-CLUSTER>
+ <CAN-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH></CAN-FRAME>
+</ELEMENTS></AUTOSAR>"#;
+
+/// "Open..." on one CAN row accepts ARXML when the file has one CAN cluster;
+/// it replaces that row's database instead of creating a new bus.
+#[test]
+fn a_single_cluster_arxml_replaces_one_existing_can_database() {
+    use crate::app::App;
+    let path = std::env::temp_dir().join(format!(
+        "roxy_can_single_cluster_{}.arxml",
+        std::process::id()
+    ));
+    std::fs::write(&path, ONE_CLUSTER).expect("write matrix");
+    let mut app = App::headless();
+    app.open_can_database_for(0, path.to_string_lossy().into_owned());
+    app.settle();
+    assert_eq!(app.can_arxml.get(&0).map(|(_, c)| c.as_str()), Some("Solo"));
+    let db = app.snap.channels[0]
+        .dbc
+        .as_ref()
+        .expect("replaced database");
+    assert_eq!(db.messages[&(0x100, false)].name, "F");
+    std::fs::remove_file(path).ok();
+}

@@ -456,9 +456,9 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             }
             if ui.is_item_hovered() {
                 ui.tooltip_text(if has_arxml {
-                    "Replace this bus's ARXML database with a DBC file"
+                    "Replace this bus's ARXML database with a DBC or a single-cluster ARXML"
                 } else {
-                    "Change this bus's primary DBC file (it takes precedence for decoding and name lookup)"
+                    "Open a DBC, or a single-cluster ARXML, as this bus's primary database (it takes precedence for decoding and name lookup)"
                 });
             }
             ui.same_line();

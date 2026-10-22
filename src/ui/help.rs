@@ -73,7 +73,7 @@ const SHORTCUTS: [(&str, &str); 11] = [
     ("- / +", "Replay one step slower / faster"),
     ("Home", "Graphics window: jump to live edge"),
     ("Ctrl+N", "New project"),
-    ("Ctrl+O", "Open DBC"),
+    ("Ctrl+O", "Open CAN database (DBC or ARXML)"),
     ("Ctrl+Shift+O", "Open project"),
     ("Ctrl+R", "Toggle log recording (ASC / BLF)"),
     ("Ctrl+E", "Export Trace (ASC / PCAP)"),

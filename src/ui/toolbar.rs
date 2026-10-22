@@ -130,12 +130,12 @@ pub fn render(app: &mut App, ui: &Ui) {
                         app.save_project(None);
                     }
                     ui.separator();
-                    if ui.menu_item_with_shortcut("Open DBC...", "Ctrl+O") {
+                    if ui.menu_item_with_shortcut("Open CAN database...", "Ctrl+O") {
                         app.pick_dbc();
                     }
                     if ui.is_item_hovered() {
                         ui.tooltip_text(
-                            "Load a DBC onto the first CAN bus; use Buses to attach one to any other bus",
+                            "Open a DBC, or a single-cluster ARXML, on the first CAN bus; use Buses to attach a database to any other bus",
                         );
                     }
                     if ui.menu_item_enabled_selected("Open Log...", None::<&str>, false, !log_switch_blocked(app))
