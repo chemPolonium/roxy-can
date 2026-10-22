@@ -1,4 +1,4 @@
-import type { Catalog, Command, Hardware, Snapshot } from "./types";
+import type { Catalog, Command, Hardware, Script, Snapshot } from "./types";
 
 export async function fetchState(
   epoch: number | null,
@@ -37,6 +37,14 @@ export async function fetchHardware(): Promise<Hardware> {
     throw new Error(`hardware: ${response.status}`);
   }
   return (await response.json()) as Hardware;
+}
+
+export async function fetchScripts(): Promise<Script[]> {
+  const response = await fetch("/api/nodes", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`nodes: ${response.status}`);
+  }
+  return (await response.json()) as Script[];
 }
 
 export async function sendCommand(command: Command): Promise<void> {

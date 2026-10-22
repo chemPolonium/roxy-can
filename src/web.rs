@@ -6,6 +6,7 @@
 //! the desktop ImGui path stays the product.
 
 use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -179,14 +180,29 @@ pub fn run(args: &[String]) {
     let signals = Arc::new(Mutex::new(SignalStore::default()));
     let catalog = Arc::new(Mutex::new(WebCatalog::default()));
     let hardware = Arc::new(Mutex::new(HardwareCache::default()));
+    let scripts = Arc::new(Mutex::new(Vec::new()));
     {
         let shared = shared.clone();
         let trace = trace.clone();
         let signals = signals.clone();
         let catalog = catalog.clone();
+        let scripts = scripts.clone();
         std::thread::Builder::new()
             .name("roxy-web-core".to_string())
-            .spawn(move || app_loop(rx, shared, trace, signals, catalog, project, replay))
+            .spawn(move || {
+                app_loop(
+                    rx,
+                    SharedStores {
+                        shared,
+                        trace,
+                        signals,
+                        catalog,
+                        scripts,
+                    },
+                    project,
+                    replay,
+                )
+            })
             .expect("spawn web core thread");
     }
 
@@ -199,6 +215,7 @@ pub fn run(args: &[String]) {
             .route("/state", get(state))
             .route("/catalog", get(catalog_handler))
             .route("/hardware", get(hardware_handler))
+            .route("/nodes", get(scripts_handler))
             .route("/command", post(command))
             .with_state(ApiState {
                 shared,
@@ -206,6 +223,7 @@ pub fn run(args: &[String]) {
                 signals,
                 catalog,
                 hardware,
+                scripts,
                 commands: tx,
             });
         let app = Router::new().nest("/api", api).fallback_service(
@@ -398,6 +416,55 @@ fn state_bands_from(
     (current, bands)
 }
 
+async fn scripts_handler(State(api): State<ApiState>) -> Json<Vec<WebScript>> {
+    Json(
+        api.scripts
+            .lock()
+            .map(|scripts| scripts.clone())
+            .unwrap_or_default(),
+    )
+}
+
+/// Fingerprint of everything the scripts dialog shows. Source edits are
+/// infrequent, but they must reach the editor without shipping every
+/// script on every 10 Hz state poll; `/api/nodes` is refreshed only when
+/// this changes.
+fn scripts_signature(app: &App) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for node in app.snap.nodes.iter() {
+        node.id.hash(&mut hasher);
+        node.name.hash(&mut hasher);
+        node.source.hash(&mut hasher);
+        node.enabled.hash(&mut hasher);
+        node.running.hash(&mut hasher);
+        node.errored.hash(&mut hasher);
+        node.attached.hash(&mut hasher);
+        node.log.len().hash(&mut hasher);
+        node.log.last().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn scripts_snapshot(app: &App) -> Vec<WebScript> {
+    app.snap
+        .nodes
+        .iter()
+        .map(|node| WebScript {
+            id: node.id,
+            name: node.name.clone(),
+            channel: node.channel,
+            attached_bus: node.attached.as_ref().map(|(bus, _)| *bus),
+            attached_node: node.attached.as_ref().map(|(_, name)| name.clone()),
+            enabled: node.enabled,
+            running: node.running,
+            errored: node.errored,
+            file_path: node.file_path.clone().unwrap_or_default(),
+            source: node.source.clone(),
+            log: node.log.clone(),
+        })
+        .collect()
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -479,6 +546,7 @@ struct ApiState {
     signals: Arc<Mutex<SignalStore>>,
     catalog: Arc<Mutex<WebCatalog>>,
     hardware: Arc<Mutex<HardwareCache>>,
+    scripts: Arc<Mutex<Vec<WebScript>>>,
     commands: Sender<WebCommand>,
 }
 
@@ -681,6 +749,31 @@ enum WebCommand {
     SaveProject {
         path: Option<String>,
     },
+    AddScript {
+        name: String,
+        channel: u8,
+        attached_bus: Option<u8>,
+        attached_node: Option<String>,
+    },
+    SetScriptName {
+        id: u64,
+        name: String,
+    },
+    SetScriptSource {
+        id: u64,
+        source: String,
+    },
+    SetScriptEnabled {
+        id: u64,
+        on: bool,
+    },
+    RemoveScript {
+        id: u64,
+    },
+    SaveScriptFile {
+        path: String,
+        source: String,
+    },
     SetSysVar {
         namespace: String,
         name: String,
@@ -846,15 +939,29 @@ async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> St
 /// Owns the App, applies UI commands, and publishes the web snapshot. The
 /// manual drive is what the headless CLI already uses: no window, no
 /// mailbox race, commands take effect on the next lap.
-fn app_loop(
-    inbox: Receiver<WebCommand>,
+/// The caches the core thread publishes into and the HTTP handlers read.
+/// Grouped so `app_loop` keeps a small argument list.
+struct SharedStores {
     shared: Arc<Mutex<WebState>>,
     trace: Arc<Mutex<TraceStore>>,
     signals: Arc<Mutex<SignalStore>>,
     catalog: Arc<Mutex<WebCatalog>>,
+    scripts: Arc<Mutex<Vec<WebScript>>>,
+}
+
+fn app_loop(
+    inbox: Receiver<WebCommand>,
+    stores: SharedStores,
     project: Option<String>,
     replay: Option<String>,
 ) {
+    let SharedStores {
+        shared,
+        trace,
+        signals,
+        catalog,
+        scripts,
+    } = stores;
     let mut app = App::headless();
     prepare_session(&mut app, project.as_deref(), replay.as_deref());
     // The web plot window is independent of the desktop layout. Ask the
@@ -874,6 +981,7 @@ fn app_loop(
     let mut series: VecDeque<WebSeriesPoint> = VecDeque::with_capacity(SERIES_POINTS);
     let mut rate_window: VecDeque<(Instant, u64)> = VecDeque::new();
     let mut last_publish = Instant::now() - PUBLISH_EVERY;
+    let mut scripts_sig = u64::MAX;
 
     loop {
         while let Ok(cmd) = inbox.try_recv() {
@@ -1068,6 +1176,44 @@ fn app_loop(
                         }
                         None => {
                             app.status = "save needs a project path".to_string();
+                        }
+                    }
+                }
+                WebCommand::AddScript {
+                    name,
+                    channel,
+                    attached_bus,
+                    attached_node,
+                } => {
+                    let attached = match (attached_bus, attached_node) {
+                        (Some(bus), Some(node)) => Some((bus, node)),
+                        _ => None,
+                    };
+                    app.send(BusCommand::AddNode {
+                        name,
+                        channel,
+                        attached,
+                    });
+                }
+                WebCommand::SetScriptName { id, name } => {
+                    app.send(BusCommand::SetNodeName { id, name });
+                }
+                WebCommand::SetScriptSource { id, source } => {
+                    app.send(BusCommand::SetNodeSource { id, source });
+                }
+                WebCommand::SetScriptEnabled { id, on } => {
+                    app.send(BusCommand::SetNodeEnabled { id, on });
+                }
+                WebCommand::RemoveScript { id } => {
+                    app.send(BusCommand::RemoveNode { id });
+                }
+                WebCommand::SaveScriptFile { path, source } => {
+                    if path.trim().is_empty() {
+                        app.status = "script save needs a path".to_string();
+                    } else {
+                        match std::fs::write(&path, source) {
+                            Ok(()) => app.status = format!("script saved: {path}"),
+                            Err(error) => app.status = format!("script save failed: {error}"),
                         }
                     }
                 }
@@ -1505,6 +1651,13 @@ fn app_loop(
             let next = build_state(&app, &series, fps);
             if let Ok(mut slot) = shared.lock() {
                 *slot = next;
+            }
+            let sig = scripts_signature(&app);
+            if sig != scripts_sig
+                && let Ok(mut slot) = scripts.lock()
+            {
+                *slot = scripts_snapshot(&app);
+                scripts_sig = sig;
             }
             last_publish = now;
         }
@@ -2124,6 +2277,7 @@ struct WebState {
     data: Vec<WebDataRow>,
     state_rows: Vec<WebStateRow>,
     state_window_s: f64,
+    scripts: Vec<WebScriptInfo>,
     stats: Vec<WebStatsRow>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
@@ -2312,6 +2466,38 @@ struct WebStateRow {
     bus: String,
     current: String,
     bands: Vec<WebStateBand>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebScript {
+    id: u64,
+    name: String,
+    channel: u8,
+    attached_bus: Option<u8>,
+    attached_node: Option<String>,
+    enabled: bool,
+    running: bool,
+    errored: bool,
+    file_path: String,
+    source: String,
+    log: Vec<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebScriptInfo {
+    id: u64,
+    name: String,
+    channel: u8,
+    attached_bus: Option<u8>,
+    attached_node: Option<String>,
+    enabled: bool,
+    running: bool,
+    errored: bool,
+    file_path: String,
+    log_len: usize,
+    last_log: String,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -2742,6 +2928,24 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .unwrap_or_default();
 
+    let scripts: Vec<WebScriptInfo> = snap
+        .nodes
+        .iter()
+        .map(|node| WebScriptInfo {
+            id: node.id,
+            name: node.name.clone(),
+            channel: node.channel,
+            attached_bus: node.attached.as_ref().map(|(bus, _)| *bus),
+            attached_node: node.attached.as_ref().map(|(_, name)| name.clone()),
+            enabled: node.enabled,
+            running: node.running,
+            errored: node.errored,
+            file_path: node.file_path.clone().unwrap_or_default(),
+            log_len: node.log.len(),
+            last_log: node.log.last().cloned().unwrap_or_default(),
+        })
+        .collect();
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -2883,6 +3087,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         data,
         state_rows,
         state_window_s,
+        scripts,
         stats,
         channels,
         messages,
@@ -3208,6 +3413,40 @@ mod tests {
         let bus = state.buses.iter().find(|bus| bus.index == 0).unwrap();
         let row = bus.nodes.iter().find(|row| row.name == node).unwrap();
         assert!(!row.simulated);
+    }
+
+    /// Node scripts reach the web with their source, binding and summary;
+    /// the editor cache only refreshes when the fingerprint changes.
+    #[test]
+    fn scripts_reach_the_web_with_source_and_runtime_state() {
+        let mut app = App::headless();
+        app.send(BusCommand::AddNode {
+            name: "Node A".to_string(),
+            channel: 0,
+            attached: Some((0, "EngineECU".to_string())),
+        });
+        app.settle();
+        let id = app.snap.nodes[0].id;
+        let before = scripts_signature(&app);
+        app.send(BusCommand::SetNodeSource {
+            id,
+            source: "on start { print(\"hi\"); }".to_string(),
+        });
+        app.settle();
+        assert_ne!(
+            scripts_signature(&app),
+            before,
+            "source edits refresh /nodes"
+        );
+        let snapshots = scripts_snapshot(&app);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].name, "Node A");
+        assert!(snapshots[0].source.contains("print"));
+        assert_eq!(snapshots[0].attached_node.as_deref(), Some("EngineECU"));
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.scripts.len(), 1);
+        assert_eq!(state.scripts[0].id, id);
+        assert!(state.scripts[0].enabled);
     }
 
     /// A replay path must open the log and start playback in Replay mode,

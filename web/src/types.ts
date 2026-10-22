@@ -30,6 +30,7 @@ export interface State {
   data: DataRow[];
   stateRows: StateRow[];
   stateWindowS: number;
+  scripts: ScriptInfo[];
   stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
@@ -190,6 +191,25 @@ export interface StateRow {
   bands: StateBand[];
 }
 
+export interface ScriptInfo {
+  id: number;
+  name: string;
+  channel: number;
+  attachedBus: number | null;
+  attachedNode: string | null;
+  enabled: boolean;
+  running: boolean;
+  errored: boolean;
+  filePath: string;
+  logLen: number;
+  lastLog: string;
+}
+
+export interface Script extends ScriptInfo {
+  source: string;
+  log: string[];
+}
+
 export interface StatsRow {  label: string;
   bus: string;
   count: number;
@@ -316,6 +336,18 @@ export type Command =
   | { type: "replay_play_to"; target_us: number }
   | { type: "replay_play_for"; duration_us: number }
   | { type: "record_toggle"; name: string | null; format: number | null }
+  | {
+      type: "add_script";
+      name: string;
+      channel: number;
+      attached_bus: number | null;
+      attached_node: string | null;
+    }
+  | { type: "set_script_name"; id: number; name: string }
+  | { type: "set_script_source"; id: number; source: string }
+  | { type: "set_script_enabled"; id: number; on: boolean }
+  | { type: "remove_script"; id: number }
+  | { type: "save_script_file"; path: string; source: string }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }

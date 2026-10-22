@@ -17,6 +17,7 @@ interface Props {
   onAttach: (bus: number, driver: string, index: number) => void;
   onDetach: (bus: number) => void;
   onSetReal: (real: boolean) => void;
+  onOpenScripts: () => void;
   onClose: () => void;
 }
 
@@ -315,6 +316,7 @@ export function BusesModal({
   onAttach,
   onDetach,
   onSetReal,
+  onOpenScripts,
   onClose,
 }: Props) {
   useEffect(() => {
@@ -345,6 +347,9 @@ export function BusesModal({
             </span>
             <button type="button" onClick={onAddBus}>
               Add bus
+            </button>
+            <button type="button" onClick={onOpenScripts}>
+              Scripts…
             </button>
             <button type="button" disabled={loading} onClick={onRefresh}>
               Refresh hardware

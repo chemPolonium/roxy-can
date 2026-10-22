@@ -2057,6 +2057,229 @@ button.danger:hover:not(:disabled) {
   text-align: center;
 }
 
+/* Node scripts: a compact list plus a plain textarea editor (no syntax
+   highlighting yet) and the node's runtime log. */
+.scripts-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, 100%);
+  height: min(780px, 92vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.scripts-body {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.scripts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 0;
+  padding: 6px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+
+.script-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 7px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #cdd8e4;
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.script-item:hover {
+  background: #151d27;
+}
+
+.script-item.on {
+  background: #142334;
+  border-color: #2d5c88;
+}
+
+.script-item strong {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.script-item strong i {
+  color: #e6b455;
+  font-style: normal;
+}
+
+.script-item > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.script-chips {
+  display: flex;
+  gap: 3px;
+  margin-top: 1px;
+}
+
+.script-chips em {
+  padding: 0 3px;
+  border: 1px solid #3a4655;
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 8.5px;
+  font-style: normal;
+}
+
+.script-chips em.ok {
+  border-color: #2f6b4c;
+  color: #7fd6a5;
+}
+
+.script-chips em.bad {
+  border-color: #7d3535;
+  color: #ff9b83;
+}
+
+.scripts-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 10px;
+}
+
+.script-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.script-meta label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.script-meta input {
+  width: 190px;
+}
+
+.script-enable {
+  margin-left: auto;
+}
+
+.script-textarea {
+  flex: 1 1 auto;
+  min-height: 160px;
+  padding: 8px;
+  overflow: auto;
+  background: #0b1016;
+  border: 1px solid #263140;
+  border-radius: 4px;
+  color: #d6e2f0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  tab-size: 4;
+  white-space: pre;
+  resize: none;
+}
+
+.script-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.script-actions .spacer {
+  flex: 1;
+}
+
+.script-path {
+  width: 220px;
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.script-log {
+  height: 100px;
+  overflow: auto;
+  padding: 5px 7px;
+  background: #0b1016;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+  color: #9fb0c2;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.script-log.bad {
+  border-color: #7d3535;
+}
+
+.script-empty-line {
+  color: var(--muted);
+}
+
+.script-new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.script-new label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.script-new input {
+  width: 170px;
+}
+
+.script-empty {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.script-empty.bad {
+  color: #ff9b83;
+}
+
 /* System Variables manager: one compact row per variable plus an inline
    add/edit form. Values stay editable in place; definitions cross the host
    boundary through define_sysvar. */

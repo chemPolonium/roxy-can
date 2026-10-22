@@ -24,6 +24,7 @@ import type { MonitorPatch } from "./components/MonitorPanel";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
+import { ScriptsModal } from "./components/ScriptsModal";
 import { StatePanel } from "./components/StatePanel";
 import { StatsTable } from "./components/StatsTable";
 import { SysVarsModal } from "./components/SysVarsModal";
@@ -152,6 +153,7 @@ export function App() {
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [dataPickerOpen, setDataPickerOpen] = useState(false);
   const [statePickerOpen, setStatePickerOpen] = useState(false);
+  const [scriptsOpen, setScriptsOpen] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -316,6 +318,7 @@ export function App() {
     if (!value) return;
     void run({ type: "open_project", path: value });
     setSessionOpen(false);
+    setScriptsOpen(false);
   };
 
   const loadLog = (path: string) => {
@@ -323,6 +326,7 @@ export function App() {
     if (!value) return;
     void run({ type: "open_log", path: value });
     setSessionOpen(false);
+    setScriptsOpen(false);
   };
 
   const saveProject = (path: string | null) => {
@@ -343,6 +347,7 @@ export function App() {
 
   const openPicker = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
@@ -356,6 +361,7 @@ export function App() {
 
   const openGenerator = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
@@ -369,6 +375,7 @@ export function App() {
 
   const openTriggers = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
@@ -382,6 +389,7 @@ export function App() {
 
   const openSysvars = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
@@ -394,6 +402,7 @@ export function App() {
 
   const openMonitorPicker = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
     setDataPickerOpen(false);
@@ -407,6 +416,7 @@ export function App() {
 
   const openDataPicker = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
@@ -420,6 +430,7 @@ export function App() {
 
   const openStatePicker = () => {
     setSessionOpen(false);
+    setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
@@ -648,6 +659,7 @@ export function App() {
             disabled={!online}
             onClick={() => {
               setSessionOpen(false);
+    setScriptsOpen(false);
               setPickerOpen(false);
               setMonitorPickerOpen(false);
               setDataPickerOpen(false);
@@ -655,6 +667,7 @@ export function App() {
               setGeneratorOpen(false);
               setTriggersOpen(false);
               setSysvarsOpen(false);
+              setScriptsOpen(false);
               setBusesOpen(true);
             }}
           >
@@ -675,10 +688,12 @@ export function App() {
               setMonitorPickerOpen(false);
               setDataPickerOpen(false);
               setStatePickerOpen(false);
+              setScriptsOpen(false);
               setBusesOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
               setSysvarsOpen(false);
+              setScriptsOpen(false);
               setSessionOpen(true);
             }}
           >
@@ -1253,7 +1268,19 @@ export function App() {
           onAttach={attachHardware}
           onDetach={detachHardware}
           onSetReal={setRealBus}
+          onOpenScripts={() => {
+            setBusesOpen(false);
+            setScriptsOpen(true);
+          }}
           onClose={() => setBusesOpen(false)}
+        />
+      )}
+
+      {scriptsOpen && (
+        <ScriptsModal
+          buses={state?.buses ?? []}
+          onCommand={(command) => void run(command)}
+          onClose={() => setScriptsOpen(false)}
         />
       )}
 
