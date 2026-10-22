@@ -31,12 +31,15 @@ port (default 2010).
 The toolbar's **Session…** dialog can switch sessions without restarting the
 server: enter a host path or pick a recent project/log. Opening a project or
 log stops the current measurement and clears the trace; a log starts playing
-immediately. **Save** writes the open project and **Save as** writes a copy to
-a typed host path; the dialog marks unsaved changes next to the current name.
-Saving keeps the project's desktop dock layout and Graphics-window settings
-untouched: the web plot asks the core for its sampling stride instead of
-editing desktop config. Paths are resolved on the host (the page cannot open
-a native file dialog).
+immediately. A loaded replay also gets a second, slim bar with the playhead,
+a forward **Step** (10 ms–5 s), **Play for** (1–60 s) and **Play to** an
+absolute log time; both timed plays resume playback and pause at the target.
+**Save** writes the open project and **Save as** writes a copy to a typed host
+path; the dialog marks unsaved changes next to the current name. Saving keeps
+the project's desktop dock layout and Graphics-window settings untouched: the
+web plot asks the core for its sampling stride instead of editing desktop
+config. Paths are resolved on the host (the page cannot open a native file
+dialog).
 
 For hot reload, keep the server running and start Vite in a second terminal:
 

@@ -612,6 +612,15 @@ enum WebCommand {
     Pause {
         on: bool,
     },
+    ReplayStep {
+        delta_us: u64,
+    },
+    ReplayPlayTo {
+        target_us: u64,
+    },
+    ReplayPlayFor {
+        duration_us: u64,
+    },
     ClearTrace,
     OpenProject {
         path: String,
@@ -879,6 +888,15 @@ fn app_loop(
                 }
                 WebCommand::Pause { on } => {
                     app.send(BusCommand::SetTracePaused(on));
+                }
+                WebCommand::ReplayStep { delta_us } => {
+                    app.send(BusCommand::ReplayStep { delta_us });
+                }
+                WebCommand::ReplayPlayTo { target_us } => {
+                    app.send(BusCommand::ReplayPlayTo { target_us });
+                }
+                WebCommand::ReplayPlayFor { duration_us } => {
+                    app.send(BusCommand::ReplayPlayFor { duration_us });
                 }
                 WebCommand::ClearTrace => {
                     app.send(BusCommand::ClearTrace);

@@ -138,6 +138,9 @@ export function App() {
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [savePath, setSavePath] = useState("");
+  const [replayStepMs, setReplayStepMs] = useState(100);
+  const [replayForS, setReplayForS] = useState(5);
+  const [replayTo, setReplayTo] = useState("");
   const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
@@ -734,6 +737,106 @@ export function App() {
         </div>
         {error && <div class="error-pill">{error}</div>}
       </section>
+
+      {state?.runMode === "Replay" && state.log && (
+        <section class="replaybar">
+          <span class="replay-mode">Replay</span>
+          <span class="replay-pos">{replayText || "no position"}</span>
+          <div class="replay-nav">
+            <label>
+              Step
+              <select
+                value={replayStepMs}
+                onChange={(event) =>
+                  setReplayStepMs(Number((event.target as HTMLSelectElement).value))
+                }
+              >
+                {[10, 50, 100, 500, 1000, 5000].map((ms) => (
+                  <option key={ms} value={ms}>
+                    {ms >= 1000 ? `${ms / 1000} s` : `${ms} ms`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={!state.measuring}
+              title="Advance the replay by the step size (forward only)"
+              onClick={() =>
+                void run({ type: "replay_step", delta_us: replayStepMs * 1000 })
+              }
+            >
+              Step
+            </button>
+            <label>
+              Play for
+              <select
+                value={replayForS}
+                onChange={(event) =>
+                  setReplayForS(Number((event.target as HTMLSelectElement).value))
+                }
+              >
+                {[1, 5, 10, 30, 60].map((s) => (
+                  <option key={s} value={s}>
+                    {s} s
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={!state.measuring}
+              title="Resume and pause after this much log time"
+              onClick={() =>
+                void run({
+                  type: "replay_play_for",
+                  duration_us: replayForS * 1_000_000,
+                })
+              }
+            >
+              Play
+            </button>
+            <form
+              class="replay-to"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const secs = Number(replayTo);
+                if (Number.isFinite(secs) && secs >= 0) {
+                  void run({
+                    type: "replay_play_to",
+                    target_us: Math.round(secs * 1_000_000),
+                  });
+                }
+              }}
+            >
+              <label>
+                to
+                <input
+                  value={replayTo}
+                  placeholder="s"
+                  inputMode="decimal"
+                  onInput={(event) =>
+                    setReplayTo((event.target as HTMLInputElement).value)
+                  }
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={
+                  !state.measuring ||
+                  !replayTo.trim() ||
+                  !Number.isFinite(Number(replayTo))
+                }
+                title="Play forward to this absolute log time, then pause"
+              >
+                Go
+              </button>
+            </form>
+          </div>
+          <span class="spacer" />
+          <span class="replay-hint">forward only · pauses at the target</span>
+        </section>
+      )}
 
       <main
         class="workspace"

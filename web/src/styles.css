@@ -206,6 +206,88 @@ input::placeholder {
   overflow: hidden;
 }
 
+/* Replay navigation: a slim second bar, present only while a replay log is
+   loaded, so the main toolbar keeps its width. */
+.replaybar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  background: #0f151d;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.replay-mode {
+  padding: 0 5px;
+  border: 1px solid #2d5c88;
+  border-radius: 3px;
+  color: #8fc8ff;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.replay-pos {
+  color: #d8e4f2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.replay-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.replay-nav label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.replay-nav select {
+  padding: 1px 3px;
+  font-size: 10px;
+}
+
+.replay-nav button {
+  padding: 1px 7px;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.replay-to {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.replay-to input {
+  width: 64px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.replaybar .spacer {
+  flex: 1;
+}
+
+.replay-hint {
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .replay-hint {
+    display: none;
+  }
+}
+
 .stat {
   display: flex;
   align-items: baseline;

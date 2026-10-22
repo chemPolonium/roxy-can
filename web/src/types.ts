@@ -303,6 +303,9 @@ export type Command =
   | { type: "start" }
   | { type: "stop" }
   | { type: "pause"; on: boolean }
+  | { type: "replay_step"; delta_us: number }
+  | { type: "replay_play_to"; target_us: number }
+  | { type: "replay_play_for"; duration_us: number }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
