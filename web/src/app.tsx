@@ -31,6 +31,12 @@ import { StatsTable } from "./components/StatsTable";
 import { SysVarsModal } from "./components/SysVarsModal";
 import type { SysVarEdit } from "./components/SysVarsModal";
 import { TraceTable } from "./components/TraceTable";
+import {
+  EMPTY_TRACE_FILTER,
+  TraceFilterModal,
+  traceFilterActive,
+} from "./components/TraceFilterModal";
+import type { TraceFilter } from "./components/TraceFilterModal";
 
 type RightTab = "messages" | "statistics" | "activity";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
@@ -139,6 +145,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [bus, setBus] = useState<number | "all">("all");
+  const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
+  const [traceFilterOpen, setTraceFilterOpen] = useState(false);
   const [tab, setTab] = useState<RightTab>("messages");
   const [chartTab, setChartTab] = useState<ChartTab>("rate");
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -597,13 +605,22 @@ export function App() {
       </div>
     );
 
-  const visibleRows = useMemo(
-    () =>
-      traceRows.filter(
-        (frame) => (bus === "all" || frame.bus === bus) && matches(frame, query),
-      ),
-    [traceRows, query, bus],
-  );
+  const visibleRows = useMemo(() => {
+    const payload = traceFilter.payload.trim().toUpperCase().replace(/\s+/g, "");
+    const from = traceFilter.from.trim() === "" ? null : Number(traceFilter.from) * 1e6;
+    const to = traceFilter.to.trim() === "" ? null : Number(traceFilter.to) * 1e6;
+    return traceRows.filter((frame) => {
+      if (bus !== "all" && frame.bus !== bus) return false;
+      if (traceFilter.dir !== "all" && frame.dir !== traceFilter.dir) return false;
+      if (traceFilter.dbcOnly && !frame.name) return false;
+      if (payload && !frame.data.toUpperCase().replace(/\s+/g, "").includes(payload)) {
+        return false;
+      }
+      if (from != null && frame.tUs < from) return false;
+      if (to != null && frame.tUs > to) return false;
+      return matches(frame, query);
+    });
+  }, [traceRows, query, bus, traceFilter]);
 
   const canControl = Boolean(state) && online && !busy;
   const measuring = state?.measuring ?? false;
@@ -891,6 +908,14 @@ export function App() {
                 title="Export the trace to an ASC or PCAP host file"
               >
                 Export…
+              </button>
+              <button
+                type="button"
+                class={`mini ${traceFilterActive(traceFilter) ? "on" : ""}`}
+                onClick={() => setTraceFilterOpen(true)}
+                title="Direction, DBC-only, payload and time filters"
+              >
+                Filters
               </button>
               <select
                 value={bus === "all" ? "all" : String(bus)}
@@ -1438,6 +1463,14 @@ export function App() {
             setExportOpen(false);
           }}
           onClose={() => setExportOpen(false)}
+        />
+      )}
+
+      {traceFilterOpen && (
+        <TraceFilterModal
+          filter={traceFilter}
+          onApply={setTraceFilter}
+          onClose={() => setTraceFilterOpen(false)}
         />
       )}
 

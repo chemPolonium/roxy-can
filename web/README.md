@@ -121,10 +121,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Statistics, Data, State or the Write log as CSV/TXT. Paths are host paths;
   relative ones resolve against the server's working directory. Exports use
   the first desktop window of that kind, which is All buses by default.
-- Trace/Messages tables, a canvas chart with total and per-bus frame rates
-  plus dashed bus-load lines, bus filtering, text filtering, and
-  Start/Stop/Pause/Clear trace are wired to the same core commands as the
-  desktop UI. The status bar reports the browser's own UI frame rate.
+- Trace/Messages tables, bus and text filtering, the extra **Filters** dialog
+  (direction, decoded-only, payload substring, time range), a canvas chart
+  with total and per-bus frame rates plus dashed bus-load lines,
+  Start/Stop/Pause/Clear trace and the same core commands as the desktop UI.
+  The status bar reports the browser's own UI frame rate.
 - The Signals tab plots real DBC signals from the loaded project. **Pick
   signals…** opens a searchable bus → message → signal catalog fetched from
   the backend. The demo starts with eight auto-selected generator sources,
