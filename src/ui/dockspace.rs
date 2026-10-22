@@ -33,7 +33,11 @@ pub fn render(app: &mut App, ui: &Ui) {
         | WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS
         | WindowFlags::NO_NAV
         | WindowFlags::NO_DOCKING;
+    let empty = !any_window_open(app);
     let zero_pad = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
+    // The host's border would stack with the toolbar's and the desktop
+    // strip's, leaving stray gray lines around the dock area.
+    let no_border = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
     let mut applied = false;
     ui.window("##dockspace_host")
         .flags(flags)
@@ -47,16 +51,107 @@ pub fn render(app: &mut App, ui: &Ui) {
                 dear_imgui_rs::sys::ImGuiDockNodeFlags_None,
                 std::ptr::null(),
             );
-            if dock_default {
+            // With no windows open there is nothing to arrange; keep the
+            // first-use layout pending so the first window opened from the
+            // start overlay still lands in the default arrangement.
+            if dock_default && !empty {
                 apply_default_layout(id, w, h, toolbar_h, &names);
                 applied = true;
             }
         });
+    no_border.pop();
     zero_pad.pop();
     if applied {
         app.dock_default_pending = false;
         app.dock_focus_pending = true;
     }
+    if empty {
+        match empty_state(ui, toolbar_h, w, h) {
+            Some(EmptyStateCmd::MeasurementSetup) => app.measurement_view.open = true,
+            Some(EmptyStateCmd::NewTrace) => app.new_trace_window(),
+            Some(EmptyStateCmd::Network) => app.network_view.open = true,
+            Some(EmptyStateCmd::Buses) => app.buses_view.open = true,
+            None => {}
+        }
+    }
+}
+
+enum EmptyStateCmd {
+    MeasurementSetup,
+    NewTrace,
+    Network,
+    Buses,
+}
+
+/// Whether this desktop has any content window to show. Popups (Message
+/// Selection, Help) do not count: the empty workspace needs its own entry
+/// points instead of a blank black dock.
+fn any_window_open(app: &App) -> bool {
+    app.trace_windows.iter().any(|w| w.opened)
+        || app.msg_windows.iter().any(|w| w.opened)
+        || app.stats_windows.iter().any(|w| w.opened)
+        || app.graphics.iter().any(|w| w.opened)
+        || app.data_windows.iter().any(|w| w.opened)
+        || app.state_trackers.iter().any(|w| w.opened)
+        || app.measurement_view.open
+        || app.network_view.open
+        || app.write_view.open
+        || app.generator_view.open
+        || app.buses_view.open
+        || app.triggers_view.open
+        || app.busstats_view.open
+        || app.spec_view.open
+        || app.sysvars_view.open
+        || app.monitor_view.open
+        || !app.script_editor.open.is_empty()
+}
+
+/// A closed desktop is not an error: offer the windows an operator needs to
+/// get back to work instead of leaving an empty dock with no explanation.
+/// This is a separate overlay window because widgets submitted after
+/// `DockSpace` inside the host are clipped by the dock node's draw pass.
+fn empty_state(ui: &Ui, toolbar_h: f32, w: f32, h: f32) -> Option<EmptyStateCmd> {
+    const BOX_W: f32 = 520.0;
+    let mut cmd = None;
+    let x = ((w - BOX_W) * 0.5).max(20.0);
+    let y = toolbar_h + (h * 0.5 - 44.0).max(20.0);
+    let flags = WindowFlags::NO_TITLE_BAR
+        | WindowFlags::NO_RESIZE
+        | WindowFlags::NO_MOVE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SCROLLBAR
+        | WindowFlags::NO_SCROLL_WITH_MOUSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_BACKGROUND
+        | WindowFlags::NO_FOCUS_ON_APPEARING
+        | WindowFlags::NO_NAV
+        | WindowFlags::NO_DOCKING;
+    let no_border = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
+    ui.window("##empty_state")
+        .flags(flags)
+        .position([x, y], Condition::Always)
+        .size([BOX_W, 96.0], Condition::Always)
+        .build(|| {
+            ui.text_colored([0.55, 0.75, 1.0, 1.0], "No windows open on this desktop");
+            ui.text_disabled("Open one from the View menu, or start here:");
+            if ui.button("Measurement Setup") {
+                cmd = Some(EmptyStateCmd::MeasurementSetup);
+            }
+            ui.same_line();
+            if ui.button("New Trace") {
+                cmd = Some(EmptyStateCmd::NewTrace);
+            }
+            ui.same_line();
+            if ui.button("Network") {
+                cmd = Some(EmptyStateCmd::Network);
+            }
+            ui.same_line();
+            if ui.button("Buses") {
+                cmd = Some(EmptyStateCmd::Buses);
+            }
+        });
+    no_border.pop();
+    cmd
 }
 
 /// Native names (`Title###id`) of the windows a fresh workspace seeds. Only

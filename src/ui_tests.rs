@@ -517,6 +517,74 @@ fn the_first_use_dock_layout_runs_once() {
     assert!(!app.dock_default_pending, "a drawn layout is not rebuilt");
 }
 
+/// A desktop whose windows are all closed has to explain itself instead of
+/// leaving a blank dock, and its buttons must stay live: without the View
+/// menu they are the way back to a workspace. The overlay is a normal window
+/// so it also pins the z-order rule that hid it when it carried
+/// `NoBringToFrontOnFocus` (ImGui pushes such windows to the back).
+#[test]
+fn the_empty_desktop_draws_a_working_start_overlay() {
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    for w in &mut app.trace_windows {
+        w.opened = false;
+    }
+    for w in &mut app.msg_windows {
+        w.opened = false;
+    }
+    for w in &mut app.stats_windows {
+        w.opened = false;
+    }
+    for w in &mut app.graphics {
+        w.opened = false;
+    }
+    for w in &mut app.data_windows {
+        w.opened = false;
+    }
+    for w in &mut app.state_trackers {
+        w.opened = false;
+    }
+    app.measurement_view.open = false;
+    app.network_view.open = false;
+    app.write_view.open = false;
+    app.generator_view.open = false;
+    app.buses_view.open = false;
+    app.triggers_view.open = false;
+    app.busstats_view.open = false;
+    app.spec_view.open = false;
+    app.sysvars_view.open = false;
+    app.monitor_view.open = false;
+    app.script_editor.open.clear();
+    frames(&mut app, &mut ctx, 3);
+
+    let window = unsafe { dear_imgui_rs::sys::igFindWindowByName(c"##empty_state".as_ptr()) };
+    assert!(
+        !window.is_null(),
+        "the empty desktop offers a start overlay"
+    );
+    let pos = unsafe { (*window).Pos };
+
+    // The first button sits under the two text lines; probe its band rather
+    // than hard-coding every padding constant.
+    let mut opened = false;
+    for dy in [34.0, 39.0, 44.0, 49.0, 54.0, 59.0] {
+        ctx.io_mut().add_mouse_pos_event([pos.x + 20.0, pos.y + dy]);
+        ctx.io_mut()
+            .add_mouse_button_event(dear_imgui_rs::MouseButton::Left, true);
+        frames(&mut app, &mut ctx, 1);
+        ctx.io_mut()
+            .add_mouse_button_event(dear_imgui_rs::MouseButton::Left, false);
+        frames(&mut app, &mut ctx, 1);
+        if app.measurement_view.open {
+            opened = true;
+            break;
+        }
+    }
+    assert!(opened, "Measurement Setup opens from the empty desktop");
+    frames(&mut app, &mut ctx, 2);
+}
+
 /// The cursor pair shares the draw path with the curves, so what is worth
 /// proving without a screen is that a placed pair draws at all: overlay and
 /// one-plot-per-signal both, and with only one of the two placed, which is the

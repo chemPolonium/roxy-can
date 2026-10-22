@@ -1,5 +1,5 @@
 use crate::app::{App, Mode, PopupTarget, REPLAY_SPEEDS};
-use dear_imgui_rs::{Condition, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, Ui, WindowFlags, sys};
 
 fn vsep(ui: &Ui) {
     ui.same_line();
@@ -629,15 +629,16 @@ pub fn render(app: &mut App, ui: &Ui) {
                     }
                 }
             }
-            // Publish the measured height for the next frame's dock space
-            // and first-use placement. Auto-resize makes the window itself
-            // fit this content; this value is its expected outer height.
-            let style = ui.clone_style();
-            let measured = (ui.cursor_pos()[1] - ui.window_pos()[1] - style.item_spacing()[1])
-                + style.window_padding()[1] * 2.0
-                + style.window_border_size() * 2.0;
-            crate::ui::set_toolbar_height(measured.max(1.0));
         });
+    // Publish the height End() settled on. Re-deriving it from cursor
+    // position double-counted padding and left a clear-color gap under the
+    // bar that read as a gray strip.
+    unsafe {
+        let window = sys::igFindWindowByName(c"Toolbar".as_ptr());
+        if !window.is_null() {
+            crate::ui::set_toolbar_height((*window).Size.y.max(1.0));
+        }
+    }
 }
 
 /// 倍速下拉框的列表：固定阶梯，再加上当前在跑而不属于阶梯的那些

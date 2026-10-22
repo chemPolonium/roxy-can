@@ -41,6 +41,9 @@ impl DesktopsView {
             | WindowFlags::NO_DOCKING;
         // ImGui's default window_min_size (32) would inflate this 22px strip.
         let min = ui.push_style_var(StyleVar::WindowMinSize([0.0, 0.0]));
+        // The top border would read as a stray gray bar against the empty
+        // dock above it; the tab buttons already mark the strip.
+        let border = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
         let pad = ui.push_style_var(StyleVar::WindowPadding([4.0, 4.5]));
         ui.window("##desktops")
             .flags(flags)
@@ -108,6 +111,7 @@ impl DesktopsView {
                 }
             });
         pad.pop();
+        border.pop();
         min.pop();
         self.rename_modal(ui, &mut cmds);
         cmds
