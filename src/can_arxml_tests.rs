@@ -241,3 +241,28 @@ fn unified_import_adds_each_cluster_and_survives_the_project() {
     );
     std::fs::remove_file(path).ok();
 }
+
+/// The same unified action drives the FlexRay branch: the committed cluster
+/// description becomes its own FlexRay bus, with the cluster name remembered.
+#[test]
+fn unified_import_adds_a_flexray_cluster_from_the_committed_asset() {
+    use crate::app::App;
+    let path = "assets/arxml/PowerTrain.arxml";
+    let mut app = App::headless();
+    app.import_arxml_path(path);
+    app.settle();
+    let bus = app
+        .fr_buses
+        .keys()
+        .copied()
+        .find(|b| app.fr_clusters.contains_key(b))
+        .expect("the file's FlexRay cluster landed on a bus");
+    let db = app.fr_db(bus).expect("cluster database");
+    assert!(!db.frames.is_empty());
+    assert!(!app.fr_clusters[&bus].is_empty());
+    assert!(
+        app.status.contains("added") || app.status.contains("updated"),
+        "the import reports what it did: {}",
+        app.status
+    );
+}

@@ -344,7 +344,7 @@ fn merged_rows(counts: &[(u8, u64)], configured: &[(u8, Option<u8>)]) -> Vec<(u8
 type CanBusRow = (String, Vec<String>, Option<(String, String)>, u32, u32);
 
 fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
-    if ui.button("+ Add bus") {
+    if ui.button("+ Add CAN bus") {
         cmds.push(BusesCmd::AddChannel);
     }
     ui.same_line();
