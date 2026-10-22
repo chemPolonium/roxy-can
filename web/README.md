@@ -85,6 +85,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   a bar scaled by the database's declared range (observed range as fallback).
   Rows can be hidden without unsubscribing, removed, or cleared; selection
   uses the same catalog as Signals and the Monitor.
+- The **State** tab shows logic-analyzer bands for the first State Tracker
+  window. Values are quantized to six significant digits, sampled into one
+  band per pixel column, and drawn on a canvas over a 5 s–30 min trailing
+  window (persisted in the project). Few states get distinct high-contrast
+  colors and in-band labels; an analog sweep collapses to one neutral band.
+  Custom value-definition bands are not here yet.
 - **SysVars…** manages system variables through the real core: add/edit
   definitions (namespace, name, init, clamped min/max, unit, comment), edit
   live values in place (writes clamp), rename by deleting the old key, and
@@ -117,9 +123,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 A native browser file picker (opening, saving and DBC loading use host paths
-and recents; the CLI flags also work), FlexRay/Ethernet attachment, node
-scripts, and docking/desktops. Hardware, Data and the Monitor cover CAN only
-for now; signal selection is session-only.
+and recents; the CLI flags also work), FlexRay/Ethernet attachment, state
+value-definition bands, node scripts, and docking/desktops. Hardware, Data,
+State and the Monitor cover CAN only for now; signal selection is session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

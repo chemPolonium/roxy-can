@@ -26,6 +26,8 @@ export interface State {
   sysvars: SysVar[];
   monitor: MonitorRow[];
   data: DataRow[];
+  stateRows: StateRow[];
+  stateWindowS: number;
   stats: StatsRow[];
   channels: Channel[];
   messages: Message[];
@@ -160,6 +162,23 @@ export interface DataRow {
   max: string;
   frac: number;
   visible: boolean;
+}
+
+export interface StateBand {
+  start: number;
+  end: number;
+  label: string;
+  color: number;
+}
+
+export interface StateRow {
+  ch: number;
+  id: number;
+  ext: boolean;
+  name: string;
+  bus: string;
+  current: string;
+  bands: StateBand[];
 }
 
 export interface StatsRow {  label: string;
@@ -328,6 +347,10 @@ export type Command =
       name: string;
       visible: boolean;
     }
+  | { type: "add_state"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "remove_state"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "clear_state" }
+  | { type: "set_state_window"; seconds: number }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }

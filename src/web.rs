@@ -312,6 +312,92 @@ fn edit_monitor_row(
     }
 }
 
+/// Six-significant-digit state identity, the same quantization the desktop
+/// State Tracker uses: tiny numeric jitter does not split a band.
+fn quantize_state(v: f64) -> f64 {
+    if v == 0.0 || !v.is_finite() {
+        return v;
+    }
+    let mag = v.abs().log10().floor() as i32;
+    let digits = (5 - mag).clamp(0, 9);
+    let p = 10f64.powi(digits);
+    (v * p).round() / p
+}
+
+fn state_label(v: f64) -> String {
+    format!("{v}")
+}
+
+/// Turns visible samples into at most one band per pixel column (360). Each
+/// column keeps the last value seen in it, and empty columns carry the last
+/// state forward, so a signal that updates once a second still paints its
+/// band across the whole window.
+fn state_bands_from(
+    held: Option<f64>,
+    samples: &[(u64, f64)],
+    lo: u64,
+    hi: u64,
+) -> (String, Vec<WebStateBand>) {
+    const COLS: usize = 360;
+    let span = hi.saturating_sub(lo).max(1);
+    let mut values: Vec<Option<f64>> = vec![None; COLS];
+    for &(t, v) in samples {
+        let idx =
+            (((t.saturating_sub(lo)) as u128 * COLS as u128 / span as u128) as usize).min(COLS - 1);
+        values[idx] = Some(quantize_state(v));
+    }
+    let mut last = held.map(quantize_state);
+    for slot in &mut values {
+        if let Some(v) = *slot {
+            last = Some(v);
+        } else {
+            *slot = last;
+        }
+    }
+    let mut bands = Vec::new();
+    let mut open: Option<(f64, usize)> = None;
+    for (i, slot) in values.iter().enumerate() {
+        let value = *slot;
+        match open {
+            Some((open_value, _)) if Some(open_value) == value => {}
+            Some((open_value, start)) => {
+                bands.push(WebStateBand {
+                    start: start as f64 / COLS as f64,
+                    end: i as f64 / COLS as f64,
+                    label: state_label(open_value),
+                    color: 0,
+                });
+                open = value.map(|v| (v, i));
+            }
+            None => open = value.map(|v| (v, i)),
+        }
+    }
+    if let Some((value, start)) = open {
+        bands.push(WebStateBand {
+            start: start as f64 / COLS as f64,
+            end: 1.0,
+            label: state_label(value),
+            color: 0,
+        });
+    }
+    // Few states get distinct palette slots in first-seen order; an analog
+    // sweep (more states than the palette) is drawn as one neutral band by
+    // the frontend instead of a rainbow of one-pixel stripes.
+    let mut seen: Vec<&str> = Vec::new();
+    for band in &mut bands {
+        let slot = seen
+            .iter()
+            .position(|label| *label == band.label)
+            .unwrap_or_else(|| {
+                seen.push(&band.label);
+                seen.len() - 1
+            });
+        band.color = slot % 8;
+    }
+    let current = last.map(state_label).unwrap_or_else(|| "-".to_string());
+    (current, bands)
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -640,6 +726,22 @@ enum WebCommand {
         ext: bool,
         name: String,
         visible: bool,
+    },
+    AddState {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    RemoveState {
+        ch: u8,
+        id: u32,
+        ext: bool,
+        name: String,
+    },
+    ClearState,
+    SetStateWindow {
+        seconds: f64,
     },
     SetEntryActive {
         ch: u8,
@@ -1067,6 +1169,44 @@ fn app_loop(
                         .and_then(|window| window.signals.iter_mut().find(|row| row.key == key))
                     {
                         signal.visible = visible;
+                    }
+                }
+                WebCommand::AddState { ch, id, ext, name } => {
+                    if app.state_trackers.is_empty() {
+                        app.new_state_window();
+                    }
+                    app.set_win_signal(
+                        crate::workspace::PopupTarget::State(0),
+                        SigKey::can(ch, id, ext, name),
+                        true,
+                    );
+                }
+                WebCommand::RemoveState { ch, id, ext, name } => {
+                    app.set_win_signal(
+                        crate::workspace::PopupTarget::State(0),
+                        SigKey::can(ch, id, ext, name),
+                        false,
+                    );
+                }
+                WebCommand::ClearState => {
+                    let keys: Vec<SigKey> = app
+                        .state_trackers
+                        .first()
+                        .map(|window| {
+                            window
+                                .signals
+                                .iter()
+                                .map(|signal| signal.key.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for key in keys {
+                        app.set_win_signal(crate::workspace::PopupTarget::State(0), key, false);
+                    }
+                }
+                WebCommand::SetStateWindow { seconds } => {
+                    if let Some(window) = app.state_trackers.first_mut() {
+                        window.time_window_s = seconds.clamp(0.1, 3600.0);
                     }
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
@@ -1929,6 +2069,8 @@ struct WebState {
     sysvars: Vec<WebSysVar>,
     monitor: Vec<WebMonitorRow>,
     data: Vec<WebDataRow>,
+    state_rows: Vec<WebStateRow>,
+    state_window_s: f64,
     stats: Vec<WebStatsRow>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
@@ -2087,6 +2229,27 @@ struct WebDataRow {
     max: String,
     frac: f64,
     visible: bool,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebStateBand {
+    start: f64,
+    end: f64,
+    label: String,
+    color: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebStateRow {
+    ch: u8,
+    id: u32,
+    ext: bool,
+    name: String,
+    bus: String,
+    current: String,
+    bands: Vec<WebStateBand>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -2453,6 +2616,50 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .unwrap_or_default();
 
+    let state_window_s = app
+        .state_trackers
+        .first()
+        .map(|window| window.time_window_s)
+        .unwrap_or(20.0);
+    let state_rows: Vec<WebStateRow> = app
+        .state_trackers
+        .first()
+        .map(|window| {
+            let tw = window.time_window_s.max(0.1);
+            let right_s = app.plot_now_s();
+            let left_s = (right_s - tw).max(0.0);
+            let lo = (left_s * 1e6) as u64;
+            let hi = (right_s * 1e6) as u64;
+            window
+                .signals
+                .iter()
+                .filter_map(|signal| {
+                    let SigKey::Can { ch, id, ext, name } = &signal.key else {
+                        return None;
+                    };
+                    let (current, bands) = match signal_sub(app, &signal.key) {
+                        Some(sub) => {
+                            let held = sub.history.at(lo);
+                            let samples: Vec<(u64, f64)> =
+                                sub.history.range(lo, hi).copied().collect();
+                            state_bands_from(held, &samples, lo, hi)
+                        }
+                        None => ("-".to_string(), Vec::new()),
+                    };
+                    Some(WebStateRow {
+                        ch: *ch,
+                        id: *id,
+                        ext: *ext,
+                        name: name.clone(),
+                        bus: bus_name(app, *ch),
+                        current,
+                        bands,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -2590,6 +2797,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         sysvars,
         monitor,
         data,
+        state_rows,
+        state_window_s,
         stats,
         channels,
         messages,
@@ -2840,6 +3049,47 @@ mod tests {
         assert_eq!(src.kind, "Sine");
         assert!(src.period_us > 0);
         assert!(src.hi > src.lo);
+    }
+
+    /// Visible samples collapse into one band per change of the quantized
+    /// value; empty columns carry the last state forward.
+    #[test]
+    fn state_bands_split_on_value_changes() {
+        let (current, bands) = state_bands_from(
+            Some(0.0),
+            &[(10_000, 0.0), (20_000, 1.0), (30_000, 1.0)],
+            0,
+            40_000,
+        );
+        assert_eq!(current, "1");
+        assert_eq!(bands.len(), 2);
+        assert_eq!(bands[0].start, 0.0);
+        assert_eq!(bands[0].end, 0.5);
+        assert_eq!(bands[0].label, "0");
+        assert_eq!(bands[1].start, 0.5);
+        assert_eq!(bands[1].end, 1.0);
+        assert_eq!(bands[1].label, "1");
+    }
+
+    /// The first State Tracker window feeds the web: identity, bus and the
+    /// window length reach the state, so the tab can draw and resize it.
+    #[test]
+    fn the_state_lists_state_tracker_rows_and_window() {
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut app = App::headless();
+        app.new_state_window();
+        app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.state_rows.len(), 1);
+        assert_eq!(state.state_rows[0].name, "EngineSpeed");
+        assert_eq!(state.state_rows[0].bus, "CAN1");
+        assert_eq!(state.state_window_s, 20.0);
+
+        app.set_win_signal(crate::workspace::PopupTarget::State(0), key, false);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(state.state_rows.is_empty());
     }
 
     /// A replay path must open the log and start playback in Replay mode,

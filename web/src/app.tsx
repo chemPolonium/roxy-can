@@ -24,13 +24,14 @@ import type { MonitorPatch } from "./components/MonitorPanel";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
+import { StatePanel } from "./components/StatePanel";
 import { StatsTable } from "./components/StatsTable";
 import { SysVarsModal } from "./components/SysVarsModal";
 import type { SysVarEdit } from "./components/SysVarsModal";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "statistics" | "activity";
-type ChartTab = "rate" | "signals" | "monitor" | "data";
+type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
 type Drag = "main" | "right" | null;
 
 interface Layout {
@@ -141,6 +142,7 @@ export function App() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [dataPickerOpen, setDataPickerOpen] = useState(false);
+  const [statePickerOpen, setStatePickerOpen] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -338,6 +340,7 @@ export function App() {
     setSysvarsOpen(false);
     setMonitorPickerOpen(false);
     setDataPickerOpen(false);
+    setStatePickerOpen(false);
     setPickerOpen(true);
     void loadCatalog();
   };
@@ -348,6 +351,7 @@ export function App() {
     setPickerOpen(false);
     setMonitorPickerOpen(false);
     setDataPickerOpen(false);
+    setStatePickerOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
     setGeneratorOpen(true);
@@ -360,6 +364,7 @@ export function App() {
     setPickerOpen(false);
     setMonitorPickerOpen(false);
     setDataPickerOpen(false);
+    setStatePickerOpen(false);
     setGeneratorOpen(false);
     setSysvarsOpen(false);
     setTriggersOpen(true);
@@ -372,6 +377,7 @@ export function App() {
     setPickerOpen(false);
     setMonitorPickerOpen(false);
     setDataPickerOpen(false);
+    setStatePickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(true);
@@ -382,6 +388,7 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setDataPickerOpen(false);
+    setStatePickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
@@ -394,10 +401,24 @@ export function App() {
     setBusesOpen(false);
     setPickerOpen(false);
     setMonitorPickerOpen(false);
+    setStatePickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
     setSysvarsOpen(false);
     setDataPickerOpen(true);
+    void loadCatalog();
+  };
+
+  const openStatePicker = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setMonitorPickerOpen(false);
+    setDataPickerOpen(false);
+    setGeneratorOpen(false);
+    setTriggersOpen(false);
+    setSysvarsOpen(false);
+    setStatePickerOpen(true);
     void loadCatalog();
   };
 
@@ -577,6 +598,9 @@ export function App() {
   const dataKeys = new Set(
     (state?.data ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
   );
+  const stateKeys = new Set(
+    (state?.stateRows ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
+  );
 
   return (
     <div class="app">
@@ -618,6 +642,7 @@ export function App() {
               setPickerOpen(false);
               setMonitorPickerOpen(false);
               setDataPickerOpen(false);
+              setStatePickerOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
               setSysvarsOpen(false);
@@ -640,6 +665,7 @@ export function App() {
               setPickerOpen(false);
               setMonitorPickerOpen(false);
               setDataPickerOpen(false);
+              setStatePickerOpen(false);
               setBusesOpen(false);
               setGeneratorOpen(false);
               setTriggersOpen(false);
@@ -777,9 +803,8 @@ export function App() {
                   class={chartTab === "rate" ? "on" : ""}
                   onClick={() => setChartTab("rate")}
                 >
-                  Bus rate
-                </button>
-                <button
+                  Rate
+                </button>                <button
                   type="button"
                   class={chartTab === "signals" ? "on" : ""}
                   onClick={() => setChartTab("signals")}
@@ -799,6 +824,13 @@ export function App() {
                   onClick={() => setChartTab("data")}
                 >
                   Data
+                </button>
+                <button
+                  type="button"
+                  class={chartTab === "state" ? "on" : ""}
+                  onClick={() => setChartTab("state")}
+                >
+                  State
                 </button>
               </div>
               {chartTab === "signals" && (
@@ -848,15 +880,32 @@ export function App() {
                   </button>
                 </>
               )}
-              <span class="meta">
-                {chartTab === "rate"
-                  ? "solid f/s · dashed load"
-                  : chartTab === "signals"
-                    ? `${signals.length} channels · wheel zoom`
-                    : chartTab === "monitor"
-                      ? `${state?.monitor.length ?? 0} rows · colored rules`
-                      : `${state?.data.length ?? 0} rows · min/avg/max`}
-              </span>
+              {chartTab === "state" && (
+                <>
+                  <button
+                    type="button"
+                    class="mini"
+                    onClick={() => void openStatePicker()}
+                  >
+                    + Signal
+                  </button>
+                  <button
+                    type="button"
+                    class="mini"
+                    disabled={!(state?.stateRows.length ?? 0)}
+                    onClick={() => void run({ type: "clear_state" })}
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
+              {(chartTab === "rate" || chartTab === "signals") && (
+                <span class="meta">
+                  {chartTab === "rate"
+                    ? "solid f/s · dashed load"
+                    : `${signals.length} channels · wheel zoom`}
+                </span>
+              )}
               {chartTab === "rate" && (
                 <strong class="readout">
                   {state ? state.fps.toFixed(0) : "—"} f/s
@@ -904,7 +953,7 @@ export function App() {
                   })
                 }
               />
-            ) : (
+            ) : chartTab === "data" ? (
               <DataPanel
                 rows={state?.data ?? []}
                 onVisible={(row, visible) =>
@@ -920,6 +969,23 @@ export function App() {
                 onRemove={(row) =>
                   void run({
                     type: "remove_data",
+                    ch: row.ch,
+                    id: row.id,
+                    ext: row.ext,
+                    name: row.name,
+                  })
+                }
+              />
+            ) : (
+              <StatePanel
+                rows={state?.stateRows ?? []}
+                windowS={state?.stateWindowS ?? 20}
+                onWindow={(seconds) =>
+                  void run({ type: "set_state_window", seconds })
+                }
+                onRemove={(row) =>
+                  void run({
+                    type: "remove_state",
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
@@ -1160,6 +1226,36 @@ export function App() {
             )
           }
           onClose={() => setDataPickerOpen(false)}
+        />
+      )}
+
+      {statePickerOpen && (
+        <SignalPicker
+          catalog={catalog}
+          loading={catalogLoading}
+          error={catalogError}
+          selected={stateKeys}
+          title="State signals"
+          onToggle={(ch, message, signal, on) =>
+            void run(
+              on
+                ? {
+                    type: "add_state",
+                    ch,
+                    id: message.id,
+                    ext: message.extended,
+                    name: signal.name,
+                  }
+                : {
+                    type: "remove_state",
+                    ch,
+                    id: message.id,
+                    ext: message.extended,
+                    name: signal.name,
+                  },
+            )
+          }
+          onClose={() => setStatePickerOpen(false)}
         />
       )}
 
