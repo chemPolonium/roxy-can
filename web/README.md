@@ -127,13 +127,14 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   desktop UI. The status bar reports the browser's own UI frame rate.
 - The Signals tab plots real DBC signals from the loaded project. **Pick
   signals…** opens a searchable bus → message → signal catalog fetched from
-  the backend; the selection is session-only. The demo starts with eight
-  auto-selected generator sources, while real projects start empty. The
-  core samples at up to 200 Hz; each series keeps 12k points (one minute at
-  that rate), and the canvas reduces them to one min/max span per pixel
-  column. Wheel zoom and drag pan freeze the view; double-click returns to
-  live. With eight full series and continuous wheel zoom, 1024x768 and
-  1200x800 both hold ~60 UI fps.
+  the backend. The demo starts with eight auto-selected generator sources,
+  while real projects start from their first Graphics window and save the
+  selection back there, so lanes survive save/reload. The core samples at up
+  to 200 Hz; each series keeps 12k points (one minute at that rate), and the
+  canvas reduces them to one min/max span per pixel column. Wheel zoom and
+  drag pan freeze the view; double-click returns to live. With eight full
+  series and continuous wheel zoom, 1024x768 and 1200x800 both hold ~60 UI
+  fps.
 - The **Monitor** tab watches selected CAN signals as large live values with
   an optional coloring rule (`>=`/`<=` a threshold), decimal places and a
   rule color; rows are project state, so the rule survives a save. Selection
@@ -147,7 +148,7 @@ A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet attachment, state
 value-definition bands, docking/desktops, and syntax highlighting or `.rxcan`
 loading in the web script editor. Hardware, Data, State and the Monitor cover
-CAN only for now; signal selection is session-only.
+CAN only for now.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

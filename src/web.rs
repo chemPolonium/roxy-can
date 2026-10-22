@@ -484,6 +484,58 @@ fn export_file(app: &mut App, kind: &str, path: &str) {
     }
 }
 
+/// Seeds the chart from a project's first Graphics window. The desktop
+/// project persists curve selection there; the web keeps its own lane
+/// metadata but must not start empty when the same project is opened.
+fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
+    let keys: Vec<SigKey> = app
+        .graphics
+        .first()
+        .map(|window| {
+            window
+                .signals
+                .iter()
+                .filter(|signal| signal.visible)
+                .map(|signal| signal.key.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    for key in keys {
+        if let SigKey::Can { ch, id, ext, name } = &key {
+            let (ch, id, ext, name) = (*ch, *id, *ext, name.clone());
+            store.select(app, ch, id, ext, &name);
+            app.subscribe(SigKey::can(ch, id, ext, name));
+        }
+    }
+}
+
+/// Selecting a chart lane also records it on the first Graphics window, so
+/// project save/load carries the selection. The panel stays the source of
+/// truth for lane colors; `store` is updated by the caller.
+fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
+    if app.graphics.is_empty() {
+        app.new_graphics_window();
+    }
+    let key = SigKey::can(ch, id, ext, name);
+    app.set_win_signal(
+        crate::workspace::PopupTarget::Graphics(0),
+        key.clone(),
+        true,
+    );
+    app.subscribe(key);
+}
+
+fn chart_unselect(app: &mut App, key: &SigKey) {
+    app.set_win_signal(
+        crate::workspace::PopupTarget::Graphics(0),
+        key.clone(),
+        false,
+    );
+    // Demo lanes never lived in a Graphics window; prune still drops the
+    // subscription unless another observer (Monitor/Data/State) uses it.
+    app.prune_signal(key);
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -987,6 +1039,9 @@ fn app_loop(
     } = stores;
     let mut app = App::headless();
     prepare_session(&mut app, project.as_deref(), replay.as_deref());
+    if let Ok(mut store) = signals.lock() {
+        seed_chart_selection(&mut app, &mut store);
+    }
     // The web plot window is independent of the desktop layout. Ask the
     // core for the 5 ms stress stride directly instead of opening a
     // hidden Graphics window, which would dirty (and later save) config.
@@ -1071,6 +1126,9 @@ fn app_loop(
                     // Same as the bootstrap load: applying the live layout
                     // is part of opening the project, not an unsaved edit.
                     app.mark_clean();
+                    if let Ok(mut store) = signals.lock() {
+                        seed_chart_selection(&mut app, &mut store);
+                    }
                     app.log_path.clear();
                     app.log_info = None;
                     app.send(BusCommand::SetRunMode(Mode::Virtual));
@@ -1103,7 +1161,7 @@ fn app_loop(
                         .map(|store| store.is_selected(&key))
                         .unwrap_or(false);
                     if !already {
-                        app.subscribe(key);
+                        chart_select(&mut app, ch, id, ext, &name);
                         if let Ok(mut store) = signals.lock() {
                             store.select(&app, ch, id, ext, &name);
                         }
@@ -1116,7 +1174,7 @@ fn app_loop(
                         .map(|store| store.is_selected(&key))
                         .unwrap_or(false);
                     if selected {
-                        app.send(BusCommand::Unsubscribe { key: key.clone() });
+                        chart_unselect(&mut app, &key);
                         if let Ok(mut store) = signals.lock() {
                             store.unselect(&key);
                         }
@@ -3517,6 +3575,32 @@ mod tests {
             );
             std::fs::remove_file(path).ok();
         }
+    }
+
+    /// Chart selection is also Graphics-window state, so it survives a
+    /// project save and seeds the lanes when the project is opened again.
+    #[test]
+    fn chart_selection_round_trips_through_the_graphics_window() {
+        let mut app = App::headless();
+        chart_select(&mut app, 0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        assert!(
+            app.graphics
+                .first()
+                .is_some_and(|window| window.signals.iter().any(|row| row.key == key))
+        );
+        assert!(app.config_snapshot().contains("EngineSpeed"));
+
+        let mut seeded = SignalStore::default();
+        seed_chart_selection(&mut app, &mut seeded);
+        assert!(seeded.is_selected(&key), "a load repopulates the lanes");
+
+        chart_unselect(&mut app, &key);
+        assert!(
+            app.graphics
+                .first()
+                .is_none_or(|window| window.signals.iter().all(|row| row.key != key))
+        );
     }
 
     /// A replay path must open the log and start playback in Replay mode,
