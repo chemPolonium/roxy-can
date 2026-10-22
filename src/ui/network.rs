@@ -1,6 +1,6 @@
 use crate::app::{App, NodeRole};
 use crate::ui::tx::{GeneratorCmd, GeneratorView};
-use dear_imgui_rs::{Condition, Ui};
+use dear_imgui_rs::{Condition, StyleColor, Ui};
 
 /// Which Ethernet subject the Network detail pane shows. Frames come from the
 /// ARXML matrix, flows from captured traffic; both are read-only because this
@@ -292,7 +292,7 @@ impl NetworkView {
         };
         if let Some(db) = db {
             if db.frames.is_empty() {
-                ui.text_disabled("The matrix declares no frames");
+                crate::ui::text_wrapped_disabled(ui, "The matrix declares no frames");
             } else if let Some(_g) = ui
                 .tree_node_config(format!("Frames ({})##ethframes{bus}", db.frames.len()))
                 .default_open(true)
@@ -336,7 +336,7 @@ impl NetworkView {
             .filter(|a| a.key.bus == bus)
             .collect();
         if flows.is_empty() {
-            ui.text_disabled("No captured flows on this bus");
+            crate::ui::text_wrapped_disabled(ui, "No captured flows on this bus");
             return;
         }
         if let Some(_g) = ui
@@ -388,15 +388,16 @@ impl NetworkView {
             ui.text("This frame is no longer in the loaded matrix");
             return;
         };
-        ui.text_colored(
-            [0.95, 0.75, 0.35, 1.0],
-            format!(
+        {
+            let _c = ui.push_style_color(StyleColor::Text, [0.95, 0.75, 0.35, 1.0]);
+            ui.text_wrapped(format!(
                 "{} / {}  —  ARXML frame",
                 app.eth_bus_label(bus),
                 frame.name
-            ),
-        );
-        ui.text_disabled(
+            ));
+        }
+        crate::ui::text_wrapped_disabled(
+            ui,
             "Ethernet is receive-only in this build: the matrix names and decodes captured frames.",
         );
         ui.separator();
@@ -808,6 +809,7 @@ impl NetworkView {
                 else {
                     return;
                 };
+                ui.align_text_to_frame_padding();
                 ui.text_disabled("Profile");
                 if !profile_list.is_empty() {
                     ui.same_line();
@@ -919,10 +921,15 @@ impl NetworkView {
                         return;
                     }
                     if let Some((bus, ecu)) = self.net_fr_sel.clone() {
-                        ui.text_colored(
-                            [0.30, 0.80, 1.00, 1.0],
-                            format!("{} / {}  —  FlexRay sender", app.fr_bus_label(bus), ecu),
-                        );
+                        {
+                            let _c =
+                                ui.push_style_color(StyleColor::Text, [0.30, 0.80, 1.00, 1.0]);
+                            ui.text_wrapped(format!(
+                                "{} / {}  —  FlexRay sender",
+                                app.fr_bus_label(bus),
+                                ecu
+                            ));
+                        }
                         ui.separator();
                         gen_cmds.extend(genv.fr_ecu_generator(ui, app, bus, &ecu));
                         return;
@@ -936,9 +943,9 @@ impl NetworkView {
                             && app.eth_buses.is_empty()
                             && app.snap.eth_aggs.is_empty()
                         {
-                            ui.text("Nothing to display: no DBC, cluster description or Ethernet matrix is loaded");
+                            ui.text_wrapped("Nothing to display: no DBC, cluster description or Ethernet matrix is loaded");
                         } else {
-                            ui.text(
+                            ui.text_wrapped(
                                 "No CAN nodes; pick an ECU under FlexRay or a frame/flow under Ethernet to see details",
                             );
                         }
@@ -955,24 +962,32 @@ impl NetworkView {
                         remaining -= infos.len();
                     }
                     let Some((ch, idx)) = selected else {
-                        ui.text("select a node to see its messages and signals");
+                        ui.text_wrapped("select a node to see its messages and signals");
                         return;
                     };
                     let ni = &dbc_nodes[ch][idx];
-                    ui.text_colored(
-                        [0.30, 0.80, 1.00, 1.0],
-                        format!(
+                    // The details pane can be narrow: wrapping the summary is
+                    // better than clipping "receives N signal(s)" at the edge.
+                    {
+                        let _c =
+                            ui.push_style_color(StyleColor::Text, [0.30, 0.80, 1.00, 1.0]);
+                        ui.text_wrapped(format!(
                             "{} / {}  —  sends {} message(s), receives {} signal(s)",
                             app.channel_name(ch as u8),
                             ni.name,
                             ni.tx.len(),
                             ni.rx.len()
-                        ),
-                    );
+                        ));
+                    }
                     let mut role_idx = crate::app::NodeRole::ALL
                         .iter()
                         .position(|r| *r == app.node_role(ch as u8, &ni.name))
                         .unwrap_or(0);
+                    // An unlabelled combo under the node summary read as a
+                    // stray field; name what it sets.
+                    ui.align_text_to_frame_padding();
+                    ui.text("Role");
+                    ui.same_line();
                     ui.set_next_item_width(88.0);
                     let role_labels: Vec<&str> = crate::app::NodeRole::ALL
                         .iter()
@@ -997,6 +1012,7 @@ impl NetworkView {
                     // 脚本编辑入口在节点之下（而非总线）：新建的脚本
                     // 自动绑定到当前选中的 DBC 节点，发帧受其角色开关。
                     // 两个新建按钮统一排在标签同一行。
+                    ui.align_text_to_frame_padding();
                     ui.text("Node scripts");
                     ui.same_line();
                     if ui.button(format!("+ Script node##netadd{ch}")) {
@@ -1043,6 +1059,7 @@ impl NetworkView {
 
                     // 回放块也是节点的一种驱动：该节点名下的块就近列出，
                     // 新建即绑定到本节点并默认只回放它的报文。
+                    ui.align_text_to_frame_padding();
                     ui.text("Node replay blocks");
                     ui.same_line();
                     if ui.button(format!("+ Replay block##netaddblk{ch}")) {
@@ -1087,6 +1104,7 @@ impl NetworkView {
                             );
                         }
                         ui.same_line();
+                        ui.align_text_to_frame_padding();
                         ui.text(&name);
                         ui.same_line();
                         ui.text_disabled(format!("{frames} frames"));

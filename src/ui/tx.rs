@@ -765,9 +765,11 @@ fn signal_rows(
                     .join(", ");
             }
             ui.same_line();
+            ui.align_text_to_frame_padding();
             ui.text(format!("{shown} {}", sig.unit));
         } else {
             ui.same_line();
+            ui.align_text_to_frame_padding();
             ui.text(format!("{} {}", cur, sig.unit));
         }
     }

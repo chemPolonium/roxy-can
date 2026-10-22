@@ -331,6 +331,7 @@ fn signal_cell(app: &App, ui: &Ui, kind: ListKind, cmds: &mut Vec<MeasurementCmd
         cmds.push(MeasurementCmd::OpenPicker(target));
     }
     ui.same_line();
+    ui.align_text_to_frame_padding();
     ui.text(format!("{vis}/{total}"));
 }
 

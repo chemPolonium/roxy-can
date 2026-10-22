@@ -151,6 +151,21 @@ fn file_name(p: &str) -> String {
         .unwrap_or_else(|| p.to_string())
 }
 
+fn bus_count(n: usize) -> String {
+    if n == 1 {
+        "1 bus".to_string()
+    } else {
+        format!("{n} buses")
+    }
+}
+
+/// The channel index already distinguishes ports; Kvaser/Vector repeat it
+/// as "(Channel N)" in the name, which only forces the combo to clip.
+fn short_hw_name(name: &str) -> &str {
+    let short = name.split(" (Channel").next().unwrap_or(name);
+    if short.trim().is_empty() { name } else { short }
+}
+
 /// What a bus's loaded description says its cluster is called, plus how many
 /// frames it schedules. The one piece of identity a description file carries
 /// that a recording does not -- with two networks in one log it is how the
@@ -345,6 +360,15 @@ fn merged_rows(counts: &[(u8, u64)], configured: &[(u8, Option<u8>)]) -> Vec<(u8
 /// One CAN row as drawn: name, DBC paths, ARXML source, arb/FD rates.
 type CanBusRow = (String, Vec<String>, Option<(String, String)>, u32, u32);
 
+// Shared widths for the CAN and FlexRay tables. Name/rates/hardware/remove
+// are fixed so the two tables keep the same column x positions; Database is
+// the only stretch column, so it absorbs the window's spare width instead of
+// leaving an empty strip, and both tables give it the same width.
+const BUS_NAME_W: f32 = 88.0;
+const BUS_RATE_W: f32 = 176.0;
+const BUS_HW_W: f32 = 140.0;
+const BUS_RM_W: f32 = 22.0;
+
 fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     if ui.button("+ Add CAN bus") {
         cmds.push(BusesCmd::AddChannel);
@@ -359,7 +383,10 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         );
     }
     ui.same_line();
-    ui.text(format!("{} bus(es)", app.snap.channel_count));
+    // Plain text shares the row with framed buttons; without this its
+    // baseline sits a couple of pixels above theirs.
+    ui.align_text_to_frame_padding();
+    ui.text_disabled(bus_count(app.snap.channel_count));
     ui.same_line();
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
@@ -372,20 +399,29 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     }
     ui.separator();
 
-    // NO_BORDERS_IN_BODY restricts column-resize dragging to the header row.
-    let flags = TableFlags::RESIZABLE;
+    // NO_SAVED_SETTINGS matters for alignment: both bus tables are laid out
+    // column for column, and widths saved by an older session should not
+    // re-shape one table away from the other.
+    let flags = TableFlags::RESIZABLE
+        | TableFlags::BORDERS_INNER
+        | TableFlags::NO_BORDERS_IN_BODY
+        | TableFlags::NO_SAVED_SETTINGS;
     let opts = dear_imgui_rs::TableOptions::from(flags)
-        .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
+        .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchSame);
     let mut remove: Option<usize> = None;
-    {
-        let Some(_table) = ui.begin_table_with_flags("bus_table", 5, opts) else {
+    if !app.snap.channels.is_empty() {
+        let Some(_table) = ui.begin_table_with_flags("bus_table_v2", 5, opts) else {
             return;
         };
-        ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
-        ui.table_setup_column_stretch_weight("Database", TableColumnFlags::NONE, 1.6);
-        ui.table_setup_column_fixed_width("kbit/s (arb / FD data)", TableColumnFlags::NONE, 190.0);
-        ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, 140.0);
-        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
+        ui.table_setup_column_fixed_width("Name", TableColumnFlags::NONE, BUS_NAME_W);
+        ui.table_setup_column_stretch_weight("Database", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_column_fixed_width(
+            "kbit/s (arb / FD data)",
+            TableColumnFlags::NONE,
+            BUS_RATE_W,
+        );
+        ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, BUS_HW_W);
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, BUS_RM_W);
         ui.table_headers_row();
 
         // The rows render from the snapshot; edits are frontend drafts
@@ -436,6 +472,10 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 view.bus_name_edit = None;
             }
             ui.table_next_column();
+            // The extra databases are drawn after two framed buttons; their
+            // cursor x drifts a cell padding to the right, so pin every line
+            // back to the column's left edge.
+            let cell_x = ui.cursor_pos()[0];
             let path = paths.first().cloned().unwrap_or_default();
             let extras: Vec<String> = paths.iter().skip(1).cloned().collect();
             let has_arxml = arxml.is_some();
@@ -478,6 +518,8 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             }
             // Extra attached databases: one line each with a detach button.
             for (e, extra) in extras.iter().enumerate() {
+                let y = ui.cursor_pos()[1];
+                ui.set_cursor_pos([cell_x, y]);
                 ui.text_disabled(file_name(extra));
                 ui.same_line();
                 if ui.button(format!("x##busdbx{i}_{e}")) {
@@ -598,10 +640,20 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                         Ok(channels) if !channels.is_empty() => {
                             let labels: Vec<String> = channels
                                 .iter()
-                                .map(|c| format!("[{}] ch{}: {}", c.driver.tag(), c.index, c.name))
+                                .map(|c| {
+                                    format!(
+                                        "[{}] ch{}: {}",
+                                        c.driver.tag(),
+                                        c.index,
+                                        short_hw_name(&c.name)
+                                    )
+                                })
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-                            ui.set_next_item_width(110.0);
+                            // Fill the cell: a fixed 110px box clipped the
+                            // channel name while the rest of the column sat
+                            // empty.
+                            ui.set_next_item_width(-1.0);
                             // Show the port this row last chose, not the list's
                             // first entry: after a refused open the cell is the
                             // only place left that can say which port the
@@ -686,24 +738,25 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         );
     }
     ui.same_line();
-    ui.text(format!("{} bus(es)", rows.len()));
+    ui.align_text_to_frame_padding();
+    ui.text_disabled(bus_count(rows.len()));
     let mut detach = None;
     let mut remove_fr = None;
     let mut attach: Option<(u8, i32)> = None;
     let mut load_for: Option<u8> = None;
-    {
-        let fr_opts = dear_imgui_rs::TableOptions::from(TableFlags::RESIZABLE)
-            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
-        let Some(_t) = ui.begin_table_with_flags("fr_table", 5, fr_opts) else {
+    if !rows.is_empty() {
+        // The CAN table's flags and widths, so the two line up column for
+        // column.
+        let fr_opts = dear_imgui_rs::TableOptions::from(flags)
+            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchSame);
+        let Some(_t) = ui.begin_table_with_flags("fr_table_v2", 5, fr_opts) else {
             return;
         };
-        ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
-        ui.table_setup_column_stretch_weight("FIBEX/ARXML", TableColumnFlags::NONE, 1.6);
-        // Same widths as the CAN table, so the two line up column for column --
-        // 190 because CAN's cell holds two combos side by side.
-        ui.table_setup_column_fixed_width("kbit/s · cycle ms", TableColumnFlags::NONE, 190.0);
-        ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, 140.0);
-        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
+        ui.table_setup_column_fixed_width("Name", TableColumnFlags::NONE, BUS_NAME_W);
+        ui.table_setup_column_stretch_weight("FIBEX/ARXML", TableColumnFlags::NONE, 1.0);
+        ui.table_setup_column_fixed_width("kbit/s · cycle ms", TableColumnFlags::NONE, BUS_RATE_W);
+        ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, BUS_HW_W);
+        ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, BUS_RM_W);
         ui.table_headers_row();
         for bus in rows {
             // Everything the row shows is read into owned values first: the
@@ -829,10 +882,10 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                         // like a CAN row: no second button to press.
                         let labels: Vec<String> = free
                             .iter()
-                            .map(|c| format!("[V] ch{}: {}", c.index, c.name))
+                            .map(|c| format!("[V] ch{}: {}", c.index, short_hw_name(&c.name)))
                             .collect();
                         let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-                        ui.set_next_item_width(110.0);
+                        ui.set_next_item_width(-1.0);
                         // The CAN row's rule, same reason: a refused open leaves
                         // no watch behind, and the row would otherwise read
                         // `ch0` while the bar names the port that failed.
@@ -886,9 +939,9 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
 
     // Ethernet buses: one row per loaded AUTOSAR matrix. No hardware column:
     // this build reads Ethernet from offline logs, not from a live port.
+    // The add button names the section, as it does for CAN and FlexRay; a
+    // separate "Ethernet" label made this row the only one with two leads.
     ui.separator();
-    ui.text("Ethernet");
-    ui.same_line();
     if ui.button("+ Add Ethernet") {
         cmds.push(BusesCmd::AddEthBus);
     }
@@ -897,7 +950,9 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     }
     ui.same_line();
     let eth_rows = app.eth_bus_rows();
-    ui.text(format!("{} bus(es)", eth_rows.len()));
+    ui.align_text_to_frame_padding();
+    ui.text_disabled(bus_count(eth_rows.len()));
+    ui.new_line();
     let mut len_includes_header = app.eth_length_includes_header;
     if ui.checkbox(
         "FRAME-LENGTH includes L2 header##ethlen",
@@ -913,16 +968,14 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
         );
     }
     if !eth_rows.is_empty() {
-        let table_flags =
-            TableFlags::RESIZABLE | TableFlags::BORDERS_INNER | TableFlags::NO_BORDERS_IN_BODY;
-        let opts = dear_imgui_rs::TableOptions::from(table_flags)
-            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchProp);
-        if let Some(_t) = ui.begin_table_with_flags("eth_table", 5, opts) {
-            ui.table_setup_column_fixed_width("Eth", TableColumnFlags::NONE, 46.0);
-            ui.table_setup_column_stretch_weight("ARXML", TableColumnFlags::NONE, 1.6);
-            ui.table_setup_column_stretch_weight("VLAN / frames", TableColumnFlags::NONE, 1.0);
-            ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 70.0);
-            ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
+        let opts = dear_imgui_rs::TableOptions::from(flags)
+            .sizing_policy(dear_imgui_rs::TableSizingPolicy::StretchSame);
+        if let Some(_t) = ui.begin_table_with_flags("eth_table_v2", 5, opts) {
+            ui.table_setup_column_fixed_width("Eth", TableColumnFlags::NONE, 56.0);
+            ui.table_setup_column_stretch_weight("ARXML", TableColumnFlags::NONE, 1.0);
+            ui.table_setup_column_fixed_width("VLAN / frames", TableColumnFlags::NONE, 160.0);
+            ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 76.0);
+            ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 22.0);
             ui.table_headers_row();
             for bus in eth_rows {
                 let Some(cfg) = app.eth_buses.get(&bus) else {
@@ -958,8 +1011,6 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 }
             }
         }
-    } else {
-        ui.text_disabled("No Ethernet communication matrix loaded");
     }
 
     replay_map_section(app, ui, cmds);

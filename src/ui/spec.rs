@@ -81,18 +81,23 @@ impl SpecView {
                     .count()
             })
             .sum();
+        // These labels sit beside framed drags/checkboxes; ImGui draws plain
+        // text from the line top, so align it to the frame padding first.
+        ui.align_text_to_frame_padding();
         ui.text("tolerance");
         ui.same_line();
         if let Some(v) = self.threshold(ui, "spec_tol", app.spec_tol_pct, 0.0, 100.0, "%.0f%%") {
             cmds.push(SpecCmd::SetTolerance(v));
         }
         ui.same_line();
+        ui.align_text_to_frame_padding();
         ui.text("grace");
         ui.same_line();
         if let Some(v) = self.threshold(ui, "spec_grace", app.spec_grace, 1.0, 20.0, "%.0fx") {
             cmds.push(SpecCmd::SetGrace(v));
         }
         ui.same_line();
+        ui.align_text_to_frame_padding();
         ui.text(format!("{periodic} periodic messages declared"));
         // The four rule checkboxes and the two buttons need their own row:
         // together with the tolerance pair they overflow the default width
@@ -189,6 +194,10 @@ impl SpecView {
         let label = format!("##{key}");
         let mut v = self.draft.shown(key, model as f64) as f32;
         let format = NumericFormat::new(fmt).expect("static format string");
+        // Without a width a DragFloat takes the whole remaining line: the
+        // tolerance drag swallowed the row and pushed the grace drag (and the
+        // declared-period count) out of the window.
+        ui.set_next_item_width(80.0);
         let moved = Drag::new(&label)
             .speed((hi - lo) / 100.0)
             .range(lo, hi)

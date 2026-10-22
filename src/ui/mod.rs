@@ -93,6 +93,16 @@ pub(crate) fn hint_width(ui: &Ui, hint: &str, min: f32) -> f32 {
     (ui.calc_text_size(hint)[0] + 12.0).max(min)
 }
 
+/// Disabled text that has to wrap: `text_disabled` cannot wrap, and a
+/// `push_style_color` around `text_wrapped` is the pair the ImGui bindings
+/// expect (there is no `text_wrapped_disabled`).
+pub(crate) fn text_wrapped_disabled(ui: &Ui, text: &str) {
+    use dear_imgui_rs::StyleColor;
+    let color = ui.style_color(StyleColor::TextDisabled);
+    let _color = ui.push_style_color(StyleColor::Text, color);
+    ui.text_wrapped(text);
+}
+
 /// Clamp a window's first-use rectangle into the space between the toolbar,
 /// status bar and desktop tab strip. Percentage-based default positions put
 /// several windows partly off-screen on a 1228x768 viewport (Network's bottom,

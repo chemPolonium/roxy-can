@@ -172,6 +172,7 @@ pub fn draw_view(
             None
         };
         ui.same_line();
+        ui.align_text_to_frame_padding();
         ui.text(key.name());
         // Right-click a Graphics/Data row routes the signal into a State
         // Tracker -- one more way to start watching a signal's states

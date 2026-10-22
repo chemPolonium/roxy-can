@@ -109,6 +109,9 @@ impl MonitorView {
                 .build();
             ui.dummy([10.0, 0.0]);
             ui.same_line();
+            // The rule controls on this row are framed buttons; align the
+            // label's baseline with them instead of the line top.
+            ui.align_text_to_frame_padding();
             ui.text_colored(text_color, &label);
             ui.same_line();
             ui.text_colored(text_color, format!("{:.*} {}", digits, value, unit));

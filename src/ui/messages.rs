@@ -99,6 +99,8 @@ impl MsgWin {
         // The text cache was refreshed before the window drew (see
         // `App::sync_observer_text`), so this path is read-only.
         ui.same_line();
+        // Counts share the row with framed buttons; align their baseline.
+        ui.align_text_to_frame_padding();
         ui.text(&self.text_header);
         ui.separator();
 

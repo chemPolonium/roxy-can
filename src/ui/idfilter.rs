@@ -561,6 +561,7 @@ fn signal_content(view: &mut IdFilterView, app: &App, ui: &Ui, cmds: &mut Vec<Id
         });
     }
     ui.same_line();
+    ui.align_text_to_frame_padding();
     ui.text(format!("{} signal(s) selected", selected.len()));
     ui.separator();
 

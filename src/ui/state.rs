@@ -232,6 +232,7 @@ fn custom_panel(
             *cut = c as f64;
         }
         ui.same_line();
+        ui.align_text_to_frame_padding();
         ui.text("cut");
         ui.same_line();
         if ui.button(format!("x##srcutrm{ci}")) {
