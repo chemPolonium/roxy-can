@@ -19,6 +19,7 @@ import { BusStatsPanel } from "./components/BusStatsPanel";
 import { DataPanel } from "./components/DataPanel";
 import { ExportModal } from "./components/ExportModal";
 import { GeneratorModal } from "./components/GeneratorModal";
+import { HelpModal } from "./components/HelpModal";
 import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
@@ -162,6 +163,8 @@ export function App() {
   const [replayTo, setReplayTo] = useState("");
   const [recordName, setRecordName] = useState("record");
   const [recordFormat, setRecordFormat] = useState(0);
+  const [recordFilter, setRecordFilter] = useState("");
+  const [helpOpen, setHelpOpen] = useState(false);
   const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
@@ -435,6 +438,44 @@ export function App() {
     setExportKind(kind);
     setExportOpen(true);
   };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (event.key === "F9") {
+        event.preventDefault();
+        void run({ type: state?.measuring ? "stop" : "start" });
+      } else if (mod && event.shiftKey && key === "s") {
+        event.preventDefault();
+        setSessionOpen(true);
+      } else if (mod && key === "s") {
+        event.preventDefault();
+        if (state?.projectPath) void run({ type: "save_project", path: null });
+        else setSessionOpen(true);
+      } else if (mod && key === "o") {
+        event.preventDefault();
+        setSessionOpen(true);
+      } else if (mod && key === "e") {
+        event.preventDefault();
+        openExport("trace");
+      } else if (event.key === "?") {
+        setHelpOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state?.measuring, state?.projectPath]);
 
   const openDataPicker = () => {    setSessionOpen(false);
     setScriptsOpen(false);
@@ -792,6 +833,14 @@ export function App() {
           <strong>{state?.runMode ?? state?.mode ?? "—"}</strong>
         </div>
         {error && <div class="error-pill">{error}</div>}
+        <button
+          type="button"
+          class="help-link"
+          title="Shortcuts and about (?)"
+          onClick={() => setHelpOpen(true)}
+        >
+          ?
+        </button>
       </section>
 
       {state?.runMode === "Replay" && state.log && (
@@ -1552,6 +1601,8 @@ export function App() {
         />
       )}
 
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+
       {sessionOpen && (
         <div class="modal-backdrop" onMouseDown={() => setSessionOpen(false)}>
           <div
@@ -1708,6 +1759,25 @@ export function App() {
                   path is used as typed. Recording while stopped arms the file
                   for the next Start.
                 </p>
+                <label class="record-filter">
+                  Only ids / FR slots
+                  <input
+                    value={recordFilter}
+                    placeholder="100, 3F4x, FR0:13"
+                    spellcheck={false}
+                    onInput={(event) =>
+                      setRecordFilter((event.target as HTMLInputElement).value)
+                    }
+                    onBlur={() =>
+                      void run({ type: "set_record_filter", text: recordFilter })
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        (event.target as HTMLInputElement).blur();
+                      }
+                    }}
+                  />
+                </label>
               </section>
 
               <p class="hint">

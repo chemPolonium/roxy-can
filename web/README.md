@@ -37,9 +37,10 @@ absolute log time; both timed plays resume playback and pause at the target.
 **Save** writes the open project and **Save as** writes a copy to a typed host
 path; the dialog marks unsaved changes next to the current name. The
 **Recording** section starts/stops an ASC or BLF capture with a typed file
-name; relative names land in `Record/` beside the project, and arming while
-stopped creates the file on the next Start. The live badge in the top bar
-turns red while recording. Saving keeps
+name and an optional whitelist (`100, 3F4x, FR0:13`); relative names land in
+`Record/` beside the project, and arming while stopped creates the file on
+the next Start. The live badge in the top bar turns red while recording.
+Saving keeps
 the project's desktop dock layout and Graphics-window settings untouched: the
 web plot asks the core for its sampling stride instead of editing desktop
 config. Paths are resolved on the host (the page cannot open a native file
@@ -147,6 +148,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   rule color; rows are project state, so the rule survives a save. Selection
   reuses the same searchable catalog, and Clear unsubscribes every row. The
   row layout stacks controls under the value at narrow widths.
+- Shortcuts: F9 start/stop, Ctrl+S save, Ctrl+Shift+S Session, Ctrl+O
+  Session, Ctrl+E export, `?` for the help/about dialog (ignored while
+  typing). The **?** button at the right of the stats strip opens the same
+  dialog.
 - The layout has been checked at 1024x768, 1200x800 and 1440x900.
 
 ## Not here yet

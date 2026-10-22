@@ -3,6 +3,7 @@ export interface State {
   tracePaused: boolean;
   recording: boolean;
   recordFile: string;
+  recordFilter: string;
   mode: string;
   frames: number;
   fps: number;
@@ -375,6 +376,7 @@ export type Command =
   | { type: "replay_play_to"; target_us: number }
   | { type: "replay_play_for"; duration_us: number }
   | { type: "record_toggle"; name: string | null; format: number | null }
+  | { type: "set_record_filter"; text: string }
   | {
       type: "add_script";
       name: string;

@@ -767,6 +767,48 @@ fn state_bands_custom(
     (current, bands)
 }
 
+fn parse_id_filter(text: &str) -> Vec<(u32, bool)> {
+    text.split([',', ' ', ';'])
+        .filter(|part| !part.is_empty())
+        .map(|raw| {
+            let token = raw.trim();
+            match token.strip_suffix(['x', 'X']) {
+                Some(hex) => (u32::from_str_radix(hex, 16).unwrap_or(0), true),
+                None => (u32::from_str_radix(token, 16).unwrap_or(0), false),
+            }
+        })
+        .filter(|&(id, _)| id != 0)
+        .collect()
+}
+
+/// Web twin of the desktop record-filter parser: CAN hex ids (an `x`
+/// suffix marks extended) and `FRn:slot` entries, comma/space separated.
+fn parse_record_filter(text: &str) -> crate::recorder::RecordFilter {
+    let mut filter = crate::recorder::RecordFilter::default();
+    for raw in text.split([',', ' ', ';']) {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match token
+            .strip_prefix(['f', 'F'])
+            .and_then(|rest| rest.strip_prefix(['r', 'R']))
+        {
+            Some(rest) => {
+                let Some((bus, slot)) = rest.split_once(':') else {
+                    continue;
+                };
+                if let (Ok(bus), Ok(slot)) = (bus.trim().parse::<u8>(), slot.trim().parse::<u16>())
+                {
+                    filter.fr.push((bus, slot));
+                }
+            }
+            None => filter.can.extend(parse_id_filter(token)),
+        }
+    }
+    filter
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -994,6 +1036,9 @@ enum WebCommand {
     RecordToggle {
         name: Option<String>,
         format: Option<u8>,
+    },
+    SetRecordFilter {
+        text: String,
     },
     ClearTrace,
     OpenProject {
@@ -1353,6 +1398,12 @@ fn app_loop(
                         app.record_format = if format == 1 { 1 } else { 0 };
                     }
                     app.toggle_record();
+                }
+                WebCommand::SetRecordFilter { text } => {
+                    app.record_filter_text = text.clone();
+                    app.send(BusCommand::SetRecordFilter {
+                        filter: parse_record_filter(&text),
+                    });
                 }
                 WebCommand::ClearTrace => {
                     app.send(BusCommand::ClearTrace);
@@ -2608,6 +2659,7 @@ struct WebState {
     trace_paused: bool,
     recording: bool,
     record_file: String,
+    record_filter: String,
     mode: String,
     frames: u64,
     fps: f64,
@@ -3494,6 +3546,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         trace_paused: snap.trace_paused,
         recording: snap.recording,
         record_file: snap.last_record.clone(),
+        record_filter: app.record_filter_text.clone(),
         mode: match snap.mode {
             Mode::Virtual => "Simulation".to_string(),
             Mode::Replay => "Replay".to_string(),
