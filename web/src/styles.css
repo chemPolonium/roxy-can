@@ -2832,21 +2832,75 @@ button.danger:hover:not(:disabled) {
   margin-left: auto;
 }
 
-.script-textarea {
+.script-editor {
+  position: relative;
   flex: 1 1 auto;
   min-height: 160px;
+}
+
+.script-highlight,
+.script-textarea {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  margin: 0;
   padding: 8px;
-  overflow: auto;
-  background: #0b1016;
   border: 1px solid #263140;
   border-radius: 4px;
-  color: #d6e2f0;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11.5px;
   line-height: 1.45;
   tab-size: 4;
   white-space: pre;
+}
+
+.script-highlight {
+  overflow: hidden;
+  color: #d6e2f0;
+  background: #0b1016;
+  pointer-events: none;
+}
+
+.script-textarea {
   resize: none;
+  overflow: auto;
+  color: transparent;
+  caret-color: #e8f0f8;
+  background: transparent;
+}
+
+.script-textarea.composing {
+  color: #d6e2f0;
+  background: #0b1016;
+}
+
+.script-textarea::placeholder {
+  color: #5d6a7a;
+}
+
+.script-textarea::selection {
+  color: transparent;
+  background: rgba(76, 157, 255, 0.35);
+}
+
+.tok-comment {
+  color: #6a7a8c;
+}
+
+.tok-string {
+  color: #8fd3a8;
+}
+
+.tok-number {
+  color: #e6b455;
+}
+
+.tok-keyword {
+  color: #6cb6ff;
+}
+
+.tok-fn {
+  color: #c77dff;
 }
 
 .script-actions {

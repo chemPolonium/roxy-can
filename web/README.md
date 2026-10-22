@@ -124,8 +124,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   recompiles and restarts), see its log and compile errors, insert a starter
   template, load a local `.rxcan` file into the draft, save the source to a
   host `.rxcan` path, or remove it. Nodes run through the same
-  `AddNode`/`SetNodeSource` commands as the desktop editor; syntax
-  highlighting is desktop-only for now.
+  `AddNode`/`SetNodeSource` commands as the desktop editor. The editor
+  colors comments, strings, numbers, keywords and calls; it is not a full
+  language server.
 - **SysVars…** manages system variables through the real core: add/edit
   definitions (namespace, name, init, clamped min/max, unit, comment), edit
   live values in place (writes clamp), rename by deleting the old key, and
@@ -183,8 +184,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 Ethernet hardware attachment and generation (descriptions, replay rows,
-read-only Trace/Messages/Statistics and the FR generator are supported),
-docking/desktops, and syntax highlighting in the web script editor.
+read-only Trace/Messages/Statistics and the FR generator are supported)
+and docking/desktops.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

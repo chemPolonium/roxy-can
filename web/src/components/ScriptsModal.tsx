@@ -18,6 +18,62 @@ on timer 1000 {
 }
 `;
 
+const KEYWORDS = new Set([
+  "on",
+  "start",
+  "stop",
+  "timer",
+  "if",
+  "else",
+  "for",
+  "while",
+  "return",
+  "let",
+  "var",
+  "const",
+  "true",
+  "false",
+  "break",
+  "continue",
+]);
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/// A deliberately small highlighter: comments, strings, numbers, keywords
+/// and call names. It paints the <pre> behind the textarea; the textarea
+/// itself keeps the caret and input handling.
+function highlight(source: string): string {
+  const token =
+    /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*/g;
+  let out = "";
+  let last = 0;
+  for (const match of source.matchAll(token)) {
+    const at = match.index ?? 0;
+    out += escapeHtml(source.slice(last, at));
+    const text = match[0];
+    last = at + text.length;
+    if (text.startsWith("//") || text.startsWith("/*")) {
+      out += `<span class="tok-comment">${escapeHtml(text)}</span>`;
+    } else if (text.startsWith('"') || text.startsWith("'")) {
+      out += `<span class="tok-string">${escapeHtml(text)}</span>`;
+    } else if (/^\d/.test(text)) {
+      out += `<span class="tok-number">${text}</span>`;
+    } else if (KEYWORDS.has(text)) {
+      out += `<span class="tok-keyword">${text}</span>`;
+    } else if (/^\s*\(/.test(source.slice(last))) {
+      out += `<span class="tok-fn">${text}</span>`;
+    } else {
+      out += escapeHtml(text);
+    }
+  }
+  return out + escapeHtml(source.slice(last));
+}
+
 function busName(buses: Bus[], channel: number): string {
   return buses[channel]?.name ?? `CAN${channel + 1}`;
 }
@@ -29,6 +85,8 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
   const [selected, setSelected] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [composing, setComposing] = useState(false);
+  const highlightRef = useRef<HTMLPreElement>(null);
   const [reload, setReload] = useState(0);
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
@@ -304,15 +362,33 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
                     Enabled
                   </label>
                 </div>
-                <textarea
-                  class="script-textarea"
-                  spellcheck={false}
-                  value={draft}
-                  placeholder="on start { … }"
-                  onInput={(event) =>
-                    edit((event.target as HTMLTextAreaElement).value)
-                  }
-                />
+                <div class="script-editor">
+                  <pre
+                    ref={highlightRef}
+                    class="script-highlight"
+                    aria-hidden="true"
+                    dangerouslySetInnerHTML={{ __html: highlight(`${draft}\n`) }}
+                  />
+                  <textarea
+                    class={`script-textarea ${composing ? "composing" : ""}`}
+                    spellcheck={false}
+                    value={draft}
+                    placeholder="on start { … }"
+                    onCompositionStart={() => setComposing(true)}
+                    onCompositionEnd={() => setComposing(false)}
+                    onInput={(event) =>
+                      edit((event.target as HTMLTextAreaElement).value)
+                    }
+                    onScroll={(event) => {
+                      const area = event.target as HTMLTextAreaElement;
+                      const pre = highlightRef.current;
+                      if (pre) {
+                        pre.scrollTop = area.scrollTop;
+                        pre.scrollLeft = area.scrollLeft;
+                      }
+                    }}
+                  />
+                </div>
                 <div class="script-actions">
                   <button
                     type="button"
@@ -393,8 +469,8 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
                 </div>
                 <p class="hint">
                   Scripts are C-like and recompile on every start; Apply while
-                  measuring restarts the node. No syntax highlighting in the
-                  web editor yet.
+                  measuring restarts the node. Comments, strings, numbers,
+                  keywords and calls are colored as you type.
                 </p>
               </>
             ) : (
