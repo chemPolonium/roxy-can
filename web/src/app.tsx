@@ -176,6 +176,7 @@ export function App() {
   const [bus, setBus] = useState<string>("all");
   const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
   const [traceFilterOpen, setTraceFilterOpen] = useState(false);
+  const [panelQuery, setPanelQuery] = useState("");
   const [tab, setTab] = useState<RightTab>("messages");
   const [chartTab, setChartTab] = useState<ChartTab>("rate");
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -724,6 +725,29 @@ export function App() {
         ))}
       </div>
     );
+
+  const lowerMessages = useMemo(() => {
+    const rows = state?.messages ?? [];
+    const needle = panelQuery.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter(
+      (row) =>
+        row.name.toLowerCase().includes(needle) ||
+        row.addr.toLowerCase().includes(needle) ||
+        row.busName.toLowerCase().includes(needle),
+    );
+  }, [state?.messages, panelQuery]);
+
+  const lowerStats = useMemo(() => {
+    const rows = state?.stats ?? [];
+    const needle = panelQuery.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter(
+      (row) =>
+        row.label.toLowerCase().includes(needle) ||
+        row.bus.toLowerCase().includes(needle),
+    );
+  }, [state?.stats, panelQuery]);
 
   const visibleRows = useMemo(() => {
     const payload = traceFilter.payload.trim().toUpperCase().replace(/\s+/g, "");
@@ -1375,9 +1399,9 @@ export function App() {
               </div>
               <span class="meta">
                 {tab === "messages"
-                  ? `${state?.messages.length ?? 0} ids`
+                  ? `${lowerMessages.length} ids`
                   : tab === "statistics"
-                    ? `${state?.stats.length ?? 0} rows`
+                    ? `${lowerStats.length} rows`
                     : tab === "bus"
                       ? `${state?.busStats.length ?? 0} buses`
                       : tab === "spec"
@@ -1403,10 +1427,40 @@ export function App() {
                 </button>
               )}
             </div>
-            {tab === "messages" ? (
-              <MessageTable rows={state?.messages ?? []} />
-            ) : tab === "statistics" ? (
-              <StatsTable rows={state?.stats ?? []} />
+            {tab === "messages" || tab === "statistics" ? (
+              <div class="panel-list">
+                <div class="panel-filter-row">
+                  <input
+                    class="panel-filter"
+                    type="search"
+                    value={panelQuery}
+                    placeholder="Filter bus, name or id…"
+                    onInput={(event) =>
+                      setPanelQuery((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  {panelQuery && (
+                    <button
+                      type="button"
+                      class="mini"
+                      onClick={() => setPanelQuery("")}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {tab === "messages" ? (
+                  <MessageTable
+                    rows={lowerMessages}
+                    filtered={panelQuery.trim() !== ""}
+                  />
+                ) : (
+                  <StatsTable
+                    rows={lowerStats}
+                    filtered={panelQuery.trim() !== ""}
+                  />
+                )}
+              </div>
             ) : tab === "bus" ? (
               <BusStatsPanel buses={state?.busStats ?? []} />
             ) : tab === "spec" ? (

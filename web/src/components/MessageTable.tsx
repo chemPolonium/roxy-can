@@ -24,13 +24,23 @@ function useWideColumns(): boolean {
   return wide;
 }
 
-export function MessageTable({ rows }: { rows: Message[] }) {
+export function MessageTable({
+  rows,
+  filtered = false,
+}: {
+  rows: Message[];
+  filtered?: boolean;
+}) {
   const wide = useWideColumns();
   if (rows.length === 0) {
     return (
       <div class="empty">
-        <strong>No messages seen</strong>
-        <span>Traffic will appear here once the bus runs.</span>
+        <strong>{filtered ? "No matching messages" : "No messages seen"}</strong>
+        <span>
+          {filtered
+            ? "Try a different bus, name or id."
+            : "Traffic will appear here once the bus runs."}
+        </span>
       </div>
     );
   }

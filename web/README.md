@@ -143,6 +143,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Messages and Statistics include CAN, FlexRay and Ethernet rows when the
   session carries them: FR addresses read `slot N` and use the loaded
   cluster description, Ethernet rows use EtherType and the matched flow name.
+  Both tabs have a search box matching bus, name or address.
   Statistics shows aggregate count, min/avg/max/jitter and share; Jitter
   folds away below 1280 px and the row tooltip keeps the full values. Bus
   shows per-bus load, send distance, bursts and per-class frame rates with a

@@ -13,13 +13,25 @@ function useWideColumns(): boolean {
   return wide;
 }
 
-export function StatsTable({ rows }: { rows: StatsRow[] }) {
+export function StatsTable({
+  rows,
+  filtered = false,
+}: {
+  rows: StatsRow[];
+  filtered?: boolean;
+}) {
   const wide = useWideColumns();
   if (rows.length === 0) {
     return (
       <div class="empty">
-        <strong>No traffic statistics</strong>
-        <span>Counts, cycle times and jitter appear once frames arrive.</span>
+        <strong>
+          {filtered ? "No matching statistics" : "No traffic statistics"}
+        </strong>
+        <span>
+          {filtered
+            ? "Try a different bus or message name."
+            : "Counts, cycle times and jitter appear once frames arrive."}
+        </span>
       </div>
     );
   }
