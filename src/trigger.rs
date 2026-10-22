@@ -445,9 +445,6 @@ impl App {
     }
 
     fn push_trigger(&mut self, cond: TriggerCond) {
-        // The new rule's index is the list's length *before* the append;
-        // its editor opens straight away.
-        let index = self.snap.triggers.len();
         let action = TriggerAction::StartRecording;
         self.send(crate::bus::BusCommand::AddTrigger {
             cond: cond.clone(),

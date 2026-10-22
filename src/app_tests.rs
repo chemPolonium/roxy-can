@@ -11,7 +11,7 @@ use crate::observe::Subscription;
 use crate::observe::YMode;
 use crate::sim::ValueSrc;
 use crate::source::FrameSource;
-use crate::trigger::{Trigger, TriggerAction, TriggerCmd, TriggerCond, TriggerKind};
+use crate::trigger::{Trigger, TriggerAction, TriggerCond};
 
 #[test]
 fn record_survives_start_and_writes_frames() {
