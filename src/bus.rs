@@ -1703,9 +1703,10 @@ impl BusCore {
             } => {
                 // Prefer init access (the wire-egress switches can then
                 // direct traffic onto the wire). When another program
-                // holds the channel, fall back to receive-only. Vector
-                // first cut is classic CAN (fd_data_kbps is accepted but
-                // not applied; the attach status reports fd=false).
+                // holds the channel, fall back to receive-only. Both
+                // drivers apply the bus's FD data-phase rate when the
+                // channel is opened with init access; a rejected config
+                // comes back fd=false, and hw_fd_note says classic.
                 let opened = match driver {
                     crate::hw::HwDriver::Kvaser => {
                         crate::hw::kvaser::KvaserChannel::open(adapter, kbps, fd_data_kbps, true)
@@ -1729,8 +1730,9 @@ impl BusCore {
                             })
                     }
                     crate::hw::HwDriver::Vector => {
-                        // Vector classic CAN first cut: init access only
-                        // (rx-only open is provided the same way).
+                        // Same init-first attach: xlCanFdSetConfiguration
+                        // needs init access, so an FD bus on a channel
+                        // owned elsewhere degrades to monitoring only.
                         crate::hw::vector::VectorChannel::open(adapter, kbps, fd_data_kbps, true)
                             .map(|p| {
                                 let fd = p.fd;

@@ -17,10 +17,14 @@
 //! only ever invoked through the safe wrapper below. Handles are owned
 //! by [`VectorChannel`], which closes them on drop.
 //!
-//! First cut scope: classic CAN. CAN FD on Vector goes through the
-//! `XLcanFdConf` parameter struct (a separate, larger FFI surface) and
-//! is deferred -- `fd` is always false here, matching the Kvaser
-//! receive-only degrade path.
+//! CAN FD is configured through `xlCanFdSetConfiguration` before the
+//! channel is activated. The driver expresses both phases in time quanta
+//! against its 80 MHz CAN clock; the presets below reproduce python-can's
+//! Vector defaults (10 tq, 70% sample point) and a 16-tq preset for the
+//! 5 Mbit/s data phase. A driver or adapter that cannot take the FD
+//! configuration falls back to classic at the arbitration rate, and the
+//! attach status reports classic mode rather than leaving FD frames to
+//! leave at a silently wrong speed.
 
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use std::ffi::c_void;
@@ -79,6 +83,28 @@ const TX_EVENT_MSG_FLAGS: usize = 12;
 const TX_EVENT_DLC: usize = 16;
 const TX_EVENT_DATA: usize = 24;
 
+/// `XLcanFdConf` as laid out by the vendor header (the same field order
+/// python-can's `xlclass.py` uses). The nominal/data timing fields are in
+/// time quanta; `options = 0` selects ISO CAN FD (bit 3 is the non-ISO
+/// switch on drivers that expose it). `#[repr(C)]` pads the 37 meaningful
+/// bytes to the driver's 40-byte struct.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct XlCanFdConf {
+    arbitration_bit_rate: u32,
+    sjw_abr: u32,
+    tseg1_abr: u32,
+    tseg2_abr: u32,
+    data_bit_rate: u32,
+    sjw_dbr: u32,
+    tseg1_dbr: u32,
+    tseg2_dbr: u32,
+    reserved: u8,
+    options: u8,
+    reserved1: [u8; 2],
+    reserved2: u8,
+}
+
 type XlOpenDriver = unsafe extern "system" fn() -> XlStatus;
 type XlCloseDriver = unsafe extern "system" fn() -> XlStatus;
 type XlGetDriverConfig = unsafe extern "system" fn(*mut u8) -> XlStatus;
@@ -92,6 +118,8 @@ type XlOpenPort = unsafe extern "system" fn(
     u32,
 ) -> XlStatus;
 type XlCanSetChannelBitrate = unsafe extern "system" fn(XlPortHandle, XlAccess, u32) -> XlStatus;
+type XlCanFdSetConfiguration =
+    unsafe extern "system" fn(XlPortHandle, XlAccess, *const XlCanFdConf) -> XlStatus;
 type XlActivateChannel = unsafe extern "system" fn(XlPortHandle, XlAccess, u32, u32) -> XlStatus;
 type XlDeactivateChannel = unsafe extern "system" fn(XlPortHandle, XlAccess) -> XlStatus;
 type XlCanReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
@@ -123,6 +151,9 @@ struct Vxlapi {
     get_driver_config: XlGetDriverConfig,
     open_port: XlOpenPort,
     can_set_channel_bitrate: XlCanSetChannelBitrate,
+    /// Present on the current drivers; older installs predate CAN FD and
+    /// simply stay in classic mode.
+    can_fd_set_configuration: Option<XlCanFdSetConfiguration>,
     activate_channel: XlActivateChannel,
     deactivate_channel: XlDeactivateChannel,
     can_receive: XlCanReceive,
@@ -215,12 +246,20 @@ impl Vxlapi {
                 }
             };
         }
+        macro_rules! maybe {
+            ($name:expr, $ty:ty) => {
+                // Same cast as `need!`, but an older driver may legitimately
+                // lack the export; None means "classic only", not "no driver".
+                unsafe { std::mem::transmute::<*mut c_void, Option<$ty>>(sym($name)) }
+            };
+        }
         Some(Vxlapi {
             open_driver: need!(b"xlOpenDriver", XlOpenDriver),
             close_driver: need!(b"xlCloseDriver", XlCloseDriver),
             get_driver_config: need!(b"xlGetDriverConfig", XlGetDriverConfig),
             open_port: need!(b"xlOpenPort", XlOpenPort),
             can_set_channel_bitrate: need!(b"xlCanSetChannelBitrate", XlCanSetChannelBitrate),
+            can_fd_set_configuration: maybe!(b"xlCanFdSetConfiguration", XlCanFdSetConfiguration),
             activate_channel: need!(b"xlActivateChannel", XlActivateChannel),
             deactivate_channel: need!(b"xlDeactivateChannel", XlDeactivateChannel),
             can_receive: need!(b"xlCanReceive", XlCanReceive),
@@ -294,8 +333,8 @@ pub struct VectorChannel {
     port: XlPortHandle,
     /// The single-channel mask this port was opened for.
     mask: XlAccess,
-    /// FD data-phase params were applied; FD frames can leave. Always
-    /// false in the first cut (see module docs).
+    /// `xlCanFdSetConfiguration` was accepted; FD frames can leave.
+    /// False on a monitoring port or after a classic fallback.
     pub fd: bool,
     /// Non-frame events seen since the last [`Self::take_tag_news`], by tag.
     tags: std::collections::BTreeMap<u16, u64>,
@@ -376,15 +415,69 @@ fn dlc_from_len(len: usize, fd: bool) -> u8 {
     }
 }
 
+/// Vector's XL CAN FD timing is expressed in time quanta against an 80 MHz
+/// CAN clock (the clock python-can assumes for every Vector device). The
+/// 10-tq nominal preset gives a 70% sample point and divides every
+/// arbitration rate the UI offers. The 5 Mbit/s data phase needs 16 tq at
+/// that clock, so it gets 11/4 and a 75% sample point.
+const FD_NOMINAL_TIMING: (u32, u32, u32) = (2, 6, 3);
+const FD_5M_TIMING: (u32, u32, u32) = (4, 11, 4);
+
+/// Data-phase segments for a rate, or None when the 80 MHz clock cannot
+/// produce the requested rate with a whole number of time quanta.
+fn fd_data_timing(kbps: u32) -> Option<(u32, u32, u32)> {
+    if kbps == 5_000 {
+        return Some(FD_5M_TIMING);
+    }
+    let bitrate = kbps.checked_mul(1_000)? as u64;
+    if bitrate > 0 {
+        let (_, tseg1, tseg2) = FD_NOMINAL_TIMING;
+        let total = 1 + tseg1 as u64 + tseg2 as u64;
+        if 80_000_000 % (bitrate * total) == 0 {
+            return Some(FD_NOMINAL_TIMING);
+        }
+    }
+    None
+}
+
+/// The FD configuration handed to `xlCanFdSetConfiguration`. The nominal
+/// phase keeps the same 80 MHz/10-tq preset; the data phase gets the
+/// rate-specific preset.
+fn can_fd_conf(kbps: u32, data_kbps: u32) -> Option<XlCanFdConf> {
+    let (sjw_d, tseg1_d, tseg2_d) = fd_data_timing(data_kbps)?;
+    // The nominal preset also has to divide the clock at this arbitration
+    // rate; an odd rate falls back to classic instead of handing the driver
+    // a timing it will reject.
+    let nominal_total = 1 + FD_NOMINAL_TIMING.1 as u64 + FD_NOMINAL_TIMING.2 as u64;
+    let nominal_bitrate = (kbps as u64).checked_mul(1_000)?;
+    if nominal_bitrate == 0 || 80_000_000 % (nominal_bitrate * nominal_total) != 0 {
+        return None;
+    }
+    Some(XlCanFdConf {
+        arbitration_bit_rate: kbps.saturating_mul(1_000),
+        sjw_abr: FD_NOMINAL_TIMING.0,
+        tseg1_abr: FD_NOMINAL_TIMING.1,
+        tseg2_abr: FD_NOMINAL_TIMING.2,
+        data_bit_rate: data_kbps.saturating_mul(1_000),
+        sjw_dbr: sjw_d,
+        tseg1_dbr: tseg1_d,
+        tseg2_dbr: tseg2_d,
+        // ISO CAN FD, vendor reserved bytes zero.
+        options: 0,
+        ..Default::default()
+    })
+}
+
 impl VectorChannel {
     /// Opens the channel (global channel index from the driver config)
     /// and activates it at the given arbitration bitrate.
     ///
     /// `init_access = false` opens without init permission: it succeeds
     /// even when another program holds the channel -- the monitoring
-    /// path. `fd_data_kbps` is accepted for interface parity with the
-    /// Kvaser path but not yet applied (Vector FD config goes through
-    /// `XLcanFdConf`, deferred); `fd` therefore stays false.
+    /// path. With init access and a nonzero `fd_data_kbps`, the channel
+    /// is configured for ISO CAN FD before activation; a driver without
+    /// the export or an adapter/hardware that rejects the configuration
+    /// falls back to classic at the arbitration rate, with `fd = false`.
     ///
     /// The permission request names the channels in the mask, not the
     /// whole 64-bit space (`u64::MAX` reads as an out-of-range channel
@@ -397,7 +490,7 @@ impl VectorChannel {
         fd_data_kbps: Option<u32>,
         init_access: bool,
     ) -> Result<VectorChannel, String> {
-        let _ = fd_data_kbps;
+        let fd_request = fd_data_kbps.filter(|k| *k > 0);
         let lib = Vxlapi::lib()
             .ok_or("Vector driver unavailable (vxlapi64.dll / vxlapi.dll not found)")?;
         unsafe {
@@ -435,18 +528,30 @@ impl VectorChannel {
                         .to_string(),
                 );
             }
-            // Bitrate needs init access; a monitoring port attaches at
-            // whatever the bus already runs.
+            // Bitrate/FD configuration needs init access; a monitoring
+            // port attaches at whatever the bus already runs.
+            let mut fd = false;
             if init_access {
-                let bitrate = kbps.saturating_mul(1_000);
-                let status = (lib.can_set_channel_bitrate)(port, mask, bitrate);
-                if status != 0 {
-                    (lib.close_port)(port);
-                    (lib.close_driver)();
-                    return Err(format!(
-                        "failed to set bitrate {kbps} kbit/s ({})",
-                        lib.error(status)
-                    ));
+                // The FD configuration carries both phases; calling the
+                // classic bitrate setter after it would overwrite the
+                // nominal phase, so the two paths are exclusive.
+                if let Some(data_kbps) = fd_request
+                    && let (Some(set_fd), Some(conf)) =
+                        (lib.can_fd_set_configuration, can_fd_conf(kbps, data_kbps))
+                {
+                    fd = set_fd(port, permission & mask, &conf) == 0;
+                }
+                if !fd {
+                    let bitrate = kbps.saturating_mul(1_000);
+                    let status = (lib.can_set_channel_bitrate)(port, mask, bitrate);
+                    if status != 0 {
+                        (lib.close_port)(port);
+                        (lib.close_driver)();
+                        return Err(format!(
+                            "failed to set bitrate {kbps} kbit/s ({})",
+                            lib.error(status)
+                        ));
+                    }
                 }
             }
             let status = (lib.activate_channel)(port, mask, XL_BUS_TYPE_CAN, 0);
@@ -464,7 +569,7 @@ impl VectorChannel {
             Ok(VectorChannel {
                 port,
                 mask,
-                fd: false,
+                fd,
                 tags: Default::default(),
             })
         }
@@ -1273,6 +1378,60 @@ mod tests {
             "and the busiest tag wins"
         );
     }
+    /// The FD configuration crosses the FFI boundary as a raw pointer; a
+    /// field order or size mismatch would put a rate or the ISO option in
+    /// the wrong place. These offsets are the vendor layout python-can
+    /// uses (`XLcanFdConf`, padded to 40 bytes).
+    #[test]
+    fn xlcanfdconf_matches_the_vendor_layout() {
+        use std::mem::{offset_of, size_of};
+        assert_eq!(size_of::<XlCanFdConf>(), 40);
+        assert_eq!(offset_of!(XlCanFdConf, arbitration_bit_rate), 0);
+        assert_eq!(offset_of!(XlCanFdConf, sjw_abr), 4);
+        assert_eq!(offset_of!(XlCanFdConf, tseg1_abr), 8);
+        assert_eq!(offset_of!(XlCanFdConf, tseg2_abr), 12);
+        assert_eq!(offset_of!(XlCanFdConf, data_bit_rate), 16);
+        assert_eq!(offset_of!(XlCanFdConf, sjw_dbr), 20);
+        assert_eq!(offset_of!(XlCanFdConf, tseg1_dbr), 24);
+        assert_eq!(offset_of!(XlCanFdConf, tseg2_dbr), 28);
+        assert_eq!(offset_of!(XlCanFdConf, options), 33, "ISO/non-ISO byte");
+    }
+
+    /// Segment presets must divide the driver's 80 MHz clock exactly; a
+    /// "close enough" timing is a silently wrong bitrate on the wire.
+    #[test]
+    fn fd_timing_reconstructs_each_supported_rate_on_the_80mhz_clock() {
+        for &(kbps, expected) in &[
+            (1_000, FD_NOMINAL_TIMING),
+            (2_000, FD_NOMINAL_TIMING),
+            (4_000, FD_NOMINAL_TIMING),
+            (5_000, FD_5M_TIMING),
+            (8_000, FD_NOMINAL_TIMING),
+        ] {
+            assert_eq!(fd_data_timing(kbps), Some(expected), "{kbps} kbit/s preset");
+            let (_, t1, t2) = expected;
+            let total = 1 + t1 as u64 + t2 as u64;
+            let bitrate = kbps as u64 * 1_000;
+            assert_eq!(80_000_000 % (bitrate * total), 0, "{kbps} kbit/s timing");
+        }
+        assert_eq!(fd_data_timing(3_000), None, "no whole-tq timing exists");
+        assert_eq!(can_fd_conf(500, 3_000), None);
+        assert_eq!(can_fd_conf(333, 2_000), None, "odd arbitration rate");
+
+        let conf = can_fd_conf(500, 2_000).expect("2 Mbit/s preset");
+        assert_eq!(conf.arbitration_bit_rate, 500_000);
+        assert_eq!(conf.data_bit_rate, 2_000_000);
+        assert_eq!(conf.options, 0, "ISO CAN FD");
+        assert_eq!(
+            (conf.sjw_abr, conf.tseg1_abr, conf.tseg2_abr),
+            FD_NOMINAL_TIMING
+        );
+        assert_eq!(
+            (conf.sjw_dbr, conf.tseg1_dbr, conf.tseg2_dbr),
+            FD_NOMINAL_TIMING
+        );
+    }
+
     use flexray::*;
 
     /// FR-2 live probe: on a machine whose Vector driver lists a
@@ -1488,6 +1647,63 @@ mod tests {
                 "loopback ok: id=0x{:X} len={} data[0]=0x{:02X}",
                 got.id, got.len, got.data[0]
             );
+
+            // CAN FD on the same virtual pair. Reopen both with init access
+            // because xlCanFdSetConfiguration needs it; a virtual adapter
+            // that rejects the FD preset comes back fd=false and this probe
+            // says so instead of claiming a classic-only round trip.
+            drop(b);
+            drop(a);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let a = VectorChannel::open(vch0, 500, Some(2_000), true).expect("FD init open");
+            assert!(a.fd, "virtual channel rejected CAN FD (classic fallback)");
+            let mut b = VectorChannel::open(vch1, 500, Some(2_000), true).expect("FD init open B");
+            assert!(b.fd, "second virtual channel rejected CAN FD");
+            let mut data = [0u8; MAX_CAN_FD_LEN];
+            for (i, byte) in data.iter_mut().enumerate() {
+                *byte = i as u8;
+            }
+            let fd = CanFrame {
+                t_us: 0,
+                channel: 0,
+                id: 0x321,
+                extended: true,
+                len: 16,
+                data,
+                dir: Direction::Tx,
+                flags: FrameFlags::FD.union(FrameFlags::BRS),
+            };
+            a.write_frame(&fd).expect("FD tx");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let mut got = None;
+            while std::time::Instant::now() < deadline {
+                if let Some(f) = b.try_read() {
+                    got = Some(f);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let got = got.expect("the FD frame never arrived on the second channel");
+            assert!(got.flags.contains(FrameFlags::FD), "EDL was not decoded");
+            assert!(got.flags.contains(FrameFlags::BRS), "BRS was not decoded");
+            assert_eq!(got.id, 0x321);
+            assert!(got.extended);
+            assert_eq!(got.len, 16);
+            assert_eq!(&got.data[..16], &fd.data[..16]);
+            println!(
+                "FD loopback ok: id=0x{:X} len={} flags={:?}",
+                got.id, got.len, got.flags
+            );
+
+            // A data rate with no whole-quantum timing must fall back to
+            // classic, not hand the driver a half-valid struct.
+            drop(b);
+            drop(a);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let classic = VectorChannel::open(vch0, 500, Some(3_000), true)
+                .expect("unsupported FD rate falls back to classic");
+            assert!(!classic.fd, "3 Mbit/s must not claim an FD config");
+            println!("unsupported FD rate falls back to classic: ok");
         }
     }
 }
