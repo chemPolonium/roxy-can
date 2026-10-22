@@ -1380,7 +1380,9 @@ export function App() {
       {generatorOpen && (
         <GeneratorModal
           entries={state?.tx ?? []}
+          frTx={state?.frTx ?? []}
           buses={state?.buses ?? []}
+          frBuses={state?.frBuses ?? []}
           catalog={catalog}
           catalogLoading={catalogLoading}
           catalogError={catalogError}
@@ -1407,6 +1409,40 @@ export function App() {
           onAdd={addEntry}
           onRemove={removeEntry}
           onSimulate={simulateBus}
+          onFrToggle={(entry, on) =>
+            void run({
+              type: "set_fr_entry_active",
+              bus: entry.bus,
+              slot: entry.slot,
+              on,
+            })
+          }
+          onFrCycle={(entry, cycleUs) =>
+            void run({
+              type: "set_fr_entry_cycle",
+              bus: entry.bus,
+              slot: entry.slot,
+              cycle_us: cycleUs,
+            })
+          }
+          onFrHex={(entry, text) =>
+            void run({
+              type: "set_fr_entry_hex",
+              bus: entry.bus,
+              slot: entry.slot,
+              text,
+            })
+          }
+          onFrAdd={(bus, slot) =>
+            void run({ type: "add_fr_entry", bus, slot })
+          }
+          onFrRemove={(entry) =>
+            void run({
+              type: "remove_fr_entry",
+              bus: entry.bus,
+              slot: entry.slot,
+            })
+          }
           onClose={() => setGeneratorOpen(false)}
         />
       )}

@@ -1542,6 +1542,12 @@ button.mini.on {
   align-items: center;
 }
 
+.gen-slot {
+  width: 64px;
+  padding: 1px 5px;
+  font-size: 10px;
+}
+
 .gen-hex {
   flex: 1 1 280px;
   font-family: "Cascadia Mono", Consolas, monospace;

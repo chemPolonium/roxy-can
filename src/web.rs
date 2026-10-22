@@ -1265,6 +1265,29 @@ enum WebCommand {
         id: u32,
         src: WebSrc,
     },
+    AddFrEntry {
+        bus: u8,
+        slot: u16,
+    },
+    RemoveFrEntry {
+        bus: u8,
+        slot: u16,
+    },
+    SetFrEntryActive {
+        bus: u8,
+        slot: u16,
+        on: bool,
+    },
+    SetFrEntryCycle {
+        bus: u8,
+        slot: u16,
+        cycle_us: u64,
+    },
+    SetFrEntryHex {
+        bus: u8,
+        slot: u16,
+        text: String,
+    },
     ClearEntrySource {
         ch: u8,
         id: u32,
@@ -1897,6 +1920,29 @@ fn app_loop(
                         app.stop();
                     }
                     app.remove_eth_bus(bus);
+                }
+                WebCommand::AddFrEntry { bus, slot } => {
+                    app.add_fr_tx(bus, slot);
+                }
+                WebCommand::RemoveFrEntry { bus, slot } => {
+                    app.send(BusCommand::RemoveFrEntry { bus, slot });
+                }
+                WebCommand::SetFrEntryActive { bus, slot, on } => {
+                    app.send(BusCommand::SetFrEntryActive { bus, slot, on });
+                }
+                WebCommand::SetFrEntryCycle {
+                    bus,
+                    slot,
+                    cycle_us,
+                } => {
+                    app.send(BusCommand::SetFrEntryCycle {
+                        bus,
+                        slot,
+                        cycle_us,
+                    });
+                }
+                WebCommand::SetFrEntryHex { bus, slot, text } => {
+                    app.send(BusCommand::SetFrEntryHex { bus, slot, text });
                 }
                 WebCommand::AddEntry { ch, id } => {
                     app.send(BusCommand::AddEntry { ch, id });
@@ -2820,6 +2866,7 @@ struct WebState {
     real_bus: bool,
     hw_refresh: u64,
     tx: Vec<WebTx>,
+    fr_tx: Vec<WebFrTx>,
     triggers: Vec<WebTrigger>,
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
@@ -2868,6 +2915,22 @@ struct WebEthBus {
     path: String,
     clusters: usize,
     frames: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebFrTx {
+    bus: u8,
+    bus_name: String,
+    slot: u16,
+    name: String,
+    node: String,
+    active: bool,
+    cycle_us: u64,
+    data_text: String,
+    sent_text: String,
+    muted: bool,
+    undescribed: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -3288,6 +3351,25 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
     tx.sort_by_key(|entry| (entry.channel, entry.id));
+
+    let mut fr_tx: Vec<WebFrTx> = snap
+        .fr_tx
+        .iter()
+        .map(|entry| WebFrTx {
+            bus: entry.bus,
+            bus_name: app.fr_bus_name(entry.bus),
+            slot: entry.slot,
+            name: entry.name.clone(),
+            node: entry.node.clone(),
+            active: entry.active,
+            cycle_us: entry.cycle_us,
+            data_text: entry.data_text.clone(),
+            sent_text: entry.sent_text.clone(),
+            muted: entry.muted,
+            undescribed: entry.undescribed,
+        })
+        .collect();
+    fr_tx.sort_by_key(|entry| (entry.bus, entry.slot));
 
     let total_frames: u64 = snap
         .aggs
@@ -3875,6 +3957,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         real_bus: snap.real_bus,
         hw_refresh: snap.hw_refresh,
         tx,
+        fr_tx,
         triggers,
         trigger_limits: WebTriggerLimits {
             pre_frames: app.limits.pre_frames,
@@ -4467,6 +4550,24 @@ mod tests {
                 .any(|row| row.kind == "fr" && !row.name.is_empty()),
             "at least one row resolves through its cluster description"
         );
+    }
+
+    /// FlexRay generator rows reach the web with their slot, sender and
+    /// payload, so the Generator dialog can edit them like CAN entries.
+    #[test]
+    fn the_state_lists_flexray_generator_entries() {
+        let mut app = App::headless();
+        let bus = app
+            .load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), None)
+            .expect("cluster loads");
+        app.add_fr_tx(bus, 13);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(!state.fr_tx.is_empty(), "the FR entry is listed");
+        let row = state.fr_tx.iter().find(|row| row.slot == 13).unwrap();
+        assert_eq!(row.bus, bus);
+        assert!(row.bus_name.starts_with("FR"));
+        assert!(!row.node.is_empty(), "the description names the sender");
     }
 
     /// A replay path must open the log and start playback in Replay mode,

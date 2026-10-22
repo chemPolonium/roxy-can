@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Bus, Catalog, CatalogSignal, TxEntry, TxSource } from "../types";
+import type {
+  Bus,
+  Catalog,
+  CatalogSignal,
+  FrBus,
+  FrTxEntry,
+  TxEntry,
+  TxSource,
+} from "../types";
 
 interface Props {
   entries: TxEntry[];
+  frTx: FrTxEntry[];
   buses: Bus[];
+  frBuses: FrBus[];
   catalog: Catalog | null;
   catalogLoading: boolean;
   catalogError: string;
@@ -13,6 +23,11 @@ interface Props {
   onHex: (entry: TxEntry, text: string) => void;
   onSource: (entry: TxEntry, src: TxSource) => void;
   onClearSource: (entry: TxEntry, name: string) => void;
+  onFrToggle: (entry: FrTxEntry, on: boolean) => void;
+  onFrCycle: (entry: FrTxEntry, cycleUs: number) => void;
+  onFrHex: (entry: FrTxEntry, text: string) => void;
+  onFrAdd: (bus: number, slot: number) => void;
+  onFrRemove: (entry: FrTxEntry) => void;
   onAdd: (ch: number, id: number) => void;
   onRemove: (entry: TxEntry) => void;
   onSimulate: (ch: number) => void;
@@ -534,9 +549,182 @@ function BusGroup({
   );
 }
 
+function FrEntryRow({
+  entry,
+  onToggle,
+  onCycle,
+  onHex,
+  onRemove,
+}: {
+  entry: FrTxEntry;
+  onToggle: (entry: FrTxEntry, on: boolean) => void;
+  onCycle: (entry: FrTxEntry, cycleUs: number) => void;
+  onHex: (entry: FrTxEntry, text: string) => void;
+  onRemove: (entry: FrTxEntry) => void;
+}) {
+  const [cycle, setCycle] = useState((entry.cycleUs / 1000).toString());
+  const cycleRef = useRef(cycle);
+  const [hex, setHex] = useState(entry.dataText);
+  const hexRef = useRef(hex);
+  useEffect(() => {
+    const next = (entry.cycleUs / 1000).toString();
+    setCycle(next);
+    cycleRef.current = next;
+  }, [entry.cycleUs]);
+  useEffect(() => {
+    setHex(entry.dataText);
+    hexRef.current = entry.dataText;
+  }, [entry.dataText]);
+  return (
+    <div class={`gen-row ${entry.active ? "on" : ""}`}>
+      <div class="gen-line">
+        <label class="gen-active">
+          <input
+            type="checkbox"
+            checked={entry.active}
+            onChange={(event) =>
+              onToggle(entry, (event.target as HTMLInputElement).checked)
+            }
+          />
+          On
+        </label>
+        <strong class="gen-name">
+          {entry.name || `slot ${entry.slot}`}
+        </strong>
+        <span class="gen-id">slot {entry.slot}</span>
+        {entry.node && <span class="gen-node">{entry.node}</span>}
+        {entry.muted && <span class="gen-warn">muted</span>}
+        {entry.undescribed && <span class="gen-warn">undescribed</span>}
+        <label class="gen-cycle" title="0 = event-triggered">
+          Cycle
+          <input
+            value={cycle}
+            onInput={(event) => {
+              cycleRef.current = (event.target as HTMLInputElement).value;
+              setCycle(cycleRef.current);
+            }}
+            onBlur={() => {
+              const ms = Number(cycleRef.current);
+              if (Number.isFinite(ms) && ms >= 0) {
+                onCycle(entry, Math.round(ms * 1000));
+              } else {
+                setCycle((entry.cycleUs / 1000).toString());
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                (event.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+          ms
+        </label>
+        <span class="spacer" />
+        <button
+          type="button"
+          class="bus-remove"
+          onClick={() => onRemove(entry)}
+        >
+          Remove
+        </button>
+      </div>
+      <div class="gen-line gen-data">
+        <input
+          class="gen-hex"
+          value={hex}
+          spellcheck={false}
+          placeholder="Hex payload"
+          onInput={(event) => {
+            hexRef.current = (event.target as HTMLInputElement).value;
+            setHex(hexRef.current);
+          }}
+          onBlur={() => {
+            const text = hexRef.current.trim();
+            if (text && text !== entry.dataText) onHex(entry, text);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              (event.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+        {entry.sentText && <span class="gen-sent">sent {entry.sentText}</span>}
+      </div>
+    </div>
+  );
+}
+
+function FrBusGroup({
+  bus,
+  entries,
+  onToggle,
+  onCycle,
+  onHex,
+  onAdd,
+  onRemove,
+}: {
+  bus: FrBus;
+  entries: FrTxEntry[];
+  onToggle: (entry: FrTxEntry, on: boolean) => void;
+  onCycle: (entry: FrTxEntry, cycleUs: number) => void;
+  onHex: (entry: FrTxEntry, text: string) => void;
+  onAdd: (bus: number, slot: number) => void;
+  onRemove: (entry: FrTxEntry) => void;
+}) {
+  const [slot, setSlot] = useState("");
+  const parsed = Number(slot);
+  return (
+    <section class="gen-bus">
+      <div class="gen-bus-head">
+        <strong>{bus.name}</strong>
+        <span class="gen-meta">
+          {bus.cluster || "unnamed cluster"} · {entries.length} entries
+        </span>
+        <span class="spacer" />
+        <input
+          class="gen-slot"
+          value={slot}
+          placeholder="slot"
+          inputMode="numeric"
+          onInput={(event) => setSlot((event.target as HTMLInputElement).value)}
+        />
+        <button
+          type="button"
+          disabled={!Number.isInteger(parsed) || parsed <= 0}
+          onClick={() => {
+            onAdd(bus.bus, parsed);
+            setSlot("");
+          }}
+        >
+          Add slot
+        </button>
+      </div>
+      {entries.length === 0 ? (
+        <div class="gen-empty">
+          No FlexRay entries on this bus. Add a slot the description
+          schedules.
+        </div>
+      ) : (
+        entries.map((entry) => (
+          <FrEntryRow
+            key={`${entry.bus}:${entry.slot}`}
+            entry={entry}
+            onToggle={onToggle}
+            onCycle={onCycle}
+            onHex={onHex}
+            onRemove={onRemove}
+          />
+        ))
+      )}
+    </section>
+  );
+}
+
 export function GeneratorModal({
   entries,
+  frTx,
   buses,
+  frBuses,
   catalog,
   catalogLoading,
   catalogError,
@@ -546,6 +734,11 @@ export function GeneratorModal({
   onHex,
   onSource,
   onClearSource,
+  onFrToggle,
+  onFrCycle,
+  onFrHex,
+  onFrAdd,
+  onFrRemove,
   onAdd,
   onRemove,
   onSimulate,
@@ -599,6 +792,18 @@ export function GeneratorModal({
               onAdd={onAdd}
               onRemove={onRemove}
               onSimulate={onSimulate}
+            />
+          ))}
+          {frBuses.map((bus) => (
+            <FrBusGroup
+              key={`fr${bus.bus}`}
+              bus={bus}
+              entries={frTx.filter((entry) => entry.bus === bus.bus)}
+              onToggle={onFrToggle}
+              onCycle={onFrCycle}
+              onHex={onFrHex}
+              onAdd={onFrAdd}
+              onRemove={onFrRemove}
             />
           ))}
         </div>

@@ -26,6 +26,7 @@ export interface State {
   realBus: boolean;
   hwRefresh: number;
   tx: TxEntry[];
+  frTx: FrTxEntry[];
   triggers: TriggerEntry[];
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
@@ -131,6 +132,20 @@ export interface HwChannel {
 export interface Hardware {
   channels: HwChannel[];
   error: string;
+}
+
+export interface FrTxEntry {
+  bus: number;
+  busName: string;
+  slot: number;
+  name: string;
+  node: string;
+  active: boolean;
+  cycleUs: number;
+  dataText: string;
+  sentText: string;
+  muted: boolean;
+  undescribed: boolean;
 }
 
 export interface TriggerEntry {
@@ -500,6 +515,11 @@ export type Command =
   | { type: "set_entry_hex"; ch: number; id: number; text: string }
   | { type: "set_entry_source"; ch: number; id: number; src: TxSource }
   | { type: "clear_entry_source"; ch: number; id: number; name: string }
+  | { type: "add_fr_entry"; bus: number; slot: number }
+  | { type: "remove_fr_entry"; bus: number; slot: number }
+  | { type: "set_fr_entry_active"; bus: number; slot: number; on: boolean }
+  | { type: "set_fr_entry_cycle"; bus: number; slot: number; cycle_us: number }
+  | { type: "set_fr_entry_hex"; bus: number; slot: number; text: string }
   | { type: "add_entry"; ch: number; id: number }
   | { type: "remove_entry"; ch: number; id: number }
   | { type: "simulate_bus_nodes"; ch: number }

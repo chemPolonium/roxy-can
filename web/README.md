@@ -81,11 +81,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   an AUTOSAR matrix by host path and list the resulting bus, cluster and frame
   count; loading or removing a description stops the measurement. It uses the
   same core commands as the desktop Buses/Network windows.
-- **Generator…** edits the real TxView list: per-entry On, cycle, FD, hex
-  payload, add-from-DBC/remove, and a per-bus “Simulate nodes” action. The
+- **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
+  cycle, FD and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
+  action, and FR slots added by number to a loaded cluster description. The
   Write tab shows the bus Write ring (command results, node errors, trigger
-  events). **Sources** opens the waveform editor per entry: add/remove a DBC
-  signal and edit its shape (Ramp, Sine, Step, Random, Triangle, Counter),
+  events). **Sources** opens the CAN waveform editor per entry: add/remove a
+  DBC signal and edit its shape (Ramp, Sine, Step, Random, Triangle, Counter),
   Lo/Hi, period, phase, Step sequence and Random redraw interval.
 - **Triggers…** shows the live rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
@@ -164,10 +165,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment
-and live generation (descriptions, replay rows and read-only Trace/Messages/
-Statistics are supported), docking/desktops, and syntax highlighting or
-`.rxcan` loading in the web script editor. Hardware, Data, State and the
-Monitor cover CAN only for now.
+and Ethernet generation (descriptions, replay rows, read-only Trace/Messages/
+Statistics and the FR generator are supported), docking/desktops, and syntax
+highlighting or `.rxcan` loading in the web script editor. Hardware, Data,
+State and the Monitor cover CAN only for now.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled
