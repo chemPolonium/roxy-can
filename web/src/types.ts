@@ -19,6 +19,7 @@ export interface State {
   realBus: boolean;
   hwRefresh: number;
   tx: TxEntry[];
+  triggers: TriggerEntry[];
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];
@@ -87,6 +88,16 @@ export interface HwChannel {
 export interface Hardware {
   channels: HwChannel[];
   error: string;
+}
+
+export interface TriggerEntry {
+  summary: string;
+  action: string;
+  kind: string;
+  enabled: boolean;
+  fired: number;
+  level: boolean;
+  lastFireUs: number;
 }
 
 export interface TxEntry {
@@ -190,4 +201,8 @@ export type Command =
   | { type: "set_entry_hex"; ch: number; id: number; text: string }
   | { type: "add_entry"; ch: number; id: number }
   | { type: "remove_entry"; ch: number; id: number }
-  | { type: "simulate_bus_nodes"; ch: number };
+  | { type: "simulate_bus_nodes"; ch: number }
+  | { type: "add_trigger"; kind: string }
+  | { type: "set_trigger_enabled"; index: number; on: boolean }
+  | { type: "remove_trigger"; index: number }
+  | { type: "rearm_triggers" };

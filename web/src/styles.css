@@ -1144,6 +1144,87 @@ button.mini {
   font-size: 10.5px;
 }
 
+.trigger-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: min(780px, 88vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.trig-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trig-body {
+  flex: 1 1 auto;
+  min-height: 160px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.trig-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #151c25;
+  background: #0d1218;
+  font-size: 11px;
+}
+
+.trig-row.off {
+  opacity: 0.62;
+}
+
+.trig-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #ccd8e6;
+}
+
+.trig-level {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px rgb(84 192 138 / 50%);
+}
+
+.trig-action {
+  padding: 0 5px;
+  color: #9fc7f5;
+  border: 1px solid #2d5c88;
+  border-radius: 3px;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.trig-fired,
+.trig-last {
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.trig-last {
+  min-width: 72px;
+  text-align: right;
+}
+
 @media (max-width: 900px) {
   .buses-tools {
     flex-wrap: wrap;

@@ -14,6 +14,7 @@ import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { GeneratorModal } from "./components/GeneratorModal";
+import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
@@ -134,6 +135,7 @@ export function App() {
   const [catalogError, setCatalogError] = useState("");
   const [busesOpen, setBusesOpen] = useState(false);
   const [generatorOpen, setGeneratorOpen] = useState(false);
+  const [triggersOpen, setTriggersOpen] = useState(false);
   const [hardware, setHardware] = useState<Hardware | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareError, setHardwareError] = useState("");
@@ -316,6 +318,7 @@ export function App() {
     setSessionOpen(false);
     setBusesOpen(false);
     setGeneratorOpen(false);
+    setTriggersOpen(false);
     setPickerOpen(true);
     void loadCatalog();
   };
@@ -324,8 +327,17 @@ export function App() {
     setSessionOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
+    setTriggersOpen(false);
     setGeneratorOpen(true);
     void loadCatalog();
+  };
+
+  const openTriggers = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setGeneratorOpen(false);
+    setTriggersOpen(true);
   };
 
   const toggleSignal = (
@@ -392,6 +404,13 @@ export function App() {
     void run({ type: "remove_entry", ch: entry.channel, id: entry.id });
   const simulateBus = (ch: number) =>
     void run({ type: "simulate_bus_nodes", ch });
+  const addTrigger = (kind: string) =>
+    void run({ type: "add_trigger", kind });
+  const setTriggerEnabled = (index: number, on: boolean) =>
+    void run({ type: "set_trigger_enabled", index, on });
+  const removeTrigger = (index: number) =>
+    void run({ type: "remove_trigger", index });
+  const rearmTriggers = () => void run({ type: "rearm_triggers" });
 
   const recent = (paths: string[], open: (path: string) => void) =>
     paths.length > 0 && (
@@ -462,10 +481,18 @@ export function App() {
           <button
             type="button"
             disabled={!online}
+            onClick={openTriggers}
+          >
+            Triggers…
+          </button>
+          <button
+            type="button"
+            disabled={!online}
             onClick={() => {
               setSessionOpen(false);
               setPickerOpen(false);
               setGeneratorOpen(false);
+              setTriggersOpen(false);
               setBusesOpen(true);
             }}
           >
@@ -478,6 +505,7 @@ export function App() {
               setPickerOpen(false);
               setBusesOpen(false);
               setGeneratorOpen(false);
+              setTriggersOpen(false);
               setSessionOpen(true);
             }}
           >
@@ -729,6 +757,17 @@ export function App() {
         <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
       </footer>
+
+      {triggersOpen && (
+        <TriggersModal
+          triggers={state?.triggers ?? []}
+          onAdd={addTrigger}
+          onToggle={setTriggerEnabled}
+          onRemove={removeTrigger}
+          onRearm={rearmTriggers}
+          onClose={() => setTriggersOpen(false)}
+        />
+      )}
 
       {generatorOpen && (
         <GeneratorModal

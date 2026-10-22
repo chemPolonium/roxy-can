@@ -23,6 +23,7 @@ use crate::can::frame::{CanFrame, Direction};
 use crate::hw::HwDriver;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
+use crate::trigger::{TriggerAction, TriggerCmd, TriggerCond, TriggerKind};
 
 const PORT: u16 = 2010;
 const SERIES_POINTS: usize = 120;
@@ -228,6 +229,31 @@ fn reset_visual_stores(
     }
     series.clear();
     rate_window.clear();
+}
+
+fn trigger_kind(cond: &TriggerCond) -> &'static str {
+    match cond {
+        TriggerCond::SignalCross { .. } => "signal",
+        TriggerCond::IdPresent { .. } => "id",
+        TriggerCond::ErrorFrame { .. } => "error",
+        TriggerCond::CycleTimeout { .. } => "timeout",
+        TriggerCond::FrFramePresent { .. } => "fr_frame",
+        TriggerCond::FrSignalCross { .. } => "fr_signal",
+        TriggerCond::SysVar { .. } => "sysvar",
+    }
+}
+
+fn parse_trigger_kind(value: &str) -> Option<TriggerKind> {
+    match value {
+        "signal" => Some(TriggerKind::Signal),
+        "id" => Some(TriggerKind::Id),
+        "error" => Some(TriggerKind::ErrorFrame),
+        "fr_frame" => Some(TriggerKind::FrFrame),
+        "fr_signal" => Some(TriggerKind::FrSignal),
+        "timeout" => Some(TriggerKind::Timeout),
+        "sysvar" => Some(TriggerKind::SysVar),
+        _ => None,
+    }
 }
 
 fn parse_driver(value: &str) -> Option<HwDriver> {
@@ -484,6 +510,17 @@ enum WebCommand {
     SimulateBusNodes {
         ch: u8,
     },
+    AddTrigger {
+        kind: String,
+    },
+    SetTriggerEnabled {
+        index: usize,
+        on: bool,
+    },
+    RemoveTrigger {
+        index: usize,
+    },
+    RearmTriggers,
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -705,6 +742,20 @@ fn app_loop(
                 }
                 WebCommand::RemoveEntry { ch, id } => {
                     app.send(BusCommand::RemoveEntry { ch, id });
+                }
+                WebCommand::AddTrigger { kind } => {
+                    if let Some(kind) = parse_trigger_kind(&kind) {
+                        app.apply_trigger_cmds(vec![TriggerCmd::Add(kind)]);
+                    }
+                }
+                WebCommand::SetTriggerEnabled { index, on } => {
+                    app.apply_trigger_cmds(vec![TriggerCmd::SetEnabled { index, on }]);
+                }
+                WebCommand::RemoveTrigger { index } => {
+                    app.apply_trigger_cmds(vec![TriggerCmd::Remove(index)]);
+                }
+                WebCommand::RearmTriggers => {
+                    app.apply_trigger_cmds(vec![TriggerCmd::Rearm]);
                 }
                 WebCommand::SimulateBusNodes { ch } => {
                     let nodes = app
@@ -1421,6 +1472,7 @@ struct WebState {
     real_bus: bool,
     hw_refresh: u64,
     tx: Vec<WebTx>,
+    triggers: Vec<WebTrigger>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -1482,6 +1534,18 @@ struct WebTx {
     sent_text: String,
     muted: bool,
     sources: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebTrigger {
+    summary: String,
+    action: String,
+    kind: String,
+    enabled: bool,
+    fired: u64,
+    level: bool,
+    last_fire_us: u64,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1605,6 +1669,27 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .collect();
     tx.sort_by_key(|entry| (entry.channel, entry.id));
 
+    let triggers: Vec<WebTrigger> = snap
+        .triggers
+        .iter()
+        .enumerate()
+        .map(|(index, trigger)| WebTrigger {
+            summary: app.trigger_summary(index),
+            action: match &trigger.action {
+                TriggerAction::StartRecording => "start recording".to_string(),
+                TriggerAction::StopRecording => "stop recording".to_string(),
+                TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
+                TriggerAction::ClearTrace => "clear trace".to_string(),
+                TriggerAction::InsertMarker => "insert marker".to_string(),
+            },
+            kind: trigger_kind(&trigger.cond).to_string(),
+            enabled: trigger.enabled,
+            fired: trigger.fired,
+            level: trigger.level,
+            last_fire_us: trigger.last_fire_t_us,
+        })
+        .collect();
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -1696,6 +1781,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         real_bus: snap.real_bus,
         hw_refresh: snap.hw_refresh,
         tx,
+        triggers,
         channels,
         messages,
         write,
@@ -1795,6 +1881,18 @@ mod tests {
         store.unselect(&key);
         store.sync(&app);
         assert!(store.seed().is_empty());
+    }
+
+    /// The Triggers panel reads the live rule list and its fire state.
+    #[test]
+    fn the_state_lists_triggers() {
+        let mut app = App::headless();
+        app.apply_trigger_cmds(vec![TriggerCmd::Add(TriggerKind::Id)]);
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.triggers.len(), 1);
+        assert!(state.triggers[0].enabled);
+        assert_eq!(state.triggers[0].kind, "id");
+        assert!(!state.triggers[0].summary.is_empty());
     }
 
     /// The generator panel reads live TxView rows, including their cycle,
