@@ -380,6 +380,10 @@ pub struct App {
     pub msg_windows: Vec<MsgWin>,
     pub stats_windows: Vec<StatsWin>,
     pub graphics: Vec<GraphicsWindow>,
+    /// Sampling stride a frontend asks for itself, ignoring the Graphics
+    /// windows' zoom. The web plot owns its lanes, so it must not have to
+    /// mutate (and later save) the desktop window config to get fine curves.
+    pub(crate) plot_stride_us: Option<u64>,
     pub data_windows: Vec<DataWindow>,
     pub state_trackers: Vec<StateWin>,
     pub(crate) trace_counter: usize,
@@ -556,6 +560,7 @@ impl App {
             msg_windows: Vec::new(),
             stats_windows: Vec::new(),
             graphics: Vec::new(),
+            plot_stride_us: None,
             data_windows: Vec::new(),
             state_trackers: Vec::new(),
             trace_counter: 0,

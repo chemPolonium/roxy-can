@@ -1375,6 +1375,17 @@ button.mini {
   min-width: 0;
 }
 
+.save-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.save-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .recent {
   display: flex;
   flex-wrap: wrap;

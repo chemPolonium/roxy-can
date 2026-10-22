@@ -683,6 +683,9 @@ impl App {
     /// signal update, while wide windows keep the coarse stride that bounds
     /// the cache to a few ten-thousand points per signal.
     pub(crate) fn wanted_stride_us(&self) -> u64 {
+        if let Some(stride) = self.plot_stride_us {
+            return stride.clamp(MIN_STRIDE_US, SAMPLE_INTERVAL_US);
+        }
         let min_window_us = self
             .graphics
             .iter()

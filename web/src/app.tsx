@@ -131,6 +131,7 @@ export function App() {
   const [chartTab, setChartTab] = useState<ChartTab>("rate");
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
+  const [savePath, setSavePath] = useState("");
   const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -303,6 +304,10 @@ export function App() {
     if (!value) return;
     void run({ type: "open_log", path: value });
     setSessionOpen(false);
+  };
+
+  const saveProject = (path: string | null) => {
+    void run({ type: "save_project", path });
   };
 
   const loadCatalog = async () => {
@@ -891,7 +896,7 @@ export function App() {
                 <h3>Project</h3>
                 <p class="session-current">
                   {state?.project
-                    ? `Current: ${state.project}`
+                    ? `Current: ${state.project}${state.dirty ? " · unsaved changes" : ""}`
                     : "Untitled workspace"}
                 </p>
                 <form
@@ -915,6 +920,29 @@ export function App() {
                     Open project
                   </button>
                 </form>
+                <div class="save-row">
+                  <button
+                    type="button"
+                    disabled={!state?.projectPath}
+                    onClick={() => saveProject(null)}
+                  >
+                    Save
+                  </button>
+                  <input
+                    value={savePath}
+                    placeholder={state?.projectPath || "Save as host path…"}
+                    onInput={(event) =>
+                      setSavePath((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={!savePath.trim()}
+                    onClick={() => saveProject(savePath.trim())}
+                  >
+                    Save as
+                  </button>
+                </div>
                 {recent(state?.recentProjects ?? [], loadProject)}
               </section>
 

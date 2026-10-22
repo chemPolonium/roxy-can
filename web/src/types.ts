@@ -8,6 +8,8 @@ export interface State {
   simTimeUs: number;
   status: string;
   project: string;
+  projectPath: string;
+  dirty: boolean;
   log: string;
   logInfo: string;
   runMode: string;
@@ -228,6 +230,7 @@ export type Command =
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
+  | { type: "save_project"; path: string | null }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }

@@ -5060,6 +5060,18 @@ fn a_cycle_timeout_trigger_fires_on_each_dropout() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
+/// A frontend that owns its plots sets the stride directly; the desktop
+/// windows' zoom neither tightens nor coarsens it.
+#[test]
+fn a_plot_stride_override_ignores_the_graphics_windows() {
+    let mut app = quiet_app();
+    app.graphics[0].time_window_s = 10.0;
+    let windowed = app.wanted_stride_us();
+    app.plot_stride_us = Some(5_000);
+    assert_eq!(app.wanted_stride_us(), 5_000);
+    assert!(windowed > 5_000, "the desktop stride stays window-derived");
+}
+
 /// The CANoe Graphics behaviour: zooming into a small window must reveal
 /// every signal update. A 100 Hz signal watched through a 0.1 s window
 /// samples every frame at the tightened stride, where the old fixed 50 ms

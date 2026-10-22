@@ -1,11 +1,12 @@
 # roxy-can web spike
 
-Experimental web frontend for roxy-can, on the `web-spike` branch. It follows
+Experimental web frontend for roxy-can, merged into `main`. It follows
 the lightweight shape of roxy-arxml: a Rust `axum` host, a Preact + TypeScript
 frontend built by Vite, no component library.
 
-**This is not the supported UI.** The Dear ImGui desktop app remains the
-product. The spike exists to measure the alternative before deciding.
+**The Dear ImGui desktop app remains the supported UI until web parity.** The
+spike exists to measure the alternative before deciding; features are being
+ported panel by panel.
 
 ## Run
 
@@ -30,8 +31,12 @@ port (default 2010).
 The toolbar's **Session…** dialog can switch sessions without restarting the
 server: enter a host path or pick a recent project/log. Opening a project or
 log stops the current measurement and clears the trace; a log starts playing
-immediately. Paths are resolved on the host (the page cannot open a native
-file dialog).
+immediately. **Save** writes the open project and **Save as** writes a copy to
+a typed host path; the dialog marks unsaved changes next to the current name.
+Saving keeps the project's desktop dock layout and Graphics-window settings
+untouched: the web plot asks the core for its sampling stride instead of
+editing desktop config. Paths are resolved on the host (the page cannot open
+a native file dialog).
 
 For hot reload, keep the server running and start Vite in a second terminal:
 
@@ -55,6 +60,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - A project or log can be loaded from the Session dialog by host path or
   from recents. The header, mode chip and status bar carry the session name
   and replay playhead; switching sessions resets the trace and curve buffers.
+  A loaded project starts clean, plain **Save** rewrites it in place, and
+  **Save as** targets a new path — both reuse the desktop project format,
+  including its layout and desktops.
 - **Buses…** lists each bus with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
   configured rates, and toggles the Simulated/Real bus mode. Buses can be
@@ -90,11 +98,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 ## Not here yet
 
-Saving projects, a native browser file picker (opening and DBC loading use
-host paths and recents; the CLI flags also work), FlexRay/Ethernet
-attachment, generator signal sources, system variables, the monitor, node
-scripts, and docking/desktops. Hardware is CAN attach/detach only for now;
-signal selection is CAN-only and session-only.
+A native browser file picker (opening, saving and DBC loading use host paths
+and recents; the CLI flags also work), FlexRay/Ethernet attachment, generator
+signal sources, system variables, the monitor, node scripts, and
+docking/desktops. Hardware is CAN attach/detach only for now; signal selection
+is CAN-only and session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

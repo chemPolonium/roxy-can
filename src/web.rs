@@ -231,6 +231,19 @@ fn reset_visual_stores(
     rate_window.clear();
 }
 
+fn read_project_layout(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("layout")
+                .and_then(|layout| layout.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -276,7 +289,13 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 /// playback; no flags keeps the old demo behavior.
 fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
     if let Some(path) = project {
+        let layout = read_project_layout(std::path::Path::new(path));
         app.open_project_path(std::path::Path::new(path));
+        // The web has no desktop layout of its own; keep the project's
+        // existing dock layout so a web save does not wipe it.
+        if !layout.is_empty() {
+            app.layout_cache = layout;
+        }
     }
     if let Some(path) = replay {
         app.load_log(path);
@@ -284,10 +303,18 @@ fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
             app.send(BusCommand::SetRunMode(Mode::Replay));
             app.start_selected();
         }
+        if project.is_some() {
+            app.mark_clean();
+        }
         return;
     }
     if project.is_none() {
         seed_demo(app);
+    } else {
+        // Applying the project's live layout to the active desktop is part
+        // of loading it (the desktop UI does the same on its first frame),
+        // so the freshly opened project has nothing unsaved.
+        app.mark_clean();
     }
 }
 
@@ -479,6 +506,9 @@ enum WebCommand {
         ch: u8,
         path: String,
     },
+    SaveProject {
+        path: Option<String>,
+    },
     SetEntryActive {
         ch: u8,
         id: u32,
@@ -565,16 +595,10 @@ fn app_loop(
 ) {
     let mut app = App::headless();
     prepare_session(&mut app, project.as_deref(), replay.as_deref());
-    // The web plot window is independent of the desktop layout. A 1 s
-    // Graphics window requests the 5 ms sampling stride; no project needs
-    // to carry a hidden desktop window just to get fine curves.
-    if app.graphics.is_empty() {
-        app.new_graphics_window();
-    }
-    if let Some(window) = app.graphics.first_mut() {
-        window.opened = true;
-        window.time_window_s = 1.0;
-    }
+    // The web plot window is independent of the desktop layout. Ask the
+    // core for the 5 ms stress stride directly instead of opening a
+    // hidden Graphics window, which would dirty (and later save) config.
+    app.plot_stride_us = Some(5_000);
     if project.is_none()
         && replay.is_none()
         && let Ok(mut store) = signals.lock()
@@ -628,7 +652,14 @@ fn app_loop(
                     }
                     app.send(BusCommand::ClearTrace);
                     app.send(BusCommand::ClearAggregates);
+                    let layout = read_project_layout(std::path::Path::new(&path));
                     app.open_project_path(std::path::Path::new(&path));
+                    if !layout.is_empty() {
+                        app.layout_cache = layout;
+                    }
+                    // Same as the bootstrap load: applying the live layout
+                    // is part of opening the project, not an unsaved edit.
+                    app.mark_clean();
                     app.log_path.clear();
                     app.log_info = None;
                     app.send(BusCommand::SetRunMode(Mode::Virtual));
@@ -745,6 +776,20 @@ fn app_loop(
                         fd_data_kbps: Some(fd_data_kbps),
                         node_roles: None,
                     });
+                }
+                WebCommand::SaveProject { path } => {
+                    let target = path
+                        .filter(|value| !value.trim().is_empty())
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| app.project_path.clone());
+                    match target {
+                        Some(target) => {
+                            app.save_project(Some(target));
+                        }
+                        None => {
+                            app.status = "save needs a project path".to_string();
+                        }
+                    }
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
                     app.send(BusCommand::SetEntryActive { ch, id, on });
@@ -996,12 +1041,6 @@ fn seed_demo(app: &mut App) {
     for (ch, id) in entries {
         app.send(BusCommand::SetEntryActive { ch, id, on: true });
         app.send(BusCommand::SetEntryCycle { ch, id, cycle_us });
-    }
-    // A 1 s Graphics window asks the core for the finest sampling stride
-    // (5 ms); the 50 ms default would only give each curve 20 points/s.
-    if let Some(window) = app.graphics.first_mut() {
-        window.time_window_s = 1.0;
-        window.opened = true;
     }
     for spec in &SIGNALS {
         let mut src = ValueSrc::new(spec.name, spec.kind, spec.lo, spec.hi);
@@ -1561,6 +1600,8 @@ struct WebState {
     sim_time_us: u64,
     status: String,
     project: String,
+    project_path: String,
+    dirty: bool,
     log: String,
     log_info: String,
     run_mode: String,
@@ -2012,6 +2053,12 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        project_path: app
+            .project_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        dirty: app.is_dirty(),
         log: std::path::Path::new(&app.log_path)
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -2096,6 +2143,22 @@ mod tests {
             !trace.after(before).is_empty(),
             "the client only needs the delta"
         );
+    }
+
+    /// Loading a project through the web keeps the file's desktop layout and
+    /// leaves the workspace clean: the plot's fine stride is frontend state,
+    /// not a config edit that a later save would write back.
+    #[test]
+    fn a_web_project_load_keeps_the_desktop_layout_and_stays_clean() {
+        let mut app = App::headless();
+        prepare_session(&mut app, Some("assets/Sample.rxproj"), None);
+        assert!(
+            !app.layout_cache.is_empty(),
+            "the top-level dock layout survives the headless load"
+        );
+        assert!(!app.is_dirty(), "web startup must not edit desktop config");
+        app.plot_stride_us = Some(5_000);
+        assert!(!app.is_dirty(), "the plot stride is frontend state");
     }
 
     /// A replay path must open the log and start playback in Replay mode,
