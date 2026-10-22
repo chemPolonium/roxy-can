@@ -517,11 +517,71 @@ input::placeholder {
   background: var(--accent);
 }
 
+.trace-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.trace-cursors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.trace-selection {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trace-cursor-times {
+  color: #cfe6ff;
+}
+
+.trace-cursors .spacer {
+  flex: 1 1 auto;
+}
+
+.trace-cursors button {
+  padding: 1px 6px;
+  font-size: 9px;
+}
+
+.trace-table tbody tr.selected td,
+.trace-table tbody tr.selected:hover td {
+  background: #16283b;
+}
+
+.trace-table tbody tr.cursor-a td:first-child {
+  box-shadow: inset 2px 0 #e6b455;
+}
+
+.trace-table tbody tr.cursor-b td:first-child {
+  box-shadow: inset 2px 0 #c77dff;
+}
+
 .table-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   scrollbar-color: #2c3846 #0c1016;
+}
+
+.table-scroll:focus {
+  outline: none;
+}
+
+.table-scroll:focus-visible {
+  outline: 1px solid #2f4a64;
+  outline-offset: -1px;
 }
 
 .table-scroll::-webkit-scrollbar {

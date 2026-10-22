@@ -73,7 +73,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   rows. The server seeds the buffer once and then sends only new frames, so
   the 100 ms poll stays small as the table grows. A scrolled-away reader keeps
   the same frame in view when rows are prepended; the live edge follows new
-  frames.
+  frames. Click a row to select it, move with ↑/↓, copy with Ctrl+C, and use
+  **Set A** / **Set B** for a Δt readout (the row's left edge marks each
+  cursor).
 - A project or log can be loaded from the Session dialog by host path or
   from recents. The header, mode chip and status bar carry the session name
   and replay playhead; switching sessions resets the trace and curve buffers.
