@@ -78,7 +78,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   one remaps the web signal keys with the core's channel indices. Each DBC
   node appears as a chip with its generator-entry count; ticking it declares
   the node Simulated (its DBC traffic joins the generator), unticking takes it
-  offline. It uses the same core commands as the desktop Buses/Network windows.
+  offline. **FlexRay** and **Ethernet** sections load a FIBEX/ARXML cluster or
+  an AUTOSAR matrix by host path and list the resulting bus, cluster and frame
+  count; loading or removing a description stops the measurement. It uses the
+  same core commands as the desktop Buses/Network windows.
 - **Generator…** edits the real TxView list: per-entry On, cycle, FD, hex
   payload, add-from-DBC/remove, and a per-bus “Simulate nodes” action. The
   Write tab shows the bus Write ring (command results, node errors, trigger
@@ -157,9 +160,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 A native browser file picker (opening, saving and DBC loading use host paths
-and recents; the CLI flags also work), FlexRay/Ethernet attachment,
-docking/desktops, and syntax highlighting or `.rxcan` loading in the web
-script editor. Hardware, Data, State and the Monitor cover CAN only for now.
+and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment,
+live FR/Eth observation and generation (descriptions can already be loaded in
+Buses), docking/desktops, and syntax highlighting or `.rxcan` loading in the
+web script editor. Hardware, Data, State and the Monitor cover CAN only for
+now.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

@@ -21,6 +21,8 @@ export interface State {
   recentProjects: string[];
   recentLogs: string[];
   buses: Bus[];
+  frBuses: FrBus[];
+  ethBuses: EthBus[];
   realBus: boolean;
   hwRefresh: number;
   tx: TxEntry[];
@@ -76,6 +78,22 @@ export interface CatalogChannel {
 
 export interface Catalog {
   channels: CatalogChannel[];
+}
+
+export interface FrBus {
+  bus: number;
+  name: string;
+  path: string;
+  cluster: string;
+  frames: number;
+}
+
+export interface EthBus {
+  bus: number;
+  name: string;
+  path: string;
+  clusters: number;
+  frames: number;
 }
 
 export interface HwAttachment {
@@ -468,6 +486,10 @@ export type Command =
     }
   | { type: "load_dbc"; ch: number; path: string }
   | { type: "set_node_role"; bus: number; node: string; simulated: boolean }
+  | { type: "load_fr_description"; path: string; bus: number | null }
+  | { type: "remove_fr_bus"; bus: number }
+  | { type: "load_eth_description"; path: string; bus: number | null }
+  | { type: "remove_eth_bus"; bus: number }
   | { type: "set_entry_active"; ch: number; id: number; on: boolean }
   | { type: "set_entry_cycle"; ch: number; id: number; cycle_us: number }
   | { type: "set_entry_fd"; ch: number; id: number; fd: boolean }

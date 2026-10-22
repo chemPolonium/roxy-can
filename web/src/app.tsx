@@ -1405,6 +1405,8 @@ export function App() {
       {busesOpen && (
         <BusesModal
           buses={state?.buses ?? []}
+          frBuses={state?.frBuses ?? []}
+          ethBuses={state?.ethBuses ?? []}
           realBus={state?.realBus ?? false}
           hardware={hardware}
           loading={hardwareLoading}
@@ -1418,6 +1420,14 @@ export function App() {
           onSetNodeRole={(bus, node, simulated) =>
             void run({ type: "set_node_role", bus, node, simulated })
           }
+          onLoadFr={(path) =>
+            void run({ type: "load_fr_description", path, bus: null })
+          }
+          onRemoveFr={(bus) => void run({ type: "remove_fr_bus", bus })}
+          onLoadEth={(path) =>
+            void run({ type: "load_eth_description", path, bus: null })
+          }
+          onRemoveEth={(bus) => void run({ type: "remove_eth_bus", bus })}
           onAttach={attachHardware}
           onDetach={detachHardware}
           onSetReal={setRealBus}

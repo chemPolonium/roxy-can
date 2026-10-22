@@ -1089,6 +1089,20 @@ enum WebCommand {
         node: String,
         simulated: bool,
     },
+    LoadFrDescription {
+        path: String,
+        bus: Option<u8>,
+    },
+    RemoveFrBus {
+        bus: u8,
+    },
+    LoadEthDescription {
+        path: String,
+        bus: Option<u8>,
+    },
+    RemoveEthBus {
+        bus: u8,
+    },
     LoadDbc {
         ch: u8,
         path: String,
@@ -1859,6 +1873,30 @@ fn app_loop(
                             crate::app::NodeRole::Absent
                         },
                     });
+                }
+                WebCommand::LoadFrDescription { path, bus } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.load_cluster_description(&path, bus);
+                }
+                WebCommand::RemoveFrBus { bus } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.remove_fr_bus(bus);
+                }
+                WebCommand::LoadEthDescription { path, bus } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.load_eth_description(&path, bus);
+                }
+                WebCommand::RemoveEthBus { bus } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.remove_eth_bus(bus);
                 }
                 WebCommand::AddEntry { ch, id } => {
                     app.send(BusCommand::AddEntry { ch, id });
@@ -2677,6 +2715,8 @@ struct WebState {
     recent_projects: Vec<String>,
     recent_logs: Vec<String>,
     buses: Vec<WebBus>,
+    fr_buses: Vec<WebFrBus>,
+    eth_buses: Vec<WebEthBus>,
     real_bus: bool,
     hw_refresh: u64,
     tx: Vec<WebTx>,
@@ -2708,6 +2748,26 @@ struct WebSeriesPoint {
     total: f64,
     bus_rates: Vec<f64>,
     bus_loads: Vec<f64>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebFrBus {
+    bus: u8,
+    name: String,
+    path: String,
+    cluster: String,
+    frames: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebEthBus {
+    bus: u8,
+    name: String,
+    path: String,
+    clusters: usize,
+    frames: usize,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -3258,6 +3318,29 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
 
+    let fr_buses: Vec<WebFrBus> = app
+        .fr_buses
+        .iter()
+        .map(|(bus, cfg)| WebFrBus {
+            bus: *bus,
+            name: app.fr_bus_name(*bus),
+            path: cfg.path.clone(),
+            cluster: cfg.db.params.name.clone(),
+            frames: cfg.db.frames.len(),
+        })
+        .collect();
+    let eth_buses: Vec<WebEthBus> = app
+        .eth_buses
+        .iter()
+        .map(|(bus, cfg)| WebEthBus {
+            bus: *bus,
+            name: app.eth_bus_label(*bus),
+            path: cfg.path.clone(),
+            clusters: cfg.db.clusters.len(),
+            frames: cfg.db.frames.len(),
+        })
+        .collect();
+
     let bus_stats: Vec<WebBusStats> = snap
         .bus_loads
         .iter()
@@ -3582,6 +3665,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         recent_projects: app.recent_projects.clone(),
         recent_logs: app.recent_log.clone(),
         buses,
+        fr_buses,
+        eth_buses,
         real_bus: snap.real_bus,
         hw_refresh: snap.hw_refresh,
         tx,
@@ -4115,6 +4200,34 @@ mod tests {
         clear_state_rule(&mut app, &key);
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert!(state.state_rows[0].rule.is_none());
+    }
+
+    /// FR/Eth descriptions loaded into the core appear as bus sections with
+    /// their cluster identity and frame counts.
+    #[test]
+    fn the_state_lists_flexray_and_ethernet_buses() {
+        let mut app = App::headless();
+        let fr = app
+            .load_cluster_description("assets/fibex/PowerTrain_v2.xml", None)
+            .expect("FIBEX fixture loads");
+        let eth = app
+            .load_eth_description("assets/arxml/PowerTrain.arxml", None)
+            .expect("ARXML fixture loads");
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let fr_bus = state
+            .fr_buses
+            .iter()
+            .find(|bus| bus.bus == fr)
+            .expect("FlexRay bus listed");
+        assert!(!fr_bus.name.is_empty());
+        assert!(fr_bus.frames > 0);
+        let eth_bus = state
+            .eth_buses
+            .iter()
+            .find(|bus| bus.bus == eth)
+            .expect("Ethernet bus listed");
+        assert!(!eth_bus.name.is_empty());
+        assert!(eth_bus.path.contains("PowerTrain"));
     }
 
     /// A replay path must open the log and start playback in Replay mode,

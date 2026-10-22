@@ -1167,6 +1167,67 @@ button.mini.on {
   border-bottom: 1px solid var(--line-soft);
 }
 
+.bus-proto {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #0d1218;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+}
+
+.bus-proto h3 {
+  margin: 0 0 6px;
+  color: #9fb0c2;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.proto-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid #161d26;
+  font-size: 10.5px;
+}
+
+.proto-row strong {
+  color: #dfe8f2;
+  font-weight: 500;
+}
+
+.proto-row span {
+  color: var(--muted);
+}
+
+.proto-row em {
+  color: #cfe6ff;
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.proto-path {
+  margin-left: auto;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9.5px;
+}
+
+.proto-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.proto-add input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10.5px;
+}
+
 .bus-nodes-label {
   flex: 0 0 52px;
   padding-top: 4px;

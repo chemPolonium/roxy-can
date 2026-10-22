@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Bus, Hardware, HwChannel } from "../types";
+import type { Bus, EthBus, FrBus, Hardware, HwChannel } from "../types";
 
 interface Props {
   buses: Bus[];
+  frBuses: FrBus[];
+  ethBuses: EthBus[];
   realBus: boolean;
   hardware: Hardware | null;
   loading: boolean;
@@ -14,6 +16,10 @@ interface Props {
   onSetRates: (bus: number, arb: number, fd: number) => void;
   onLoadDbc: (bus: number, path: string) => void;
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
+  onLoadFr: (path: string) => void;
+  onRemoveFr: (bus: number) => void;
+  onLoadEth: (path: string) => void;
+  onRemoveEth: (bus: number) => void;
   onAttach: (bus: number, driver: string, index: number) => void;
   onDetach: (bus: number) => void;
   onSetReal: (real: boolean) => void;
@@ -302,6 +308,8 @@ function BusCard({
 
 export function BusesModal({
   buses,
+  frBuses,
+  ethBuses,
   realBus,
   hardware,
   loading,
@@ -313,12 +321,18 @@ export function BusesModal({
   onSetRates,
   onLoadDbc,
   onSetNodeRole,
+  onLoadFr,
+  onRemoveFr,
+  onLoadEth,
+  onRemoveEth,
   onAttach,
   onDetach,
   onSetReal,
   onOpenScripts,
   onClose,
 }: Props) {
+  const [frPath, setFrPath] = useState("");
+  const [ethPath, setEthPath] = useState("");
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -407,6 +421,91 @@ export function BusesModal({
               onSetNodeRole={onSetNodeRole}
             />
           ))}
+
+          <section class="bus-proto">
+            <h3>FlexRay</h3>
+            {frBuses.map((bus) => (
+              <div class="proto-row" key={bus.bus}>
+                <strong>{bus.name}</strong>
+                <span>{bus.cluster || "unnamed cluster"}</span>
+                <em>{bus.frames} frames</em>
+                <span class="proto-path" title={bus.path}>
+                  {fileName(bus.path)}
+                </span>
+                <button
+                  type="button"
+                  class="bus-remove"
+                  onClick={() => onRemoveFr(bus.bus)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <form
+              class="proto-add"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (frPath.trim()) {
+                  onLoadFr(frPath.trim());
+                  setFrPath("");
+                }
+              }}
+            >
+              <input
+                value={frPath}
+                placeholder="Host path to a FIBEX / ARXML cluster"
+                onInput={(event) =>
+                  setFrPath((event.target as HTMLInputElement).value)
+                }
+              />
+              <button type="submit" disabled={!frPath.trim()}>
+                Load description
+              </button>
+            </form>
+          </section>
+
+          <section class="bus-proto">
+            <h3>Ethernet</h3>
+            {ethBuses.map((bus) => (
+              <div class="proto-row" key={bus.bus}>
+                <strong>{bus.name}</strong>
+                <span>
+                  {bus.clusters} clusters · {bus.frames} frames
+                </span>
+                <span class="proto-path" title={bus.path}>
+                  {fileName(bus.path)}
+                </span>
+                <button
+                  type="button"
+                  class="bus-remove"
+                  onClick={() => onRemoveEth(bus.bus)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <form
+              class="proto-add"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (ethPath.trim()) {
+                  onLoadEth(ethPath.trim());
+                  setEthPath("");
+                }
+              }}
+            >
+              <input
+                value={ethPath}
+                placeholder="Host path to an AUTOSAR ARXML matrix"
+                onInput={(event) =>
+                  setEthPath((event.target as HTMLInputElement).value)
+                }
+              />
+              <button type="submit" disabled={!ethPath.trim()}>
+                Load matrix
+              </button>
+            </form>
+          </section>
         </div>
 
         <p class="hint picker-hint">
