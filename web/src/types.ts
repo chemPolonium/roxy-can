@@ -212,6 +212,7 @@ export interface MonitorRow {
   label: string;
   bus: string;
   value: number;
+  hasValue: boolean;
   unit: string;
   digits: number;
   ruleOn: boolean;

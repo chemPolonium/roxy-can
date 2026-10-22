@@ -3735,6 +3735,7 @@ struct WebMonitorRow {
     label: String,
     bus: String,
     value: f64,
+    has_value: bool,
     unit: String,
     digits: usize,
     rule_on: bool,
@@ -4490,9 +4491,9 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 ext,
                 frame,
             } = row_address(&row.key);
-            let (value, unit) = signal_sub(app, &row.key)
-                .map(|sub| (sub.latest, sub.unit.clone()))
-                .unwrap_or((0.0, String::new()));
+            let (value, has_value, unit) = signal_sub(app, &row.key)
+                .map(|sub| (sub.latest, sub.min <= sub.max, sub.unit.clone()))
+                .unwrap_or((0.0, false, String::new()));
             WebMonitorRow {
                 kind: kind.to_string(),
                 ch,
@@ -4503,6 +4504,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 label: row.label.clone(),
                 bus: signal_bus(app, &row.key),
                 value,
+                has_value,
                 unit,
                 digits: row.digits,
                 rule_on: row.rule_on,
@@ -5345,6 +5347,7 @@ mod tests {
         assert_eq!(monitor.kind, "eth");
         assert_eq!(monitor.frame.as_deref(), Some("EthFrame"));
         assert_eq!(monitor.bus, "ETH0");
+        assert!(!monitor.has_value, "no sample has arrived yet");
         assert_eq!(state.data[0].kind, "eth");
         assert_eq!(state.data[0].value, "-", "no samples yet, so dashes");
         assert_eq!(state.data[0].min, "-");

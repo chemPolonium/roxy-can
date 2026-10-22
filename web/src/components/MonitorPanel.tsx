@@ -72,6 +72,7 @@ export function MonitorPanel({ rows, onEdit, onRemove }: Props) {
       {rows.map((row) => {
         const color = COLORS[row.color % COLORS.length];
         const hot =
+          row.hasValue &&
           row.ruleOn &&
           ((row.rising && row.value >= row.threshold) ||
             (!row.rising && row.value <= row.threshold));
@@ -89,8 +90,8 @@ export function MonitorPanel({ rows, onEdit, onRemove }: Props) {
                 </small>
               </span>
               <strong class="monitor-value" style={{ color: hot ? color : undefined }}>
-                {row.value.toFixed(row.digits)}
-                {row.unit && <em>{row.unit}</em>}
+                {row.hasValue ? row.value.toFixed(row.digits) : "—"}
+                {row.hasValue && row.unit && <em>{row.unit}</em>}
               </strong>
               <button
                 type="button"
