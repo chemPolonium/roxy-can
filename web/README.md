@@ -44,16 +44,22 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
   desktop UI. The status bar reports the browser's own UI frame rate.
+- The Signals tab plots eight real DBC signals driven by the generator's
+  Sine/Ramp/Triangle/Random sources. The core samples them at up to 200 Hz;
+  each series keeps 12k points (one minute at that rate), and the canvas
+  reduces them to one min/max span per pixel column. Wheel zoom and drag
+  pan freeze the view; double-click returns to live. With eight full series
+  and continuous wheel zoom, 1024x768 and 1200x800 both hold ~60 UI fps.
 - The layout has been checked at 1024x768, 1200x800 and 1440x900.
 
 ## Not here yet
 
-Project open/save, replay, hardware channels, signal plots, node scripts,
-and docking/desktops. The web trace buffer caps at 50,000 rows, matching the
-source ring; raising it needs a different storage layout than per-row JSON
-strings. Scroll anchoring while new rows arrive is left to the browser.
-Snapshots are polled at 10 Hz over a 120-sample window; SSE is the obvious
-next step if the frontend is adopted.
+Project open/save, replay, hardware channels, signal selection (the demo
+pins eight curves), node scripts, and docking/desktops. The web trace buffer
+caps at 50,000 rows, matching the source ring; raising it needs a different
+storage layout than per-row JSON strings. Scroll anchoring while new rows
+arrive is left to the browser. Snapshots are polled at 10 Hz over a
+120-sample window; SSE is the obvious next step if the frontend is adopted.
 
 ## Performance testing
 
@@ -69,6 +75,8 @@ ROXY_WEB_CYCLE_US=5000 ./target/debug/roxy-can.exe --web
 ```
 
 At 5 ms the demo runs around 1,800 frames/s, so the 50k buffer fills in
-under 30 seconds. The page keeps a UI frame-rate readout in the status bar.
+under 30 seconds. The same period drives the eight signal curves at 200 Hz,
+so each series reaches its 12k-point cap in about a minute. The page keeps
+a UI frame-rate readout in the status bar.
 The Vite build is served from disk (`web/dist`) rather than embedded, so the
 trial avoids a Rust rebuild for every frontend change.

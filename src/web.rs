@@ -18,16 +18,136 @@ use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::app::{App, Mode, NodeRole};
-use crate::bus::BusCommand;
+use crate::bus::{BusCommand, SubView};
 use crate::can::frame::{CanFrame, Direction};
+use crate::observe::SigKey;
+use crate::sim::{SrcKind, ValueSrc};
 
 const PORT: u16 = 2010;
 const SERIES_POINTS: usize = 120;
 /// Rows the web frontend keeps. This matches the source ring's 50k limit
 /// and CANoe's ~100k default order of magnitude.
 const TRACE_LOG_CAP: usize = 50_000;
+/// Samples kept per plotted signal. At the 5 ms stress stride this is a
+/// one-minute window; the renderer decimates to pixels.
+const SIGNAL_CAP: usize = 12_000;
 /// Demo generator period; `ROXY_WEB_CYCLE_US` can shorten it for stress runs.
 const DEMO_CYCLE_US: u64 = 50_000;
+
+/// Demo curves: real DBC signals, driven by the generator's own value
+/// sources. `color` indexes the frontend palette; ranges stay inside the
+/// DBC declarations so the encoder never clamps the shape.
+struct SignalSpec {
+    ch: u8,
+    id: u32,
+    name: &'static str,
+    color: usize,
+    kind: SrcKind,
+    lo: f64,
+    hi: f64,
+    period_us: u64,
+    phase_us: u64,
+    redraw_us: u64,
+}
+
+const SIGNALS: [SignalSpec; 8] = [
+    SignalSpec {
+        ch: 0,
+        id: 0x100,
+        name: "EngineSpeed",
+        color: 0,
+        kind: SrcKind::Sine,
+        lo: 800.0,
+        hi: 7000.0,
+        period_us: 5_000_000,
+        phase_us: 0,
+        redraw_us: 0,
+    },
+    SignalSpec {
+        ch: 0,
+        id: 0x100,
+        name: "ThrottlePos",
+        color: 1,
+        kind: SrcKind::Triangle,
+        lo: 0.0,
+        hi: 100.0,
+        period_us: 3_000_000,
+        phase_us: 400_000,
+        redraw_us: 0,
+    },
+    SignalSpec {
+        ch: 0,
+        id: 0x200,
+        name: "VehicleSpeed",
+        color: 2,
+        kind: SrcKind::Triangle,
+        lo: 0.0,
+        hi: 220.0,
+        period_us: 12_000_000,
+        phase_us: 0,
+        redraw_us: 0,
+    },
+    SignalSpec {
+        ch: 0,
+        id: 0x320,
+        name: "BrakePressure",
+        color: 3,
+        kind: SrcKind::Sine,
+        lo: 0.0,
+        hi: 90.0,
+        period_us: 7_000_000,
+        phase_us: 500_000,
+        redraw_us: 0,
+    },
+    SignalSpec {
+        ch: 1,
+        id: 0x64,
+        name: "EngSpeed",
+        color: 4,
+        kind: SrcKind::Ramp,
+        lo: 0.0,
+        hi: 6000.0,
+        period_us: 8_000_000,
+        phase_us: 0,
+        redraw_us: 0,
+    },
+    SignalSpec {
+        ch: 1,
+        id: 0xC9,
+        name: "CarSpeed",
+        color: 5,
+        kind: SrcKind::Sine,
+        lo: 0.0,
+        hi: 260.0,
+        period_us: 10_000_000,
+        phase_us: 0,
+        redraw_us: 0,
+    },
+    SignalSpec {
+        ch: 1,
+        id: 0xC8,
+        name: "WheelSpeedFL",
+        color: 6,
+        kind: SrcKind::Random,
+        lo: 0.0,
+        hi: 1200.0,
+        period_us: 1_000_000,
+        phase_us: 0,
+        redraw_us: 50_000,
+    },
+    SignalSpec {
+        ch: 1,
+        id: 0xC8,
+        name: "WheelSpeedRR",
+        color: 7,
+        kind: SrcKind::Random,
+        lo: 0.0,
+        hi: 1200.0,
+        period_us: 1_000_000,
+        phase_us: 0,
+        redraw_us: 50_000,
+    },
+];
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
 const TICK_EVERY: Duration = Duration::from_millis(5);
 
@@ -47,12 +167,14 @@ pub fn run(args: &[String]) {
     let (tx, rx) = std::sync::mpsc::channel();
     let shared = Arc::new(Mutex::new(WebState::default()));
     let trace = Arc::new(Mutex::new(TraceStore::default()));
+    let signals = Arc::new(Mutex::new(SignalStore::default()));
     {
         let shared = shared.clone();
         let trace = trace.clone();
+        let signals = signals.clone();
         std::thread::Builder::new()
             .name("roxy-web-core".to_string())
-            .spawn(move || app_loop(rx, shared, trace))
+            .spawn(move || app_loop(rx, shared, trace, signals))
             .expect("spawn web core thread");
     }
 
@@ -67,6 +189,7 @@ pub fn run(args: &[String]) {
             .with_state(ApiState {
                 shared,
                 trace,
+                signals,
                 commands: tx,
             });
         let app = Router::new().nest("/api", api).fallback_service(
@@ -84,6 +207,7 @@ pub fn run(args: &[String]) {
 struct ApiState {
     shared: Arc<Mutex<WebState>>,
     trace: Arc<Mutex<TraceStore>>,
+    signals: Arc<Mutex<SignalStore>>,
     commands: Sender<WebCommand>,
 }
 
@@ -91,6 +215,8 @@ struct ApiState {
 struct TraceQuery {
     epoch: Option<u64>,
     seq: Option<u64>,
+    signals_epoch: Option<u64>,
+    signals_since: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -104,6 +230,12 @@ struct WebResponse {
     trace_seed: Option<Vec<WebFrame>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     trace_delta: Vec<WebFrame>,
+    signals_epoch: u64,
+    signals_max_t: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signals_seed: Option<Vec<SignalSeries>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    signals_delta: Vec<SignalSeries>,
 }
 
 async fn state(State(api): State<ApiState>, Query(query): Query<TraceQuery>) -> Json<WebResponse> {
@@ -123,12 +255,36 @@ async fn state(State(api): State<ApiState>, Query(query): Query<TraceQuery>) -> 
             (epoch, seq, Some(store.seed()), Vec::new())
         }
     };
+    let (signals_epoch, signals_max_t, signals_seed, signals_delta) = {
+        let store = api.signals.lock().unwrap_or_else(|p| p.into_inner());
+        let epoch = store.epoch;
+        let max_t = store.max_t();
+        let first = store.earliest_t();
+        let synced = query.signals_epoch == Some(epoch)
+            && query
+                .signals_since
+                .is_some_and(|client| client >= first && client <= max_t);
+        if synced {
+            (
+                epoch,
+                max_t,
+                None,
+                store.after(query.signals_since.unwrap_or(max_t)),
+            )
+        } else {
+            (epoch, max_t, Some(store.seed()), Vec::new())
+        }
+    };
     Json(WebResponse {
         state: snapshot,
         trace_epoch: epoch,
         trace_seq: seq,
         trace_seed: seed,
         trace_delta: delta,
+        signals_epoch,
+        signals_max_t,
+        signals_seed,
+        signals_delta,
     })
 }
 
@@ -155,6 +311,7 @@ fn app_loop(
     inbox: Receiver<WebCommand>,
     shared: Arc<Mutex<WebState>>,
     trace: Arc<Mutex<TraceStore>>,
+    signals: Arc<Mutex<SignalStore>>,
 ) {
     let mut app = App::headless();
     seed_demo(&mut app);
@@ -243,6 +400,9 @@ fn app_loop(
             if let Ok(mut store) = trace.lock() {
                 store.sync(&app);
             }
+            if let Ok(mut store) = signals.lock() {
+                store.sync(&app);
+            }
             let next = build_state(&app, &series, fps);
             if let Ok(mut slot) = shared.lock() {
                 *slot = next;
@@ -284,6 +444,27 @@ fn seed_demo(app: &mut App) {
     for (ch, id) in entries {
         app.send(BusCommand::SetEntryActive { ch, id, on: true });
         app.send(BusCommand::SetEntryCycle { ch, id, cycle_us });
+    }
+    // A 1 s Graphics window asks the core for the finest sampling stride
+    // (5 ms); the 50 ms default would only give each curve 20 points/s.
+    if let Some(window) = app.graphics.first_mut() {
+        window.time_window_s = 1.0;
+        window.opened = true;
+    }
+    for spec in &SIGNALS {
+        let mut src = ValueSrc::new(spec.name, spec.kind, spec.lo, spec.hi);
+        src.period_us = spec.period_us;
+        src.phase_us = spec.phase_us;
+        src.redraw_us = spec.redraw_us;
+        // Random wheels would otherwise share one sequence and overlap
+        // exactly on the plot.
+        src.seed ^= (spec.color as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        app.send(BusCommand::SetEntrySource {
+            ch: spec.ch,
+            id: spec.id,
+            src,
+        });
+        app.subscribe(SigKey::can(spec.ch, spec.id, false, spec.name));
     }
     app.start_virtual();
 }
@@ -402,6 +583,155 @@ fn frame_dto(app: &App, frame: &CanFrame) -> WebFrame {
         len: frame.len,
         data: hex(frame.payload()),
         fd: frame.is_fd(),
+    }
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignalSeries {
+    key: String,
+    name: String,
+    bus: String,
+    unit: String,
+    color: usize,
+    /// `[seconds, value]`, oldest first.
+    points: Vec<[f64; 2]>,
+}
+
+struct SignalBuffer {
+    meta: SignalSeries,
+    points: VecDeque<(u64, f64)>,
+}
+
+/// Incremental cache of the subscribed signal histories. The frontend asks
+/// once for a seed and then for everything newer than its last timestamp;
+/// the server never resends the two-hour sample ring.
+#[derive(Default)]
+struct SignalStore {
+    epoch: u64,
+    primed: bool,
+    buffers: Vec<SignalBuffer>,
+    last_t: Vec<u64>,
+}
+
+impl SignalStore {
+    fn sync(&mut self, app: &App) {
+        let mut reset = !self.primed;
+        if self.primed {
+            for (i, spec) in SIGNALS.iter().enumerate() {
+                let Some(sub) = signal_sub(app, spec) else {
+                    continue;
+                };
+                let last = sub.history.iter().last().map(|(t, _)| *t).unwrap_or(0);
+                if self.last_t.get(i).copied().unwrap_or(0) > last {
+                    reset = true;
+                }
+            }
+        }
+        if reset {
+            self.primed = true;
+            self.epoch = self.epoch.wrapping_add(1).max(1);
+            self.buffers.clear();
+            self.last_t = vec![0; SIGNALS.len()];
+            for (i, spec) in SIGNALS.iter().enumerate() {
+                let sub = signal_sub(app, spec);
+                let meta = signal_meta(app, spec, sub);
+                let mut points = VecDeque::new();
+                if let Some(sub) = sub {
+                    let all: Vec<(u64, f64)> = sub.history.iter().copied().collect();
+                    let start = all.len().saturating_sub(SIGNAL_CAP);
+                    points.extend(all[start..].iter().copied());
+                    if let Some((t, _)) = points.back() {
+                        self.last_t[i] = *t;
+                    }
+                }
+                self.buffers.push(SignalBuffer { meta, points });
+            }
+            return;
+        }
+
+        for (i, spec) in SIGNALS.iter().enumerate() {
+            let Some(sub) = signal_sub(app, spec) else {
+                continue;
+            };
+            let Some(buffer) = self.buffers.get_mut(i) else {
+                continue;
+            };
+            buffer.meta = signal_meta(app, spec, Some(sub));
+            let last = self.last_t.get(i).copied().unwrap_or(0);
+            for &(t, value) in sub.history.iter() {
+                if t > last {
+                    buffer.points.push_back((t, value));
+                }
+            }
+            while buffer.points.len() > SIGNAL_CAP {
+                buffer.points.pop_front();
+            }
+            if let Some((t, _)) = buffer.points.back() {
+                self.last_t[i] = *t;
+            }
+        }
+    }
+
+    fn max_t(&self) -> u64 {
+        self.last_t.iter().copied().max().unwrap_or(0)
+    }
+
+    fn earliest_t(&self) -> u64 {
+        self.buffers
+            .iter()
+            .filter_map(|buffer| buffer.points.front().map(|(t, _)| *t))
+            .min()
+            .unwrap_or(self.max_t())
+    }
+
+    fn seed(&self) -> Vec<SignalSeries> {
+        self.buffers
+            .iter()
+            .map(|buffer| Self::dto(buffer, 0))
+            .collect()
+    }
+
+    fn after(&self, since: u64) -> Vec<SignalSeries> {
+        self.buffers
+            .iter()
+            .filter(|buffer| buffer.points.back().is_some_and(|(t, _)| *t > since))
+            .map(|buffer| Self::dto(buffer, since))
+            .collect()
+    }
+
+    fn dto(buffer: &SignalBuffer, since: u64) -> SignalSeries {
+        let mut series = buffer.meta.clone();
+        series.points = buffer
+            .points
+            .iter()
+            .filter(|(t, _)| *t > since)
+            .map(|(t, value)| [*t as f64 / 1e6, *value])
+            .collect();
+        series
+    }
+}
+
+fn signal_sub<'a>(app: &'a App, spec: &SignalSpec) -> Option<&'a SubView> {
+    app.snap
+        .subs
+        .iter()
+        .find(|sub| sub.key == SigKey::can(spec.ch, spec.id, false, spec.name))
+}
+
+fn signal_meta(app: &App, spec: &SignalSpec, sub: Option<&SubView>) -> SignalSeries {
+    SignalSeries {
+        key: format!("{}:{}:{}", spec.ch, spec.id, spec.name),
+        name: spec.name.to_string(),
+        bus: app
+            .snap
+            .channels
+            .get(spec.ch as usize)
+            .map(|channel| channel.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", spec.ch + 1)),
+        unit: sub.map(|sub| sub.unit.clone()).unwrap_or_default(),
+        color: spec.color,
+        points: Vec::new(),
     }
 }
 
@@ -606,6 +936,33 @@ mod tests {
         assert!(
             !trace.after(before).is_empty(),
             "the client only needs the delta"
+        );
+    }
+
+    /// The demo must actually drive and sample the plotted signals; an empty
+    /// SignalStore would draw eight empty lanes forever.
+    #[test]
+    fn the_demo_samples_the_plotted_signals() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(5));
+            app.update();
+        }
+        let mut signals = SignalStore::default();
+        signals.sync(&app);
+        let seeded = signals.seed();
+        assert_eq!(seeded.len(), SIGNALS.len());
+        assert!(
+            seeded.iter().any(|series| !series.points.is_empty()),
+            "the subscriptions received samples"
+        );
+        assert!(
+            seeded
+                .iter()
+                .flat_map(|series| series.points.iter())
+                .any(|[_, value]| *value != 0.0),
+            "the generator sources produced non-zero signal values"
         );
     }
 

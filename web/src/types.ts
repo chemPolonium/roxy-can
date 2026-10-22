@@ -13,12 +13,26 @@ export interface State {
   series: SeriesPoint[];
 }
 
-/** Light state plus the incremental trace hand-off. */
+export interface SignalSeries {
+  key: string;
+  name: string;
+  bus: string;
+  unit: string;
+  color: number;
+  /** `[seconds, value]`, oldest first. */
+  points: [number, number][];
+}
+
+/** Light state plus the incremental trace/signal hand-off. */
 export interface Snapshot extends State {
   traceEpoch: number;
   traceSeq: number;
   traceSeed?: Frame[];
   traceDelta?: Frame[];
+  signalsEpoch: number;
+  signalsMaxT: number;
+  signalsSeed?: SignalSeries[];
+  signalsDelta?: SignalSeries[];
 }
 
 export interface SeriesPoint {

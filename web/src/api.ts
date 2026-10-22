@@ -3,8 +3,19 @@ import type { Command, Snapshot } from "./types";
 export async function fetchState(
   epoch: number | null,
   seq: number,
+  signalsEpoch: number | null,
+  signalsSince: number,
 ): Promise<Snapshot> {
-  const query = epoch === null ? "" : `?epoch=${epoch}&seq=${seq}`;
+  const params = new URLSearchParams();
+  if (epoch !== null) {
+    params.set("epoch", String(epoch));
+    params.set("seq", String(seq));
+  }
+  if (signalsEpoch !== null) {
+    params.set("signals_epoch", String(signalsEpoch));
+    params.set("signals_since", String(signalsSince));
+  }
+  const query = params.size > 0 ? `?${params}` : "";
   const response = await fetch(`/api/state${query}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`state: ${response.status}`);

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { Command, Frame, State } from "./types";
+import type { Command, Frame, SignalSeries, State } from "./types";
 import { fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { MessageTable } from "./components/MessageTable";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
+import { SignalChart } from "./components/SignalChart";
 import { TraceTable } from "./components/TraceTable";
 
 type RightTab = "messages" | "activity";
+type ChartTab = "rate" | "signals";
 type Drag = "main" | "right" | null;
 
 interface Layout {
@@ -16,6 +18,7 @@ interface Layout {
 
 const LAYOUT_KEY = "roxy-can-web.layout";
 const TRACE_CAP = 50_000;
+const SIGNAL_CAP = 12_000;
 const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -91,12 +94,19 @@ export function App() {
     seq: number;
     rows: Frame[];
   }>({ epoch: null, seq: 0, rows: [] });
+  const [signals, setSignals] = useState<SignalSeries[]>([]);
+  const signalRef = useRef<{
+    epoch: number | null;
+    since: number;
+    series: SignalSeries[];
+  }>({ epoch: null, since: 0, series: [] });
   const [online, setOnline] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [bus, setBus] = useState<number | "all">("all");
   const [tab, setTab] = useState<RightTab>("messages");
+  const [chartTab, setChartTab] = useState<ChartTab>("rate");
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
   const uiFps = useUiFps();
@@ -119,7 +129,12 @@ export function App() {
       inFlight = true;
       try {
         const { epoch, seq } = traceRef.current;
-        const next = await fetchState(epoch, seq);
+        const next = await fetchState(
+          epoch,
+          seq,
+          signalRef.current.epoch,
+          signalRef.current.since,
+        );
         if (!alive) return;
         let rows = traceRef.current.rows;
         if (next.traceSeed) {
@@ -135,6 +150,29 @@ export function App() {
           seq: next.traceSeq,
           rows,
         };
+
+        let series = signalRef.current.series;
+        if (next.signalsSeed) {
+          series = next.signalsSeed;
+          setSignals(series);
+        } else if (next.signalsDelta?.length) {
+          const byKey = new Map(series.map((entry) => [entry.key, entry]));
+          for (const delta of next.signalsDelta) {
+            const previous = byKey.get(delta.key);
+            const points = previous
+              ? [...previous.points, ...delta.points].slice(-SIGNAL_CAP)
+              : delta.points;
+            byKey.set(delta.key, { ...delta, points });
+          }
+          series = [...byKey.values()];
+          setSignals(series);
+        }
+        signalRef.current = {
+          epoch: next.signalsEpoch,
+          since: next.signalsMaxT,
+          series,
+        };
+
         setState(next);
         setOnline(true);
         setError("");
@@ -341,29 +379,61 @@ export function App() {
         >
           <section class="panel chart-panel">
             <div class="panel-head">
-              <div class="panel-title">
-                <h2>Bus activity</h2>
-                <span>solid f/s · dashed load</span>
+              <div class="tabs chart-tabs">
+                <button
+                  type="button"
+                  class={chartTab === "rate" ? "on" : ""}
+                  onClick={() => setChartTab("rate")}
+                >
+                  Bus rate
+                </button>
+                <button
+                  type="button"
+                  class={chartTab === "signals" ? "on" : ""}
+                  onClick={() => setChartTab("signals")}
+                >
+                  Signals
+                </button>
               </div>
-              <strong class="readout">{state ? state.fps.toFixed(0) : "—"} f/s</strong>
-            </div>
-            <div class="chart-legend">
-              <span class="legend-key">
-                <i style={{ background: "#4c9dff" }} />
-                Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
+              <span class="meta">
+                {chartTab === "rate"
+                  ? "solid f/s · dashed load"
+                  : `${signals.length} channels · wheel zoom`}
               </span>
-              {state?.channels.map((channel, index) => (
-                <span class="legend-key" key={channel.name}>
-                  <i style={{ background: BUS_COLORS[index % BUS_COLORS.length] }} />
-                  {channel.name} <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
-                  <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
-                </span>
-              ))}
+              {chartTab === "rate" && (
+                <strong class="readout">
+                  {state ? state.fps.toFixed(0) : "—"} f/s
+                </strong>
+              )}
             </div>
-            <RateChart
-              points={state?.series ?? []}
-              channels={state?.channels ?? []}
-            />
+            {chartTab === "rate" ? (
+              <>
+                <div class="chart-legend">
+                  <span class="legend-key">
+                    <i style={{ background: "#4c9dff" }} />
+                    Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
+                  </span>
+                  {state?.channels.map((channel, index) => (
+                    <span class="legend-key" key={channel.name}>
+                      <i
+                        style={{
+                          background: BUS_COLORS[index % BUS_COLORS.length],
+                        }}
+                      />
+                      {channel.name}{" "}
+                      <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
+                      <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
+                    </span>
+                  ))}
+                </div>
+                <RateChart
+                  points={state?.series ?? []}
+                  channels={state?.channels ?? []}
+                />
+              </>
+            ) : (
+              <SignalChart series={signals} />
+            )}
           </section>
 
           <div

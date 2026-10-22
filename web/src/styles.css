@@ -543,12 +543,26 @@ input::placeholder {
   font-weight: 500;
 }
 
-.rate-chart {
+.rate-chart,
+.signal-chart {
   display: block;
   flex: 1 1 auto;
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.signal-chart {
+  cursor: grab;
+  touch-action: none;
+}
+
+.signal-chart:active {
+  cursor: grabbing;
+}
+
+.chart-tabs {
+  flex: 0 0 auto;
 }
 
 .tabs {
