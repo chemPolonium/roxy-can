@@ -104,8 +104,12 @@ function baseName(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
-function clock(wallUs: number): string {
-  const total = wallUs / 1e6;
+function fileNameOf(path: string): string {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return cut >= 0 ? path.slice(cut + 1) : path;
+}
+
+function clock(wallUs: number): string {  const total = wallUs / 1e6;
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = Math.floor(total % 60);
@@ -141,6 +145,8 @@ export function App() {
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
+  const [recordName, setRecordName] = useState("record");
+  const [recordFormat, setRecordFormat] = useState(0);
   const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
@@ -711,6 +717,7 @@ export function App() {
         <div class={`link ${online ? "on" : "off"}`}>
           <span class="dot" />
           {online ? "live" : "reconnecting"}
+          {state?.recording && <span class="rec-badge">REC</span>}
         </div>
       </header>
 
@@ -1461,6 +1468,63 @@ export function App() {
                   </button>
                 </form>
                 {recent(state?.recentLogs ?? [], loadLog)}
+              </section>
+
+              <section>
+                <h3>Recording</h3>
+                <p class="session-current">
+                  {state?.recording
+                    ? state.recordFile
+                      ? `Recording: ${fileNameOf(state.recordFile)}`
+                      : "Armed — starts with the measurement"
+                    : state?.recordFile
+                      ? `Last: ${fileNameOf(state.recordFile)}`
+                      : "Not recording"}
+                </p>
+                <div class="record-row">
+                  <input
+                    value={recordName}
+                    placeholder="record"
+                    disabled={state?.recording}
+                    title="File name; a date suffix is added under the project's Record/ folder"
+                    onInput={(event) =>
+                      setRecordName((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  <select
+                    value={recordFormat}
+                    disabled={state?.recording}
+                    title="Recording format"
+                    onChange={(event) =>
+                      setRecordFormat(
+                        Number((event.target as HTMLSelectElement).value),
+                      )
+                    }
+                  >
+                    <option value={0}>ASC</option>
+                    <option value={1}>BLF</option>
+                  </select>
+                  <button
+                    type="button"
+                    class={state?.recording ? "danger" : ""}
+                    onClick={() =>
+                      void run({
+                        type: "record_toggle",
+                        name: state?.recording
+                          ? null
+                          : recordName.trim() || "record",
+                        format: state?.recording ? null : recordFormat,
+                      })
+                    }
+                  >
+                    {state?.recording ? "Stop recording" : "Record"}
+                  </button>
+                </div>
+                <p class="hint">
+                  Relative names land in Record/ beside the project; an absolute
+                  path is used as typed. Recording while stopped arms the file
+                  for the next Start.
+                </p>
               </section>
 
               <p class="hint">

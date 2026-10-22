@@ -1,6 +1,8 @@
 export interface State {
   measuring: boolean;
   tracePaused: boolean;
+  recording: boolean;
+  recordFile: string;
   mode: string;
   frames: number;
   fps: number;
@@ -306,6 +308,7 @@ export type Command =
   | { type: "replay_step"; delta_us: number }
   | { type: "replay_play_to"; target_us: number }
   | { type: "replay_play_for"; duration_us: number }
+  | { type: "record_toggle"; name: string | null; format: number | null }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }

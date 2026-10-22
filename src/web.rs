@@ -621,6 +621,10 @@ enum WebCommand {
     ReplayPlayFor {
         duration_us: u64,
     },
+    RecordToggle {
+        name: Option<String>,
+        format: Option<u8>,
+    },
     ClearTrace,
     OpenProject {
         path: String,
@@ -897,6 +901,15 @@ fn app_loop(
                 }
                 WebCommand::ReplayPlayFor { duration_us } => {
                     app.send(BusCommand::ReplayPlayFor { duration_us });
+                }
+                WebCommand::RecordToggle { name, format } => {
+                    if let Some(name) = name {
+                        app.record_path_buf = name;
+                    }
+                    if let Some(format) = format {
+                        app.record_format = if format == 1 { 1 } else { 0 };
+                    }
+                    app.toggle_record();
                 }
                 WebCommand::ClearTrace => {
                     app.send(BusCommand::ClearTrace);
@@ -2062,6 +2075,8 @@ fn build_catalog(app: &App) -> WebCatalog {
 struct WebState {
     measuring: bool,
     trace_paused: bool,
+    recording: bool,
+    record_file: String,
     mode: String,
     frames: u64,
     fps: f64,
@@ -2768,6 +2783,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     WebState {
         measuring: snap.measuring,
         trace_paused: snap.trace_paused,
+        recording: snap.recording,
+        record_file: snap.last_record.clone(),
         mode: match snap.mode {
             Mode::Virtual => "Simulation".to_string(),
             Mode::Replay => "Replay".to_string(),

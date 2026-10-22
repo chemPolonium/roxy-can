@@ -1564,6 +1564,46 @@ button.mini {
   margin-top: 6px;
 }
 
+.record-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.record-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.record-row select {
+  flex: 0 0 auto;
+  width: 72px;
+}
+
+.record-row button {
+  flex: 0 0 auto;
+}
+
+button.danger {
+  background: #4a1e1e;
+  border-color: #7d3535;
+  color: #ffb4a7;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #5a2626;
+  border-color: #9a4343;
+}
+
+.rec-badge {
+  padding: 0 4px;
+  border: 1px solid #8a3434;
+  border-radius: 3px;
+  color: #ff8f7a;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
 .save-row input {
   flex: 1 1 auto;
   min-width: 0;

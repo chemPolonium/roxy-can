@@ -35,7 +35,11 @@ immediately. A loaded replay also gets a second, slim bar with the playhead,
 a forward **Step** (10 ms–5 s), **Play for** (1–60 s) and **Play to** an
 absolute log time; both timed plays resume playback and pause at the target.
 **Save** writes the open project and **Save as** writes a copy to a typed host
-path; the dialog marks unsaved changes next to the current name. Saving keeps
+path; the dialog marks unsaved changes next to the current name. The
+**Recording** section starts/stops an ASC or BLF capture with a typed file
+name; relative names land in `Record/` beside the project, and arming while
+stopped creates the file on the next Start. The live badge in the top bar
+turns red while recording. Saving keeps
 the project's desktop dock layout and Graphics-window settings untouched: the
 web plot asks the core for its sampling stride instead of editing desktop
 config. Paths are resolved on the host (the page cannot open a native file
