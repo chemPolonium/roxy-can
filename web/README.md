@@ -61,6 +61,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   added, removed, renamed, re-rated and given a new DBC by host path; removing
   one remaps the web signal keys with the core's channel indices. It uses the
   same core commands as the desktop Buses window.
+- **Generator…** edits the real TxView list: per-entry On, cycle, FD, hex
+  payload, add-from-DBC/remove, and a per-bus “Simulate nodes” action. The
+  Write tab shows the bus Write ring (command results, node errors, trigger
+  events). Signal-source editing remains desktop-only for now.
 - Trace/Messages tables, a canvas chart with total and per-bus frame rates
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
@@ -80,8 +84,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 Saving projects, a native browser file picker (opening and DBC loading use
 host paths and recents; the CLI flags also work), FlexRay/Ethernet
-attachment, node scripts, and docking/desktops. Hardware is CAN
-attach/detach only for now; signal selection is CAN-only and session-only.
+attachment, generator signal sources, triggers, node scripts, and
+docking/desktops. Hardware is CAN attach/detach only for now; signal
+selection is CAN-only and session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

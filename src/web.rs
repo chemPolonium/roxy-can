@@ -453,6 +453,37 @@ enum WebCommand {
         ch: u8,
         path: String,
     },
+    SetEntryActive {
+        ch: u8,
+        id: u32,
+        on: bool,
+    },
+    SetEntryCycle {
+        ch: u8,
+        id: u32,
+        cycle_us: u64,
+    },
+    SetEntryFd {
+        ch: u8,
+        id: u32,
+        fd: bool,
+    },
+    SetEntryHex {
+        ch: u8,
+        id: u32,
+        text: String,
+    },
+    AddEntry {
+        ch: u8,
+        id: u32,
+    },
+    RemoveEntry {
+        ch: u8,
+        id: u32,
+    },
+    SimulateBusNodes {
+        ch: u8,
+    },
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -656,6 +687,36 @@ fn app_loop(
                         fd_data_kbps: Some(fd_data_kbps),
                         node_roles: None,
                     });
+                }
+                WebCommand::SetEntryActive { ch, id, on } => {
+                    app.send(BusCommand::SetEntryActive { ch, id, on });
+                }
+                WebCommand::SetEntryCycle { ch, id, cycle_us } => {
+                    app.send(BusCommand::SetEntryCycle { ch, id, cycle_us });
+                }
+                WebCommand::SetEntryFd { ch, id, fd } => {
+                    app.send(BusCommand::SetEntryFd { ch, id, fd });
+                }
+                WebCommand::SetEntryHex { ch, id, text } => {
+                    app.send(BusCommand::SetEntryHex { ch, id, text });
+                }
+                WebCommand::AddEntry { ch, id } => {
+                    app.send(BusCommand::AddEntry { ch, id });
+                }
+                WebCommand::RemoveEntry { ch, id } => {
+                    app.send(BusCommand::RemoveEntry { ch, id });
+                }
+                WebCommand::SimulateBusNodes { ch } => {
+                    let nodes = app
+                        .snap
+                        .channels
+                        .get(ch as usize)
+                        .and_then(|channel| channel.dbc.as_ref())
+                        .map(|db| db.nodes.clone())
+                        .unwrap_or_default();
+                    for node in nodes {
+                        app.set_node_role(ch, &node, NodeRole::Simulated);
+                    }
                 }
                 WebCommand::LoadDbc { ch, path } => {
                     if app.snap.measuring {
@@ -1359,6 +1420,7 @@ struct WebState {
     buses: Vec<WebBus>,
     real_bus: bool,
     hw_refresh: u64,
+    tx: Vec<WebTx>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -1402,6 +1464,24 @@ struct WebHwAttachment {
 struct WebTxFail {
     reason: String,
     count: u64,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebTx {
+    channel: u8,
+    bus: String,
+    id: u32,
+    name: String,
+    node: String,
+    active: bool,
+    gate_open: bool,
+    fd: bool,
+    cycle_us: u64,
+    data_text: String,
+    sent_text: String,
+    muted: bool,
+    sources: usize,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1500,6 +1580,31 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             })
             .collect();
 
+    let mut tx: Vec<WebTx> = snap
+        .tx
+        .iter()
+        .map(|entry| WebTx {
+            channel: entry.channel,
+            bus: snap
+                .channels
+                .get(entry.channel as usize)
+                .map(|channel| channel.name.clone())
+                .unwrap_or_else(|| format!("CAN{}", entry.channel + 1)),
+            id: entry.id,
+            name: entry.name.clone(),
+            node: entry.node.clone(),
+            active: entry.active,
+            gate_open: entry.gate_open,
+            fd: entry.fd,
+            cycle_us: entry.cycle_us,
+            data_text: entry.data_text.clone(),
+            sent_text: entry.sent_text.clone(),
+            muted: entry.muted,
+            sources: entry.srcs.len(),
+        })
+        .collect();
+    tx.sort_by_key(|entry| (entry.channel, entry.id));
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -1590,6 +1695,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         buses,
         real_bus: snap.real_bus,
         hw_refresh: snap.hw_refresh,
+        tx,
         channels,
         messages,
         write,
@@ -1689,6 +1795,23 @@ mod tests {
         store.unselect(&key);
         store.sync(&app);
         assert!(store.seed().is_empty());
+    }
+
+    /// The generator panel reads live TxView rows, including their cycle,
+    /// payload and node gate.
+    #[test]
+    fn the_state_lists_generator_entries() {
+        let app = App::headless();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert!(!state.tx.is_empty(), "the bootstrap generator has entries");
+        let entry = state
+            .tx
+            .iter()
+            .find(|entry| entry.channel == 0 && entry.id == 0x100)
+            .expect("EngineStatus is in the sample generator");
+        assert_eq!(entry.name, "EngineStatus");
+        assert!(entry.cycle_us > 0);
+        assert_eq!(entry.bus, "CAN1");
     }
 
     /// Reloading a database must retire selections it no longer declares,

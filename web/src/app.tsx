@@ -8,10 +8,12 @@ import type {
   Hardware,
   SignalSeries,
   State,
+  TxEntry,
 } from "./types";
 import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
+import { GeneratorModal } from "./components/GeneratorModal";
 import { MessageTable } from "./components/MessageTable";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
@@ -131,6 +133,7 @@ export function App() {
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   const [busesOpen, setBusesOpen] = useState(false);
+  const [generatorOpen, setGeneratorOpen] = useState(false);
   const [hardware, setHardware] = useState<Hardware | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareError, setHardwareError] = useState("");
@@ -297,10 +300,7 @@ export function App() {
     setSessionOpen(false);
   };
 
-  const openPicker = async () => {
-    setSessionOpen(false);
-    setBusesOpen(false);
-    setPickerOpen(true);
+  const loadCatalog = async () => {
     setCatalogLoading(true);
     try {
       setCatalog(await fetchCatalog());
@@ -310,6 +310,22 @@ export function App() {
     } finally {
       setCatalogLoading(false);
     }
+  };
+
+  const openPicker = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setGeneratorOpen(false);
+    setPickerOpen(true);
+    void loadCatalog();
+  };
+
+  const openGenerator = () => {
+    setSessionOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setGeneratorOpen(true);
+    void loadCatalog();
   };
 
   const toggleSignal = (
@@ -357,6 +373,25 @@ export function App() {
     });
   const loadDbc = (bus: number, path: string) =>
     void run({ type: "load_dbc", ch: bus, path });
+  const setEntryActive = (entry: TxEntry, on: boolean) =>
+    void run({ type: "set_entry_active", ch: entry.channel, id: entry.id, on });
+  const setEntryCycle = (entry: TxEntry, cycleUs: number) =>
+    void run({
+      type: "set_entry_cycle",
+      ch: entry.channel,
+      id: entry.id,
+      cycle_us: cycleUs,
+    });
+  const setEntryFd = (entry: TxEntry, fd: boolean) =>
+    void run({ type: "set_entry_fd", ch: entry.channel, id: entry.id, fd });
+  const setEntryHex = (entry: TxEntry, text: string) =>
+    void run({ type: "set_entry_hex", ch: entry.channel, id: entry.id, text });
+  const addEntry = (ch: number, id: number) =>
+    void run({ type: "add_entry", ch, id });
+  const removeEntry = (entry: TxEntry) =>
+    void run({ type: "remove_entry", ch: entry.channel, id: entry.id });
+  const simulateBus = (ch: number) =>
+    void run({ type: "simulate_bus_nodes", ch });
 
   const recent = (paths: string[], open: (path: string) => void) =>
     paths.length > 0 && (
@@ -420,9 +455,17 @@ export function App() {
           <button
             type="button"
             disabled={!online}
+            onClick={openGenerator}
+          >
+            Generator…
+          </button>
+          <button
+            type="button"
+            disabled={!online}
             onClick={() => {
               setSessionOpen(false);
               setPickerOpen(false);
+              setGeneratorOpen(false);
               setBusesOpen(true);
             }}
           >
@@ -434,6 +477,7 @@ export function App() {
             onClick={() => {
               setPickerOpen(false);
               setBusesOpen(false);
+              setGeneratorOpen(false);
               setSessionOpen(true);
             }}
           >
@@ -650,7 +694,7 @@ export function App() {
                   class={tab === "activity" ? "on" : ""}
                   onClick={() => setTab("activity")}
                 >
-                  Activity
+                  Write
                 </button>
               </div>
               <span class="meta">
@@ -685,6 +729,24 @@ export function App() {
         <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
       </footer>
+
+      {generatorOpen && (
+        <GeneratorModal
+          entries={state?.tx ?? []}
+          buses={state?.buses ?? []}
+          catalog={catalog}
+          catalogLoading={catalogLoading}
+          catalogError={catalogError}
+          onToggle={setEntryActive}
+          onCycle={setEntryCycle}
+          onFd={setEntryFd}
+          onHex={setEntryHex}
+          onAdd={addEntry}
+          onRemove={removeEntry}
+          onSimulate={simulateBus}
+          onClose={() => setGeneratorOpen(false)}
+        />
+      )}
 
       {busesOpen && (
         <BusesModal

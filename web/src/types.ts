@@ -18,6 +18,7 @@ export interface State {
   buses: Bus[];
   realBus: boolean;
   hwRefresh: number;
+  tx: TxEntry[];
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];
@@ -86,6 +87,22 @@ export interface HwChannel {
 export interface Hardware {
   channels: HwChannel[];
   error: string;
+}
+
+export interface TxEntry {
+  channel: number;
+  bus: string;
+  id: number;
+  name: string;
+  node: string;
+  active: boolean;
+  gateOpen: boolean;
+  fd: boolean;
+  cycleUs: number;
+  dataText: string;
+  sentText: string;
+  muted: boolean;
+  sources: number;
 }
 
 /** Light state plus the incremental trace/signal hand-off. */
@@ -166,4 +183,11 @@ export type Command =
       bitrate_kbps: number;
       fd_data_kbps: number;
     }
-  | { type: "load_dbc"; ch: number; path: string };
+  | { type: "load_dbc"; ch: number; path: string }
+  | { type: "set_entry_active"; ch: number; id: number; on: boolean }
+  | { type: "set_entry_cycle"; ch: number; id: number; cycle_us: number }
+  | { type: "set_entry_fd"; ch: number; id: number; fd: boolean }
+  | { type: "set_entry_hex"; ch: number; id: number; text: string }
+  | { type: "add_entry"; ch: number; id: number }
+  | { type: "remove_entry"; ch: number; id: number }
+  | { type: "simulate_bus_nodes"; ch: number };

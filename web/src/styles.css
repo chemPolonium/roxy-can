@@ -990,6 +990,160 @@ button.mini {
   flex: 1;
 }
 
+.generator-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 100%);
+  max-height: min(840px, 92vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.gen-body {
+  flex: 1 1 auto;
+  min-height: 200px;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.gen-bus {
+  margin-bottom: 8px;
+  background: #0d1218;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.gen-bus-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #0e131a;
+  border-bottom: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.gen-bus-head strong {
+  color: #e0e9f5;
+  font-size: 12px;
+}
+
+.gen-bus-head select {
+  max-width: 300px;
+}
+
+.gen-meta {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.gen-bus-head .spacer {
+  flex: 1;
+}
+
+.gen-row {
+  padding: 5px 10px;
+  background: #0d1218;
+  border-bottom: 1px solid #151c25;
+}
+
+.gen-row.on {
+  background: #101922;
+}
+
+.gen-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gen-line + .gen-line {
+  margin-top: 4px;
+}
+
+.gen-active,
+.gen-cycle,
+.gen-fd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #aab7c7;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.gen-active input,
+.gen-fd input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.gen-cycle input {
+  width: 58px;
+  padding: 1px 4px;
+  font-size: 10.5px;
+}
+
+.gen-name {
+  color: #e0e9f5;
+  font-size: 11.5px;
+}
+
+.gen-id,
+.gen-node {
+  color: #8b98a9;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+}
+
+.gen-warn {
+  padding: 0 4px;
+  color: var(--warn);
+  border: 1px solid #5a4322;
+  border-radius: 3px;
+  font-size: 9.5px;
+}
+
+.gen-badge {
+  padding: 0 4px;
+  color: #8fc8ff;
+  border: 1px solid #2d5c88;
+  border-radius: 3px;
+  font-size: 9.5px;
+}
+
+.gen-data {
+  align-items: center;
+}
+
+.gen-hex {
+  flex: 1 1 280px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.gen-sent {
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 9.5px;
+}
+
+.gen-empty {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 @media (max-width: 900px) {
   .buses-tools {
     flex-wrap: wrap;
