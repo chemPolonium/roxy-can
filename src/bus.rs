@@ -980,10 +980,14 @@ fn scan_log_ids(path: &std::path::Path) -> Option<LogIds> {
 
 /// Status-line note about the FD state of a fresh hardware attach: active
 /// data-phase bitrate, classic-mode degradation, or nothing for classic buses.
-fn hw_fd_note(fd_data_kbps: Option<u32>, fd_active: bool) -> String {
+fn hw_fd_note(fd_data_kbps: Option<u32>, fd_active: bool, fd_error: Option<&str>) -> String {
     match (fd_data_kbps, fd_active) {
         (Some(k), true) => format!(", FD data phase {k} kbit/s"),
-        (Some(_), false) => ", classic mode (FD preset mismatch or unsupported)".to_string(),
+        (Some(0), false) => String::new(),
+        (Some(_), false) => match fd_error {
+            Some(e) => format!(", classic mode ({e})"),
+            None => ", classic mode (FD preset mismatch or unsupported)".to_string(),
+        },
         (None, _) => String::new(),
     }
 }
@@ -1760,18 +1764,26 @@ impl BusCore {
                             crate::hw::HwDriver::Kvaser => "Kvaser",
                             crate::hw::HwDriver::Vector => "Vector",
                         };
+                        let fd_error = match &port {
+                            crate::hw::HwPort::Vector(v) => v.fd_error.clone(),
+                            _ => None,
+                        };
                         self.hw.attach(bus, driver, adapter, kbps, true, port);
                         *status = format!(
                             "hardware attached to {bus}: {driver_name} ch{adapter} @ {kbps} kbit/s (TX/RX){}",
-                            hw_fd_note(fd_data_kbps, fd)
+                            hw_fd_note(fd_data_kbps, fd, fd_error.as_deref())
                         );
                     }
                     Err((init_err, retry)) => match retry {
                         Ok((port, fd)) => {
+                            let fd_error = match &port {
+                                crate::hw::HwPort::Vector(v) => v.fd_error.clone(),
+                                _ => None,
+                            };
                             self.hw.attach(bus, driver, adapter, kbps, false, port);
                             *status = format!(
                                 "hardware attached to {bus}: ch{adapter} @ {kbps} kbit/s (receive-only -- channel taken by another program){}",
-                                hw_fd_note(fd_data_kbps, fd)
+                                hw_fd_note(fd_data_kbps, fd, fd_error.as_deref())
                             );
                         }
                         Err(e) => *status = format!("hardware attach failed: {init_err} / {e}"),

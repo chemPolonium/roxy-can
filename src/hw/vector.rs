@@ -306,7 +306,18 @@ impl Vxlapi {
 
     fn lib() -> Option<&'static Vxlapi> {
         static LIB: std::sync::OnceLock<Option<Vxlapi>> = std::sync::OnceLock::new();
-        LIB.get_or_init(|| unsafe { Vxlapi::load() }).as_ref()
+        LIB.get_or_init(|| {
+            let lib = unsafe { Vxlapi::load() }?;
+            // Hold one driver reference for the process lifetime. The XL
+            // driver tracks PnP attach/detach while it is open; opening and
+            // closing around every enumeration left a hot-plugged adapter
+            // visible but its CAN FD setup unavailable until the next app
+            // start. Every port's temporary reference drops back to this
+            // one, so the driver stays initialized.
+            let _ = unsafe { (lib.open_driver)() };
+            Some(lib)
+        })
+        .as_ref()
     }
 }
 
@@ -320,10 +331,28 @@ pub struct ChannelInfo {
     pub name: String,
     pub can: bool,
     pub flexray: bool,
+    /// `channelCapabilities` (FD support lives here: ISO bit 31, Bosch
+    /// bit 29).
+    pub caps: u32,
     /// The raw `channelBusCapabilities` dword, kept for diagnostics:
     /// muxed portal devices (VN7640...) report their protocol support in
     /// ways a plain bit test misreads.
     pub bus_caps: u32,
+    /// Driver-reported bus state (`isOnBus` / `connectedBusType`). An
+    /// idle but physically connected adapter also reports false/0, so
+    /// these are diagnostics, not a physical-presence test.
+    pub is_on_bus: bool,
+    pub connected_bus_type: u32,
+}
+
+/// `XL_CHANNEL_FLAG_CANFD_ISO_SUPPORT` / the older Bosch-only flag.
+const XL_CHANNEL_FLAG_CANFD_ISO: u32 = 0x8000_0000;
+const XL_CHANNEL_FLAG_CANFD_BOSCH: u32 = 0x2000_0000;
+
+impl ChannelInfo {
+    pub fn supports_fd(&self) -> bool {
+        self.caps & (XL_CHANNEL_FLAG_CANFD_ISO | XL_CHANNEL_FLAG_CANFD_BOSCH) != 0
+    }
 }
 
 /// An open, activated Vector port for one CAN channel. Frames written
@@ -336,6 +365,10 @@ pub struct VectorChannel {
     /// `xlCanFdSetConfiguration` was accepted; FD frames can leave.
     /// False on a monitoring port or after a classic fallback.
     pub fd: bool,
+    /// Why an FD request fell back to classic, when there was one. Shown
+    /// in the attach status so a hot-plugged adapter's driver verdict is
+    /// visible instead of the generic "unsupported".
+    pub fd_error: Option<String>,
     /// Non-frame events seen since the last [`Self::take_tag_news`], by tag.
     tags: std::collections::BTreeMap<u16, u64>,
 }
@@ -531,15 +564,29 @@ impl VectorChannel {
             // Bitrate/FD configuration needs init access; a monitoring
             // port attaches at whatever the bus already runs.
             let mut fd = false;
+            let mut fd_error = None;
             if init_access {
                 // The FD configuration carries both phases; calling the
                 // classic bitrate setter after it would overwrite the
                 // nominal phase, so the two paths are exclusive.
-                if let Some(data_kbps) = fd_request
-                    && let (Some(set_fd), Some(conf)) =
-                        (lib.can_fd_set_configuration, can_fd_conf(kbps, data_kbps))
-                {
-                    fd = set_fd(port, permission & mask, &conf) == 0;
+                if let Some(data_kbps) = fd_request {
+                    match (lib.can_fd_set_configuration, can_fd_conf(kbps, data_kbps)) {
+                        (Some(set_fd), Some(conf)) => {
+                            let status = set_fd(port, permission & mask, &conf);
+                            if status == 0 {
+                                fd = true;
+                            } else {
+                                fd_error = Some(lib.error(status));
+                            }
+                        }
+                        (None, _) => {
+                            fd_error = Some("driver has no xlCanFdSetConfiguration".to_string());
+                        }
+                        (_, None) => {
+                            fd_error =
+                                Some(format!("no 80 MHz timing preset for {data_kbps} kbit/s"));
+                        }
+                    }
                 }
                 if !fd {
                     let bitrate = kbps.saturating_mul(1_000);
@@ -570,6 +617,7 @@ impl VectorChannel {
                 port,
                 mask,
                 fd,
+                fd_error,
                 tags: Default::default(),
             })
         }
@@ -815,13 +863,19 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
             let name = String::from_utf8_lossy(&name_bytes[..end]).into_owned();
             let channel_index = config[rec + 41];
-            // `channelBusCapabilities` (u32 at the layout's +58) carries
-            // the XL_BUS_TYPE_* bits. Verified live: virtual channels
-            // report 0 here, so a zero reads as "assume CAN" -- only an
-            // explicit FlexRay bit excludes a channel from the CAN path.
-            // (Offset + FR bit get an MSVC offsetof probe in the FR-2
-            // phase, before anything trusts them for real hardware.)
-            let bus_caps = u32::from_le_bytes(config[rec + 58..rec + 62].try_into().unwrap());
+            // The packed vendor layout (confirmed against python-can's
+            // `XLchannelConfig`): name[32], hwType@32, hwIndex@33,
+            // hwChannel@34, transceiverState@37, configError@39,
+            // channelIndex@41, channelMask@42, channelCapabilities@50,
+            // channelBusCapabilities@54, isOnBus@58, connectedBusType@59.
+            // The previous code read +58 as a capability dword, which is
+            // actually isOnBus plus the first three bytes of the connected
+            // bus type; real adapters were classified from garbage.
+            let caps = u32::from_le_bytes(config[rec + 50..rec + 54].try_into().unwrap());
+            let bus_caps = u32::from_le_bytes(config[rec + 54..rec + 58].try_into().unwrap());
+            let is_on_bus = config[rec + 58] != 0;
+            let connected_bus_type =
+                u32::from_le_bytes(config[rec + 59..rec + 63].try_into().unwrap());
             let is_fr = bus_caps & XL_BUS_TYPE_FLEXRAY != 0;
             out.push(ChannelInfo {
                 index: channel_index as i32,
@@ -832,7 +886,10 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
                 },
                 can: bus_caps == 0 || bus_caps & XL_BUS_TYPE_CAN != 0,
                 flexray: is_fr,
+                caps,
                 bus_caps,
+                is_on_bus,
+                connected_bus_type,
             });
         }
         (lib.close_driver)();
@@ -1548,6 +1605,40 @@ mod tests {
         assert_eq!(cfg.g_number_of_static_slots, 60);
         assert_eq!(cfg.g_payload_length_static, 21);
         assert_eq!(cfg.p_channels, 3, "A+B both enabled");
+    }
+
+    /// Bench probe for a real VN1610: the corrected `XLchannelConfig`
+    /// offsets should report CAN FD and no FlexRay. Opens the channel with
+    /// init access and the 2 Mbit/s preset, printing the driver verdict --
+    /// hardware state is reported, not asserted (a channel already owned by
+    /// CANoe is a valid outcome). Skips when no VN1610 is attached.
+    #[test]
+    fn vn1610_fd_probe() {
+        let Ok(channels) = enumerate() else {
+            println!("vector enumerate unavailable -- probe skipped");
+            return;
+        };
+        let Some(ch) = channels.iter().find(|c| c.name.starts_with("VN1610")) else {
+            println!("no VN1610 attached -- probe skipped");
+            return;
+        };
+        println!(
+            "{}: caps=0x{:08X} fd={} bus=0x{:08X} can={} flexray={} on_bus={}",
+            ch.name,
+            ch.caps,
+            ch.supports_fd(),
+            ch.bus_caps,
+            ch.can,
+            ch.flexray,
+            ch.is_on_bus
+        );
+        match VectorChannel::open(ch.index, 500, Some(2_000), true) {
+            Ok(port) => println!(
+                "VN1610 ch{} FD open: fd={} error={:?}",
+                ch.index, port.fd, port.fd_error
+            ),
+            Err(e) => println!("VN1610 ch{} open failed: {e}", ch.index),
+        }
     }
 
     /// Live probe against the machine's real vxlapi driver: dump every

@@ -820,8 +820,16 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     let mut s = format!("{} Vector channel(s):\n", channels.len());
     for c in &channels {
         s.push_str(&format!(
-            "  ch{}: {} [caps=0x{:08X} can:{} flexray:{}]\n",
-            c.index, c.name, c.bus_caps, c.can, c.flexray
+            "  ch{}: {} [caps=0x{:08X} fd:{} bus=0x{:08X} can:{} flexray:{} on_bus:{} connected:0x{:X}]\n",
+            c.index,
+            c.name,
+            c.caps,
+            c.supports_fd(),
+            c.bus_caps,
+            c.can,
+            c.flexray,
+            c.is_on_bus,
+            c.connected_bus_type
         ));
     }
     // One description file configures every probed channel; parse it
