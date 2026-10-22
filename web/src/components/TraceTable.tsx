@@ -65,12 +65,14 @@ function TraceRow({
   cursorA,
   cursorB,
   onSelect,
+  onMenu,
 }: {
   frame: Frame;
   selected: boolean;
   cursorA: boolean;
   cursorB: boolean;
   onSelect: () => void;
+  onMenu: (event: MouseEvent) => void;
 }) {
   const classes = [
     selected ? "selected" : "",
@@ -80,7 +82,7 @@ function TraceRow({
     .filter(Boolean)
     .join(" ");
   return (
-    <tr class={classes} onClick={onSelect}>
+    <tr class={classes} onClick={onSelect} onContextMenu={onMenu}>
       <td class="num mono">{(frame.tUs / 1e6).toFixed(6)}</td>
       <td>{frame.busName}</td>
       <td class="mono">
@@ -102,7 +104,13 @@ function TraceRow({
 /// Fixed-row-height virtualization: the table keeps its column layout and
 /// sticky header, only the tbody window is in the DOM, and two spacer rows
 /// carry the unrendered height. Five thousand rows cost about thirty nodes.
-export function TraceTable({ rows }: { rows: Frame[] }) {
+export function TraceTable({
+  rows,
+  onQuery,
+}: {
+  rows: Frame[];
+  onQuery?: (text: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
   const previousFirst = useRef<string | null>(null);
@@ -111,7 +119,26 @@ export function TraceTable({ rows }: { rows: Frame[] }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [cursorA, setCursorA] = useState<Mark | null>(null);
   const [cursorB, setCursorB] = useState<Mark | null>(null);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    frame: Frame;
+  } | null>(null);
   const total = rows.length;
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [menu]);
 
   // New rows are prepended. A reader who scrolled down to inspect an older
   // frame must not be pushed away by that insertion: keep the same frame at
@@ -335,6 +362,16 @@ export function TraceTable({ rows }: { rows: Frame[] }) {
                     setSelectedKey(key);
                     scrollRef.current?.focus();
                   }}
+                  onMenu={(event) => {
+                    event.preventDefault();
+                    setSelectedKey(key);
+                    scrollRef.current?.focus();
+                    setMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      frame,
+                    });
+                  }}
                 />
               );
             })}
@@ -346,6 +383,54 @@ export function TraceTable({ rows }: { rows: Frame[] }) {
           </tbody>
         </table>
       </div>
+      {menu && (
+        <div
+          class="trace-menu"
+          style={{
+            left: `${Math.min(menu.x, window.innerWidth - 190)}px`,
+            top: `${Math.min(menu.y, window.innerHeight - 150)}px`,
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            disabled={!onQuery}
+            onClick={() => {
+              onQuery?.(menu.frame.addr || hexId(menu.frame));
+              setMenu(null);
+            }}
+          >
+            Filter this ID
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCursorA(mark(menu.frame));
+              setMenu(null);
+            }}
+          >
+            Set cursor A
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCursorB(mark(menu.frame));
+              setMenu(null);
+            }}
+          >
+            Set cursor B
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              copyText(rowText(menu.frame));
+              setMenu(null);
+            }}
+          >
+            Copy row
+          </button>
+        </div>
+      )}
     </div>
   );
 }

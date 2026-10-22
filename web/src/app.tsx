@@ -105,6 +105,7 @@ function matches(frame: Frame, query: string): boolean {
   return (
     frame.name.toLowerCase().includes(needle) ||
     frame.busName.toLowerCase().includes(needle) ||
+    frame.addr.toLowerCase().includes(needle) ||
     id.includes(needle) ||
     frame.data.toLowerCase().includes(needle)
   );
@@ -1096,6 +1097,7 @@ export function App() {
           <TraceTable
             key={`${bus}:${query}:${traceEpoch}`}
             rows={visibleRows}
+            onQuery={setQuery}
           />
         </section>
 

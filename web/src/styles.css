@@ -575,6 +575,33 @@ input::placeholder {
   scrollbar-color: #2c3846 #0c1016;
 }
 
+.trace-menu {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid #2c3846;
+  border-radius: 4px;
+  background: #111820;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+
+.trace-menu button {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #cfdae6;
+  font-size: 10.5px;
+  text-align: left;
+}
+
+.trace-menu button:hover:not(:disabled) {
+  background: #1b2836;
+}
+
 .table-scroll:focus {
   outline: none;
 }
