@@ -13,7 +13,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::StatusCode;
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -226,6 +228,7 @@ pub fn run(args: &[String]) {
                 "/upload",
                 post(upload).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
             )
+            .route("/download", get(download))
             .with_state(ApiState {
                 shared,
                 trace,
@@ -1042,6 +1045,63 @@ struct UploadReply {
     size: usize,
 }
 
+#[derive(Deserialize)]
+struct DownloadQuery {
+    name: Option<String>,
+}
+
+fn to_download_dir(file: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join("roxy-can-web-downloads")
+        .join(upload_name(file))
+}
+
+/// A bare file name from the export dialog is written to the download
+/// folder so the browser can fetch it back. Paths with a directory part are
+/// the user's own host paths and stay untouched.
+fn export_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if std::path::Path::new(trimmed).components().count() != 1 {
+        return trimmed.to_string();
+    }
+    let dir = std::env::temp_dir().join("roxy-can-web-downloads");
+    let _ = std::fs::create_dir_all(&dir);
+    to_download_dir(trimmed).to_string_lossy().into_owned()
+}
+
+/// Serves only files in the export folder; the name is sanitized the same
+/// way the export path was, so a caller cannot walk out of that folder.
+async fn download(Query(query): Query<DownloadQuery>) -> Result<Response, (StatusCode, String)> {
+    let name = upload_name(query.name.as_deref().unwrap_or(""));
+    let path = to_download_dir(&name);
+    let read = path.clone();
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(&read))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("download task: {e}"),
+            )
+        })?
+        .map_err(|_| (StatusCode::NOT_FOUND, "export is not ready".to_string()))?;
+    let mut response = bytes.into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    let disposition =
+        HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("download name: {e}"),
+            )
+        })?;
+    response
+        .headers_mut()
+        .insert(CONTENT_DISPOSITION, disposition);
+    Ok(response)
+}
+
 fn upload_name(raw: &str) -> String {
     let base = std::path::Path::new(raw)
         .file_name()
@@ -1845,7 +1905,7 @@ fn app_loop(
                     app.send(BusCommand::ClearSpec);
                 }
                 WebCommand::Export { kind, path } => {
-                    export_file(&mut app, &kind, &path);
+                    export_file(&mut app, &kind, &export_path(&path));
                 }
                 WebCommand::SetSysVar {
                     namespace,
@@ -5165,6 +5225,25 @@ mod tests {
         assert_eq!(upload_name(".."), "upload");
         assert_eq!(upload_name(""), "upload");
         assert_eq!(upload_name("\u{4e2d}\u{6587}.dbc"), "__.dbc");
+    }
+
+    #[test]
+    fn bare_export_names_land_in_the_download_folder() {
+        let folder = std::env::temp_dir().join("roxy-can-web-downloads");
+        let path = std::path::PathBuf::from(export_path("export.csv"));
+        assert_eq!(path.parent(), Some(folder.as_path()));
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("export.csv")
+        );
+        assert_eq!(export_path("logs/export.csv"), "logs/export.csv");
+        assert_eq!(export_path(""), "");
+        let nested = to_download_dir("../../secret.csv");
+        assert_eq!(nested.parent(), Some(folder.as_path()));
+        assert_eq!(
+            nested.file_name().and_then(|n| n.to_str()),
+            Some("secret.csv")
+        );
     }
 
     #[test]

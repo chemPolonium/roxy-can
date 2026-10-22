@@ -136,9 +136,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - **Export…** sits in the Trace header and the lower panel: it writes the
   trace as ASC (or PCAP when the path ends in `.pcap`), and Messages,
   Statistics, Data, State, the Signals chart or the Write log as CSV/TXT.
-  Paths are host paths; relative ones resolve against the server's working
-  directory. Exports use the first desktop window of that kind, which is All
-  buses by default.
+  A bare file name is written to the host's web download folder and
+  **Export & download** hands it to the browser; a path with a directory part
+  writes there instead. Exports use the first desktop window of that kind,
+  which is All buses by default.
 - Trace/Messages tables, bus and text filtering, the extra **Filters** dialog
   (direction, decoded-only, payload substring, time range, only/exclude hex
   ids), a canvas chart
@@ -172,8 +173,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 ## Not here yet
 
-Browser downloads for saves and exports (those still write host paths; the
-CLI flags also work), FlexRay/Ethernet hardware attachment and Ethernet
+Browser downloads for project saves (they still write host paths; the CLI
+flags also work), FlexRay/Ethernet hardware attachment and Ethernet
 generation (descriptions, replay rows, read-only Trace/Messages/Statistics
 and the FR generator are supported), docking/desktops, and syntax
 highlighting or `.rxcan` loading in the web script editor. Hardware remains

@@ -31,7 +31,38 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
   const [path, setPath] = useState(
     `export${KINDS.find(([value]) => value === initialKind)?.[2] ?? ".asc"}`,
   );
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
   const current = KINDS.find(([value]) => value === kind) ?? KINDS[0];
+  const name = path.trim();
+  const canDownload = name.length > 0 && !/[\\/]/.test(name);
+
+  // The export runs on the core thread, so poll the download folder until
+  // the file appears instead of guessing a fixed delay.
+  const exportAndDownload = async () => {
+    setDownloading(true);
+    setDownloadError("");
+    onExport(kind, name);
+    const url = `/api/download?name=${encodeURIComponent(name)}`;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      try {
+        const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+        if (!response.ok) continue;
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.click();
+        setDownloading(false);
+        onClose();
+        return;
+      } catch {
+        // The file is not there yet; keep waiting.
+      }
+    }
+    setDownloading(false);
+    setDownloadError("The export did not produce a file in time.");
+  };
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -83,19 +114,30 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
             />
           </label>
           <p class="hint">
-            Relative paths resolve against the server's working directory; an
-            absolute host path is used as typed. Trace writes ASC unless the
-            path ends in <code>.pcap</code>. Exports use the first desktop
-            window of that kind (All buses by default).
+            A bare file name exports into the host's download folder and
+            <strong> Export &amp; download</strong> saves it through the
+            browser. A path with a directory part is written there instead.
+            Trace writes ASC unless the path ends in <code>.pcap</code>.
+            Exports use the first desktop window of that kind (All buses by
+            default).
           </p>
+          {downloadError && <p class="modal-error">{downloadError}</p>}
           <div class="export-actions">
             <button
               type="button"
               class="primary"
-              disabled={!path.trim()}
-              onClick={() => onExport(kind, path.trim())}
+              disabled={!name || downloading}
+              onClick={() => onExport(kind, name)}
             >
               Export
+            </button>
+            <button
+              type="button"
+              class="primary"
+              disabled={!canDownload || downloading}
+              onClick={() => void exportAndDownload()}
+            >
+              {downloading ? "Waiting…" : "Export & download"}
             </button>
             <button type="button" onClick={onClose}>
               Cancel
