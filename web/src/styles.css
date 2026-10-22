@@ -1558,6 +1558,80 @@ button.mini.on {
   white-space: nowrap;
 }
 
+.gen-block {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #0d1218;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+}
+
+.gen-block h3 {
+  margin: 0 0 6px;
+  color: #dfe8f2;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.gen-block-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid #161d26;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.gen-block-row strong {
+  color: #cfe6ff;
+  font-weight: 500;
+}
+
+.gen-block-row em {
+  color: #8fd3a8;
+  font-style: normal;
+  font-size: 9.5px;
+}
+
+.gen-block-row:not(.on) em {
+  color: var(--muted);
+}
+
+.gen-block-path {
+  max-width: 170px;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9.5px;
+}
+
+.gen-block-error {
+  color: #ffb2b2;
+  font-size: 9.5px;
+}
+
+.gen-block-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.gen-block-add input:first-child {
+  width: 110px;
+}
+
+.gen-block-add select {
+  width: 90px;
+}
+
+.gen-block-add input:nth-of-type(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .gen-bus-head .spacer {
   flex: 1;
 }

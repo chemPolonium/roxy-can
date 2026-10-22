@@ -1531,6 +1531,7 @@ export function App() {
         <GeneratorModal
           entries={state?.tx ?? []}
           frTx={state?.frTx ?? []}
+          blocks={state?.blocks ?? []}
           buses={state?.buses ?? []}
           frBuses={state?.frBuses ?? []}
           catalog={catalog}
@@ -1559,6 +1560,15 @@ export function App() {
           onAdd={addEntry}
           onRemove={removeEntry}
           onSimulate={simulateBus}
+          onBlockAdd={(channel, name, path, node) =>
+            void run({ type: "add_replay_block", channel, name, path, node })
+          }
+          onBlockToggle={(id, on) =>
+            void run({ type: "set_replay_block_enabled", id, on })
+          }
+          onBlockRemove={(id) =>
+            void run({ type: "remove_replay_block", id })
+          }
           onFrToggle={(entry, on) =>
             void run({
               type: "set_fr_entry_active",

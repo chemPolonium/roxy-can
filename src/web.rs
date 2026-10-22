@@ -1633,6 +1633,19 @@ enum WebCommand {
         id: u32,
         src: WebSrc,
     },
+    AddReplayBlock {
+        channel: u8,
+        name: String,
+        path: String,
+        node: Option<String>,
+    },
+    SetReplayBlockEnabled {
+        id: u64,
+        on: bool,
+    },
+    RemoveReplayBlock {
+        id: u64,
+    },
     AddFrEntry {
         bus: u8,
         slot: u16,
@@ -2432,6 +2445,27 @@ fn app_loop(
                         app.stop();
                     }
                     app.remove_eth_bus(bus);
+                }
+                WebCommand::AddReplayBlock {
+                    channel,
+                    name,
+                    path,
+                    node,
+                } => {
+                    let node = node.filter(|value| !value.trim().is_empty());
+                    let name = if name.trim().is_empty() {
+                        format!("Block {}", app.snap.blocks.len() + 1)
+                    } else {
+                        name
+                    };
+                    let attached = node.clone().map(|node| (channel, node));
+                    app.add_replay_block(channel, name, path, node, attached);
+                }
+                WebCommand::SetReplayBlockEnabled { id, on } => {
+                    app.set_replay_block_enabled(id, on);
+                }
+                WebCommand::RemoveReplayBlock { id } => {
+                    app.remove_replay_block(id);
                 }
                 WebCommand::AddFrEntry { bus, slot } => {
                     app.add_fr_tx(bus, slot);
@@ -3560,6 +3594,7 @@ struct WebState {
     hw_refresh: u64,
     tx: Vec<WebTx>,
     fr_tx: Vec<WebFrTx>,
+    blocks: Vec<WebReplayBlock>,
     triggers: Vec<WebTrigger>,
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
@@ -3610,6 +3645,19 @@ struct WebEthBus {
     path: String,
     clusters: usize,
     frames: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebReplayBlock {
+    id: u64,
+    name: String,
+    channel: u8,
+    path: String,
+    node_filter: Option<String>,
+    enabled: bool,
+    frames: usize,
+    error: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4095,6 +4143,20 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .collect();
     tx.sort_by_key(|entry| (entry.channel, entry.id));
 
+    let blocks: Vec<WebReplayBlock> = snap
+        .blocks
+        .iter()
+        .map(|block| WebReplayBlock {
+            id: block.id,
+            name: block.name.clone(),
+            channel: block.channel,
+            path: block.path.clone(),
+            node_filter: block.node_filter.clone(),
+            enabled: block.enabled,
+            frames: block.frames,
+            error: block.last_error.clone(),
+        })
+        .collect();
     let mut fr_tx: Vec<WebFrTx> = snap
         .fr_tx
         .iter()
@@ -4762,6 +4824,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         hw_refresh: snap.hw_refresh,
         tx,
         fr_tx,
+        blocks,
         triggers,
         trigger_limits: WebTriggerLimits {
             pre_frames: app.limits.pre_frames,

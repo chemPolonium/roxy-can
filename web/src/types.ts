@@ -30,6 +30,7 @@ export interface State {
   hwRefresh: number;
   tx: TxEntry[];
   frTx: FrTxEntry[];
+  blocks: ReplayBlock[];
   triggers: TriggerEntry[];
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
@@ -154,6 +155,17 @@ export interface Hardware {
   frChannels: HwChannel[];
   error: string;
   frError: string;
+}
+
+export interface ReplayBlock {
+  id: number;
+  name: string;
+  channel: number;
+  path: string;
+  nodeFilter: string | null;
+  enabled: boolean;
+  frames: number;
+  error: string | null;
 }
 
 export interface FrTxEntry {
@@ -620,6 +632,15 @@ export type Command =
   | { type: "set_entry_hex"; ch: number; id: number; text: string }
   | { type: "set_entry_source"; ch: number; id: number; src: TxSource }
   | { type: "clear_entry_source"; ch: number; id: number; name: string }
+  | {
+      type: "add_replay_block";
+      channel: number;
+      name: string;
+      path: string;
+      node: string | null;
+    }
+  | { type: "set_replay_block_enabled"; id: number; on: boolean }
+  | { type: "remove_replay_block"; id: number }
   | { type: "add_fr_entry"; bus: number; slot: number }
   | { type: "remove_fr_entry"; bus: number; slot: number }
   | { type: "set_fr_entry_active"; bus: number; slot: number; on: boolean }

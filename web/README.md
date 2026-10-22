@@ -111,7 +111,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Write tab shows the bus Write ring (command results, node errors, trigger
   events). **Sources** opens the CAN waveform editor per entry: add/remove a
   DBC signal and edit its shape (Ramp, Sine, Step, Random, Triangle, Counter),
-  Lo/Hi, period, phase, Step sequence and Random redraw interval.
+  Lo/Hi, period, phase, Step sequence and Random redraw interval. A
+  **Replay blocks** section injects a recorded ASC/BLF onto a chosen bus,
+  optionally limited to one DBC node; blocks toggle and remove in place.
 - **Triggers…** shows the live rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition

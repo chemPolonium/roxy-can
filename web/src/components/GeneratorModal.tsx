@@ -5,13 +5,16 @@ import type {
   CatalogSignal,
   FrBus,
   FrTxEntry,
+  ReplayBlock,
   TxEntry,
   TxSource,
 } from "../types";
+import { FilePick } from "./FilePick";
 
 interface Props {
   entries: TxEntry[];
   frTx: FrTxEntry[];
+  blocks: ReplayBlock[];
   buses: Bus[];
   frBuses: FrBus[];
   catalog: Catalog | null;
@@ -31,6 +34,14 @@ interface Props {
   onAdd: (ch: number, id: number) => void;
   onRemove: (entry: TxEntry) => void;
   onSimulate: (ch: number) => void;
+  onBlockAdd: (
+    channel: number,
+    name: string,
+    path: string,
+    node: string | null,
+  ) => void;
+  onBlockToggle: (id: number, on: boolean) => void;
+  onBlockRemove: (id: number) => void;
   onClose: () => void;
 }
 
@@ -723,6 +734,7 @@ function FrBusGroup({
 export function GeneratorModal({
   entries,
   frTx,
+  blocks,
   buses,
   frBuses,
   catalog,
@@ -742,8 +754,19 @@ export function GeneratorModal({
   onAdd,
   onRemove,
   onSimulate,
+  onBlockAdd,
+  onBlockToggle,
+  onBlockRemove,
   onClose,
 }: Props) {
+  const [blockName, setBlockName] = useState("");
+  const [blockNode, setBlockNode] = useState("");
+  const [blockBus, setBlockBus] = useState(buses[0]?.index ?? 0);
+  useEffect(() => {
+    if (!buses.some((bus) => bus.index === blockBus)) {
+      setBlockBus(buses[0]?.index ?? 0);
+    }
+  }, [buses, blockBus]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -806,6 +829,104 @@ export function GeneratorModal({
               onRemove={onFrRemove}
             />
           ))}
+
+          <section class="gen-block">
+            <h3>Replay blocks</h3>
+            {blocks.length === 0 ? (
+              <p class="hint">
+                Replay a recorded ASC/BLF into a simulated bus, optionally
+                filtering to the frames one DBC node sends.
+              </p>
+            ) : (
+              blocks.map((block) => (
+                <div
+                  class={`gen-block-row ${block.enabled ? "on" : ""}`}
+                  key={block.id}
+                >
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={block.enabled}
+                      onChange={(event) =>
+                        onBlockToggle(
+                          block.id,
+                          (event.target as HTMLInputElement).checked,
+                        )
+                      }
+                    />
+                    On
+                  </label>
+                  <strong>{block.name}</strong>
+                  <span>
+                    {buses.find((bus) => bus.index === block.channel)?.name ??
+                      `CAN${block.channel + 1}`}
+                    {" · "}
+                    {block.nodeFilter ?? "all ids"}
+                  </span>
+                  <em>
+                    {block.enabled ? `${block.frames} frames` : "off"}
+                  </em>
+                  <span class="gen-block-path" title={block.path}>
+                    {block.path.split(/[\\/]/).pop()}
+                  </span>
+                  {block.error && (
+                    <span class="gen-block-error" title={block.error}>
+                      load failed
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    class="bus-remove"
+                    onClick={() => onBlockRemove(block.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))
+            )}
+            <div class="gen-block-add">
+              <input
+                value={blockName}
+                placeholder="Block name"
+                onInput={(event) =>
+                  setBlockName((event.target as HTMLInputElement).value)
+                }
+              />
+              <select
+                value={blockBus}
+                onChange={(event) =>
+                  setBlockBus(Number((event.target as HTMLSelectElement).value))
+                }
+              >
+                {buses.map((bus) => (
+                  <option key={bus.index} value={bus.index}>
+                    {bus.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={blockNode}
+                placeholder="DBC node (optional)"
+                onInput={(event) =>
+                  setBlockNode((event.target as HTMLInputElement).value)
+                }
+              />
+              <FilePick
+                label="Add from log…"
+                accept=".asc,.blf"
+                onPick={(path) => {
+                  onBlockAdd(
+                    blockBus,
+                    blockName.trim(),
+                    path,
+                    blockNode.trim() || null,
+                  );
+                  setBlockName("");
+                  setBlockNode("");
+                }}
+              />
+            </div>
+          </section>
         </div>
         <p class="hint picker-hint">
           Entries transmit only when On and their DBC node is Simulated. On a
