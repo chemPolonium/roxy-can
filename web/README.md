@@ -160,7 +160,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Statistics shows aggregate count, min/avg/max/jitter and share; Jitter
   folds away below 1280 px and the row tooltip keeps the full values. Bus
   shows per-bus load, send distance, bursts and per-class frame rates with a
-  one-minute load sparkline. Spec reads the project's tolerance/grace, the
+  one-minute load sparkline. Write filters by category and text. Spec reads
+  the project's tolerance/grace, the
   periodic-message count and the latched Unknown id / DLC / Cycle / Dropped
   verdicts, with per-rule filters, Clear and CSV export.
 - **Export…** sits in the Trace header and the lower panel: it writes the

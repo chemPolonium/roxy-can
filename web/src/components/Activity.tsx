@@ -3,15 +3,23 @@ import type { WriteLine } from "../types";
 export function Activity({
   rows,
   clock,
+  filtered = false,
 }: {
   rows: WriteLine[];
   clock: (wallUs: number) => string;
+  filtered?: boolean;
 }) {
   if (rows.length === 0) {
     return (
       <div class="empty">
-        <strong>Nothing reported yet</strong>
-        <span>Command results and bus events land here.</span>
+        <strong>
+          {filtered ? "No matching lines" : "Nothing reported yet"}
+        </strong>
+        <span>
+          {filtered
+            ? "Try a different category or text."
+            : "Command results and bus events land here."}
+        </span>
       </div>
     );
   }

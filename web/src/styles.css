@@ -447,8 +447,14 @@ input::placeholder {
   font-size: 10.5px;
 }
 
-.panel-filter-row button {
+.panel-filter-row button,
+.panel-filter-row select {
   flex: 0 0 auto;
+}
+
+.panel-filter-row select {
+  width: 90px;
+  font-size: 10.5px;
 }
 
 .chart-legend {

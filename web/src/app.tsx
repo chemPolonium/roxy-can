@@ -177,6 +177,8 @@ export function App() {
   const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
   const [traceFilterOpen, setTraceFilterOpen] = useState(false);
   const [panelQuery, setPanelQuery] = useState("");
+  const [writeKind, setWriteKind] = useState("all");
+  const [writeQuery, setWriteQuery] = useState("");
   const [tab, setTab] = useState<RightTab>("messages");
   const [chartTab, setChartTab] = useState<ChartTab>("rate");
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -737,6 +739,15 @@ export function App() {
         row.busName.toLowerCase().includes(needle),
     );
   }, [state?.messages, panelQuery]);
+
+  const writeRows = useMemo(() => {
+    const rows = state?.write ?? [];
+    const needle = writeQuery.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (writeKind !== "all" && row.kind !== writeKind) return false;
+      return !needle || row.text.toLowerCase().includes(needle);
+    });
+  }, [state?.write, writeKind, writeQuery]);
 
   const lowerStats = useMemo(() => {
     const rows = state?.stats ?? [];
@@ -1406,7 +1417,7 @@ export function App() {
                       ? `${state?.busStats.length ?? 0} buses`
                       : tab === "spec"
                         ? `${state?.specRows.length ?? 0} violations`
-                        : `${state?.write.length ?? 0} lines`}
+                        : `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`}
               </span>
               {tab !== "bus" && tab !== "spec" && (
                 <button
@@ -1479,7 +1490,45 @@ export function App() {
                 onExport={() => openExport("spec")}
               />
             ) : (
-              <Activity rows={state?.write ?? []} clock={clock} />
+              <div class="panel-list">
+                <div class="panel-filter-row">
+                  <select
+                    value={writeKind}
+                    onChange={(event) =>
+                      setWriteKind((event.target as HTMLSelectElement).value)
+                    }
+                  >
+                    <option value="all">All lines</option>
+                    <option value="script">Script</option>
+                    <option value="info">Info</option>
+                    <option value="warn">Warn</option>
+                    <option value="error">Error</option>
+                  </select>
+                  <input
+                    class="panel-filter"
+                    type="search"
+                    value={writeQuery}
+                    placeholder="Filter text…"
+                    onInput={(event) =>
+                      setWriteQuery((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  {writeQuery && (
+                    <button
+                      type="button"
+                      class="mini"
+                      onClick={() => setWriteQuery("")}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <Activity
+                  rows={writeRows}
+                  clock={clock}
+                  filtered={writeKind !== "all" || writeQuery.trim() !== ""}
+                />
+              </div>
             )}
           </section>
         </div>
