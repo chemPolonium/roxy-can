@@ -1960,6 +1960,24 @@ export function App() {
                   >
                     {state?.recording ? "Stop recording" : "Record"}
                   </button>
+                  <button
+                    type="button"
+                    disabled={state?.recording || !state?.recordFile}
+                    title={
+                      state?.recording
+                        ? "Stop recording before downloading"
+                        : "Save the last recording through the browser"
+                    }
+                    onClick={() => {
+                      if (!state?.recordFile) return;
+                      triggerDownload(
+                        "/api/recording",
+                        fileNameOf(state.recordFile),
+                      );
+                    }}
+                  >
+                    Download
+                  </button>
                 </div>
                 <p class="hint">
                   Relative names land in Record/ beside the project; an absolute

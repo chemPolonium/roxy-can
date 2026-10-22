@@ -229,6 +229,7 @@ pub fn run(args: &[String]) {
                 post(upload).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
             )
             .route("/download", get(download).delete(discard_download))
+            .route("/recording", get(recording_download))
             .with_state(ApiState {
                 shared,
                 trace,
@@ -1139,6 +1140,57 @@ async fn download(Query(query): Query<DownloadQuery>) -> Result<Response, (Statu
             )
         })?
         .map_err(|_| (StatusCode::NOT_FOUND, "export is not ready".to_string()))?;
+    let mut response = bytes.into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    let disposition =
+        HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("download name: {e}"),
+            )
+        })?;
+    response
+        .headers_mut()
+        .insert(CONTENT_DISPOSITION, disposition);
+    Ok(response)
+}
+
+/// Serves the file the recorder finished last. The path comes from the
+/// core's own snapshot, never from the query, and a live recording is
+/// refused until its writer has closed the trailer.
+async fn recording_download(State(api): State<ApiState>) -> Result<Response, (StatusCode, String)> {
+    let (path, recording) = api
+        .shared
+        .lock()
+        .map(|state| (state.record_file.clone(), state.recording))
+        .unwrap_or_default();
+    if recording {
+        return Err((
+            StatusCode::CONFLICT,
+            "stop recording before downloading".to_string(),
+        ));
+    }
+    if path.is_empty() {
+        return Err((StatusCode::NOT_FOUND, "no recording yet".to_string()));
+    }
+    let read = path.clone();
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(&read))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("recording task: {e}"),
+            )
+        })?
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("recording: {e}")))?;
+    let file = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("recording.asc");
+    let name = upload_name(file);
     let mut response = bytes.into_response();
     response.headers_mut().insert(
         CONTENT_TYPE,

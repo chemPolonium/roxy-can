@@ -44,7 +44,8 @@ The dialog marks unsaved changes next to the current name. The
 **Recording** section starts/stops an ASC or BLF capture with a typed file
 name and an optional whitelist (`100, 3F4x, FR0:13`); relative names land in
 `Record/` beside the project, and arming while stopped creates the file on
-the next Start. The live badge in the top bar turns red while recording.
+the next Start. Once stopped, **Download** fetches the last recording
+through the browser. The live badge in the top bar turns red while recording.
 Saving keeps
 the project's desktop dock layout and Graphics-window settings untouched: the
 web plot asks the core for its sampling stride instead of editing desktop
