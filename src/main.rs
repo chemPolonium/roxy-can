@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The core keeps observer and project-file models that the retired desktop UI
+// used to populate. They still participate in project compatibility and tests;
+// pruning them is separate from the web migration.
+#![allow(dead_code)]
 
 mod aggregate;
 mod app;

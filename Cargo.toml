@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 # The local axum host for the Vite build, and the async runtime it needs.
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal"] }
 tower-http = { version = "0.6", features = ["fs"] }
 # Hardware probing uses the Windows device enumeration API.
 windows-sys = { version = "0.52", features = [

@@ -23,9 +23,9 @@ the project but leaves it stopped; `--replay` loads the log and starts
 playback. A project and a replay can be combined. `--profile <name>` overlays
 `profiles/<name>.toml` from the project directory onto its roles and hardware
 mapping, exactly like the headless CLI. `--port <n>` changes the
-port (default 2010). A bare launch opens the browser; `--web` remains an
-explicit synonym for the default and keeps scripted runs silent
-(`ROXY_WEB_NO_OPEN=1` does the same).
+port (default 2010). A bare launch opens the browser and prints the serving URL with the
+version; press Ctrl+C to stop. `--web` remains an explicit synonym for the
+default and keeps scripted runs silent (`ROXY_WEB_NO_OPEN=1` does the same).
 The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 

@@ -247,11 +247,20 @@ pub fn run(args: &[String], open: bool) {
             .await
             .unwrap_or_else(|e| panic!("bind 127.0.0.1:{port}: {e}"));
         let url = format!("http://127.0.0.1:{port}");
-        println!("roxy-can web ui: {url}");
+        println!("roxy-can {} is serving on {url}", env!("CARGO_PKG_VERSION"));
         if open {
+            println!("Opening the roxy-can web UI in your default browser…");
             open_browser(&url);
+            println!("If it did not open, visit {url}. Press Ctrl+C to stop.");
+        } else {
+            println!("Open {url} in your browser. Press Ctrl+C to stop.");
         }
-        axum::serve(listener, app).await.expect("web server");
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await
+            .expect("web server");
     });
 }
 
