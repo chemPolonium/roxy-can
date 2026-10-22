@@ -1139,6 +1139,92 @@ button.mini {
   font-size: 9.5px;
 }
 
+.gen-src-toggle {
+  color: var(--muted);
+}
+
+.gen-src-toggle.on {
+  background: #142334;
+  border-color: #2d5c88;
+  color: #cfe6ff;
+}
+
+.gen-srcs {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 2px 0 6px 24px;
+  padding: 6px 8px;
+  background: #0e141b;
+  border: 1px solid #223042;
+  border-radius: 4px;
+}
+
+.gen-src-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.gen-src-name {
+  width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d8e4f2;
+  font-weight: 500;
+}
+
+.gen-src-row label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.gen-src-num {
+  width: 62px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.gen-src-seq-label {
+  flex: 1 1 100%;
+}
+
+.gen-src-seq {
+  flex: 1 1 160px;
+  min-width: 120px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.gen-src-remove {
+  margin-left: auto;
+  padding: 0 5px;
+  color: #ff8f7a;
+  line-height: 16px;
+}
+
+.gen-src-add {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.gen-src-add select {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.gen-src-empty {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .gen-data {
   align-items: center;
 }

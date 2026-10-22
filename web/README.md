@@ -72,7 +72,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - **Generator…** edits the real TxView list: per-entry On, cycle, FD, hex
   payload, add-from-DBC/remove, and a per-bus “Simulate nodes” action. The
   Write tab shows the bus Write ring (command results, node errors, trigger
-  events). Signal-source editing remains desktop-only for now.
+  events). **Sources** opens the waveform editor per entry: add/remove a DBC
+  signal and edit its shape (Ramp, Sine, Step, Random, Triangle, Counter),
+  Lo/Hi, period, phase, Step sequence and Random redraw interval.
 - **Triggers…** shows the live rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition
@@ -115,9 +117,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 A native browser file picker (opening, saving and DBC loading use host paths
-and recents; the CLI flags also work), FlexRay/Ethernet attachment, generator
-signal sources, node scripts, and docking/desktops. Hardware, Data and the
-Monitor cover CAN only for now; signal selection is session-only.
+and recents; the CLI flags also work), FlexRay/Ethernet attachment, node
+scripts, and docking/desktops. Hardware, Data and the Monitor cover CAN only
+for now; signal selection is session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

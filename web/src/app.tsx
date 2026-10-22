@@ -1035,6 +1035,22 @@ export function App() {
           onCycle={setEntryCycle}
           onFd={setEntryFd}
           onHex={setEntryHex}
+          onSource={(entry, src) =>
+            void run({
+              type: "set_entry_source",
+              ch: entry.channel,
+              id: entry.id,
+              src,
+            })
+          }
+          onClearSource={(entry, name) =>
+            void run({
+              type: "clear_entry_source",
+              ch: entry.channel,
+              id: entry.id,
+              name,
+            })
+          }
           onAdd={addEntry}
           onRemove={removeEntry}
           onSimulate={simulateBus}

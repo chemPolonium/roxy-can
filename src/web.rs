@@ -661,6 +661,16 @@ enum WebCommand {
         id: u32,
         text: String,
     },
+    SetEntrySource {
+        ch: u8,
+        id: u32,
+        src: WebSrc,
+    },
+    ClearEntrySource {
+        ch: u8,
+        id: u32,
+        name: String,
+    },
     AddEntry {
         ch: u8,
         id: u32,
@@ -1070,6 +1080,39 @@ fn app_loop(
                 }
                 WebCommand::SetEntryHex { ch, id, text } => {
                     app.send(BusCommand::SetEntryHex { ch, id, text });
+                }
+                WebCommand::SetEntrySource { ch, id, src } => {
+                    let Some(kind) = crate::sim::KINDS
+                        .iter()
+                        .copied()
+                        .find(|kind| kind.label().eq_ignore_ascii_case(&src.kind))
+                    else {
+                        app.status = format!("unknown source kind: {}", src.kind);
+                        continue;
+                    };
+                    let name = src.name.trim().to_string();
+                    if name.is_empty() {
+                        app.status = "source needs a signal name".to_string();
+                        continue;
+                    }
+                    app.send(BusCommand::SetEntrySource {
+                        ch,
+                        id,
+                        src: crate::sim::ValueSrc {
+                            name,
+                            kind,
+                            lo: src.lo,
+                            hi: src.hi,
+                            period_us: src.period_us,
+                            phase_us: src.phase_us,
+                            seq: src.seq,
+                            seed: src.seed,
+                            redraw_us: src.redraw_us,
+                        },
+                    });
+                }
+                WebCommand::ClearEntrySource { ch, id, name } => {
+                    app.send(BusCommand::ClearEntrySource { ch, id, name });
                 }
                 WebCommand::AddEntry { ch, id } => {
                     app.send(BusCommand::AddEntry { ch, id });
@@ -1932,6 +1975,20 @@ struct WebTxFail {
     count: u64,
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSrc {
+    name: String,
+    kind: String,
+    lo: f64,
+    hi: f64,
+    period_us: u64,
+    phase_us: u64,
+    seq: Vec<f64>,
+    seed: u64,
+    redraw_us: u64,
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebTx {
@@ -1947,7 +2004,7 @@ struct WebTx {
     data_text: String,
     sent_text: String,
     muted: bool,
-    sources: usize,
+    srcs: Vec<WebSrc>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -2161,7 +2218,21 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             data_text: entry.data_text.clone(),
             sent_text: entry.sent_text.clone(),
             muted: entry.muted,
-            sources: entry.srcs.len(),
+            srcs: entry
+                .srcs
+                .iter()
+                .map(|src| WebSrc {
+                    name: src.name.clone(),
+                    kind: src.kind.label().to_string(),
+                    lo: src.lo,
+                    hi: src.hi,
+                    period_us: src.period_us,
+                    phase_us: src.phase_us,
+                    seq: src.seq.clone(),
+                    seed: src.seed,
+                    redraw_us: src.redraw_us,
+                })
+                .collect(),
         })
         .collect();
     tx.sort_by_key(|entry| (entry.channel, entry.id));
@@ -2748,6 +2819,27 @@ mod tests {
         app.settle();
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert!(state.data.is_empty());
+    }
+
+    /// The demo's generator sources reach the web with their shape and
+    /// timing, not just a count, so the editor can round-trip them.
+    #[test]
+    fn the_state_lists_generator_sources() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..20 {
+            app.update();
+        }
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let src = state
+            .tx
+            .iter()
+            .flat_map(|entry| &entry.srcs)
+            .find(|src| src.name == "EngineSpeed")
+            .expect("the demo drives EngineSpeed");
+        assert_eq!(src.kind, "Sine");
+        assert!(src.period_us > 0);
+        assert!(src.hi > src.lo);
     }
 
     /// A replay path must open the log and start playback in Replay mode,

@@ -196,6 +196,18 @@ export interface TriggerEdit {
   sendId: number;
 }
 
+export interface TxSource {
+  name: string;
+  kind: string;
+  lo: number;
+  hi: number;
+  periodUs: number;
+  phaseUs: number;
+  seq: number[];
+  seed: number;
+  redrawUs: number;
+}
+
 export interface TxEntry {
   channel: number;
   bus: string;
@@ -209,7 +221,7 @@ export interface TxEntry {
   dataText: string;
   sentText: string;
   muted: boolean;
-  sources: number;
+  srcs: TxSource[];
 }
 
 /** Light state plus the incremental trace/signal hand-off. */
@@ -336,6 +348,8 @@ export type Command =
   | { type: "set_entry_cycle"; ch: number; id: number; cycle_us: number }
   | { type: "set_entry_fd"; ch: number; id: number; fd: boolean }
   | { type: "set_entry_hex"; ch: number; id: number; text: string }
+  | { type: "set_entry_source"; ch: number; id: number; src: TxSource }
+  | { type: "clear_entry_source"; ch: number; id: number; name: string }
   | { type: "add_entry"; ch: number; id: number }
   | { type: "remove_entry"; ch: number; id: number }
   | { type: "simulate_bus_nodes"; ch: number }

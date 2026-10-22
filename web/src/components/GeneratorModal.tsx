@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Bus, Catalog, TxEntry } from "../types";
+import type { Bus, Catalog, CatalogSignal, TxEntry, TxSource } from "../types";
 
 interface Props {
   entries: TxEntry[];
@@ -11,10 +11,253 @@ interface Props {
   onCycle: (entry: TxEntry, cycleUs: number) => void;
   onFd: (entry: TxEntry, on: boolean) => void;
   onHex: (entry: TxEntry, text: string) => void;
+  onSource: (entry: TxEntry, src: TxSource) => void;
+  onClearSource: (entry: TxEntry, name: string) => void;
   onAdd: (ch: number, id: number) => void;
   onRemove: (entry: TxEntry) => void;
   onSimulate: (ch: number) => void;
   onClose: () => void;
+}
+
+const KINDS = ["Ramp", "Sine", "Step", "Random", "Triangle", "Counter"];
+
+function NumField({
+  value,
+  onCommit,
+  title,
+}: {
+  value: number;
+  onCommit: (value: number) => void;
+  title?: string;
+}) {
+  const [text, setText] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setText(String(value));
+  }, [value, editing]);
+  const commit = () => {
+    setEditing(false);
+    const parsed = Number(text);
+    if (Number.isFinite(parsed)) {
+      if (parsed !== value) onCommit(parsed);
+    } else {
+      setText(String(value));
+    }
+  };
+  return (
+    <input
+      class="gen-src-num"
+      value={text}
+      title={title}
+      inputMode="decimal"
+      onFocus={() => setEditing(true)}
+      onInput={(event) => setText((event.target as HTMLInputElement).value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+        if (event.key === "Escape") {
+          setText(String(value));
+          (event.target as HTMLInputElement).blur();
+        }
+      }}
+    />
+  );
+}
+
+function SeqField({
+  seq,
+  onCommit,
+}: {
+  seq: number[];
+  onCommit: (seq: number[]) => void;
+}) {
+  const label = seq.join(", ");
+  const [text, setText] = useState(label);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setText(label);
+  }, [label, editing]);
+  const commit = () => {
+    setEditing(false);
+    const parts = text
+      .split(/[\s,;]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const values: number[] = [];
+    for (const part of parts) {
+      const parsed = Number(part);
+      if (!Number.isFinite(parsed)) {
+        setText(label);
+        return;
+      }
+      values.push(parsed);
+    }
+    if (values.join(",") !== seq.join(",")) onCommit(values);
+  };
+  return (
+    <input
+      class="gen-src-seq"
+      value={text}
+      placeholder="comma-separated values"
+      title="Values walked at equal duration; empty toggles Lo/Hi"
+      onFocus={() => setEditing(true)}
+      onInput={(event) => setText((event.target as HTMLInputElement).value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+}
+
+function SourceRow({
+  src,
+  onChange,
+  onRemove,
+}: {
+  src: TxSource;
+  onChange: (src: TxSource) => void;
+  onRemove: () => void;
+}) {
+  const patch = (next: Partial<TxSource>) => onChange({ ...src, ...next });
+  return (
+    <div class="gen-src-row">
+      <strong class="gen-src-name">{src.name}</strong>
+      <select
+        value={src.kind}
+        title="Waveform shape"
+        onChange={(event) =>
+          patch({ kind: (event.target as HTMLSelectElement).value })
+        }
+      >
+        {KINDS.map((kind) => (
+          <option key={kind} value={kind}>
+            {kind}
+          </option>
+        ))}
+      </select>
+      <label>
+        lo
+        <NumField value={src.lo} onCommit={(lo) => patch({ lo })} />
+      </label>
+      <label>
+        hi
+        <NumField value={src.hi} onCommit={(hi) => patch({ hi })} />
+      </label>
+      <label title="One full cycle">
+        period
+        <NumField
+          value={src.periodUs / 1000}
+          onCommit={(ms) => patch({ periodUs: Math.max(0, Math.round(ms * 1000)) })}
+        />
+        ms
+      </label>
+      <label title="Shift onto the simulation clock">
+        phase
+        <NumField
+          value={src.phaseUs / 1000}
+          onCommit={(ms) => patch({ phaseUs: Math.max(0, Math.round(ms * 1000)) })}
+        />
+        ms
+      </label>
+      {src.kind === "Random" && (
+        <label title="Redraw interval; 0 = every frame">
+          redraw
+          <NumField
+            value={src.redrawUs / 1000}
+            onCommit={(ms) =>
+              patch({ redrawUs: Math.max(0, Math.round(ms * 1000)) })
+            }
+          />
+          ms
+        </label>
+      )}
+      {src.kind === "Step" && (
+        <label class="gen-src-seq-label">
+          seq
+          <SeqField seq={src.seq} onCommit={(seq) => patch({ seq })} />
+        </label>
+      )}
+      <button
+        type="button"
+        class="gen-src-remove"
+        title="Stop driving this signal"
+        onClick={onRemove}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function SourceEditor({
+  entry,
+  signals,
+  onSource,
+  onClearSource,
+}: {
+  entry: TxEntry;
+  signals: CatalogSignal[];
+  onSource: (entry: TxEntry, src: TxSource) => void;
+  onClearSource: (entry: TxEntry, name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const available = signals.filter(
+    (signal) => !entry.srcs.some((src) => src.name === signal.name),
+  );
+  const add = () => {
+    const signal = signals.find((candidate) => candidate.name === name);
+    if (!signal) return;
+    onSource(entry, {
+      name: signal.name,
+      kind: "Ramp",
+      lo: signal.min,
+      hi: signal.max,
+      periodUs: 1_000_000,
+      phaseUs: 0,
+      seq: [],
+      seed: 0x5eed1234,
+      redrawUs: 0,
+    });
+    setName("");
+  };
+  return (
+    <div class="gen-srcs">
+      {entry.srcs.map((src) => (
+        <SourceRow
+          key={src.name}
+          src={src}
+          onChange={(next) => onSource(entry, next)}
+          onRemove={() => onClearSource(entry, src.name)}
+        />
+      ))}
+      {signals.length === 0 ? (
+        <div class="gen-src-empty">
+          Load a DBC for this message to drive its signals.
+        </div>
+      ) : (
+        <div class="gen-src-add">
+          <select
+            value={name}
+            onChange={(event) => setName((event.target as HTMLSelectElement).value)}
+          >
+            <option value="">
+              {available.length === 0 ? "All signals driven" : "Add source…"}
+            </option>
+            {available.map((signal) => (
+              <option key={signal.name} value={signal.name}>
+                {signal.name} ({signal.min}..{signal.max}
+                {signal.unit ? ` ${signal.unit}` : ""})
+              </option>
+            ))}
+          </select>
+          <button type="button" disabled={!name} onClick={add}>
+            + Source
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function hexId(id: number): string {
@@ -23,23 +266,30 @@ function hexId(id: number): string {
 
 function EntryRow({
   entry,
+  signals,
   onToggle,
   onCycle,
   onFd,
   onHex,
+  onSource,
+  onClearSource,
   onRemove,
 }: {
   entry: TxEntry;
+  signals: CatalogSignal[];
   onToggle: (entry: TxEntry, on: boolean) => void;
   onCycle: (entry: TxEntry, cycleUs: number) => void;
   onFd: (entry: TxEntry, on: boolean) => void;
   onHex: (entry: TxEntry, text: string) => void;
+  onSource: (entry: TxEntry, src: TxSource) => void;
+  onClearSource: (entry: TxEntry, name: string) => void;
   onRemove: (entry: TxEntry) => void;
 }) {
   const [cycle, setCycle] = useState((entry.cycleUs / 1000).toString());
   const cycleRef = useRef(cycle);
   const [hex, setHex] = useState(entry.dataText);
   const hexRef = useRef(hex);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
 
   useEffect(() => {
     const next = (entry.cycleUs / 1000).toString();
@@ -91,9 +341,14 @@ function EntryRow({
           </span>
         )}
         {entry.muted && <span class="gen-warn">muted</span>}
-        {entry.sources > 0 && (
-          <span class="gen-badge">{entry.sources} src</span>
-        )}
+        <button
+          type="button"
+          class={`mini gen-src-toggle ${entry.srcs.length ? "on" : ""}`}
+          title="Edit the waveforms driving this entry's signals"
+          onClick={() => setSourcesOpen((open) => !open)}
+        >
+          Sources{entry.srcs.length ? ` ${entry.srcs.length}` : ""}
+        </button>
         <label class="gen-cycle" title="0 = event-triggered">
           Cycle
           <input
@@ -149,6 +404,14 @@ function EntryRow({
         />
         {entry.sentText && <span class="gen-sent">sent {entry.sentText}</span>}
       </div>
+      {sourcesOpen && (
+        <SourceEditor
+          entry={entry}
+          signals={signals}
+          onSource={onSource}
+          onClearSource={onClearSource}
+        />
+      )}
     </div>
   );
 }
@@ -163,6 +426,8 @@ function BusGroup({
   onCycle,
   onFd,
   onHex,
+  onSource,
+  onClearSource,
   onAdd,
   onRemove,
   onSimulate,
@@ -176,6 +441,8 @@ function BusGroup({
   onCycle: (entry: TxEntry, cycleUs: number) => void;
   onFd: (entry: TxEntry, on: boolean) => void;
   onHex: (entry: TxEntry, text: string) => void;
+  onSource: (entry: TxEntry, src: TxSource) => void;
+  onClearSource: (entry: TxEntry, name: string) => void;
   onAdd: (ch: number, id: number) => void;
   onRemove: (entry: TxEntry) => void;
   onSimulate: (ch: number) => void;
@@ -249,10 +516,16 @@ function BusGroup({
           <EntryRow
             key={`${entry.channel}:${entry.id}`}
             entry={entry}
+            signals={
+              catalogMessages.find((message) => message.id === entry.id)
+                ?.signals ?? []
+            }
             onToggle={onToggle}
             onCycle={onCycle}
             onFd={onFd}
             onHex={onHex}
+            onSource={onSource}
+            onClearSource={onClearSource}
             onRemove={onRemove}
           />
         ))
@@ -271,6 +544,8 @@ export function GeneratorModal({
   onCycle,
   onFd,
   onHex,
+  onSource,
+  onClearSource,
   onAdd,
   onRemove,
   onSimulate,
@@ -319,6 +594,8 @@ export function GeneratorModal({
               onCycle={onCycle}
               onFd={onFd}
               onHex={onHex}
+              onSource={onSource}
+              onClearSource={onClearSource}
               onAdd={onAdd}
               onRemove={onRemove}
               onSimulate={onSimulate}
