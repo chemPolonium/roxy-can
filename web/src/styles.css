@@ -771,6 +771,52 @@ input::placeholder {
   background: rgb(0 0 0 / 58%);
 }
 
+.export-modal {
+  width: min(560px, 100%);
+  max-height: 88vh;
+  overflow: auto;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.export-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.export-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.export-body input,
+.export-body select {
+  width: 100%;
+}
+
+.export-body .hint code {
+  padding: 1px 3px;
+  background: #151c24;
+  border-radius: 3px;
+  color: #a9bdd2;
+  font: inherit;
+}
+
+.export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .session-modal {
   width: min(620px, 100%);
   max-height: min(680px, 88vh);
@@ -2498,6 +2544,14 @@ button.danger:hover:not(:disabled) {
   /* The right column is too narrow for the tab strip, actions and meta at
      once; the count disappears before a button is allowed to wrap. */
   .chart-panel .panel-head .meta {
+    display: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  /* The lower panel now carries Export next to three tabs; at this width
+     the row count would push the Write tab out of the header. */
+  .lower-panel .panel-head .meta {
     display: none;
   }
 }

@@ -348,6 +348,7 @@ export type Command =
   | { type: "set_script_enabled"; id: number; on: boolean }
   | { type: "remove_script"; id: number }
   | { type: "save_script_file"; path: string; source: string }
+  | { type: "export"; kind: string; path: string }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }

@@ -465,6 +465,25 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
         .collect()
 }
 
+/// Runs the desktop exporter for a web export request. Trace picks ASC or
+/// PCAP by the path's extension; the others write CSV/TXT. Exporters target
+/// the first matching desktop window, which starts as an All-buses view.
+fn export_file(app: &mut App, kind: &str, path: &str) {
+    if path.trim().is_empty() {
+        app.status = "export needs a path".to_string();
+        return;
+    }
+    match kind {
+        "trace" => app.export_trace(0, path),
+        "messages" => app.export_messages_csv(0, path),
+        "stats" => app.export_stats_csv(0, path),
+        "write" => app.export_write_txt(path),
+        "data" => app.export_data_csv(0, path),
+        "state" => app.export_state_csv(0, path),
+        other => app.status = format!("unknown export kind: {other}"),
+    }
+}
+
 fn trigger_kind(cond: &TriggerCond) -> &'static str {
     match cond {
         TriggerCond::SignalCross { .. } => "signal",
@@ -773,6 +792,10 @@ enum WebCommand {
     SaveScriptFile {
         path: String,
         source: String,
+    },
+    Export {
+        kind: String,
+        path: String,
     },
     SetSysVar {
         namespace: String,
@@ -1216,6 +1239,9 @@ fn app_loop(
                             Err(error) => app.status = format!("script save failed: {error}"),
                         }
                     }
+                }
+                WebCommand::Export { kind, path } => {
+                    export_file(&mut app, &kind, &path);
                 }
                 WebCommand::SetSysVar {
                     namespace,
@@ -3447,6 +3473,50 @@ mod tests {
         assert_eq!(state.scripts.len(), 1);
         assert_eq!(state.scripts[0].id, id);
         assert!(state.scripts[0].enabled);
+    }
+
+    /// The web export paths write the desktop formats: ASC for trace and
+    /// CSV headers for Messages/Statistics/Data/State.
+    #[test]
+    fn web_exports_write_the_desktop_formats() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..20 {
+            app.update();
+        }
+        let dir = std::env::temp_dir();
+        let files = [
+            (
+                "trace",
+                dir.join("roxy_web_export.asc"),
+                "Begin Triggerblock",
+            ),
+            (
+                "messages",
+                dir.join("roxy_web_export_messages.csv"),
+                "bus,id,name,dir,count",
+            ),
+            (
+                "stats",
+                dir.join("roxy_web_export_stats.csv"),
+                "bus,id,name,count",
+            ),
+            (
+                "data",
+                dir.join("roxy_web_export_data.csv"),
+                "bus,signal,value,unit",
+            ),
+        ];
+        for (kind, path, header) in &files {
+            export_file(&mut app, kind, path.to_str().unwrap());
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            assert!(
+                text.contains(header),
+                "{kind} export should contain {header:?}, got {:?}",
+                text.chars().take(60).collect::<String>()
+            );
+            std::fs::remove_file(path).ok();
+        }
     }
 
     /// A replay path must open the log and start playback in Replay mode,

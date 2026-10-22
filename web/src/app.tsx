@@ -16,6 +16,7 @@ import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { DataPanel } from "./components/DataPanel";
+import { ExportModal } from "./components/ExportModal";
 import { GeneratorModal } from "./components/GeneratorModal";
 import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
@@ -154,6 +155,8 @@ export function App() {
   const [dataPickerOpen, setDataPickerOpen] = useState(false);
   const [statePickerOpen, setStatePickerOpen] = useState(false);
   const [scriptsOpen, setScriptsOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportKind, setExportKind] = useState("trace");
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -414,8 +417,12 @@ export function App() {
     void loadCatalog();
   };
 
-  const openDataPicker = () => {
-    setSessionOpen(false);
+  const openExport = (kind: string) => {
+    setExportKind(kind);
+    setExportOpen(true);
+  };
+
+  const openDataPicker = () => {    setSessionOpen(false);
     setScriptsOpen(false);
     setBusesOpen(false);
     setPickerOpen(false);
@@ -877,6 +884,14 @@ export function App() {
               </span>
             </div>
             <div class="panel-tools">
+              <button
+                type="button"
+                class="mini"
+                onClick={() => openExport("trace")}
+                title="Export the trace to an ASC or PCAP host file"
+              >
+                Export…
+              </button>
               <select
                 value={bus === "all" ? "all" : String(bus)}
                 onChange={(e) => {
@@ -1161,6 +1176,22 @@ export function App() {
                     ? `${state?.stats.length ?? 0} rows`
                     : `${state?.write.length ?? 0} lines`}
               </span>
+              <button
+                type="button"
+                class="mini"
+                onClick={() =>
+                  openExport(
+                    tab === "messages"
+                      ? "messages"
+                      : tab === "statistics"
+                        ? "stats"
+                        : "write",
+                  )
+                }
+                title="Export this panel to a host file"
+              >
+                Export…
+              </button>
             </div>
             {tab === "messages" ? (
               <MessageTable rows={state?.messages ?? []} />
@@ -1396,6 +1427,17 @@ export function App() {
             )
           }
           onClose={() => setStatePickerOpen(false)}
+        />
+      )}
+
+      {exportOpen && (
+        <ExportModal
+          initialKind={exportKind}
+          onExport={(kind, path) => {
+            void run({ type: "export", kind, path });
+            setExportOpen(false);
+          }}
+          onClose={() => setExportOpen(false)}
         />
       )}
 
