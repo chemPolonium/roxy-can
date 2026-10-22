@@ -78,6 +78,17 @@ impl EthFlowKey {
             len: f.len(),
         }
     }
+
+    /// The same identity in the matcher/decoder's flow shape.
+    pub fn flow(&self) -> crate::eth::db::EthFlow {
+        crate::eth::db::EthFlow {
+            vlan: self.vlan,
+            dst: self.dst,
+            src: self.src,
+            ethertype: self.ethertype,
+            payload_len: self.len,
+        }
+    }
 }
 
 /// One Ethernet flow's running tally behind Messages/Statistics. Cycle and

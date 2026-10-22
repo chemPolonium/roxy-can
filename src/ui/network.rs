@@ -2,12 +2,22 @@ use crate::app::{App, NodeRole};
 use crate::ui::tx::{GeneratorCmd, GeneratorView};
 use dear_imgui_rs::{Condition, Ui};
 
+/// Which Ethernet subject the Network detail pane shows. Frames come from the
+/// ARXML matrix, flows from captured traffic; both are read-only because this
+/// build receives Ethernet and does not transmit it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EthNetSel {
+    Frame { bus: u8, index: usize },
+    Flow(crate::aggregate::EthFlowKey),
+}
+
 /// The Network window's own state: selection, the Profile row, and replay
 /// block drafts. Topology and node facts stay on the bus.
 pub struct NetworkView {
     pub open: bool,
     pub net_selected: usize,
     pub net_fr_sel: Option<(u8, String)>,
+    pub net_eth_sel: Option<EthNetSel>,
     pub(crate) profile_pick: usize,
     pub(crate) profile_draft_name: String,
     pub(crate) profile_delete_arm: bool,
@@ -21,6 +31,7 @@ impl Default for NetworkView {
             open: true,
             net_selected: 0,
             net_fr_sel: None,
+            net_eth_sel: None,
             profile_pick: 0,
             profile_draft_name: String::new(),
             profile_delete_arm: false,
@@ -153,13 +164,19 @@ impl NetworkView {
                 ui.same_line();
                 if ui
                     .selectable_config(format!("{}##net{ch}_{i}", ni.name))
-                    .selected(self.net_fr_sel.is_none() && self.net_selected == flat_base + i)
+                    .selected(
+                        self.net_fr_sel.is_none()
+                            && self.net_eth_sel.is_none()
+                            && self.net_selected == flat_base + i,
+                    )
                     .build()
                 {
                     self.net_selected = flat_base + i;
-                    // One selection at a time across the two trees: a CAN node and a
-                    // FlexRay ECU cannot both own the detail pane.
+                    // One selection at a time across the three trees: a CAN node,
+                    // a FlexRay ECU and an Ethernet frame/flow cannot all own the
+                    // detail pane.
                     self.net_fr_sel = None;
+                    self.net_eth_sel = None;
                 }
                 // 绑定到该节点的脚本作为下一层树叶列在节点下：点击打开
                 // 该脚本的编辑器。
@@ -220,6 +237,7 @@ impl NetworkView {
                         {
                             // 块的编辑就在所属节点的详情里：点击树叶选中节点。
                             self.net_selected = flat_base + i;
+                            self.net_eth_sel = None;
                         }
                     }
                     ui.unindent();
@@ -250,6 +268,322 @@ impl NetworkView {
             }
         }
     }
+
+    /// One Ethernet bus as a tree section: the ARXML frames it declares and
+    /// the L2 flows actually captured on it. There is no role switch or
+    /// generator here -- this build receives Ethernet -- so the leaves open a
+    /// read-only detail pane instead of a sender editor.
+    fn draw_ethernet_section(&mut self, ui: &Ui, app: &App, bus: u8) {
+        let db = app.eth_db(bus);
+        let label = match db {
+            Some(db) => {
+                let cluster = match db.clusters.as_slice() {
+                    [] => "-".to_string(),
+                    [one] => one.name.clone(),
+                    many => format!("{} clusters", many.len()),
+                };
+                format!("{} · {cluster}", app.eth_bus_label(bus))
+            }
+            None => format!("{} (no matrix loaded)", app.eth_bus_label(bus)),
+        };
+        let _id = ui.push_id(format!("eth{bus}").as_str());
+        let Some(_t) = ui.tree_node_config(label).default_open(true).push() else {
+            return;
+        };
+        if let Some(db) = db {
+            if db.frames.is_empty() {
+                ui.text_disabled("The matrix declares no frames");
+            } else if let Some(_g) = ui
+                .tree_node_config(format!("Frames ({})##ethframes{bus}", db.frames.len()))
+                .default_open(true)
+                .push()
+            {
+                for (i, f) in db.frames.iter().enumerate() {
+                    let mut text = f.name.clone();
+                    if let Some(vlan) = f.vlan {
+                        text.push_str(&format!(" · VLAN {vlan}"));
+                    }
+                    if let Some(et) = f.ethertype_hint {
+                        text.push_str(&format!(" · 0x{et:04X}"));
+                    }
+                    text.push_str(&format!(" · {} B", f.length));
+                    let signals: usize = f.pdus.iter().map(|p| p.signals.len()).sum();
+                    if signals > 0 {
+                        text.push_str(&format!(" · {signals} sig"));
+                    }
+                    let selected = self.net_eth_sel == Some(EthNetSel::Frame { bus, index: i });
+                    if ui
+                        .selectable_config(format!("{text}##ethframe{bus}_{i}"))
+                        .selected(selected)
+                        .build()
+                    {
+                        self.net_eth_sel = Some(EthNetSel::Frame { bus, index: i });
+                        self.net_fr_sel = None;
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(&text);
+                    }
+                }
+            }
+        } else {
+            ui.text_disabled("No ARXML matrix is loaded; captured flows are listed below");
+        }
+
+        let flows: Vec<&crate::aggregate::EthAgg> = app
+            .snap
+            .eth_aggs
+            .iter()
+            .filter(|a| a.key.bus == bus)
+            .collect();
+        if flows.is_empty() {
+            ui.text_disabled("No captured flows on this bus");
+            return;
+        }
+        if let Some(_g) = ui
+            .tree_node_config(format!("Flows seen ({})##ethflows{bus}", flows.len()))
+            .default_open(true)
+            .push()
+        {
+            for (i, agg) in flows.iter().enumerate() {
+                let text = format!(
+                    "{} > {} · VLAN {} · 0x{:04X} · {} frames",
+                    crate::eth::db::mac_text(&agg.key.src),
+                    crate::eth::db::mac_text(&agg.key.dst),
+                    vlan_text(agg.key.vlan),
+                    agg.key.ethertype,
+                    agg.count
+                );
+                let selected = self.net_eth_sel == Some(EthNetSel::Flow(agg.key));
+                if ui
+                    .selectable_config(format!("{text}##ethflow{bus}_{i}"))
+                    .selected(selected)
+                    .build()
+                {
+                    self.net_eth_sel = Some(EthNetSel::Flow(agg.key));
+                    self.net_fr_sel = None;
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(&text);
+                }
+            }
+        }
+    }
+
+    /// The detail pane for either kind of Ethernet leaf. Both are read-only:
+    /// the matrix says what a frame is, the capture says what arrived; there is
+    /// no Ethernet transmit path to edit here.
+    fn draw_ethernet_detail(&self, ui: &Ui, app: &App, sel: &EthNetSel) {
+        match sel {
+            EthNetSel::Frame { bus, index } => self.draw_eth_frame_detail(ui, app, *bus, *index),
+            EthNetSel::Flow(key) => self.draw_eth_flow_detail(ui, app, key),
+        }
+    }
+
+    fn draw_eth_frame_detail(&self, ui: &Ui, app: &App, bus: u8, index: usize) {
+        let Some(db) = app.eth_db(bus) else {
+            ui.text("The ARXML matrix for this Ethernet bus is no longer loaded");
+            return;
+        };
+        let Some(frame) = db.frames.get(index) else {
+            ui.text("This frame is no longer in the loaded matrix");
+            return;
+        };
+        ui.text_colored(
+            [0.95, 0.75, 0.35, 1.0],
+            format!(
+                "{} / {}  —  ARXML frame",
+                app.eth_bus_label(bus),
+                frame.name
+            ),
+        );
+        ui.text_disabled(
+            "Ethernet is receive-only in this build: the matrix names and decodes captured frames.",
+        );
+        ui.separator();
+        ui.text(format!("Cluster: {}", frame.cluster));
+        ui.text(format!("VLAN: {}", vlan_text(frame.vlan)));
+        ui.text(format!("Declared length: {} bytes", frame.length));
+        if let Some(et) = frame.ethertype_hint {
+            ui.text(format!("EtherType: 0x{et:04X}"));
+        }
+        let signals: usize = frame.pdus.iter().map(|p| p.signals.len()).sum();
+        ui.text(format!("PDUs: {} · signals: {}", frame.pdus.len(), signals));
+        ui.separator();
+        for pdu in &frame.pdus {
+            ui.text_colored(
+                [0.55, 0.80, 1.0, 1.0],
+                format!("{}  ({} bytes)", pdu.name, pdu.length),
+            );
+            ui.indent();
+            for sig in &pdu.signals {
+                let mut line = format!(
+                    "{}  bit {} · {} bit · {}",
+                    sig.name,
+                    sig.start_bit,
+                    sig.size,
+                    if sig.signed { "signed" } else { "unsigned" }
+                );
+                if !sig.unit.is_empty() {
+                    line.push_str(&format!(" · {}", sig.unit));
+                }
+                ui.text(line);
+            }
+            ui.unindent();
+        }
+
+        ui.separator();
+        ui.text("Captured flows matching this frame");
+        let matching: Vec<&crate::aggregate::EthAgg> = app
+            .snap
+            .eth_aggs
+            .iter()
+            .filter(|a| {
+                a.key.bus == bus
+                    && db.match_flow(&a.key.flow(), app.eth_length_includes_header)
+                        == crate::eth::db::EthMatch::Unique(index)
+            })
+            .collect();
+        if matching.is_empty() {
+            ui.text_disabled("No captured flow matches this frame yet.");
+            return;
+        }
+        for agg in matching {
+            let mut line = format!(
+                "{} > {} · VLAN {} · {} frames",
+                crate::eth::db::mac_text(&agg.key.src),
+                crate::eth::db::mac_text(&agg.key.dst),
+                vlan_text(agg.key.vlan),
+                agg.count
+            );
+            if agg.count > 1 {
+                line.push_str(&format!(
+                    " · {:.1} ms ±{:.1}",
+                    agg.cycle_us / 1000.0,
+                    agg.jitter_us / 1000.0
+                ));
+            }
+            ui.text(line);
+            if let Some(decoded) = db.decode(
+                &agg.key.flow(),
+                &agg.payload,
+                app.eth_length_includes_header,
+            ) {
+                ui.indent();
+                for d in decoded.signals {
+                    ui.text(format!(
+                        "{} = {}",
+                        d.name,
+                        crate::dbc::fmt_signal_value(
+                            d.physical,
+                            &d.unit,
+                            &d.type_tag,
+                            d.label.as_deref()
+                        )
+                    ));
+                }
+                ui.unindent();
+            }
+        }
+    }
+
+    fn draw_eth_flow_detail(&self, ui: &Ui, app: &App, key: &crate::aggregate::EthFlowKey) {
+        let Some(agg) = app.snap.eth_aggs.iter().find(|a| a.key == *key) else {
+            ui.text("This flow is no longer in the snapshot");
+            return;
+        };
+        ui.text_colored(
+            [0.95, 0.75, 0.35, 1.0],
+            format!(
+                "{} / {} > {}  —  Ethernet flow",
+                app.eth_bus_label(key.bus),
+                crate::eth::db::mac_text(&key.src),
+                crate::eth::db::mac_text(&key.dst)
+            ),
+        );
+        ui.text_disabled(
+            "Read-only: Ethernet frames arrive from the log; this build does not transmit them.",
+        );
+        ui.separator();
+        ui.text(format!("VLAN: {}", vlan_text(key.vlan)));
+        ui.text(format!("EtherType: 0x{:04X}", key.ethertype));
+        ui.text(format!("Payload: {} bytes · {} frames", key.len, agg.count));
+        if agg.count > 1 {
+            ui.text(format!(
+                "Cycle: {:.1} ms ±{:.1} ms",
+                agg.cycle_us / 1000.0,
+                agg.jitter_us / 1000.0
+            ));
+        }
+        let preview: String = agg
+            .payload
+            .iter()
+            .take(64)
+            .map(|b| format!("{b:02X} "))
+            .collect();
+        ui.text(format!(
+            "Last payload: {}{}",
+            preview.trim_end(),
+            if agg.payload.len() > 64 { " …" } else { "" }
+        ));
+        ui.separator();
+
+        let Some(db) = app.eth_db(key.bus) else {
+            ui.text_disabled(
+                "No ARXML matrix is loaded for this bus; the flow is shown as raw L2 only.",
+            );
+            return;
+        };
+        match db.match_flow(&key.flow(), app.eth_length_includes_header) {
+            crate::eth::db::EthMatch::Unique(i) => {
+                let frame = &db.frames[i];
+                ui.text(format!("ARXML frame: {}", frame.name));
+                if let Some(decoded) =
+                    db.decode(&key.flow(), &agg.payload, app.eth_length_includes_header)
+                {
+                    ui.indent();
+                    for d in decoded.signals {
+                        ui.text(format!(
+                            "{} = {}",
+                            d.name,
+                            crate::dbc::fmt_signal_value(
+                                d.physical,
+                                &d.unit,
+                                &d.type_tag,
+                                d.label.as_deref()
+                            )
+                        ));
+                    }
+                    ui.unindent();
+                } else {
+                    ui.text_disabled("The frame declares no signals this payload can decode.");
+                }
+            }
+            crate::eth::db::EthMatch::Ambiguous(n) => {
+                ui.text_colored(
+                    [1.0, 0.8, 0.4, 1.0],
+                    format!(
+                        "{n} ARXML frames match this flow; it stays raw until the match is unique."
+                    ),
+                );
+                ui.text_disabled(
+                    "Check VLAN, payload length and the FRAME-LENGTH convention on the Buses window.",
+                );
+            }
+            crate::eth::db::EthMatch::None => {
+                ui.text_disabled("No ARXML frame matches this flow; it is shown as raw L2 only.");
+            }
+        }
+        ui.separator();
+        ui.text_disabled(
+            "Signals can be plotted from Data, Graphics or State Tracker with the selection popup.",
+        );
+    }
+}
+
+/// VLAN as the tables print it: `-` when the frame was untagged.
+fn vlan_text(vlan: Option<u16>) -> String {
+    vlan.map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// The FlexRay clusters the topology lists: every bus with a description
@@ -261,6 +595,20 @@ fn fr_buses(app: &App) -> Vec<u8> {
     for bus in app.snap.fr_loads.keys().copied() {
         if !buses.contains(&bus) {
             buses.push(bus);
+        }
+    }
+    buses.sort_unstable();
+    buses
+}
+
+/// The Ethernet buses the topology lists: every bus with a matrix loaded, plus
+/// any bus that carried captured flows without one. As on the FlexRay side,
+/// traffic alone is enough to make a cable visible.
+fn eth_buses(app: &App) -> Vec<u8> {
+    let mut buses: Vec<u8> = app.eth_buses.keys().copied().collect();
+    for agg in &app.snap.eth_aggs {
+        if !buses.contains(&agg.key.bus) {
+            buses.push(agg.key.bus);
         }
     }
     buses.sort_unstable();
@@ -367,6 +715,7 @@ impl NetworkView {
                 .build()
             {
                 self.net_fr_sel = Some((bus, ecu.clone()));
+                self.net_eth_sel = None;
             }
         }
     }
@@ -554,6 +903,11 @@ impl NetworkView {
                         for bus in fr_buses(app) {
                             self.draw_flexray_section(ui, app, bus);
                         }
+                        // Ethernet after FlexRay: another numbering space, with
+                        // matrix frames and captured L2 flows as its leaves.
+                        for bus in eth_buses(app) {
+                            self.draw_ethernet_section(ui, app, bus);
+                        }
                     });
                 ui.same_line();
 
@@ -561,6 +915,10 @@ impl NetworkView {
                 // remaining space), so long content never adds a scrollbar to the
                 // outer window and shifts the topology sections.
                 ui.child_window("node_details").size([0.0, 0.0]).build(ui, || {
+                    if let Some(sel) = self.net_eth_sel.clone() {
+                        self.draw_ethernet_detail(ui, app, &sel);
+                        return;
+                    }
                     if let Some((bus, ecu)) = self.net_fr_sel.clone() {
                         ui.text_colored(
                             [0.30, 0.80, 1.00, 1.0],
@@ -571,15 +929,18 @@ impl NetworkView {
                         return;
                     }
                     if total_dbc == 0 {
-                        // The FlexRay side has no selection model yet (no roles,
-                        // no generator: the bus cannot transmit), so an empty CAN
-                        // tree with clusters listed beside it is not "nothing to
-                        // show" -- say where to look instead.
-                        if app.fr_buses.is_empty() && app.snap.fr_loads.is_empty() {
-                            ui.text("no DBC nodes to display");
+                        // The other streams have their own selection models;
+                        // an empty CAN tree is not "nothing to show" when a
+                        // cluster or Ethernet bus is listed beside it.
+                        if app.fr_buses.is_empty()
+                            && app.snap.fr_loads.is_empty()
+                            && app.eth_buses.is_empty()
+                            && app.snap.eth_aggs.is_empty()
+                        {
+                            ui.text("Nothing to display: no DBC, cluster description or Ethernet matrix is loaded");
                         } else {
                             ui.text(
-                                "No DBC nodes; pick an ECU under FlexRay on the left and its generator shows here",
+                                "No CAN nodes; pick an ECU under FlexRay or a frame/flow under Ethernet to see details",
                             );
                         }
                         return;
@@ -967,5 +1328,42 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The topology lists a bus for either reason: a loaded matrix, or traffic
+    /// that arrived without one. Missing the second case is what made a live
+    /// Ethernet cable invisible in Network.
+    #[test]
+    fn eth_buses_lists_matrix_only_and_traffic_only_buses() {
+        let mut app = App::headless();
+        app.eth_buses.insert(
+            2,
+            crate::app::EthBusCfg {
+                path: "synthetic.arxml".to_string(),
+                db: std::sync::Arc::new(crate::eth::db::EthDb::default()),
+            },
+        );
+        let flow = crate::aggregate::EthFlowKey {
+            bus: 1,
+            vlan: None,
+            dst: [0; 6],
+            src: [1; 6],
+            ethertype: 0x0800,
+            len: 8,
+        };
+        app.eth_aggs.insert(
+            flow,
+            crate::aggregate::EthAgg {
+                key: flow,
+                ..Default::default()
+            },
+        );
+        app.refresh_snapshot();
+        assert_eq!(eth_buses(&app), vec![1, 2]);
     }
 }

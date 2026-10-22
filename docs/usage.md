@@ -123,6 +123,7 @@ roxy-can -h                               完整帮助
 - **矩阵**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML），显示 cluster/VLAN/帧数。捕获 flow 按 VLAN、payload 长度和 IEEE1722 EtherType 打分匹配；多个候选或无候选都不猜，Name 列退回 MAC 对。`FRAME-LENGTH 含 L2 头` 是项目开关（随工程保存）：打开时按「声明长度 − 14」与捕获 payload 比较。
 - **解码**：`I-SIGNAL-I-PDU` 里的 I-Signal 位偏移、大小、字节序、符号、factor/offset、单位和值表；Container / Multiplexed / Secured PDU 不在当前范围内。
 - **Trace**：以太网帧与 CAN/FlexRay 按时间混排。Bus 列 `ETHn`，ID 列 EtherType，Name 列矩阵帧名（无唯一匹配时是 MAC 对）；右键可把该 L2 flow 加入本窗口的 Manual 选择。作用域多一档 `Ethernet: ETHn`。
+- **Network**：每条以太网路一节，列出矩阵声明的帧和本次捕获到的 L2 flow。点帧看 cluster/VLAN/声明长度/PDU 与 I-Signal 定义，以及匹配该帧的 flow 与最新解码值；点 flow 看 MAC 对、VLAN、EtherType、计数/周期和原始载荷。与 CAN/FlexRay 不同，本版本以太网只收不发，所以这里没有发送条目或生成器。
 - **Messages / Statistics**：每个 L2 flow 一行，MAC、VLAN、EtherType、计数与周期；CSV 导出同样包含。
 - **订阅**：以太网信号进 Graphics / Data / State / Monitor，身份是 `(ETH 路, 帧名, 信号名)`，随工程保存；作用域为某个 Ethernet 路或 Manual flow 时 Messages/Statistics 也按同一规则收窄。
 - **回放通道映射**：抓包工具的以太网 channel 有单独一张表，先映射到工程的 `ETHn` 再匹配矩阵、解码和聚合。

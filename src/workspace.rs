@@ -36,17 +36,6 @@ pub enum Pick {
     Eth(crate::aggregate::EthFlowKey),
 }
 
-/// The captured-flow view of one Ethernet identity.
-fn eth_flow(key: &crate::aggregate::EthFlowKey) -> crate::eth::db::EthFlow {
-    crate::eth::db::EthFlow {
-        vlan: key.vlan,
-        dst: key.dst,
-        src: key.src,
-        ethertype: key.ethertype,
-        payload_len: key.len,
-    }
-}
-
 /// One Trace row: a CAN, FlexRay or Ethernet frame. The three share the Trace
 /// window's table, interleaved by time -- CANoe's Trace shape -- while their
 /// storage and the rest of each pipeline stay apart.
@@ -1309,7 +1298,7 @@ impl App {
         key: &crate::aggregate::EthFlowKey,
     ) -> Option<&crate::eth::db::EthFrameDef> {
         let db = self.eth_db(bus)?;
-        let flow = eth_flow(key);
+        let flow = key.flow();
         match db.match_flow(&flow, self.eth_length_includes_header) {
             crate::eth::db::EthMatch::Unique(i) => db.frames.get(i),
             crate::eth::db::EthMatch::Ambiguous(_) | crate::eth::db::EthMatch::None => None,
@@ -1334,7 +1323,7 @@ impl App {
         let Some(db) = self.eth_db(key.bus) else {
             return macs;
         };
-        match db.match_flow(&eth_flow(key), self.eth_length_includes_header) {
+        match db.match_flow(&key.flow(), self.eth_length_includes_header) {
             crate::eth::db::EthMatch::Unique(i) => db.frames[i].name.clone(),
             crate::eth::db::EthMatch::Ambiguous(n) => format!("<{n} candidates>  {macs}"),
             crate::eth::db::EthMatch::None => macs,
@@ -1397,9 +1386,10 @@ impl App {
             else {
                 return false;
             };
-            let Some(decoded) = self.eth_db(f.bus).and_then(|db| {
-                db.decode(&eth_flow(&key), &f.payload, self.eth_length_includes_header)
-            }) else {
+            let Some(decoded) = self
+                .eth_db(f.bus)
+                .and_then(|db| db.decode(&key.flow(), &f.payload, self.eth_length_includes_header))
+            else {
                 return false;
             };
             let Some(v) = decoded

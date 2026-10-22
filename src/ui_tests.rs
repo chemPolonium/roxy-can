@@ -1485,3 +1485,85 @@ fn trace_draws_ethernet_frames() {
     app.refresh_snapshot();
     frames(&mut app, &mut ctx, 2);
 }
+
+/// The Network topology lists Ethernet buses from either source: an ARXML
+/// matrix with its frame leaves, and captured flows on a bus that never got a
+/// matrix. Both frame and flow details draw without touching the core.
+#[test]
+fn the_network_view_draws_ethernet_frames_and_flows() {
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.network_view.open = true;
+    let db = crate::eth::db::EthDb {
+        clusters: vec![crate::eth::db::EthCluster {
+            name: "Cluster".into(),
+            vlans: vec![100],
+        }],
+        frames: vec![crate::eth::db::EthFrameDef {
+            name: "SpeedFrame".into(),
+            cluster: "Cluster".into(),
+            vlan: Some(100),
+            length: 8,
+            ethertype_hint: Some(0x0800),
+            pdus: vec![crate::eth::db::EthPdu {
+                name: "SpeedPdu".into(),
+                length: 8,
+                start_bit: 0,
+                signals: vec![crate::eth::db::EthSignal {
+                    name: "Speed".into(),
+                    start_bit: 0,
+                    size: 8,
+                    big_endian: false,
+                    signed: false,
+                    factor: 1.0,
+                    offset: 0.0,
+                    unit: "km/h".into(),
+                    values: vec![],
+                }],
+            }],
+        }],
+    };
+    app.eth_buses.insert(
+        0,
+        crate::app::EthBusCfg {
+            path: "synthetic.arxml".to_string(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        crate::can::frame::Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![42; 8],
+    ));
+    // Bus 1 has traffic but no matrix: the topology must still list the cable.
+    app.ingest_eth(crate::eth::EthFrame::new(
+        2_000,
+        1,
+        crate::can::frame::Direction::Rx,
+        [0xAA; 6],
+        [0xBB; 6],
+        None,
+        0x88B5,
+        vec![0x55; 4],
+    ));
+    app.refresh_snapshot();
+    assert_eq!(app.snap.eth_aggs.len(), 2);
+
+    app.network_view.net_eth_sel = Some(crate::ui::network::EthNetSel::Frame { bus: 0, index: 0 });
+    frames(&mut app, &mut ctx, 2);
+    let flow = app
+        .snap
+        .eth_aggs
+        .iter()
+        .find(|a| a.key.bus == 0)
+        .expect("bus 0 flow")
+        .key;
+    app.network_view.net_eth_sel = Some(crate::ui::network::EthNetSel::Flow(flow));
+    frames(&mut app, &mut ctx, 2);
+}
