@@ -8,10 +8,17 @@ export interface State {
   simTimeUs: number;
   status: string;
   channels: Channel[];
-  trace: Frame[];
   messages: Message[];
   write: WriteLine[];
   series: SeriesPoint[];
+}
+
+/** Light state plus the incremental trace hand-off. */
+export interface Snapshot extends State {
+  traceEpoch: number;
+  traceSeq: number;
+  traceSeed?: Frame[];
+  traceDelta?: Frame[];
 }
 
 export interface SeriesPoint {

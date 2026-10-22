@@ -476,6 +476,12 @@ input::placeholder {
   background: #0d1218;
 }
 
+.data-table tr.spacer td {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .data-table tbody tr:hover td {
   background: #16202b;
 }

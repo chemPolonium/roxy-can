@@ -15,6 +15,7 @@ interface Layout {
 }
 
 const LAYOUT_KEY = "roxy-can-web.layout";
+const TRACE_CAP = 5_000;
 const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -83,6 +84,13 @@ function clock(wallUs: number): string {
 
 export function App() {
   const [state, setState] = useState<State | null>(null);
+  const [traceRows, setTraceRows] = useState<Frame[]>([]);
+  const [traceEpoch, setTraceEpoch] = useState(0);
+  const traceRef = useRef<{
+    epoch: number | null;
+    seq: number;
+    rows: Frame[];
+  }>({ epoch: null, seq: 0, rows: [] });
   const [online, setOnline] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -105,10 +113,28 @@ export function App() {
 
   useEffect(() => {
     let alive = true;
+    let inFlight = false;
     const tick = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const next = await fetchState();
+        const { epoch, seq } = traceRef.current;
+        const next = await fetchState(epoch, seq);
         if (!alive) return;
+        let rows = traceRef.current.rows;
+        if (next.traceSeed) {
+          rows = next.traceSeed;
+          setTraceRows(rows);
+          setTraceEpoch(next.traceEpoch);
+        } else if (next.traceDelta?.length) {
+          rows = [...next.traceDelta, ...rows].slice(0, TRACE_CAP);
+          setTraceRows(rows);
+        }
+        traceRef.current = {
+          epoch: next.traceEpoch,
+          seq: next.traceSeq,
+          rows,
+        };
         setState(next);
         setOnline(true);
         setError("");
@@ -116,6 +142,8 @@ export function App() {
         if (!alive) return;
         setOnline(false);
         setError(String(e));
+      } finally {
+        inFlight = false;
       }
     };
     void tick();
@@ -160,12 +188,13 @@ export function App() {
     }
   };
 
-  const traceRows = useMemo(() => {
-    if (!state) return [];
-    return state.trace.filter(
-      (frame) => (bus === "all" || frame.bus === bus) && matches(frame, query),
-    );
-  }, [state, query, bus]);
+  const visibleRows = useMemo(
+    () =>
+      traceRows.filter(
+        (frame) => (bus === "all" || frame.bus === bus) && matches(frame, query),
+      ),
+    [traceRows, query, bus],
+  );
 
   const canControl = Boolean(state) && online && !busy;
   const measuring = state?.measuring ?? false;
@@ -261,7 +290,9 @@ export function App() {
           <div class="panel-head">
             <div class="panel-title">
               <h2>Trace</h2>
-              <span>{traceRows.length} shown</span>
+              <span>
+                {visibleRows.length} shown / {traceRows.length} rows
+              </span>
             </div>
             <div class="panel-tools">
               <select
@@ -286,7 +317,10 @@ export function App() {
               />
             </div>
           </div>
-          <TraceTable rows={traceRows} />
+          <TraceTable
+            key={`${bus}:${query}:${traceEpoch}`}
+            rows={visibleRows}
+          />
         </section>
 
         <div

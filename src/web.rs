@@ -10,7 +10,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -19,11 +19,13 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::app::{App, Mode, NodeRole};
 use crate::bus::BusCommand;
-use crate::can::frame::Direction;
+use crate::can::frame::{CanFrame, Direction};
 
 const PORT: u16 = 2010;
 const SERIES_POINTS: usize = 120;
-const TRACE_ROWS: usize = 240;
+/// Rows the web frontend keeps. The source ring holds 50k; 5k fills in under
+/// half a minute of demo traffic and is enough to exercise virtualization.
+const TRACE_LOG_CAP: usize = 5_000;
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
 const TICK_EVERY: Duration = Duration::from_millis(5);
 
@@ -42,11 +44,13 @@ pub fn run(args: &[String]) {
 
     let (tx, rx) = std::sync::mpsc::channel();
     let shared = Arc::new(Mutex::new(WebState::default()));
+    let trace = Arc::new(Mutex::new(TraceStore::default()));
     {
         let shared = shared.clone();
+        let trace = trace.clone();
         std::thread::Builder::new()
             .name("roxy-web-core".to_string())
-            .spawn(move || app_loop(rx, shared))
+            .spawn(move || app_loop(rx, shared, trace))
             .expect("spawn web core thread");
     }
 
@@ -60,6 +64,7 @@ pub fn run(args: &[String]) {
             .route("/command", post(command))
             .with_state(ApiState {
                 shared,
+                trace,
                 commands: tx,
             });
         let app = Router::new().nest("/api", api).fallback_service(
@@ -76,12 +81,53 @@ pub fn run(args: &[String]) {
 #[derive(Clone)]
 struct ApiState {
     shared: Arc<Mutex<WebState>>,
+    trace: Arc<Mutex<TraceStore>>,
     commands: Sender<WebCommand>,
 }
 
-async fn state(State(api): State<ApiState>) -> Json<WebState> {
+#[derive(Default, Deserialize)]
+struct TraceQuery {
+    epoch: Option<u64>,
+    seq: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebResponse {
+    #[serde(flatten)]
+    state: WebState,
+    trace_epoch: u64,
+    trace_seq: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace_seed: Option<Vec<WebFrame>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    trace_delta: Vec<WebFrame>,
+}
+
+async fn state(State(api): State<ApiState>, Query(query): Query<TraceQuery>) -> Json<WebResponse> {
     let snapshot = api.shared.lock().map(|s| s.clone()).unwrap_or_default();
-    Json(snapshot)
+    let (epoch, seq, seed, delta) = {
+        let store = api.trace.lock().unwrap_or_else(|p| p.into_inner());
+        let epoch = store.epoch;
+        let seq = store.next_seq;
+        let first = store.first_seq();
+        let synced = query.epoch == Some(epoch)
+            && query
+                .seq
+                .is_some_and(|client| client >= first && client <= seq);
+        if synced {
+            (epoch, seq, None, store.after(query.seq.unwrap_or(seq)))
+        } else {
+            (epoch, seq, Some(store.seed()), Vec::new())
+        }
+    };
+    Json(WebResponse {
+        state: snapshot,
+        trace_epoch: epoch,
+        trace_seq: seq,
+        trace_seed: seed,
+        trace_delta: delta,
+    })
 }
 
 #[derive(Deserialize)]
@@ -103,7 +149,11 @@ async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> St
 /// Owns the App, applies UI commands, and publishes the web snapshot. The
 /// manual drive is what the headless CLI already uses: no window, no
 /// mailbox race, commands take effect on the next lap.
-fn app_loop(inbox: Receiver<WebCommand>, shared: Arc<Mutex<WebState>>) {
+fn app_loop(
+    inbox: Receiver<WebCommand>,
+    shared: Arc<Mutex<WebState>>,
+    trace: Arc<Mutex<TraceStore>>,
+) {
     let mut app = App::headless();
     seed_demo(&mut app);
     app.start_virtual();
@@ -188,6 +238,9 @@ fn app_loop(inbox: Receiver<WebCommand>, shared: Arc<Mutex<WebState>>) {
             if series.len() > SERIES_POINTS {
                 series.pop_front();
             }
+            if let Ok(mut store) = trace.lock() {
+                store.sync(&app);
+            }
             let next = build_state(&app, &series, fps);
             if let Ok(mut slot) = shared.lock() {
                 *slot = next;
@@ -232,6 +285,121 @@ fn seed_demo(app: &mut App) {
     app.start_virtual();
 }
 
+/// Chronological trace buffer owned by the app thread. The API sends a seed
+/// on first contact and only the frames appended since the client's last
+/// sequence afterwards; the frontend keeps the 5k window and virtualizes it,
+/// so a full table never costs a full JSON snapshot per poll.
+#[derive(Default)]
+struct TraceStore {
+    epoch: u64,
+    next_seq: u64,
+    log: VecDeque<(u64, WebFrame)>,
+    last_len: usize,
+    last_loss: u64,
+    primed: bool,
+}
+
+impl TraceStore {
+    fn sync(&mut self, app: &App) {
+        let len = app.snap.trace.len();
+        let loss = app.snap.trace.head_loss().0;
+        let reset = !self.primed || len < self.last_len || loss != self.last_loss;
+        if reset {
+            self.primed = true;
+            self.epoch = self.epoch.wrapping_add(1).max(1);
+            self.next_seq = 0;
+            self.log.clear();
+            let take = len.min(TRACE_LOG_CAP);
+            let mut rows: Vec<WebFrame> = app
+                .snap
+                .trace
+                .iter()
+                .rev()
+                .take(take)
+                .map(|frame| frame_dto(app, frame))
+                .collect();
+            rows.reverse();
+            for row in rows {
+                self.push(row);
+            }
+        } else if len > self.last_len {
+            let take = (len - self.last_len).min(TRACE_LOG_CAP);
+            let mut rows: Vec<WebFrame> = app
+                .snap
+                .trace
+                .iter()
+                .rev()
+                .take(take)
+                .map(|frame| frame_dto(app, frame))
+                .collect();
+            rows.reverse();
+            for row in rows {
+                self.push(row);
+            }
+        }
+        self.last_len = len;
+        self.last_loss = loss;
+    }
+
+    fn push(&mut self, frame: WebFrame) {
+        self.log.push_back((self.next_seq, frame));
+        self.next_seq += 1;
+        while self.log.len() > TRACE_LOG_CAP {
+            self.log.pop_front();
+        }
+    }
+
+    fn first_seq(&self) -> u64 {
+        self.log
+            .front()
+            .map(|(seq, _)| *seq)
+            .unwrap_or(self.next_seq)
+    }
+
+    /// Newest first, ready to prepend on the client.
+    fn seed(&self) -> Vec<WebFrame> {
+        self.log
+            .iter()
+            .rev()
+            .map(|(_, frame)| frame.clone())
+            .collect()
+    }
+
+    fn after(&self, seq: u64) -> Vec<WebFrame> {
+        self.log
+            .iter()
+            .rev()
+            .filter(|(s, _)| *s > seq)
+            .map(|(_, frame)| frame.clone())
+            .collect()
+    }
+}
+
+fn frame_dto(app: &App, frame: &CanFrame) -> WebFrame {
+    let channel = app.snap.channels.get(frame.channel as usize);
+    WebFrame {
+        t_us: frame.t_us,
+        bus: frame.channel,
+        bus_name: channel
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", frame.channel + 1)),
+        id: frame.id,
+        extended: frame.extended,
+        name: channel
+            .and_then(|c| c.dbc.as_ref())
+            .and_then(|db| db.message_name(frame.id))
+            .unwrap_or("")
+            .to_string(),
+        dir: match frame.dir {
+            Direction::Rx => "Rx",
+            Direction::Tx => "Tx",
+        },
+        len: frame.len,
+        data: hex(frame.payload()),
+        fd: frame.is_fd(),
+    }
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebState {
@@ -244,7 +412,6 @@ struct WebState {
     sim_time_us: u64,
     status: String,
     channels: Vec<WebChannel>,
-    trace: Vec<WebFrame>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
     series: Vec<WebSeriesPoint>,
@@ -326,31 +493,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     };
     let db = |bus: u8| snap.channels.get(bus as usize).and_then(|c| c.dbc.as_ref());
 
-    let trace: Vec<WebFrame> = snap
-        .trace
-        .iter()
-        .rev()
-        .take(TRACE_ROWS)
-        .map(|f| WebFrame {
-            t_us: f.t_us,
-            bus: f.channel,
-            bus_name: bus_name(f.channel),
-            id: f.id,
-            extended: f.extended,
-            name: db(f.channel)
-                .and_then(|d| d.message_name(f.id))
-                .unwrap_or("")
-                .to_string(),
-            dir: match f.dir {
-                Direction::Rx => "Rx",
-                Direction::Tx => "Tx",
-            },
-            len: f.len,
-            data: hex(f.payload()),
-            fd: f.is_fd(),
-        })
-        .collect();
-
     let mut messages: Vec<WebMessage> = snap
         .aggs
         .iter()
@@ -402,7 +544,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         sim_time_us: snap.sim_t_us,
         status: app.status.clone(),
         channels,
-        trace,
         messages,
         write,
         series: series.iter().cloned().collect(),
@@ -440,11 +581,26 @@ mod tests {
         let state = build_state(&app, &series, app.frame_rate);
         assert_eq!(state.channels.len(), 2);
         assert!(state.frames > 0, "the generator ran");
-        assert!(!state.trace.is_empty(), "the trace ring has rows");
         assert!(!state.messages.is_empty(), "the aggregates saw traffic");
+
+        let mut trace = TraceStore::default();
+        trace.sync(&app);
+        let seed = trace.seed();
+        assert!(!seed.is_empty(), "the trace log has rows");
         assert!(
-            state.trace.iter().any(|frame| !frame.name.is_empty()),
+            seed.iter().any(|frame| !frame.name.is_empty()),
             "at least one row decoded through its DBC"
+        );
+        let before = trace.next_seq;
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(5));
+            app.update();
+        }
+        trace.sync(&app);
+        assert!(trace.next_seq > before, "later laps append rows");
+        assert!(
+            !trace.after(before).is_empty(),
+            "the client only needs the delta"
         );
     }
 }

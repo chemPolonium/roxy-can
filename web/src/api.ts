@@ -1,11 +1,15 @@
-import type { Command, State } from "./types";
+import type { Command, Snapshot } from "./types";
 
-export async function fetchState(): Promise<State> {
-  const response = await fetch("/api/state", { cache: "no-store" });
+export async function fetchState(
+  epoch: number | null,
+  seq: number,
+): Promise<Snapshot> {
+  const query = epoch === null ? "" : `?epoch=${epoch}&seq=${seq}`;
+  const response = await fetch(`/api/state${query}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`state: ${response.status}`);
   }
-  return (await response.json()) as State;
+  return (await response.json()) as Snapshot;
 }
 
 export async function sendCommand(command: Command): Promise<void> {
