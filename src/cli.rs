@@ -824,10 +824,12 @@ pub fn vector_probe(fibex: Option<&str>) -> Result<String, String> {
     }
     for c in &channels {
         s.push_str(&format!(
-            "  ch{}: {} [hw={} caps=0x{:08X} fd:{} bus=0x{:08X} can:{} flexray:{} on_bus:{} connected:0x{:X}]\n",
+            "  ch{}: {} [hw={} dev={} sn={} caps=0x{:08X} fd:{} bus=0x{:08X} can:{} flexray:{} on_bus:{} connected:0x{:X}]\n",
             c.index,
             c.name,
             c.hw_type,
+            c.hw_index,
+            c.serial_number,
             c.caps,
             c.supports_fd(),
             c.bus_caps,

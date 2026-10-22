@@ -61,6 +61,9 @@ pub struct AnyChannelInfo {
     pub driver: HwDriver,
     pub index: i32,
     pub name: String,
+    /// Extra identity for repeated channel names (two identical VN1610s):
+    /// "dev N" or the driver's serial number.
+    pub detail: Option<String>,
 }
 
 /// Enumerates channels across every supported driver. A driver whose
@@ -76,6 +79,7 @@ pub fn enumerate_all() -> Result<Vec<AnyChannelInfo>, String> {
                     driver: HwDriver::Kvaser,
                     index: c.index,
                     name: c.name,
+                    detail: None,
                 });
             }
         }
@@ -83,18 +87,34 @@ pub fn enumerate_all() -> Result<Vec<AnyChannelInfo>, String> {
     }
     match vector::enumerate() {
         Ok(list) => {
+            // A FlexRay port of a VN7640 must not surface as a CAN
+            // attachment. Channels that report no capability bits at all
+            // (every virtual channel so far) keep the legacy behaviour and
+            // stay in the list.
+            let list: Vec<_> = list
+                .into_iter()
+                .filter(|c| !(c.flexray && !c.can))
+                .collect();
+            // Two identical VN1610s present the same channel names. Append
+            // the device identity only when a name actually repeats, so a
+            // single adapter's labels stay short.
+            let mut counts = std::collections::BTreeMap::new();
+            for c in &list {
+                *counts.entry(c.name.clone()).or_insert(0u32) += 1;
+            }
             for c in list {
-                // A FlexRay port of a VN7640 must not surface as a CAN
-                // attachment. Channels that report no capability bits at
-                // all (every virtual channel so far) keep the legacy
-                // behaviour and stay in the list.
-                if c.flexray && !c.can {
-                    continue;
-                }
+                let detail = (counts.get(&c.name).copied().unwrap_or(0) > 1).then(|| {
+                    if c.serial_number != 0 {
+                        format!("S/N {}", c.serial_number)
+                    } else {
+                        format!("dev {}", c.hw_index)
+                    }
+                });
                 out.push(AnyChannelInfo {
                     driver: HwDriver::Vector,
                     index: c.index,
                     name: c.name,
+                    detail,
                 });
             }
         }

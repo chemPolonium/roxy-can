@@ -240,6 +240,11 @@ pub struct App {
     pub default_layout: String,
     /// Layout queued to be applied by main before the next imgui frame.
     pub pending_layout: Option<String>,
+    /// Last Windows PnP signature for Vector USB devices and when it was
+    /// polled. A transition to/from "no Vector USB at all" reopens the XL
+    /// driver automatically (USB replug without pressing Refresh).
+    pnp_signature: Option<Vec<String>>,
+    last_pnp_poll: Instant,
     /// A workspace that never loaded a layout still needs a usable first
     /// frame: the dockspace arranges the seeded windows once, then clears
     /// this. Loading any saved layout cancels it.
@@ -456,6 +461,13 @@ impl App {
         knobs: std::sync::Arc<crate::core_loop::BusKnobs>,
         every_window_kind: bool,
     ) -> Self {
+        // Baseline only in the GUI: the headless suite builds hundreds of
+        // App shells and must not call SetupAPI for each one.
+        let pnp_signature = if matches!(drive, CoreDrive::Threaded) {
+            crate::hw::vector::present_usb_signature()
+        } else {
+            None
+        };
         let mut app = App {
             drive,
             inbox_tx,
@@ -475,6 +487,8 @@ impl App {
             layout_cache: String::new(),
             default_layout: String::new(),
             pending_layout: None,
+            pnp_signature,
+            last_pnp_poll: Instant::now(),
             dock_default_pending: true,
             dock_focus_pending: false,
             pending_action: None,
@@ -1878,7 +1892,42 @@ impl App {
         );
     }
 
+    /// Polls Windows PnP for Vector USB devices once a second. A transition
+    /// through "no Vector USB device present" (unplug, then replug) reopens
+    /// the XL driver automatically, which is what restores CAN FD on the
+    /// returning adapter. Other transitions only invalidate the Buses
+    /// channel cache, so adding a second adapter never cuts an active port.
+    fn watch_hardware_hotplug(&mut self) {
+        if !matches!(self.drive, CoreDrive::Threaded) {
+            return;
+        }
+        if self.last_pnp_poll.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.last_pnp_poll = Instant::now();
+        let Some(sig) = crate::hw::vector::present_usb_signature() else {
+            return;
+        };
+        match &self.pnp_signature {
+            None => self.pnp_signature = Some(sig),
+            Some(prev) if *prev != sig => {
+                let crosses_empty = prev.is_empty() || sig.is_empty();
+                self.pnp_signature = Some(sig);
+                if crosses_empty {
+                    self.send(crate::bus::BusCommand::RefreshHardware);
+                } else {
+                    // Same-model adapter count changed while others remain:
+                    // no port needs closing, just discard the list cache.
+                    self.buses_view.hw_channels = None;
+                    self.buses_view.fr_channels = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn update(&mut self) {
+        self.watch_hardware_hotplug();
         // The text-throttle gate runs before anything that can early-return:
         // every frame decides once whether throttled readouts re-render.
         self.text_fresh = self.text_rate_hz == 0

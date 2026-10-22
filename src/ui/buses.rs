@@ -11,10 +11,8 @@ pub struct BusesView {
     pub fr_name_edit: Option<(u8, String)>,
     pub hw_channels: Option<Result<Vec<crate::hw::AnyChannelInfo>, String>>,
     pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
-    /// The hardware generation whose list is cached, and whether a
-    /// RefreshHardware command is still in flight.
+    /// The hardware generation whose list is cached.
     last_hw_refresh: u64,
-    refresh_pending: bool,
 }
 
 pub enum BusesCmd {
@@ -110,17 +108,13 @@ impl BusesView {
         if !self.open {
             return cmds;
         }
-        if !self.refresh_pending {
-            self.last_hw_refresh = app.snap.hw_refresh;
-        } else if self.last_hw_refresh != app.snap.hw_refresh {
-            // The core has closed the Vector ports and reopened the driver;
-            // enumerate again after the reopen. (The click also clears the
-            // list immediately so an unplugged device disappears without
-            // waiting for the core.)
+        if self.last_hw_refresh != app.snap.hw_refresh {
+            // The core has closed the Vector ports and reopened the driver
+            // (manual Refresh or the automatic hot-plug watcher); enumerate
+            // again after the reopen.
             self.last_hw_refresh = app.snap.hw_refresh;
             self.hw_channels = None;
             self.fr_channels = None;
-            self.refresh_pending = false;
         }
         let io = ui.io();
         let mut open = self.open;
@@ -410,7 +404,6 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
     if ui.button("Refresh channels##hwref") {
-        view.refresh_pending = true;
         // PnP already hides a physically absent adapter, so the immediate
         // re-enumeration is correct; the generation clear after the core
         // reset refreshes the FD capabilities.
@@ -668,12 +661,16 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                             let labels: Vec<String> = channels
                                 .iter()
                                 .map(|c| {
-                                    format!(
+                                    let mut label = format!(
                                         "[{}] ch{}: {}",
                                         c.driver.tag(),
                                         c.index,
                                         short_hw_name(&c.name)
-                                    )
+                                    );
+                                    if let Some(detail) = &c.detail {
+                                        label.push_str(&format!(" · {detail}"));
+                                    }
+                                    label
                                 })
                                 .collect();
                             let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
@@ -907,9 +904,20 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                     Ok(_) => {
                         // Picking a port from the combo is the attach, exactly
                         // like a CAN row: no second button to press.
+                        let mut name_counts = std::collections::BTreeMap::new();
+                        for c in &free {
+                            *name_counts.entry(c.name.clone()).or_insert(0u32) += 1;
+                        }
                         let labels: Vec<String> = free
                             .iter()
-                            .map(|c| format!("[V] ch{}: {}", c.index, short_hw_name(&c.name)))
+                            .map(|c| {
+                                let mut label =
+                                    format!("[V] ch{}: {}", c.index, short_hw_name(&c.name));
+                                if name_counts.get(&c.name).copied().unwrap_or(0) > 1 {
+                                    label.push_str(&format!(" · dev {}", c.hw_index));
+                                }
+                                label
+                            })
                             .collect();
                         let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                         ui.set_next_item_width(-1.0);
@@ -1071,9 +1079,8 @@ impl App {
                 BusesCmd::DetachHardware(bus) => self.detach_hardware(bus),
                 BusesCmd::RefreshHardware => {
                     // The core closes Vector ports and reopens the driver;
-                    // the generation bump above clears this cache once that
-                    // has actually happened.
-                    self.buses_view.refresh_pending = true;
+                    // the generation bump clears this cache once that has
+                    // actually happened.
                     self.send(crate::bus::BusCommand::RefreshHardware);
                 }
                 BusesCmd::AttachHardware {

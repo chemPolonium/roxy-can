@@ -366,6 +366,11 @@ pub struct ChannelInfo {
     pub index: i32,
     pub name: String,
     pub hw_type: u8,
+    /// Device index among adapters of the same `hw_type`; this is what
+    /// distinguishes two identical VN1610s in the driver config.
+    pub hw_index: u8,
+    /// Device serial as the driver reports it (0 when the driver has none).
+    pub serial_number: u32,
     pub can: bool,
     pub flexray: bool,
     /// `channelCapabilities` (FD support lives here: ISO bit 31, Bosch
@@ -419,8 +424,10 @@ fn channel_present(
             } else {
                 // A disconnected adapter can lose both its name and its
                 // hwType in the driver record; the UI would otherwise show
-                // the synthetic "Vector channel N" entry forever.
-                !(present.is_empty() && (name.starts_with("VN16") || name.trim().is_empty()))
+                // the synthetic "Vector channel N" entry forever. This is
+                // independent of the present-PID count, so removing one of
+                // two identical adapters also drops its ghost channels.
+                !(name.trim().is_empty() || (present.is_empty() && name.starts_with("VN16")))
             }
         }
         None => true,
@@ -433,8 +440,7 @@ fn channel_present(
 /// query returns None so the caller keeps the driver's list rather than
 /// hiding every adapter.
 #[cfg(windows)]
-fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
-    use std::collections::HashSet;
+fn present_vector_usb_instances() -> Option<Vec<String>> {
     use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
         DIGCF_ALLCLASSES, DIGCF_PRESENT, SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList,
         SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW,
@@ -451,7 +457,7 @@ fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
         if set == INVALID_HANDLE_VALUE {
             return None;
         }
-        let mut pids = HashSet::new();
+        let mut ids = Vec::new();
         let mut index = 0u32;
         loop {
             let mut info: SP_DEVINFO_DATA = std::mem::zeroed();
@@ -473,16 +479,30 @@ fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
             }
             let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             let id = String::from_utf16_lossy(&buf[..len]).to_ascii_uppercase();
-            if let Some(pos) = id.find("VID_1248&PID_")
-                && let Some(hex) = id.get(pos + 13..pos + 17)
-                && let Ok(pid) = u16::from_str_radix(hex, 16)
-            {
-                pids.insert(pid);
+            if id.contains("VID_1248&PID_") {
+                ids.push(id);
             }
         }
         SetupDiDestroyDeviceInfoList(set);
-        Some(pids)
+        ids.sort_unstable();
+        Some(ids)
     }
+}
+
+#[cfg(not(windows))]
+fn present_vector_usb_instances() -> Option<Vec<String>> {
+    None
+}
+
+fn instance_pid(instance: &str) -> Option<u16> {
+    let pos = instance.find("VID_1248&PID_")?;
+    let hex = instance.get(pos + 13..pos + 17)?;
+    u16::from_str_radix(hex, 16).ok()
+}
+
+#[cfg(windows)]
+fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
+    present_vector_usb_instances().map(|ids| ids.iter().filter_map(|id| instance_pid(id)).collect())
 }
 
 #[cfg(not(windows))]
@@ -490,14 +510,21 @@ fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
     None
 }
 
-/// Sorted present Vector USB PIDs for the diagnostic probe; None means the
-/// PnP query itself failed.
+/// Sorted present Vector USB PIDs for the diagnostic probe and status line;
+/// None means the PnP query itself failed.
 pub fn present_usb_pids() -> Option<Vec<u16>> {
     present_vector_usb_pids().map(|set| {
         let mut pids: Vec<u16> = set.into_iter().collect();
         pids.sort_unstable();
         pids
     })
+}
+
+/// Sorted PnP instance IDs of present Vector USB devices. Unlike a PID
+/// set, this changes when one of two identical adapters is added or
+/// removed, so the hot-plug watcher can see it.
+pub fn present_usb_signature() -> Option<Vec<String>> {
+    present_vector_usb_instances()
 }
 
 /// An open, activated Vector port for one CAN channel. Frames written
@@ -1016,7 +1043,13 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
             if !channel_present(hw_type, &name, present_pids.as_ref()) {
                 continue;
             }
+            let hw_index = config[rec + 33];
             let channel_index = config[rec + 41];
+            // `serialNumber` follows busParams/driverVersion/raw_data in
+            // the packed vendor layout; verified against python-can's
+            // XLchannelConfig field order.
+            let serial_number =
+                u32::from_le_bytes(config[rec + 147..rec + 151].try_into().unwrap());
             // The packed vendor layout (confirmed against python-can's
             // `XLchannelConfig`): name[32], hwType@32, hwIndex@33,
             // hwChannel@34, transceiverState@37, configError@39,
@@ -1039,6 +1072,8 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
                     name
                 },
                 hw_type,
+                hw_index,
+                serial_number,
                 can: bus_caps == 0 || bus_caps & XL_BUS_TYPE_CAN != 0,
                 flexray: is_fr,
                 caps,
@@ -1626,8 +1661,8 @@ mod tests {
             "an unnamed offline record disappears with no USB present"
         );
         assert!(
-            channel_present(0, "", Some(&present)),
-            "an unnamed channel stays while a Vector USB device is present"
+            !channel_present(0, "", Some(&present)),
+            "an unnamed record also disappears when another Vector USB is present"
         );
     }
 
