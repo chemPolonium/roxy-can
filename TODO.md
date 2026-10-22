@@ -11,7 +11,7 @@
 ## 硬件
 
 - **Profile 里的通道号会随硬件变**：`profiles/*.toml` 的 `[[hw]]` 存的是裸索引，插上第二台设备就指错口——而 Profile 的卖点正是"同一套工程在仿真 / 台架 / CI 间零修改切换"。改成按设备名匹配（或名字 + 编号双校验、错配整份拒绝）。
-- **Vector CAN FD 真机验收**：VN1610 在启动前插入时已通过 500 kbit/s / 2 Mbit/s 的 FD 配置，虚拟通道完成 EDL/BRS 回环；`Refresh channels` 已改为关闭 Vector 端口并重开 XL 驱动，热插拔后附加仍待复测；5/8 Mbit/s 数据段和拔出后的离线通道过滤也待台上复核。
+- **Vector CAN FD 真机验收**：VN1610 在启动前插入时已通过 500 kbit/s / 2 Mbit/s 的 FD 配置，虚拟通道完成 EDL/BRS 回环；`Refresh channels` 已改为关闭 Vector 端口并重开 XL 驱动，拔出后按 Windows PnP 过滤 VN1610 通道。热插拔后附加、5/8 Mbit/s 数据段仍待台上复核；其他 Vector 型号的 PnP 映射也待补。
 - **屏幕验收**：FlexRay 行的下拉回显；`发送被拒 ×N` 在真机上亮一次（两设备对发通着时得让对端停掉才会出现）；`断开` 之后端口是不是真关；Vector 设备拔出后刷新是否仍列出。
 
 ## 零散

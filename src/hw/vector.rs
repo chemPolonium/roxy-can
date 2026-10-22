@@ -365,6 +365,7 @@ pub fn reset_driver() -> Result<(), String> {
 pub struct ChannelInfo {
     pub index: i32,
     pub name: String,
+    pub hw_type: u8,
     pub can: bool,
     pub flexray: bool,
     /// `channelCapabilities` (FD support lives here: ISO bit 31, Bosch
@@ -389,6 +390,89 @@ impl ChannelInfo {
     pub fn supports_fd(&self) -> bool {
         self.caps & (XL_CHANNEL_FLAG_CANFD_ISO | XL_CHANNEL_FLAG_CANFD_BOSCH) != 0
     }
+}
+
+/// USB product ID for the hardware types whose presence can be checked in
+/// Windows PnP. Unknown types are never filtered (the driver list is the
+/// only source we have for them).
+fn vector_usb_pid(hw_type: u8) -> Option<u16> {
+    match hw_type {
+        // XL_HWTYPE_VN1610; USB VID is 0x1248.
+        55 => Some(0x1050),
+        _ => None,
+    }
+}
+
+/// Whether a channel should be listed given the present USB product IDs.
+/// `None` means the PnP query failed, so nothing is hidden.
+fn channel_present(hw_type: u8, present_pids: Option<&std::collections::HashSet<u16>>) -> bool {
+    match (vector_usb_pid(hw_type), present_pids) {
+        (Some(pid), Some(present)) => present.contains(&pid),
+        _ => true,
+    }
+}
+
+/// Product IDs of currently present Vector USB devices. The XL driver
+/// keeps configured-but-unplugged channels in `xlGetDriverConfig`; Windows
+/// PnP is what tells us the device is actually there. A failed SetupAPI
+/// query returns None so the caller keeps the driver's list rather than
+/// hiding every adapter.
+#[cfg(windows)]
+fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
+    use std::collections::HashSet;
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        DIGCF_ALLCLASSES, DIGCF_PRESENT, SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList,
+        SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW,
+    };
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+
+    unsafe {
+        let set = SetupDiGetClassDevsW(
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            DIGCF_PRESENT | DIGCF_ALLCLASSES,
+        );
+        if set == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut pids = HashSet::new();
+        let mut index = 0u32;
+        loop {
+            let mut info: SP_DEVINFO_DATA = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+            if SetupDiEnumDeviceInfo(set, index, &mut info) == 0 {
+                break;
+            }
+            index += 1;
+            let mut buf = [0u16; 512];
+            if SetupDiGetDeviceInstanceIdW(
+                set,
+                &info,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                continue;
+            }
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let id = String::from_utf16_lossy(&buf[..len]).to_ascii_uppercase();
+            if let Some(pos) = id.find("VID_1248&PID_")
+                && let Some(hex) = id.get(pos + 13..pos + 17)
+                && let Ok(pid) = u16::from_str_radix(hex, 16)
+            {
+                pids.insert(pid);
+            }
+        }
+        SetupDiDestroyDeviceInfoList(set);
+        Some(pids)
+    }
+}
+
+#[cfg(not(windows))]
+fn present_vector_usb_pids() -> Option<std::collections::HashSet<u16>> {
+    None
 }
 
 /// An open, activated Vector port for one CAN channel. Frames written
@@ -894,12 +978,19 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
                 .unwrap(),
         )
         .min(64) as usize;
+        // One PnP query per enumeration; the dropdown is cached until the
+        // next refresh, so this is not a per-frame cost.
+        let present_pids = present_vector_usb_pids();
         let mut out = Vec::new();
         for i in 0..count {
             let rec = DRIVER_CONFIG_CHANNELS + i * DRIVER_CONFIG_CHANNEL_STRIDE;
             let name_bytes = &config[rec..rec + 32];
             let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
             let name = String::from_utf8_lossy(&name_bytes[..end]).into_owned();
+            let hw_type = config[rec + 32];
+            if !channel_present(hw_type, present_pids.as_ref()) {
+                continue;
+            }
             let channel_index = config[rec + 41];
             // The packed vendor layout (confirmed against python-can's
             // `XLchannelConfig`): name[32], hwType@32, hwIndex@33,
@@ -922,6 +1013,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
                 } else {
                     name
                 },
+                hw_type,
                 can: bus_caps == 0 || bus_caps & XL_BUS_TYPE_CAN != 0,
                 flexray: is_fr,
                 caps,
@@ -1475,6 +1567,29 @@ mod tests {
             "and the busiest tag wins"
         );
     }
+    /// Only adapters we can map to a USB product ID are filtered by PnP;
+    /// virtual channels (hwType 1) and unknown hardware stay visible.
+    #[test]
+    fn pnp_presence_filters_only_mapped_models() {
+        use std::collections::HashSet;
+        assert_eq!(vector_usb_pid(55), Some(0x1050), "VN1610");
+        let present: HashSet<u16> = [0x1050].into_iter().collect();
+        assert!(channel_present(55, Some(&present)));
+        assert!(!channel_present(55, Some(&HashSet::new())));
+        assert!(
+            channel_present(55, None),
+            "a failed PnP query must not hide hardware"
+        );
+        assert!(
+            channel_present(1, Some(&HashSet::new())),
+            "virtual channels are not PnP devices"
+        );
+        assert!(
+            channel_present(99, Some(&HashSet::new())),
+            "unknown hw types stay visible"
+        );
+    }
+
     /// The FD configuration crosses the FFI boundary as a raw pointer; a
     /// field order or size mismatch would put a rate or the ISO option in
     /// the wrong place. These offsets are the vendor layout python-can

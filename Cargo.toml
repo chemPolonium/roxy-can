@@ -16,6 +16,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_Devices_DeviceAndDriverInstallation",
 ] }
 winit = "0.30"
 pollster = "0.4"
