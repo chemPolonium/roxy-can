@@ -72,9 +72,13 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
     let doc = Document::parse(text).map_err(|e| format!("XML parse error: {e}"))?;
     let root = doc.root_element();
 
-    let cluster_node = root
+    let can_clusters: Vec<Node> = root
         .descendants()
         .filter(|n| n.is_element() && n.has_tag_name("CAN-CLUSTER"))
+        .collect();
+    let cluster_node = can_clusters
+        .iter()
+        .copied()
         .find(|n| short_name(*n) == cluster)
         .ok_or_else(|| format!("CAN cluster `{cluster}` not found in the file"))?;
     let bitrate_kbps = number(cluster_node, "BAUDRATE")
@@ -272,9 +276,10 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
     let mut messages: HashMap<(u32, bool), MessageInfo> = HashMap::new();
     let mut order: Vec<(u32, bool)> = Vec::new();
     let mut value_tables: HashMap<((u32, bool), String), HashMap<i64, String>> = HashMap::new();
-    for trig in cluster_node
+    for trig in root
         .descendants()
         .filter(|n| n.is_element() && n.has_tag_name("CAN-FRAME-TRIGGERING"))
+        .filter(|t| triggering_cluster(*t, &can_clusters).as_deref() == Some(cluster))
     {
         let Some(frame_ref) = child_text(trig, "FRAME-REF") else {
             continue;
@@ -542,6 +547,41 @@ fn ancestor_ecu(node: Node) -> Option<String> {
         .find(|n| n.has_tag_name("ECU-INSTANCE"))
         .map(short_name)
         .filter(|n| !n.is_empty())
+}
+
+/// Which CAN cluster owns a frame triggering. Most matrices nest the
+/// triggering under the cluster's physical channel; some keep it in a shared
+/// package and name the cluster through a PDU-triggering path
+/// (`/Cluster/<name>/...`). A single-cluster file is unambiguous either way.
+fn triggering_cluster(trig: Node, clusters: &[Node]) -> Option<String> {
+    if let Some(cluster) = trig.ancestors().find(|n| n.has_tag_name("CAN-CLUSTER")) {
+        let name = short_name(cluster);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    if let Some(path) = text_of(trig, "PDU-TRIGGERING-REF")
+        && let Some(name) = cluster_of_path(&path)
+    {
+        return Some(name);
+    }
+    if clusters.len() == 1 {
+        let name = short_name(clusters[0]);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// The cluster segment of an AUTOSAR reference path:
+/// `/Cluster/CanA/CH/PT_x` -> `CanA`.
+fn cluster_of_path(path: &str) -> Option<String> {
+    let mut parts = path.split('/').filter(|p| !p.is_empty());
+    match (parts.next(), parts.next()) {
+        (Some("Cluster"), Some(name)) => Some(name.to_string()),
+        _ => None,
+    }
 }
 
 fn short_name(node: Node) -> String {

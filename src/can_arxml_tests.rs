@@ -300,3 +300,82 @@ fn a_single_cluster_arxml_replaces_one_existing_can_database() {
     assert_eq!(db.messages[&(0x100, false)].name, "F");
     std::fs::remove_file(path).ok();
 }
+
+const SHARED_FRAMES: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><ELEMENTS>
+ <CAN-CLUSTER><SHORT-NAME>CanA</SHORT-NAME><CAN-CLUSTER-VARIANTS><CAN-CLUSTER-CONDITIONAL>
+  <PHYSICAL-CHANNELS><CAN-PHYSICAL-CHANNEL><SHORT-NAME>CHA</SHORT-NAME>
+   <FRAME-TRIGGERINGS><CAN-FRAME-TRIGGERING><SHORT-NAME>FTA</SHORT-NAME>
+    <FRAME-REF>/F</FRAME-REF><CAN-ADDRESSING-MODE>STANDARD</CAN-ADDRESSING-MODE><IDENTIFIER>256</IDENTIFIER>
+   </CAN-FRAME-TRIGGERING></FRAME-TRIGGERINGS>
+  </CAN-PHYSICAL-CHANNEL></PHYSICAL-CHANNELS>
+ </CAN-CLUSTER-CONDITIONAL></CAN-CLUSTER-VARIANTS></CAN-CLUSTER>
+ <CAN-CLUSTER><SHORT-NAME>CanB</SHORT-NAME><CAN-CLUSTER-VARIANTS><CAN-CLUSTER-CONDITIONAL>
+  <PHYSICAL-CHANNELS><CAN-PHYSICAL-CHANNEL><SHORT-NAME>CHB</SHORT-NAME>
+   <FRAME-TRIGGERINGS><CAN-FRAME-TRIGGERING><SHORT-NAME>FTB</SHORT-NAME>
+    <FRAME-REF>/F</FRAME-REF><CAN-ADDRESSING-MODE>STANDARD</CAN-ADDRESSING-MODE><IDENTIFIER>512</IDENTIFIER>
+   </CAN-FRAME-TRIGGERING></FRAME-TRIGGERINGS>
+  </CAN-PHYSICAL-CHANNEL></PHYSICAL-CHANNELS>
+ </CAN-CLUSTER-CONDITIONAL></CAN-CLUSTER-VARIANTS></CAN-CLUSTER>
+ <CAN-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH>
+  <PDU-TO-FRAME-MAPPING><PDU-REF>/P</PDU-REF><START-POSITION>0</START-POSITION></PDU-TO-FRAME-MAPPING>
+ </CAN-FRAME>
+ <I-SIGNAL-I-PDU><SHORT-NAME>P</SHORT-NAME><LENGTH>8</LENGTH>
+  <I-SIGNAL-TO-I-PDU-MAPPING><I-SIGNAL-REF>/S</I-SIGNAL-REF><START-POSITION>0</START-POSITION></I-SIGNAL-TO-I-PDU-MAPPING>
+ </I-SIGNAL-I-PDU>
+ <I-SIGNAL><SHORT-NAME>S</SHORT-NAME><LENGTH>8</LENGTH></I-SIGNAL>
+</ELEMENTS></AUTOSAR>"#;
+
+/// Two clusters may share every frame, PDU and signal definition and differ
+/// only by the identifier in their own triggering. Each parse keeps its own
+/// id; the unified importer creates two buses rather than overwriting one.
+#[test]
+fn two_can_clusters_can_share_frame_definitions_with_different_ids() {
+    use crate::app::App;
+    let a = parse_cluster(SHARED_FRAMES, "CanA").expect("CanA");
+    assert_eq!(a.db.order, [(0x100, false)]);
+    assert_eq!(a.db.messages[&(0x100, false)].name, "F");
+    let b = parse_cluster(SHARED_FRAMES, "CanB").expect("CanB");
+    assert_eq!(b.db.order, [(0x200, false)]);
+    assert_eq!(b.db.messages[&(0x200, false)].name, "F");
+
+    let path = std::env::temp_dir().join(format!(
+        "roxy_can_shared_clusters_{}.arxml",
+        std::process::id()
+    ));
+    std::fs::write(&path, SHARED_FRAMES).expect("write matrix");
+    let mut app = App::headless();
+    let before = app.snap.channel_count;
+    app.import_arxml_path(path.to_string_lossy().as_ref());
+    app.settle();
+    assert_eq!(app.snap.channel_count, before + 2);
+    let names: Vec<&str> = app.can_arxml.values().map(|(_, c)| c.as_str()).collect();
+    assert!(names.contains(&"CanA"));
+    assert!(names.contains(&"CanB"));
+    std::fs::remove_file(path).ok();
+}
+
+const TOP_LEVEL_TRIGGERS: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><ELEMENTS>
+ <CAN-CLUSTER><SHORT-NAME>C1</SHORT-NAME></CAN-CLUSTER>
+ <CAN-CLUSTER><SHORT-NAME>C2</SHORT-NAME></CAN-CLUSTER>
+ <CAN-FRAME-TRIGGERING><SHORT-NAME>T1</SHORT-NAME>
+  <FRAME-REF>/F</FRAME-REF><IDENTIFIER>1</IDENTIFIER>
+  <PDU-TRIGGERING-REF>/Cluster/C1/CH/PT</PDU-TRIGGERING-REF>
+ </CAN-FRAME-TRIGGERING>
+ <CAN-FRAME-TRIGGERING><SHORT-NAME>T2</SHORT-NAME>
+  <FRAME-REF>/F</FRAME-REF><IDENTIFIER>2</IDENTIFIER>
+  <PDU-TRIGGERING-REF>/Cluster/C2/CH/PT</PDU-TRIGGERING-REF>
+ </CAN-FRAME-TRIGGERING>
+ <CAN-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH></CAN-FRAME>
+</ELEMENTS></AUTOSAR>"#;
+
+/// Triggerings kept outside the cluster package name their cluster through
+/// the PDU-triggering path; the same two-cluster split still holds.
+#[test]
+fn top_level_triggerings_are_attributed_by_their_cluster_path() {
+    let a = parse_cluster(TOP_LEVEL_TRIGGERS, "C1").expect("C1");
+    assert_eq!(a.db.order, [(1, false)]);
+    let b = parse_cluster(TOP_LEVEL_TRIGGERS, "C2").expect("C2");
+    assert_eq!(b.db.order, [(2, false)]);
+}
