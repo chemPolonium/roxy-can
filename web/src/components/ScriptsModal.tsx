@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { fetchScripts } from "../api";
 import type { Bus, Command, Script } from "../types";
+import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
@@ -334,6 +335,15 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
                   >
                     Template
                   </button>
+                  <FilePick
+                    label="Load file…"
+                    accept=".rxcan,.txt"
+                    onText={(text, name) => {
+                      edit(text);
+                      setSavePath(name);
+                    }}
+                    onError={setError}
+                  />
                   <button
                     type="button"
                     class="danger"
