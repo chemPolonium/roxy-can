@@ -1,6 +1,6 @@
 # roxy-can
 
-基于 Rust + Dear ImGui 的 CAN / FlexRay 总线分析工具：多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
+基于 Rust 的 CAN / FlexRay 总线分析工具，默认使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)），原生 Dear ImGui 窗口仍可用 `--desktop` 打开。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
 ![roxy-can](screenshot.png)
 
@@ -52,10 +52,12 @@
 
 ## 构建与运行
 
-需要 Rust 工具链（edition 2024）。
+需要 Rust 工具链（edition 2024）。Web UI 还需要先构建前端。
 
 ```sh
-cargo run
+cd web && npm install && npm run build && cd ..
+cargo run                       # Web UI, http://127.0.0.1:2010
+cargo run -- --desktop          # 原生 Dear ImGui 工作区（后备）
 ```
 
 运行测试：

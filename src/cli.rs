@@ -87,9 +87,10 @@ pub struct ScriptCheck {
 pub fn usage() -> &'static str {
     "roxy-can -- CAN bus analysis
 
-  roxy-can                       open the workspace window (default)
+  roxy-can                       open the web UI on 127.0.0.1:2010 (default)
+  roxy-can --desktop             open the native workspace window
   roxy-can --web [--port <n>] [--project <p>] [--replay <log>]
-                                 experimental web UI on 127.0.0.1 (default 2010)
+                                 web UI explicitly (same as the default)
   roxy-can --replay <log> ...    replay a CAN log without any window
   roxy-can --project <p> ...     simulate a saved project without any window
   roxy-can --check-script <f>    compile node scripts, no window needed

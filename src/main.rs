@@ -509,10 +509,16 @@ fn centered_position(
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    // Experimental web frontend host. This stays outside the CLI parser so
-    // the spike cannot perturb the desktop argument contract.
-    if args.iter().any(|arg| arg == "--web") {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // The web host is the default UI; the native window stays one flag away
+    // while the last desktop-only workflows are retired. Keeping this outside
+    // the CLI parser leaves the headless modes (`--replay`, `--project`,
+    // `--check-script`) exactly as they were.
+    let desktop = args.iter().any(|arg| arg == "--desktop");
+    if desktop {
+        args.retain(|arg| arg != "--desktop");
+    }
+    if args.iter().any(|arg| arg == "--web") || (args.is_empty() && !desktop) {
         cli::attach_parent_console();
         web::run(&args);
         return;

@@ -1,12 +1,12 @@
-# roxy-can web spike
+# roxy-can web UI
 
-Experimental web frontend for roxy-can, merged into `main`. It follows
-the lightweight shape of roxy-arxml: a Rust `axum` host, a Preact + TypeScript
-frontend built by Vite, no component library.
+The default UI for roxy-can. It follows the lightweight shape of
+roxy-arxml: a Rust `axum` host, a Preact + TypeScript frontend built by Vite,
+no component library.
 
-**The Dear ImGui desktop app remains the supported UI until web parity.** The
-spike exists to measure the alternative before deciding; features are being
-ported panel by panel.
+**The Dear ImGui desktop app is still available with `--desktop`** as a
+fallback while the last desktop-only workflows are retired; it is no longer
+the default entry point.
 
 ## Run
 
@@ -17,15 +17,18 @@ cd web
 npm install
 npm run build
 cd ..
-cargo run -- --web                              # demo simulation
+cargo run                                       # demo simulation
 cargo run -- --web --project <path.rxproj>      # project, stopped
 cargo run -- --web --replay <path.asc|path.blf> # load and start a replay
+cargo run -- --desktop                          # native window instead
 ```
 
 With neither flag the generator demo starts automatically. `--project` loads
 the project but leaves it stopped; `--replay` loads the log and starts
 playback. A project and a replay can be combined. `--port <n>` changes the
-port (default 2010).
+port (default 2010). `--web` remains an explicit synonym for the default.
+The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
+`--check-script`) keep their old meaning.
 
 The toolbar's **Session…** dialog can switch sessions without restarting the
 server: enter a host path, pick a recent project/log, or choose a file with
