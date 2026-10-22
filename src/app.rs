@@ -261,6 +261,11 @@ pub struct App {
     pub desktops: Vec<Desktop>,
     pub active_desktop: usize,
     pub replay_speed: f64,
+    /// Replay navigation drafts: the step size (ms), the play-for duration
+    /// (s), and the absolute play-to time typed in the toolbar.
+    pub replay_step_ms: u64,
+    pub replay_play_for_s: u64,
+    pub replay_to_buf: String,
     /// The Triggers window's own state: open flag and the editor draft.
     pub(crate) triggers_view: crate::ui::triggers::TriggersView,
     /// The Write window's own state: open flag and per-kind filters.
@@ -496,6 +501,9 @@ impl App {
             desktops: Vec::new(),
             active_desktop: 0,
             replay_speed: 1.0,
+            replay_step_ms: 100,
+            replay_play_for_s: 5,
+            replay_to_buf: String::new(),
             triggers_view: Default::default(),
             write_view: Default::default(),
             busstats_view: Default::default(),

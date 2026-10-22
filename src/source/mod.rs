@@ -72,6 +72,17 @@ pub trait FrameSource: Send {
     /// replay clock honor this.
     fn set_speed(&mut self, _speed: f64) {}
 
+    /// Move a replay's playhead forward by `us` of log time. The next
+    /// `poll` delivers the frames that became due. Forward-only on
+    /// purpose: the observers and aggregates are rebuilt by the normal
+    /// step, not by a second seek path.
+    fn step_forward(&mut self, _us: u64) {}
+
+    /// Stop delivering frames past this absolute log time, even when the
+    /// playhead (an as-fast-as-possible burst) is already beyond it. Used
+    /// by Play-to so the target frame is the last one ingested.
+    fn set_poll_limit(&mut self, _limit: Option<u64>) {}
+
     /// Current position on the source's clock, in microseconds.
     fn position(&self) -> Option<u64> {
         None

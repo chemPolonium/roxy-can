@@ -315,6 +315,9 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.button("<<") {
                 app.step_replay_speed(-1);
             }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Slower replay speed");
+            }
             slower.end();
             ui.same_line();
             // Fixed width so toggling Play/Pause never shifts the buttons
@@ -332,6 +335,9 @@ pub fn render(app: &mut App, ui: &Ui) {
             let faster = ui.begin_disabled_with_cond(!matches!(app.snap.mode, Mode::Replay));
             if ui.button(">>") {
                 app.step_replay_speed(1);
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Faster replay speed");
             }
             faster.end();
             ui.same_line();
@@ -480,6 +486,119 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
             }
             if matches!(app.snap.run_mode, Mode::Replay) {
+                // Replay navigation: a forward step, a timed play, or an
+                // absolute target. All three run through the normal replay
+                // step, so observers/statistics stay consistent; none of
+                // them pretends to reconstruct a past playhead.
+                {
+                    let nav = ui.begin_disabled_with_cond(
+                        !(app.snap.measuring && matches!(app.snap.mode, Mode::Replay)),
+                    );
+                    const STEPS_MS: [u64; 6] = [10, 50, 100, 500, 1_000, 5_000];
+                    let step_labels: Vec<String> = STEPS_MS
+                        .iter()
+                        .map(|ms| {
+                            if *ms >= 1_000 {
+                                format!("{} s", ms / 1_000)
+                            } else {
+                                format!("{ms} ms")
+                            }
+                        })
+                        .collect();
+                    let step_refs: Vec<&str> = step_labels.iter().map(|s| s.as_str()).collect();
+                    let mut step_pick = STEPS_MS
+                        .iter()
+                        .position(|ms| *ms == app.replay_step_ms)
+                        .unwrap_or(2);
+                    ui.set_next_item_width(76.0);
+                    if ui.combo_simple_string("##replaystep", &mut step_pick, &step_refs) {
+                        app.replay_step_ms = STEPS_MS[step_pick];
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Step size in log time; Step advances immediately (forward only)",
+                        );
+                    }
+                    ui.same_line();
+                    if ui.button("Step##replaystepgo") {
+                        app.send(crate::bus::BusCommand::ReplayStep {
+                            delta_us: app.replay_step_ms * 1_000,
+                        });
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Advance the replay by the step size in one go\n中文：按左侧步长向前跳一次，所有窗口走正常回放路径",
+                        );
+                    }
+                    ui.same_line();
+                    const PLAY_FOR_S: [u64; 5] = [1, 5, 10, 30, 60];
+                    let play_labels: Vec<String> = PLAY_FOR_S
+                        .iter()
+                        .map(|s| format!("{s} s"))
+                        .collect();
+                    let play_refs: Vec<&str> = play_labels.iter().map(|s| s.as_str()).collect();
+                    let mut play_pick = PLAY_FOR_S
+                        .iter()
+                        .position(|s| *s == app.replay_play_for_s)
+                        .unwrap_or(1);
+                    ui.set_next_item_width(62.0);
+                    if ui.combo_simple_string("##replayfor", &mut play_pick, &play_refs) {
+                        app.replay_play_for_s = PLAY_FOR_S[play_pick];
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Play forward for this much log time, then pause automatically",
+                        );
+                    }
+                    ui.same_line();
+                    if ui.button("Play for##replayforgo") {
+                        app.send(crate::bus::BusCommand::ReplayPlayFor {
+                            duration_us: app.replay_play_for_s * 1_000_000,
+                        });
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Resume and pause after the chosen log-time span\n中文：从现在起播放指定日志时长后自动暂停",
+                        );
+                    }
+                    ui.same_line();
+                    ui.set_next_item_width(84.0);
+                    let entered = ui
+                        .input_text("##replayto", &mut app.replay_to_buf)
+                        .hint("to s")
+                        .build();
+                    if ui.is_item_hovered() {
+                        let position = app
+                            .replay_position()
+                            .map(|(p, d)| format!("now {p:.3} s / {d:.3} s"))
+                            .unwrap_or_else(|| "no replay timeline".to_string());
+                        ui.tooltip_text(format!(
+                            "Absolute log time in seconds; plays forward to it, then pauses ({position})\n\
+                             中文：播放到指定日志时间后暂停，只能向前",
+                        ));
+                    }
+                    ui.same_line();
+                    let go = ui.button("Go##replaytogo");
+                    if entered || go {
+                        match app.replay_to_buf.trim().parse::<f64>() {
+                            Ok(secs) if secs.is_finite() && secs >= 0.0 => {
+                                app.send(crate::bus::BusCommand::ReplayPlayTo {
+                                    target_us: (secs * 1e6).round() as u64,
+                                });
+                            }
+                            _ => {
+                                app.status = "enter a play-to time in seconds".to_string();
+                            }
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(
+                            "Play to an absolute log time (seconds), then pause; a target behind the playhead is refused",
+                        );
+                    }
+                    nav.end();
+                }
+                vsep(ui);
                 let open = ui.begin_disabled_with_cond(log_switch_blocked(app));
                 if ui.button("Open Log...") {
                     app.pick_log();

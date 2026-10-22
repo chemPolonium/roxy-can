@@ -22,6 +22,9 @@ pub struct ReplaySource {
     /// loop's `next_deadline` can read it without `&mut` access to the
     /// stream. Refreshed everywhere the playhead moves.
     next_t: Option<u64>,
+    /// Play-to target: frames past this log time are held back, even on an
+    /// infinite-speed burst that moved the playhead much further.
+    limit: Option<u64>,
 }
 
 impl ReplaySource {
@@ -33,6 +36,7 @@ impl ReplaySource {
             speed: 1.0,
             done: false,
             next_t: None,
+            limit: None,
         };
         src.refresh_next();
         src
@@ -52,6 +56,11 @@ impl ReplaySource {
         let eth = self.stream.peek_eth_t();
         self.next_t = [can, fr, eth].into_iter().flatten().min();
     }
+
+    /// The playhead, capped by a pending Play-to target.
+    fn target(&self) -> u64 {
+        (self.pos_us as u64).min(self.limit.unwrap_or(u64::MAX))
+    }
 }
 
 impl FrameSource for ReplaySource {
@@ -66,7 +75,7 @@ impl FrameSource for ReplaySource {
             self.pos_us += now_us.saturating_sub(prev) as f64 * self.speed;
         }
         self.last = Some(now_us);
-        let target = self.pos_us as u64;
+        let target = self.target();
         while out.len() < MAX_POLL_FRAMES {
             match self.stream.peek_t() {
                 Some(t) if t <= target => match self.stream.next_frame() {
@@ -105,6 +114,21 @@ impl FrameSource for ReplaySource {
         self.speed = s.max(0.01);
     }
 
+    fn step_forward(&mut self, us: u64) {
+        if self.pos_us.is_finite() {
+            self.pos_us += us as f64;
+        }
+        // The next poll must not add the wall time between the click and
+        // the poll: the step itself moved the playhead. `last = None`
+        // makes `poll` treat that call as a zero-delta lap.
+        self.last = None;
+        self.refresh_next();
+    }
+
+    fn set_poll_limit(&mut self, limit: Option<u64>) {
+        self.limit = limit;
+    }
+
     fn position(&self) -> Option<u64> {
         let pos = self.pos_us as u64;
         if self.pos_us.is_finite() {
@@ -127,12 +151,12 @@ impl FrameSource for ReplaySource {
     fn poll_fr(&mut self, _now_us: u64, out: &mut Vec<crate::trace::FrRow>) {
         // The playhead is the same one the CAN loop paced against, so
         // FR rows stream in log order interleaved with the CAN frames.
-        let target = self.pos_us as u64;
+        let target = self.target();
         self.stream.poll_fr_rows(target, out);
     }
 
     fn poll_eth(&mut self, _now_us: u64, out: &mut Vec<crate::eth::EthFrame>) {
-        let target = self.pos_us as u64;
+        let target = self.target();
         self.stream.poll_eth_frames(target, out);
     }
 
@@ -220,6 +244,47 @@ mod tests {
             Some(50_000),
             "position tracks the virtual clock"
         );
+    }
+
+    /// A forward step moves the log clock without waiting for wall time;
+    /// the next poll delivers exactly the frames the step covered.
+    #[test]
+    fn step_forward_emits_the_frames_the_step_covers() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
+        src.step_forward(100_000);
+        let mut out = Vec::new();
+        src.poll(1_000_000, &mut out);
+        assert_eq!(out.len(), 2, "t=0 and t=100ms are due");
+        assert_eq!(src.position(), Some(100_000));
+
+        out.clear();
+        src.step_forward(100_000);
+        src.poll(1_000_000, &mut out);
+        assert_eq!(out.len(), 1, "the 200ms frame becomes due");
+        out.clear();
+        src.step_forward(100_000);
+        src.poll(1_000_000, &mut out);
+        assert!(out.is_empty(), "nothing past the log end");
+        assert!(src.is_done());
+    }
+
+    /// An as-fast-as-possible burst can move the playhead far past a
+    /// play-to target; the poll limit must hold the later frames back.
+    #[test]
+    fn a_poll_limit_holds_frames_past_the_target() {
+        let mut src = ReplaySource::from_frames(vec![frame(0), frame(100_000), frame(200_000)]);
+        src.set_poll_limit(Some(100_000));
+        src.step_forward(500_000);
+        let mut out = Vec::new();
+        src.poll(0, &mut out);
+        assert_eq!(out.len(), 2, "0 and 100 ms only; 200 ms is held back");
+        assert!(!src.is_done());
+
+        src.set_poll_limit(None);
+        out.clear();
+        src.poll(0, &mut out);
+        assert_eq!(out.len(), 1, "releasing the limit delivers the rest");
+        assert!(src.is_done());
     }
 
     /// A length estimate that lags the traffic must not cap the playhead.

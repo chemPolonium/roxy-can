@@ -359,6 +359,65 @@ fn loading_log_does_not_start_replay() {
     std::fs::remove_file(&first).ok();
 }
 
+/// Replay navigation is forward-only and reuses the normal step: a step
+/// delivers the frames the step covers, play-to resumes and pauses at the
+/// target, and a target behind the playhead is refused instead of silently
+/// rewinding.
+#[test]
+fn replay_step_and_play_to_advance_forward() {
+    use std::time::{Duration, Instant};
+    let path = std::env::temp_dir().join(format!("roxy_replay_nav_{}.asc", std::process::id()));
+    std::fs::write(
+        &path,
+        "base hex  timestamps absolute\n\
+         0.000000 Start of measurement\n\
+         0.000000  1  100  Rx  d  8  01 02 03 04 05 06 07 08\n\
+         0.100000  1  100  Rx  d  8  11 12 13 14 15 16 17 18\n\
+         0.200000  1  100  Rx  d  8  21 22 23 24 25 26 27 28\n",
+    )
+    .unwrap();
+    let mut app = App::headless();
+    app.load_log(&path.to_string_lossy());
+    app.replay();
+    app.update();
+    assert!(app.measuring);
+    let before_step = app.snap.frame_counter;
+
+    app.send(crate::bus::BusCommand::SetTracePaused(true));
+    app.update();
+    app.send(crate::bus::BusCommand::ReplayStep { delta_us: 150_000 });
+    let stepped = app.replay_position().expect("a replay timeline").0;
+    assert!(stepped >= 0.150, "step moved the playhead to {stepped}s");
+    assert!(
+        app.snap.frame_counter > before_step,
+        "the 100 ms frame was delivered by the step"
+    );
+
+    app.send(crate::bus::BusCommand::ReplayPlayTo { target_us: 200_000 });
+    assert!(!app.snap.trace_paused, "play-to resumes the replay");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !app.snap.trace_paused {
+        std::thread::sleep(Duration::from_millis(5));
+        app.update();
+    }
+    assert!(
+        app.snap.trace_paused,
+        "play-to pauses at the target; status {}",
+        app.status
+    );
+    assert!(app.replay_position().expect("timeline").0 >= 0.200);
+
+    app.send(crate::bus::BusCommand::ReplayPlayTo { target_us: 100_000 });
+    assert!(
+        app.status.contains("behind"),
+        "a backward target is refused: {}",
+        app.status
+    );
+    app.stop();
+    drop(app);
+    std::fs::remove_file(&path).ok();
+}
+
 #[test]
 fn loading_blf_does_not_start_replay() {
     let mut app = App::headless();

@@ -479,6 +479,18 @@ fn every_window_draws_without_panicking() {
     frames(&mut app, &mut ctx, 5);
 }
 
+/// The Replay toolbar row now carries step/play-for/play-to controls next
+/// to Open Log. Drawing it in Replay mode must not panic or collide with
+/// the Virtual row's record-control IDs.
+#[test]
+fn the_replay_toolbar_draws_its_navigation_controls() {
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::SetRunMode(crate::app::Mode::Replay));
+    frames(&mut app, &mut ctx, 3);
+}
+
 /// A fresh workspace docks its seeded windows once, then selects the
 /// Measurement tab on the next frame (the layout has to exist before the
 /// window can claim it). Both steps must clear their flag: rebuilding the

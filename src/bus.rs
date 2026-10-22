@@ -129,6 +129,21 @@ pub enum BusCommand {
     /// Freeze or unfreeze the trace views; frozen arrivals stamp at the
     /// freeze instant.
     SetTracePaused(bool),
+    /// Advance a replay by this much log time in one immediate step.
+    /// Forward only; the observers see the frames through the normal step.
+    ReplayStep {
+        delta_us: u64,
+    },
+    /// Play forward until the playhead reaches this absolute log time,
+    /// then pause. A target behind the playhead is refused.
+    ReplayPlayTo {
+        target_us: u64,
+    },
+    /// Play forward for this much log time from the current playhead, then
+    /// pause.
+    ReplayPlayFor {
+        duration_us: u64,
+    },
     /// Toggle ASC recording. While stopped, the file is created by the
     /// next start -- checking Record must not leave an empty file behind.
     ToggleRecord,
@@ -1096,6 +1111,14 @@ pub struct BusCore {
     pub(crate) trace_paused: bool,
     /// Wall-clock instant the freeze started; None while not frozen.
     pub(crate) paused_at_us: Option<u64>,
+    /// Replay stops here (absolute log time) when the playhead reaches it;
+    /// set by Play-for / Play-to, cleared by manual pause or a fresh run.
+    pub(crate) replay_stop_at: Option<u64>,
+    /// The last sampling/spec policy a normal step ran with, reused when a
+    /// step command invokes a step outside the frontend's tick.
+    last_stride_us: u64,
+    last_tol_pct: u64,
+    last_grace: u64,
     /// Frames received this run, for the run-total counter in the status bar.
     pub(crate) frame_counter: u64,
     /// Per-(bus, id) aggregates behind the Messages / Statistics views.
@@ -1253,6 +1276,10 @@ impl BusCore {
             eth_length_includes_header: false,
             trace_paused: false,
             paused_at_us: None,
+            replay_stop_at: None,
+            last_stride_us: SAMPLE_INTERVAL_US,
+            last_tol_pct: 0,
+            last_grace: 0,
             frame_counter: 0,
             aggs: HashMap::new(),
             bus_loads,
@@ -1304,7 +1331,15 @@ impl BusCore {
         match cmd {
             BusCommand::StartVirtual => self.start_virtual(status),
             BusCommand::Stop => self.stop_bus(status),
-            BusCommand::SetTracePaused(on) => self.trace_paused = on,
+            BusCommand::SetTracePaused(on) => {
+                self.trace_paused = on;
+                // A manual pause/resume abandons a pending play-to target.
+                self.replay_stop_at = None;
+                self.source.set_poll_limit(None);
+            }
+            BusCommand::ReplayStep { delta_us } => self.replay_step(delta_us, status),
+            BusCommand::ReplayPlayTo { target_us } => self.replay_play_to(target_us, status),
+            BusCommand::ReplayPlayFor { duration_us } => self.replay_play_for(duration_us, status),
             BusCommand::ToggleRecord => self.toggle_record(status),
             BusCommand::RearmTriggers => self.rearm_latched_triggers(status),
             BusCommand::ClearTrace => self.clear_trace_view(status),
@@ -4077,9 +4112,12 @@ impl BusCore {
         for block in &mut self.replay_blocks {
             block.rewind();
         }
-        // A fresh start must not inherit the previous run's pause state.
+        // A fresh start must not inherit the previous run's pause state or
+        // a play-to target.
         self.trace_paused = false;
         self.paused_at_us = None;
+        self.replay_stop_at = None;
+        self.source.set_poll_limit(None);
         self.trace.clear();
         self.fr_trace.clear();
         self.eth_trace.clear();
@@ -4125,8 +4163,60 @@ impl BusCore {
         self.refresh_sub_histories();
     }
 
+    /// One immediate forward step on the replay clock. Runs a normal bus
+    /// step at the last wall-clock anchor, so trace, aggregates, spec and
+    /// observers all see the frames exactly as a played lap would.
+    fn replay_step(&mut self, delta_us: u64, status: &mut String) {
+        if !matches!(self.mode, Mode::Replay) || !self.measuring {
+            *status = "start Replay before stepping".to_string();
+            return;
+        }
+        // A manual step abandons a pending timed play.
+        self.replay_stop_at = None;
+        self.source.set_poll_limit(None);
+        self.source.step_forward(delta_us);
+        let now = self.sim_prev_us;
+        self.step(
+            now,
+            self.last_stride_us,
+            self.last_tol_pct,
+            self.last_grace,
+            status,
+        );
+    }
+
+    /// Arms a forward-only stop target and resumes the replay clock. The
+    /// target is absolute log time; a value behind the playhead is refused
+    /// rather than silently ignored.
+    fn replay_play_to(&mut self, target_us: u64, status: &mut String) {
+        if !matches!(self.mode, Mode::Replay) || !self.measuring {
+            *status = "start Replay before setting a play target".to_string();
+            return;
+        }
+        let pos = self.source.position().unwrap_or(0);
+        if target_us <= pos {
+            *status = format!(
+                "play target {:.3}s is behind the playhead {:.3}s (forward only)",
+                target_us as f64 / 1e6,
+                pos as f64 / 1e6
+            );
+            return;
+        }
+        self.replay_stop_at = Some(target_us);
+        self.source.set_poll_limit(Some(target_us));
+        self.trace_paused = false;
+        *status = format!("replaying to {:.3}s", target_us as f64 / 1e6);
+    }
+
+    fn replay_play_for(&mut self, duration_us: u64, status: &mut String) {
+        let pos = self.source.position().unwrap_or(0);
+        self.replay_play_to(pos.saturating_add(duration_us), status);
+    }
+
     fn stop_bus(&mut self, status: &mut String) {
         self.measuring = false;
+        self.replay_stop_at = None;
+        self.source.set_poll_limit(None);
         self.recorder.close();
         for node in &mut self.nodes {
             node.stop();
@@ -4297,6 +4387,11 @@ impl BusCore {
         grace: u64,
         status: &mut String,
     ) -> bool {
+        // Remember the frontend's policy for step commands that run a step
+        // outside the normal tick.
+        self.last_stride_us = stride;
+        self.last_tol_pct = tol_pct;
+        self.last_grace = grace;
         // Every step moves the clock, so the load windows drain and resample
         // whether or not a frame arrived; publish the rollups after it.
         self.loads_dirty = true;
@@ -4764,9 +4859,21 @@ impl BusCore {
 
         if replay_done {
             self.measuring = false;
+            self.replay_stop_at = None;
+            self.source.set_poll_limit(None);
             self.recorder.close();
             let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
             *status = format!("replay finished at {dur:.2}s");
+        } else if self.measuring
+            && matches!(self.mode, Mode::Replay)
+            && !self.trace_paused
+            && let Some(target) = self.replay_stop_at
+            && self.source.position().is_some_and(|pos| pos >= target)
+        {
+            self.replay_stop_at = None;
+            self.source.set_poll_limit(None);
+            self.trace_paused = true;
+            *status = format!("replay paused at {:.3}s", target as f64 / 1e6);
         }
         replay_done
     }
