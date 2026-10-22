@@ -4,6 +4,11 @@ version = "0.17.7"
 edition = "2024"
 
 [dependencies]
+# The experimental web frontend: a local axum host for the Vite build, and
+# the async runtime it needs. The desktop path never starts the runtime.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time"] }
+tower-http = { version = "0.6", features = ["fs"] }
 # dear-imgui-rs binds Dear ImGui 1.92.x (docking branch, docking always on).
 # The wgpu backend's default feature targets wgpu 30; pin it to our wgpu 29.
 dear-imgui-rs = "0.18"

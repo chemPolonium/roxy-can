@@ -34,6 +34,7 @@ mod spec;
 mod trace;
 mod trigger;
 mod ui;
+mod web;
 mod workspace;
 
 /// 主线阶段 2 验收：不开 UI 跑完整仿真 + 录制 + 导出。
@@ -504,6 +505,13 @@ fn centered_position(
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Experimental web frontend host. This stays outside the CLI parser so
+    // the spike cannot perturb the desktop argument contract.
+    if args.iter().any(|arg| arg == "--web") {
+        cli::attach_parent_console();
+        web::run(&args);
+        return;
+    }
     match cli::parse_args(&args) {
         Ok(cli::Cli::Gui) => {}
         Ok(cli::Cli::Help(text)) => {

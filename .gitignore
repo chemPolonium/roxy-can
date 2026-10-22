@@ -9,6 +9,10 @@ record_*.asc
 
 /target
 
+# web spike 的依赖与 Vite 产物：本地构建，不入库
+/web/node_modules
+/web/dist
+
 # 助手的临时构建日志
 clippy.log
 
