@@ -236,9 +236,17 @@ export function App() {
 
   const canControl = Boolean(state) && online && !busy;
   const measuring = state?.measuring ?? false;
+  const needsLog = state?.runMode === "Replay" && !state?.log;
   const latest = state?.series.length
     ? state.series[state.series.length - 1]
     : undefined;
+  const session = state
+    ? [state.project || "Untitled", state.log].filter(Boolean).join(" · ")
+    : "";
+  const replayText =
+    state?.replayPosUs != null && state?.replayTotalUs != null
+      ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
+      : "";
 
   return (
     <div class="app">
@@ -251,7 +259,8 @@ export function App() {
             </h1>
             <p>
               {state
-                ? `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
+                ? session ||
+                  `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
                 : "connecting to the bus core"}
             </p>
           </div>
@@ -260,7 +269,7 @@ export function App() {
           <button
             type="button"
             class="primary"
-            disabled={!canControl || measuring}
+            disabled={!canControl || measuring || needsLog}
             onClick={() => void run({ type: "start" })}
           >
             Start
@@ -312,7 +321,7 @@ export function App() {
         </div>
         <div class="stat">
           <span>Mode</span>
-          <strong>{state?.mode ?? "—"}</strong>
+          <strong>{state?.runMode ?? state?.mode ?? "—"}</strong>
         </div>
         {error && <div class="error-pill">{error}</div>}
       </section>
@@ -482,9 +491,12 @@ export function App() {
           {measuring ? (state?.tracePaused ? "PAUSED" : "MEASURING") : "STOPPED"}
         </span>
         <span>
-          {measuring
-            ? "auto demo traffic · generated from the loaded DBCs"
-            : state?.status || "waiting for core"}
+          {replayText ||
+            (measuring
+              ? state?.log
+                ? `${state.runMode} · ${state.log}`
+                : "auto demo traffic · generated from the loaded DBCs"
+              : state?.status || "waiting for core")}
         </span>
         <span class="spacer" />
         <span>poll 10 Hz</span>

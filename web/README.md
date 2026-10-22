@@ -17,11 +17,16 @@ cd web
 npm install
 npm run build
 cd ..
-cargo run -- --web          # http://127.0.0.1:2010
+cargo run -- --web                              # demo simulation
+cargo run -- --web --project <path.rxproj>      # project, stopped
+cargo run -- --web --replay <path.asc|path.blf> # load and start a replay
 ```
 
-`--port <n>` changes the port. For hot reload, keep the server running and
-start Vite in a second terminal:
+With neither flag the generator demo starts automatically. `--project` loads
+the project but leaves it stopped; `--replay` loads the log and starts
+playback. A project and a replay can be combined. `--port <n>` changes the
+port (default 2010). For hot reload, keep the server running and start Vite
+in a second terminal:
 
 ```bash
 cd web
@@ -54,12 +59,13 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 ## Not here yet
 
-Project open/save, replay, hardware channels, signal selection (the demo
-pins eight curves), node scripts, and docking/desktops. The web trace buffer
-caps at 50,000 rows, matching the source ring; raising it needs a different
-storage layout than per-row JSON strings. Scroll anchoring while new rows
-arrive is left to the browser. Snapshots are polled at 10 Hz over a
-120-sample window; SSE is the obvious next step if the frontend is adopted.
+Opening/saving projects and logs from the browser (the CLI flags above cover
+the session bootstrap), hardware channels, signal selection for real
+projects (the demo pins eight curves), node scripts, and docking/desktops.
+The web trace buffer caps at 50,000 rows, matching the source ring; raising
+it needs a different storage layout than per-row JSON strings. Scroll
+anchoring while new rows arrive is left to the browser. Snapshots are polled
+at 10 Hz over a 120-sample window; SSE is the obvious next step.
 
 ## Performance testing
 

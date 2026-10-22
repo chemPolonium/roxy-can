@@ -160,8 +160,15 @@ pub fn run(args: &[String]) {
         .and_then(|i| args.get(i + 1))
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(PORT);
+    let project = flag_value(args, "--project");
+    let replay = flag_value(args, "--replay");
     if !std::path::Path::new("web/dist/index.html").exists() {
         eprintln!("web/dist is missing; run `npm install && npm run build` in web/ first");
+    }
+    if let Some(path) = &replay {
+        println!("web session replay: {path}");
+    } else if let Some(path) = &project {
+        println!("web session project: {path}");
     }
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -174,7 +181,7 @@ pub fn run(args: &[String]) {
         let signals = signals.clone();
         std::thread::Builder::new()
             .name("roxy-web-core".to_string())
-            .spawn(move || app_loop(rx, shared, trace, signals))
+            .spawn(move || app_loop(rx, shared, trace, signals, project, replay))
             .expect("spawn web core thread");
     }
 
@@ -201,6 +208,33 @@ pub fn run(args: &[String]) {
         println!("roxy-can web ui: http://127.0.0.1:{port}");
         axum::serve(listener, app).await.expect("web server");
     });
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+/// Bring up the requested session: a saved project, a replay log, or the
+/// generator demo. A project without a log opens stopped; a log starts
+/// playback; no flags keeps the old demo behavior.
+fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
+    if let Some(path) = project {
+        app.open_project_path(std::path::Path::new(path));
+    }
+    if let Some(path) = replay {
+        app.load_log(path);
+        if !app.log_path.is_empty() {
+            app.send(BusCommand::SetRunMode(Mode::Replay));
+            app.start_selected();
+        }
+        return;
+    }
+    if project.is_none() {
+        seed_demo(app);
+    }
 }
 
 #[derive(Clone)]
@@ -312,10 +346,11 @@ fn app_loop(
     shared: Arc<Mutex<WebState>>,
     trace: Arc<Mutex<TraceStore>>,
     signals: Arc<Mutex<SignalStore>>,
+    project: Option<String>,
+    replay: Option<String>,
 ) {
     let mut app = App::headless();
-    seed_demo(&mut app);
-    app.start_virtual();
+    prepare_session(&mut app, project.as_deref(), replay.as_deref());
     let mut series: VecDeque<WebSeriesPoint> = VecDeque::with_capacity(SERIES_POINTS);
     let mut rate_window: VecDeque<(Instant, u64)> = VecDeque::new();
     let mut last_publish = Instant::now() - PUBLISH_EVERY;
@@ -325,8 +360,13 @@ fn app_loop(
             match cmd {
                 WebCommand::Start => {
                     if !app.snap.measuring {
-                        app.start_virtual();
-                        rate_window.clear();
+                        if app.snap.run_mode == Mode::Replay && app.log_path.is_empty() {
+                            app.status =
+                                "replay needs a log; start with --replay <path>".to_string();
+                        } else {
+                            app.start_selected();
+                            rate_window.clear();
+                        }
                     }
                 }
                 WebCommand::Stop => {
@@ -688,6 +728,7 @@ impl SignalStore {
     fn seed(&self) -> Vec<SignalSeries> {
         self.buffers
             .iter()
+            .filter(|buffer| !buffer.points.is_empty())
             .map(|buffer| Self::dto(buffer, 0))
             .collect()
     }
@@ -746,6 +787,12 @@ struct WebState {
     trace_len: usize,
     sim_time_us: u64,
     status: String,
+    project: String,
+    log: String,
+    log_info: String,
+    run_mode: String,
+    replay_pos_us: Option<u64>,
+    replay_total_us: Option<u64>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -878,6 +925,23 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         trace_len: snap.trace_len,
         sim_time_us: snap.sim_t_us,
         status: app.status.clone(),
+        project: app
+            .project_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        log: std::path::Path::new(&app.log_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        log_info: app.log_info.clone().unwrap_or_default(),
+        run_mode: match snap.run_mode {
+            Mode::Virtual => "Simulation".to_string(),
+            Mode::Replay => "Replay".to_string(),
+        },
+        replay_pos_us: snap.replay.map(|(pos, _)| pos),
+        replay_total_us: snap.replay.map(|(_, total)| total),
         channels,
         messages,
         write,
@@ -937,6 +1001,27 @@ mod tests {
             !trace.after(before).is_empty(),
             "the client only needs the delta"
         );
+    }
+
+    /// A replay path must open the log and start playback in Replay mode,
+    /// without falling back to the interactive file picker.
+    #[test]
+    fn a_replay_path_starts_the_web_session() {
+        let path = std::env::temp_dir().join("roxy_web_session_replay.asc");
+        let text = "date Sat Jan 01 00:00:00.000 2022\n\
+                    base hex  timestamps absolute\n\
+                    Begin Triggerblock Sat Jan 01 00:00:00.000 2022\n\
+                    1.0 1 416 Rx d 8 17 34 51 68 85 102 119 136\n\
+                    2.0 1 416 Rx d 8 17 34 51 68 85 102 119 136\n\
+                    End TriggerBlock\n";
+        std::fs::write(&path, text).expect("write replay fixture");
+        let mut app = App::headless();
+        prepare_session(&mut app, None, Some(path.to_str().unwrap()));
+        assert_eq!(app.snap.run_mode, Mode::Replay);
+        assert!(!app.log_path.is_empty(), "the log was accepted");
+        assert!(app.snap.measuring, "playback started");
+        assert!(app.snap.replay.is_some(), "the playhead is visible");
+        std::fs::remove_file(&path).ok();
     }
 
     /// The demo must actually drive and sample the plotted signals; an empty

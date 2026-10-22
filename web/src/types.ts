@@ -7,6 +7,12 @@ export interface State {
   traceLen: number;
   simTimeUs: number;
   status: string;
+  project: string;
+  log: string;
+  logInfo: string;
+  runMode: string;
+  replayPosUs: number | null;
+  replayTotalUs: number | null;
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];

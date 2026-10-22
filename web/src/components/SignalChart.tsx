@@ -82,6 +82,21 @@ export function SignalChart({ series }: { series: SignalSeries[] }) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
 
+      if (series.length === 0) {
+        ctx.fillStyle = "#8a97a8";
+        ctx.font = "11px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("No signals subscribed", width / 2, height / 2 - 2);
+        ctx.fillStyle = "#5d6a7a";
+        ctx.font = "9px 'Segoe UI', sans-serif";
+        ctx.fillText(
+          "The demo session wires eight DBC signals",
+          width / 2,
+          height / 2 + 14,
+        );
+        return;
+      }
+
       const live = view.endS === null;
       const range = bounds(series);
       const end = live

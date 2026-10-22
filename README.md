@@ -64,6 +64,19 @@ cargo run
 cargo test
 ```
 
+### Web UI（试验，逐步接管前端）
+
+Web 版本在 `web/`，技术栈是 axum + Preact/Vite；桌面的 Dear ImGui 路径仍保留，等 Web 覆盖现有功能后再移除。
+
+```sh
+cd web && npm install && npm run build && cd ..
+cargo run -- --web                              # http://127.0.0.1:2010 演示仿真
+cargo run -- --web --project <path.rxproj>      # 载入工程（停止状态）
+cargo run -- --web --replay <path.asc|blf>      # 载入并开始回放
+```
+
+当前已有 Trace（50k 行虚拟化增量）、Messages、总线/帧率/负载曲线、8 路真实 DBC 信号曲线（缩放/拖动）、Start/Stop/Pause/Clear。工程/日志的浏览器内选择、硬件、信号选择与其余面板仍在迁移，细节和性能测试方法见 [web/README.md](web/README.md)。
+
 ## 上手
 
 1. 工具栏 **Simulation / Replay** 选模式，点 **Play**（仿真跑虚拟总线，回放已加载的 ASC / BLF）
