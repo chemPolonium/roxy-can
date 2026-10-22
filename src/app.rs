@@ -9,7 +9,7 @@ use crate::log::open_stream;
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
 pub const TRACE_LIMIT: usize = 50_000;
-pub const TOOLBAR_H: f32 = 54.0;
+pub const TOOLBAR_H: f32 = 80.0;
 pub const STATUSBAR_H: f32 = 28.0;
 pub const TABSTRIP_H: f32 = 22.0;
 /// How far back sampled signal history is kept. Deliberately in seconds, not
@@ -240,6 +240,13 @@ pub struct App {
     pub default_layout: String,
     /// Layout queued to be applied by main before the next imgui frame.
     pub pending_layout: Option<String>,
+    /// A workspace that never loaded a layout still needs a usable first
+    /// frame: the dockspace arranges the seeded windows once, then clears
+    /// this. Loading any saved layout cancels it.
+    pub(crate) dock_default_pending: bool,
+    /// Selects the Measurement Setup tab on the frame after the first-use
+    /// dock layout is built; the window itself only exists from then on.
+    pub(crate) dock_focus_pending: bool,
     /// Set when a destructive action must first pass the unsaved-project modal.
     pub pending_action: Option<PendingAction>,
     /// Config JSON snapshot of the last clean state (loaded/saved/reset);
@@ -468,6 +475,8 @@ impl App {
             layout_cache: String::new(),
             default_layout: String::new(),
             pending_layout: None,
+            dock_default_pending: true,
+            dock_focus_pending: false,
             pending_action: None,
             baseline: String::new(),
             desktops: Vec::new(),

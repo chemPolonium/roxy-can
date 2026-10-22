@@ -66,13 +66,15 @@ impl WriteView {
         let io = ui.io();
         let mut open = self.open;
         let min = ui.push_style_var(StyleVar::WindowMinSize([420.0, 160.0]));
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.55, io.display_size()[1] * 0.35],
+            [640.0, 280.0],
+        );
         ui.window("Write")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.55, io.display_size()[1] * 0.35],
-                Condition::FirstUseEver,
-            )
-            .size([640.0, 280.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| content(self, app, ui, &mut cmds));
         min.pop();
         self.open = open;
@@ -111,9 +113,8 @@ fn content(view: &mut WriteView, app: &App, ui: &Ui, cmds: &mut Vec<WriteCmd>) {
         ui.same_line();
         ui.checkbox(label, slot);
     }
-    ui.same_line();
-    ui.align_text_to_frame_padding();
-    ui.text_disabled("script output, checks, system events");
+    ui.new_line();
+    ui.text_disabled("Script output, checks and system events");
 
     // Stick to the bottom while the user hasn't scrolled up to read
     // something: arrivals keep appending below otherwise.

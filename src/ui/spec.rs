@@ -50,13 +50,15 @@ impl SpecView {
         }
         let io = ui.io();
         let mut open = self.open;
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.30, io.display_size()[1] * 0.55],
+            [620.0, 260.0],
+        );
         ui.window("Specification")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.30, io.display_size()[1] * 0.55],
-                Condition::FirstUseEver,
-            )
-            .size([620.0, 260.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| self.content(app, ui, &mut cmds));
         self.open = open;
         cmds
@@ -92,6 +94,10 @@ impl SpecView {
         }
         ui.same_line();
         ui.text(format!("{periodic} periodic messages declared"));
+        // The four rule checkboxes and the two buttons need their own row:
+        // together with the tolerance pair they overflow the default width
+        // and the last rule's label was cut off.
+        ui.new_line();
 
         // One checkbox per rule, session-only: real logs carry other people's
         // traffic, and being able to stop looking at it without editing the project

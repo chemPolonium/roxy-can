@@ -113,14 +113,16 @@ impl StateWin {
         if focus {
             cmds.push(StateCmd::ClearFocus);
         }
+        let (pos, size) = crate::ui::fit_first_use(
+            ui.io().display_size(),
+            [16.0 + i as f32 * 30.0, disp_h * 0.08],
+            [720.0, 340.0],
+        );
         let mut window = ui
             .window(format!("{name}###st{i}"))
             .opened(&mut open)
-            .position(
-                [16.0 + i as f32 * 30.0, disp_h * 0.08],
-                Condition::FirstUseEver,
-            )
-            .size([720.0, 340.0], Condition::FirstUseEver);
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver);
         if focus {
             window = window.focused(true);
         }

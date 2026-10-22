@@ -30,13 +30,15 @@ impl BusStatsView {
         }
         let io = ui.io();
         let mut open = self.open;
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.55, io.display_size()[1] * 0.12],
+            [520.0, 420.0],
+        );
         ui.window("Bus Statistics###busstats")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.55, io.display_size()[1] * 0.12],
-                Condition::FirstUseEver,
-            )
-            .size([520.0, 420.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| content(app, ui));
         self.open = open;
     }

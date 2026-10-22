@@ -76,13 +76,15 @@ impl TriggersView {
         // The table cannot compress below its own columns; a floor keeps the
         // drag handle from folding everything into unreadability.
         let min = ui.push_style_var(StyleVar::WindowMinSize([460.0, 200.0]));
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.3, io.display_size()[1] * 0.3],
+            [560.0, 320.0],
+        );
         ui.window("Triggers")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.3, io.display_size()[1] * 0.3],
-                Condition::FirstUseEver,
-            )
-            .size([560.0, 320.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| content(self, app, ui, &mut cmds));
         min.pop();
         self.open = open;

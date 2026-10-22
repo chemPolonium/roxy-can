@@ -782,16 +782,15 @@ impl NetworkView {
         let io = ui.io();
         let mut open = self.open;
         if open {
+            let (pos, size) = crate::ui::fit_first_use(
+                io.display_size(),
+                [io.display_size()[0] * 0.3, io.display_size()[1] * 0.55],
+                [860.0, 540.0],
+            );
             ui.window("Network")
             .opened(&mut open)
-            .position(
-                [
-                    io.display_size()[0] * 0.3,
-                    io.display_size()[1] * 0.55,
-                ],
-                Condition::FirstUseEver,
-            )
-            .size([860.0, 540.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| {
                 // Profile row: enumerate the project's profiles/*.toml and
                 // apply the selected one (all-or-nothing role overrides),
@@ -1009,8 +1008,7 @@ impl NetworkView {
                             attached,
                         });
                     }
-                    ui.same_line();
-                    ui.text_disabled("Click a name to open its script editor");
+                    ui.text_disabled("Click a script name to open its editor");
                     let node_scripts: Vec<(u64, String, bool, bool)> = app
                         .snap
                         .nodes

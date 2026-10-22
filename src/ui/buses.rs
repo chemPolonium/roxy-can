@@ -105,13 +105,15 @@ impl BusesView {
         }
         let io = ui.io();
         let mut open = self.open;
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.38, io.display_size()[1] * 0.25],
+            [760.0, 320.0],
+        );
         ui.window("Buses")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.38, io.display_size()[1] * 0.25],
-                Condition::FirstUseEver,
-            )
-            .size([480.0, 240.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| content(self, app, ui, &mut cmds));
         self.open = open;
         cmds

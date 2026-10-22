@@ -407,8 +407,11 @@ pub fn render(app: &mut App, ui: &Ui) {
             if ui.combo_simple_string("##textrate", &mut pick, &rates) {
                 app.text_rate_hz = vals[pick];
             }
+            // Two rows keep the recording controls on screen. With one row the
+            // record path/format/filter ran past the right edge even at 1440px,
+            // and nothing on the toolbar said they existed.
+            ui.new_line();
             if matches!(app.snap.run_mode, Mode::Virtual) {
-                vsep(ui);
                 let mut rec = app.snap.recording;
                 if ui.checkbox("Record", &mut rec) {
                     app.toggle_record();
@@ -477,7 +480,6 @@ pub fn render(app: &mut App, ui: &Ui) {
                 }
             }
             if matches!(app.snap.run_mode, Mode::Replay) {
-                vsep(ui);
                 let open = ui.begin_disabled_with_cond(log_switch_blocked(app));
                 if ui.button("Open Log...") {
                     app.pick_log();

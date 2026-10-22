@@ -38,20 +38,19 @@ impl StatsWin {
         if focus {
             cmds.push(StatsCmd::ClearFocus);
         }
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [
+                io.display_size()[0] * 0.6 + off,
+                io.display_size()[1] * 0.45 + off,
+            ],
+            [640.0, io.display_size()[1] * 0.42],
+        );
         let mut window = ui
             .window(format!("{title}###stats{i}"))
             .opened(&mut open)
-            .position(
-                [
-                    io.display_size()[0] * 0.6 + off,
-                    io.display_size()[1] * 0.45 + off,
-                ],
-                Condition::FirstUseEver,
-            )
-            .size(
-                [640.0, io.display_size()[1] * 0.42],
-                Condition::FirstUseEver,
-            );
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver);
         if focus {
             window = window.focused(true);
         }

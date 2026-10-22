@@ -265,6 +265,9 @@ impl State {
         // text is embedded when the project is saved.
         if let Some(l) = self.app.pending_layout.take() {
             self.context.load_ini_settings(&l);
+            // A saved (possibly deliberately undocked) layout wins over the
+            // first-use arrangement.
+            self.app.dock_default_pending = false;
         }
         self.app.layout_cache.clear();
         self.context.save_ini_settings(&mut self.app.layout_cache);

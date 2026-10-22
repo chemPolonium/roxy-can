@@ -45,20 +45,19 @@ impl MsgWin {
         if focus {
             cmds.push(MessagesCmd::ClearFocus);
         }
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [
+                io.display_size()[0] * 0.25 + off,
+                io.display_size()[1] * 0.45 + off,
+            ],
+            [700.0, io.display_size()[1] * 0.42],
+        );
         let mut window = ui
             .window(format!("{title}###msgs{i}"))
             .opened(&mut open)
-            .position(
-                [
-                    io.display_size()[0] * 0.25 + off,
-                    io.display_size()[1] * 0.45 + off,
-                ],
-                Condition::FirstUseEver,
-            )
-            .size(
-                [700.0, io.display_size()[1] * 0.42],
-                Condition::FirstUseEver,
-            );
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver);
         if focus {
             window = window.focused(true);
         }

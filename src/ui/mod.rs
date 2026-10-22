@@ -93,6 +93,28 @@ pub(crate) fn hint_width(ui: &Ui, hint: &str, min: f32) -> f32 {
     (ui.calc_text_size(hint)[0] + 12.0).max(min)
 }
 
+/// Clamp a window's first-use rectangle into the space between the toolbar,
+/// status bar and desktop tab strip. Percentage-based default positions put
+/// several windows partly off-screen on a 1228x768 viewport (Network's bottom,
+/// Statistics/Write/Generator's right edge), and a first-use window has to be
+/// fully operable before the user ever resizes it.
+pub(crate) fn fit_first_use(
+    display: [f32; 2],
+    pos: [f32; 2],
+    size: [f32; 2],
+) -> ([f32; 2], [f32; 2]) {
+    const MARGIN: f32 = 12.0;
+    let top = crate::app::TOOLBAR_H + MARGIN;
+    let bottom = (display[1] - crate::app::STATUSBAR_H - crate::app::TABSTRIP_H - MARGIN).max(top);
+    let width = size[0]
+        .min((display[0] - 2.0 * MARGIN).max(200.0))
+        .max(200.0);
+    let height = size[1].min((bottom - top).max(140.0)).max(140.0);
+    let x = pos[0].clamp(MARGIN, (display[0] - width - MARGIN).max(MARGIN));
+    let y = pos[1].clamp(top, (bottom - height).max(top));
+    ([x, y], [width, height])
+}
+
 pub fn render(app: &mut App, ui: &Ui) {
     // The status bar takes `&App`, so its throttled counters refresh here;
     // every other window syncs inside its own draw path.
@@ -100,7 +122,7 @@ pub fn render(app: &mut App, ui: &Ui) {
     // Observer text caches are refreshed before any window draws, so the
     // windows themselves only read `&App` (see the view/command pattern).
     app.sync_observer_text();
-    dockspace::render(ui);
+    dockspace::render(app, ui);
     toolbar::render(app, ui);
     trace::render(app, ui);
     messages::render(app, ui);

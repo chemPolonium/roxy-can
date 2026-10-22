@@ -316,16 +316,18 @@ fn editor_window(
     // `###` pins the window identity to the node, so a rename moves the
     // title without losing position or open state.
     let mut open = true;
+    let (pos, size) = crate::ui::fit_first_use(
+        ui.io().display_size(),
+        [
+            340.0 + (id as f32 % 6.0) * 28.0,
+            80.0 + (id as f32 % 6.0) * 24.0,
+        ],
+        [640.0, 500.0],
+    );
     ui.window(format!("Script · {}###script{}", node.name, id))
         .opened(&mut open)
-        .position(
-            [
-                340.0 + (id as f32 % 6.0) * 28.0,
-                80.0 + (id as f32 % 6.0) * 24.0,
-            ],
-            Condition::FirstUseEver,
-        )
-        .size([640.0, 500.0], Condition::FirstUseEver)
+        .position(pos, Condition::FirstUseEver)
+        .size(size, Condition::FirstUseEver)
         .build(|| content(view, app, ui, node, cmds));
     if !open {
         view.close(id);

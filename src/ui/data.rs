@@ -36,14 +36,18 @@ impl crate::observe::DataWindow {
         if focus {
             cmds.push(DataCmd::ClearFocus);
         }
+        // The value table's fixed columns add up to ~540 px beside the
+        // 190 px signal panel; the old 480 px default could not show them.
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] - 840.0, TOOLBAR_H + i as f32 * 28.0],
+            [840.0, 380.0],
+        );
         let mut window = ui
             .window(format!("{name}###data{i}"))
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] - 480.0, TOOLBAR_H + i as f32 * 28.0],
-                Condition::FirstUseEver,
-            )
-            .size([480.0, 360.0], Condition::FirstUseEver);
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver);
         if focus {
             window = window.focused(true);
         }

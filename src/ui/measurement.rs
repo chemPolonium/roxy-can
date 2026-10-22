@@ -61,13 +61,15 @@ impl MeasurementView {
         let io = ui.io();
         let mut open = self.open;
         if open {
+            let (pos, size) = crate::ui::fit_first_use(
+                io.display_size(),
+                [io.display_size()[0] * 0.04, io.display_size()[1] * 0.30],
+                [760.0, 340.0],
+            );
             ui.window("Measurement Setup")
                 .opened(&mut open)
-                .position(
-                    [io.display_size()[0] * 0.04, io.display_size()[1] * 0.30],
-                    Condition::FirstUseEver,
-                )
-                .size([620.0, 320.0], Condition::FirstUseEver)
+                .position(pos, Condition::FirstUseEver)
+                .size(size, Condition::FirstUseEver)
                 .build(|| content(app, ui, &mut cmds));
         }
         self.open = open;

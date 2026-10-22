@@ -479,6 +479,32 @@ fn every_window_draws_without_panicking() {
     frames(&mut app, &mut ctx, 5);
 }
 
+/// A fresh workspace docks its seeded windows once, then selects the
+/// Measurement tab on the next frame (the layout has to exist before the
+/// window can claim it). Both steps must clear their flag: rebuilding the
+/// dock tree later would undo the user's arrangement. Saved layouts go
+/// through `pending_layout`, which clears the first-use flag in main.
+#[test]
+fn the_first_use_dock_layout_runs_once() {
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    assert!(
+        app.dock_default_pending,
+        "a new shell wants its first layout"
+    );
+    frames(&mut app, &mut ctx, 1);
+    assert!(!app.dock_default_pending);
+    assert!(
+        app.dock_focus_pending,
+        "focus waits for the window to exist"
+    );
+    frames(&mut app, &mut ctx, 1);
+    assert!(!app.dock_focus_pending);
+    frames(&mut app, &mut ctx, 1);
+    assert!(!app.dock_default_pending, "a drawn layout is not rebuilt");
+}
+
 /// The cursor pair shares the draw path with the curves, so what is worth
 /// proving without a screen is that a placed pair draws at all: overlay and
 /// one-plot-per-signal both, and with only one of the two placed, which is the

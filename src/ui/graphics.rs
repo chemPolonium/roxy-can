@@ -396,14 +396,16 @@ impl crate::observe::GraphicsWindow {
         if focus {
             cmds.push(GraphicsCmd::ClearFocus);
         }
+        let (pos, size) = crate::ui::fit_first_use(
+            ui.io().display_size(),
+            [16.0 + i as f32 * 36.0, disp_h * 0.55 + i as f32 * 28.0],
+            [760.0, (disp_h * 0.40).max(240.0)],
+        );
         let mut window = ui
             .window(format!("{name}###gfx{i}"))
             .opened(&mut open)
-            .position(
-                [16.0 + i as f32 * 36.0, disp_h * 0.55 + i as f32 * 28.0],
-                Condition::FirstUseEver,
-            )
-            .size([760.0, (disp_h * 0.40).max(240.0)], Condition::FirstUseEver);
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver);
         if focus {
             window = window.focused(true);
         }

@@ -148,13 +148,15 @@ impl SysVarsView {
         let io = ui.io();
         let mut open = self.open;
         let min = ui.push_style_var(StyleVar::WindowMinSize([520.0, 220.0]));
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.25, io.display_size()[1] * 0.25],
+            [680.0, 360.0],
+        );
         ui.window("System Variables")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.25, io.display_size()[1] * 0.25],
-                Condition::FirstUseEver,
-            )
-            .size([680.0, 360.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| self.content(app, ui, &mut cmds));
         min.pop();
         self.open = open;

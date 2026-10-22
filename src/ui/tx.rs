@@ -262,13 +262,15 @@ impl GeneratorView {
         if !open {
             return false;
         }
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.62, TOOLBAR_H + 10.0],
+            [560.0, 340.0],
+        );
         ui.window("Interactive Generator")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.62, TOOLBAR_H + 10.0],
-                Condition::FirstUseEver,
-            )
-            .size([560.0, 340.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| {
                 ui.set_next_item_width(200.0);
                 ui.input_text("##gsearch", &mut self.gen_search)

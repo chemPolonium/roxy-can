@@ -150,13 +150,15 @@ impl IdFilterView {
             None => "Message Selection".to_string(),
         };
         let mut cmds = Vec::new();
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.35, io.display_size()[1] * 0.18],
+            [460.0, 480.0],
+        );
         ui.window(title)
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.35, io.display_size()[1] * 0.18],
-                Condition::FirstUseEver,
-            )
-            .size([460.0, 480.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| {
                 if signal_level {
                     signal_content(self, app, ui, &mut cmds);

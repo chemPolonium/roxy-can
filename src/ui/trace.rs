@@ -62,17 +62,19 @@ impl TraceWin {
         if focus {
             cmds.push(TraceCmd::ClearFocus);
         }
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [off, TOOLBAR_H + off],
+            [
+                io.display_size()[0] * 0.55,
+                io.display_size()[1] * 0.5 - TOOLBAR_H,
+            ],
+        );
         let mut window = ui
             .window(format!("{title}###trace{i}"))
             .opened(&mut open)
-            .position([off, TOOLBAR_H + off], Condition::FirstUseEver)
-            .size(
-                [
-                    io.display_size()[0] * 0.55,
-                    io.display_size()[1] * 0.5 - TOOLBAR_H,
-                ],
-                Condition::FirstUseEver,
-            );
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver);
         if focus {
             window = window.focused(true);
         }
@@ -376,6 +378,10 @@ fn can_table(win: &mut TraceWin, app: &App, ui: &Ui, i: usize, cmds: &mut Vec<Tr
             hidden.join(" · ")
         ));
     }
+    // The main row is the filter lens; its extra conditions, Reset, Clear and
+    // Export live on the second row so English labels never run past the
+    // window edge.
+    ui.new_line();
     if win.filters_open {
         ui.same_line();
         const PAYLOAD_HINT: &str = "payload 11 22";

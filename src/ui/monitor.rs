@@ -38,13 +38,17 @@ impl MonitorView {
         let io = ui.io();
         let mut open = self.open;
         let min = ui.push_style_var(StyleVar::WindowMinSize([360.0, 160.0]));
+        // Rule controls reserve 268 px on the right; 420 left too little for
+        // a signal name plus its value before the controls began.
+        let (pos, size) = crate::ui::fit_first_use(
+            io.display_size(),
+            [io.display_size()[0] * 0.45, io.display_size()[1] * 0.12],
+            [520.0, 360.0],
+        );
         ui.window("Monitor")
             .opened(&mut open)
-            .position(
-                [io.display_size()[0] * 0.45, io.display_size()[1] * 0.12],
-                Condition::FirstUseEver,
-            )
-            .size([420.0, 360.0], Condition::FirstUseEver)
+            .position(pos, Condition::FirstUseEver)
+            .size(size, Condition::FirstUseEver)
             .build(|| self.content(app, ui, &mut cmds));
         min.pop();
         self.open = open;
