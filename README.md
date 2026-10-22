@@ -1,6 +1,6 @@
 # roxy-can
 
-基于 Rust 的 CAN / FlexRay 总线分析工具，默认使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)），原生 Dear ImGui 窗口仍可用 `--desktop` 打开。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
+基于 Rust 的 CAN / FlexRay 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
 ![roxy-can](screenshot.png)
 
@@ -8,14 +8,15 @@
 
 ## 功能
 
-以下能力由两套 UI 共用核心；Web 固定外壳的入口与限制见
-[web/README.md](web/README.md)。多窗口/多桌面只在原生窗口（`--desktop`）提供，
-Web 用固定的 Trace + 图表面板 + 下栏替代。
+界面是固定的 Web 外壳：Trace 主表、右侧 Rate/Signals/Monitor/Data/State
+标签页、下栏 Messages/Statistics/Bus/Spec/Write，入口与操作见
+[web/README.md](web/README.md)。下文的“窗口”指 core 的观测模型，Web 用
+对应标签页呈现。
 
 - **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记。
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧。Trace 的 Flags 列统一给帧类型，错误行与远程行有底色。
-- **观测窗口**：Trace / Messages / Statistics / Data / Graphics 每类都能多开、各自独立过滤；Data / Graphics 可跨总线勾选信号。
+- **观测面板**：Trace、Messages、Statistics、Signals、Data、State、Monitor 各有独立过滤与选择；Data/Signals 可跨总线勾选信号。
 - **Trace**：虚拟滚动（几十万行的过滤结果照样流畅），payload 字节搜索、信号值条件（`Name>10`）、精确地址（`id:1AB` / `slot:13`）、时间范围、列头排序、右键"Filter this ID"、行游标 A/B 与 Δt 读数、点一行选中后用 ↑/↓ 走行、Ctrl+C 复制。
 - **总线负载与规格监视**：按总线给线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；Specification 把实测流量与数据库声明逐条对账——Unknown / Dlc / Cycle / Missing 四类判定，容差与宽限可调，可导出 CSV。
 - **Interactive Generator（节点中心）**：DBC 报文按声明周期发送，按信号拖物理值或直接改 hex；每个信号可添加 Ramp / Sine / Step / Random / Triangle / Counter 激励。条目都在 Network 的节点详情里，新建默认不发送，发不发逐条由你决定。
@@ -35,24 +36,17 @@ Web 用固定的 Trace + 图表面板 + 下栏替代。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
 - **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧，以及 FlexRay 收帧），自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、as-fast-as-possible、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，Buses 窗口底部的**回放通道映射**把那些编号指到本工程的各路（CAN、FlexRay、以太网各一张表，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
 - **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON；DBC 路径相对工程目录，工程文件夹可整体移动；30 秒自动保存。
-- **多桌面**：多个桌面工作区，各自记住窗口开关与布局。
-- **中文字体**：内嵌中文字形，支持中文输入法。
+- **中文字体**：Web UI 跟随系统中文输入与显示。
 
-## 原生窗口快捷键
+## Web 快捷键
 
 | 按键 | 功能 |
 | --- | --- |
 | F9 | 启动 / 停止测量 |
-| Space | 播放 / 暂停 |
-| - / + | 回放减速 / 加速一档 |
-| Home | 图形窗口回到实时边缘 |
-| Ctrl+R | 切换录制 |
-| Ctrl+E | 导出第一个 Trace 窗口（ASC 或 PCAP） |
-| Ctrl+O | 打开 CAN 数据库（DBC 或单 cluster ARXML） |
-| Ctrl+N / Ctrl+Shift+O | 新建 / 打开工程 |
-| Ctrl+S / Ctrl+Shift+S | 保存 / 另存工程 |
-
-菜单栏 Help → Shortcuts 可查看全部快捷键。
+| Ctrl+S | 保存工程 |
+| Ctrl+Shift+S / Ctrl+O | 打开 Session 对话框 |
+| Ctrl+E | 导出 |
+| ? | 快捷键与关于（输入框内不触发） |
 
 ## 构建与运行
 
@@ -61,7 +55,6 @@ Web 用固定的 Trace + 图表面板 + 下栏替代。
 ```sh
 cd web && npm install && npm run build && cd ..
 cargo run                       # Web UI, opens http://127.0.0.1:2010
-cargo run -- --desktop          # 原生 Dear ImGui 工作区（后备）
 ```
 
 运行测试：
@@ -70,13 +63,14 @@ cargo run -- --desktop          # 原生 Dear ImGui 工作区（后备）
 cargo test
 ```
 
-### Web UI（试验，逐步接管前端）
+### Web UI
 
-Web 版本在 `web/`，技术栈是 axum + Preact/Vite；桌面的 Dear ImGui 路径仍保留，等 Web 覆盖现有功能后再移除。
+Web 版本在 `web/`，技术栈是 axum + Preact/Vite；这是唯一 UI，不再依赖
+Dear ImGui 或 wgpu。
 
 ```sh
 cd web && npm install && npm run build && cd ..
-cargo run -- --web                              # http://127.0.0.1:2010 演示仿真
+cargo run                                       # http://127.0.0.1:2010 演示仿真
 cargo run -- --web --project <path.rxproj>      # 载入工程（停止状态）
 cargo run -- --web --replay <path.asc|blf>      # 载入并开始回放
 ```
@@ -118,8 +112,7 @@ roxy-can --vector-tx-probe 2                    # 打印该通道实际收到的
 
 ## 主要依赖
 
-- [dear-imgui-rs](https://github.com/Latias94/dear-imgui-rs) + [dear-imgui-cte](https://crates.io/crates/dear-imgui-cte)：界面与渲染（ImGui 1.92 docking，源码编辑器为 ImGuiColorTextEdit）
-- [winit](https://github.com/rust-windowing/winit)：窗口与输入
+- [axum](https://github.com/tokio-rs/axum) + [Preact](https://preactjs.com/)：本地 Web 宿主与前端
 - [can-dbc](https://github.com/marcelbuesing/can-dbc)：DBC 解析
 - [rfd](https://github.com/PolyMeilex/rfd)：原生文件对话框
 - [memmap2](https://github.com/Razaek/memmap2-rs)：ASC/BLF 大文件流式读取

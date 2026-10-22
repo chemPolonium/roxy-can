@@ -453,20 +453,11 @@ impl App {
             cond: cond.clone(),
             action,
         });
-        self.triggers_view.draft = Some(crate::ui::triggers::TrigDraft::new(index, cond, action));
-        self.triggers_view.open = true;
     }
 
     pub fn remove_trigger(&mut self, i: usize) {
         if i < self.snap.triggers.len() {
             self.send(crate::bus::BusCommand::RemoveTrigger { index: i });
-        }
-        // An editor pointing at the removed row closes; one pointing past
-        // it follows the row up.
-        match &mut self.triggers_view.draft {
-            Some(d) if d.index == i => self.triggers_view.draft = None,
-            Some(d) if d.index > i => d.index -= 1,
-            _ => {}
         }
     }
 }

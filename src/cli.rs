@@ -88,7 +88,6 @@ pub fn usage() -> &'static str {
     "roxy-can -- CAN bus analysis
 
   roxy-can                       open the web UI on 127.0.0.1:2010 (default)
-  roxy-can --desktop             open the native workspace window
   roxy-can --web [--port <n>] [--project <p>] [--replay <log>]
                                  web UI explicitly (same as the default)
   roxy-can --replay <log> ...    replay a CAN log without any window

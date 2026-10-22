@@ -2,6 +2,18 @@ use crate::app::{App, MessageAgg};
 use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
 
+fn wall_stamp(us: u64) -> String {
+    let s = us / 1_000_000;
+    let ms = (us % 1_000_000) / 1_000;
+    format!(
+        "[{:02}:{:02}:{:02}.{:03}]",
+        s / 3_600,
+        (s % 3_600) / 60,
+        s % 60,
+        ms
+    )
+}
+
 impl App {
     /// Exports the frames and FlexRay rows that pass the given Trace window's
     /// filter as ASC; an Ethernet capture goes to PCAP instead, chosen by the
@@ -541,13 +553,13 @@ impl App {
             };
             filter[i]
         };
-        let filter = self.write_view.filter;
+        let filter = self.write_filter;
         let lines: Vec<String> = self
             .snap
             .write
             .iter()
             .filter(|l| want(&l.kind, &filter))
-            .map(|l| format!("[{}] {}", crate::ui::write::wall_stamp(l.wall_us), l.text))
+            .map(|l| format!("[{}] {}", wall_stamp(l.wall_us), l.text))
             .collect();
         if lines.is_empty() {
             self.status = "export: the Write log is empty".to_string();
@@ -580,9 +592,9 @@ impl App {
             let Some(sub) = self.sub_view(&key) else {
                 continue;
             };
-            let held = sub.history.at(lo_us).map(crate::ui::state::quantize);
+            let held = sub.history.at(lo_us).map(crate::state_seg::quantize);
             let pts: Vec<(u64, f64)> = sub.history.range(lo_us, hi_us).copied().collect();
-            let segs = crate::ui::state::compute_segs(self, i, &key, held, &pts, lo_us, hi_us);
+            let segs = crate::state_seg::compute_segs(self, i, &key, held, &pts, lo_us, hi_us);
             let bus = self.sig_bus_label(&key);
             for seg in &segs {
                 let start = (seg.t0_us as f64 / 1e6).max(t_left);

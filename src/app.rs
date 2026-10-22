@@ -177,6 +177,14 @@ pub struct MonitorRow {
     pub color: usize,
 }
 
+/// Rows watched by the Monitor panel. The desktop window draws them; the web
+/// Monitor tab serializes the same list.
+#[derive(Default)]
+pub struct MonitorView {
+    pub open: bool,
+    pub rows: Vec<MonitorRow>,
+}
+
 impl Default for MonitorRow {
     fn default() -> Self {
         Self {
@@ -270,49 +278,18 @@ pub struct App {
     pub replay_step_ms: u64,
     pub replay_play_for_s: u64,
     pub replay_to_buf: String,
-    /// The Triggers window's own state: open flag and the editor draft.
-    pub(crate) triggers_view: crate::ui::triggers::TriggersView,
-    /// The Write window's own state: open flag and per-kind filters.
-    pub(crate) write_view: crate::ui::write::WriteView,
-    /// Bus Statistics and the two help popups: open flags only.
-    pub(crate) busstats_view: crate::ui::busstats::BusStatsView,
-    pub(crate) help_view: crate::ui::help::HelpView,
-    /// The Monitor window's rows and open flag.
-    pub(crate) monitor_view: crate::ui::monitor::MonitorView,
-    /// The Specification window's filters and drag draft.
-    pub(crate) spec_view: crate::ui::spec::SpecView,
-    /// The System Variables manager's state and editor draft.
-    pub(crate) sysvars_view: crate::ui::sysvars::SysVarsView,
-    /// The Buses window's state: rename drafts and hardware caches.
-    pub(crate) buses_view: crate::ui::buses::BusesView,
-    /// The desktop strip's rename popup.
-    pub(crate) desktops_view: crate::ui::desktops::DesktopsView,
-    /// The Interactive Generator's drafts and selection state.
-    pub(crate) generator_view: crate::ui::tx::GeneratorView,
-    /// The Network window's selection, profile row and block drafts.
-    pub(crate) network_view: crate::ui::network::NetworkView,
-    /// The Measurement Setup window's open flag.
-    pub(crate) measurement_view: crate::ui::measurement::MeasurementView,
-    /// The State Tracker windows' shared band-editor/color-picker state.
-    pub(crate) state_ui: crate::ui::state::StateUi,
+    /// The Monitor rows shared by the web observers.
+    pub(crate) monitor_view: MonitorView,
+    /// Which Write categories the text export carries.
+    pub write_filter: [bool; 4],
     /// How far an observed period may stray from the declared one, in percent.
     pub spec_tol_pct: u64,
     /// How many declared periods of silence count as a dropped message.
     pub spec_grace: u64,
-    /// The Message/Signal Selection popup's open flag, bound window and search
-    /// boxes (see [`crate::ui::idfilter::IdFilterView`]).
-    pub id_filter: crate::ui::idfilter::IdFilterView,
     /// The recording file format: 0 = ASC, 1 = BLF. The toolbar combo
     /// selects this; the recorder picks the backend by extension.
     pub record_format: usize,
     pub focus_title: Option<String>,
-    /// The State Tracker row whose state editor is open is tracked by
-    /// [`crate::ui::state::StateUi`], alongside the color picker.
-    /// Script windows: open node ids, CTE editors, text/facts caches. The
-    /// editors bind to the ImGui context, which `App::new` does not have:
-    /// rendering queues the id in `pending`, and main creates the editor
-    /// before the next frame's `Ui` borrow starts.
-    pub script_editor: crate::ui::script_editor::ScriptEditorView,
     /// The port each CAN row's 硬件 picker last chose, by bus. A failed attach
     /// leaves the driver holding nothing, so without this the cell falls back
     /// to the list's first entry and the row ends up showing a channel while
@@ -512,24 +489,11 @@ impl App {
             replay_step_ms: 100,
             replay_play_for_s: 5,
             replay_to_buf: String::new(),
-            triggers_view: Default::default(),
-            write_view: Default::default(),
-            busstats_view: Default::default(),
-            help_view: Default::default(),
             monitor_view: Default::default(),
-            spec_view: Default::default(),
-            sysvars_view: Default::default(),
-            buses_view: Default::default(),
-            desktops_view: Default::default(),
-            generator_view: Default::default(),
-            network_view: Default::default(),
-            measurement_view: Default::default(),
-            state_ui: Default::default(),
+            write_filter: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
-            id_filter: Default::default(),
             focus_title: None,
-            script_editor: Default::default(),
             // The record draft: a file name, shown as-is in the toolbar
             // input. The directory is implicit (the open project's
             // Record/ folder, resolved when recording arms); the
@@ -1932,11 +1896,6 @@ impl App {
                 self.pnp_signature = Some(sig);
                 if crosses_empty {
                     self.send(crate::bus::BusCommand::RefreshHardware);
-                } else {
-                    // Same-model adapter count changed while others remain:
-                    // no port needs closing, just discard the list cache.
-                    self.buses_view.hw_channels = None;
-                    self.buses_view.fr_channels = None;
                 }
             }
             _ => {}
@@ -2018,13 +1977,6 @@ impl App {
         };
         lane.step_lap(now_us, stride, tol, grace);
         self.read_snapshot();
-    }
-}
-
-impl App {
-    /// Opens the node's script editor (no-op when already open).
-    pub fn open_script_editor(&mut self, id: u64) {
-        self.script_editor.open(id);
     }
 }
 

@@ -1,12 +1,8 @@
 # roxy-can web UI
 
-The default UI for roxy-can. It follows the lightweight shape of
-roxy-arxml: a Rust `axum` host, a Preact + TypeScript frontend built by Vite,
-no component library.
-
-**The Dear ImGui desktop app is still available with `--desktop`** as a
-fallback while the last desktop-only workflows are retired; it is no longer
-the default entry point.
+The UI for roxy-can. It follows the lightweight shape of roxy-arxml: a Rust
+`axum` host, a Preact + TypeScript frontend built by Vite, no component
+library. There is no second desktop UI.
 
 ## Run
 
@@ -20,7 +16,6 @@ cd ..
 cargo run                                       # demo simulation
 cargo run -- --web --project <path.rxproj>      # project, stopped
 cargo run -- --web --replay <path.asc|path.blf> # load and start a replay
-cargo run -- --desktop                          # native window instead
 ```
 
 With neither flag the generator demo starts automatically. `--project` loads
@@ -205,8 +200,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 Ethernet hardware attachment and generation (descriptions, replay rows,
-read-only Trace/Messages/Statistics and the FR generator are supported)
-and docking/desktops.
+read-only Trace/Messages/Statistics and the FR generator are supported).
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Snapshots are
 polled at 10 Hz over a 120-sample window; SSE is the obvious next step.

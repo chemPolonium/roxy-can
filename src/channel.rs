@@ -390,7 +390,6 @@ impl App {
         for w in &mut self.stats_windows {
             fix_scope(&mut w.scope);
         }
-        self.network_view.net_selected = 0;
         // The status line ("bus CANx removed") came from the command.
     }
 
@@ -1010,32 +1009,10 @@ impl App {
         self.fr_buses.remove(&bus);
         self.fr_clusters.remove(&bus);
         self.fr_names.remove(&bus);
-        if matches!(&self.buses_view.fr_name_edit, Some((r, _)) if *r == bus) {
-            self.buses_view.fr_name_edit = None;
-        }
-        self.generator_view.fr_tx_pick.remove(&bus);
         // The picker's remembered port goes with the row: it echoes a choice
         // about a 路 that no longer exists, and a later 路 on the freed index
         // should not open showing this one's port.
         self.fr_pick.remove(&bus);
-        if self
-            .network_view
-            .net_fr_sel
-            .as_ref()
-            .is_some_and(|(b, _)| *b == bus)
-        {
-            self.network_view.net_fr_sel = None;
-        }
-        // An open rule editor naming this cluster would offer a bus the tool no
-        // longer knows anything about.
-        if self
-            .triggers_view
-            .draft
-            .as_ref()
-            .is_some_and(|d| d.cond.fr_bus() == Some(bus))
-        {
-            self.triggers_view.draft = None;
-        }
         // Descriptions move as one map, so the core forgets this 路 here; the
         // command below carries everything keyed by its index that the core
         // holds. Its status line is the bar's final word -- a message written

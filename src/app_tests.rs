@@ -12,8 +12,6 @@ use crate::observe::YMode;
 use crate::sim::ValueSrc;
 use crate::source::FrameSource;
 use crate::trigger::{Trigger, TriggerAction, TriggerCmd, TriggerCond, TriggerKind};
-use crate::ui::buses::BusesCmd;
-use crate::ui::monitor::MonitorCmd;
 
 #[test]
 fn record_survives_start_and_writes_frames() {
@@ -1767,56 +1765,6 @@ fn trace_filter_matches_by_name_id_and_direction() {
     assert!(app.trace_match(&w, &rx), "All scope passes everything");
 }
 
-/// The row menu's "Filter this ID" has to leave on screen the row it was opened
-/// on -- and nothing else. The box's plain text is a substring search, so the
-/// old `1AB` also kept `1AB0` and `21AB`; the menu now writes the exact form,
-/// with the `x` suffix a 29-bit frame's row needs because the frame class is
-/// part of its address.
-#[test]
-fn the_trace_row_menu_filters_to_the_row_it_was_opened_on() {
-    let mut app = App::headless();
-    let mut ext = frame_at(1_000, 0x1ABCDEF, 8, Direction::Rx);
-    ext.extended = true;
-    let std_frame = frame_at(2_000, 0x1AB, 8, Direction::Rx);
-    let longer_std = frame_at(3_000, 0x1AB0, 8, Direction::Rx);
-
-    crate::ui::trace::filter_to_id(&mut app, 0, &ext);
-    let w = app.trace_windows[0].clone();
-    assert!(
-        app.trace_match(&w, &ext),
-        "the extended row survives its own menu (filter {:?})",
-        app.trace_windows[0].filter
-    );
-    assert!(
-        !app.trace_match(&w, &std_frame),
-        "and it names one frame class, not every frame holding those digits"
-    );
-
-    // A standard frame: the exact form, and the over-match the prefix exists to
-    // stop.
-    crate::ui::trace::filter_to_id(&mut app, 0, &std_frame);
-    assert_eq!(app.trace_windows[0].filter, "id:1AB");
-    let w = app.trace_windows[0].clone();
-    assert!(app.trace_match(&w, &std_frame));
-    assert!(
-        !app.trace_match(&w, &ext),
-        "now the extended twin is the one out"
-    );
-    let loose = {
-        let mut win = app.trace_windows[0].clone();
-        win.filter = "1AB".to_string();
-        win
-    };
-    assert!(
-        app.trace_match(&loose, &longer_std),
-        "the substring search is still a substring search"
-    );
-    assert!(
-        !app.trace_match(&w, &longer_std),
-        "and `id:` is what you ask for one id and nothing else"
-    );
-}
-
 /// `slot:13` is the address the plain text cannot express: a `13` search also
 /// matches slot 113, slot 130 and any frame name holding those digits. The two
 /// numbering spaces stay apart -- an id names no slot and a slot names no CAN
@@ -1897,64 +1845,6 @@ fn the_trace_filter_takes_an_exact_slot_or_id() {
             "{typo} stays the text search it was"
         );
     }
-}
-
-/// The row menu's "Clear filter" has to lift *every* condition, including the
-/// ones that live in the collapsed 筛选 row: it used to reset the text box, the
-/// direction, 仅 DBC and the scope, and quietly leave the payload search, the
-/// frame kind and the time range working. A button that names the whole filter
-/// and clears half of it is the same lie as a "Clear" that clears one of two
-/// tables -- and now that the time range is saved with the project, a reopened
-/// session can be hiding rows nothing on screen still shows.
-#[test]
-fn the_row_menu_clear_filter_lifts_every_condition() {
-    let mut app = App::headless();
-    let base = app.trace_windows[0].clone();
-    /// One filter condition and how to switch it on alone.
-    type Case = (&'static str, fn(&mut crate::workspace::TraceWin));
-    // One row every condition below can exclude by itself: unknown to the DBC,
-    // Rx, classic, empty payload, bus 0, at 9 s.
-    let f = frame_at(9_000_000, 0x777, 8, Direction::Rx);
-    let cases: [Case; 7] = [
-        ("the text box", |w| w.filter = "zzz".into()),
-        ("payload", |w| w.payload = "AA BB".into()),
-        ("帧类型", |w| w.flags_kind = 2),
-        ("仅 DBC", |w| w.dbc_only = true),
-        ("方向", |w| w.dir = 2),
-        ("时间范围", |w| {
-            w.time_from = "1.0".into();
-            w.time_to = "2.5".into();
-        }),
-        ("作用域", |w| w.scope = SigScope::Bus(1)),
-    ];
-    for (what, set) in cases {
-        let mut w = base.clone();
-        set(&mut w);
-        app.trace_windows[0] = w;
-        assert!(
-            !app.trace_match(&app.trace_windows[0], &f),
-            "{what} alone hides the row"
-        );
-        crate::ui::trace::clear_filter(&mut app, 0);
-        assert!(
-            app.trace_match(&app.trace_windows[0], &f),
-            "and the menu's Clear filter lifts {what}"
-        );
-    }
-
-    // What it must not touch: the window's Manual pick set is a list the
-    // operator built, not a condition they typed.
-    let mut w = base.clone();
-    w.scope = SigScope::Manual;
-    w.manual
-        .insert(crate::workspace::Pick::Fr { bus: 0, slot: 13 });
-    app.trace_windows[0] = w;
-    crate::ui::trace::clear_filter(&mut app, 0);
-    assert_eq!(app.trace_windows[0].scope, SigScope::All);
-    assert!(
-        !app.trace_windows[0].manual.is_empty(),
-        "a one-key clear must not quietly eat the curated selection"
-    );
 }
 
 /// The other half of the same defect: a closed 筛选 row keeps filtering with
@@ -2448,16 +2338,6 @@ fn eviction_begins_only_past_the_retention_span() {
     );
 }
 
-#[test]
-fn retention_backs_the_widest_plot_window() {
-    assert!(
-        HISTORY_SPAN_US as f64 / 1e6 >= crate::ui::graphics::MAX_TIME_WINDOW_S,
-        "the widest window is {} s but history only holds {} s",
-        crate::ui::graphics::MAX_TIME_WINDOW_S,
-        HISTORY_SPAN_US as f64 / 1e6,
-    );
-}
-
 /// Records `iters` frames of generator traffic to an ASC, then returns an
 /// App with the first sample.dbc signal subscribed and that log loaded but
 /// not yet playing. The traffic has to be DBC-decodable for the Graphics
@@ -2884,46 +2764,6 @@ fn autosave_round_trips_the_workspace() {
     assert!(!restored.is_dirty(), "restored autosave starts clean");
     std::fs::remove_file(&path).ok();
     std::fs::remove_file(crate::config::state_path(crate::config::AUTOSAVE_PATH)).ok();
-}
-
-#[test]
-fn desktop_switching_restores_window_visibility() {
-    let mut app = App::headless();
-    assert!(app.trace_windows[0].opened);
-    assert!(app.network_view.open);
-    app.add_desktop();
-    assert!(!app.trace_windows[0].opened, "a new desktop starts empty");
-    assert!(!app.network_view.open, "a new desktop hides all panels");
-    app.switch_desktop(0);
-    assert_eq!(app.active_desktop, 0);
-    assert!(app.trace_windows[0].opened, "desktop 1 reopens its windows");
-    assert!(app.network_view.open, "desktop 1 restores the panel state");
-    app.switch_desktop(1);
-    assert!(!app.trace_windows[0].opened, "desktop 2 keeps it closed");
-    assert!(!app.network_view.open);
-}
-
-#[test]
-fn desktops_round_trip_through_config() {
-    let mut app = App::headless();
-    app.add_desktop();
-    app.switch_desktop(0);
-    app.busstats_view.open = true;
-    let cfg = Config::from_app(&app, None);
-    let mut restored = App::headless();
-    cfg.apply(&mut restored);
-    assert_eq!(restored.desktops.len(), 2);
-    assert_eq!(restored.desktops[0].name, "Desktop 1");
-    assert_eq!(restored.desktops[1].name, "Desktop 2");
-    assert_eq!(restored.active_desktop, 0);
-    assert_eq!(
-        restored.desktops[0].open_windows.len(),
-        app.desktops[0].open_windows.len()
-    );
-    assert!(
-        restored.busstats_view.open,
-        "panel visibility rides the desktop like every other flag"
-    );
 }
 
 #[test]
@@ -4808,150 +4648,6 @@ fn an_error_frame_trigger_latches_once_per_run() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
-/// The "+ Signal" button must land on something real: the database's first
-/// message and signal, not a blind id the editor cannot decode.
-#[test]
-fn adding_a_signal_trigger_picks_the_first_database_signal() {
-    let mut app = quiet_app();
-    app.add_signal_trigger();
-    assert_eq!(app.triggers.len(), 1);
-    let draft = app
-        .triggers_view
-        .draft
-        .as_ref()
-        .expect("the new row is up for editing");
-    assert_eq!(draft.index, 0);
-    match &app.triggers[0].cond {
-        TriggerCond::SignalCross {
-            ch,
-            id,
-            signal,
-            rising,
-            ..
-        } => {
-            assert_eq!(*ch, 0);
-            assert_eq!(*id, 0x100, "sample.dbc's first message");
-            assert_eq!(signal, "EngineSpeed", "its first signal");
-            assert!(*rising);
-        }
-        other => panic!("expected a signal trigger, got {other:?}"),
-    }
-
-    app.add_error_trigger();
-    assert_eq!(
-        app.triggers_view.draft.as_ref().map(|d| d.index),
-        Some(1),
-        "the newest row is up for editing"
-    );
-    if let Some(d) = &mut app.triggers_view.draft {
-        d.index = 0;
-    }
-    app.remove_trigger(1);
-    assert_eq!(
-        app.triggers_view.draft.as_ref().map(|d| d.index),
-        Some(0),
-        "deleting another row keeps the editor"
-    );
-    app.remove_trigger(0);
-    assert_eq!(app.triggers_view.draft, None, "nothing left to edit");
-    assert_eq!(
-        app.trigger_summary(0),
-        "",
-        "a summary for a missing row is empty, not a panic"
-    );
-}
-
-/// The Buses window's draw is read-only; add/configure/remove all land
-/// through the command boundary.
-#[test]
-fn buses_window_commands_apply_in_one_place() {
-    let mut app = quiet_app();
-    let before = app.snap.channel_count;
-    app.apply_buses_cmds(vec![BusesCmd::AddChannel]);
-    app.settle();
-    assert_eq!(app.snap.channel_count, before + 1);
-
-    app.apply_buses_cmds(vec![BusesCmd::SetChannelConfig {
-        ch: 0,
-        name: Some("Bench".to_string()),
-        bitrate_kbps: Some(500),
-        fd_data_kbps: Some(0),
-    }]);
-    app.settle();
-    assert_eq!(app.channel_name(0), "Bench");
-
-    app.apply_buses_cmds(vec![BusesCmd::RemoveChannel(before)]);
-    app.settle();
-    assert_eq!(app.snap.channel_count, before);
-}
-
-/// The Monitor's add/remove/clear commands are the only paths that touch
-/// subscriptions; the row controls are view state.
-#[test]
-fn monitor_commands_apply_in_one_place() {
-    let mut app = quiet_app();
-    app.apply_monitor_cmds(vec![MonitorCmd::OpenPicker]);
-    assert!(matches!(
-        app.id_filter.target,
-        Some(crate::workspace::PopupTarget::Monitor)
-    ));
-    assert!(app.id_filter.open);
-
-    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
-    app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
-    assert_eq!(app.monitor_view.rows.len(), 1);
-    app.apply_monitor_cmds(vec![MonitorCmd::Remove(key.clone())]);
-    assert!(app.monitor_view.rows.is_empty());
-    assert!(
-        app.sub_view(&key).is_none(),
-        "the feed is pruned with the row"
-    );
-}
-
-/// The Triggers window's draw never writes; everything it collects lands
-/// through `apply_trigger_cmds`. This walks the command set once so the
-/// boundary is testable without an imgui frame.
-#[test]
-fn trigger_commands_apply_in_one_place() {
-    let mut app = quiet_app();
-    app.apply_trigger_cmds(vec![TriggerCmd::Add(TriggerKind::Id)]);
-    assert_eq!(app.triggers.len(), 1);
-    assert!(app.triggers_view.open, "adding a rule opens its window");
-    assert_eq!(
-        app.triggers_view.draft.as_ref().map(|d| d.index),
-        Some(0),
-        "and its editor"
-    );
-    assert!(matches!(
-        app.triggers[0].cond,
-        TriggerCond::IdPresent { .. }
-    ));
-
-    app.apply_trigger_cmds(vec![TriggerCmd::SetEnabled {
-        index: 0,
-        on: false,
-    }]);
-    assert!(!app.triggers[0].enabled);
-
-    app.apply_trigger_cmds(vec![TriggerCmd::SetPreFrames(64)]);
-    assert_eq!(app.limits.pre_frames, 64);
-
-    let action = app.triggers[0].action;
-    app.apply_trigger_cmds(vec![TriggerCmd::Edit {
-        index: 0,
-        cond: TriggerCond::IdPresent { ch: 0, id: 0x123 },
-        action,
-    }]);
-    assert!(matches!(
-        app.triggers[0].cond,
-        TriggerCond::IdPresent { id: 0x123, .. }
-    ));
-
-    app.apply_trigger_cmds(vec![TriggerCmd::Remove(0)]);
-    assert!(app.triggers.is_empty());
-    assert_eq!(app.triggers_view.draft, None);
-}
-
 /// The editor's one Apply lands as one `EditTrigger`: flipping the crossing
 /// direction -- the change the old inline editor could not make stick --
 /// updates the row in place, both ways.
@@ -5107,70 +4803,6 @@ fn a_small_graphics_window_pulls_the_sample_stride_down() {
         fine - coarse >= 15,
         "the zoomed window samples nearly every frame: {coarse} -> {fine}"
     );
-}
-
-#[test]
-fn triggers_round_trip_through_a_project() {
-    let mut app = App::headless();
-    app.add_signal_trigger();
-    if let TriggerCond::SignalCross {
-        threshold, rising, ..
-    } = &mut app.triggers[0].cond
-    {
-        *threshold = 3000.0;
-        *rising = false;
-    }
-    app.add_id_trigger();
-    app.triggers[1].action = TriggerAction::StopRecording;
-    app.triggers[1].enabled = false;
-    app.add_error_trigger();
-    app.triggers[2].cond = TriggerCond::CycleTimeout { ch: 1, id: 0x200 };
-    app.triggers[2].action = TriggerAction::Send { ch: 1, id: 0x300 };
-
-    let path = std::env::temp_dir().join("roxy_can_trig_roundtrip.rxproj");
-    app.refresh_snapshot();
-    assert!(app.save_project(Some(path.clone())), "save writes the file");
-
-    let mut restored = App::headless();
-    restored.open_project_path(&path);
-    assert_eq!(restored.triggers.len(), 3, "all three shapes come back");
-    match &restored.triggers[0].cond {
-        TriggerCond::SignalCross {
-            ch,
-            id,
-            ext,
-            signal,
-            threshold,
-            rising,
-        } => {
-            assert_eq!(*ch, 0);
-            assert_eq!(*id, 0x100);
-            assert!(!*ext);
-            assert_eq!(signal, "EngineSpeed");
-            assert_eq!(*threshold, 3000.0);
-            assert!(!*rising);
-        }
-        other => panic!("expected a signal trigger, got {other:?}"),
-    }
-    assert!(matches!(
-        restored.triggers[1].action,
-        TriggerAction::StopRecording
-    ));
-    assert!(!restored.triggers[1].enabled, "the disabled flag survives");
-    assert!(matches!(
-        &restored.triggers[2].cond,
-        TriggerCond::CycleTimeout { ch: 1, id: 0x200 }
-    ));
-    assert_eq!(
-        restored.triggers[2].action,
-        TriggerAction::Send { ch: 1, id: 0x300 },
-        "the send target survives as data, not an index"
-    );
-    assert_eq!(
-        restored.triggers_view.draft, None,
-        "runtime editor state does not"
-    );
-    std::fs::remove_file(&path).ok();
 }
 
 /// The reaction rule in its smallest form: a watched message arrives and one
@@ -5447,129 +5079,6 @@ fn gfx_app(mode: YMode) -> (App, crate::observe::SigKey) {
         y_mode: mode,
     });
     (app, key)
-}
-
-#[test]
-fn lock_freezes_the_value_axis_until_the_mode_is_re_entered() {
-    let (mut app, key) = gfx_app(YMode::Auto);
-    feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 100.0),
-        "auto fits what the run has shown"
-    );
-
-    // Picking Lock captures the range on screen; later, taller values may
-    // not move it.
-    app.graphics[0].signals[0].y_mode = YMode::Lock;
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 100.0),
-        "the capture takes the current view"
-    );
-    feed_rpm(&mut app, &[(300_000, 500.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 100.0),
-        "locked means locked: 500 rpm must not widen the axis"
-    );
-
-    // Leaving the mode drops the frozen range -- the list menu does this --
-    // so re-entering re-captures afresh.
-    app.graphics[0].signals[0].y_mode = YMode::Auto;
-    app.graphics[0].y_locks.remove(&format!("{key:?}"));
-    feed_rpm(&mut app, &[(400_000, 900.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 900.0),
-        "auto follows again"
-    );
-    app.stop();
-}
-
-#[test]
-fn fit_all_only_ever_widens_the_value_axis() {
-    let (mut app, key) = gfx_app(YMode::FitAll);
-    feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 100.0)
-    );
-    feed_rpm(&mut app, &[(300_000, 250.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 250.0),
-        "a taller peak widens the axis"
-    );
-    feed_rpm(&mut app, &[(400_000, 30.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        (0.0, 250.0),
-        "quieter values never shrink it back -- everything seen stays visible"
-    );
-    app.stop();
-}
-
-#[test]
-fn dbc_mode_scales_by_the_declared_range() {
-    let (mut app, key) = gfx_app(YMode::Dbc);
-    let declared = app
-        .declared_range(&key)
-        .expect("sample.dbc declares the range");
-    feed_rpm(&mut app, &[(10_000, 0.0), (200_000, 100.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        declared,
-        "the axis is the database's word, not the traffic's"
-    );
-    // Even traffic beyond the declaration cannot stretch it: the curve
-    // clamps at the plot edge instead.
-    feed_rpm(&mut app, &[(300_000, 9_000.0)]);
-    assert_eq!(
-        crate::ui::graphics::resolve_y_range(&mut app, 0, std::slice::from_ref(&key), 0, 1_000_000),
-        declared
-    );
-    app.stop();
-}
-
-#[test]
-fn each_signal_keeps_its_own_axis_in_the_overlay_union() {
-    // Overlay shares one axis, but the policies stay per signal: EngineSpeed
-    // locked keeps its span as a floor/ceiling while an Auto neighbour
-    // widens the shared span past it.
-    let (mut app, key) = gfx_app(YMode::Lock);
-    let temp = SigKey::can(0, 0x100, false, "EngineTemp");
-    app.subscribe(temp.clone());
-    app.graphics[0].signals.push(GfxSignal {
-        key: temp.clone(),
-        visible: true,
-        y_mode: YMode::Auto,
-    });
-    let keys = vec![key.clone(), temp.clone()];
-
-    // rpm_frame fills EngineSpeed's bytes; byte 2 carries EngineTemp
-    // (sample.dbc: raw with a -40 offset).
-    let mut f = rpm_frame(10_000, 100.0);
-    f.len = 3;
-    f.data[2] = 100;
-    let mut f2 = rpm_frame(200_000, 50.0);
-    f2.len = 3;
-    f2.data[2] = 100;
-    receive(&mut app, 300_000, vec![f, f2]);
-    let pinned = crate::ui::graphics::resolve_y_range(&mut app, 0, &keys, 0, 1_000_000);
-    assert_eq!(pinned, (50.0, 100.0), "the locked signal pins the axis");
-
-    let mut f3 = rpm_frame(300_000, 50.0);
-    f3.len = 3;
-    f3.data[2] = 200;
-    receive(&mut app, 400_000, vec![f3]);
-    let grown = crate::ui::graphics::resolve_y_range(&mut app, 0, &keys, 0, 1_000_000);
-    assert!(
-        grown.1 > 100.0,
-        "the auto neighbour widens the shared axis: {grown:?}"
-    );
-    assert_eq!(grown.0, 50.0, "the locked floor survives the union");
-    app.stop();
 }
 
 #[test]
@@ -6366,7 +5875,7 @@ fn the_write_export_honours_the_kind_filter() {
     );
 
     // Script prints off: they leave the file too.
-    app.write_view.filter[0] = false;
+    app.write_filter[0] = false;
     app.export_write_txt(&path.to_string_lossy());
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
@@ -6377,7 +5886,7 @@ fn the_write_export_honours_the_kind_filter() {
 
     // Everything filtered off: refuse, keep the old file.
     let stale = std::fs::read_to_string(&path).unwrap();
-    for slot in app.write_view.filter.iter_mut() {
+    for slot in app.write_filter.iter_mut() {
         *slot = false;
     }
     app.export_write_txt(&path.to_string_lossy());
@@ -7563,8 +7072,6 @@ fn a_script_node_round_trips_through_a_project() {
         id,
         source: source.to_string(),
     });
-    // An unapplied editor is session state and must not leak into the file.
-    app.script_editor.synced.insert(id, "garbage".to_string());
     let path = std::env::temp_dir().join("roxy_can_node.rxproj");
     assert!(app.save_project(Some(path.clone())));
 
@@ -7582,10 +7089,6 @@ fn a_script_node_round_trips_through_a_project() {
         node.attached,
         Some((0, "EngineECU".to_string())),
         "the node binding rides the round trip"
-    );
-    assert!(
-        restored.script_editor.synced.is_empty(),
-        "editor sync state is keyed by id and ids are minted fresh"
     );
     std::fs::remove_file(&path).ok();
 }
@@ -10679,137 +10182,6 @@ fn the_frame_length_convention_renames_trace_rows() {
     );
 }
 
-/// Every click the selection popup offers goes through one command type; this
-/// walks each variant without a frame so the state transitions are pinned
-/// where the draw cannot hide them.
-#[test]
-fn id_filter_commands_toggle_picks_and_signals() {
-    use crate::ui::idfilter::IdFilterCmd;
-    use crate::workspace::Pick;
-    let mut app = App::headless();
-    let trace = crate::workspace::PopupTarget::Trace(0);
-    let pick = Pick::Can { ch: 0, id: 0x100 };
-
-    app.apply_id_filter_cmds(vec![IdFilterCmd::TogglePick {
-        target: trace,
-        pick,
-        on: true,
-    }]);
-    assert!(app.trace_windows[0].manual.contains(&pick));
-    assert_eq!(app.trace_windows[0].scope, SigScope::Manual);
-
-    app.apply_id_filter_cmds(vec![IdFilterCmd::TogglePick {
-        target: trace,
-        pick,
-        on: false,
-    }]);
-    assert!(!app.trace_windows[0].manual.contains(&pick));
-
-    let other = Pick::Eth(crate::aggregate::EthFlowKey {
-        bus: 0,
-        vlan: Some(100),
-        dst: [9, 8, 7, 6, 5, 4],
-        src: [1, 2, 3, 4, 5, 6],
-        ethertype: 0x0800,
-        len: 8,
-    });
-    app.trace_windows[0].scope = SigScope::All;
-    app.apply_id_filter_cmds(vec![IdFilterCmd::AddPicks {
-        target: trace,
-        picks: vec![pick, other],
-    }]);
-    assert_eq!(app.trace_windows[0].manual.len(), 2);
-    assert_eq!(app.trace_windows[0].scope, SigScope::Manual);
-
-    app.apply_id_filter_cmds(vec![IdFilterCmd::ClearPicks { target: trace }]);
-    assert!(app.trace_windows[0].manual.is_empty());
-    assert_eq!(app.trace_windows[0].scope, SigScope::All);
-
-    // Signal-level targets: the same toggle path drives set_win_signal, and
-    // Clear drops exactly the keys it was given.
-    app.new_graphics_window();
-    let gfx = crate::workspace::PopupTarget::Graphics(0);
-    let a = SigKey::can(0, 0x100, false, "A");
-    let b = SigKey::can(0, 0x100, false, "B");
-    app.apply_id_filter_cmds(vec![
-        IdFilterCmd::ToggleSignal {
-            target: gfx,
-            key: a.clone(),
-            on: true,
-        },
-        IdFilterCmd::ToggleSignal {
-            target: gfx,
-            key: b.clone(),
-            on: true,
-        },
-    ]);
-    assert_eq!(app.graphics[0].signals.len(), 2);
-    app.apply_id_filter_cmds(vec![IdFilterCmd::ClearSignals {
-        target: gfx,
-        keys: vec![a],
-    }]);
-    assert_eq!(app.graphics[0].signals.len(), 1);
-    assert_eq!(app.graphics[0].signals[0].key, b);
-}
-
-/// Each script-window control that changes the model or writes a file goes
-/// through one command type; the editor's own text and cursor never do.
-#[test]
-fn script_commands_reach_the_node_model_and_file() {
-    use crate::ui::script_editor::{ScriptCmd, ScriptEditorView};
-    let mut app = App::headless();
-    app.send(crate::bus::BusCommand::AddNode {
-        name: "gen".into(),
-        channel: 0,
-        attached: None,
-    });
-    app.settle();
-    let id = app.snap.nodes[0].id;
-
-    app.apply_script_cmds(vec![
-        ScriptCmd::SetName {
-            id,
-            name: "renamed".into(),
-        },
-        ScriptCmd::SetEnabled { id, on: false },
-        ScriptCmd::Apply {
-            id,
-            source: "on start { }".into(),
-        },
-    ]);
-    app.settle();
-    let node = app.snap.nodes.iter().find(|n| n.id == id).unwrap();
-    assert_eq!(node.name, "renamed");
-    assert!(!node.enabled);
-    assert_eq!(node.source, "on start { }");
-
-    let path =
-        std::env::temp_dir().join(format!("roxy_can_scriptcmd_{}.rxcan", std::process::id()));
-    app.apply_script_cmds(vec![ScriptCmd::Save {
-        path: path.to_string_lossy().into_owned(),
-        source: "on timer 1 { }".into(),
-    }]);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "on timer 1 { }");
-    assert!(app.status.starts_with("saved"));
-    std::fs::remove_file(&path).ok();
-
-    app.apply_script_cmds(vec![ScriptCmd::Status("loaded".into())]);
-    assert_eq!(app.status, "loaded");
-
-    // The view owns open/editor state; dropping a node's editor is local,
-    // while removing the node still goes through the bus core.
-    let mut view = ScriptEditorView::default();
-    view.open(id);
-    view.open(id);
-    assert_eq!(view.open, vec![id], "opening twice keeps one window");
-    view.close(id);
-    assert!(view.open.is_empty());
-
-    app.apply_script_cmds(vec![ScriptCmd::Remove { id }]);
-    app.settle();
-    assert!(app.snap.nodes.iter().all(|n| n.id != id));
-}
-
 /// Trace export speaks PCAP when the chosen name ends in `.pcap`: Ethernet
 /// frames keep their MACs, VLAN tag, EtherType and payload, and the same
 /// Trace filter decides which records land in the file.
@@ -10953,25 +10325,4 @@ fn ethernet_flows_reach_messages_and_statistics_csv() {
     app.export_stats_csv(0, &stats.to_string_lossy());
     assert!(!std::fs::read_to_string(&stats).unwrap().contains("ETH0"));
     std::fs::remove_file(&stats).ok();
-}
-
-/// View > Observers (and Measurement Setup's arrow) share one focus action:
-/// a hidden window is reopened and named as the one to bring to the front.
-#[test]
-fn focusing_an_observer_reopens_it_and_requests_the_front() {
-    use crate::workspace::PopupTarget;
-    let mut app = App::headless();
-    app.new_graphics_window();
-    let i = app.graphics.len() - 1;
-    app.graphics[i].opened = false;
-    let name = app.graphics[i].name.clone();
-
-    app.focus_observer(PopupTarget::Graphics(i));
-    assert!(app.graphics[i].opened, "a hidden observer is shown again");
-    assert_eq!(app.focus_title.as_deref(), Some(name.as_str()));
-
-    app.monitor_view.open = false;
-    app.focus_observer(PopupTarget::Monitor);
-    assert!(app.monitor_view.open);
-    assert_eq!(app.focus_title.as_deref(), Some("Monitor"));
 }

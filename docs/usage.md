@@ -1,11 +1,13 @@
 # 使用说明
 
-各窗口能做什么、数字按什么口径算、出错时说什么。总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。
+各面板能做什么、数字按什么口径算、出错时说什么。界面是固定的 Web 外壳
+（Trace + 右侧图表页 + 下栏），文中“窗口”指对应的 core 观测模型与标签页。
+总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。
 
 ## 命令行（无头模式）
 
 ```
-roxy-can                                  开窗口（默认）
+roxy-can                                  打开 Web UI（默认，127.0.0.1:2010）
 roxy-can --replay <log>                   回放日志，不开窗口
 roxy-can --project <p.rxproj>             无头仿真整个工程
 roxy-can --check-script <f.rxcan>         校验节点脚本（flag 可重复）

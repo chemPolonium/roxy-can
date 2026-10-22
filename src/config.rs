@@ -1023,16 +1023,18 @@ impl Config {
             // Written only by the legacy loader; a save drops it in favour of
             // `fr_buses` above.
             fr_fibex: None,
-            show_tx: app.generator_view.open,
-            show_network: app.network_view.open,
-            show_measurement: app.measurement_view.open,
-            show_buses: app.buses_view.open,
-            show_triggers: app.triggers_view.open,
-            show_bus_stats: app.busstats_view.open,
-            show_spec: app.spec_view.open,
-            show_id_filter: app.id_filter.open,
-            show_sysvars: app.sysvars_view.open,
-            show_write: app.write_view.open,
+            // Panel visibility was a desktop-window concept; the web shell
+            // keeps these fields for file compatibility only.
+            show_tx: false,
+            show_network: false,
+            show_measurement: false,
+            show_buses: false,
+            show_triggers: false,
+            show_bus_stats: false,
+            show_spec: false,
+            show_id_filter: false,
+            show_sysvars: false,
+            show_write: false,
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
             replay_fastest: !app.replay_speed.is_finite(),
             replay_speed: if app.replay_speed.is_finite() {
@@ -1629,16 +1631,6 @@ impl Config {
                 }
             })
             .collect();
-        app.generator_view.open = self.show_tx;
-        app.network_view.open = self.show_network;
-        app.measurement_view.open = self.show_measurement;
-        app.buses_view.open = self.show_buses;
-        app.triggers_view.open = self.show_triggers;
-        app.busstats_view.open = self.show_bus_stats;
-        app.spec_view.open = self.show_spec;
-        app.id_filter.open = self.show_id_filter;
-        app.sysvars_view.open = self.show_sysvars;
-        app.write_view.open = self.show_write;
         app.text_rate_hz = self.text_rate_hz;
         app.trace_limit = self.trace_limit;
         app.set_trace_limit(self.trace_limit);
@@ -1725,7 +1717,6 @@ impl Config {
             .collect();
         app.send(crate::bus::BusCommand::SetTriggers(triggers));
         app.settle();
-        app.triggers_view.draft = None;
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = if self.replay_fastest {
@@ -1962,7 +1953,6 @@ mod tests {
     #[test]
     fn config_round_trips_through_json() {
         let mut app = App::headless();
-        app.id_filter.open = true;
         app.replay_speed = 2.0;
         app.trace_windows[0].filter = "Motor".to_string();
         app.trace_windows[0].scope = SigScope::Bus(1);
@@ -1987,7 +1977,6 @@ mod tests {
             .unwrap()
             .apply(&mut restored);
 
-        assert!(restored.id_filter.open);
         assert_eq!(restored.replay_speed, 2.0);
         assert_eq!(restored.trace_windows[0].filter, "Motor");
         assert_eq!(restored.trace_windows[0].scope, SigScope::Bus(1));

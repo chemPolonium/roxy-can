@@ -1,41 +1,42 @@
 # 给 agent 的守则
 
-## Dear ImGui：先查绑定，别自己造
+## UI 只有 Web 一套
 
-依赖是 `dear-imgui-rs 0.18`（绑定 Dear ImGui 1.92，docking 常开）。要任何 ImGui 行为，**先在 crate 文档里搜一遍再动手**：
+前端在 `web/`（Preact 10 + TypeScript + Vite），后端是 `src/web.rs` 的 axum
+宿主；Rust 核心（`bus` / `app` / `observe`）不依赖任何 UI 库。不要在 Rust 里
+再加桌面窗口或第二套界面。
 
-- 文档首页：<https://docs.rs/dear-imgui-rs/latest/dear_imgui_rs/>
-- 直接搜：`https://docs.rs/dear-imgui-rs/latest/dear_imgui_rs/?search=text_wrapped`
-  —— `?search=<关键词>` 在该文档任意页面都有效，填英文动词/名词即可（`text`、`table`、`combo`、`drag`、`style`）。
-- 版本以 `Cargo.toml` 为准；docs.rs 页面左下角可切版本。
-
-同一个角落的两个例子，都是"绑定里已经有"：
-
-- 日志文本折行 = `ui.text_wrapped(text)`（内部就是 `PushTextWrapPos(0.0)`，按窗口 work rect 右缘折，续行对齐到正文起点）。自己拿 `cursor_screen_pos + content_region_avail` 算 wrap 位置是**错的**：那个参数要的是窗口内坐标，塞屏幕坐标会把一行中段画到窗外，看着像被截断，尾巴却跑到第二行。
-- 带颜色的折行文本：`push_style_color(StyleColor::Text, c)` 套住 `ui.text_wrapped(..)`——没有 `text_wrapped_colored` 这种函数。
-
-同理，遇到"内容被裁掉/放不下"的问题，先找控件或列自己的 flag，再考虑手推几何。**但 flag 的作用要读源码确认**，别信名字：表格单元格的文字**不能**靠列级 `TableColumnFlags::NO_CLIP` 跨列——`TableBeginCell` 只在**表级** `TableFlags::NO_CLIP` 时才跳过"把本列矩形设为裁剪矩形"，列级那个 flag 只影响绘制通道的合并（且要求该列总共只有一条绘制命令）。表级 NoClip 在这张表里也不能用：它冻结了列，整表关掉裁剪会让后面的列整片消失。ImGui 没有 colspan——**长内容放进足够宽的列**（一般是最后一列 stretch 列），而不是跟裁剪较劲。
-
-## 控件 ID 不要取自显示文本
-
-表格**不给单元格另加 ID 种子**（`TableSetColumnIndex` 只挪光标和裁剪矩形），所以循环里的控件拿显示文本当 ID 迟早撞车，ImGui 会弹 `2 visible items with conflicting ID` 盖住整个窗口。文本重复是常态，不是边角情况：同一份 DBC 挂在两条总线上，Messages 就有两行 `100  EngineStatus`；两条总线或两路 FlexRay 可以改成同名；`on` / `off` 这种状态词两行之间必然一样。
-
-写法：`let _id = ui.push_id(行的身份);` 套住整行——身份用聚合键那种数字（`(通道, id, 帧类)`、`(路, 槽, 占用帧)`），不要用它派生出的名字；或者给 label 加 `##{i}` 后缀。改了 ID 就要在提交信息里说明：ImGui 按 ID 存的展开状态、列宽这些会重置一次。
+- 固定外壳：Trace 主表、右侧 Rate/Signals/Monitor/Data/State、下栏
+  Messages/Statistics/Bus/Spec/Write；不要为单个面板引入窗口管理器。
+- 大表手写固定行高虚拟化（`TraceTable.tsx`）；曲线用 canvas 手写抽稀，
+  不要引入表格/图表组件库。
+- 浏览器文件交换走 `/api/upload`、`/api/download` 与 per-user 数据目录；
+  不要给页面加任意主机路径读取接口。
 
 ## 界面语言
 
-- 窗口标题、菜单、按钮、表头、状态/错误行、输入提示等**主界面文案一律英文**；代码注释继续用中文。
-- 悬停/弹窗注释以英文为主；遇到不容易一眼看懂的领域规则，可以在末尾加一行 `中文：…` 的简短解释。不要把中文留在按钮、表头这类需要快速扫读的位置。
-- 改文案时保留 `##` 控件 ID 后缀和格式占位符；纯显示文案变化会让 ImGui 按 ID 存的少量状态重置一次，属预期。
+- 窗口标题、标签页、按钮、表头、状态/错误行、输入提示等**主界面文案一律英文**；
+  代码注释继续用中文。
+- 悬停/弹窗注释以英文为主；遇到不容易一眼看懂的领域规则，可以在末尾加一行
+  `中文：…` 的简短解释。不要把中文留在按钮、表头这类需要快速扫读的位置。
+- 格式化占位符、单位与已有快捷键不要顺手改。
 
-## 窗口状态与命令：绘制只读，写入集中
+## 前端状态与命令：快照只读，写入集中
 
-新窗口和改旧窗口都按 `ui/triggers.rs` 的形状写：
+新面板和新控件按 `SignalPicker` / `BusesModal` 的形状写：
 
-- 窗口自己的状态（开关、草稿、选中、搜索框）放进 `XxxView`，不要散在 `App` 的大字段里；
-- 绘制签名是 `fn show(&mut self, ui: &Ui, app: &App) -> Vec<XxxCmd>`：`app` 只读，**禁止** `app.send`、**禁止**改 `app` 的任何字段；
-- 用户动作只产出 `XxxCmd`，由 `render` 末尾的 `app.apply_xxx_cmds(cmds)` 统一执行；默认值、合法性、总线写入都留在 `App`，UI 不猜；
-- 视图暂存在 `App` 里时，用 `std::mem::take` 在 `render` 中拿出来、画完放回、再 apply，这样 `&mut view` 与 `&App` 不打架；
-- 每个 `XxxCmd` 至少有一条无头测试走一遍（不依赖 imgui 帧），绘制路径由 `ui_tests` 的 headless 冒烟覆盖。
+- 弹窗/面板自己的草稿、选中、搜索框放在组件本地 state；跨会话的工程状态
+  放 `App` 或 core 快照，不要塞进前端全局单例。
+- 后端数据只读：组件通过 props 拿 `state`/`catalog`，不要直接改写；
+- 用户动作只产出 `Command`（定义在 `web/src/types.ts`），由 `app.tsx` 的
+  `run()` POST 到 `/api/command`；默认值、合法性、总线写入都留在 Rust；
+- 新增命令必须同时在 `WebCommand`、TypeScript `Command` 和 UI 调用点落地，
+  并至少补一条 Rust 无头测试走真实 core；
+- 表格/曲线更新要保持增量协议（`epoch/seq`、`signalsEpoch/since`），不要
+  每次轮询重发全量。
 
-这样 AI 一次只需要理解一个小状态结构和一个命令枚举；`TriggersView` / `TriggerCmd` 是现成模板。
+## 验证
+
+改 UI 要跑 `npm run build`、`cargo fmt --check`、`cargo clippy --all-targets`、
+`cargo test --all-targets`，并在 1280×800 与 1024×768 下检查主要标签页和
+弹窗没有横向溢出。验证用的服务、浏览器必须停掉，不要留后台进程。

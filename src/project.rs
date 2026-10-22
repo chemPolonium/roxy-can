@@ -165,9 +165,6 @@ impl App {
                 self.push_recent_project(path.to_string_lossy().to_string());
                 self.project_path = Some(path.clone());
                 self.retarget_record_draft();
-                // A Save As into another folder points the profile row at a
-                // different profiles/ directory; force a re-enumeration.
-                self.network_view.profile_names = None;
                 self.baseline = self.config_snapshot();
                 self.status = format!("project saved: {}", path.display());
                 true

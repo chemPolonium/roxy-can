@@ -695,16 +695,16 @@ impl App {
             name: String::new(),
             layout: self.layout_cache.clone(),
             open_windows,
-            show_tx: self.generator_view.open,
-            show_network: self.network_view.open,
-            show_measurement: self.measurement_view.open,
-            show_buses: self.buses_view.open,
-            show_triggers: self.triggers_view.open,
-            show_bus_stats: self.busstats_view.open,
-            show_spec: self.spec_view.open,
-            show_id_filter: self.id_filter.open,
-            show_sysvars: self.sysvars_view.open,
-            show_write: self.write_view.open,
+            show_tx: false,
+            show_network: false,
+            show_measurement: false,
+            show_buses: false,
+            show_triggers: false,
+            show_bus_stats: false,
+            show_spec: false,
+            show_id_filter: false,
+            show_sysvars: false,
+            show_write: false,
         }
     }
 
@@ -731,16 +731,6 @@ impl App {
         for w in &mut self.state_trackers {
             w.opened = has(WindowKind::StateTracker, &w.name);
         }
-        self.generator_view.open = d.show_tx;
-        self.network_view.open = d.show_network;
-        self.measurement_view.open = d.show_measurement;
-        self.buses_view.open = d.show_buses;
-        self.triggers_view.open = d.show_triggers;
-        self.busstats_view.open = d.show_bus_stats;
-        self.spec_view.open = d.show_spec;
-        self.id_filter.open = d.show_id_filter;
-        self.sysvars_view.open = d.show_sysvars;
-        self.write_view.open = d.show_write;
         let layout = if d.layout.is_empty() {
             self.default_layout.clone()
         } else {
