@@ -515,10 +515,13 @@ fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
 /// project save/load carries the selection. The panel stays the source of
 /// truth for lane colors; `store` is updated by the caller.
 fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
+    chart_select_key(app, SigKey::can(ch, id, ext, name));
+}
+
+fn chart_select_key(app: &mut App, key: SigKey) {
     if app.graphics.is_empty() {
         app.new_graphics_window();
     }
-    let key = SigKey::can(ch, id, ext, name);
     app.set_win_signal(
         crate::workspace::PopupTarget::Graphics(0),
         key.clone(),
@@ -1063,6 +1066,16 @@ enum WebCommand {
         ext: bool,
         name: String,
     },
+    SelectFrSignal {
+        bus: u8,
+        slot: u16,
+        name: String,
+    },
+    UnselectFrSignal {
+        bus: u8,
+        slot: u16,
+        name: String,
+    },
     AttachHardware {
         bus: u8,
         driver: String,
@@ -1522,6 +1535,32 @@ fn app_loop(
                 }
                 WebCommand::UnselectSignal { ch, id, ext, name } => {
                     let key = SigKey::can(ch, id, ext, name);
+                    let selected = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if selected {
+                        chart_unselect(&mut app, &key);
+                        if let Ok(mut store) = signals.lock() {
+                            store.unselect(&key);
+                        }
+                    }
+                }
+                WebCommand::SelectFrSignal { bus, slot, name } => {
+                    let key = SigKey::fr(bus, slot, name);
+                    let already = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if !already {
+                        chart_select_key(&mut app, key.clone());
+                        if let Ok(mut store) = signals.lock() {
+                            store.select_key(&app, key);
+                        }
+                    }
+                }
+                WebCommand::UnselectFrSignal { bus, slot, name } => {
+                    let key = SigKey::fr(bus, slot, name);
                     let selected = signals
                         .lock()
                         .map(|store| store.is_selected(&key))
@@ -2501,18 +2540,32 @@ impl SignalStore {
     /// Adds a selection without subscribing; the command handler owns the
     /// bus subscription so this stays a pure cache operation.
     fn select(&mut self, app: &App, ch: u8, id: u32, ext: bool, name: &str) {
-        let key = SigKey::can(ch, id, ext, name);
+        self.select_key(app, SigKey::can(ch, id, ext, name));
+    }
+
+    fn select_key(&mut self, app: &App, key: SigKey) {
         if self.is_selected(&key) {
             return;
         }
+        let name = match &key {
+            SigKey::Can { name, .. } | SigKey::Fr { name, .. } | SigKey::Eth { name, .. } => {
+                name.clone()
+            }
+        };
+        let bus = signal_bus(app, &key);
+        let unit = match &key {
+            SigKey::Can { ch, id, ext, name } => signal_unit(app, *ch, *id, *ext, name),
+            // FR/Eth units arrive with the first subscription publish.
+            SigKey::Fr { .. } | SigKey::Eth { .. } => String::new(),
+        };
         let color = (0..SIGNAL_PALETTE)
             .find(|color| !self.selected.iter().any(|signal| signal.color == *color))
             .unwrap_or(self.selected.len() % SIGNAL_PALETTE);
         self.selected.push(SelectedSignal {
             key,
-            name: name.to_string(),
-            bus: bus_name(app, ch),
-            unit: signal_unit(app, ch, id, ext, name),
+            name,
+            bus,
+            unit,
             color,
         });
         self.primed = false;
@@ -2587,7 +2640,7 @@ impl SignalStore {
 
     fn sync(&mut self, app: &App) {
         for signal in &mut self.selected {
-            signal.bus = bus_name(app, key_channel(&signal.key));
+            signal.bus = signal_bus(app, &signal.key);
             if let Some(sub) = signal_sub(app, &signal.key) {
                 signal.unit = sub.unit.clone();
             }
@@ -2690,10 +2743,20 @@ impl SignalStore {
     }
 }
 
+#[cfg(test)]
 fn key_channel(key: &SigKey) -> u8 {
     match key {
         SigKey::Can { ch, .. } => *ch,
         SigKey::Fr { bus, .. } | SigKey::Eth { bus, .. } => *bus,
+    }
+}
+
+#[cfg(test)]
+fn key_id(key: &SigKey) -> u32 {
+    match key {
+        SigKey::Can { id, .. } => *id,
+        SigKey::Fr { slot, .. } => *slot as u32,
+        SigKey::Eth { .. } => 0,
     }
 }
 
@@ -2720,14 +2783,25 @@ fn signal_sub<'a>(app: &'a App, key: &SigKey) -> Option<&'a SubView> {
     app.snap.subs.iter().find(|sub| &sub.key == key)
 }
 
+fn series_key(key: &SigKey) -> String {
+    match key {
+        SigKey::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
+        SigKey::Fr { bus, slot, name } => format!("fr:{bus}:{slot}:{name}"),
+        SigKey::Eth { bus, frame, name } => format!("eth:{bus}:{frame}:{name}"),
+    }
+}
+
+fn signal_bus(app: &App, key: &SigKey) -> String {
+    match key {
+        SigKey::Can { ch, .. } => bus_name(app, *ch),
+        SigKey::Fr { bus, .. } => app.fr_bus_name(*bus),
+        SigKey::Eth { bus, .. } => app.eth_bus_label(*bus),
+    }
+}
+
 fn signal_meta(signal: &SelectedSignal) -> SignalSeries {
     SignalSeries {
-        key: format!(
-            "{}:{}:{}",
-            key_channel(&signal.key),
-            key_id(&signal.key),
-            signal.name
-        ),
+        key: series_key(&signal.key),
         name: signal.name.clone(),
         bus: signal.bus.clone(),
         unit: signal.unit.clone(),
@@ -2736,17 +2810,9 @@ fn signal_meta(signal: &SelectedSignal) -> SignalSeries {
     }
 }
 
-fn key_id(key: &SigKey) -> u32 {
-    match key {
-        SigKey::Can { id, .. } => *id,
-        SigKey::Fr { slot, .. } => *slot as u32,
-        SigKey::Eth { .. } => 0,
-    }
-}
-
-/// Build the DBC signal tree for the picker. Only CAN is exposed for now;
-/// the store and commands carry the same key format so FlexRay/Ethernet can
-/// join later without changing the frontend contract.
+/// Build the signal tree for the picker: every CAN channel with a DBC plus
+/// every loaded FlexRay cluster. Keys are the same strings the series
+/// endpoint reports, so selection state round-trips without translation.
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebCatalog {
@@ -2756,6 +2822,8 @@ struct WebCatalog {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebCatalogChannel {
+    kind: String,
+    index: u8,
     name: String,
     messages: Vec<WebCatalogMessage>,
 }
@@ -2793,7 +2861,12 @@ fn channel_signature(app: &App) -> String {
             format!("{}:{}:{table}", channel.name, channel.dbc_paths.join(","))
         })
         .collect();
-    parts.join(";")
+    let fr: Vec<String> = app
+        .fr_buses
+        .iter()
+        .map(|(bus, cfg)| format!("fr{bus}:{}:{}", cfg.path, Arc::as_ptr(&cfg.db) as usize))
+        .collect();
+    parts.into_iter().chain(fr).collect::<Vec<_>>().join(";")
 }
 
 fn refresh_catalog(app: &App, catalog: &Arc<Mutex<WebCatalog>>, signature: &mut String) {
@@ -2808,45 +2881,82 @@ fn refresh_catalog(app: &App, catalog: &Arc<Mutex<WebCatalog>>, signature: &mut 
 }
 
 fn build_catalog(app: &App) -> WebCatalog {
-    WebCatalog {
-        channels: app
-            .snap
-            .channels
-            .iter()
-            .enumerate()
-            .map(|(ch, channel)| WebCatalogChannel {
-                name: channel.name.clone(),
-                messages: channel
-                    .dbc
-                    .as_ref()
-                    .map(|db| {
-                        db.order
-                            .iter()
-                            .filter_map(|&(id, ext)| {
-                                let message = db.messages.get(&(id, ext))?;
-                                Some(WebCatalogMessage {
-                                    id,
-                                    extended: ext,
-                                    name: message.name.clone(),
-                                    signals: message
-                                        .signals
-                                        .iter()
-                                        .map(|signal| WebCatalogSignal {
-                                            key: format!("{ch}:{id}:{}", signal.name),
-                                            name: signal.name.clone(),
-                                            unit: signal.unit.clone(),
-                                            min: signal.min,
-                                            max: signal.max,
-                                        })
-                                        .collect(),
-                                })
+    let mut channels: Vec<WebCatalogChannel> = app
+        .snap
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(ch, channel)| WebCatalogChannel {
+            kind: "can".to_string(),
+            index: ch as u8,
+            name: channel.name.clone(),
+            messages: channel
+                .dbc
+                .as_ref()
+                .map(|db| {
+                    db.order
+                        .iter()
+                        .filter_map(|&(id, ext)| {
+                            let message = db.messages.get(&(id, ext))?;
+                            Some(WebCatalogMessage {
+                                id,
+                                extended: ext,
+                                name: message.name.clone(),
+                                signals: message
+                                    .signals
+                                    .iter()
+                                    .map(|signal| WebCatalogSignal {
+                                        key: series_key(&SigKey::can(
+                                            ch as u8,
+                                            id,
+                                            ext,
+                                            &signal.name,
+                                        )),
+                                        name: signal.name.clone(),
+                                        unit: signal.unit.clone(),
+                                        min: signal.min,
+                                        max: signal.max,
+                                    })
+                                    .collect(),
                             })
-                            .collect()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect();
+    for (bus, cfg) in &app.fr_buses {
+        let messages = cfg
+            .db
+            .slot_signals()
+            .into_iter()
+            .map(|(slot, frame, names)| WebCatalogMessage {
+                id: slot as u32,
+                extended: false,
+                name: frame,
+                signals: names
+                    .into_iter()
+                    .map(|name| {
+                        let meta = cfg.db.slot_signal(slot, &name);
+                        WebCatalogSignal {
+                            key: series_key(&SigKey::fr(*bus, slot, &name)),
+                            name,
+                            unit: meta.map(|signal| signal.unit.clone()).unwrap_or_default(),
+                            min: meta.map(|signal| signal.min).unwrap_or(0.0),
+                            max: meta.map(|signal| signal.max).unwrap_or(0.0),
+                        }
                     })
-                    .unwrap_or_default(),
+                    .collect(),
             })
-            .collect(),
+            .collect();
+        channels.push(WebCatalogChannel {
+            kind: "fr".to_string(),
+            index: *bus,
+            name: app.fr_bus_name(*bus),
+            messages,
+        });
     }
+    WebCatalog { channels }
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4593,6 +4703,39 @@ mod tests {
         assert_eq!(row.bus, bus);
         assert!(row.bus_name.starts_with("FR"));
         assert!(!row.node.is_empty(), "the description names the sender");
+    }
+
+    /// The signal catalog exposes the loaded FlexRay cluster's slots and
+    /// signals, and a selected FR key keeps the `fr:` series identity.
+    #[test]
+    fn the_catalog_offers_flexray_signals() {
+        let mut app = App::headless();
+        let bus = app
+            .load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), None)
+            .expect("cluster loads");
+        let catalog = build_catalog(&app);
+        let fr = catalog
+            .channels
+            .iter()
+            .find(|channel| channel.kind == "fr" && channel.index == bus)
+            .expect("FR catalog channel");
+        assert!(fr.name.starts_with("FR"));
+        let message = fr
+            .messages
+            .iter()
+            .find(|message| message.id == 13)
+            .expect("slot 13 message");
+        let signal = message.signals.first().expect("a signal");
+        assert!(signal.key.starts_with("fr:"));
+
+        let mut store = SignalStore::default();
+        let key = SigKey::fr(bus, 13, &signal.name);
+        app.subscribe(key.clone());
+        store.select_key(&app, key);
+        store.sync(&app);
+        let seeded = store.seed();
+        assert!(seeded[0].key.starts_with("fr:"));
+        assert_eq!(seeded[0].bus, fr.name);
     }
 
     /// A replay path must open the log and start playback in Replay mode,

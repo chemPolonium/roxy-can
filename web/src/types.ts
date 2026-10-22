@@ -74,6 +74,8 @@ export interface CatalogMessage {
 }
 
 export interface CatalogChannel {
+  kind: string;
+  index: number;
   name: string;
   messages: CatalogMessage[];
 }
@@ -492,6 +494,8 @@ export type Command =
   | { type: "clear_state_rule"; ch: number; id: number; ext: boolean; name: string }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "select_fr_signal"; bus: number; slot: number; name: string }
+  | { type: "unselect_fr_signal"; bus: number; slot: number; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
   | { type: "refresh_hardware" }

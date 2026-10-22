@@ -142,9 +142,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Start/Stop/Pause/Clear trace and the same core commands as the desktop UI.
   Trace merges CAN, FlexRay (`slot N` addresses) and Ethernet rows from the
   loaded session; the status bar reports the browser's own UI frame rate.
-- The Signals tab plots real DBC signals from the loaded project. **Pick
-  signals…** opens a searchable bus → message → signal catalog fetched from
-  the backend. The demo starts with eight auto-selected generator sources,
+- The Signals tab plots real DBC signals from the loaded project, and
+  FlexRay signals when a cluster description is loaded (slots appear as
+  `Slot N` instead of hex ids). **Pick signals…** opens a searchable
+  bus → message → signal catalog fetched from the backend. The demo starts
+  with eight auto-selected generator sources,
   while real projects start from their first Graphics window and save the
   selection back there, so lanes survive save/reload. The core samples at up
   to 200 Hz; each series keeps 12k points (one minute at that rate), and the
@@ -169,8 +171,9 @@ A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment
 and Ethernet generation (descriptions, replay rows, read-only Trace/Messages/
 Statistics and the FR generator are supported), docking/desktops, and syntax
-highlighting or `.rxcan` loading in the web script editor. Hardware, Data,
-State and the Monitor cover CAN only for now.
+highlighting or `.rxcan` loading in the web script editor. Hardware and the
+Data/State/Monitor pickers cover CAN only for now; FlexRay signals are
+selectable in the Signals chart.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

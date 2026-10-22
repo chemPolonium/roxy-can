@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
-import type { Catalog, CatalogMessage, CatalogSignal } from "../types";
+import type {
+  Catalog,
+  CatalogChannel,
+  CatalogMessage,
+  CatalogSignal,
+} from "../types";
 
 interface Props {
   catalog: Catalog | null;
@@ -7,8 +12,9 @@ interface Props {
   error: string;
   selected: Set<string>;
   title?: string;
+  kinds?: string[];
   onToggle: (
-    ch: number,
+    channel: CatalogChannel,
     message: CatalogMessage,
     signal: CatalogSignal,
     on: boolean,
@@ -16,7 +22,8 @@ interface Props {
   onClose: () => void;
 }
 
-function hexId(message: CatalogMessage): string {
+function messageId(channel: CatalogChannel, message: CatalogMessage): string {
+  if (channel.kind === "fr") return `Slot ${message.id}`;
   const width = message.extended ? 8 : 3;
   return `0x${message.id.toString(16).toUpperCase().padStart(width, "0")}`;
 }
@@ -27,6 +34,7 @@ export function SignalPicker({
   error,
   selected,
   title = "Signals",
+  kinds,
   onToggle,
   onClose,
 }: Props) {
@@ -44,7 +52,8 @@ export function SignalPicker({
     if (!catalog) return [];
     const needle = query.trim().toLowerCase();
     return catalog.channels
-      .map((channel, ch) => {
+      .filter((channel) => !kinds || kinds.includes(channel.kind))
+      .map((channel) => {
         const channelHit =
           needle.length > 0 && channel.name.toLowerCase().includes(needle);
         const messages = channel.messages
@@ -52,7 +61,7 @@ export function SignalPicker({
             const messageHit =
               channelHit ||
               message.name.toLowerCase().includes(needle) ||
-              hexId(message).toLowerCase().includes(needle);
+              messageId(channel, message).toLowerCase().includes(needle);
             const signals = messageHit
               ? message.signals
               : message.signals.filter(
@@ -63,10 +72,10 @@ export function SignalPicker({
             return { message, signals };
           })
           .filter((entry) => entry.signals.length > 0);
-        return { ch, name: channel.name, messages };
+        return { channel, messages };
       })
-      .filter((channel) => channel.messages.length > 0);
-  }, [catalog, query]);
+      .filter((group) => group.messages.length > 0);
+  }, [catalog, query, kinds]);
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -115,23 +124,26 @@ export function SignalPicker({
               <span>
                 {query
                   ? "Try a different bus, message or signal name."
-                  : "Load a DBC into the project first."}
+                  : "Load a description file into the project first."}
               </span>
             </div>
           )}
           {!loading &&
             !error &&
-            groups.map((group) => (
-              <section class="picker-channel" key={group.ch}>
-                <h4>{group.name}</h4>
-                {group.messages.map(({ message, signals }) => (
+            groups.map(({ channel, messages }) => (
+              <section
+                class="picker-channel"
+                key={`${channel.kind}:${channel.index}`}
+              >
+                <h4>{channel.name}</h4>
+                {messages.map(({ message, signals }) => (
                   <div
                     class="picker-message"
-                    key={`${group.ch}:${message.id}:${message.extended}`}
+                    key={`${channel.kind}:${channel.index}:${message.id}:${message.extended}`}
                   >
                     <div class="picker-message-head">
                       <span>{message.name}</span>
-                      <em>{hexId(message)}</em>
+                      <em>{messageId(channel, message)}</em>
                     </div>
                     {signals.map((signal) => {
                       const on = selected.has(signal.key);
@@ -144,7 +156,7 @@ export function SignalPicker({
                             type="checkbox"
                             checked={on}
                             onChange={() =>
-                              onToggle(group.ch, message, signal, !on)
+                              onToggle(channel, message, signal, !on)
                             }
                           />
                           <span>{signal.name}</span>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   Catalog,
+  CatalogChannel,
   CatalogMessage,
   CatalogSignal,
   Command,
@@ -538,23 +539,32 @@ export function App() {
   };
 
   const toggleSignal = (
-    ch: number,
+    channel: CatalogChannel,
     message: CatalogMessage,
     signal: CatalogSignal,
     selected: boolean,
   ) => {
+    if (channel.kind === "fr") {
+      void run({
+        type: selected ? "select_fr_signal" : "unselect_fr_signal",
+        bus: channel.index,
+        slot: message.id,
+        name: signal.name,
+      });
+      return;
+    }
     void run(
       selected
         ? {
             type: "select_signal",
-            ch,
+            ch: channel.index,
             id: message.id,
             ext: message.extended,
             name: signal.name,
           }
         : {
             type: "unselect_signal",
-            ch,
+            ch: channel.index,
             id: message.id,
             ext: message.extended,
             name: signal.name,
@@ -1532,6 +1542,7 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={selectedKeys}
+          kinds={["can", "fr"]}
           onToggle={toggleSignal}
           onClose={() => setPickerOpen(false)}
         />
@@ -1544,19 +1555,20 @@ export function App() {
           error={catalogError}
           selected={monitorKeys}
           title="Monitor signals"
-          onToggle={(ch, message, signal, on) =>
+          kinds={["can"]}
+          onToggle={(channel, message, signal, on) =>
             void run(
               on
                 ? {
                     type: "add_monitor",
-                    ch,
+                    ch: channel.index,
                     id: message.id,
                     ext: message.extended,
                     name: signal.name,
                   }
                 : {
                     type: "remove_monitor",
-                    ch,
+                    ch: channel.index,
                     id: message.id,
                     ext: message.extended,
                     name: signal.name,
@@ -1574,19 +1586,20 @@ export function App() {
           error={catalogError}
           selected={dataKeys}
           title="Data signals"
-          onToggle={(ch, message, signal, on) =>
+          kinds={["can"]}
+          onToggle={(channel, message, signal, on) =>
             void run(
               on
                 ? {
                     type: "add_data",
-                    ch,
+                    ch: channel.index,
                     id: message.id,
                     ext: message.extended,
                     name: signal.name,
                   }
                 : {
                     type: "remove_data",
-                    ch,
+                    ch: channel.index,
                     id: message.id,
                     ext: message.extended,
                     name: signal.name,
@@ -1604,19 +1617,20 @@ export function App() {
           error={catalogError}
           selected={stateKeys}
           title="State signals"
-          onToggle={(ch, message, signal, on) =>
+          kinds={["can"]}
+          onToggle={(channel, message, signal, on) =>
             void run(
               on
                 ? {
                     type: "add_state",
-                    ch,
+                    ch: channel.index,
                     id: message.id,
                     ext: message.extended,
                     name: signal.name,
                   }
                 : {
                     type: "remove_state",
-                    ch,
+                    ch: channel.index,
                     id: message.id,
                     ext: message.extended,
                     name: signal.name,
