@@ -59,6 +59,19 @@ const TRACE_CAP = 50_000;
 const SIGNAL_CAP = 12_000;
 const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
 
+/// The backend's series/catalog key for an observer row. CAN ids start at 0,
+/// so FlexRay keys need the prefix to stay distinct.
+function rowKey(row: {
+  kind: string;
+  ch: number;
+  id: number;
+  name: string;
+}): string {
+  return row.kind === "fr"
+    ? `fr:${row.ch}:${row.id}:${row.name}`
+    : `${row.ch}:${row.id}:${row.name}`;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -506,11 +519,12 @@ export function App() {
   };
 
   const editMonitor = (
-    row: { ch: number; id: number; ext: boolean; name: string },
+    row: { kind: string; ch: number; id: number; ext: boolean; name: string },
     patch: MonitorPatch,
   ) => {
     void run({
       type: "edit_monitor",
+      kind: row.kind,
       ch: row.ch,
       id: row.id,
       ext: row.ext,
@@ -697,15 +711,9 @@ export function App() {
       ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
       : "";
   const selectedKeys = new Set(signals.map((signal) => signal.key));
-  const monitorKeys = new Set(
-    (state?.monitor ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
-  );
-  const dataKeys = new Set(
-    (state?.data ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
-  );
-  const stateKeys = new Set(
-    (state?.stateRows ?? []).map((row) => `${row.ch}:${row.id}:${row.name}`),
-  );
+  const monitorKeys = new Set((state?.monitor ?? []).map(rowKey));
+  const dataKeys = new Set((state?.data ?? []).map(rowKey));
+  const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
 
   return (
     <div class="app">
@@ -1209,6 +1217,7 @@ export function App() {
                 onRemove={(row) =>
                   void run({
                     type: "remove_monitor",
+                    kind: row.kind,
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
@@ -1222,6 +1231,7 @@ export function App() {
                 onVisible={(row, visible) =>
                   void run({
                     type: "set_data_visible",
+                    kind: row.kind,
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
@@ -1232,6 +1242,7 @@ export function App() {
                 onRemove={(row) =>
                   void run({
                     type: "remove_data",
+                    kind: row.kind,
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
@@ -1250,6 +1261,7 @@ export function App() {
                 onRemove={(row) =>
                   void run({
                     type: "remove_state",
+                    kind: row.kind,
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
@@ -1555,12 +1567,13 @@ export function App() {
           error={catalogError}
           selected={monitorKeys}
           title="Monitor signals"
-          kinds={["can"]}
+          kinds={["can", "fr"]}
           onToggle={(channel, message, signal, on) =>
             void run(
               on
                 ? {
                     type: "add_monitor",
+                    kind: channel.kind,
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
@@ -1568,6 +1581,7 @@ export function App() {
                   }
                 : {
                     type: "remove_monitor",
+                    kind: channel.kind,
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
@@ -1586,12 +1600,13 @@ export function App() {
           error={catalogError}
           selected={dataKeys}
           title="Data signals"
-          kinds={["can"]}
+          kinds={["can", "fr"]}
           onToggle={(channel, message, signal, on) =>
             void run(
               on
                 ? {
                     type: "add_data",
+                    kind: channel.kind,
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
@@ -1599,6 +1614,7 @@ export function App() {
                   }
                 : {
                     type: "remove_data",
+                    kind: channel.kind,
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
@@ -1617,12 +1633,13 @@ export function App() {
           error={catalogError}
           selected={stateKeys}
           title="State signals"
-          kinds={["can"]}
+          kinds={["can", "fr"]}
           onToggle={(channel, message, signal, on) =>
             void run(
               on
                 ? {
                     type: "add_state",
+                    kind: channel.kind,
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
@@ -1630,6 +1647,7 @@ export function App() {
                   }
                 : {
                     type: "remove_state",
+                    kind: channel.kind,
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
@@ -1667,6 +1685,7 @@ export function App() {
           onApply={(cuts, names) => {
             void run({
               type: "set_state_rule",
+              kind: stateRule.kind,
               ch: stateRule.ch,
               id: stateRule.id,
               ext: stateRule.ext,
@@ -1679,6 +1698,7 @@ export function App() {
           onClear={() => {
             void run({
               type: "clear_state_rule",
+              kind: stateRule.kind,
               ch: stateRule.ch,
               id: stateRule.id,
               ext: stateRule.ext,

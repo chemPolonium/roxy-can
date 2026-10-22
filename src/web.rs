@@ -1184,12 +1184,14 @@ enum WebCommand {
         name: String,
     },
     AddMonitor {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
         name: String,
     },
     RemoveMonitor {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1197,6 +1199,7 @@ enum WebCommand {
     },
     ClearMonitor,
     EditMonitor {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1208,12 +1211,14 @@ enum WebCommand {
         color: Option<usize>,
     },
     AddData {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
         name: String,
     },
     RemoveData {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1221,6 +1226,7 @@ enum WebCommand {
     },
     ClearData,
     SetDataVisible {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1228,12 +1234,14 @@ enum WebCommand {
         visible: bool,
     },
     AddState {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
         name: String,
     },
     RemoveState {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1244,6 +1252,7 @@ enum WebCommand {
         seconds: f64,
     },
     SetStateRule {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1252,6 +1261,7 @@ enum WebCommand {
         names: Vec<String>,
     },
     ClearStateRule {
+        kind: String,
         ch: u8,
         id: u32,
         ext: bool,
@@ -1743,19 +1753,31 @@ fn app_loop(
                 WebCommand::DeleteSysVar { namespace, name } => {
                     app.send(BusCommand::DeleteSysVar { namespace, name });
                 }
-                WebCommand::AddMonitor { ch, id, ext, name } => {
-                    app.set_win_signal(
-                        crate::workspace::PopupTarget::Monitor,
-                        SigKey::can(ch, id, ext, name),
-                        true,
-                    );
+                WebCommand::AddMonitor {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
                 }
-                WebCommand::RemoveMonitor { ch, id, ext, name } => {
-                    app.set_win_signal(
-                        crate::workspace::PopupTarget::Monitor,
-                        SigKey::can(ch, id, ext, name),
-                        false,
-                    );
+                WebCommand::RemoveMonitor {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
                 }
                 WebCommand::ClearMonitor => {
                     let keys: Vec<SigKey> = app
@@ -1769,6 +1791,7 @@ fn app_loop(
                     }
                 }
                 WebCommand::EditMonitor {
+                    kind,
                     ch,
                     id,
                     ext,
@@ -1779,32 +1802,40 @@ fn app_loop(
                     threshold,
                     color,
                 } => {
-                    edit_monitor_row(
-                        &mut app,
-                        &SigKey::can(ch, id, ext, name),
-                        digits,
-                        rule_on,
-                        rising,
-                        threshold,
-                        color,
-                    );
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    edit_monitor_row(&mut app, &key, digits, rule_on, rising, threshold, color);
                 }
-                WebCommand::AddData { ch, id, ext, name } => {
+                WebCommand::AddData {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
                     if app.data_windows.is_empty() {
                         app.new_data_window();
                     }
-                    app.set_win_signal(
-                        crate::workspace::PopupTarget::Data(0),
-                        SigKey::can(ch, id, ext, name),
-                        true,
-                    );
+                    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, true);
                 }
-                WebCommand::RemoveData { ch, id, ext, name } => {
-                    app.set_win_signal(
-                        crate::workspace::PopupTarget::Data(0),
-                        SigKey::can(ch, id, ext, name),
-                        false,
-                    );
+                WebCommand::RemoveData {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, false);
                 }
                 WebCommand::ClearData => {
                     let keys: Vec<SigKey> = app
@@ -1823,13 +1854,17 @@ fn app_loop(
                     }
                 }
                 WebCommand::SetDataVisible {
+                    kind,
                     ch,
                     id,
                     ext,
                     name,
                     visible,
                 } => {
-                    let key = SigKey::can(ch, id, ext, name);
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
                     if let Some(signal) = app
                         .data_windows
                         .first_mut()
@@ -1838,22 +1873,34 @@ fn app_loop(
                         signal.visible = visible;
                     }
                 }
-                WebCommand::AddState { ch, id, ext, name } => {
+                WebCommand::AddState {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
                     if app.state_trackers.is_empty() {
                         app.new_state_window();
                     }
-                    app.set_win_signal(
-                        crate::workspace::PopupTarget::State(0),
-                        SigKey::can(ch, id, ext, name),
-                        true,
-                    );
+                    app.set_win_signal(crate::workspace::PopupTarget::State(0), key, true);
                 }
-                WebCommand::RemoveState { ch, id, ext, name } => {
-                    app.set_win_signal(
-                        crate::workspace::PopupTarget::State(0),
-                        SigKey::can(ch, id, ext, name),
-                        false,
-                    );
+                WebCommand::RemoveState {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    app.set_win_signal(crate::workspace::PopupTarget::State(0), key, false);
                 }
                 WebCommand::ClearState => {
                     let keys: Vec<SigKey> = app
@@ -1877,6 +1924,7 @@ fn app_loop(
                     }
                 }
                 WebCommand::SetStateRule {
+                    kind,
                     ch,
                     id,
                     ext,
@@ -1884,10 +1932,24 @@ fn app_loop(
                     cuts,
                     names,
                 } => {
-                    set_state_rule(&mut app, &SigKey::can(ch, id, ext, name), cuts, names);
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    set_state_rule(&mut app, &key, cuts, names);
                 }
-                WebCommand::ClearStateRule { ch, id, ext, name } => {
-                    clear_state_rule(&mut app, &SigKey::can(ch, id, ext, name));
+                WebCommand::ClearStateRule {
+                    kind,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                } => {
+                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                        app.status = format!("unknown signal kind: {kind}");
+                        continue;
+                    };
+                    clear_state_rule(&mut app, &key);
                 }
                 WebCommand::SetEntryActive { ch, id, on } => {
                     app.send(BusCommand::SetEntryActive { ch, id, on });
@@ -2783,6 +2845,30 @@ fn signal_sub<'a>(app: &'a App, key: &SigKey) -> Option<&'a SubView> {
     app.snap.subs.iter().find(|sub| &sub.key == key)
 }
 
+/// Resolves the address every observer command carries. CAN keys use a
+/// message id; FlexRay keys use a slot, carried in the same `id` field with
+/// the cluster in `ch`, so Monitor/Data/State need one command shape.
+fn command_key(kind: &str, ch: u8, id: u32, ext: bool, name: String) -> Option<SigKey> {
+    match kind {
+        "can" => Some(SigKey::can(ch, id, ext, name)),
+        "fr" => u16::try_from(id)
+            .ok()
+            .map(|slot| SigKey::fr(ch, slot, name)),
+        _ => None,
+    }
+}
+
+/// Observer rows carry one address shape for every bus kind. FlexRay puts
+/// its cluster in `ch` and its slot in `id`; Ethernet stays out of these
+/// tables until their editors understand frame names.
+fn row_address(key: &SigKey) -> Option<(&'static str, u8, u32, bool)> {
+    match key {
+        SigKey::Can { ch, id, ext, .. } => Some(("can", *ch, *id, *ext)),
+        SigKey::Fr { bus, slot, .. } => Some(("fr", *bus, u32::from(*slot), false)),
+        SigKey::Eth { .. } => None,
+    }
+}
+
 fn series_key(key: &SigKey) -> String {
     match key {
         SigKey::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
@@ -3210,6 +3296,7 @@ struct WebStatsRow {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebMonitorRow {
+    kind: String,
     ch: u8,
     id: u32,
     ext: bool,
@@ -3228,6 +3315,7 @@ struct WebMonitorRow {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebDataRow {
+    kind: String,
     ch: u8,
     id: u32,
     ext: bool,
@@ -3262,6 +3350,7 @@ struct WebStateRule {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebStateRow {
+    kind: String,
     ch: u8,
     id: u32,
     ext: bool,
@@ -3765,9 +3854,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 .signals
                 .iter()
                 .filter_map(|signal| {
-                    let SigKey::Can { ch, id, ext, name } = &signal.key else {
-                        return None;
-                    };
+                    let (kind, ch, id, ext) = row_address(&signal.key)?;
+                    let name = signal.key.name().to_string();
                     let sub = signal_sub(app, &signal.key);
                     let (value, unit, raw, min, avg, max, frac) = match sub {
                         Some(sub) => {
@@ -3803,11 +3891,12 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         ),
                     };
                     Some(WebDataRow {
-                        ch: *ch,
-                        id: *id,
-                        ext: *ext,
-                        name: name.clone(),
-                        bus: bus_name(app, *ch),
+                        kind: kind.to_string(),
+                        ch,
+                        id,
+                        ext,
+                        name,
+                        bus: signal_bus(app, &signal.key),
                         value,
                         unit,
                         raw,
@@ -3840,9 +3929,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 .signals
                 .iter()
                 .filter_map(|signal| {
-                    let SigKey::Can { ch, id, ext, name } = &signal.key else {
-                        return None;
-                    };
+                    let (kind, ch, id, ext) = row_address(&signal.key)?;
+                    let name = signal.key.name().to_string();
                     let rule = window.rules.get(&signal.key);
                     let (current, bands) = match signal_sub(app, &signal.key) {
                         Some(sub) => {
@@ -3857,11 +3945,12 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         None => ("-".to_string(), Vec::new()),
                     };
                     Some(WebStateRow {
-                        ch: *ch,
-                        id: *id,
-                        ext: *ext,
-                        name: name.clone(),
-                        bus: bus_name(app, *ch),
+                        kind: kind.to_string(),
+                        ch,
+                        id,
+                        ext,
+                        name,
+                        bus: signal_bus(app, &signal.key),
                         current,
                         bands,
                         rule: rule.map(|rule| WebStateRule {
@@ -3910,26 +3999,23 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     };
     let db = |bus: u8| snap.channels.get(bus as usize).and_then(|c| c.dbc.as_ref());
 
-    // The web monitor covers CAN rows; a project's FlexRay/Ethernet rows are
-    // left untouched in the file and simply stay desktop-only for now.
     let monitor: Vec<WebMonitorRow> = app
         .monitor_view
         .rows
         .iter()
         .filter_map(|row| {
-            let SigKey::Can { ch, id, ext, name } = &row.key else {
-                return None;
-            };
+            let (kind, ch, id, ext) = row_address(&row.key)?;
             let (value, unit) = signal_sub(app, &row.key)
                 .map(|sub| (sub.latest, sub.unit.clone()))
                 .unwrap_or((0.0, String::new()));
             Some(WebMonitorRow {
-                ch: *ch,
-                id: *id,
-                ext: *ext,
-                name: name.clone(),
+                kind: kind.to_string(),
+                ch,
+                id,
+                ext,
+                name: row.key.name().to_string(),
                 label: row.label.clone(),
-                bus: bus_name(*ch),
+                bus: signal_bus(app, &row.key),
                 value,
                 unit,
                 digits: row.digits,
@@ -4736,6 +4822,51 @@ mod tests {
         let seeded = store.seed();
         assert!(seeded[0].key.starts_with("fr:"));
         assert_eq!(seeded[0].bus, fr.name);
+    }
+
+    /// The observer tables share one address shape: a FlexRay key keeps its
+    /// cluster in `ch` and its slot in `id`, so Monitor/Data/State can list
+    /// both bus kinds without a second set of DTOs.
+    #[test]
+    fn observers_list_flexray_rows_next_to_can() {
+        use crate::workspace::PopupTarget;
+        let mut app = App::headless();
+        let bus = app
+            .load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0))
+            .expect("cluster loads");
+        let key = SigKey::fr(bus, 13, "CarSpeed");
+        app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
+        app.new_data_window();
+        app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
+        app.new_state_window();
+        app.set_win_signal(PopupTarget::State(0), key.clone(), true);
+
+        let state = build_state(&app, &std::collections::VecDeque::new(), 60.0);
+        let monitor = state.monitor.first().expect("monitor row");
+        assert_eq!(monitor.kind, "fr");
+        assert_eq!((monitor.ch, monitor.id, monitor.ext), (bus, 13, false));
+        assert_eq!(monitor.name, "CarSpeed");
+        assert_eq!(monitor.bus, "FR0");
+        let data = state.data.first().expect("data row");
+        assert_eq!(data.kind, "fr");
+        assert_eq!((data.ch, data.id), (bus, 13));
+        let state_row = state.state_rows.first().expect("state row");
+        assert_eq!(state_row.kind, "fr");
+        assert_eq!((state_row.ch, state_row.id), (bus, 13));
+    }
+
+    #[test]
+    fn observer_commands_resolve_can_and_flexray_addresses() {
+        assert_eq!(
+            command_key("can", 1, 0x100, true, "EngineSpeed".to_string()),
+            Some(SigKey::can(1, 0x100, true, "EngineSpeed"))
+        );
+        assert_eq!(
+            command_key("fr", 2, 13, false, "CarSpeed".to_string()),
+            Some(SigKey::fr(2, 13, "CarSpeed"))
+        );
+        assert!(command_key("eth", 0, 1, false, "x".to_string()).is_none());
+        assert!(command_key("fr", 0, 70_000, false, "x".to_string()).is_none());
     }
 
     /// A replay path must open the log and start playback in Replay mode,

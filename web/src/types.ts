@@ -185,6 +185,7 @@ export interface SysVar {
 }
 
 export interface MonitorRow {
+  kind: string;
   ch: number;
   id: number;
   ext: boolean;
@@ -201,6 +202,7 @@ export interface MonitorRow {
 }
 
 export interface DataRow {
+  kind: string;
   ch: number;
   id: number;
   ext: boolean;
@@ -229,6 +231,7 @@ export interface StateRule {
 }
 
 export interface StateRow {
+  kind: string;
   ch: number;
   id: number;
   ext: boolean;
@@ -452,11 +455,26 @@ export type Command =
       old_name: string | null;
     }
   | { type: "delete_sys_var"; namespace: string; name: string }
-  | { type: "add_monitor"; ch: number; id: number; ext: boolean; name: string }
-  | { type: "remove_monitor"; ch: number; id: number; ext: boolean; name: string }
+  | {
+      type: "add_monitor";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
+  | {
+      type: "remove_monitor";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
   | { type: "clear_monitor" }
   | {
       type: "edit_monitor";
+      kind: string;
       ch: number;
       id: number;
       ext: boolean;
@@ -467,23 +485,53 @@ export type Command =
       threshold?: number;
       color?: number;
     }
-  | { type: "add_data"; ch: number; id: number; ext: boolean; name: string }
-  | { type: "remove_data"; ch: number; id: number; ext: boolean; name: string }
+  | {
+      type: "add_data";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
+  | {
+      type: "remove_data";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
   | { type: "clear_data" }
   | {
       type: "set_data_visible";
+      kind: string;
       ch: number;
       id: number;
       ext: boolean;
       name: string;
       visible: boolean;
     }
-  | { type: "add_state"; ch: number; id: number; ext: boolean; name: string }
-  | { type: "remove_state"; ch: number; id: number; ext: boolean; name: string }
+  | {
+      type: "add_state";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
+  | {
+      type: "remove_state";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
   | { type: "clear_state" }
   | { type: "set_state_window"; seconds: number }
   | {
       type: "set_state_rule";
+      kind: string;
       ch: number;
       id: number;
       ext: boolean;
@@ -491,7 +539,14 @@ export type Command =
       cuts: number[];
       names: string[];
     }
-  | { type: "clear_state_rule"; ch: number; id: number; ext: boolean; name: string }
+  | {
+      type: "clear_state_rule";
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+    }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "select_fr_signal"; bus: number; slot: number; name: string }

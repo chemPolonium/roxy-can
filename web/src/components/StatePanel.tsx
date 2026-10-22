@@ -118,7 +118,7 @@ export function StatePanel({ rows, windowS, onWindow, onRemove, onRule }: Props)
           {rows.map((row) => (
             <div
               class="state-row"
-              key={`${row.ch}:${row.id}:${row.ext}:${row.name}`}
+              key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
             >
               <div class="state-name" title={`${row.bus} · ${row.name}`}>
                 <strong>{row.name}</strong>

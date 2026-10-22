@@ -20,7 +20,7 @@ export function DataPanel({ rows, onVisible, onRemove }: Props) {
       {rows.map((row) => (
         <div
           class={`data-row ${row.visible ? "" : "hidden"}`}
-          key={`${row.ch}:${row.id}:${row.ext}:${row.name}`}
+          key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
         >
           <label class="data-check" title="Show this signal in the value table">
             <input

@@ -94,11 +94,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
   actions including Send-to-generator-entry, and the pre/post/marker limits.
-- The **Data** tab mirrors the first Data window: per selected CAN signal it
+- The **Data** tab mirrors the first Data window: per selected signal it
   shows the live value (or enum label), unit, raw wire value, min/avg/max and
   a bar scaled by the database's declared range (observed range as fallback).
   Rows can be hidden without unsubscribing, removed, or cleared; selection
-  uses the same catalog as Signals and the Monitor.
+  uses the same catalog as Signals and the Monitor, including FlexRay rows.
 - The **State** tab shows logic-analyzer bands for the first State Tracker
   window. Values are quantized to six significant digits, sampled into one
   band per pixel column, and drawn on a canvas over a 5 s–30 min trailing
@@ -154,7 +154,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   drag pan freeze the view; double-click returns to live. With eight full
   series and continuous wheel zoom, 1024x768 and 1200x800 both hold ~60 UI
   fps.
-- The **Monitor** tab watches selected CAN signals as large live values with
+- The **Monitor** tab watches selected CAN or FlexRay signals as large live values with
   an optional coloring rule (`>=`/`<=` a threshold), decimal places and a
   rule color; rows are project state, so the rule survives a save. Selection
   reuses the same searchable catalog, and Clear unsubscribes every row. The
@@ -171,9 +171,8 @@ A native browser file picker (opening, saving and DBC loading use host paths
 and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment
 and Ethernet generation (descriptions, replay rows, read-only Trace/Messages/
 Statistics and the FR generator are supported), docking/desktops, and syntax
-highlighting or `.rxcan` loading in the web script editor. Hardware and the
-Data/State/Monitor pickers cover CAN only for now; FlexRay signals are
-selectable in the Signals chart.
+highlighting or `.rxcan` loading in the web script editor. Hardware remains
+CAN-only, and the observer tables skip Ethernet signals.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

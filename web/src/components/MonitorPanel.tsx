@@ -78,7 +78,7 @@ export function MonitorPanel({ rows, onEdit, onRemove }: Props) {
         return (
           <div
             class={`monitor-row ${hot ? "hot" : ""}`}
-            key={`${row.ch}:${row.id}:${row.ext}:${row.name}`}
+            key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
             style={{ borderLeftColor: color }}
           >
             <div class="monitor-main">
