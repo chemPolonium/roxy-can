@@ -356,6 +356,8 @@ export interface Channel {
 }
 
 export interface Frame {
+  kind: string;
+  addr: string;
   tUs: number;
   bus: number;
   busName: string;

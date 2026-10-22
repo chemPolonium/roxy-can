@@ -2175,49 +2175,98 @@ struct TraceStore {
     /// Using the total, not `len`, lets a full ring trim its head without
     /// looking like a reset on every publish.
     last_total: u64,
+    /// The FR and Ethernet rings expose no head-loss counter; a shrinking
+    /// length is a new run (or a cleared ring), so it triggers a reseed.
+    last_fr_len: usize,
+    last_eth_len: usize,
     primed: bool,
 }
 
 impl TraceStore {
+    fn seed_rows(app: &App) -> Vec<WebFrame> {
+        let mut rows: Vec<WebFrame> = app
+            .snap
+            .trace
+            .iter()
+            .map(|frame| frame_dto(app, frame))
+            .chain(app.snap.fr_trace.iter().map(|row| fr_frame_dto(app, row)))
+            .chain(
+                app.snap
+                    .eth_trace
+                    .iter()
+                    .map(|frame| eth_frame_dto(app, frame)),
+            )
+            .collect();
+        rows.sort_by_key(|row| row.t_us);
+        if rows.len() > TRACE_LOG_CAP {
+            rows.drain(..rows.len() - TRACE_LOG_CAP);
+        }
+        rows
+    }
+
     fn sync(&mut self, app: &App) {
         let len = app.snap.trace.len();
         let loss = app.snap.trace.head_loss().0;
         let total = len as u64 + loss;
-        let new_count = total.saturating_sub(self.last_total) as usize;
-        let reset = !self.primed || total < self.last_total || new_count > TRACE_LOG_CAP;
+        let fr_len = app.snap.fr_trace.len();
+        let eth_len = app.snap.eth_trace.len();
+        let reset = !self.primed
+            || total < self.last_total
+            || fr_len < self.last_fr_len
+            || eth_len < self.last_eth_len;
         if reset {
             self.primed = true;
             self.epoch = self.epoch.wrapping_add(1).max(1);
             self.next_seq = 0;
             self.log.clear();
-            let take = len.min(TRACE_LOG_CAP);
-            let mut rows: Vec<WebFrame> = app
-                .snap
-                .trace
-                .iter()
-                .rev()
-                .take(take)
-                .map(|frame| frame_dto(app, frame))
-                .collect();
-            rows.reverse();
-            for row in rows {
+            for row in Self::seed_rows(app) {
                 self.push(row);
             }
-        } else if new_count > 0 {
-            let mut rows: Vec<WebFrame> = app
-                .snap
-                .trace
-                .iter()
-                .rev()
-                .take(new_count)
-                .map(|frame| frame_dto(app, frame))
-                .collect();
-            rows.reverse();
+        } else {
+            let mut rows = Vec::new();
+            let new_count = total.saturating_sub(self.last_total) as usize;
+            if new_count > 0 {
+                rows.extend(
+                    app.snap
+                        .trace
+                        .iter()
+                        .rev()
+                        .take(new_count)
+                        .map(|frame| frame_dto(app, frame)),
+                );
+            }
+            if fr_len > self.last_fr_len {
+                let take = fr_len - self.last_fr_len;
+                rows.extend(
+                    app.snap
+                        .fr_trace
+                        .iter()
+                        .rev()
+                        .take(take)
+                        .map(|row| fr_frame_dto(app, row)),
+                );
+            }
+            if eth_len > self.last_eth_len {
+                let take = eth_len - self.last_eth_len;
+                rows.extend(
+                    app.snap
+                        .eth_trace
+                        .iter_rev()
+                        .take(take)
+                        .map(|frame| eth_frame_dto(app, frame)),
+                );
+            }
+            // The three rings are drained in arrival order within one
+            // publish; sorting the small delta keeps the merged table
+            // chronological without touching the stored log.
+            rows.sort_by_key(|row| row.t_us);
             for row in rows {
                 self.push(row);
             }
         }
         self.last_total = total;
+        self.last_fr_len = fr_len;
+        self.last_eth_len = eth_len;
     }
 
     fn push(&mut self, frame: WebFrame) {
@@ -2233,6 +2282,8 @@ impl TraceStore {
         self.log.clear();
         self.next_seq = 0;
         self.last_total = 0;
+        self.last_fr_len = 0;
+        self.last_eth_len = 0;
     }
 
     fn first_seq(&self) -> u64 {
@@ -2264,6 +2315,12 @@ impl TraceStore {
 fn frame_dto(app: &App, frame: &CanFrame) -> WebFrame {
     let channel = app.snap.channels.get(frame.channel as usize);
     WebFrame {
+        kind: "can".to_string(),
+        addr: if frame.extended {
+            format!("0x{:08X}", frame.id)
+        } else {
+            format!("0x{:03X}", frame.id)
+        },
         t_us: frame.t_us,
         bus: frame.channel,
         bus_name: channel
@@ -2283,6 +2340,49 @@ fn frame_dto(app: &App, frame: &CanFrame) -> WebFrame {
         len: frame.len,
         data: hex(frame.payload()),
         fd: frame.is_fd(),
+    }
+}
+
+fn fr_frame_dto(app: &App, row: &crate::trace::FrRow) -> WebFrame {
+    WebFrame {
+        kind: "fr".to_string(),
+        addr: format!("slot {}", row.slot),
+        t_us: row.t_us,
+        bus: row.bus,
+        bus_name: app.fr_bus_name(row.bus),
+        id: row.slot as u32,
+        extended: false,
+        name: app.fr_row_name(row).unwrap_or("").to_string(),
+        dir: "Rx",
+        len: row.payload.len().min(u8::MAX as usize) as u8,
+        data: hex(&row.payload),
+        fd: false,
+    }
+}
+
+fn eth_frame_dto(app: &App, frame: &crate::eth::EthFrame) -> WebFrame {
+    const SHOWN_BYTES: usize = 32;
+    let shown = frame.payload.len().min(SHOWN_BYTES);
+    let mut data = hex(&frame.payload[..shown]);
+    if frame.payload.len() > SHOWN_BYTES {
+        data.push_str(" …");
+    }
+    WebFrame {
+        kind: "eth".to_string(),
+        addr: format!("0x{:04X}", frame.ethertype),
+        t_us: frame.t_us,
+        bus: frame.bus,
+        bus_name: app.eth_bus_label(frame.bus),
+        id: frame.ethertype as u32,
+        extended: false,
+        name: app.eth_row_name(frame),
+        dir: match frame.dir {
+            Direction::Rx => "Rx",
+            Direction::Tx => "Tx",
+        },
+        len: frame.payload.len().min(u8::MAX as usize) as u8,
+        data,
+        fd: false,
     }
 }
 
@@ -3064,6 +3164,8 @@ struct WebChannel {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebFrame {
+    kind: String,
+    addr: String,
     t_us: u64,
     bus: u8,
     bus_name: String,
@@ -3638,9 +3740,9 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .iter()
         .map(|m| {
             let addr = if m.extended {
-                format!("{:08X}x", m.id)
+                format!("0x{:08X}", m.id)
             } else {
-                format!("{:03X}", m.id)
+                format!("0x{:03X}", m.id)
             };
             WebMessage {
                 kind: "can".to_string(),
@@ -3739,7 +3841,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         frames: snap.frame_counter,
         fps,
-        trace_len: snap.trace_len,
+        trace_len: snap.trace.len() + snap.fr_trace.len() + snap.eth_trace.len(),
         sim_time_us: snap.sim_t_us,
         status: app.status.clone(),
         project: app
@@ -4336,6 +4438,35 @@ mod tests {
             .expect("Ethernet bus listed");
         assert!(!eth_bus.name.is_empty());
         assert!(eth_bus.path.contains("PowerTrain"));
+    }
+
+    /// Replay rows from the FlexRay ring join the web trace alongside CAN,
+    /// with a slot address and the cluster's bus label.
+    #[test]
+    fn the_trace_store_merges_flexray_rows() {
+        let mut app = App::headless();
+        app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0));
+        app.load_cluster_description(crate::test_assets::path("PowerTrain_v2.xml"), Some(1));
+        prepare_session(&mut app, None, Some(crate::test_assets::logging_blf_two()));
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(5));
+            app.update();
+        }
+        let mut store = TraceStore::default();
+        store.sync(&app);
+        let rows = store.seed();
+        let fr = rows
+            .iter()
+            .find(|row| row.kind == "fr")
+            .expect("FlexRay rows reach the web trace");
+        assert!(fr.addr.starts_with("slot "));
+        assert!(fr.bus_name.starts_with("FR"));
+        assert!(!fr.data.is_empty());
+        assert!(
+            rows.iter()
+                .any(|row| row.kind == "fr" && !row.name.is_empty()),
+            "at least one row resolves through its cluster description"
+        );
     }
 
     /// A replay path must open the log and start playback in Replay mode,

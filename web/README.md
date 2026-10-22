@@ -137,7 +137,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   ids), a canvas chart
   with total and per-bus frame rates plus dashed bus-load lines,
   Start/Stop/Pause/Clear trace and the same core commands as the desktop UI.
-  The status bar reports the browser's own UI frame rate.
+  Trace merges CAN, FlexRay (`slot N` addresses) and Ethernet rows from the
+  loaded session; the status bar reports the browser's own UI frame rate.
 - The Signals tab plots real DBC signals from the loaded project. **Pick
   signals…** opens a searchable bus → message → signal catalog fetched from
   the backend. The demo starts with eight auto-selected generator sources,
@@ -162,11 +163,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 A native browser file picker (opening, saving and DBC loading use host paths
-and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment,
-live FR/Eth observation and generation (descriptions can already be loaded in
-Buses), docking/desktops, and syntax highlighting or `.rxcan` loading in the
-web script editor. Hardware, Data, State and the Monitor cover CAN only for
-now.
+and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment
+and live generation (descriptions, replay rows and read-only Trace/Messages/
+Statistics are supported), docking/desktops, and syntax highlighting or
+`.rxcan` loading in the web script editor. Hardware, Data, State and the
+Monitor cover CAN only for now.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

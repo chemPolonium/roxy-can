@@ -16,7 +16,7 @@ function TraceRow({ frame }: { frame: Frame }) {
       <td class="num mono">{(frame.tUs / 1e6).toFixed(6)}</td>
       <td>{frame.busName}</td>
       <td class="mono">
-        {hexId(frame)}
+        {frame.addr || hexId(frame)}
         {frame.fd && <span class="badge">FD</span>}
       </td>
       <td class="name" title={frame.name}>

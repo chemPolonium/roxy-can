@@ -150,7 +150,7 @@ export function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
-  const [bus, setBus] = useState<number | "all">("all");
+  const [bus, setBus] = useState<string>("all");
   const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
   const [traceFilterOpen, setTraceFilterOpen] = useState(false);
   const [tab, setTab] = useState<RightTab>("messages");
@@ -659,7 +659,7 @@ export function App() {
     const include = parseIds(traceFilter.idInclude);
     const exclude = parseIds(traceFilter.idExclude);
     return traceRows.filter((frame) => {
-      if (bus !== "all" && frame.bus !== bus) return false;
+      if (bus !== "all" && frame.busName !== bus) return false;
       if (traceFilter.dir !== "all" && frame.dir !== traceFilter.dir) return false;
       if (traceFilter.dbcOnly && !frame.name) return false;
       if (include && !include.has(frame.id)) return false;
@@ -977,16 +977,25 @@ export function App() {
                 Filters
               </button>
               <select
-                value={bus === "all" ? "all" : String(bus)}
+                value={bus}
                 onChange={(e) => {
-                  const value = (e.target as HTMLSelectElement).value;
-                  setBus(value === "all" ? "all" : Number(value));
+                  setBus((e.target as HTMLSelectElement).value);
                 }}
               >
                 <option value="all">All buses</option>
-                {state?.channels.map((channel, index) => (
-                  <option key={channel.name} value={index}>
+                {state?.channels.map((channel) => (
+                  <option key={channel.name} value={channel.name}>
                     {channel.name}
+                  </option>
+                ))}
+                {state?.frBuses.map((fr) => (
+                  <option key={fr.name} value={fr.name}>
+                    {fr.name}
+                  </option>
+                ))}
+                {state?.ethBuses.map((eth) => (
+                  <option key={eth.name} value={eth.name}>
+                    {eth.name}
                   </option>
                 ))}
               </select>

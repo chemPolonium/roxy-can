@@ -46,6 +46,10 @@ pub fn path(name: &str) -> &'static str {
     Box::leak(path.to_string_lossy().into_owned().into_boxed_str())
 }
 
+fn log_name(stem: &str, ext: &str) -> String {
+    format!("{stem}_{}.{ext}", std::process::id())
+}
+
 fn fr_row(
     bus: u8,
     t_us: u64,
@@ -75,7 +79,7 @@ fn ensure_logs() {
 
         // ASC: 30,600 FR rows, first one matching the historic ground-truth
         // coordinates (549 µs, slot 13, cycle 0, named receive, 26 bytes).
-        let asc = dir.join("Logging.asc");
+        let asc = dir.join(log_name("Logging", "asc"));
         let mut writer = crate::log::AscWriter::new(&asc.to_string_lossy()).expect("ASC fixture");
         for i in 0..30_600u64 {
             let (t, slot, cycle, payload, name) = if i == 0 {
@@ -96,7 +100,7 @@ fn ensure_logs() {
         writer.finish().expect("finish ASC fixture");
 
         // BLF, single cluster: 39,200 rows over 39.2 s.
-        let single = dir.join("Logging_single.blf");
+        let single = dir.join(log_name("Logging_single", "blf"));
         let mut writer =
             crate::log::blf::BlfWriter::create(&single.to_string_lossy()).expect("BLF fixture");
         for i in 0..39_200u64 {
@@ -114,7 +118,7 @@ fn ensure_logs() {
         // BLF, two clusters: the historic 29,738 / 30,334 split, shared
         // slots, unique instants, and slot 13/cycle 0 payloads that differ
         // between the clusters.
-        let two = dir.join("Logging_two.blf");
+        let two = dir.join(log_name("Logging_two", "blf"));
         let mut writer =
             crate::log::blf::BlfWriter::create(&two.to_string_lossy()).expect("BLF fixture");
         let counts = [29_738u32, 30_334u32];
@@ -148,15 +152,15 @@ fn ensure_logs() {
 
 pub fn logging_asc() -> &'static str {
     ensure_logs();
-    path("Logging.asc")
+    path(&log_name("Logging", "asc"))
 }
 
 pub fn logging_blf_single() -> &'static str {
     ensure_logs();
-    path("Logging_single.blf")
+    path(&log_name("Logging_single", "blf"))
 }
 
 pub fn logging_blf_two() -> &'static str {
     ensure_logs();
-    path("Logging_two.blf")
+    path(&log_name("Logging_two", "blf"))
 }
