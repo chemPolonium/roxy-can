@@ -23,9 +23,11 @@ use crate::can::frame::{CanFrame, Direction};
 
 const PORT: u16 = 2010;
 const SERIES_POINTS: usize = 120;
-/// Rows the web frontend keeps. The source ring holds 50k; 5k fills in under
-/// half a minute of demo traffic and is enough to exercise virtualization.
-const TRACE_LOG_CAP: usize = 5_000;
+/// Rows the web frontend keeps. This matches the source ring's 50k limit
+/// and CANoe's ~100k default order of magnitude.
+const TRACE_LOG_CAP: usize = 50_000;
+/// Demo generator period; `ROXY_WEB_CYCLE_US` can shorten it for stress runs.
+const DEMO_CYCLE_US: u64 = 50_000;
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
 const TICK_EVERY: Duration = Duration::from_millis(5);
 
@@ -268,6 +270,11 @@ fn seed_demo(app: &mut App) {
             app.set_node_role(ch as u8, &node, NodeRole::Simulated);
         }
     }
+    let cycle_us = std::env::var("ROXY_WEB_CYCLE_US")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 1_000)
+        .unwrap_or(DEMO_CYCLE_US);
     let entries: Vec<(u8, u32)> = app
         .snap
         .tx
@@ -276,11 +283,7 @@ fn seed_demo(app: &mut App) {
         .collect();
     for (ch, id) in entries {
         app.send(BusCommand::SetEntryActive { ch, id, on: true });
-        app.send(BusCommand::SetEntryCycle {
-            ch,
-            id,
-            cycle_us: 50_000,
-        });
+        app.send(BusCommand::SetEntryCycle { ch, id, cycle_us });
     }
     app.start_virtual();
 }
@@ -294,8 +297,10 @@ struct TraceStore {
     epoch: u64,
     next_seq: u64,
     log: VecDeque<(u64, WebFrame)>,
-    last_len: usize,
-    last_loss: u64,
+    /// Total frames the source ring has ever held this run (`len + lost`).
+    /// Using the total, not `len`, lets a full ring trim its head without
+    /// looking like a reset on every publish.
+    last_total: u64,
     primed: bool,
 }
 
@@ -303,7 +308,9 @@ impl TraceStore {
     fn sync(&mut self, app: &App) {
         let len = app.snap.trace.len();
         let loss = app.snap.trace.head_loss().0;
-        let reset = !self.primed || len < self.last_len || loss != self.last_loss;
+        let total = len as u64 + loss;
+        let new_count = total.saturating_sub(self.last_total) as usize;
+        let reset = !self.primed || total < self.last_total || new_count > TRACE_LOG_CAP;
         if reset {
             self.primed = true;
             self.epoch = self.epoch.wrapping_add(1).max(1);
@@ -322,14 +329,13 @@ impl TraceStore {
             for row in rows {
                 self.push(row);
             }
-        } else if len > self.last_len {
-            let take = (len - self.last_len).min(TRACE_LOG_CAP);
+        } else if new_count > 0 {
             let mut rows: Vec<WebFrame> = app
                 .snap
                 .trace
                 .iter()
                 .rev()
-                .take(take)
+                .take(new_count)
                 .map(|frame| frame_dto(app, frame))
                 .collect();
             rows.reverse();
@@ -337,8 +343,7 @@ impl TraceStore {
                 self.push(row);
             }
         }
-        self.last_len = len;
-        self.last_loss = loss;
+        self.last_total = total;
     }
 
     fn push(&mut self, frame: WebFrame) {
@@ -602,5 +607,23 @@ mod tests {
             !trace.after(before).is_empty(),
             "the client only needs the delta"
         );
+    }
+
+    /// At the cap the store must trim its oldest row without discarding the
+    /// sequence range the client already holds.
+    #[test]
+    fn the_trace_store_keeps_the_newest_rows_at_the_cap() {
+        let mut store = TraceStore::default();
+        for i in 0..TRACE_LOG_CAP + 10 {
+            store.push(WebFrame {
+                t_us: i as u64,
+                ..Default::default()
+            });
+        }
+        assert_eq!(store.log.len(), TRACE_LOG_CAP);
+        assert_eq!(store.first_seq(), 10);
+        let tail = store.after(store.next_seq - 6);
+        assert_eq!(tail.len(), 5);
+        assert_eq!(tail[0].t_us, (TRACE_LOG_CAP + 9) as u64);
     }
 }

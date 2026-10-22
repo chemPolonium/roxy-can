@@ -15,7 +15,7 @@ interface Layout {
 }
 
 const LAYOUT_KEY = "roxy-can-web.layout";
-const TRACE_CAP = 5_000;
+const TRACE_CAP = 50_000;
 const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -291,7 +291,8 @@ export function App() {
             <div class="panel-title">
               <h2>Trace</h2>
               <span>
-                {visibleRows.length} shown / {traceRows.length} rows
+                {visibleRows.length.toLocaleString()} shown /{" "}
+                {traceRows.length.toLocaleString()} rows
               </span>
             </div>
             <div class="panel-tools">

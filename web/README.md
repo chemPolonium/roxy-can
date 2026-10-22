@@ -37,9 +37,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   the common "watch Trace + Messages + a curve" flow without window
   management. Pane sizes persist in `localStorage`.
 - Trace uses a hand-rolled fixed-row-height virtualizer (no table library):
-  5,000 buffered rows render as roughly 30 DOM rows between two spacer rows.
-  The server seeds the buffer once and then sends only new frames, so the
-  100 ms poll stays small as the table grows.
+  50,000 buffered rows render as roughly 30 DOM rows between two spacer
+  rows. The server seeds the buffer once and then sends only new frames, so
+  the 100 ms poll stays small as the table grows.
 - Trace/Messages tables, a canvas chart with total and per-bus frame rates
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
@@ -49,9 +49,26 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 Project open/save, replay, hardware channels, signal plots, node scripts,
-and docking/desktops. The web trace buffer caps at 5,000 rows (the source
-ring holds 50,000) and scroll anchoring while new rows arrive is left to the
-browser. Snapshots are polled at 10 Hz over a 120-sample window; SSE is the
-obvious next step if the frontend is adopted.
+and docking/desktops. The web trace buffer caps at 50,000 rows, matching the
+source ring; raising it needs a different storage layout than per-row JSON
+strings. Scroll anchoring while new rows arrive is left to the browser.
+Snapshots are polled at 10 Hz over a 120-sample window; SSE is the obvious
+next step if the frontend is adopted.
+
+## Performance testing
+
+CANoe's Trace buffer is commonly around 100k events by default and can be
+raised into the millions. The web spike caps at 50k, the same order of
+magnitude and the desktop source ring's limit.
+
+The demo generates 9 messages at 20 Hz. To fill 50k rows quickly, shorten
+the generator period through the environment:
+
+```bash
+ROXY_WEB_CYCLE_US=5000 ./target/debug/roxy-can.exe --web
+```
+
+At 5 ms the demo runs around 1,800 frames/s, so the 50k buffer fills in
+under 30 seconds. The page keeps a UI frame-rate readout in the status bar.
 The Vite build is served from disk (`web/dist`) rather than embedded, so the
 trial avoids a Rust rebuild for every frontend change.

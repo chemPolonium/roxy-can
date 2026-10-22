@@ -6,6 +6,10 @@ function hexId(message: Message): string {
   return `0x${message.id.toString(16).toUpperCase().padStart(width, "0")}`;
 }
 
+function countText(count: number): string {
+  return count >= 10_000 ? `${(count / 1000).toFixed(1)}k` : count.toLocaleString();
+}
+
 /// Below ~1280px the payload column squeezes both itself and the name into
 /// ellipses; the Trace still carries the bytes, so drop it there.
 function useWideColumns(): boolean {
@@ -61,7 +65,7 @@ export function MessageTable({ rows }: { rows: Message[] }) {
               <td class="name" title={message.name}>
                 {message.name || <span class="dash">—</span>}
               </td>
-              <td class="num mono">{message.count.toLocaleString()}</td>
+              <td class="num mono">{countText(message.count)}</td>
               <td class="num mono">
                 {message.cycleMs > 0 ? `${message.cycleMs.toFixed(1)} ms` : "event"}
               </td>
