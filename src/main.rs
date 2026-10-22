@@ -170,6 +170,12 @@ impl State {
             let mut window_bg = style.color(StyleColor::WindowBg);
             window_bg[3] = 1.0;
             style.set_color(StyleColor::WindowBg, window_bg);
+            // An empty dock node (all its windows closed) would otherwise
+            // paint ImGui's gray DockingEmptyBg and read as a dead panel.
+            // Match the window background so the remaining dock simply
+            // blends in; the node still exists until a window is docked
+            // there or the layout is reset.
+            style.set_color(StyleColor::DockingEmptyBg, window_bg);
             let mut popup_bg = style.color(StyleColor::PopupBg);
             popup_bg[3] = 1.0;
             style.set_color(StyleColor::PopupBg, popup_bg);
