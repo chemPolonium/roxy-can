@@ -583,6 +583,25 @@ input::placeholder {
   font-size: 9px;
 }
 
+.th-sort {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.th-sort:hover {
+  color: #dfe8f2;
+}
+
+.th-sort.on {
+  color: #8fd3a8;
+}
+
 .trace-table tbody tr.selected td,
 .trace-table tbody tr.selected:hover td {
   background: #16283b;

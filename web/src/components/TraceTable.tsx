@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "preact/hooks";
 import type { Frame } from "../types";
 
 const ROW_H = 21;
@@ -49,6 +55,28 @@ function copyText(text: string): void {
     void navigator.clipboard.writeText(text).catch(fallback);
   } else {
     fallback();
+  }
+}
+
+type SortKey = "time" | "bus" | "id" | "name" | "dir" | "len";
+type SortDir = "asc" | "desc";
+
+function compareFrames(a: Frame, b: Frame, key: SortKey): number {
+  switch (key) {
+    case "time":
+      return a.tUs - b.tUs;
+    case "bus":
+      return a.busName.localeCompare(b.busName);
+    case "id":
+      return a.kind === "eth" || b.kind === "eth"
+        ? a.addr.localeCompare(b.addr)
+        : a.id - b.id;
+    case "name":
+      return a.name.localeCompare(b.name);
+    case "dir":
+      return a.dir.localeCompare(b.dir);
+    case "len":
+      return a.len - b.len;
   }
 }
 
@@ -124,7 +152,14 @@ export function TraceTable({
     y: number;
     frame: Frame;
   } | null>(null);
-  const total = rows.length;
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return rows;
+    const sign = sortDir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => sign * compareFrames(a, b, sortKey));
+  }, [rows, sortKey, sortDir]);
+  const total = sortedRows.length;
 
   useEffect(() => {
     if (!menu) return;
@@ -140,19 +175,31 @@ export function TraceTable({
     };
   }, [menu]);
 
+  // A new sort starts at the top; keeping a raw pixel offset would land in
+  // the middle of an unrelated order.
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    previousFirst.current = null;
+    if (!element) return;
+    element.scrollTop = 0;
+    scrollTopRef.current = 0;
+    setScrollTop(0);
+  }, [sortKey, sortDir]);
+
   // New rows are prepended. A reader who scrolled down to inspect an older
   // frame must not be pushed away by that insertion: keep the same frame at
   // the same viewport offset, while a reader at the live edge stays at 0.
+  // Sorted views are exempt: their order changes with every arrival.
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    const first = rows.length > 0 ? frameKey(rows[0]) : null;
+    const first = sortedRows.length > 0 ? frameKey(sortedRows[0]) : null;
     const previous = previousFirst.current;
     previousFirst.current = first;
-    if (!element || !previous || first === previous) return;
-    const limit = Math.min(rows.length, ANCHOR_SCAN);
+    if (sortKey || !element || !previous || first === previous) return;
+    const limit = Math.min(sortedRows.length, ANCHOR_SCAN);
     let prepended = 0;
     for (let i = 1; i < limit; i += 1) {
-      if (frameKey(rows[i]) === previous) {
+      if (frameKey(sortedRows[i]) === previous) {
         prepended = i;
         break;
       }
@@ -168,7 +215,7 @@ export function TraceTable({
     element.scrollTop = next;
     scrollTopRef.current = next;
     setScrollTop(next);
-  }, [rows]);
+  }, [sortedRows, sortKey]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -196,18 +243,21 @@ export function TraceTable({
   const selectedIndex =
     selectedKey == null
       ? -1
-      : rows.findIndex((frame) => frameKey(frame) === selectedKey);
-  const selectedFrame = selectedIndex >= 0 ? rows[selectedIndex] : null;
+      : sortedRows.findIndex((frame) => frameKey(frame) === selectedKey);
+  const selectedFrame = selectedIndex >= 0 ? sortedRows[selectedIndex] : null;
 
   const moveSelection = (delta: number) => {
-    if (rows.length === 0) return;
+    if (sortedRows.length === 0) return;
     let next: number;
     if (selectedIndex < 0) {
-      next = delta > 0 ? 0 : rows.length - 1;
+      next = delta > 0 ? 0 : sortedRows.length - 1;
     } else {
-      next = Math.min(rows.length - 1, Math.max(0, selectedIndex + delta));
+      next = Math.min(
+        sortedRows.length - 1,
+        Math.max(0, selectedIndex + delta),
+      );
     }
-    const frame = rows[next];
+    const frame = sortedRows[next];
     if (!frame) return;
     setSelectedKey(frameKey(frame));
     const element = scrollRef.current;
@@ -240,6 +290,27 @@ export function TraceTable({
   const topHeight = start * ROW_H;
   const bottomHeight = Math.max(0, (total - end) * ROW_H);
   const mark = (frame: Frame): Mark => ({ key: frameKey(frame), tUs: frame.tUs });
+  const cycleSort = (key: SortKey) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+    } else if (sortDir === "asc") {
+      setSortDir("desc");
+    } else {
+      setSortKey(null);
+    }
+  };
+  const sortButton = (label: string, key: SortKey) => (
+    <button
+      type="button"
+      class={`th-sort ${sortKey === key ? "on" : ""}`}
+      onClick={() => cycleSort(key)}
+      title={`Sort by ${label.toLowerCase()}`}
+    >
+      {label}
+      {sortKey === key && (sortDir === "asc" ? " ▲" : " ▼")}
+    </button>
+  );
 
   return (
     <div class="trace-body">
@@ -334,12 +405,12 @@ export function TraceTable({
           </colgroup>
           <thead>
             <tr>
-              <th class="num">Time</th>
-              <th>Bus</th>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Dir</th>
-              <th class="num">Len</th>
+              <th class="num">{sortButton("Time", "time")}</th>
+              <th>{sortButton("Bus", "bus")}</th>
+              <th>{sortButton("ID", "id")}</th>
+              <th>{sortButton("Name", "name")}</th>
+              <th>{sortButton("Dir", "dir")}</th>
+              <th class="num">{sortButton("Len", "len")}</th>
               <th>Data</th>
             </tr>
           </thead>
@@ -349,7 +420,7 @@ export function TraceTable({
                 <td colSpan={COLUMNS} style={{ height: `${topHeight}px` }} />
               </tr>
             )}
-            {rows.slice(start, end).map((frame, index) => {
+            {sortedRows.slice(start, end).map((frame, index) => {
               const key = frameKey(frame);
               return (
                 <TraceRow

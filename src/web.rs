@@ -172,6 +172,7 @@ pub fn run(args: &[String], open: bool) {
         .unwrap_or(PORT);
     let project = flag_value(args, "--project");
     let replay = flag_value(args, "--replay");
+    let profile = flag_value(args, "--profile");
     if !std::path::Path::new("web/dist/index.html").exists() {
         eprintln!("web/dist is missing; run `npm install && npm run build` in web/ first");
     }
@@ -208,6 +209,7 @@ pub fn run(args: &[String], open: bool) {
                     },
                     project,
                     replay,
+                    profile,
                 )
             })
             .expect("spawn web core thread");
@@ -1744,6 +1746,7 @@ fn app_loop(
     stores: SharedStores,
     project: Option<String>,
     replay: Option<String>,
+    profile: Option<String>,
 ) {
     let SharedStores {
         shared,
@@ -1754,6 +1757,15 @@ fn app_loop(
     } = stores;
     let mut app = App::headless();
     prepare_session(&mut app, project.as_deref(), replay.as_deref());
+    if let (Some(project), Some(profile)) = (&project, &profile) {
+        let dir = std::path::Path::new(project)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        match crate::profile::apply_profile(&mut app, dir, profile) {
+            Ok(summary) => app.status = format!("{}; profile: {summary}", app.status),
+            Err(error) => app.status = format!("profile failed: {error}"),
+        }
+    }
     if let Ok(mut store) = signals.lock() {
         seed_chart_selection(&mut app, &mut store);
     }

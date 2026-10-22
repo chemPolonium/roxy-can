@@ -25,7 +25,9 @@ cargo run -- --desktop                          # native window instead
 
 With neither flag the generator demo starts automatically. `--project` loads
 the project but leaves it stopped; `--replay` loads the log and starts
-playback. A project and a replay can be combined. `--port <n>` changes the
+playback. A project and a replay can be combined. `--profile <name>` overlays
+`profiles/<name>.toml` from the project directory onto its roles and hardware
+mapping, exactly like the headless CLI. `--port <n>` changes the
 port (default 2010). A bare launch opens the browser; `--web` remains an
 explicit synonym for the default and keeps scripted runs silent
 (`ROXY_WEB_NO_OPEN=1` does the same).
@@ -81,7 +83,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   frames. Click a row to select it, move with ↑/↓, copy with Ctrl+C, and use
   **Set A** / **Set B** for a Δt readout (the row's left edge marks each
   cursor). Right-click a row to filter its ID or copy it. The search box also
-  matches the address column (`0x100`, `slot 13`, EtherType).
+  matches the address column (`0x100`, `slot 13`, EtherType). Click a column
+  header to sort ascending, again for descending, and a third time to restore
+  the live newest-first order.
 - A project or log can be loaded from the Session dialog by host path or
   from recents. The header, mode chip and status bar carry the session name
   and replay playhead; switching sessions resets the trace and curve buffers.
