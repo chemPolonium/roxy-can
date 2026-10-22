@@ -266,6 +266,10 @@ impl MockFrPort {
 /// All hardware attachments plus the CANoe-style bus mode.
 #[derive(Debug)]
 pub struct Hardware {
+    /// Incremented when the Vector driver is reopened for a hardware
+    /// refresh; the frontend watches it to drop its cached dropdown list
+    /// only after the reset has actually run.
+    pub refresh_seq: u64,
     /// Bus index → attachment. One adapter per bus.
     pub buses: HashMap<u8, BusHardware>,
     /// FlexRay bus index → its RX-only watch. Several clusters can be watched
@@ -308,6 +312,7 @@ impl Hardware {
     /// to be on the wire.
     pub fn new() -> Self {
         Self {
+            refresh_seq: 0,
             buses: Default::default(),
             fr_watches: Default::default(),
             live: true,
@@ -356,6 +361,16 @@ impl Hardware {
 
     pub fn detach(&mut self, bus: u8) {
         self.buses.remove(&bus);
+    }
+
+    /// Closes every Vector CAN and FlexRay port, leaving other drivers'
+    /// attachments alone. The XL driver can then be closed and reopened
+    /// to rescan USB hardware after a replug.
+    pub fn detach_vector_ports(&mut self) {
+        self.buses
+            .retain(|_, bh| !matches!(bh.port, HwPort::Vector(_)));
+        self.fr_watches
+            .retain(|_, w| !matches!(w.port, FrPort::Vector(_)));
     }
 
     /// Attaches the FlexRay RX-only watch from the cluster description the

@@ -28,6 +28,12 @@
 
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Vector ports currently open across CAN and FlexRay. A driver reset is
+/// only safe when this is zero: the XL DLL's function pointers stay valid,
+/// but a port opened by the previous driver instance would be orphaned.
+static OPEN_PORTS: AtomicUsize = AtomicUsize::new(0);
 
 type XlStatus = i16;
 type XlPortHandle = i32;
@@ -279,6 +285,30 @@ impl Vxlapi {
         })
     }
 
+    /// Close and reopen the driver. This is the recovery path for a USB
+    /// adapter that was unplugged and replugged: the driver keeps
+    /// configured-but-disconnected channels in its config, and a fresh
+    /// open is what re-reads the device's CAN FD capabilities. The caller
+    /// must close every Vector port first (the Buses refresh path does).
+    pub fn reset_driver() -> Result<(), String> {
+        let open = OPEN_PORTS.load(Ordering::SeqCst);
+        if open != 0 {
+            return Err(format!("{open} Vector port(s) are still open"));
+        }
+        let lib = Vxlapi::lib()
+            .ok_or("Vector driver unavailable (vxlapi64.dll / vxlapi.dll not found)")?;
+        unsafe {
+            // The process-lifetime reference from `lib()` is the only one
+            // left; closing it reaches zero and lets the next open rescan.
+            (lib.close_driver)();
+            let status = (lib.open_driver)();
+            if status != 0 {
+                return Err(format!("xlOpenDriver failed ({})", lib.error(status)));
+            }
+        }
+        Ok(())
+    }
+
     /// The driver's own error text for a status code (static buffer).
     /// Every failure that reaches the user carries this, not just the
     /// number -- "status 101" alone has cost an entire debugging round.
@@ -319,6 +349,12 @@ impl Vxlapi {
         })
         .as_ref()
     }
+}
+
+/// Close and reopen the XL driver for the Buses refresh path. See
+/// [`Vxlapi::reset_driver`] for the port count requirement.
+pub fn reset_driver() -> Result<(), String> {
+    Vxlapi::reset_driver()
 }
 
 /// One discoverable Vector channel: the driver's global channel index
@@ -613,6 +649,7 @@ impl VectorChannel {
             // Frames queued while parked (or from a previous owner of the
             // channel) must not leak into this run's views.
             (lib.flush_receive_queue)(port);
+            OPEN_PORTS.fetch_add(1, Ordering::SeqCst);
             Ok(VectorChannel {
                 port,
                 mask,
@@ -821,6 +858,7 @@ impl VectorChannel {
 
 impl Drop for VectorChannel {
     fn drop(&mut self) {
+        OPEN_PORTS.fetch_sub(1, Ordering::SeqCst);
         if let Some(lib) = Vxlapi::lib() {
             unsafe {
                 (lib.deactivate_channel)(self.port, self.mask);
@@ -1277,6 +1315,7 @@ pub mod flexray {
                     ));
                 }
                 (lib.flush_receive_queue)(port);
+                OPEN_PORTS.fetch_add(1, Ordering::SeqCst);
                 Ok(FlexRayChannel { port, mask })
             }
         }
@@ -1380,6 +1419,7 @@ pub mod flexray {
 
     impl Drop for FlexRayChannel {
         fn drop(&mut self) {
+            OPEN_PORTS.fetch_sub(1, Ordering::SeqCst);
             if let Some(lib) = Vxlapi::lib() {
                 unsafe {
                     (lib.deactivate_channel)(self.port, self.mask);
@@ -1638,6 +1678,16 @@ mod tests {
                 ch.index, port.fd, port.fd_error
             ),
             Err(e) => println!("VN1610 ch{} open failed: {e}", ch.index),
+        }
+        // The Buses refresh path: no port is open now, so a full driver
+        // close/reopen must leave FD configuration available.
+        match reset_driver() {
+            Ok(()) => println!("driver reset path: ok"),
+            Err(e) => println!("driver reset path failed: {e}"),
+        }
+        match VectorChannel::open(ch.index, 500, Some(2_000), true) {
+            Ok(port) => println!("after reset: fd={} error={:?}", port.fd, port.fd_error),
+            Err(e) => println!("after reset: open failed: {e}"),
         }
     }
 

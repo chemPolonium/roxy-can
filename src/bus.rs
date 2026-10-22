@@ -389,6 +389,10 @@ pub enum BusCommand {
     DetachHardware {
         bus: u8,
     },
+    /// Recovery after a USB replug: close Vector ports, reopen the XL
+    /// driver so it rescans the adapter, and let the frontend re-enumerate.
+    /// Other drivers' attachments are untouched.
+    RefreshHardware,
     /// Attach (or move) the FlexRay RX-only watch to a Vector channel,
     /// configured from the FIBEX description at `fibex_path`; `None`
     /// detaches. RX-only and read-only: it never transmits, and its
@@ -706,6 +710,9 @@ pub struct Snapshot {
     /// Commands the core has processed; a threaded frontend watches it to
     /// tell whether its sent commands have been applied yet.
     pub laps: u64,
+    /// Generation of the last Vector driver reopen. The Buses dropdown
+    /// clears its cache when this changes, not when Refresh is clicked.
+    pub hw_refresh: u64,
     /// The bus-name counter used to mint "CAN{n}" for new buses; the
     /// frontend reads it for saves and pins it back on project restore.
     pub bus_counter: usize,
@@ -1794,6 +1801,17 @@ impl BusCore {
                 self.hw.detach(bus);
                 *status = format!("hardware detached from bus {}", bus + 1);
             }
+            BusCommand::RefreshHardware => {
+                self.hw.detach_vector_ports();
+                let result = crate::hw::vector::reset_driver();
+                self.hw.refresh_seq += 1;
+                *status = match result {
+                    Ok(()) => "Vector driver reopened; channel list refreshed".to_string(),
+                    Err(e) => {
+                        format!("Vector connections closed, but the driver could not reopen: {e}")
+                    }
+                };
+            }
             BusCommand::SetFrWatch {
                 bus,
                 channel_index,
@@ -2766,6 +2784,7 @@ impl BusCore {
             replay_census_eth: self.log_census.rows(crate::replay_map::LogBusKind::Eth),
             channel_count: self.channels.len(),
             laps: self.laps,
+            hw_refresh: self.hw.refresh_seq,
             bus_counter: self.bus_counter,
             sim_t_us: self.sim_t_us,
             spec: self.spec.clone(),

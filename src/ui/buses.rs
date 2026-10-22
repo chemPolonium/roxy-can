@@ -11,11 +11,18 @@ pub struct BusesView {
     pub fr_name_edit: Option<(u8, String)>,
     pub hw_channels: Option<Result<Vec<crate::hw::AnyChannelInfo>, String>>,
     pub fr_channels: Option<Result<Vec<crate::hw::vector::ChannelInfo>, String>>,
+    /// The hardware generation whose list is cached, and whether a
+    /// RefreshHardware command is still in flight.
+    last_hw_refresh: u64,
+    refresh_pending: bool,
 }
 
 pub enum BusesCmd {
     AddChannel,
     RemoveChannel(usize),
+    /// Close Vector ports, reopen the XL driver and re-enumerate once the
+    /// core reports the new generation.
+    RefreshHardware,
     SetChannelConfig {
         ch: u8,
         name: Option<String>,
@@ -102,6 +109,15 @@ impl BusesView {
         let mut cmds = Vec::new();
         if !self.open {
             return cmds;
+        }
+        if self.refresh_pending && self.last_hw_refresh != app.snap.hw_refresh {
+            // The core has closed the Vector ports and reopened the driver;
+            // only now is it safe to enumerate again. Clearing on the click
+            // would race the reopen and cache the old device list.
+            self.last_hw_refresh = app.snap.hw_refresh;
+            self.hw_channels = None;
+            self.fr_channels = None;
+            self.refresh_pending = false;
         }
         let io = ui.io();
         let mut open = self.open;
@@ -391,11 +407,14 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     // One global re-enumeration for the whole window: the channel list is
     // machine-wide, not per bus.
     if ui.button("Refresh channels##hwref") {
-        view.hw_channels = None;
-        view.fr_channels = None;
+        view.refresh_pending = true;
+        cmds.push(BusesCmd::RefreshHardware);
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text("Re-enumerate this machine's hardware channels (Kvaser / Vector)");
+        ui.tooltip_text(
+            "Re-enumerate this machine's hardware channels. Closes Vector connections and reopens the XL driver so a replugged adapter is rescanned; Kvaser connections stay.\n\
+             中文：重新枚举硬件。会关闭 Vector 连接并重开 XL 驱动，用于 USB 重新插拔后的恢复；Kvaser 连接不受影响",
+        );
     }
     ui.separator();
 
@@ -1042,6 +1061,13 @@ impl App {
                 BusesCmd::AttachDbc(ch) => self.attach_dbc_dialog(ch),
                 BusesCmd::DetachDbcExtra { bus, extra } => self.detach_dbc_extra(bus, extra),
                 BusesCmd::DetachHardware(bus) => self.detach_hardware(bus),
+                BusesCmd::RefreshHardware => {
+                    // The core closes Vector ports and reopens the driver;
+                    // the generation bump above clears this cache once that
+                    // has actually happened.
+                    self.buses_view.refresh_pending = true;
+                    self.send(crate::bus::BusCommand::RefreshHardware);
+                }
                 BusesCmd::AttachHardware {
                     bus,
                     driver,
