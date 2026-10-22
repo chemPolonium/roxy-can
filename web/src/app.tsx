@@ -19,6 +19,7 @@ import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
 import { DataPanel } from "./components/DataPanel";
 import { ExportModal } from "./components/ExportModal";
+import { FilePick } from "./components/FilePick";
 import { GeneratorModal } from "./components/GeneratorModal";
 import { HelpModal } from "./components/HelpModal";
 import { TriggersModal } from "./components/TriggersModal";
@@ -1520,6 +1521,7 @@ export function App() {
           hardware={hardware}
           loading={hardwareLoading}
           error={hardwareError}
+          onError={setError}
           onRefresh={refreshHardware}
           onAddBus={addBus}
           onRemoveBus={removeBus}
@@ -1785,6 +1787,15 @@ export function App() {
                   >
                     Open project
                   </button>
+                  <FilePick
+                    label="Choose file…"
+                    accept=".rxproj,application/json"
+                    onError={setError}
+                    onPick={(path) => {
+                      setProjectPath(path);
+                      loadProject(path);
+                    }}
+                  />
                 </form>
                 <div class="save-row">
                   <button
@@ -1839,6 +1850,15 @@ export function App() {
                   >
                     Open &amp; play
                   </button>
+                  <FilePick
+                    label="Choose file…"
+                    accept=".asc,.blf"
+                    onError={setError}
+                    onPick={(path) => {
+                      setLogPath(path);
+                      loadLog(path);
+                    }}
+                  />
                 </form>
                 {recent(state?.recentLogs ?? [], loadLog)}
               </section>

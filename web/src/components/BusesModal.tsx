@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Bus, EthBus, FrBus, Hardware, HwChannel } from "../types";
+import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
@@ -9,6 +10,7 @@ interface Props {
   hardware: Hardware | null;
   loading: boolean;
   error: string;
+  onError: (message: string) => void;
   onRefresh: () => void;
   onAddBus: () => void;
   onRemoveBus: (bus: number) => void;
@@ -62,6 +64,7 @@ function BusCard({
   onSetRates,
   onLoadDbc,
   onSetNodeRole,
+  onError,
 }: {
   bus: Bus;
   channels: HwChannel[];
@@ -73,6 +76,7 @@ function BusCard({
   onSetRates: (bus: number, arb: number, fd: number) => void;
   onLoadDbc: (bus: number, path: string) => void;
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
+  onError: (message: string) => void;
 }) {
   const [name, setName] = useState(bus.name);
   const nameRef = useRef(bus.name);
@@ -207,6 +211,15 @@ function BusCard({
         >
           Load DBC
         </button>
+        <FilePick
+          label="Choose…"
+          accept=".dbc,.arxml"
+          onError={onError}
+          onPick={(path) => {
+            setDbc(path);
+            onLoadDbc(bus.index, path);
+          }}
+        />
       </div>
 
       {bus.nodes.length > 0 && (
@@ -314,6 +327,7 @@ export function BusesModal({
   hardware,
   loading,
   error,
+  onError,
   onRefresh,
   onAddBus,
   onRemoveBus,
@@ -419,6 +433,7 @@ export function BusesModal({
               onSetRates={onSetRates}
               onLoadDbc={onLoadDbc}
               onSetNodeRole={onSetNodeRole}
+              onError={onError}
             />
           ))}
 
@@ -461,6 +476,15 @@ export function BusesModal({
               <button type="submit" disabled={!frPath.trim()}>
                 Load description
               </button>
+              <FilePick
+                label="Choose…"
+                accept=".xml,.arxml,.fibex"
+                onError={onError}
+                onPick={(path) => {
+                  setFrPath(path);
+                  onLoadFr(path);
+                }}
+              />
             </form>
           </section>
 
@@ -504,6 +528,15 @@ export function BusesModal({
               <button type="submit" disabled={!ethPath.trim()}>
                 Load matrix
               </button>
+              <FilePick
+                label="Choose…"
+                accept=".arxml,.xml"
+                onError={onError}
+                onPick={(path) => {
+                  setEthPath(path);
+                  onLoadEth(path);
+                }}
+              />
             </form>
           </section>
         </div>

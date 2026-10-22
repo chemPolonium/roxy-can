@@ -47,6 +47,20 @@ export async function fetchScripts(): Promise<Script[]> {
   return (await response.json()) as Script[];
 }
 
+export async function uploadFile(file: File): Promise<string> {
+  const query = new URLSearchParams({ name: file.name });
+  const response = await fetch(`/api/upload?${query}`, {
+    method: "POST",
+    body: file,
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `upload: ${response.status}`);
+  }
+  const reply = (await response.json()) as { path: string };
+  return reply.path;
+}
+
 export async function sendCommand(command: Command): Promise<void> {
   const response = await fetch("/api/command", {
     method: "POST",

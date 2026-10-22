@@ -9,9 +9,10 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -36,6 +37,10 @@ const TRACE_LOG_CAP: usize = 50_000;
 const SIGNAL_CAP: usize = 12_000;
 /// Demo generator period; `ROXY_WEB_CYCLE_US` can shorten it for stress runs.
 const DEMO_CYCLE_US: u64 = 50_000;
+/// Browser uploads are buffered in memory before landing in the temp folder.
+/// This covers DBC/ARXML/project files and ordinary logs; bigger recordings
+/// still go through a typed host path.
+const UPLOAD_LIMIT: usize = 256 * 1024 * 1024;
 
 /// Demo curves: real DBC signals, driven by the generator's own value
 /// sources. `color` indexes the frontend palette; ranges stay inside the
@@ -217,6 +222,10 @@ pub fn run(args: &[String]) {
             .route("/hardware", get(hardware_handler))
             .route("/nodes", get(scripts_handler))
             .route("/command", post(command))
+            .route(
+                "/upload",
+                post(upload).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
+            )
             .with_state(ApiState {
                 shared,
                 trace,
@@ -1018,6 +1027,86 @@ async fn state(State(api): State<ApiState>, Query(query): Query<TraceQuery>) -> 
         signals_seed,
         signals_delta,
     })
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    name: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadReply {
+    path: String,
+    name: String,
+    size: usize,
+}
+
+fn upload_name(raw: &str) -> String {
+    let base = std::path::Path::new(raw)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let mut cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    cleaned.truncate(120);
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        "upload".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Saves a browser-picked file into the OS temp folder and returns the host
+/// path the rest of the API can load. Only the file name is trusted: any
+/// directory part is dropped and the stamped prefix keeps two uploads from
+/// overwriting each other.
+async fn upload(
+    Query(query): Query<UploadQuery>,
+    body: Bytes,
+) -> Result<Json<UploadReply>, (StatusCode, String)> {
+    let dir = std::env::temp_dir().join("roxy-can-web-uploads");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("upload folder: {e}"),
+        )
+    })?;
+    let name = upload_name(query.name.as_deref().unwrap_or("upload"));
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = dir.join(format!("{stamp}_{name}"));
+    let size = body.len();
+    let write = path.clone();
+    tokio::task::spawn_blocking(move || std::fs::write(&write, &body))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("upload task: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("upload write: {e}"),
+            )
+        })?;
+    Ok(Json(UploadReply {
+        path: path.to_string_lossy().into_owned(),
+        name,
+        size,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -5066,6 +5155,16 @@ mod tests {
         let state_row = state.state_rows.first().expect("state row");
         assert_eq!(state_row.kind, "fr");
         assert_eq!((state_row.ch, state_row.id), (bus, 13));
+    }
+
+    #[test]
+    fn uploads_keep_only_a_safe_file_name() {
+        assert_eq!(upload_name("C:\\logs\\drive.asc"), "drive.asc");
+        assert_eq!(upload_name("/tmp/project.rxproj"), "project.rxproj");
+        assert_eq!(upload_name("a b:c?.dbc"), "a_b_c_.dbc");
+        assert_eq!(upload_name(".."), "upload");
+        assert_eq!(upload_name(""), "upload");
+        assert_eq!(upload_name("\u{4e2d}\u{6587}.dbc"), "__.dbc");
     }
 
     #[test]
