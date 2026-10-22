@@ -635,6 +635,10 @@ export function App() {
     void run({ type: "attach_hardware", bus, driver, index });
   const detachHardware = (bus: number) =>
     void run({ type: "detach_hardware", bus });
+  const attachFrHardware = (bus: number, index: number) =>
+    void run({ type: "attach_fr_hardware", bus, index });
+  const detachFrHardware = (bus: number) =>
+    void run({ type: "detach_fr_hardware", bus });
   const setRealBus = (real: boolean) =>
     void run({ type: "set_bus_mode", real });
   const addBus = () => void run({ type: "add_bus" });
@@ -1566,6 +1570,8 @@ export function App() {
           onRemoveEth={(bus) => void run({ type: "remove_eth_bus", bus })}
           onAttach={attachHardware}
           onDetach={detachHardware}
+          onAttachFr={attachFrHardware}
+          onDetachFr={detachFrHardware}
           onSetReal={setRealBus}
           onOpenScripts={() => {
             setBusesOpen(false);

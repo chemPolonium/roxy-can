@@ -1213,6 +1213,15 @@ button.mini.on {
   font-style: normal;
 }
 
+.fr-attach {
+  max-width: 190px;
+  font-size: 10px;
+}
+
+.fr-watch {
+  color: #8fd3a8 !important;
+}
+
 .proto-path {
   margin-left: auto;
   max-width: 180px;

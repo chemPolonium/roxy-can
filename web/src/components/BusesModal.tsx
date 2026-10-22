@@ -24,6 +24,8 @@ interface Props {
   onRemoveEth: (bus: number) => void;
   onAttach: (bus: number, driver: string, index: number) => void;
   onDetach: (bus: number) => void;
+  onAttachFr: (bus: number, index: number) => void;
+  onDetachFr: (bus: number) => void;
   onSetReal: (real: boolean) => void;
   onOpenScripts: () => void;
   onClose: () => void;
@@ -341,6 +343,8 @@ export function BusesModal({
   onRemoveEth,
   onAttach,
   onDetach,
+  onAttachFr,
+  onDetachFr,
   onSetReal,
   onOpenScripts,
   onClose,
@@ -356,7 +360,10 @@ export function BusesModal({
   }, [onClose]);
 
   const channels = hardware?.channels ?? [];
-  const attachedCount = buses.filter((bus) => bus.attached).length;
+  const frChannels = hardware?.frChannels ?? [];
+  const attachedFr = frBuses.filter((bus) => bus.attached).length;
+  const attachedCount =
+    buses.filter((bus) => bus.attached).length + attachedFr;
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -444,6 +451,50 @@ export function BusesModal({
                 <strong>{bus.name}</strong>
                 <span>{bus.cluster || "unnamed cluster"}</span>
                 <em>{bus.frames} frames</em>
+                {bus.attached ? (
+                  <>
+                    <em class="fr-watch" title="Receive-only Vector FlexRay watch">
+                      ch{bus.channel} · RX
+                    </em>
+                    <button
+                      type="button"
+                      class="mini"
+                      onClick={() => onDetachFr(bus.bus)}
+                    >
+                      Detach
+                    </button>
+                  </>
+                ) : (
+                  <select
+                    class="fr-attach"
+                    value=""
+                    disabled={frChannels.length === 0}
+                    title={
+                      frChannels.length
+                        ? "Attach this port in receive-only mode"
+                        : hardware?.frError || "No Vector FlexRay channel found"
+                    }
+                    onChange={(event) => {
+                      const index = Number(
+                        (event.target as HTMLSelectElement).value,
+                      );
+                      if (Number.isFinite(index)) onAttachFr(bus.bus, index);
+                    }}
+                  >
+                    <option value="">
+                      {frChannels.length ? "Attach port…" : "No FR port"}
+                    </option>
+                    {frChannels.map((channel) => (
+                      <option
+                        key={`${channel.driver}:${channel.index}`}
+                        value={channel.index}
+                      >
+                        [V] ch{channel.index}: {channel.name}
+                        {channel.detail ? ` · ${channel.detail}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <span class="proto-path" title={bus.path}>
                   {fileName(bus.path)}
                 </span>

@@ -91,6 +91,8 @@ export interface FrBus {
   path: string;
   cluster: string;
   frames: number;
+  attached: boolean;
+  channel: number;
 }
 
 export interface EthBus {
@@ -135,7 +137,9 @@ export interface HwChannel {
 
 export interface Hardware {
   channels: HwChannel[];
+  frChannels: HwChannel[];
   error: string;
+  frError: string;
 }
 
 export interface FrTxEntry {
@@ -569,6 +573,8 @@ export type Command =
   | { type: "unselect_eth_signal"; bus: number; frame: string; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
+  | { type: "attach_fr_hardware"; bus: number; index: number }
+  | { type: "detach_fr_hardware"; bus: number }
   | { type: "refresh_hardware" }
   | { type: "set_bus_mode"; real: boolean }
   | { type: "add_bus" }

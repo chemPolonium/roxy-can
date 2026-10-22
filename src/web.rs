@@ -927,12 +927,23 @@ async fn hardware_handler(State(api): State<ApiState>) -> Json<WebHardware> {
     {
         return Json(data.clone());
     }
-    let probed = tokio::task::spawn_blocking(crate::hw::enumerate_all)
-        .await
-        .unwrap_or_else(|error| Err(format!("hardware probe failed: {error}")));
-    let data = match probed {
-        Ok(channels) => WebHardware {
-            channels: channels
+    let probed = tokio::task::spawn_blocking(|| {
+        (
+            crate::hw::enumerate_all(),
+            crate::hw::vector::enumerate_flexray(),
+        )
+    })
+    .await
+    .unwrap_or_else(|error| {
+        (
+            Err(format!("hardware probe failed: {error}")),
+            Err(format!("hardware probe failed: {error}")),
+        )
+    });
+    let (can, fr) = probed;
+    let (channels, error) = match can {
+        Ok(channels) => (
+            channels
                 .into_iter()
                 .map(|channel| WebHwChannel {
                     driver: channel.driver.word().to_string(),
@@ -941,12 +952,36 @@ async fn hardware_handler(State(api): State<ApiState>) -> Json<WebHardware> {
                     detail: channel.detail,
                 })
                 .collect(),
-            error: String::new(),
-        },
-        Err(error) => WebHardware {
-            channels: Vec::new(),
-            error,
-        },
+            String::new(),
+        ),
+        Err(error) => (Vec::new(), error),
+    };
+    let (fr_channels, fr_error) = match fr {
+        Ok(list) => {
+            let mut counts = std::collections::BTreeMap::new();
+            for channel in &list {
+                *counts.entry(channel.name.clone()).or_insert(0u32) += 1;
+            }
+            (
+                list.into_iter()
+                    .map(|channel| WebHwChannel {
+                        driver: "Vector".to_string(),
+                        index: channel.index,
+                        name: channel.name.clone(),
+                        detail: (counts.get(&channel.name).copied().unwrap_or(0) > 1)
+                            .then(|| format!("dev {}", channel.hw_index)),
+                    })
+                    .collect(),
+                String::new(),
+            )
+        }
+        Err(error) => (Vec::new(), error),
+    };
+    let data = WebHardware {
+        channels,
+        fr_channels,
+        error,
+        fr_error,
     };
     if let Ok(mut cache) = api.hardware.lock() {
         cache.generation = generation;
@@ -1262,6 +1297,13 @@ enum WebCommand {
         index: i32,
     },
     DetachHardware {
+        bus: u8,
+    },
+    AttachFrHardware {
+        bus: u8,
+        index: i32,
+    },
+    DetachFrHardware {
         bus: u8,
     },
     RefreshHardware,
@@ -1813,6 +1855,12 @@ fn app_loop(
                 }
                 WebCommand::DetachHardware { bus } => {
                     app.detach_hardware(bus);
+                }
+                WebCommand::AttachFrHardware { bus, index } => {
+                    app.attach_fr_watch_on(bus, index);
+                }
+                WebCommand::DetachFrHardware { bus } => {
+                    app.detach_flexray_watch(bus);
                 }
                 WebCommand::RefreshHardware => {
                     app.send(BusCommand::RefreshHardware);
@@ -3423,6 +3471,8 @@ struct WebFrBus {
     path: String,
     cluster: String,
     frames: usize,
+    attached: bool,
+    channel: i32,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -3733,7 +3783,9 @@ struct WebHwChannel {
 #[serde(rename_all = "camelCase")]
 struct WebHardware {
     channels: Vec<WebHwChannel>,
+    fr_channels: Vec<WebHwChannel>,
     error: String,
+    fr_error: String,
 }
 
 #[derive(Default)]
@@ -4079,12 +4131,17 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     let fr_buses: Vec<WebFrBus> = app
         .fr_buses
         .iter()
-        .map(|(bus, cfg)| WebFrBus {
-            bus: *bus,
-            name: app.fr_bus_name(*bus),
-            path: cfg.path.clone(),
-            cluster: cfg.db.params.name.clone(),
-            frames: cfg.db.frames.len(),
+        .map(|(bus, cfg)| {
+            let watch = app.snap.fr_watches.iter().find(|watch| watch.bus == *bus);
+            WebFrBus {
+                bus: *bus,
+                name: app.fr_bus_name(*bus),
+                path: cfg.path.clone(),
+                cluster: cfg.db.params.name.clone(),
+                frames: cfg.db.frames.len(),
+                attached: watch.is_some(),
+                channel: watch.map(|watch| watch.channel_index).unwrap_or(-1),
+            }
         })
         .collect();
     let eth_buses: Vec<WebEthBus> = app
@@ -5265,6 +5322,18 @@ mod tests {
             nested.file_name().and_then(|n| n.to_str()),
             Some("secret.csv")
         );
+    }
+
+    #[test]
+    fn flexray_rows_report_the_attached_port() {
+        let mut app = App::headless();
+        app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0));
+        app.hw.attach_fr_mock(0, 5);
+        app.refresh_snapshot();
+        let state = build_state(&app, &std::collections::VecDeque::new(), 60.0);
+        let bus = state.fr_buses.first().expect("FR bus row");
+        assert!(bus.attached);
+        assert_eq!(bus.channel, 5);
     }
 
     #[test]

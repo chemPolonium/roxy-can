@@ -83,9 +83,11 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   node appears as a chip with its generator-entry count; ticking it declares
   the node Simulated (its DBC traffic joins the generator), unticking takes it
   offline. **FlexRay** and **Ethernet** sections load a FIBEX/ARXML cluster or
-  an AUTOSAR matrix by host path and list the resulting bus, cluster and frame
-  count; loading or removing a description stops the measurement. It uses the
-  same core commands as the desktop Buses/Network windows.
+  an AUTOSAR matrix (host path or browser picker) and list the resulting bus,
+  cluster and frame count; loading or removing a description stops the
+  measurement. A loaded FlexRay bus can attach a Vector FlexRay port in
+  receive-only mode and detach it again. It uses the same core commands as
+  the desktop Buses/Network windows.
 - **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
   cycle, FD and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
   action, and FR slots added by number to a loaded cluster description. The
@@ -174,11 +176,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 ## Not here yet
 
-FlexRay/Ethernet hardware attachment and Ethernet generation
-(descriptions, replay rows, read-only Trace/Messages/Statistics and the FR
-generator are supported), docking/desktops, and syntax
-highlighting or `.rxcan` loading in the web script editor. Hardware remains
-CAN-only.
+Ethernet hardware attachment and generation (descriptions, replay rows,
+read-only Trace/Messages/Statistics and the FR generator are supported),
+docking/desktops, and syntax highlighting or `.rxcan` loading in the web
+script editor.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled
