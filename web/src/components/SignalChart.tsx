@@ -59,7 +59,13 @@ function valueText(value: number): string {
 /// Stacked signal lanes on one canvas. Curves are min/max decimated to the
 /// pixel columns, so a 12k-point series costs one vertical span per column
 /// instead of one line segment per sample.
-export function SignalChart({ series }: { series: SignalSeries[] }) {
+export function SignalChart({
+  series,
+  markers = [],
+}: {
+  series: SignalSeries[];
+  markers?: number[];
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<View>({ windowS: 30, endS: null });
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -110,6 +116,23 @@ export function SignalChart({ series }: { series: SignalSeries[] }) {
       const lanes = Math.max(1, series.length);
       const plotW = Math.max(1, width - GUTTER - 8);
       const laneH = Math.max(1, (height - TOP - AXIS_H) / lanes);
+
+      // Trigger markers: amber dashed lines behind the lanes, like the
+      // desktop Graphics window.
+      ctx.save();
+      ctx.strokeStyle = "#e6b455";
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      for (const marker of markers) {
+        if (marker < start || marker > end) continue;
+        const x = GUTTER + ((marker - start) / view.windowS) * plotW + 0.5;
+        ctx.moveTo(x, TOP);
+        ctx.lineTo(x, height - AXIS_H);
+      }
+      ctx.stroke();
+      ctx.restore();
 
       ctx.font = "10px 'Segoe UI', sans-serif";
       ctx.textBaseline = "alphabetic";
@@ -260,7 +283,7 @@ export function SignalChart({ series }: { series: SignalSeries[] }) {
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [series, view]);
+  }, [series, view, markers]);
 
   const plotWidth = () => {
     const canvas = canvasRef.current;

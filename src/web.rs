@@ -3505,6 +3505,8 @@ struct WebState {
     record_file: String,
     record_filter: String,
     mode: String,
+    /// Bus-event marker times in seconds, oldest first.
+    markers: Vec<f64>,
     frames: u64,
     fps: f64,
     trace_len: usize,
@@ -4676,6 +4678,14 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         recording: snap.recording,
         record_file: snap.last_record.clone(),
         record_filter: app.record_filter_text.clone(),
+        markers: snap
+            .markers
+            .iter()
+            .rev()
+            .take(500)
+            .rev()
+            .map(|t_us| *t_us as f64 / 1e6)
+            .collect(),
         mode: match snap.mode {
             Mode::Virtual => "Simulation".to_string(),
             Mode::Replay => "Replay".to_string(),

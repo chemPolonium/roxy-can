@@ -5,6 +5,7 @@ export interface State {
   recordFile: string;
   recordFilter: string;
   mode: string;
+  markers: number[];
   frames: number;
   fps: number;
   traceLen: number;

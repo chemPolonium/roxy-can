@@ -1283,7 +1283,7 @@ export function App() {
                 />
               </>
             ) : chartTab === "signals" ? (
-              <SignalChart series={signals} />
+              <SignalChart series={signals} markers={state?.markers ?? []} />
             ) : chartTab === "monitor" ? (
               <MonitorPanel
                 rows={state?.monitor ?? []}

@@ -112,6 +112,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
   actions including Send-to-generator-entry, and the pre/post/marker limits.
+  Insert-marker actions draw amber dashed lines in the Signals chart.
 - The **Data** tab mirrors the first Data window: per selected signal it
   shows the live value (or enum label), unit, raw wire value, min/avg/max and
   a bar scaled by the database's declared range (observed range as fallback).
