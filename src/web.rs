@@ -1076,6 +1076,16 @@ enum WebCommand {
         slot: u16,
         name: String,
     },
+    SelectEthSignal {
+        bus: u8,
+        frame: String,
+        name: String,
+    },
+    UnselectEthSignal {
+        bus: u8,
+        frame: String,
+        name: String,
+    },
     AttachHardware {
         bus: u8,
         driver: String,
@@ -1188,6 +1198,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     RemoveMonitor {
@@ -1195,6 +1206,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     ClearMonitor,
@@ -1203,6 +1215,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
         digits: Option<usize>,
         rule_on: Option<bool>,
@@ -1215,6 +1228,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     RemoveData {
@@ -1222,6 +1236,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     ClearData,
@@ -1230,6 +1245,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
         visible: bool,
     },
@@ -1238,6 +1254,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     RemoveState {
@@ -1245,6 +1262,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     ClearState,
@@ -1256,6 +1274,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
         cuts: Vec<f64>,
         names: Vec<String>,
@@ -1265,6 +1284,7 @@ enum WebCommand {
         ch: u8,
         id: u32,
         ext: bool,
+        frame: Option<String>,
         name: String,
     },
     SetEntryActive {
@@ -1582,6 +1602,32 @@ fn app_loop(
                         }
                     }
                 }
+                WebCommand::SelectEthSignal { bus, frame, name } => {
+                    let key = SigKey::eth(bus, frame, name);
+                    let already = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if !already {
+                        chart_select_key(&mut app, key.clone());
+                        if let Ok(mut store) = signals.lock() {
+                            store.select_key(&app, key);
+                        }
+                    }
+                }
+                WebCommand::UnselectEthSignal { bus, frame, name } => {
+                    let key = SigKey::eth(bus, frame, name);
+                    let selected = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if selected {
+                        chart_unselect(&mut app, &key);
+                        if let Ok(mut store) = signals.lock() {
+                            store.unselect(&key);
+                        }
+                    }
+                }
                 WebCommand::AttachHardware { bus, driver, index } => {
                     let Some(driver) = parse_driver(&driver) else {
                         app.status = format!("unknown hardware driver: {driver}");
@@ -1758,9 +1804,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1771,9 +1818,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1795,6 +1843,7 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                     digits,
                     rule_on,
@@ -1802,7 +1851,7 @@ fn app_loop(
                     threshold,
                     color,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1813,9 +1862,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1829,9 +1879,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1858,10 +1909,11 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                     visible,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1878,9 +1930,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1894,9 +1947,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1928,11 +1982,12 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                     cuts,
                     names,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -1943,9 +1998,10 @@ fn app_loop(
                     ch,
                     id,
                     ext,
+                    frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, name) else {
+                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2846,26 +2902,61 @@ fn signal_sub<'a>(app: &'a App, key: &SigKey) -> Option<&'a SubView> {
 }
 
 /// Resolves the address every observer command carries. CAN keys use a
-/// message id; FlexRay keys use a slot, carried in the same `id` field with
-/// the cluster in `ch`, so Monitor/Data/State need one command shape.
-fn command_key(kind: &str, ch: u8, id: u32, ext: bool, name: String) -> Option<SigKey> {
+/// message id; FlexRay keys use a slot in the same `id` field with the
+/// cluster in `ch`; Ethernet names its frame. One command shape covers the
+/// three bus kinds.
+fn command_key(
+    kind: &str,
+    ch: u8,
+    id: u32,
+    ext: bool,
+    frame: Option<String>,
+    name: String,
+) -> Option<SigKey> {
     match kind {
         "can" => Some(SigKey::can(ch, id, ext, name)),
         "fr" => u16::try_from(id)
             .ok()
             .map(|slot| SigKey::fr(ch, slot, name)),
+        "eth" => frame.map(|frame| SigKey::eth(ch, frame, name)),
         _ => None,
     }
 }
 
+struct RowAddress {
+    kind: &'static str,
+    ch: u8,
+    id: u32,
+    ext: bool,
+    frame: Option<String>,
+}
+
 /// Observer rows carry one address shape for every bus kind. FlexRay puts
-/// its cluster in `ch` and its slot in `id`; Ethernet stays out of these
-/// tables until their editors understand frame names.
-fn row_address(key: &SigKey) -> Option<(&'static str, u8, u32, bool)> {
+/// its cluster in `ch` and its slot in `id`; Ethernet keeps `ch` and names
+/// its frame.
+fn row_address(key: &SigKey) -> RowAddress {
     match key {
-        SigKey::Can { ch, id, ext, .. } => Some(("can", *ch, *id, *ext)),
-        SigKey::Fr { bus, slot, .. } => Some(("fr", *bus, u32::from(*slot), false)),
-        SigKey::Eth { .. } => None,
+        SigKey::Can { ch, id, ext, .. } => RowAddress {
+            kind: "can",
+            ch: *ch,
+            id: *id,
+            ext: *ext,
+            frame: None,
+        },
+        SigKey::Fr { bus, slot, .. } => RowAddress {
+            kind: "fr",
+            ch: *bus,
+            id: u32::from(*slot),
+            ext: false,
+            frame: None,
+        },
+        SigKey::Eth { bus, frame, .. } => RowAddress {
+            kind: "eth",
+            ch: *bus,
+            id: 0,
+            ext: false,
+            frame: Some(frame.clone()),
+        },
     }
 }
 
@@ -2920,6 +3011,9 @@ struct WebCatalogMessage {
     id: u32,
     extended: bool,
     name: String,
+    /// Ethernet frames are addressed by name, not by their catalog index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame: Option<String>,
     signals: Vec<WebCatalogSignal>,
 }
 
@@ -2952,7 +3046,17 @@ fn channel_signature(app: &App) -> String {
         .iter()
         .map(|(bus, cfg)| format!("fr{bus}:{}:{}", cfg.path, Arc::as_ptr(&cfg.db) as usize))
         .collect();
-    parts.into_iter().chain(fr).collect::<Vec<_>>().join(";")
+    let eth: Vec<String> = app
+        .eth_buses
+        .iter()
+        .map(|(bus, cfg)| format!("eth{bus}:{}:{}", cfg.path, Arc::as_ptr(&cfg.db) as usize))
+        .collect();
+    parts
+        .into_iter()
+        .chain(fr)
+        .chain(eth)
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn refresh_catalog(app: &App, catalog: &Arc<Mutex<WebCatalog>>, signature: &mut String) {
@@ -2988,6 +3092,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                                 id,
                                 extended: ext,
                                 name: message.name.clone(),
+                                frame: None,
                                 signals: message
                                     .signals
                                     .iter()
@@ -3020,6 +3125,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                 id: slot as u32,
                 extended: false,
                 name: frame,
+                frame: None,
                 signals: names
                     .into_iter()
                     .map(|name| {
@@ -3039,6 +3145,38 @@ fn build_catalog(app: &App) -> WebCatalog {
             kind: "fr".to_string(),
             index: *bus,
             name: app.fr_bus_name(*bus),
+            messages,
+        });
+    }
+    for (bus, cfg) in &app.eth_buses {
+        let messages = cfg
+            .db
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(index, frame)| WebCatalogMessage {
+                id: index as u32,
+                extended: false,
+                name: frame.name.clone(),
+                frame: Some(frame.name.clone()),
+                signals: frame
+                    .pdus
+                    .iter()
+                    .flat_map(|pdu| &pdu.signals)
+                    .map(|signal| WebCatalogSignal {
+                        key: series_key(&SigKey::eth(*bus, &frame.name, &signal.name)),
+                        name: signal.name.clone(),
+                        unit: signal.unit.clone(),
+                        min: 0.0,
+                        max: 0.0,
+                    })
+                    .collect(),
+            })
+            .collect();
+        channels.push(WebCatalogChannel {
+            kind: "eth".to_string(),
+            index: *bus,
+            name: app.eth_bus_label(*bus),
             messages,
         });
     }
@@ -3300,6 +3438,8 @@ struct WebMonitorRow {
     ch: u8,
     id: u32,
     ext: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame: Option<String>,
     name: String,
     label: String,
     bus: String,
@@ -3319,6 +3459,8 @@ struct WebDataRow {
     ch: u8,
     id: u32,
     ext: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame: Option<String>,
     name: String,
     bus: String,
     value: String,
@@ -3354,6 +3496,8 @@ struct WebStateRow {
     ch: u8,
     id: u32,
     ext: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame: Option<String>,
     name: String,
     bus: String,
     current: String,
@@ -3853,12 +3997,20 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             window
                 .signals
                 .iter()
-                .filter_map(|signal| {
-                    let (kind, ch, id, ext) = row_address(&signal.key)?;
+                .map(|signal| {
+                    let RowAddress {
+                        kind,
+                        ch,
+                        id,
+                        ext,
+                        frame,
+                    } = row_address(&signal.key);
                     let name = signal.key.name().to_string();
                     let sub = signal_sub(app, &signal.key);
                     let (value, unit, raw, min, avg, max, frac) = match sub {
-                        Some(sub) => {
+                        // An empty subscription has min = inf / max = -inf;
+                        // a fresh row shows dashes until its first frame.
+                        Some(sub) if sub.min <= sub.max => {
                             let frac = match app.declared_range(&signal.key) {
                                 Some((lo, hi)) if hi > lo => {
                                     ((sub.latest - lo) / (hi - lo)).clamp(0.0, 1.0)
@@ -3880,7 +4032,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                                 frac,
                             )
                         }
-                        None => (
+                        _ => (
                             "-".to_string(),
                             String::new(),
                             "-".to_string(),
@@ -3890,11 +4042,12 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                             0.0,
                         ),
                     };
-                    Some(WebDataRow {
+                    WebDataRow {
                         kind: kind.to_string(),
                         ch,
                         id,
                         ext,
+                        frame,
                         name,
                         bus: signal_bus(app, &signal.key),
                         value,
@@ -3905,7 +4058,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         max,
                         frac,
                         visible: signal.visible,
-                    })
+                    }
                 })
                 .collect()
         })
@@ -3928,8 +4081,14 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             window
                 .signals
                 .iter()
-                .filter_map(|signal| {
-                    let (kind, ch, id, ext) = row_address(&signal.key)?;
+                .map(|signal| {
+                    let RowAddress {
+                        kind,
+                        ch,
+                        id,
+                        ext,
+                        frame,
+                    } = row_address(&signal.key);
                     let name = signal.key.name().to_string();
                     let rule = window.rules.get(&signal.key);
                     let (current, bands) = match signal_sub(app, &signal.key) {
@@ -3944,11 +4103,12 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         }
                         None => ("-".to_string(), Vec::new()),
                     };
-                    Some(WebStateRow {
+                    WebStateRow {
                         kind: kind.to_string(),
                         ch,
                         id,
                         ext,
+                        frame,
                         name,
                         bus: signal_bus(app, &signal.key),
                         current,
@@ -3957,7 +4117,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                             cuts: rule.cuts.clone(),
                             names: rule.names.clone(),
                         }),
-                    })
+                    }
                 })
                 .collect()
         })
@@ -4003,16 +4163,23 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .monitor_view
         .rows
         .iter()
-        .filter_map(|row| {
-            let (kind, ch, id, ext) = row_address(&row.key)?;
+        .map(|row| {
+            let RowAddress {
+                kind,
+                ch,
+                id,
+                ext,
+                frame,
+            } = row_address(&row.key);
             let (value, unit) = signal_sub(app, &row.key)
                 .map(|sub| (sub.latest, sub.unit.clone()))
                 .unwrap_or((0.0, String::new()));
-            Some(WebMonitorRow {
+            WebMonitorRow {
                 kind: kind.to_string(),
                 ch,
                 id,
                 ext,
+                frame,
                 name: row.key.name().to_string(),
                 label: row.label.clone(),
                 bus: signal_bus(app, &row.key),
@@ -4023,7 +4190,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 rising: row.rising,
                 threshold: row.threshold,
                 color: row.color,
-            })
+            }
         })
         .collect();
 
@@ -4824,6 +4991,52 @@ mod tests {
         assert_eq!(seeded[0].bus, fr.name);
     }
 
+    /// Ethernet signals enter the same picker and observer tables. The
+    /// catalog names the frame because a matrix has no numeric id, and the
+    /// series key carries that name end to end.
+    #[test]
+    fn the_catalog_and_observers_offer_ethernet_signals() {
+        use crate::workspace::PopupTarget;
+        let mut app = App::headless();
+        let bus = app
+            .load_eth_description(crate::test_assets::eth_arxml(), Some(0))
+            .expect("Ethernet matrix loads");
+        let catalog = build_catalog(&app);
+        let eth = catalog
+            .channels
+            .iter()
+            .find(|channel| channel.kind == "eth" && channel.index == bus)
+            .expect("Ethernet catalog channel");
+        assert_eq!(eth.name, "ETH0");
+        let message = eth.messages.first().expect("frame");
+        assert_eq!(message.name, "EthFrame");
+        assert_eq!(message.frame.as_deref(), Some("EthFrame"));
+        let signal = message.signals.first().expect("signal");
+        assert_eq!(signal.key, "eth:0:EthFrame:Sig");
+
+        let key = SigKey::eth(bus, "EthFrame", "Sig");
+        app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
+        app.new_data_window();
+        app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
+        app.new_state_window();
+        app.set_win_signal(PopupTarget::State(0), key.clone(), true);
+        let state = build_state(&app, &std::collections::VecDeque::new(), 60.0);
+        let monitor = state.monitor.first().expect("monitor row");
+        assert_eq!(monitor.kind, "eth");
+        assert_eq!(monitor.frame.as_deref(), Some("EthFrame"));
+        assert_eq!(monitor.bus, "ETH0");
+        assert_eq!(state.data[0].kind, "eth");
+        assert_eq!(state.data[0].value, "-", "no samples yet, so dashes");
+        assert_eq!(state.data[0].min, "-");
+        assert_eq!(state.state_rows[0].kind, "eth");
+
+        let mut store = SignalStore::default();
+        store.select_key(&app, key.clone());
+        store.sync(&app);
+        assert_eq!(store.seed()[0].key, "eth:0:EthFrame:Sig");
+        assert_eq!(store.seed()[0].bus, "ETH0");
+    }
+
     /// The observer tables share one address shape: a FlexRay key keeps its
     /// cluster in `ch` and its slot in `id`, so Monitor/Data/State can list
     /// both bus kinds without a second set of DTOs.
@@ -4858,15 +5071,29 @@ mod tests {
     #[test]
     fn observer_commands_resolve_can_and_flexray_addresses() {
         assert_eq!(
-            command_key("can", 1, 0x100, true, "EngineSpeed".to_string()),
+            command_key("can", 1, 0x100, true, None, "EngineSpeed".to_string()),
             Some(SigKey::can(1, 0x100, true, "EngineSpeed"))
         );
         assert_eq!(
-            command_key("fr", 2, 13, false, "CarSpeed".to_string()),
+            command_key("fr", 2, 13, false, None, "CarSpeed".to_string()),
             Some(SigKey::fr(2, 13, "CarSpeed"))
         );
-        assert!(command_key("eth", 0, 1, false, "x".to_string()).is_none());
-        assert!(command_key("fr", 0, 70_000, false, "x".to_string()).is_none());
+        assert_eq!(
+            command_key(
+                "eth",
+                0,
+                0,
+                false,
+                Some("EthFrame".to_string()),
+                "Sig".to_string()
+            ),
+            Some(SigKey::eth(0, "EthFrame", "Sig"))
+        );
+        assert!(
+            command_key("eth", 0, 0, false, None, "x".to_string()).is_none(),
+            "an Ethernet address without a frame name is incomplete"
+        );
+        assert!(command_key("fr", 0, 70_000, false, None, "x".to_string()).is_none());
     }
 
     /// A replay path must open the log and start playback in Replay mode,

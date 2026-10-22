@@ -65,11 +65,12 @@ function rowKey(row: {
   kind: string;
   ch: number;
   id: number;
+  frame?: string;
   name: string;
 }): string {
-  return row.kind === "fr"
-    ? `fr:${row.ch}:${row.id}:${row.name}`
-    : `${row.ch}:${row.id}:${row.name}`;
+  if (row.kind === "fr") return `fr:${row.ch}:${row.id}:${row.name}`;
+  if (row.kind === "eth") return `eth:${row.ch}:${row.frame}:${row.name}`;
+  return `${row.ch}:${row.id}:${row.name}`;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -519,7 +520,14 @@ export function App() {
   };
 
   const editMonitor = (
-    row: { kind: string; ch: number; id: number; ext: boolean; name: string },
+    row: {
+      kind: string;
+      ch: number;
+      id: number;
+      ext: boolean;
+      frame?: string;
+      name: string;
+    },
     patch: MonitorPatch,
   ) => {
     void run({
@@ -528,6 +536,7 @@ export function App() {
       ch: row.ch,
       id: row.id,
       ext: row.ext,
+      frame: row.frame,
       name: row.name,
       digits: patch.digits,
       rule_on: patch.ruleOn,
@@ -563,6 +572,15 @@ export function App() {
         type: selected ? "select_fr_signal" : "unselect_fr_signal",
         bus: channel.index,
         slot: message.id,
+        name: signal.name,
+      });
+      return;
+    }
+    if (channel.kind === "eth") {
+      void run({
+        type: selected ? "select_eth_signal" : "unselect_eth_signal",
+        bus: channel.index,
+        frame: message.frame ?? message.name,
         name: signal.name,
       });
       return;
@@ -1221,6 +1239,7 @@ export function App() {
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
+                    frame: row.frame,
                     name: row.name,
                   })
                 }
@@ -1235,6 +1254,7 @@ export function App() {
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
+                    frame: row.frame,
                     name: row.name,
                     visible,
                   })
@@ -1246,6 +1266,7 @@ export function App() {
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
+                    frame: row.frame,
                     name: row.name,
                   })
                 }
@@ -1265,6 +1286,7 @@ export function App() {
                     ch: row.ch,
                     id: row.id,
                     ext: row.ext,
+                    frame: row.frame,
                     name: row.name,
                   })
                 }
@@ -1554,7 +1576,7 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={selectedKeys}
-          kinds={["can", "fr"]}
+          kinds={["can", "fr", "eth"]}
           onToggle={toggleSignal}
           onClose={() => setPickerOpen(false)}
         />
@@ -1567,7 +1589,7 @@ export function App() {
           error={catalogError}
           selected={monitorKeys}
           title="Monitor signals"
-          kinds={["can", "fr"]}
+          kinds={["can", "fr", "eth"]}
           onToggle={(channel, message, signal, on) =>
             void run(
               on
@@ -1577,6 +1599,7 @@ export function App() {
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
+                    frame: message.frame,
                     name: signal.name,
                   }
                 : {
@@ -1585,6 +1608,7 @@ export function App() {
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
+                    frame: message.frame,
                     name: signal.name,
                   },
             )
@@ -1600,7 +1624,7 @@ export function App() {
           error={catalogError}
           selected={dataKeys}
           title="Data signals"
-          kinds={["can", "fr"]}
+          kinds={["can", "fr", "eth"]}
           onToggle={(channel, message, signal, on) =>
             void run(
               on
@@ -1610,6 +1634,7 @@ export function App() {
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
+                    frame: message.frame,
                     name: signal.name,
                   }
                 : {
@@ -1618,6 +1643,7 @@ export function App() {
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
+                    frame: message.frame,
                     name: signal.name,
                   },
             )
@@ -1633,7 +1659,7 @@ export function App() {
           error={catalogError}
           selected={stateKeys}
           title="State signals"
-          kinds={["can", "fr"]}
+          kinds={["can", "fr", "eth"]}
           onToggle={(channel, message, signal, on) =>
             void run(
               on
@@ -1643,6 +1669,7 @@ export function App() {
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
+                    frame: message.frame,
                     name: signal.name,
                   }
                 : {
@@ -1651,6 +1678,7 @@ export function App() {
                     ch: channel.index,
                     id: message.id,
                     ext: message.extended,
+                    frame: message.frame,
                     name: signal.name,
                   },
             )
@@ -1689,6 +1717,7 @@ export function App() {
               ch: stateRule.ch,
               id: stateRule.id,
               ext: stateRule.ext,
+              frame: stateRule.frame,
               name: stateRule.name,
               cuts,
               names,
@@ -1702,6 +1731,7 @@ export function App() {
               ch: stateRule.ch,
               id: stateRule.id,
               ext: stateRule.ext,
+              frame: stateRule.frame,
               name: stateRule.name,
             });
             setStateRule(null);

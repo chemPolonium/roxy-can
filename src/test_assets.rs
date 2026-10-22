@@ -5,6 +5,45 @@
 use std::io::Read;
 use std::sync::OnceLock;
 
+/// One Ethernet cluster, frame, PDU and 16-bit signal. The frame length and
+/// PDU follow the parser's payload-length convention (no L2 header).
+const ETH_ARXML: &str = r#"<?xml version="1.0"?>
+<AUTOSAR>
+ <AR-PACKAGES><AR-PACKAGE><SHORT-NAME>Net</SHORT-NAME><ELEMENTS>
+  <ETHERNET-CLUSTER><SHORT-NAME>EthCluster</SHORT-NAME>
+   <ETHERNET-PHYSICAL-CHANNEL><SHORT-NAME>Vlan100</SHORT-NAME>
+    <VLAN-CONFIG><VLAN-IDENTIFIER>100</VLAN-IDENTIFIER></VLAN-CONFIG>
+    <ETHERNET-FRAME-TRIGGERING><SHORT-NAME>Trig</SHORT-NAME>
+     <FRAME-REF DEST="ETHERNET-FRAME">/Net/EthFrame</FRAME-REF>
+    </ETHERNET-FRAME-TRIGGERING>
+   </ETHERNET-PHYSICAL-CHANNEL>
+  </ETHERNET-CLUSTER>
+  <ETHERNET-FRAME><SHORT-NAME>EthFrame</SHORT-NAME><FRAME-LENGTH>22</FRAME-LENGTH>
+   <PDU-TO-FRAME-MAPPING><SHORT-NAME>Map</SHORT-NAME><START-POSITION>0</START-POSITION>
+    <PDU-REF DEST="I-SIGNAL-I-PDU">/Net/Pdu</PDU-REF>
+   </PDU-TO-FRAME-MAPPING>
+  </ETHERNET-FRAME>
+  <I-SIGNAL-I-PDU><SHORT-NAME>Pdu</SHORT-NAME><LENGTH>64</LENGTH>
+   <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>Sm</SHORT-NAME>
+    <START-POSITION>8</START-POSITION>
+    <PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>
+    <I-SIGNAL-REF DEST="I-SIGNAL">/Net/Sig</I-SIGNAL-REF>
+   </I-SIGNAL-TO-I-PDU-MAPPING>
+  </I-SIGNAL-I-PDU>
+  <I-SIGNAL><SHORT-NAME>Sig</SHORT-NAME><LENGTH>16</LENGTH>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/Net/Cm</COMPU-METHOD-REF>
+  </I-SIGNAL>
+  <COMPU-METHOD><SHORT-NAME>Cm</SHORT-NAME>
+   <COMPU-INTERNAL-TO-PHYS><COMPU-SCALES><COMPU-SCALE>
+    <COMPU-RATIONAL-COEFFS>
+     <COMPU-NUMERATOR><V>0</V><V>0.1</V></COMPU-NUMERATOR>
+     <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR>
+    </COMPU-RATIONAL-COEFFS>
+   </COMPU-SCALE></COMPU-SCALES></COMPU-INTERNAL-TO-PHYS>
+  </COMPU-METHOD>
+ </ELEMENTS></AR-PACKAGE></AR-PACKAGES>
+</AUTOSAR>"#;
+
 fn write_gzip(name: &str, compressed: &[u8]) {
     let mut bytes = Vec::new();
     flate2::read::GzDecoder::new(compressed)
@@ -35,6 +74,7 @@ fn ensure() {
             "PowerTrain2_v2.xml",
             crate::test_assets_data::POWERTRAIN_FIBEX2_GZ,
         );
+        std::fs::write(dir.join("EthSample.arxml"), ETH_ARXML).expect("write EthSample.arxml");
     });
 }
 
@@ -148,6 +188,10 @@ fn ensure_logs() {
         }
         writer.finish().expect("finish two-cluster BLF");
     });
+}
+
+pub fn eth_arxml() -> &'static str {
+    path("EthSample.arxml")
 }
 
 pub fn logging_asc() -> &'static str {

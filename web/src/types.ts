@@ -70,6 +70,7 @@ export interface CatalogMessage {
   id: number;
   extended: boolean;
   name: string;
+  frame?: string;
   signals: CatalogSignal[];
 }
 
@@ -189,6 +190,7 @@ export interface MonitorRow {
   ch: number;
   id: number;
   ext: boolean;
+  frame?: string;
   name: string;
   label: string;
   bus: string;
@@ -206,6 +208,7 @@ export interface DataRow {
   ch: number;
   id: number;
   ext: boolean;
+  frame?: string;
   name: string;
   bus: string;
   value: string;
@@ -235,6 +238,7 @@ export interface StateRow {
   ch: number;
   id: number;
   ext: boolean;
+  frame?: string;
   name: string;
   bus: string;
   current: string;
@@ -461,6 +465,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | {
@@ -469,6 +474,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | { type: "clear_monitor" }
@@ -478,6 +484,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
       digits?: number;
       rule_on?: boolean;
@@ -491,6 +498,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | {
@@ -499,6 +507,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | { type: "clear_data" }
@@ -508,6 +517,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
       visible: boolean;
     }
@@ -517,6 +527,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | {
@@ -525,6 +536,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | { type: "clear_state" }
@@ -535,6 +547,7 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
       cuts: number[];
       names: string[];
@@ -545,12 +558,15 @@ export type Command =
       ch: number;
       id: number;
       ext: boolean;
+      frame?: string;
       name: string;
     }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
   | { type: "select_fr_signal"; bus: number; slot: number; name: string }
   | { type: "unselect_fr_signal"; bus: number; slot: number; name: string }
+  | { type: "select_eth_signal"; bus: number; frame: string; name: string }
+  | { type: "unselect_eth_signal"; bus: number; frame: string; name: string }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
   | { type: "refresh_hardware" }

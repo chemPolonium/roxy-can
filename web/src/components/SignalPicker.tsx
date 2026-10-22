@@ -24,6 +24,7 @@ interface Props {
 
 function messageId(channel: CatalogChannel, message: CatalogMessage): string {
   if (channel.kind === "fr") return `Slot ${message.id}`;
+  if (channel.kind === "eth") return "frame";
   const width = message.extended ? 8 : 3;
   return `0x${message.id.toString(16).toUpperCase().padStart(width, "0")}`;
 }

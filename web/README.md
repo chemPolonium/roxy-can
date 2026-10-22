@@ -98,7 +98,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   shows the live value (or enum label), unit, raw wire value, min/avg/max and
   a bar scaled by the database's declared range (observed range as fallback).
   Rows can be hidden without unsubscribing, removed, or cleared; selection
-  uses the same catalog as Signals and the Monitor, including FlexRay rows.
+  uses the same catalog as Signals and the Monitor, including FlexRay and
+  Ethernet rows.
 - The **State** tab shows logic-analyzer bands for the first State Tracker
   window. Values are quantized to six significant digits, sampled into one
   band per pixel column, and drawn on a canvas over a 5 s–30 min trailing
@@ -142,9 +143,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Start/Stop/Pause/Clear trace and the same core commands as the desktop UI.
   Trace merges CAN, FlexRay (`slot N` addresses) and Ethernet rows from the
   loaded session; the status bar reports the browser's own UI frame rate.
-- The Signals tab plots real DBC signals from the loaded project, and
-  FlexRay signals when a cluster description is loaded (slots appear as
-  `Slot N` instead of hex ids). **Pick signals…** opens a searchable
+- The Signals tab plots real DBC signals from the loaded project, FlexRay
+  signals when a cluster description is loaded (slots appear as `Slot N`
+  instead of hex ids), and Ethernet signals when a matrix is loaded (frames
+  are addressed by name). **Pick signals…** opens a searchable
   bus → message → signal catalog fetched from the backend. The demo starts
   with eight auto-selected generator sources,
   while real projects start from their first Graphics window and save the
@@ -154,8 +156,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   drag pan freeze the view; double-click returns to live. With eight full
   series and continuous wheel zoom, 1024x768 and 1200x800 both hold ~60 UI
   fps.
-- The **Monitor** tab watches selected CAN or FlexRay signals as large live values with
-  an optional coloring rule (`>=`/`<=` a threshold), decimal places and a
+- The **Monitor** tab watches selected CAN, FlexRay or Ethernet signals as
+  large live values with an optional coloring rule (`>=`/`<=` a threshold), decimal places and a
   rule color; rows are project state, so the rule survives a save. Selection
   reuses the same searchable catalog, and Clear unsubscribes every row. The
   row layout stacks controls under the value at narrow widths.
@@ -172,7 +174,7 @@ and recents; the CLI flags also work), FlexRay/Ethernet hardware attachment
 and Ethernet generation (descriptions, replay rows, read-only Trace/Messages/
 Statistics and the FR generator are supported), docking/desktops, and syntax
 highlighting or `.rxcan` loading in the web script editor. Hardware remains
-CAN-only, and the observer tables skip Ethernet signals.
+CAN-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled
