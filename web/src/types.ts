@@ -15,6 +15,9 @@ export interface State {
   replayTotalUs: number | null;
   recentProjects: string[];
   recentLogs: string[];
+  buses: Bus[];
+  realBus: boolean;
+  hwRefresh: number;
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];
@@ -53,6 +56,36 @@ export interface CatalogChannel {
 
 export interface Catalog {
   channels: CatalogChannel[];
+}
+
+export interface HwAttachment {
+  driver: string;
+  adapter: number;
+  kbps: number;
+  fd: boolean;
+  canTx: boolean;
+  txFail: { reason: string; count: number } | null;
+}
+
+export interface Bus {
+  index: number;
+  name: string;
+  dbcPaths: string[];
+  bitrateKbps: number;
+  fdDataKbps: number;
+  attached: HwAttachment | null;
+}
+
+export interface HwChannel {
+  driver: string;
+  index: number;
+  name: string;
+  detail: string | null;
+}
+
+export interface Hardware {
+  channels: HwChannel[];
+  error: string;
 }
 
 /** Light state plus the incremental trace/signal hand-off. */
@@ -119,4 +152,8 @@ export type Command =
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
   | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
-  | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string };
+  | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
+  | { type: "attach_hardware"; bus: number; driver: string; index: number }
+  | { type: "detach_hardware"; bus: number }
+  | { type: "refresh_hardware" }
+  | { type: "set_bus_mode"; real: boolean };

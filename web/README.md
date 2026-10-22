@@ -55,6 +55,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - A project or log can be loaded from the Session dialog by host path or
   from recents. The header, mode chip and status bar carry the session name
   and replay playhead; switching sessions resets the trace and curve buffers.
+- **Buses…** lists each bus with its DBCs and bit rates, probes Kvaser/Vector
+  adapters on demand, attaches/detaches a selected channel at the bus's
+  configured rates, and toggles the Simulated/Real bus mode. It uses the same
+  core commands as the desktop Buses window.
 - Trace/Messages tables, a canvas chart with total and per-bus frame rates
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
@@ -73,8 +77,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 ## Not here yet
 
 Saving projects, a native browser file picker (opening uses host paths and
-recents; the CLI flags also work), hardware channels, node scripts, and
-docking/desktops. Signal selection is CAN-only and session-only for now.
+recents; the CLI flags also work), bus add/remove and DBC loading,
+FlexRay/Ethernet attachment, node scripts, and docking/desktops. Hardware
+is CAN attach/detach only for now; signal selection is CAN-only and
+session-only.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

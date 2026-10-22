@@ -800,6 +800,155 @@ button.mini {
   line-height: 15px;
 }
 
+.buses-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(780px, 100%);
+  max-height: min(820px, 92vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.buses-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.real-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #c9d6e5;
+  white-space: nowrap;
+}
+
+.real-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.buses-tools .hint {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hw-state {
+  margin-left: auto;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.hw-state.bad {
+  color: var(--error);
+}
+
+.buses-body {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.bus-card {
+  margin-bottom: 6px;
+  background: #0d1218;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bus-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.bus-head strong {
+  color: #e0e9f5;
+  font-size: 12px;
+}
+
+.bus-rates {
+  color: #8b98a9;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px;
+}
+
+.bus-dbcs {
+  margin-left: auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.bus-attach,
+.bus-attached {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  flex-wrap: wrap;
+  color: #aab7c7;
+  font-size: 10.5px;
+}
+
+.bus-attach select {
+  flex: 0 1 340px;
+  min-width: 160px;
+}
+
+.bus-attach .hint {
+  flex: 1 1 160px;
+  font-size: 10px;
+}
+
+.attach-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px rgb(84 192 138 / 45%);
+}
+
+.attach-warn {
+  color: var(--warn);
+}
+
+.bus-attached .spacer {
+  flex: 1;
+}
+
+@media (max-width: 900px) {
+  .buses-tools {
+    flex-wrap: wrap;
+  }
+
+  .hw-state {
+    margin-left: 0;
+    max-width: 100%;
+  }
+}
+
 .modal-head {
   display: flex;
   align-items: center;

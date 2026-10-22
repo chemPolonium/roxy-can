@@ -20,6 +20,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::app::{App, Mode, NodeRole};
 use crate::bus::{BusCommand, SubView};
 use crate::can::frame::{CanFrame, Direction};
+use crate::hw::HwDriver;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 
@@ -176,6 +177,7 @@ pub fn run(args: &[String]) {
     let trace = Arc::new(Mutex::new(TraceStore::default()));
     let signals = Arc::new(Mutex::new(SignalStore::default()));
     let catalog = Arc::new(Mutex::new(WebCatalog::default()));
+    let hardware = Arc::new(Mutex::new(HardwareCache::default()));
     {
         let shared = shared.clone();
         let trace = trace.clone();
@@ -195,12 +197,14 @@ pub fn run(args: &[String]) {
         let api = Router::new()
             .route("/state", get(state))
             .route("/catalog", get(catalog_handler))
+            .route("/hardware", get(hardware_handler))
             .route("/command", post(command))
             .with_state(ApiState {
                 shared,
                 trace,
                 signals,
                 catalog,
+                hardware,
                 commands: tx,
             });
         let app = Router::new().nest("/api", api).fallback_service(
@@ -224,6 +228,14 @@ fn reset_visual_stores(
     }
     series.clear();
     rate_window.clear();
+}
+
+fn parse_driver(value: &str) -> Option<HwDriver> {
+    match value {
+        "Vector" => Some(HwDriver::Vector),
+        "Kvaser" => Some(HwDriver::Kvaser),
+        _ => None,
+    }
 }
 
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
@@ -259,6 +271,7 @@ struct ApiState {
     trace: Arc<Mutex<TraceStore>>,
     signals: Arc<Mutex<SignalStore>>,
     catalog: Arc<Mutex<WebCatalog>>,
+    hardware: Arc<Mutex<HardwareCache>>,
     commands: Sender<WebCommand>,
 }
 
@@ -269,6 +282,42 @@ async fn catalog_handler(State(api): State<ApiState>) -> Json<WebCatalog> {
             .map(|catalog| catalog.clone())
             .unwrap_or_default(),
     )
+}
+
+async fn hardware_handler(State(api): State<ApiState>) -> Json<WebHardware> {
+    let generation = api.shared.lock().map(|state| state.hw_refresh).unwrap_or(0);
+    if let Ok(cache) = api.hardware.lock()
+        && cache.generation == generation
+        && let Some(data) = &cache.data
+    {
+        return Json(data.clone());
+    }
+    let probed = tokio::task::spawn_blocking(crate::hw::enumerate_all)
+        .await
+        .unwrap_or_else(|error| Err(format!("hardware probe failed: {error}")));
+    let data = match probed {
+        Ok(channels) => WebHardware {
+            channels: channels
+                .into_iter()
+                .map(|channel| WebHwChannel {
+                    driver: channel.driver.word().to_string(),
+                    index: channel.index,
+                    name: channel.name,
+                    detail: channel.detail,
+                })
+                .collect(),
+            error: String::new(),
+        },
+        Err(error) => WebHardware {
+            channels: Vec::new(),
+            error,
+        },
+    };
+    if let Ok(mut cache) = api.hardware.lock() {
+        cache.generation = generation;
+        cache.data = Some(data.clone());
+    }
+    Json(data)
 }
 
 #[derive(Default, Deserialize)]
@@ -374,6 +423,18 @@ enum WebCommand {
         id: u32,
         ext: bool,
         name: String,
+    },
+    AttachHardware {
+        bus: u8,
+        driver: String,
+        index: i32,
+    },
+    DetachHardware {
+        bus: u8,
+    },
+    RefreshHardware,
+    SetBusMode {
+        real: bool,
     },
 }
 
@@ -512,6 +573,28 @@ fn app_loop(
                             store.unselect(&key);
                         }
                     }
+                }
+                WebCommand::AttachHardware { bus, driver, index } => {
+                    let Some(driver) = parse_driver(&driver) else {
+                        app.status = format!("unknown hardware driver: {driver}");
+                        continue;
+                    };
+                    let Some(channel) = app.snap.channels.get(bus as usize) else {
+                        app.status = format!("bus {bus} does not exist");
+                        continue;
+                    };
+                    let (arb, data) = (channel.bitrate_kbps, channel.fd_data_kbps);
+                    app.hw_pick.insert(bus, (driver, index));
+                    app.set_hardware_channel(bus, driver, index, arb, Some(data));
+                }
+                WebCommand::DetachHardware { bus } => {
+                    app.detach_hardware(bus);
+                }
+                WebCommand::RefreshHardware => {
+                    app.send(BusCommand::RefreshHardware);
+                }
+                WebCommand::SetBusMode { real } => {
+                    app.send(BusCommand::SetBusMode { real });
                 }
             }
         }
@@ -1141,6 +1224,9 @@ struct WebState {
     replay_total_us: Option<u64>,
     recent_projects: Vec<String>,
     recent_logs: Vec<String>,
+    buses: Vec<WebBus>,
+    real_bus: bool,
+    hw_refresh: u64,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -1155,6 +1241,57 @@ struct WebSeriesPoint {
     total: f64,
     bus_rates: Vec<f64>,
     bus_loads: Vec<f64>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebBus {
+    index: u8,
+    name: String,
+    dbc_paths: Vec<String>,
+    bitrate_kbps: u32,
+    fd_data_kbps: u32,
+    attached: Option<WebHwAttachment>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebHwAttachment {
+    driver: String,
+    adapter: i32,
+    kbps: u32,
+    fd: bool,
+    can_tx: bool,
+    tx_fail: Option<WebTxFail>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebTxFail {
+    reason: String,
+    count: u64,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebHwChannel {
+    driver: String,
+    index: i32,
+    name: String,
+    detail: Option<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebHardware {
+    channels: Vec<WebHwChannel>,
+    error: String,
+}
+
+#[derive(Default)]
+struct HardwareCache {
+    generation: u64,
+    data: Option<WebHardware>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1205,6 +1342,32 @@ struct WebLine {
 
 fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
     let snap = &app.snap;
+    let buses: Vec<WebBus> =
+        snap.channels
+            .iter()
+            .enumerate()
+            .map(|(index, ch)| WebBus {
+                index: index as u8,
+                name: ch.name.clone(),
+                dbc_paths: ch.dbc_paths.clone(),
+                bitrate_kbps: ch.bitrate_kbps,
+                fd_data_kbps: ch.fd_data_kbps,
+                attached: snap.hw.iter().find(|hw| hw.bus == index as u8).map(|hw| {
+                    WebHwAttachment {
+                        driver: hw.driver.word().to_string(),
+                        adapter: hw.adapter,
+                        kbps: hw.kbps,
+                        fd: hw.fd,
+                        can_tx: hw.can_tx,
+                        tx_fail: hw.tx_fail.as_ref().map(|(reason, count)| WebTxFail {
+                            reason: reason.clone(),
+                            count: *count,
+                        }),
+                    }
+                }),
+            })
+            .collect();
+
     let channels: Vec<WebChannel> = snap
         .channels
         .iter()
@@ -1292,6 +1455,9 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         replay_total_us: snap.replay.map(|(_, total)| total),
         recent_projects: app.recent_projects.clone(),
         recent_logs: app.recent_log.clone(),
+        buses,
+        real_bus: snap.real_bus,
+        hw_refresh: snap.hw_refresh,
         channels,
         messages,
         write,
@@ -1391,6 +1557,26 @@ mod tests {
         store.unselect(&key);
         store.sync(&app);
         assert!(store.seed().is_empty());
+    }
+
+    /// The Buses panel gets its rows from the snapshot, including the DBC
+    /// names and the absence of an attachment.
+    #[test]
+    fn the_state_lists_buses_and_hardware_fields() {
+        let app = App::headless();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.buses.len(), 2);
+        assert_eq!(state.buses[0].name, "CAN1");
+        assert!(
+            state.buses[0]
+                .dbc_paths
+                .iter()
+                .any(|path| path.contains("sample.dbc"))
+        );
+        assert!(state.buses.iter().all(|bus| bus.attached.is_none()));
+        assert!(parse_driver("Vector").is_some());
+        assert!(parse_driver("Kvaser").is_some());
+        assert!(parse_driver("other").is_none());
     }
 
     /// The picker catalog comes from the loaded DBCs, not a hard-coded list.

@@ -75,7 +75,7 @@ cargo run -- --web --project <path.rxproj>      # 载入工程（停止状态）
 cargo run -- --web --replay <path.asc|blf>      # 载入并开始回放
 ```
 
-当前已有 Trace（50k 行虚拟化增量）、Messages、总线/帧率/负载曲线、真实 DBC 信号选择与多泳道曲线（缩放/拖动）、Start/Stop/Pause/Clear；工具栏 **Session…** 可按主机路径或最近列表切换工程/回放，无需重启服务。信号选择目前是 CAN、会话级；工程保存、原生文件选择、硬件与其余面板仍在迁移，细节和性能测试方法见 [web/README.md](web/README.md)。
+当前已有 Trace（50k 行虚拟化增量）、Messages、总线/帧率/负载曲线、真实 DBC 信号选择与多泳道曲线（缩放/拖动）、Start/Stop/Pause/Clear；工具栏 **Session…** 可按主机路径或最近列表切换工程/回放，无需重启服务，**Buses…** 可刷新/挂载/卸载 Kvaser/Vector 通道并切换 Simulated/Real bus。信号选择目前是 CAN、会话级；硬件是 CAN 挂载，工程保存、原生文件选择、总线增删/DBC 加载与其余面板仍在迁移，细节见 [web/README.md](web/README.md)。
 
 ## 上手
 

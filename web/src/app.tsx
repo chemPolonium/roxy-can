@@ -5,11 +5,13 @@ import type {
   CatalogSignal,
   Command,
   Frame,
+  Hardware,
   SignalSeries,
   State,
 } from "./types";
-import { fetchCatalog, fetchState, sendCommand } from "./api";
+import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
 import { Activity } from "./components/Activity";
+import { BusesModal } from "./components/BusesModal";
 import { MessageTable } from "./components/MessageTable";
 import { BUS_COLORS, RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
@@ -128,6 +130,10 @@ export function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  const [busesOpen, setBusesOpen] = useState(false);
+  const [hardware, setHardware] = useState<Hardware | null>(null);
+  const [hardwareLoading, setHardwareLoading] = useState(false);
+  const [hardwareError, setHardwareError] = useState("");
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
   const uiFps = useUiFps();
@@ -223,6 +229,27 @@ export function App() {
   }, [sessionOpen]);
 
   useEffect(() => {
+    if (!busesOpen) return;
+    let alive = true;
+    setHardwareLoading(true);
+    fetchHardware()
+      .then((data) => {
+        if (!alive) return;
+        setHardware(data);
+        setHardwareError("");
+      })
+      .catch((error) => {
+        if (alive) setHardwareError(String(error));
+      })
+      .finally(() => {
+        if (alive) setHardwareLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [busesOpen, state?.hwRefresh]);
+
+  useEffect(() => {
     if (!drag) return;
     const move = (event: PointerEvent) => {
       if (drag === "main" && workspaceRef.current) {
@@ -272,6 +299,7 @@ export function App() {
 
   const openPicker = async () => {
     setSessionOpen(false);
+    setBusesOpen(false);
     setPickerOpen(true);
     setCatalogLoading(true);
     try {
@@ -308,6 +336,14 @@ export function App() {
           },
     );
   };
+
+  const refreshHardware = () => void run({ type: "refresh_hardware" });
+  const attachHardware = (bus: number, driver: string, index: number) =>
+    void run({ type: "attach_hardware", bus, driver, index });
+  const detachHardware = (bus: number) =>
+    void run({ type: "detach_hardware", bus });
+  const setRealBus = (real: boolean) =>
+    void run({ type: "set_bus_mode", real });
 
   const recent = (paths: string[], open: (path: string) => void) =>
     paths.length > 0 && (
@@ -372,7 +408,19 @@ export function App() {
             type="button"
             disabled={!online}
             onClick={() => {
+              setSessionOpen(false);
               setPickerOpen(false);
+              setBusesOpen(true);
+            }}
+          >
+            Buses…
+          </button>
+          <button
+            type="button"
+            disabled={!online}
+            onClick={() => {
+              setPickerOpen(false);
+              setBusesOpen(false);
               setSessionOpen(true);
             }}
           >
@@ -624,6 +672,21 @@ export function App() {
         <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
       </footer>
+
+      {busesOpen && (
+        <BusesModal
+          buses={state?.buses ?? []}
+          realBus={state?.realBus ?? false}
+          hardware={hardware}
+          loading={hardwareLoading}
+          error={hardwareError}
+          onRefresh={refreshHardware}
+          onAttach={attachHardware}
+          onDetach={detachHardware}
+          onSetReal={setRealBus}
+          onClose={() => setBusesOpen(false)}
+        />
+      )}
 
       {pickerOpen && (
         <SignalPicker
