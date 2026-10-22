@@ -1045,6 +1045,62 @@ button.mini {
   font-size: 10px;
 }
 
+.bus-nodes {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 10px 2px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bus-nodes-label {
+  flex: 0 0 52px;
+  padding-top: 4px;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.bus-node-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.node-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  background: #121923;
+  border: 1px solid #263140;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.node-chip.on {
+  background: #142334;
+  border-color: #2d5c88;
+  color: #cfe6ff;
+}
+
+.node-chip input {
+  width: 11px;
+  height: 11px;
+  accent-color: #2f7fe0;
+}
+
+.node-chip em {
+  color: #8d9aab;
+  font-size: 9px;
+  font-style: normal;
+}
+
 .bus-dbc-row input {
   flex: 1 1 auto;
   min-width: 0;

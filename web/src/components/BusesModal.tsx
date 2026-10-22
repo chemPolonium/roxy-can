@@ -13,6 +13,7 @@ interface Props {
   onRenameBus: (bus: number, name: string) => void;
   onSetRates: (bus: number, arb: number, fd: number) => void;
   onLoadDbc: (bus: number, path: string) => void;
+  onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
   onAttach: (bus: number, driver: string, index: number) => void;
   onDetach: (bus: number) => void;
   onSetReal: (real: boolean) => void;
@@ -53,6 +54,7 @@ function BusCard({
   onRename,
   onSetRates,
   onLoadDbc,
+  onSetNodeRole,
 }: {
   bus: Bus;
   channels: HwChannel[];
@@ -63,6 +65,7 @@ function BusCard({
   onRename: (bus: number, name: string) => void;
   onSetRates: (bus: number, arb: number, fd: number) => void;
   onLoadDbc: (bus: number, path: string) => void;
+  onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
 }) {
   const [name, setName] = useState(bus.name);
   const nameRef = useRef(bus.name);
@@ -199,6 +202,39 @@ function BusCard({
         </button>
       </div>
 
+      {bus.nodes.length > 0 && (
+        <div class="bus-nodes">
+          <span class="bus-nodes-label">Nodes</span>
+          <div class="bus-node-list">
+            {bus.nodes.map((node) => (
+              <label
+                class={`node-chip ${node.simulated ? "on" : ""}`}
+                key={node.name}
+                title={`${node.entries} generator ${
+                  node.entries === 1 ? "entry" : "entries"
+                }; click to ${
+                  node.simulated ? "take it offline" : "simulate it"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={node.simulated}
+                  onChange={(event) =>
+                    onSetNodeRole(
+                      bus.index,
+                      node.name,
+                      (event.target as HTMLInputElement).checked,
+                    )
+                  }
+                />
+                {node.name}
+                {node.entries > 0 && <em>{node.entries}</em>}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       {bus.attached ? (
         <div class="bus-attached">
           <span class="attach-dot" />
@@ -275,6 +311,7 @@ export function BusesModal({
   onRenameBus,
   onSetRates,
   onLoadDbc,
+  onSetNodeRole,
   onAttach,
   onDetach,
   onSetReal,
@@ -362,6 +399,7 @@ export function BusesModal({
               onRename={onRenameBus}
               onSetRates={onSetRates}
               onLoadDbc={onLoadDbc}
+              onSetNodeRole={onSetNodeRole}
             />
           ))}
         </div>

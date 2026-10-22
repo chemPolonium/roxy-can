@@ -669,6 +669,11 @@ enum WebCommand {
         bitrate_kbps: u32,
         fd_data_kbps: u32,
     },
+    SetNodeRole {
+        bus: u8,
+        node: String,
+        simulated: bool,
+    },
     LoadDbc {
         ch: u8,
         path: String,
@@ -1284,6 +1289,21 @@ fn app_loop(
                 }
                 WebCommand::ClearEntrySource { ch, id, name } => {
                     app.send(BusCommand::ClearEntrySource { ch, id, name });
+                }
+                WebCommand::SetNodeRole {
+                    bus,
+                    node,
+                    simulated,
+                } => {
+                    app.send(BusCommand::SetNodeRole {
+                        ch: bus,
+                        node,
+                        role: if simulated {
+                            crate::app::NodeRole::Simulated
+                        } else {
+                            crate::app::NodeRole::Absent
+                        },
+                    });
                 }
                 WebCommand::AddEntry { ch, id } => {
                     app.send(BusCommand::AddEntry { ch, id });
@@ -2123,12 +2143,21 @@ struct WebSeriesPoint {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebNode {
+    name: String,
+    simulated: bool,
+    entries: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebBus {
     index: u8,
     name: String,
     dbc_paths: Vec<String>,
     bitrate_kbps: u32,
     fd_data_kbps: u32,
+    nodes: Vec<WebNode>,
     attached: Option<WebHwAttachment>,
 }
 
@@ -2368,31 +2397,51 @@ struct WebLine {
 
 fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
     let snap = &app.snap;
-    let buses: Vec<WebBus> =
-        snap.channels
-            .iter()
-            .enumerate()
-            .map(|(index, ch)| WebBus {
-                index: index as u8,
-                name: ch.name.clone(),
-                dbc_paths: ch.dbc_paths.clone(),
-                bitrate_kbps: ch.bitrate_kbps,
-                fd_data_kbps: ch.fd_data_kbps,
-                attached: snap.hw.iter().find(|hw| hw.bus == index as u8).map(|hw| {
-                    WebHwAttachment {
-                        driver: hw.driver.word().to_string(),
-                        adapter: hw.adapter,
-                        kbps: hw.kbps,
-                        fd: hw.fd,
-                        can_tx: hw.can_tx,
-                        tx_fail: hw.tx_fail.as_ref().map(|(reason, count)| WebTxFail {
-                            reason: reason.clone(),
-                            count: *count,
-                        }),
-                    }
+    let buses: Vec<WebBus> = snap
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(index, ch)| WebBus {
+            index: index as u8,
+            name: ch.name.clone(),
+            dbc_paths: ch.dbc_paths.clone(),
+            bitrate_kbps: ch.bitrate_kbps,
+            fd_data_kbps: ch.fd_data_kbps,
+            nodes: ch
+                .dbc
+                .as_ref()
+                .map(|db| {
+                    db.nodes
+                        .iter()
+                        .map(|node| WebNode {
+                            name: node.clone(),
+                            simulated: ch.role_of(node) == crate::app::NodeRole::Simulated,
+                            entries: snap
+                                .tx
+                                .iter()
+                                .filter(|entry| entry.channel == index as u8 && entry.node == *node)
+                                .count(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            attached: snap
+                .hw
+                .iter()
+                .find(|hw| hw.bus == index as u8)
+                .map(|hw| WebHwAttachment {
+                    driver: hw.driver.word().to_string(),
+                    adapter: hw.adapter,
+                    kbps: hw.kbps,
+                    fd: hw.fd,
+                    can_tx: hw.can_tx,
+                    tx_fail: hw.tx_fail.as_ref().map(|(reason, count)| WebTxFail {
+                        reason: reason.clone(),
+                        count: *count,
+                    }),
                 }),
-            })
-            .collect();
+        })
+        .collect();
 
     let mut tx: Vec<WebTx> = snap
         .tx
@@ -3125,6 +3174,40 @@ mod tests {
         app.settle();
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert!(state.state_rows.is_empty());
+    }
+
+    /// Bus nodes carry their role and generator-entry count, so the Buses
+    /// dialog can switch simulation per ECU instead of all-or-nothing.
+    #[test]
+    fn the_state_lists_bus_nodes_and_roles() {
+        let mut app = App::headless();
+        let node = app.snap.channels[0]
+            .dbc
+            .as_ref()
+            .and_then(|db| db.nodes.first().cloned())
+            .expect("sample DBC nodes");
+        app.set_node_role(0, &node, crate::app::NodeRole::Simulated);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let bus = state
+            .buses
+            .iter()
+            .find(|bus| bus.index == 0)
+            .expect("first bus");
+        let row = bus
+            .nodes
+            .iter()
+            .find(|row| row.name == node)
+            .expect("the node is listed");
+        assert!(row.simulated);
+        assert!(row.entries > 0, "a simulated node owns generator entries");
+
+        app.set_node_role(0, &node, crate::app::NodeRole::Absent);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let bus = state.buses.iter().find(|bus| bus.index == 0).unwrap();
+        let row = bus.nodes.iter().find(|row| row.name == node).unwrap();
+        assert!(!row.simulated);
     }
 
     /// A replay path must open the log and start playback in Replay mode,

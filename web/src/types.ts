@@ -80,12 +80,19 @@ export interface HwAttachment {
   txFail: { reason: string; count: number } | null;
 }
 
+export interface BusNode {
+  name: string;
+  simulated: boolean;
+  entries: number;
+}
+
 export interface Bus {
   index: number;
   name: string;
   dbcPaths: string[];
   bitrateKbps: number;
   fdDataKbps: number;
+  nodes: BusNode[];
   attached: HwAttachment | null;
 }
 
@@ -373,6 +380,7 @@ export type Command =
       fd_data_kbps: number;
     }
   | { type: "load_dbc"; ch: number; path: string }
+  | { type: "set_node_role"; bus: number; node: string; simulated: boolean }
   | { type: "set_entry_active"; ch: number; id: number; on: boolean }
   | { type: "set_entry_cycle"; ch: number; id: number; cycle_us: number }
   | { type: "set_entry_fd"; ch: number; id: number; fd: boolean }

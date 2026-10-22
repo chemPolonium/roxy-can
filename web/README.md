@@ -74,8 +74,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   adapters on demand, attaches/detaches a selected channel at the bus's
   configured rates, and toggles the Simulated/Real bus mode. Buses can be
   added, removed, renamed, re-rated and given a new DBC by host path; removing
-  one remaps the web signal keys with the core's channel indices. It uses the
-  same core commands as the desktop Buses window.
+  one remaps the web signal keys with the core's channel indices. Each DBC
+  node appears as a chip with its generator-entry count; ticking it declares
+  the node Simulated (its DBC traffic joins the generator), unticking takes it
+  offline. It uses the same core commands as the desktop Buses/Network windows.
 - **Generator…** edits the real TxView list: per-entry On, cycle, FD, hex
   payload, add-from-DBC/remove, and a per-bus “Simulate nodes” action. The
   Write tab shows the bus Write ring (command results, node errors, trigger

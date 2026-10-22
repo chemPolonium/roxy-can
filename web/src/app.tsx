@@ -1247,6 +1247,9 @@ export function App() {
           onRenameBus={renameBus}
           onSetRates={setBusRates}
           onLoadDbc={loadDbc}
+          onSetNodeRole={(bus, node, simulated) =>
+            void run({ type: "set_node_role", bus, node, simulated })
+          }
           onAttach={attachHardware}
           onDetach={detachHardware}
           onSetReal={setRealBus}
