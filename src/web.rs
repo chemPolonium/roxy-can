@@ -1423,6 +1423,9 @@ enum WebCommand {
         ch: u8,
         path: String,
     },
+    ImportArxml {
+        path: String,
+    },
     SaveProject {
         path: Option<String>,
     },
@@ -1997,6 +2000,12 @@ fn app_loop(
                         fd_data_kbps: Some(fd_data_kbps),
                         node_roles: None,
                     });
+                }
+                WebCommand::ImportArxml { path } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.import_arxml_path(&path);
                 }
                 WebCommand::SaveProject { path } => {
                     let target = path

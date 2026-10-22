@@ -1616,6 +1616,7 @@ export function App() {
           onRenameBus={renameBus}
           onSetRates={setBusRates}
           onLoadDbc={loadDbc}
+          onImportArxml={(path) => void run({ type: "import_arxml", path })}
           onSetNodeRole={(bus, node, simulated) =>
             void run({ type: "set_node_role", bus, node, simulated })
           }

@@ -25,6 +25,7 @@ interface Props {
   onRenameBus: (bus: number, name: string) => void;
   onSetRates: (bus: number, arb: number, fd: number) => void;
   onLoadDbc: (bus: number, path: string) => void;
+  onImportArxml: (path: string) => void;
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
   onLoadFr: (path: string) => void;
   onRemoveFr: (bus: number) => void;
@@ -346,6 +347,7 @@ export function BusesModal({
   onRenameBus,
   onSetRates,
   onLoadDbc,
+  onImportArxml,
   onSetNodeRole,
   onLoadFr,
   onRemoveFr,
@@ -432,6 +434,18 @@ export function BusesModal({
         </div>
 
         <div class="buses-body">
+          <div class="bus-import">
+            <FilePick
+              label="Import ARXML…"
+              accept=".arxml"
+              onError={onError}
+              onPick={onImportArxml}
+            />
+            <span class="hint">
+              Adds every CAN, FlexRay and Ethernet cluster in one file as its
+              own bus.
+            </span>
+          </div>
           {buses.length === 0 && (
             <div class="empty">
               <strong>No buses in this session</strong>

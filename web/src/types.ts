@@ -607,6 +607,7 @@ export type Command =
       fd_data_kbps: number;
     }
   | { type: "load_dbc"; ch: number; path: string }
+  | { type: "import_arxml"; path: string }
   | { type: "set_node_role"; bus: number; node: string; simulated: boolean }
   | { type: "load_fr_description"; path: string; bus: number | null }
   | { type: "remove_fr_bus"; bus: number }

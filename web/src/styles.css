@@ -1266,6 +1266,18 @@ button.mini.on {
   color: #d8a0a0;
 }
 
+.bus-import {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bus-import .hint {
+  min-width: 0;
+}
+
 .bus-dbc-row {
   display: flex;
   align-items: center;
