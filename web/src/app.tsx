@@ -36,6 +36,7 @@ import { TraceTable } from "./components/TraceTable";
 import {
   EMPTY_TRACE_FILTER,
   TraceFilterModal,
+  parseIds,
   traceFilterActive,
 } from "./components/TraceFilterModal";
 import type { TraceFilter } from "./components/TraceFilterModal";
@@ -611,10 +612,14 @@ export function App() {
     const payload = traceFilter.payload.trim().toUpperCase().replace(/\s+/g, "");
     const from = traceFilter.from.trim() === "" ? null : Number(traceFilter.from) * 1e6;
     const to = traceFilter.to.trim() === "" ? null : Number(traceFilter.to) * 1e6;
+    const include = parseIds(traceFilter.idInclude);
+    const exclude = parseIds(traceFilter.idExclude);
     return traceRows.filter((frame) => {
       if (bus !== "all" && frame.bus !== bus) return false;
       if (traceFilter.dir !== "all" && frame.dir !== traceFilter.dir) return false;
       if (traceFilter.dbcOnly && !frame.name) return false;
+      if (include && !include.has(frame.id)) return false;
+      if (exclude?.has(frame.id)) return false;
       if (payload && !frame.data.toUpperCase().replace(/\s+/g, "").includes(payload)) {
         return false;
       }

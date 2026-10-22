@@ -6,6 +6,8 @@ export interface TraceFilter {
   payload: string;
   from: string;
   to: string;
+  idInclude: string;
+  idExclude: string;
 }
 
 export const EMPTY_TRACE_FILTER: TraceFilter = {
@@ -14,6 +16,8 @@ export const EMPTY_TRACE_FILTER: TraceFilter = {
   payload: "",
   from: "",
   to: "",
+  idInclude: "",
+  idExclude: "",
 };
 
 export function traceFilterActive(filter: TraceFilter): boolean {
@@ -22,8 +26,25 @@ export function traceFilterActive(filter: TraceFilter): boolean {
     filter.dbcOnly ||
     filter.payload.trim() !== "" ||
     filter.from.trim() !== "" ||
-    filter.to.trim() !== ""
+    filter.to.trim() !== "" ||
+    filter.idInclude.trim() !== "" ||
+    filter.idExclude.trim() !== ""
   );
+}
+
+/** Hex ids separated by commas/spaces; unparsable tokens are ignored. */
+export function parseIds(text: string): Set<number> | null {
+  const tokens = text
+    .split(/[\s,;]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return null;
+  const ids = new Set<number>();
+  for (const token of tokens) {
+    const value = Number.parseInt(token.replace(/^0x/i, ""), 16);
+    if (Number.isFinite(value) && value >= 0) ids.add(value);
+  }
+  return ids;
 }
 
 interface Props {
@@ -113,6 +134,30 @@ export function TraceFilterModal({ filter, onApply, onClose }: Props) {
                 placeholder="end"
                 onInput={(event) =>
                   set({ to: (event.target as HTMLInputElement).value })
+                }
+              />
+            </label>
+          </div>
+          <div class="filter-time">
+            <label>
+              Only IDs (hex)
+              <input
+                value={draft.idInclude}
+                placeholder="100, 3F4"
+                spellcheck={false}
+                onInput={(event) =>
+                  set({ idInclude: (event.target as HTMLInputElement).value })
+                }
+              />
+            </label>
+            <label>
+              Exclude IDs (hex)
+              <input
+                value={draft.idExclude}
+                placeholder="0x200"
+                spellcheck={false}
+                onInput={(event) =>
+                  set({ idExclude: (event.target as HTMLInputElement).value })
                 }
               />
             </label>

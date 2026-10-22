@@ -126,7 +126,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   relative ones resolve against the server's working directory. Exports use
   the first desktop window of that kind, which is All buses by default.
 - Trace/Messages tables, bus and text filtering, the extra **Filters** dialog
-  (direction, decoded-only, payload substring, time range), a canvas chart
+  (direction, decoded-only, payload substring, time range, only/exclude hex
+  ids), a canvas chart
   with total and per-bus frame rates plus dashed bus-load lines,
   Start/Stop/Pause/Clear trace and the same core commands as the desktop UI.
   The status bar reports the browser's own UI frame rate.
