@@ -53,6 +53,7 @@ pub enum BusesCmd {
     PickEthArxml(u8),
     RemoveEthBus(u8),
     SetEthLengthIncludesHeader(bool),
+    ImportArxml,
 }
 
 /// The arbitration bit rates a CAN bus is wired for in practice. A pick list,
@@ -339,9 +340,21 @@ fn merged_rows(counts: &[(u8, u64)], configured: &[(u8, Option<u8>)]) -> Vec<(u8
     out
 }
 
+/// One CAN row as drawn: name, DBC paths, ARXML source, arb/FD rates.
+type CanBusRow = (String, Vec<String>, Option<(String, String)>, u32, u32);
+
 fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
     if ui.button("+ Add bus") {
         cmds.push(BusesCmd::AddChannel);
+    }
+    ui.same_line();
+    if ui.button("Import ARXML...") {
+        cmds.push(BusesCmd::ImportArxml);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "Load every CAN, FlexRay and Ethernet cluster in one ARXML file; each cluster becomes its own bus",
+        );
     }
     ui.same_line();
     ui.text(format!("{} bus(es)", app.snap.channel_count));
@@ -367,28 +380,31 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             return;
         };
         ui.table_setup_column_stretch_weight("Name", TableColumnFlags::NONE, 1.0);
-        ui.table_setup_column_stretch_weight("DBC", TableColumnFlags::NONE, 1.6);
+        ui.table_setup_column_stretch_weight("Database", TableColumnFlags::NONE, 1.6);
         ui.table_setup_column_fixed_width("kbit/s (arb / FD data)", TableColumnFlags::NONE, 190.0);
         ui.table_setup_column_fixed_width("Hardware", TableColumnFlags::NONE, 140.0);
         ui.table_setup_column_fixed_width("", TableColumnFlags::NONE, 26.0);
         ui.table_headers_row();
 
         // The rows render from the snapshot; edits are frontend drafts
-        // that commit as commands.
-        let views: Vec<(String, Vec<String>, u32, u32)> = app
+        // that commit as commands. The ARXML source is a frontend map, not a
+        // channel path: a parsed cluster replaces the DBC path list.
+        let views: Vec<CanBusRow> = app
             .snap
             .channels
             .iter()
-            .map(|c| {
+            .enumerate()
+            .map(|(i, c)| {
                 (
                     c.name.clone(),
                     c.dbc_paths.clone(),
+                    app.can_arxml.get(&(i as u8)).cloned(),
                     c.bitrate_kbps,
                     c.fd_data_kbps,
                 )
             })
             .collect();
-        for (i, (name, paths, arb_kbps, data_kbps)) in views.into_iter().enumerate() {
+        for (i, (name, paths, arxml, arb_kbps, data_kbps)) in views.into_iter().enumerate() {
             ui.table_next_row();
             if !ui.table_next_column() {
                 continue;
@@ -420,11 +436,17 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
             ui.table_next_column();
             let path = paths.first().cloned().unwrap_or_default();
             let extras: Vec<String> = paths.iter().skip(1).cloned().collect();
-            ui.text(if path.trim().is_empty() {
-                "(none)".to_string()
+            let has_arxml = arxml.is_some();
+            if let Some((src, cluster)) = &arxml {
+                ui.text(file_name(src));
+                ui.text_disabled(format!("ARXML · {cluster}"));
             } else {
-                file_name(&path)
-            });
+                ui.text(if path.trim().is_empty() {
+                    "(none)".to_string()
+                } else {
+                    file_name(&path)
+                });
+            }
             // Same two lines as the FlexRay rows below: the value first, the
             // actions underneath, so a long file name can never push a button
             // out of the cell. No baseline alignment either -- the small
@@ -433,14 +455,24 @@ fn content(view: &mut BusesView, app: &App, ui: &Ui, cmds: &mut Vec<BusesCmd>) {
                 cmds.push(BusesCmd::PickDbc(i));
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("Change this bus's primary DBC file (it takes precedence for decoding and name lookup)");
+                ui.tooltip_text(if has_arxml {
+                    "Replace this bus's ARXML database with a DBC file"
+                } else {
+                    "Change this bus's primary DBC file (it takes precedence for decoding and name lookup)"
+                });
             }
             ui.same_line();
+            let attach_disabled = ui.begin_disabled_with_cond(has_arxml);
             if ui.button(format!("+##busdbadd{i}")) {
                 cmds.push(BusesCmd::AttachDbc(i));
             }
+            attach_disabled.end();
             if ui.is_item_hovered() {
-                ui.tooltip_text("Attach more DBC files to this bus");
+                ui.tooltip_text(if has_arxml {
+                    "Extra DBC files are unavailable while this bus is loaded from ARXML; replace the database first"
+                } else {
+                    "Attach more DBC files to this bus"
+                });
             }
             // Extra attached databases: one line each with a detach button.
             for (e, extra) in extras.iter().enumerate() {
@@ -982,6 +1014,7 @@ impl App {
                 }
                 BusesCmd::RemoveEthBus(bus) => self.remove_eth_bus(bus),
                 BusesCmd::SetEthLengthIncludesHeader(on) => self.set_eth_length_includes_header(on),
+                BusesCmd::ImportArxml => self.import_arxml_dialog(),
             }
         }
     }

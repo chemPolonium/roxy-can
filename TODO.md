@@ -38,7 +38,7 @@
 ## ARXML 通信层（审计见 `docs/arxml-communication-audit.md`）
 
 - FlexRay 现有缺口的代码修复：`PDU-TRIGGERING` 周期、ECU 端口/连接器、Signal Group、update bit、SystemSignal 扇出、min/max、cluster 引用。
-- CAN / CAN FD ARXML cluster 支持。
+- CAN ARXML 的 Container/Multiplexed/Secured PDU、Signal Group、update bit；当前只读普通 `I-SIGNAL-I-PDU`。
 - 以太网必需的子集随以太网功能实现；其余只记录，不在本次补。
 
 ## 远期候选

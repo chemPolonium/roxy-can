@@ -314,6 +314,16 @@ pub struct App {
     /// Ethernet buses and the ARXML matrices loaded for them. Separate index
     /// space from CAN and FlexRay.
     pub eth_buses: std::collections::BTreeMap<u8, EthBusCfg>,
+    /// CAN buses whose database came from one named cluster of an ARXML
+    /// matrix: bus -> (file path, cluster). The parsed table lives on the
+    /// channel like a DBC's; this is the source identity the project saves and
+    /// the Buses cell shows.
+    pub can_arxml: std::collections::BTreeMap<u8, (String, String)>,
+    /// FlexRay buses imported from one named cluster of a multi-cluster file.
+    /// Absent means the whole file (the manual Add FlexRay path).
+    pub fr_clusters: std::collections::BTreeMap<u8, String>,
+    /// The same for Ethernet buses imported from one named cluster.
+    pub eth_clusters: std::collections::BTreeMap<u8, String>,
     /// Whether the matrix's `FRAME-LENGTH` includes the 14-byte L2 header.
     /// The capture payload never does; this is the project-level convention
     /// that makes the two lengths comparable.
@@ -494,6 +504,9 @@ impl App {
             fr_buses: Default::default(),
             fr_names: Default::default(),
             eth_buses: Default::default(),
+            can_arxml: Default::default(),
+            fr_clusters: Default::default(),
+            eth_clusters: Default::default(),
             eth_length_includes_header: false,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,

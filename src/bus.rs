@@ -120,7 +120,6 @@ pub struct FrWatchView {
 /// action, deliberately carrying no UI state -- no picked file paths, no
 /// window selections; the frontend resolves those before asking. That is
 /// what lets the same enum cross a thread unchanged in stage 3.
-#[derive(Clone, Debug, PartialEq)]
 pub enum BusCommand {
     /// Fresh virtual run: swap in a new virtual source, blank every
     /// run-scored counter, measure against the wall clock.
@@ -148,6 +147,19 @@ pub enum BusCommand {
     /// Add a bus with the sample DBC path, load it, and pre-populate its
     /// generator.
     AddChannel,
+    /// Append a CAN bus whose database was already parsed from one ARXML
+    /// cluster. The frontend carries the table so a parse error is reported
+    /// before the bus exists.
+    AddChannelWithDbc {
+        name: String,
+        dbc: Arc<crate::dbc::SymbolTable>,
+        bitrate_kbps: u32,
+    },
+    /// Replace one CAN bus's database from a parsed ARXML cluster.
+    SetChannelDbc {
+        ch: u8,
+        dbc: Arc<crate::dbc::SymbolTable>,
+    },
     /// Remove bus `ch` and remap every channel-indexed reference one step
     /// down. The frontend remaps its own window state in the same stroke.
     RemoveChannel {
@@ -1288,6 +1300,12 @@ impl BusCore {
             BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
+            BusCommand::AddChannelWithDbc {
+                name,
+                dbc,
+                bitrate_kbps,
+            } => self.add_channel_with_dbc(name, dbc, bitrate_kbps, status),
+            BusCommand::SetChannelDbc { ch, dbc } => self.set_channel_dbc(ch, dbc, status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
             BusCommand::SetNodeRole { ch, node, role } => {
                 self.set_node_role(ch, &node, role, status)
@@ -3058,6 +3076,61 @@ impl BusCore {
         for id in ids {
             self.add_entry(ch as u8, id);
         }
+    }
+
+    /// Appends a CAN bus from an already-parsed ARXML cluster. The table is
+    /// the same shape a DBC load produces; no file is read here, so a parse
+    /// error was already reported by the frontend before this command.
+    fn add_channel_with_dbc(
+        &mut self,
+        name: String,
+        dbc: Arc<crate::dbc::SymbolTable>,
+        bitrate_kbps: u32,
+        status: &mut String,
+    ) {
+        self.bus_counter += 1;
+        self.channels.push(Channel {
+            name: name.clone(),
+            dbc: Some(Arc::clone(&dbc)),
+            dbc_paths: Vec::new(),
+            dbc_sums: Vec::new(),
+            node_roles: std::collections::BTreeMap::new(),
+            bitrate_kbps,
+            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
+        });
+        self.bus_loads.push(crate::load::BusLoad::new());
+        self.loads_dirty = true;
+        self.nodes_dirty = true;
+        let ch = self.channels.len() - 1;
+        self.seed_entries_for_simulated(ch);
+        self.adopt_orphan_scripts(ch);
+        let ids: Vec<u32> = dbc.order.iter().map(|&(id, _)| id).collect();
+        for id in ids {
+            self.add_entry(ch as u8, id);
+        }
+        *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
+    }
+
+    /// Replaces one bus's database from a parsed ARXML cluster, leaving its
+    /// port, name and role declarations alone. The source table's paths are
+    /// cleared: the project carries the ARXML path/cluster separately.
+    fn set_channel_dbc(&mut self, ch: u8, dbc: Arc<crate::dbc::SymbolTable>, status: &mut String) {
+        let Some(channel) = self.channels.get_mut(ch as usize) else {
+            return;
+        };
+        let name = channel.name.clone();
+        channel.dbc = Some(Arc::clone(&dbc));
+        channel.dbc_paths.clear();
+        channel.dbc_sums.clear();
+        self.nodes_dirty = true;
+        for node in &mut self.nodes {
+            if node.channel == ch {
+                node.refresh_named_signals(&dbc);
+            }
+        }
+        self.seed_entries_for_simulated(ch as usize);
+        self.adopt_orphan_scripts(ch as usize);
+        *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
     }
 
     /// (Re)loads every database attached to the bus (primary first, then

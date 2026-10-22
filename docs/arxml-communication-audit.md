@@ -34,7 +34,7 @@
 | `UPDATE-INDICATION-BIT-POSITION` | 未读取 | 否 | 解码可忽略更新位 |
 | 信号 `min`/`max` | 未读取 | 否 | Graphics/DBC 范围可后续 |
 | 多 cluster 引用 | 未解析，取第一个 | 是* | 同一文件多 Ethernet cluster 时需按引用选择 |
-| `CAN-CLUSTER` / `CAN-FRAME` | 完全不解析 | 否 | 只在审计中记录，不在本次实现 |
+| `CAN-CLUSTER` / `CAN-FRAME` | 已实现（`src/can_arxml.rs`）：CAN 地址/帧类、帧→PDU、I-Signal、compu/单位、PDU 周期、ECU 端口发送方 | — | 多 cluster 文件按 cluster 分别导入 |
 | `CONTAINER-I-PDU` | 未读取 | 否 | SOME/IP / 容器解码超出本次范围 |
 | `MULTIPLEXED-I-PDU` | 未读取 | 否 | 同上 |
 | `SECURED-I-PDU` | 未读取 | 否 | 认证信息不作为应用信号 |
@@ -76,14 +76,12 @@
 - Container/Multiplexed/Secured 解码。
 - SOME/IP/SD/DoIP/TSN/SoAd/switch。
 - ARXML 写回/矩阵编辑。
-- CAN/CAN FD ARXML cluster。
 - FlexRay 现有缺口的代码修复（记入 TODO）。
-- 实时硬件抓包、ASC/PCAP、以太网录制/导出。
+- 实时硬件抓包、ASC 以太网写回、以太网录制。
 
 ## 6. 后续 TODO
 
 - FlexRay：`PDU-TRIGGERING` 周期、ECU 端口、Signal Group、update bit、SystemSignal 扇出、min/max、cluster 引用。
-- CAN/CAN FD ARXML cluster 支持。
 - Container/Multiplexed/Secured 的以太网解码。
 - SoAd/socket/SOME-IP、TSN、交换机拓扑。
 - 真实 CANoe 以太网 BLF 的回归样本与对象布局确认。

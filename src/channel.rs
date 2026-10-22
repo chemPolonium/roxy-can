@@ -284,6 +284,12 @@ impl App {
             .iter()
             .filter_map(|(&b, &v)| remap(b).map(|nb| (nb, v)))
             .collect();
+        // An ARXML-sourced CAN bus follows the same renumbering as its
+        // channel: the source map is keyed by the channel index.
+        self.can_arxml = std::mem::take(&mut self.can_arxml)
+            .into_iter()
+            .filter_map(|(bus, src)| remap(bus).map(|nb| (nb, src)))
+            .collect();
         // Only a CAN pick carries a CAN channel number. A FlexRay pick names a
         // cluster, which adding or removing a CAN channel does not renumber --
         // it is kept as it is, exactly like a FlexRay curve's key.
@@ -448,12 +454,35 @@ impl App {
     /// Loads one Ethernet AUTOSAR matrix. A `None` bus picks the first free
     /// Ethernet index; cancelling the picker adds nothing.
     pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
+        self.load_eth_description_inner(path, bus, None)
+    }
+
+    /// Loads one named Ethernet cluster out of a multi-cluster ARXML matrix.
+    pub fn load_eth_description_cluster(
+        &mut self,
+        path: &str,
+        bus: Option<u8>,
+        cluster: &str,
+    ) -> Option<u8> {
+        self.load_eth_description_inner(path, bus, Some(cluster))
+    }
+
+    fn load_eth_description_inner(
+        &mut self,
+        path: &str,
+        bus: Option<u8>,
+        cluster: Option<&str>,
+    ) -> Option<u8> {
         let Ok(bytes) = std::fs::read(path) else {
             self.fail(format!("ARXML read failed: {path}"));
             return None;
         };
         let text = crate::dbc::text_from_bytes(bytes);
-        let db = match crate::eth::db::EthDb::parse(&text) {
+        let parsed = match cluster {
+            Some(name) => crate::eth::db::EthDb::parse_cluster(&text, name),
+            None => crate::eth::db::EthDb::parse(&text),
+        };
+        let db = match parsed {
             Ok(db) => db,
             Err(e) => {
                 self.fail(format!("Ethernet ARXML parse failed: {e}"));
@@ -465,13 +494,16 @@ impl App {
                 .find(|b| !self.eth_buses.contains_key(b))
                 .unwrap_or(u8::MAX)
         });
-        let cluster = db
+        let cluster_label = db
             .clusters
             .first()
             .map(|c| c.name.clone())
             .unwrap_or_else(|| "-".to_string());
         let frames = db.frames.len();
         let vlans: usize = db.clusters.iter().map(|c| c.vlans.len()).sum();
+        let persist_cluster = cluster
+            .map(str::to_string)
+            .or_else(|| (db.clusters.len() == 1).then(|| db.clusters[0].name.clone()));
         self.eth_buses.insert(
             bus,
             crate::app::EthBusCfg {
@@ -479,9 +511,17 @@ impl App {
                 db: std::sync::Arc::new(db),
             },
         );
+        match persist_cluster {
+            Some(name) => {
+                self.eth_clusters.insert(bus, name);
+            }
+            None => {
+                self.eth_clusters.remove(&bus);
+            }
+        }
         self.push_eth_db_to_core();
         self.status = format!(
-            "Loaded Ethernet matrix ETH{bus} ({cluster}, {vlans} VLANs, {frames} frames): {path}"
+            "Loaded Ethernet matrix ETH{bus} ({cluster_label}, {vlans} VLANs, {frames} frames): {path}"
         );
         Some(bus)
     }
@@ -498,8 +538,221 @@ impl App {
         let _ = self.pick_eth_arxml(None);
     }
 
+    /// The next free Ethernet bus index, the same "first gap" rule FlexRay uses.
+    pub fn next_eth_bus(&self) -> Option<u8> {
+        (0..=u8::MAX).find(|b| !self.eth_buses.contains_key(b))
+    }
+
+    /// Loads one named CAN cluster into an existing bus. The caller has
+    /// already decided the bus exists; the parsed table replaces its database.
+    pub fn load_can_arxml_on_bus(
+        &mut self,
+        path: &str,
+        cluster: &str,
+        bus: u8,
+    ) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let text = crate::dbc::text_from_bytes(bytes);
+        let parsed = crate::can_arxml::parse_cluster(&text, cluster)?;
+        self.send(crate::bus::BusCommand::SetChannelDbc {
+            ch: bus,
+            dbc: std::sync::Arc::new(parsed.db),
+        });
+        self.can_arxml
+            .insert(bus, (path.to_string(), cluster.to_string()));
+        Ok(())
+    }
+
+    /// One dialog for every communication cluster in one ARXML file. Each
+    /// cluster becomes its own bus: CAN clusters add CAN buses, FlexRay and
+    /// Ethernet clusters take the next free index in their own numbering
+    /// space. Clusters already loaded from the same file are skipped.
+    pub fn import_arxml_dialog(&mut self) {
+        let Some(p) = rfd::FileDialog::new()
+            .set_title("Import AUTOSAR communication matrix")
+            .add_filter("AUTOSAR ARXML", &["arxml", "xml"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.import_arxml_path(&p.to_string_lossy());
+    }
+
+    pub fn import_arxml_path(&mut self, path: &str) {
+        self.settle();
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.fail(format!("ARXML read failed: {path}: {e}"));
+                return;
+            }
+        };
+        let text = crate::dbc::text_from_bytes(bytes);
+        let clusters = match crate::can_arxml::scan(&text) {
+            Ok(c) => c,
+            Err(e) => {
+                self.fail(format!("ARXML parse failed: {e}"));
+                return;
+            }
+        };
+        if clusters.is_empty() {
+            self.fail("ARXML import: the file declares no CAN, FlexRay or Ethernet cluster");
+            return;
+        }
+
+        let mut added = 0usize;
+        let mut updated = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+        let mut next_can = self.snap.channel_count as u32;
+        for info in clusters {
+            let existing: Option<u8> = match info.kind {
+                crate::can_arxml::ClusterKind::Can => self
+                    .can_arxml
+                    .iter()
+                    .find(|(_, (p, c))| p == path && c == &info.name)
+                    .map(|(bus, _)| *bus),
+                crate::can_arxml::ClusterKind::FlexRay => self
+                    .fr_buses
+                    .iter()
+                    .find(|(bus, cfg)| {
+                        cfg.path == path
+                            && self.fr_clusters.get(bus).is_some_and(|c| c == &info.name)
+                    })
+                    .map(|(bus, _)| *bus),
+                crate::can_arxml::ClusterKind::Ethernet => self
+                    .eth_buses
+                    .iter()
+                    .find(|(bus, cfg)| {
+                        cfg.path == path
+                            && self.eth_clusters.get(bus).is_some_and(|c| c == &info.name)
+                    })
+                    .map(|(bus, _)| *bus),
+            };
+            match info.kind {
+                crate::can_arxml::ClusterKind::Can => {
+                    if existing.is_none() && next_can > u8::MAX as u32 {
+                        errors.push(format!(
+                            "{} {}: CAN bus index exhausted",
+                            info.kind.label(),
+                            info.name
+                        ));
+                        continue;
+                    }
+                    match crate::can_arxml::parse_cluster(&text, &info.name) {
+                        Ok(parsed) => {
+                            let name = if parsed.cluster.is_empty() {
+                                info.name.clone()
+                            } else {
+                                parsed.cluster.clone()
+                            };
+                            let bus = match existing {
+                                Some(bus) => {
+                                    self.send(crate::bus::BusCommand::SetChannelDbc {
+                                        ch: bus,
+                                        dbc: std::sync::Arc::new(parsed.db),
+                                    });
+                                    updated += 1;
+                                    bus
+                                }
+                                None => {
+                                    let bus = next_can as u8;
+                                    let bitrate = parsed
+                                        .bitrate_kbps
+                                        .unwrap_or(crate::app::Channel::DEFAULT_BITRATE_KBPS);
+                                    self.send(crate::bus::BusCommand::AddChannelWithDbc {
+                                        name: name.clone(),
+                                        dbc: std::sync::Arc::new(parsed.db),
+                                        bitrate_kbps: bitrate,
+                                    });
+                                    next_can += 1;
+                                    added += 1;
+                                    bus
+                                }
+                            };
+                            self.can_arxml.insert(bus, (path.to_string(), name));
+                        }
+                        Err(e) => errors.push(format!("{} {}: {e}", info.kind.label(), info.name)),
+                    }
+                }
+                crate::can_arxml::ClusterKind::FlexRay => {
+                    let bus = match existing {
+                        Some(bus) => Some(bus),
+                        None => self.next_flexray_bus(),
+                    };
+                    let Some(bus) = bus else {
+                        errors.push(format!(
+                            "{} {}: FlexRay bus index exhausted",
+                            info.kind.label(),
+                            info.name
+                        ));
+                        continue;
+                    };
+                    if self
+                        .load_cluster_description_cluster(path, Some(bus), &info.name)
+                        .is_some()
+                    {
+                        if existing.is_some() {
+                            updated += 1;
+                        } else {
+                            added += 1;
+                        }
+                    } else {
+                        errors.push(format!(
+                            "{} {}: cluster could not be loaded",
+                            info.kind.label(),
+                            info.name
+                        ));
+                    }
+                }
+                crate::can_arxml::ClusterKind::Ethernet => {
+                    let bus = match existing {
+                        Some(bus) => Some(bus),
+                        None => self.next_eth_bus(),
+                    };
+                    let Some(bus) = bus else {
+                        errors.push(format!(
+                            "{} {}: Ethernet bus index exhausted",
+                            info.kind.label(),
+                            info.name
+                        ));
+                        continue;
+                    };
+                    if self
+                        .load_eth_description_cluster(path, Some(bus), &info.name)
+                        .is_some()
+                    {
+                        if existing.is_some() {
+                            updated += 1;
+                        } else {
+                            added += 1;
+                        }
+                    } else {
+                        errors.push(format!(
+                            "{} {}: cluster could not be loaded",
+                            info.kind.label(),
+                            info.name
+                        ));
+                    }
+                }
+            }
+        }
+        self.settle();
+        for e in &errors {
+            self.log_status(crate::bus::WriteKind::Error, format!("ARXML import: {e}"));
+        }
+        let mut summary = format!("ARXML import: {added} cluster(s) added");
+        if updated > 0 {
+            summary.push_str(&format!(", {updated} updated"));
+        }
+        if !errors.is_empty() {
+            summary.push_str(&format!(", {} failed (see Write)", errors.len()));
+        }
+        self.status = summary;
+    }
+
     pub fn remove_eth_bus(&mut self, bus: u8) {
         if self.eth_buses.remove(&bus).is_some() {
+            self.eth_clusters.remove(&bus);
             self.push_eth_db_to_core();
             self.status = format!("Removed Ethernet bus ETH{bus}");
         }
@@ -587,12 +840,36 @@ impl App {
     /// configured from the file already there. Returns the bus index, having
     /// set a failure status if it did not.
     pub fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
+        self.load_cluster_description_inner(path, bus, None)
+    }
+
+    /// Loads one named FlexRay cluster out of a multi-cluster ARXML matrix.
+    /// The cluster becomes the bus identity stored with the project.
+    pub fn load_cluster_description_cluster(
+        &mut self,
+        path: &str,
+        bus: Option<u8>,
+        cluster: &str,
+    ) -> Option<u8> {
+        self.load_cluster_description_inner(path, bus, Some(cluster))
+    }
+
+    fn load_cluster_description_inner(
+        &mut self,
+        path: &str,
+        bus: Option<u8>,
+        cluster: Option<&str>,
+    ) -> Option<u8> {
         let Ok(bytes) = std::fs::read(path) else {
             self.fail(format!("FIBEX read failed: {path}"));
             return None;
         };
         let text = crate::dbc::text_from_bytes(bytes);
-        let db = match crate::fr_db::FrDb::parse(&text) {
+        let parsed = match cluster {
+            Some(name) => crate::fr_db::FrDb::parse_cluster(&text, name),
+            None => crate::fr_db::FrDb::parse(&text),
+        };
+        let db = match parsed {
             Ok(db) => db,
             Err(e) => {
                 self.fail(format!("FlexRay description parse failed: {e}"));
@@ -618,6 +895,9 @@ impl App {
                 }
             },
         };
+        let cluster_name = cluster
+            .map(str::to_string)
+            .or_else(|| (!db.params.name.is_empty()).then(|| db.params.name.clone()));
         self.fr_buses.insert(
             bus,
             crate::app::FrBusCfg {
@@ -625,6 +905,14 @@ impl App {
                 db: std::sync::Arc::new(db),
             },
         );
+        match cluster_name {
+            Some(name) => {
+                self.fr_clusters.insert(bus, name);
+            }
+            None => {
+                self.fr_clusters.remove(&bus);
+            }
+        }
         self.push_fr_db_to_core();
         Some(bus)
     }
@@ -667,6 +955,7 @@ impl App {
         // way the user did.
         let label = self.fr_bus_label(bus);
         self.fr_buses.remove(&bus);
+        self.fr_clusters.remove(&bus);
         self.fr_names.remove(&bus);
         if matches!(&self.buses_view.fr_name_edit, Some((r, _)) if *r == bus) {
             self.buses_view.fr_name_edit = None;
@@ -769,6 +1058,12 @@ impl App {
     /// Attaches one more DBC file to the bus as an extra database (the
     /// primary stays); re-attaching the same path is a no-op.
     pub fn attach_dbc_to(&mut self, ch: usize, path: String) {
+        if self.can_arxml.contains_key(&(ch as u8)) {
+            self.status =
+                "This bus is loaded from an ARXML cluster; use Open... to replace its database"
+                    .to_string();
+            return;
+        }
         let mut paths = self
             .snap
             .channels
@@ -790,6 +1085,7 @@ impl App {
     /// "Table present after the load" is the success signal -- a failed
     /// load leaves no table behind.
     pub fn open_dbc_for(&mut self, ch: usize, path: String) {
+        self.can_arxml.remove(&(ch as u8));
         let mut paths = self
             .snap
             .channels

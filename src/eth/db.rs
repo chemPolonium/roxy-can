@@ -208,6 +208,24 @@ impl EthDb {
         Ok(db)
     }
 
+    /// Parses one named `ETHERNET-CLUSTER`. Frames are stamped with the
+    /// cluster whose triggering they sit under, so a matrix holding several
+    /// clusters (two in-vehicle networks in one file) becomes one bus each
+    /// instead of one merged database.
+    pub fn parse_cluster(text: &str, cluster: &str) -> Result<Self, String> {
+        let mut db = Self::parse(text)?;
+        if !db.clusters.iter().any(|c| c.name == cluster) {
+            return Err(format!(
+                "Ethernet cluster `{cluster}` not found in the file"
+            ));
+        }
+        let only = db.clusters.len() == 1;
+        db.clusters.retain(|c| c.name == cluster);
+        db.frames
+            .retain(|f| f.cluster == cluster || (only && f.cluster.is_empty()));
+        Ok(db)
+    }
+
     /// Rank frame definitions against a captured flow. AUTOSAR has no MAC or
     /// EtherType on `ETHERNET-FRAME`; only a unique best score binds.
     pub fn match_flow(&self, flow: &EthFlow, length_includes_header: bool) -> EthMatch {
@@ -594,5 +612,45 @@ mod tests {
             EthMatch::Unique(0)
         );
         assert_eq!(db.match_flow(&flow(Some(100), 8), false), EthMatch::None);
+    }
+}
+
+#[cfg(test)]
+mod multi_cluster_tests {
+    use super::*;
+
+    const TWO: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>N</SHORT-NAME><ELEMENTS>
+ <ETHERNET-CLUSTER><SHORT-NAME>EthA</SHORT-NAME>
+  <ETHERNET-PHYSICAL-CHANNEL><SHORT-NAME>CHA</SHORT-NAME>
+   <VLAN-CONFIG><VLAN-IDENTIFIER>100</VLAN-IDENTIFIER></VLAN-CONFIG>
+   <ETHERNET-FRAME-TRIGGERING><SHORT-NAME>TA</SHORT-NAME><FRAME-REF>/Frames/A</FRAME-REF></ETHERNET-FRAME-TRIGGERING>
+  </ETHERNET-PHYSICAL-CHANNEL>
+ </ETHERNET-CLUSTER>
+ <ETHERNET-CLUSTER><SHORT-NAME>EthB</SHORT-NAME>
+  <ETHERNET-PHYSICAL-CHANNEL><SHORT-NAME>CHB</SHORT-NAME>
+   <VLAN-CONFIG><VLAN-IDENTIFIER>200</VLAN-IDENTIFIER></VLAN-CONFIG>
+   <ETHERNET-FRAME-TRIGGERING><SHORT-NAME>TB</SHORT-NAME><FRAME-REF>/Frames/B</FRAME-REF></ETHERNET-FRAME-TRIGGERING>
+  </ETHERNET-PHYSICAL-CHANNEL>
+ </ETHERNET-CLUSTER>
+ <ETHERNET-FRAME><SHORT-NAME>A</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH></ETHERNET-FRAME>
+ <ETHERNET-FRAME><SHORT-NAME>B</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH></ETHERNET-FRAME>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+
+    #[test]
+    fn one_named_ethernet_cluster_keeps_its_own_frames() {
+        let a = EthDb::parse_cluster(TWO, "EthA").expect("EthA");
+        assert_eq!(a.clusters.len(), 1);
+        assert_eq!(a.clusters[0].name, "EthA");
+        assert_eq!(a.frames.len(), 1);
+        assert_eq!(a.frames[0].name, "A");
+        assert_eq!(a.frames[0].vlan, Some(100));
+
+        let b = EthDb::parse_cluster(TWO, "EthB").expect("EthB");
+        assert_eq!(b.frames.len(), 1);
+        assert_eq!(b.frames[0].name, "B");
+        assert_eq!(b.frames[0].vlan, Some(200));
+
+        assert!(EthDb::parse_cluster(TWO, "Missing").is_err());
     }
 }

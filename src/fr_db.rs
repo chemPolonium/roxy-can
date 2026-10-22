@@ -336,6 +336,20 @@ impl FrDb {
         self.pdu_ix.get(name).and_then(|&i| self.pdus.get(i))
     }
 
+    /// Parses one named AUTOSAR FlexRay cluster. A FIBEX file has one implicit
+    /// cluster, so the name is ignored there; an ARXML file with several
+    /// clusters would otherwise merge their triggerings and schedules.
+    pub fn parse_cluster(text: &str, cluster: &str) -> Result<FrDb, String> {
+        let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+        let doc = roxmltree::Document::parse(text).map_err(|e| format!("XML parse error: {e}"))?;
+        let root = doc.root_element();
+        if root.tag_name().name().to_uppercase().contains("FIBEX") {
+            parse_fibex_doc(&doc)
+        } else {
+            parse_arxml_doc_cluster(&doc, Some(cluster))
+        }
+    }
+
     /// Parses FIBEX or ARXML text, detecting the dialect from the root
     /// element and, failing that, from characteristic children.
     pub fn parse(text: &str) -> Result<FrDb, String> {
@@ -1671,6 +1685,17 @@ fn parse_compu_method(
 }
 
 pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
+    parse_arxml_doc_cluster(doc, None)
+}
+
+/// The ARXML reader, optionally narrowed to one named `FLEXRAY-CLUSTER`.
+/// Signal, PDU and frame definitions are global in AUTOSAR; only the physical
+/// channel triggerings and the cluster parameters belong to a cluster, so a
+/// multi-cluster file is split by filtering those before the schedule is built.
+fn parse_arxml_doc_cluster(
+    doc: &roxmltree::Document,
+    only_cluster: Option<&str>,
+) -> Result<FrDb, String> {
     let root = doc.root_element();
     let index = DocIndex::build(&root);
 
@@ -1889,7 +1914,19 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
     }
 
     // 4. Frame triggerings per physical channel.
-    let channel_nodes = index.nodes("FLEXRAY-PHYSICAL-CHANNEL");
+    let all_channel_nodes = index.nodes("FLEXRAY-PHYSICAL-CHANNEL");
+    let channel_nodes: Vec<roxmltree::Node> = all_channel_nodes
+        .iter()
+        .copied()
+        .filter(|channel| match only_cluster {
+            None => true,
+            Some(want) => channel
+                .ancestors()
+                .find(|a| a.has_tag_name("FLEXRAY-CLUSTER"))
+                .map(|n| short_name(&n))
+                .is_none_or(|name| name == want),
+        })
+        .collect();
 
     let mut triggerings: HashMap<String, FrTriggering> = HashMap::new();
     for (ch_idx, channel) in channel_nodes.iter().enumerate() {
@@ -1937,14 +1974,24 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
     // 5. Cluster parameters.
     let cluster_nodes = index.nodes("FLEXRAY-CLUSTER");
+    let selected_cluster = match only_cluster {
+        Some(want) => Some(
+            cluster_nodes
+                .iter()
+                .copied()
+                .find(|n| short_name(n) == want)
+                .ok_or_else(|| format!("FlexRay cluster `{want}` not found in the file"))?,
+        ),
+        None => cluster_nodes.first().copied(),
+    };
     let mut params = default_cluster_params();
-    if let Some(cluster_node) = cluster_nodes.first() {
-        params.name = short_name(cluster_node);
+    if let Some(cluster_node) = selected_cluster {
+        params.name = short_name(&cluster_node);
         let get_u32 = |tags: &[&str]| -> Option<u32> {
-            text_of(cluster_node, tags).and_then(|t| parse_u32(&t))
+            text_of(&cluster_node, tags).and_then(|t| parse_u32(&t))
         };
         let get_f64 = |tags: &[&str]| -> Option<f64> {
-            text_of(cluster_node, tags).and_then(|t| parse_f64(&t))
+            text_of(&cluster_node, tags).and_then(|t| parse_f64(&t))
         };
 
         if let Some(v) = get_u32(&["FLEXRAY-COLDSTART-ATTEMPTS", "GD-COLDSTART-ATTEMPTS"]) {
@@ -2087,6 +2134,9 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<FrDb, String> {
 
     let mut frames: Vec<FrFrameDb> = Vec::new();
     for (name, raw) in &frames_by_name {
+        if only_cluster.is_some() && !triggerings.contains_key(name) {
+            continue;
+        }
         frames.push(FrFrameDb {
             name: raw.name.clone(),
             length: raw.length,
@@ -2593,6 +2643,29 @@ mod tests {
             db.pdus.iter().any(|p| !p.signals.is_empty()),
             "signal layouts came along"
         );
+    }
+
+    /// A named-cluster parse must produce the same schedule as the whole-file
+    /// parse when the file holds one cluster, and must refuse a name the file
+    /// does not declare. This is what lets one ARXML with several clusters
+    /// become one bus each instead of a merged schedule.
+    #[test]
+    fn a_named_cluster_parse_narrows_the_arxml_schedule() {
+        let Some(text) = read_asset(POWERTRAIN_ARXML) else {
+            panic!("{POWERTRAIN_ARXML} is committed");
+        };
+        let all = FrDb::parse(&text).expect("whole file");
+        assert!(!all.params.name.is_empty());
+        let one = FrDb::parse_cluster(&text, &all.params.name).expect("named cluster");
+        assert_eq!(one.params.name, all.params.name);
+        assert_eq!(one.frames.len(), all.frames.len());
+        let names = |db: &FrDb| {
+            let mut names: Vec<String> = db.frames.iter().map(|f| f.name.clone()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names(&one), names(&all));
+        assert!(FrDb::parse_cluster(&text, "NoSuchCluster").is_err());
     }
 
     /// Two ARXML parsing regressions that made every FlexRay signal read 0:

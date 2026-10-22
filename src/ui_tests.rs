@@ -1567,3 +1567,17 @@ fn the_network_view_draws_ethernet_frames_and_flows() {
     app.network_view.net_eth_sel = Some(crate::ui::network::EthNetSel::Flow(flow));
     frames(&mut app, &mut ctx, 2);
 }
+
+/// A CAN bus whose database came from ARXML draws its source cell and the
+/// disabled extra-DBC action without panicking; the same row still offers
+/// replacing the database with a DBC.
+#[test]
+fn the_buses_window_draws_an_arxml_sourced_can_bus() {
+    let _ui_lock = ui_lock();
+    let mut ctx = harness();
+    let mut app = App::headless();
+    app.can_arxml
+        .insert(0, ("synthetic_can.arxml".to_string(), "CanA".to_string()));
+    app.buses_view.open = true;
+    frames(&mut app, &mut ctx, 2);
+}

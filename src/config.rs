@@ -628,6 +628,10 @@ pub struct FrBusFile {
     #[serde(default)]
     pub bus: u8,
     pub path: String,
+    /// The named cluster inside a multi-cluster ARXML. Empty means the whole
+    /// file (the FIBEX path, or an older project).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cluster: String,
 }
 
 /// One Ethernet bus's AUTOSAR matrix, stored like a FlexRay description.
@@ -636,6 +640,18 @@ pub struct EthBusFile {
     #[serde(default)]
     pub bus: u8,
     pub path: String,
+    /// The named cluster inside a multi-cluster ARXML; empty = whole file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cluster: String,
+}
+
+/// One CAN bus whose database came from an ARXML matrix cluster.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CanArxmlFile {
+    #[serde(default)]
+    pub bus: u8,
+    pub path: String,
+    pub cluster: String,
 }
 
 /// Trigger-recording context sizes: pre-trigger frames kept for
@@ -700,6 +716,9 @@ pub struct Config {
     /// Ethernet buses and their AUTOSAR matrices. Separate index space.
     #[serde(default)]
     pub eth_buses: Vec<EthBusFile>,
+    /// CAN buses whose databases were imported from one named ARXML cluster.
+    #[serde(default)]
+    pub can_arxml: Vec<CanArxmlFile>,
     /// Whether those matrices state `FRAME-LENGTH` including the 14-byte L2
     /// header. Absent (false) means the length is the payload the capture
     /// reports, which is what Vector BLF carries.
@@ -967,6 +986,7 @@ impl Config {
                 .map(|(bus, c)| FrBusFile {
                     bus: *bus,
                     path: c.path.clone(),
+                    cluster: app.fr_clusters.get(bus).cloned().unwrap_or_default(),
                 })
                 .collect(),
             fr_names: app
@@ -980,6 +1000,16 @@ impl Config {
                 .map(|(bus, c)| EthBusFile {
                     bus: *bus,
                     path: c.path.clone(),
+                    cluster: app.eth_clusters.get(bus).cloned().unwrap_or_default(),
+                })
+                .collect(),
+            can_arxml: app
+                .can_arxml
+                .iter()
+                .map(|(bus, (path, cluster))| CanArxmlFile {
+                    bus: *bus,
+                    path: path.clone(),
+                    cluster: cluster.clone(),
                 })
                 .collect(),
             eth_frame_length_includes_header: app.eth_length_includes_header,
@@ -1333,6 +1363,11 @@ impl Config {
     /// returns.
     pub fn apply(self, app: &mut App) -> Vec<String> {
         let mut problems: Vec<String> = Vec::new();
+        // Description sources are rebuilt from this file; a project that
+        // carries none must not inherit the previous project's cluster maps.
+        app.can_arxml.clear();
+        app.fr_clusters.clear();
+        app.eth_clusters.clear();
         if !self.channels.is_empty() {
             // Grow or shrink the fresh app's two default buses to the
             // saved count, then overlay the saved declarations on top.
@@ -1383,6 +1418,22 @@ impl Config {
             // Databases were already loaded with their full attach lists
             // above; no second pass needed.
         }
+        // CAN buses restored from ARXML replace the empty DBC load above with
+        // their parsed cluster. The project stores the source because the
+        // channel itself only carries the resulting table.
+        for file in &self.can_arxml {
+            if file.bus as usize >= app.snap.channel_count {
+                problems.push(format!(
+                    "CAN ARXML `{}` names bus {} but the project has no such bus",
+                    file.cluster, file.bus
+                ));
+                continue;
+            }
+            if let Err(e) = app.load_can_arxml_on_bus(&file.path, &file.cluster, file.bus) {
+                problems.push(format!("CAN ARXML load failed: {e}"));
+            }
+        }
+        app.settle();
         // Whatever the fresh app or the loaded databases put in the generator
         // goes, and the project's own entries come back in its place.
         let stale: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
@@ -1688,15 +1739,27 @@ impl Config {
         let legacy = (self.fr_buses.is_empty() && self.fr_fibex.is_some()).then(|| FrBusFile {
             bus: 0,
             path: self.fr_fibex.clone().unwrap_or_default(),
+            cluster: String::new(),
         });
         for file in self.fr_buses.iter().chain(legacy.iter()) {
             let path = &file.path;
-            match std::fs::read(path)
+            let parsed = std::fs::read(path)
                 .map_err(|e| e.to_string())
                 .map(crate::dbc::text_from_bytes)
-                .and_then(|t| crate::fr_db::FrDb::parse(&t))
-            {
+                .and_then(|t| {
+                    if file.cluster.is_empty() {
+                        crate::fr_db::FrDb::parse(&t)
+                    } else {
+                        crate::fr_db::FrDb::parse_cluster(&t, &file.cluster)
+                    }
+                });
+            match parsed {
                 Ok(db) => {
+                    let cluster = if file.cluster.is_empty() {
+                        db.params.name.clone()
+                    } else {
+                        file.cluster.clone()
+                    };
                     app.fr_buses.insert(
                         file.bus,
                         crate::app::FrBusCfg {
@@ -1704,6 +1767,9 @@ impl Config {
                             db: std::sync::Arc::new(db),
                         },
                     );
+                    if !cluster.is_empty() {
+                        app.fr_clusters.insert(file.bus, cluster);
+                    }
                 }
                 Err(e) => problems.push(format!("FlexRay description load failed: {e}")),
             }
@@ -1712,11 +1778,17 @@ impl Config {
         // problem row, not a failed project load.
         for file in &self.eth_buses {
             let path = &file.path;
-            match std::fs::read(path)
+            let parsed = std::fs::read(path)
                 .map_err(|e| e.to_string())
                 .map(crate::dbc::text_from_bytes)
-                .and_then(|t| crate::eth::db::EthDb::parse(&t).map_err(|e| e.to_string()))
-            {
+                .and_then(|t| {
+                    if file.cluster.is_empty() {
+                        crate::eth::db::EthDb::parse(&t).map_err(|e| e.to_string())
+                    } else {
+                        crate::eth::db::EthDb::parse_cluster(&t, &file.cluster)
+                    }
+                });
+            match parsed {
                 Ok(db) => {
                     app.eth_buses.insert(
                         file.bus,
@@ -1725,6 +1797,9 @@ impl Config {
                             db: std::sync::Arc::new(db),
                         },
                     );
+                    if !file.cluster.is_empty() {
+                        app.eth_clusters.insert(file.bus, file.cluster.clone());
+                    }
                 }
                 Err(e) => problems.push(format!("Ethernet ARXML load failed: {e}")),
             }

@@ -5,6 +5,7 @@ mod app;
 mod block;
 mod bus;
 mod can;
+mod can_arxml;
 mod channel;
 mod cli;
 mod clipboard;
@@ -43,6 +44,9 @@ mod headless_tests;
 /// 无头 UI 冒烟测试：不接渲染器逐帧跑真实绘制路径。
 #[cfg(test)]
 mod ui_tests;
+
+#[cfg(test)]
+mod can_arxml_tests;
 
 use std::sync::Arc;
 use std::time::Instant;

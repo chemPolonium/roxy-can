@@ -21,6 +21,7 @@
 - **Kvaser / Vector 硬件连接**：Buses 窗口选通道即连接；通道被别的程序占用时自动降级为仅接收并在行上标注；CAN FD 按总线的数据段波特率申请，硬件不支持就降级经典并标注。连接期间收到的帧照常进入所有视图，真实节点不必被模拟。发送被线路拒绝不再是静默的：第一次写入 Write 窗口带驱动给的原因，之后只在 Buses 行上累计次数。
 - **FlexRay**：可同时监听多路，每路一份自己的集群描述（FIBEX 2.x/3.x 或 AUTOSAR ARXML，中文编码无碍）。帧名与信号都按该路的描述解码，与 CAN 帧在 Trace 里按时间混排；Messages 逐帧给计数与周期均值±抖动，负载与规格照常判定；信号可订阅画曲线、进 State Tracker；帧到达与信号越阈都能作触发条件。**目前仅接收**：生成器条目与脚本发的 FlexRay 帧只进入本会话（所有视图与录制都看得见），但不出端口、不会被另一台设备收到。
 - **车载以太网**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML），离线 BLF 的以太网帧按 VLAN/长度/EtherType 匹配帧定义并解码 PDU/I-Signal；帧与 CAN/FlexRay 在 Trace 同表按时间混排，Messages/Statistics 有 flow 行，Network 按路列出矩阵帧与已捕获 flow，信号可订阅画曲线；Trace 导出 `.pcap`（MAC/VLAN/EtherType/载荷），ASC 导出负责 CAN/FlexRay。`FRAME-LENGTH 含 L2 头` 随工程保存。
+- **统一 ARXML 导入**：Buses 的 `Import ARXML...` 一次读取文件里的全部 CAN / FlexRay / Ethernet cluster，各自建一路；CAN ARXML 读标识符/帧类、帧→PDU、I-Signal、compu/单位、PDU 周期与 ECU 端口发送方，和 DBC 共用同一套分析路径。
 - **回放块**：依附于 DBC 节点——把该节点录制过的日志按 id 过滤后重新发到仿真总线上，按录制间距发送，仿真 restbus 的落地方案。
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Graphics / Data / State Tracker。
