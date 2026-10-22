@@ -1,5 +1,5 @@
-//! Window and desktop bookkeeping: the five observer-window models, the
-//! window-kind registry, and named desktops over them.
+//! Observer-window models, the window-kind registry, and the named desktop
+//! arrangements kept for project-file compatibility.
 
 use std::collections::{HashMap, HashSet};
 
@@ -639,7 +639,7 @@ impl WindowKind {
 #[derive(Clone)]
 pub struct Desktop {
     pub name: String,
-    /// imgui ini text captured when the desktop was last active.
+    /// Legacy dock-layout text, preserved so saving a project does not wipe it.
     pub layout: String,
     pub open_windows: Vec<(WindowKind, String)>,
     pub show_tx: bool,

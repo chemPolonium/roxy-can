@@ -1,8 +1,7 @@
 //! Headless integration tests (主线阶段 2 验收): the whole application --
 //! commands in, snapshot out -- runs a complete measurement and export
-//! without any UI. These tests drive `advance_clock` + `tick` directly the
-//! way the frame loop does, with a synthetic clock, so they never touch
-//! imgui, winit or the real wall clock.
+//! without any UI. These tests drive `advance_clock` + `tick` directly with a
+//! synthetic clock, so they never touch the web host or the real wall clock.
 
 use crate::app::{App, Mode, NodeRole};
 use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
@@ -10,8 +9,7 @@ use crate::log::AscWriter;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 
-/// What `update` does for the frame loop, minus the imgui-facing text
-/// gate: advance the bus clock to synthetic `now`, then run one step.
+/// Advance the bus clock to synthetic `now`, then run one step.
 fn step(app: &mut App, now: u64) {
     app.advance_clock(now);
     app.tick(now);

@@ -41,8 +41,8 @@ export function HelpModal({ onClose }: Props) {
         <div class="help-body">
           <p class="hint">
             roxy-can is a CAN / FlexRay / Ethernet simulation and analysis tool
-            sharing one core with the desktop app; this web panel currently
-            covers CAN end to end. Files and hardware live on the host.
+            running entirely in this local web UI. Files and hardware live on
+            the host.
           </p>
           <table class="help-keys">
             <tbody>

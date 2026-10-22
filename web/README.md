@@ -49,8 +49,8 @@ name and an optional whitelist (`100, 3F4x, FR0:13`); relative names land in
 the next Start. Once stopped, **Download** fetches the last recording
 through the browser. The live badge in the top bar turns red while recording.
 Saving keeps
-the project's desktop dock layout and Graphics-window settings untouched: the
-web plot asks the core for its sampling stride instead of editing desktop
+the project's legacy dock layout and Graphics-window settings untouched: the
+web plot asks the core for its sampling stride instead of editing project
 config. Recording names still take host paths; opening projects, logs, DBCs
 and ARXML descriptions can use the browser picker, and bare export/save
 names download through the browser.
@@ -85,8 +85,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   from recents. The header, mode chip and status bar carry the session name
   and replay playhead; switching sessions resets the trace and curve buffers.
   A loaded project starts clean, plain **Save** rewrites it in place, and
-  **Save as** targets a new path — both reuse the desktop project format,
-  including its layout and desktops.
+  **Save as** targets a new path — both reuse the project file format,
+  including its legacy layout text.
 - **Buses…** lists each bus with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
   configured rates, and toggles the Simulated/Real bus mode. Buses can be
@@ -103,7 +103,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   lists the CAN, FlexRay and Ethernet channels the current log carries, their frame
   counts, and maps each to a project bus, as-is, or No replay; choices apply
   immediately and are saved with the project. It uses the same core commands
-  as the desktop Buses/Network windows.
+  as the core Buses/Network models.
 - **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
   cycle, FD and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
   action, and FR slots added by number to a loaded cluster description. The
@@ -138,13 +138,13 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   recompiles and restarts), see its log and compile errors, insert a starter
   template, load a local `.rxcan` file into the draft, save the source to a
   host `.rxcan` path, or remove it. Nodes run through the same
-  `AddNode`/`SetNodeSource` commands as the desktop editor. The editor
+  `AddNode`/`SetNodeSource` commands as the core node model. The editor
   colors comments, strings, numbers, keywords and calls; it is not a full
   language server.
 - **SysVars…** manages system variables through the real core: add/edit
   definitions (namespace, name, init, clamped min/max, unit, comment), edit
   live values in place (writes clamp), rename by deleting the old key, and
-  delete. The same validation rules as the desktop editor run on the host;
+  delete. The core applies the same validation rules on the host;
   definitions are saved with the project. Values reset to Init when a
   measurement starts, and scripts reach them through `sys_get` / `sys_set`.
 - The lower panel has **Messages / Statistics / Bus / Spec / Write**.
@@ -164,13 +164,14 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Statistics, Data, State, the Signals chart or the Write log as CSV/TXT.
   A bare file name is written to the host's web download folder and
   **Export & download** hands it to the browser; a path with a directory part
-  writes there instead. Exports use the first desktop window of that kind,
+  writes there instead. Exports use the first observer window of that kind,
   which is All buses by default.
 - Trace/Messages tables, bus and text filtering, the extra **Filters** dialog
   (direction, decoded-only, payload substring, time range, only/exclude hex
   ids), a canvas chart
   with total and per-bus frame rates plus dashed bus-load lines,
-  Start/Stop/Pause/Clear trace and the same core commands as the desktop UI.
+  Start/Stop/Pause/Clear trace and the same core commands as the rest of the
+  app.
   Trace merges CAN, FlexRay (`slot N` addresses) and Ethernet rows from the
   loaded session; the status bar reports the browser's own UI frame rate.
 - The Signals tab plots real DBC signals from the loaded project, FlexRay
@@ -209,7 +210,7 @@ polled at 10 Hz over a 120-sample window; SSE is the obvious next step.
 
 CANoe's Trace buffer is commonly around 100k events by default and can be
 raised into the millions. The web spike caps at 50k, the same order of
-magnitude and the desktop source ring's limit.
+magnitude and the core trace ring's limit.
 
 The demo generates 9 messages at 20 Hz. To fill 50k rows quickly, shorten
 the generator period through the environment:

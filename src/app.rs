@@ -133,15 +133,12 @@ pub struct StatsRowText {
 }
 
 /// One Messages row as throttled text (see [`App::sync_msg_text`]); the
-/// expanded tree draws the pre-decoded signal name/value pairs.
+/// expanded row carries the pre-decoded signal name/value pairs.
 #[derive(Clone)]
 pub struct MsgRowText {
     pub label: String,
-    /// The row's own identity, for the tree node's ImGui ID. Not derived from
-    /// `label`: the same `(id, name)` legitimately appears on two buses -- a
-    /// bench where both channels load one DBC does exactly that -- and ImGui
-    /// tables do not seed item IDs per cell, so a label-derived ID puts two
-    /// visible items on one ID and the conflict check fires.
+    /// Stable row identity. Not derived from `label`: the same `(id, name)`
+    /// legitimately appears on two buses when both load one DBC.
     pub id_key: String,
     pub bus: String,
     pub dir: &'static str,
@@ -179,8 +176,7 @@ pub struct MonitorRow {
     pub color: usize,
 }
 
-/// Rows watched by the Monitor panel. The desktop window draws them; the web
-/// Monitor tab serializes the same list.
+/// Rows watched by the Monitor panel; the web Monitor tab serializes them.
 #[derive(Default)]
 pub struct MonitorView {
     pub open: bool,
@@ -248,30 +244,24 @@ pub struct App {
     /// Path of the currently open .rxproj project; None = untitled workspace.
     pub project_path: Option<PathBuf>,
     pub recent_projects: Vec<String>,
-    /// imgui layout text captured every frame by main; embedded on save.
+    /// Legacy dock-layout text embedded on save.
     pub layout_cache: String,
-    /// Layout captured on the very first frame, restored by New Project.
+    /// Factory layout restored by New Project.
     pub default_layout: String,
-    /// Layout queued to be applied by main before the next imgui frame.
+    /// Layout queued for the next project reset.
     pub pending_layout: Option<String>,
     /// Last Windows PnP signature for Vector USB devices and when it was
     /// polled. A transition to/from "no Vector USB at all" reopens the XL
     /// driver automatically (USB replug without pressing Refresh).
     pnp_signature: Option<Vec<String>>,
     last_pnp_poll: Instant,
-    /// A workspace that never loaded a layout still needs a usable first
-    /// frame: the dockspace arranges the seeded windows once, then clears
-    /// this. Loading any saved layout cancels it.
-    pub(crate) dock_default_pending: bool,
-    /// Selects the Measurement Setup tab on the frame after the first-use
-    /// dock layout is built; the window itself only exists from then on.
-    pub(crate) dock_focus_pending: bool,
     /// Set when a destructive action must first pass the unsaved-project modal.
     pub pending_action: Option<PendingAction>,
     /// Config JSON snapshot of the last clean state (loaded/saved/reset);
     /// compared against the live config to decide if anything changed.
     pub(crate) baseline: String,
-    /// Named workspace arrangements; always holds at least one desktop.
+    /// Legacy named arrangements kept for project compatibility; always holds
+    /// at least one.
     pub desktops: Vec<Desktop>,
     pub active_desktop: usize,
     pub replay_speed: f64,
@@ -359,9 +349,8 @@ pub struct App {
     pub msg_windows: Vec<MsgWin>,
     pub stats_windows: Vec<StatsWin>,
     pub graphics: Vec<GraphicsWindow>,
-    /// Sampling stride a frontend asks for itself, ignoring the Graphics
-    /// windows' zoom. The web plot owns its lanes, so it must not have to
-    /// mutate (and later save) the desktop window config to get fine curves.
+    /// Sampling stride the web plot asks for itself, ignoring the observer
+    /// windows' zoom so fine curves need no config mutation.
     pub(crate) plot_stride_us: Option<u64>,
     pub data_windows: Vec<DataWindow>,
     pub state_trackers: Vec<StateWin>,
@@ -481,8 +470,6 @@ impl App {
             pending_layout: None,
             pnp_signature,
             last_pnp_poll: Instant::now(),
-            dock_default_pending: true,
-            dock_focus_pending: false,
             pending_action: None,
             baseline: String::new(),
             desktops: Vec::new(),
@@ -1252,9 +1239,8 @@ impl App {
             .and_then(|db| crate::load::fr_slot_wire_us(&db.params))
     }
 
-    /// Refreshes the observer windows whose draw paths are read-only. Runs
-    /// once per UI frame before any window draws; each sync keeps its own
-    /// text-gate early return, so a closed or unchanged window costs a check.
+    /// Refreshes the observer text caches; each sync keeps its own text-gate
+    /// early return, so an unchanged window costs a check.
     pub(crate) fn sync_observer_text(&mut self) {
         for i in 0..self.msg_windows.len() {
             if self.msg_windows[i].opened {

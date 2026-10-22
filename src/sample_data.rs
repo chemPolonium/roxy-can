@@ -1,6 +1,6 @@
-//! Built-in starter databases. The desktop and web demos no longer read a
-//! DBC file from disk: the two small databases ship as source text and are
-//! parsed on startup, so a checkout or packaged build needs no assets folder.
+//! Built-in starter databases. The demo does not read a DBC file from disk:
+//! the two small databases ship as source text and are parsed on startup, so
+//! a checkout or packaged build needs no assets folder.
 
 pub const SAMPLE_DBC: &str = r#"VERSION "roxy-can sample database"
 

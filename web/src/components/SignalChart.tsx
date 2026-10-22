@@ -117,8 +117,7 @@ export function SignalChart({
       const plotW = Math.max(1, width - GUTTER - 8);
       const laneH = Math.max(1, (height - TOP - AXIS_H) / lanes);
 
-      // Trigger markers: amber dashed lines behind the lanes, like the
-      // desktop Graphics window.
+      // Trigger markers: amber dashed lines behind the lanes.
       ctx.save();
       ctx.strokeStyle = "#e6b455";
       ctx.globalAlpha = 0.5;

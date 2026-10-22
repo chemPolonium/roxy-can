@@ -1,6 +1,5 @@
 //! Embeds `roxy-can.ico` into the exe's PE resources, so Explorer, a shortcut,
-//! and the taskbar all show it. The window's own title-bar icon is a separate
-//! path: `src/icon.rs` decodes the same file at runtime for winit.
+//! and the taskbar all show it.
 
 fn main() {
     println!("cargo:rerun-if-changed=roxy-can.ico");

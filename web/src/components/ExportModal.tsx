@@ -112,7 +112,7 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
             <strong> Export &amp; download</strong> saves it through the
             browser. A path with a directory part is written there instead.
             Trace writes ASC unless the path ends in <code>.pcap</code>.
-            Exports use the first desktop window of that kind (All buses by
+            Exports use the first observer window of that kind (All buses by
             default).
           </p>
           {downloadError && <p class="modal-error">{downloadError}</p>}

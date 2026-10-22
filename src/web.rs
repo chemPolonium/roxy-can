@@ -1,9 +1,8 @@
-//! Experimental web frontend host.
+//! Web frontend host and HTTP API.
 //!
 //! The bus core is unchanged: this module starts an `App` on a manual drive
 //! in its own thread, publishes a small JSON snapshot, and serves the Vite
-//! build from `web/dist`. It is a spike, not a second supported frontend --
-//! the desktop ImGui path stays the product.
+//! build from `web/dist`.
 
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -306,9 +305,9 @@ fn read_project_layout(path: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
-/// Validates a system-variable definition coming from the web form. The
-/// desktop editor applies the same rules; the host is the boundary, so the
-/// web path checks them again instead of trusting the page.
+/// Validates a system-variable definition coming from the web form. The core
+/// applies the same rules; the host is the boundary, so the web path checks
+/// them again instead of trusting the page.
 fn checked_sysvar(
     namespace: String,
     name: String,
@@ -374,8 +373,8 @@ fn edit_monitor_row(
     }
 }
 
-/// Six-significant-digit state identity, the same quantization the desktop
-/// State Tracker uses: tiny numeric jitter does not split a band.
+/// Six-significant-digit state identity, the same quantization the State
+/// Tracker uses: tiny numeric jitter does not split a band.
 fn quantize_state(v: f64) -> f64 {
     if v == 0.0 || !v.is_finite() {
         return v;
@@ -509,9 +508,9 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
         .collect()
 }
 
-/// Runs the desktop exporter for a web export request. Trace picks ASC or
-/// PCAP by the path's extension; the others write CSV/TXT. Exporters target
-/// the first matching desktop window, which starts as an All-buses view.
+/// Runs the core exporter for a web export request. Trace picks ASC or PCAP
+/// by the path's extension; the others write CSV/TXT. Exporters target the
+/// first matching observer window, which starts as an All-buses view.
 fn export_file(app: &mut App, kind: &str, path: &str) {
     if path.trim().is_empty() {
         app.status = "export needs a path".to_string();
@@ -530,9 +529,9 @@ fn export_file(app: &mut App, kind: &str, path: &str) {
     }
 }
 
-/// Seeds the chart from a project's first Graphics window. The desktop
-/// project persists curve selection there; the web keeps its own lane
-/// metadata but must not start empty when the same project is opened.
+/// Seeds the chart from a project's first Graphics window. The project file
+/// persists curve selection there; the web keeps its own lane metadata but
+/// must not start empty when the same project is opened.
 fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
     let keys: Vec<SigKey> = app
         .graphics
@@ -672,8 +671,8 @@ fn class_stat_rows(
     });
 }
 
-/// The CAN section of the desktop Bus Statistics window, one row per
-/// statistic. The reference's hardware-only rows have no meaning here.
+/// The CAN section of Bus Statistics, one row per statistic. The reference's
+/// hardware-only rows have no meaning here.
 fn bus_stat_rows(load: &crate::load::BusLoad) -> Vec<WebBusStatRow> {
     use crate::load::FrameClass;
     let mut rows = Vec::new();
@@ -829,8 +828,8 @@ fn parse_id_filter(text: &str) -> Vec<(u32, bool)> {
         .collect()
 }
 
-/// Web twin of the desktop record-filter parser: CAN hex ids (an `x`
-/// suffix marks extended) and `FRn:slot` entries, comma/space separated.
+/// Record-filter parser for the web form: CAN hex ids (an `x` suffix marks
+/// extended) and `FRn:slot` entries, comma/space separated.
 fn parse_record_filter(text: &str) -> crate::recorder::RecordFilter {
     let mut filter = crate::recorder::RecordFilter::default();
     for raw in text.split([',', ' ', ';']) {
@@ -904,8 +903,7 @@ fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
     if let Some(path) = project {
         let layout = read_project_layout(std::path::Path::new(path));
         app.open_project_path(std::path::Path::new(path));
-        // The web has no desktop layout of its own; keep the project's
-        // existing dock layout so a web save does not wipe it.
+        // Keep the project's legacy dock layout so a save does not wipe it.
         if !layout.is_empty() {
             app.layout_cache = layout;
         }
@@ -924,9 +922,8 @@ fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
     if project.is_none() {
         seed_demo(app);
     } else {
-        // Applying the project's live layout to the active desktop is part
-        // of loading it (the desktop UI does the same on its first frame),
-        // so the freshly opened project has nothing unsaved.
+        // Loading applies the project's live layout, so a fresh open has
+        // nothing unsaved.
         app.mark_clean();
     }
 }
@@ -1769,9 +1766,8 @@ fn app_loop(
     if let Ok(mut store) = signals.lock() {
         seed_chart_selection(&mut app, &mut store);
     }
-    // The web plot window is independent of the desktop layout. Ask the
-    // core for the 5 ms stress stride directly instead of opening a
-    // hidden Graphics window, which would dirty (and later save) config.
+    // The web plot is independent of observer zoom. Ask the core for the
+    // 5 ms stress stride directly instead of mutating project config.
     app.plot_stride_us = Some(5_000);
     if project.is_none()
         && replay.is_none()
@@ -2148,9 +2144,8 @@ fn app_loop(
                     old_name,
                 } => match checked_sysvar(namespace, name, init, min, max, unit, comment) {
                     Ok(def) => {
-                        // A rename deletes the old key first, like the
-                        // desktop editor: leaving it would keep a phantom
-                        // variable scripts could still write.
+                        // A rename deletes the old key first: leaving it
+                        // would keep a phantom variable scripts could write.
                         if let (Some(old_ns), Some(old_name)) = (old_namespace, old_name)
                             && (old_ns != def.namespace || old_name != def.name)
                         {
@@ -4473,9 +4468,9 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
 
-    // The web's value table mirrors the first desktop Data window. Missing
-    // values keep the row but print dashes, so a freshly added signal does
-    // not flicker in and out before its first frame.
+    // The value table mirrors the first Data window model. Missing values
+    // keep the row but print dashes, so a freshly added signal does not
+    // flicker in and out before its first frame.
     let data: Vec<WebDataRow> = app
         .data_windows
         .first()
@@ -4917,7 +4912,7 @@ mod tests {
         );
     }
 
-    /// Loading a project through the web keeps the file's desktop layout and
+    /// Loading a project through the web keeps the file's legacy layout and
     /// leaves the workspace clean: the plot's fine stride is frontend state,
     /// not a config edit that a later save would write back.
     #[test]
@@ -4932,13 +4927,13 @@ mod tests {
             !app.layout_cache.is_empty(),
             "the top-level dock layout survives the headless load"
         );
-        assert!(!app.is_dirty(), "web startup must not edit desktop config");
+        assert!(!app.is_dirty(), "web startup must not edit project config");
         app.plot_stride_us = Some(5_000);
         assert!(!app.is_dirty(), "the plot stride is frontend state");
         std::fs::remove_file(&path).ok();
     }
 
-    /// The web form's rules match the desktop editor, so a bad shape is
+    /// The web form's checks match the core validation, so a bad shape is
     /// rejected at the host boundary instead of becoming a broken variable.
     #[test]
     fn web_sysvar_definitions_follow_the_desktop_rules() {
@@ -4992,8 +4987,8 @@ mod tests {
         );
     }
 
-    /// Definitions and live values reach the web state through the same
-    /// core commands the desktop manager uses.
+    /// Definitions and live values reach the web state through the core
+    /// manager commands.
     #[test]
     fn the_state_lists_system_variables_and_live_values() {
         let mut app = App::headless();
@@ -5039,7 +5034,7 @@ mod tests {
         assert_eq!(state.monitor.len(), 1);
         assert_eq!(state.monitor[0].name, "EngineSpeed");
         assert_eq!(state.monitor[0].label, "EngineSpeed");
-        assert_eq!(state.monitor[0].digits, 1, "desktop default");
+        assert_eq!(state.monitor[0].digits, 1, "core default");
 
         edit_monitor_row(
             &mut app,
@@ -5220,7 +5215,7 @@ mod tests {
         assert!(state.scripts[0].enabled);
     }
 
-    /// The web export paths write the desktop formats: ASC for trace and
+    /// The web export paths write the established formats: ASC for trace and
     /// CSV headers for Messages/Statistics/Data/State.
     #[test]
     fn web_exports_write_the_desktop_formats() {
@@ -5297,8 +5292,8 @@ mod tests {
         );
     }
 
-    /// The Bus Statistics tab reads the same BusLoad numbers as the desktop
-    /// window: load, send distance, bursts and per-class rates.
+    /// The Bus Statistics tab reads the same BusLoad numbers as the core
+    /// model: load, send distance, bursts and per-class rates.
     #[test]
     fn the_state_lists_bus_load_statistics() {
         let mut app = App::headless();
@@ -5340,7 +5335,7 @@ mod tests {
     }
 
     /// Custom cuts replace the quantized value with a band index and use the
-    /// band's own name, exactly like the desktop Value Definition editor.
+    /// band's own name, like the core Value Definition model.
     #[test]
     fn state_custom_bands_use_cut_names() {
         let rule = crate::observe::StateRule {

@@ -1,6 +1,6 @@
 //! Workspace persistence as project files (.rxproj): buses,
-//! analysis windows, signals, filters, the generator and the imgui window
-//! layout are bundled in one JSON file. A small `roxy-can.meta.json`
+//! observer windows, signals, filters, the generator and the legacy dock
+//! layout text are bundled in one JSON file. A small `roxy-can.meta.json`
 //! remembers the last opened project. The legacy `roxy-can.json` (no
 //! project path) is still read once as a migration fallback.
 use std::collections::HashMap;
@@ -74,7 +74,7 @@ pub fn resolve_dbc(p: &str, base: Option<&Path>) -> String {
     p.to_string()
 }
 
-/// One project file: semantic workspace state plus the imgui layout text.
+/// One project file: semantic workspace state plus the legacy dock layout.
 #[derive(Serialize, Deserialize)]
 pub struct ProjectFile {
     #[serde(default = "one_default_u32")]

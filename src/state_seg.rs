@@ -1,6 +1,5 @@
-//! State Tracker band segmentation shared by the web export and the old
-//! desktop renderer was removed with the desktop UI; the arithmetic lives
-//! here so CSV exports keep the same bands the web chart draws.
+//! State Tracker band segmentation. It lives in core so CSV exports keep the
+//! same bands the web chart draws.
 
 use crate::app::App;
 use crate::observe::{SigKey, StateWin};

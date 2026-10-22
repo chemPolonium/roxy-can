@@ -53,11 +53,8 @@ impl App {
         let recent_log = std::mem::take(&mut self.recent_log);
         let recent_projects = std::mem::take(&mut self.recent_projects);
         let default_layout = std::mem::take(&mut self.default_layout);
-        // The imgui context (and its dock tree) outlives an App rebuild, so
-        // only a brand-new session may lay out the first-use docks.
-        let dock_default_pending = self.dock_default_pending;
-        // Rebuild on the same drive the workspace was on: the GUI's reset
-        // replaces the core thread (the old one exits with its dropped
+        // Rebuild on the same drive the workspace was on: the web host's
+        // reset replaces the core thread (the old one exits with its dropped
         // sender), tests rebuild their hand-cranked core.
         let threaded = matches!(self.drive, crate::app::CoreDrive::Threaded);
         *self = if threaded {
@@ -69,7 +66,6 @@ impl App {
         self.recent_log = recent_log;
         self.recent_projects = recent_projects;
         self.default_layout = default_layout;
-        self.dock_default_pending = dock_default_pending;
     }
 
     /// Display name of the current project: the file stem, or "Untitled".

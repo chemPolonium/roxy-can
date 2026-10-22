@@ -4757,8 +4757,8 @@ fn a_cycle_timeout_trigger_fires_on_each_dropout() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
-/// A frontend that owns its plots sets the stride directly; the desktop
-/// windows' zoom neither tightens nor coarsens it.
+/// A frontend that owns its plots sets the stride directly; observer-window
+/// zoom neither tightens nor coarsens it.
 #[test]
 fn a_plot_stride_override_ignores_the_graphics_windows() {
     let mut app = quiet_app();
@@ -4766,7 +4766,7 @@ fn a_plot_stride_override_ignores_the_graphics_windows() {
     let windowed = app.wanted_stride_us();
     app.plot_stride_us = Some(5_000);
     assert_eq!(app.wanted_stride_us(), 5_000);
-    assert!(windowed > 5_000, "the desktop stride stays window-derived");
+    assert!(windowed > 5_000, "the default stride stays window-derived");
 }
 
 /// The CANoe Graphics behaviour: zooming into a small window must reveal
@@ -6476,7 +6476,7 @@ fn two_flexray_watches_feed_their_own_buses() {
 /// same id, same name, only the Bus column differs -- which is what a bench
 /// with both channels loading one DBC does on its own. A table does not seed
 /// item IDs per cell, so an ID taken from the printed label lands on two visible
-/// items at once and ImGui stops the window with "2 visible items with
+/// items at once, and the old table UI stopped the window with "2 visible items with
 /// conflicting ID". The row therefore carries its own key.
 #[test]
 fn messages_rows_that_print_one_label_keep_their_own_ids() {

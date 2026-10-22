@@ -2715,7 +2715,7 @@ button.danger:hover:not(:disabled) {
 }
 
 /* Bus Statistics: one card per bus with a load sparkline and compact
-   current/min/max/avg rows (same values as the desktop window). */
+   current/min/max/avg rows. */
 .busstat-list {
   display: flex;
   flex: 1 1 auto;
@@ -2811,9 +2811,8 @@ button.danger:hover:not(:disabled) {
   text-align: center;
 }
 
-/* Monitor: big live values with an optional coloring rule. The right column
-   is narrower than the desktop window, so each row stacks its value line over
-   a compact rule line. */
+/* Monitor: big live values with an optional coloring rule. Each row stacks
+   its value line over a compact rule line. */
 .monitor-list {
   display: flex;
   flex: 1 1 auto;
