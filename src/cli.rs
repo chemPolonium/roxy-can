@@ -88,7 +88,7 @@ pub fn usage() -> &'static str {
     "roxy-can -- CAN bus analysis
 
   roxy-can                       open the workspace window (default)
-  roxy-can --web [--port <n>]    experimental web UI on 127.0.0.1 (default 3000)
+  roxy-can --web [--port <n>]    experimental web UI on 127.0.0.1 (default 7817)
   roxy-can --replay <log> ...    replay a CAN log without any window
   roxy-can --project <p> ...     simulate a saved project without any window
   roxy-can --check-script <f>    compile node scripts, no window needed

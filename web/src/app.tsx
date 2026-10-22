@@ -342,7 +342,7 @@ export function App() {
         </span>
         <span class="spacer" />
         <span>poll 5 Hz</span>
-        <span>127.0.0.1:3000</span>
+        <span>{window.location.host}</span>
       </footer>
     </div>
   );
