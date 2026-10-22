@@ -210,6 +210,22 @@ pub fn run(args: &[String]) {
     });
 }
 
+fn reset_web_stores(
+    trace: &Arc<Mutex<TraceStore>>,
+    signals: &Arc<Mutex<SignalStore>>,
+    series: &mut VecDeque<WebSeriesPoint>,
+    rate_window: &mut VecDeque<(Instant, u64)>,
+) {
+    if let Ok(mut store) = trace.lock() {
+        store.reset();
+    }
+    if let Ok(mut store) = signals.lock() {
+        store.reset();
+    }
+    series.clear();
+    rate_window.clear();
+}
+
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|arg| arg == flag)
@@ -329,6 +345,8 @@ enum WebCommand {
     Stop,
     Pause { on: bool },
     ClearTrace,
+    OpenProject { path: String },
+    OpenLog { path: String },
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -380,6 +398,31 @@ fn app_loop(
                 }
                 WebCommand::ClearTrace => {
                     app.send(BusCommand::ClearTrace);
+                }
+                WebCommand::OpenProject { path } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.send(BusCommand::ClearTrace);
+                    app.send(BusCommand::ClearAggregates);
+                    app.open_project_path(std::path::Path::new(&path));
+                    app.log_path.clear();
+                    app.log_info = None;
+                    app.send(BusCommand::SetRunMode(Mode::Virtual));
+                    reset_web_stores(&trace, &signals, &mut series, &mut rate_window);
+                }
+                WebCommand::OpenLog { path } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    app.load_log(&path);
+                    if app.log_path == path && !app.status.contains("failed") {
+                        app.send(BusCommand::ClearTrace);
+                        app.send(BusCommand::ClearAggregates);
+                        app.send(BusCommand::SetRunMode(Mode::Replay));
+                        reset_web_stores(&trace, &signals, &mut series, &mut rate_window);
+                        app.start_selected();
+                    }
                 }
             }
         }
@@ -575,6 +618,13 @@ impl TraceStore {
         }
     }
 
+    fn reset(&mut self) {
+        self.primed = false;
+        self.log.clear();
+        self.next_seq = 0;
+        self.last_total = 0;
+    }
+
     fn first_seq(&self) -> u64 {
         self.log
             .front()
@@ -713,6 +763,12 @@ impl SignalStore {
         }
     }
 
+    fn reset(&mut self) {
+        self.primed = false;
+        self.buffers.clear();
+        self.last_t.clear();
+    }
+
     fn max_t(&self) -> u64 {
         self.last_t.iter().copied().max().unwrap_or(0)
     }
@@ -793,6 +849,8 @@ struct WebState {
     run_mode: String,
     replay_pos_us: Option<u64>,
     replay_total_us: Option<u64>,
+    recent_projects: Vec<String>,
+    recent_logs: Vec<String>,
     channels: Vec<WebChannel>,
     messages: Vec<WebMessage>,
     write: Vec<WebLine>,
@@ -942,6 +1000,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         replay_pos_us: snap.replay.map(|(pos, _)| pos),
         replay_total_us: snap.replay.map(|(_, total)| total),
+        recent_projects: app.recent_projects.clone(),
+        recent_logs: app.recent_log.clone(),
         channels,
         messages,
         write,

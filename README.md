@@ -75,7 +75,7 @@ cargo run -- --web --project <path.rxproj>      # 载入工程（停止状态）
 cargo run -- --web --replay <path.asc|blf>      # 载入并开始回放
 ```
 
-当前已有 Trace（50k 行虚拟化增量）、Messages、总线/帧率/负载曲线、8 路真实 DBC 信号曲线（缩放/拖动）、Start/Stop/Pause/Clear。工程/日志的浏览器内选择、硬件、信号选择与其余面板仍在迁移，细节和性能测试方法见 [web/README.md](web/README.md)。
+当前已有 Trace（50k 行虚拟化增量）、Messages、总线/帧率/负载曲线、8 路真实 DBC 信号曲线（缩放/拖动）、Start/Stop/Pause/Clear；工具栏 **Session…** 可按主机路径或最近列表切换工程/回放，无需重启服务。工程保存、原生文件选择、硬件、真实工程的信号选择与其余面板仍在迁移，细节和性能测试方法见 [web/README.md](web/README.md)。
 
 ## 上手
 

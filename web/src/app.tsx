@@ -76,6 +76,11 @@ function useUiFps(): number {
   return fps;
 }
 
+function baseName(path: string): string {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return cut >= 0 ? path.slice(cut + 1) : path;
+}
+
 function clock(wallUs: number): string {
   const total = wallUs / 1e6;
   const h = Math.floor(total / 3600);
@@ -107,6 +112,9 @@ export function App() {
   const [bus, setBus] = useState<number | "all">("all");
   const [tab, setTab] = useState<RightTab>("messages");
   const [chartTab, setChartTab] = useState<ChartTab>("rate");
+  const [sessionOpen, setSessionOpen] = useState(false);
+  const [projectPath, setProjectPath] = useState("");
+  const [logPath, setLogPath] = useState("");
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
   const uiFps = useUiFps();
@@ -193,6 +201,15 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!sessionOpen) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSessionOpen(false);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [sessionOpen]);
+
+  useEffect(() => {
     if (!drag) return;
     const move = (event: PointerEvent) => {
       if (drag === "main" && workspaceRef.current) {
@@ -225,6 +242,38 @@ export function App() {
       setBusy(false);
     }
   };
+
+  const loadProject = (path: string) => {
+    const value = path.trim();
+    if (!value) return;
+    void run({ type: "open_project", path: value });
+    setSessionOpen(false);
+  };
+
+  const loadLog = (path: string) => {
+    const value = path.trim();
+    if (!value) return;
+    void run({ type: "open_log", path: value });
+    setSessionOpen(false);
+  };
+
+  const recent = (paths: string[], open: (path: string) => void) =>
+    paths.length > 0 && (
+      <div class="recent">
+        <span>Recent</span>
+        {paths.slice(0, 5).map((path) => (
+          <button
+            type="button"
+            class="recent-item"
+            title={path}
+            key={path}
+            onClick={() => open(path)}
+          >
+            {baseName(path)}
+          </button>
+        ))}
+      </div>
+    );
 
   const visibleRows = useMemo(
     () =>
@@ -266,6 +315,13 @@ export function App() {
           </div>
         </div>
         <div class="actions">
+          <button
+            type="button"
+            disabled={!online}
+            onClick={() => setSessionOpen(true)}
+          >
+            Session…
+          </button>
           <button
             type="button"
             class="primary"
@@ -503,6 +559,93 @@ export function App() {
         <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
       </footer>
+
+      {sessionOpen && (
+        <div class="modal-backdrop" onMouseDown={() => setSessionOpen(false)}>
+          <div
+            class="session-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Session"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header class="modal-head">
+              <h2>Session</h2>
+              <button type="button" onClick={() => setSessionOpen(false)}>
+                Close
+              </button>
+            </header>
+            <div class="session-body">
+              <section>
+                <h3>Project</h3>
+                <p class="session-current">
+                  {state?.project
+                    ? `Current: ${state.project}`
+                    : "Untitled workspace"}
+                </p>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    loadProject(projectPath);
+                  }}
+                >
+                  <input
+                    value={projectPath}
+                    placeholder="C:\projects\demo.rxproj"
+                    onInput={(event) =>
+                      setProjectPath((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  <button
+                    type="submit"
+                    class="primary"
+                    disabled={!projectPath.trim()}
+                  >
+                    Open project
+                  </button>
+                </form>
+                {recent(state?.recentProjects ?? [], loadProject)}
+              </section>
+
+              <section>
+                <h3>Replay log</h3>
+                <p class="session-current">
+                  {state?.log
+                    ? `Current: ${state.log}${state.logInfo ? ` · ${state.logInfo}` : ""}`
+                    : "No log loaded"}
+                </p>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    loadLog(logPath);
+                  }}
+                >
+                  <input
+                    value={logPath}
+                    placeholder="C:\logs\drive.asc or .blf"
+                    onInput={(event) =>
+                      setLogPath((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  <button
+                    type="submit"
+                    class="primary"
+                    disabled={!logPath.trim()}
+                  >
+                    Open &amp; play
+                  </button>
+                </form>
+                {recent(state?.recentLogs ?? [], loadLog)}
+              </section>
+
+              <p class="hint">
+                Paths are resolved on the host. Opening a project or log stops
+                the current measurement and clears the trace.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

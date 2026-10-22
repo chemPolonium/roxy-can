@@ -25,8 +25,15 @@ cargo run -- --web --replay <path.asc|path.blf> # load and start a replay
 With neither flag the generator demo starts automatically. `--project` loads
 the project but leaves it stopped; `--replay` loads the log and starts
 playback. A project and a replay can be combined. `--port <n>` changes the
-port (default 2010). For hot reload, keep the server running and start Vite
-in a second terminal:
+port (default 2010).
+
+The toolbar's **Session…** dialog can switch sessions without restarting the
+server: enter a host path or pick a recent project/log. Opening a project or
+log stops the current measurement and clears the trace; a log starts playing
+immediately. Paths are resolved on the host (the page cannot open a native
+file dialog).
+
+For hot reload, keep the server running and start Vite in a second terminal:
 
 ```bash
 cd web
@@ -45,6 +52,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   50,000 buffered rows render as roughly 30 DOM rows between two spacer
   rows. The server seeds the buffer once and then sends only new frames, so
   the 100 ms poll stays small as the table grows.
+- A project or log can be loaded from the Session dialog by host path or
+  from recents. The header, mode chip and status bar carry the session name
+  and replay playhead; switching sessions resets the trace and curve buffers.
 - Trace/Messages tables, a canvas chart with total and per-bus frame rates
   plus dashed bus-load lines, bus filtering, text filtering, and
   Start/Stop/Pause/Clear trace are wired to the same core commands as the
@@ -59,9 +69,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 
 ## Not here yet
 
-Opening/saving projects and logs from the browser (the CLI flags above cover
-the session bootstrap), hardware channels, signal selection for real
-projects (the demo pins eight curves), node scripts, and docking/desktops.
+Saving projects, a native browser file picker (opening uses host paths and
+recents; the CLI flags also work), hardware channels, signal selection for
+real projects (the demo pins eight curves), node scripts, and
+docking/desktops.
 The web trace buffer caps at 50,000 rows, matching the source ring; raising
 it needs a different storage layout than per-row JSON strings. Scroll
 anchoring while new rows arrive is left to the browser. Snapshots are polled

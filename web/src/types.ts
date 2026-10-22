@@ -13,6 +13,8 @@ export interface State {
   runMode: string;
   replayPosUs: number | null;
   replayTotalUs: number | null;
+  recentProjects: string[];
+  recentLogs: string[];
   channels: Channel[];
   messages: Message[];
   write: WriteLine[];
@@ -89,4 +91,6 @@ export type Command =
   | { type: "start" }
   | { type: "stop" }
   | { type: "pause"; on: boolean }
-  | { type: "clear_trace" };
+  | { type: "clear_trace" }
+  | { type: "open_project"; path: string }
+  | { type: "open_log"; path: string };
