@@ -446,7 +446,7 @@ impl App {
             Channel {
                 name: "CAN1".to_string(),
                 dbc: None,
-                dbc_paths: vec!["assets/sample.dbc".to_string()],
+                dbc_paths: vec!["builtin:sample.dbc".to_string()],
                 dbc_sums: Vec::new(),
                 node_roles: std::collections::BTreeMap::new(),
                 bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
@@ -455,7 +455,7 @@ impl App {
             Channel {
                 name: "CAN2".to_string(),
                 dbc: None,
-                dbc_paths: vec!["assets/motbus.dbc".to_string()],
+                dbc_paths: vec!["builtin:motbus.dbc".to_string()],
                 dbc_sums: Vec::new(),
                 node_roles: std::collections::BTreeMap::new(),
                 bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,

@@ -247,7 +247,7 @@ fn unified_import_adds_each_cluster_and_survives_the_project() {
 #[test]
 fn unified_import_adds_a_flexray_cluster_from_the_committed_asset() {
     use crate::app::App;
-    let path = "assets/arxml/PowerTrain.arxml";
+    let path = crate::test_assets::path("PowerTrain.arxml");
     let mut app = App::headless();
     app.import_arxml_path(path);
     app.settle();

@@ -10,8 +10,7 @@ ported panel by panel.
 
 ## Run
 
-From the repository root (the demo loads `assets/sample.dbc` and
-`assets/motbus.dbc` by relative path):
+From the repository root:
 
 ```bash
 cd web

@@ -906,7 +906,7 @@ fn perf_snapshot_publish_under_load() {
 ///
 /// `cargo test --release perf_flexray_readouts_under_load -- --ignored --nocapture`
 ///
-/// The load is the real two-cluster recording `assets/fibex/Logging.blf`
+/// The load is the generated two-cluster recording
 /// replayed the way the screen replays it (60 072 frames over 50.6 s, both
 /// cluster descriptions loaded), so the ring sits at its cap like a long run
 /// would. Each Trace shape is timed twice: the refresh that rebuilds the row
@@ -942,9 +942,9 @@ fn perf_snapshot_publish_under_load() {
 #[ignore = "measurement probe"]
 fn perf_flexray_readouts_under_load() {
     use std::time::Instant;
-    let blf = std::path::Path::new("assets/fibex/Logging.blf");
-    let arxml = "assets/arxml/PowerTrain.arxml";
-    let fibex = "assets/fibex/PowerTrain_v2.xml";
+    let blf = std::path::Path::new(crate::test_assets::logging_blf_two());
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
+    let fibex = crate::test_assets::path("PowerTrain_v2.xml");
     if !blf.exists()
         || !std::path::Path::new(arxml).exists()
         || !std::path::Path::new(fibex).exists()
@@ -1062,9 +1062,9 @@ fn perf_flexray_child_build_split() {
     use crate::workspace::TraceRow;
     use std::cell::Cell;
     use std::time::Instant;
-    let blf = std::path::Path::new("assets/fibex/Logging.blf");
-    let arxml = "assets/arxml/PowerTrain.arxml";
-    let fibex = "assets/fibex/PowerTrain_v2.xml";
+    let blf = std::path::Path::new(crate::test_assets::logging_blf_two());
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
+    let fibex = crate::test_assets::path("PowerTrain_v2.xml");
     if !blf.exists() {
         eprintln!("assets absent -- skipped");
         return;

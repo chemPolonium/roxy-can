@@ -3134,7 +3134,7 @@ impl BusCore {
         self.channels.push(Channel {
             name: format!("CAN{}", self.bus_counter),
             dbc: None,
-            dbc_paths: vec!["assets/sample.dbc".to_string()],
+            dbc_paths: vec!["builtin:sample.dbc".to_string()],
             dbc_sums: Vec::new(),
             node_roles: std::collections::BTreeMap::new(),
             bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
@@ -3233,7 +3233,16 @@ impl BusCore {
             if path.is_empty() {
                 continue;
             }
-            match crate::dbc::read_file(std::path::Path::new(path)) {
+            let content = match path.strip_prefix("builtin:") {
+                Some(name) => match crate::sample_data::text(name) {
+                    Some(text) => Ok(text.to_string()),
+                    None => Err(format!("{path}: unknown built-in database")),
+                },
+                None => {
+                    crate::dbc::read_file(std::path::Path::new(path)).map_err(|e| e.to_string())
+                }
+            };
+            match content {
                 Ok(content) => match crate::dbc::load_dbc_str(&content) {
                     Ok(table) => {
                         sums.push(content_sum(content.as_bytes()));
@@ -6216,7 +6225,7 @@ mod tests {
         let watch = || BusCommand::SetFrWatch {
             bus: 0,
             channel_index: Some(0),
-            fibex_path: "assets/sample.dbc".into(),
+            fibex_path: "test.dbc".into(),
         };
         core.handle(watch(), &mut status);
         assert!(
@@ -6224,7 +6233,7 @@ mod tests {
             "no description pushed yet: {status}"
         );
 
-        let bytes = std::fs::read("assets/arxml/PowerTrain.arxml");
+        let bytes = std::fs::read(crate::test_assets::path("PowerTrain.arxml"));
         if let Ok(bytes) = bytes {
             let text = crate::dbc::text_from_bytes(bytes);
             let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));

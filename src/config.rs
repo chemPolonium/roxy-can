@@ -41,6 +41,9 @@ pub fn state_path(name: &str) -> std::path::PathBuf {
 /// project folder can be moved or shared; paths outside the project are
 /// stored absolute.
 pub fn relativize(p: &str, base: &Path) -> String {
+    if p.starts_with("builtin:") {
+        return p.to_string();
+    }
     let path = Path::new(p);
     let abs = if path.is_absolute() {
         path.to_path_buf()
@@ -57,6 +60,9 @@ pub fn relativize(p: &str, base: &Path) -> String {
 /// but only when the file really exists there; otherwise the path is kept
 /// as-is (it may be relative to the working directory).
 pub fn resolve_dbc(p: &str, base: Option<&Path>) -> String {
+    if p.starts_with("builtin:") {
+        return p.to_string();
+    }
     if Path::new(p).is_relative()
         && let Some(b) = base
     {
@@ -2136,7 +2142,7 @@ mod tests {
         // An entry can only exist for a slot the description binds to a sending
         // ECU, so the project under test needs its description on disk too --
         // which is also why the restore loads descriptions before entries.
-        let arxml = "assets/arxml/PowerTrain.arxml";
+        let arxml = crate::test_assets::path("PowerTrain.arxml");
         let text =
             crate::dbc::text_from_bytes(std::fs::read(arxml).expect("the asset is committed"));
         let db = crate::fr_db::FrDb::parse(&text).expect("parses");
@@ -2468,7 +2474,7 @@ mod tests {
     #[test]
     fn legacy_sim_nodes_become_roles_and_unknown_roles_are_dropped() {
         let cfg: Config = serde_json::from_str(
-            r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc",
+            r#"{"channels":[{"name":"A","dbc_path":"sample.dbc",
                  "sim_nodes":["ABS"],
                  "node_roles":{"GearBox":"Monitor","DashBoard":"Bogus"}}]}"#,
         )
@@ -2507,8 +2513,7 @@ mod tests {
     #[test]
     fn legacy_channel_config_without_sim_nodes_still_loads() {
         let cfg: Config =
-            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc"}]}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
         assert_eq!(cfg.channels.len(), 1);
         assert!(cfg.channels[0].sim_nodes.is_empty());
         assert!(cfg.channels[0].node_roles.is_empty());
@@ -2568,14 +2573,15 @@ mod tests {
     /// second cluster has to survive the trip.
     #[test]
     fn a_legacy_single_fibex_path_becomes_a_bus_entry() {
-        let arxml = "assets/arxml/PowerTrain.arxml";
-        let fibex = "assets/fibex/PowerTrain_v2.xml";
+        let arxml = crate::test_assets::path("PowerTrain.arxml");
+        let fibex = crate::test_assets::path("PowerTrain_v2.xml");
         if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
             panic!(
                 "{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
             );
         }
-        let cfg: Config = serde_json::from_str(&format!(r#"{{"fr_fibex":"{arxml}"}}"#)).unwrap();
+        let json = serde_json::json!({ "fr_fibex": arxml }).to_string();
+        let cfg: Config = serde_json::from_str(&json).unwrap();
         let mut restored = App::headless();
         cfg.apply(&mut restored);
         assert_eq!(
@@ -2641,8 +2647,8 @@ mod tests {
     /// and the filter's `FR1:5` at the wrong schedule.
     #[test]
     fn a_removed_flexray_bus_does_not_renumber_the_survivor_through_a_save() {
-        let arxml = "assets/arxml/PowerTrain.arxml";
-        let fibex = "assets/fibex/PowerTrain_v2.xml";
+        let arxml = crate::test_assets::path("PowerTrain.arxml");
+        let fibex = crate::test_assets::path("PowerTrain_v2.xml");
         if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
             panic!(
                 "{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
@@ -2767,8 +2773,7 @@ mod tests {
     #[test]
     fn legacy_channel_config_without_bitrates_loads_at_defaults() {
         let cfg: Config =
-            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc"}]}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
         assert_eq!(
             cfg.channels[0].bitrate_kbps,
             crate::app::Channel::DEFAULT_BITRATE_KBPS
@@ -2886,8 +2891,7 @@ mod tests {
             "new files are stamped with the current version"
         );
         let cfg: Config =
-            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"assets/sample.dbc"}]}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
         assert_eq!(cfg.schema_version, 0, "pre-versioning files read as 0");
     }
 
@@ -2982,13 +2986,13 @@ mod tests {
             "C:/elsewhere/other.dbc",
             "paths outside the project stay absolute"
         );
-        let rel = relativize("assets/sample.dbc", base);
+        let rel = relativize("data/sample.dbc", base);
         assert!(
             Path::new(&rel).is_absolute(),
             "CWD-relative paths are stored absolute when outside the project"
         );
         assert!(
-            Path::new(&rel).ends_with("assets/sample.dbc"),
+            Path::new(&rel).ends_with("data/sample.dbc"),
             "absolutized path keeps its tail"
         );
 

@@ -536,7 +536,7 @@ fn decode_fr_rcv(ex: bool, body: &[u8], t_us: u64) -> Option<FrOrCan> {
     // identically on either side, so `frame_at` drops the channel preference).
     let channel_mask = u16_at(body, 4);
     // `wClusterNo` is the cluster the object belongs to, and a CANoe
-    // recording really does hold more than one: `assets/fibex/Logging.blf`
+    // recording really does hold more than one: the generated two-cluster fixture
     // carries 29 738 rows of cluster 0 (Vector channel 1) and 30 334 of
     // cluster 1 (channel 2). So this is the FlexRay bus index -- two clusters
     // share slot numbers, and folding them together names one's frames from
@@ -1194,11 +1194,9 @@ pub(crate) mod tests {
     /// sane.
     #[test]
     fn the_real_canoe_flexray_blf_parses() {
-        let path = std::path::Path::new("assets/arxml/Logging.blf");
+        let path = std::path::Path::new(crate::test_assets::logging_blf_single());
         let Ok(mut stream) = BlfStream::open(path) else {
-            panic!(
-                "assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
-            );
+            panic!("the generated BLF fixture is missing");
         };
         let mut fr = Vec::new();
         let mut can = 0usize;
@@ -1241,11 +1239,9 @@ pub(crate) mod tests {
     /// the whole file hunting CAN frames that never come, which pegged the core.
     #[test]
     fn flexray_only_stream_stays_can_exhausted() {
-        let path = std::path::Path::new("assets/arxml/Logging.blf");
+        let path = std::path::Path::new(crate::test_assets::logging_blf_single());
         let Ok(mut stream) = BlfStream::open(path) else {
-            panic!(
-                "assets/arxml/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
-            );
+            panic!("the generated BLF fixture is missing");
         };
         // The first CAN peek scans to EOF and finds none; the flag latches.
         assert!(stream.peek_t().is_none(), "no CAN frames in an FR-only log");
@@ -2314,8 +2310,8 @@ pub(crate) mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// The bundled CANoe recording at `assets/fibex/Logging.blf` is the ground
-    /// truth for `wClusterNo`: 60 072 FlexRay objects, 29 738 of them cluster 0
+    /// The generated two-cluster fixture is the ground truth for
+    /// `wClusterNo`: 60 072 FlexRay objects, 29 738 of them cluster 0
     /// and 30 334 cluster 1, and the same slot numbers appear on both. Reading
     /// the field is the only thing that keeps the two clusters apart in Trace,
     /// Messages and every key downstream -- and until now every row said
@@ -2331,7 +2327,7 @@ pub(crate) mod tests {
     /// the opposite of what this reader does.
     #[test]
     fn a_real_two_cluster_recording_keeps_its_clusters_apart() {
-        let p = std::path::Path::new("assets/fibex/Logging.blf");
+        let p = std::path::Path::new(crate::test_assets::logging_blf_two());
         if !p.exists() {
             panic!(
                 "{p:?} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"

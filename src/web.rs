@@ -3755,8 +3755,12 @@ mod tests {
     /// not a config edit that a later save would write back.
     #[test]
     fn a_web_project_load_keeps_the_desktop_layout_and_stays_clean() {
+        let path = std::env::temp_dir().join("roxy_web_layout_project.rxproj");
+        let mut source = App::headless();
+        source.layout_cache = "[Window][Dockspace]\n".to_string();
+        assert!(source.save_project(Some(path.clone())), "fixture saves");
         let mut app = App::headless();
-        prepare_session(&mut app, Some("assets/Sample.rxproj"), None);
+        prepare_session(&mut app, Some(path.to_str().unwrap()), None);
         assert!(
             !app.layout_cache.is_empty(),
             "the top-level dock layout survives the headless load"
@@ -3764,6 +3768,7 @@ mod tests {
         assert!(!app.is_dirty(), "web startup must not edit desktop config");
         app.plot_stride_us = Some(5_000);
         assert!(!app.is_dirty(), "the plot stride is frontend state");
+        std::fs::remove_file(&path).ok();
     }
 
     /// The web form's rules match the desktop editor, so a bad shape is
@@ -4208,10 +4213,10 @@ mod tests {
     fn the_state_lists_flexray_and_ethernet_buses() {
         let mut app = App::headless();
         let fr = app
-            .load_cluster_description("assets/fibex/PowerTrain_v2.xml", None)
+            .load_cluster_description(crate::test_assets::path("PowerTrain_v2.xml"), None)
             .expect("FIBEX fixture loads");
         let eth = app
-            .load_eth_description("assets/arxml/PowerTrain.arxml", None)
+            .load_eth_description(crate::test_assets::path("PowerTrain.arxml"), None)
             .expect("ARXML fixture loads");
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let fr_bus = state

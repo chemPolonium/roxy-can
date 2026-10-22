@@ -921,7 +921,7 @@ fn new_generator_entries_inherit_the_declared_cycle() {
             .find(|t| t.channel == ch && t.id == id)
             .map(|t| t.cycle_us)
     };
-    // assets/motbus.dbc:62-63 declare these two explicitly...
+    // The built-in motbus DBC declares these two explicitly...
     assert_eq!(cycle(1, 0x64), Some(133_000), "EngineData 133ms");
     assert_eq!(cycle(1, 0xC9), Some(50_000), "ABSdata 50ms");
     // ...and its BA_DEF_DEF_ puts 100ms on the rest.
@@ -1036,7 +1036,7 @@ fn entry_of(app: &App, ch: u8, id: u32) -> &TxMsg {
 fn ticking_a_node_activates_only_its_own_messages() {
     let mut app = App::headless();
     app.set_node_role(1, "ABS", NodeRole::Simulated);
-    // assets/motbus.dbc:31,35,54 -- ABS owns these three, nobody else.
+    // The built-in motbus DBC: ABS owns these three, nobody else.
     assert_eq!(
         app.tx_list
             .iter()
@@ -1595,7 +1595,7 @@ fn the_spec_report_export_includes_its_premises_and_rows() {
     let content = std::fs::read_to_string(&path).unwrap();
 
     assert!(
-        content.contains("# database,CAN1,assets/sample.dbc"),
+        content.contains("# database,CAN1,builtin:sample.dbc"),
         "which database each bus carried"
     );
     assert!(content.contains("# tolerance,+/-5%"));
@@ -2005,7 +2005,7 @@ fn a_closed_filter_row_names_the_conditions_still_working() {
 /// table rather than sitting in it unexplained.
 #[test]
 fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = App::headless();
     assert!(
         app.load_cluster_description(arxml, Some(0)).is_some(),
@@ -2786,21 +2786,22 @@ fn recent_lists_dedup_and_cap() {
 #[test]
 fn dropping_a_dbc_loads_it_into_the_first_bus() {
     let mut app = App::headless();
-    // The default bus already carries sample.dbc; a drop **attaches** the
-    // new database as an extra instead of replacing the primary.
-    app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
+    let motbus = crate::test_assets::path("motbus.dbc");
+    // The default bus already carries the built-in sample database; a drop
+    // **attaches** the new database as an extra instead of replacing it.
+    app.open_dropped(std::path::Path::new(motbus));
     assert_eq!(
         app.channels[0].dbc_paths,
-        ["assets/sample.dbc", "assets/motbus.dbc"]
+        ["builtin:sample.dbc".to_string(), motbus.to_string()]
     );
     assert!(
         app.channels[0].dbc.is_some(),
         "dropped DBC is parsed into the first bus"
     );
-    assert_eq!(app.recent_dbc[0], "assets/motbus.dbc");
+    assert_eq!(app.recent_dbc[0], motbus);
 
     // Dropping the same file again never duplicates the attach.
-    app.open_dropped(std::path::Path::new("assets/motbus.dbc"));
+    app.open_dropped(std::path::Path::new(motbus));
     assert_eq!(
         app.channels[0].dbc_paths.len(),
         2,
@@ -6251,7 +6252,7 @@ fn a_step_message_stays_in_the_write_window() {
 /// Each problem now stays in the Write ring, and the bar carries the count.
 #[test]
 fn a_project_load_problem_outlives_the_loaded_line() {
-    let asset = "assets/arxml/PowerTrain.arxml";
+    let asset = crate::test_assets::path("PowerTrain.arxml");
     if !std::path::Path::new(asset).exists() {
         println!("asset absent -- skipped");
         return;
@@ -6683,7 +6684,7 @@ fn an_orphan_script_is_adopted_by_the_first_dbc_node_on_its_bus() {
     // A database load sweeps the bus: the orphan gets adopted.
     app.send(crate::bus::BusCommand::LoadDbc {
         ch: 0,
-        paths: vec!["assets/sample.dbc".to_string()],
+        paths: vec![crate::test_assets::path("sample.dbc").to_string()],
     });
     app.settle();
     let node = app
@@ -7010,7 +7011,7 @@ fn messages_rows_that_print_one_label_keep_their_own_ids() {
 #[test]
 fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
     use crate::hw::vector::flexray::FrFrame;
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
@@ -7067,7 +7068,7 @@ fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
 #[test]
 fn an_empty_flexray_message_row_names_its_reason() {
     use crate::hw::vector::flexray::FrFrame;
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
@@ -7879,7 +7880,7 @@ fn cache_shape(app: &App) -> Vec<(u64, u8, u32, String)> {
 #[test]
 fn the_trace_row_cache_extends_in_place_without_losing_rows() {
     use std::sync::Arc;
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
@@ -8535,7 +8536,7 @@ fn a_script_frame_for_an_unconfigured_bus_is_refused() {
 /// carry and still sends nothing.
 #[test]
 fn a_script_writes_a_flexray_signal_into_its_entry() {
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
@@ -8745,7 +8746,7 @@ fn replaying_a_flexray_log_drives_the_slot_handlers() {
 /// read back out of the bytes that actually went out.
 #[test]
 fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let db = crate::fr_db::FrDb::parse(&read_fr_asset(arxml)).expect("parses");
@@ -8903,7 +8904,7 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
 /// the first slot its ECU bindings give a sender to together with that ECU's
 /// name -- the only kind of slot a generator entry can be built for.
 fn fr_bound_slot(app: &mut App) -> (u16, String) {
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let db = crate::fr_db::FrDb::parse(&read_fr_asset(arxml)).expect("parses");
     let found = (0..db.frames.len()).find_map(|ix| {
         let ecu = db.frame_sender(ix).map(str::to_string)?;
@@ -9146,7 +9147,7 @@ fn a_generated_slot_stands_down_while_the_replayed_log_carries_it() {
 fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
     use crate::hw::vector::flexray::FrFrame;
     use crate::spec::Kind;
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let Ok(bytes) = std::fs::read(arxml) else {
@@ -9388,7 +9389,7 @@ fn a_new_cluster_description_rebuilds_the_expanded_rows() {
 fn dbc_only_keeps_the_flexray_rows_a_description_covers() {
     use crate::aggregate::{FrFrameAgg, FrOccupant};
     let mut app = quiet_app();
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let text = read_fr_asset(arxml);
     let db = crate::fr_db::FrDb::parse(&text).expect("the asset parses");
     let (slot, cycle) = {
@@ -9498,12 +9499,12 @@ fn read_fr_asset(path: &str) -> String {
 #[test]
 fn the_trace_text_filter_matches_fr_frame_names() {
     let mut app = quiet_app();
-    let text = read_fr_asset("assets/arxml/PowerTrain.arxml");
+    let text = read_fr_asset(crate::test_assets::path("PowerTrain.arxml"));
     let db = crate::fr_db::FrDb::parse(&text).expect("PowerTrain.arxml parses");
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "assets/arxml/PowerTrain.arxml".into(),
+            path: crate::test_assets::path("PowerTrain.arxml").into(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -10007,8 +10008,8 @@ fn a_published_trace_view_stays_frozen_while_the_ring_moves_on() {
 /// reported and takes no bus index with it.
 #[test]
 fn a_second_cluster_description_loads_without_any_hardware() {
-    let first = "assets/arxml/PowerTrain.arxml";
-    let second = "assets/fibex/PowerTrain_v2.xml";
+    let first = crate::test_assets::path("PowerTrain.arxml");
+    let second = crate::test_assets::path("PowerTrain_v2.xml");
     if !std::path::Path::new(first).exists() || !std::path::Path::new(second).exists() {
         println!("assets absent -- skipped");
         return;
@@ -10045,8 +10046,8 @@ fn a_second_cluster_description_loads_without_any_hardware() {
 /// watch was configured from the description already there.
 #[test]
 fn a_description_lands_on_the_bus_it_is_pointed_at() {
-    let first = "assets/arxml/PowerTrain.arxml";
-    let second = "assets/fibex/PowerTrain_v2.xml";
+    let first = crate::test_assets::path("PowerTrain.arxml");
+    let second = crate::test_assets::path("PowerTrain_v2.xml");
     if !std::path::Path::new(first).exists() || !std::path::Path::new(second).exists() {
         println!("assets absent -- skipped");
         return;
@@ -10110,7 +10111,7 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
 /// precisely because closing the port is part of what removal means.
 #[test]
 fn a_flexray_bus_can_be_detached_and_removed() {
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     if !std::path::Path::new(arxml).exists() {
         panic!(
             "{arxml} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
@@ -10177,7 +10178,7 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     use crate::hw::vector::flexray::FrFrame;
     use crate::observe::GfxSignal;
     use crate::workspace::{Pick, SigScope};
-    let arxml = "assets/arxml/PowerTrain.arxml";
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     let (slot, _) = fr_bound_slot(&mut app);
     let db = std::sync::Arc::clone(&app.fr_buses[&0].db);

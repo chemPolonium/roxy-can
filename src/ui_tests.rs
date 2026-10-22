@@ -748,7 +748,7 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
     app.new_trace_window();
     // The real description, when present; the draw path is the same for
     // any database, and for none.
-    let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    let described = load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml"));
     app.settle();
     app.text_fresh = false;
     let mut rows = vec![
@@ -816,7 +816,7 @@ fn trace_draws_merged_flexray_rows_without_panicking() {
             "the bundled description offers no decodable frame: the expanded draw path is not covered"
         );
     } else {
-        println!("assets/arxml/PowerTrain.arxml absent -- only the unresolved child path ran");
+        println!("PowerTrain fixture absent -- only the unresolved child path ran");
     }
     app.trace_windows[0].rows = rows.into();
     // Both cursors sit on rows that are in the table -- one CAN, one FlexRay:
@@ -837,7 +837,7 @@ fn a_picked_row_draws_on_both_streams_beside_the_marks() {
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_trace_window();
-    let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    let described = load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml"));
     app.settle();
     app.text_fresh = false;
     let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
@@ -887,7 +887,7 @@ fn a_picked_row_draws_on_both_streams_beside_the_marks() {
     app.trace_windows[0].pick = None;
     frames(&mut app, &mut ctx, 1);
     if !described {
-        println!("assets/arxml/PowerTrain.arxml absent -- the FR rows drew unresolved");
+        println!("PowerTrain fixture absent -- the FR rows drew unresolved");
     }
 }
 
@@ -903,7 +903,7 @@ fn flexray_signal_picker_draws_without_panicking() {
     let mut ctx = harness();
     let mut app = App::headless();
     app.new_graphics_window();
-    if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
+    if load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml")) {
         assert!(
             app.fr_db(0)
                 .expect("the bus has a description")
@@ -915,7 +915,7 @@ fn flexray_signal_picker_draws_without_panicking() {
     }
     // A second cluster on a second bus: the same slot number there names a
     // different signal, and the section has to show both.
-    load_fr_db(&mut app, 1, "assets/fibex/PowerTrain_v2.xml");
+    load_fr_db(&mut app, 1, crate::test_assets::path("PowerTrain_v2.xml"));
     assert_eq!(app.fr_buses.len(), 2, "both descriptions loaded");
     app.settle();
     app.id_filter.open_for(PopupTarget::Graphics(0));
@@ -970,7 +970,7 @@ fn the_message_picker_offers_flexray_slots() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
+    if load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml")) {
         let slots = app
             .fr_db(0)
             .expect("the bus has a description")
@@ -1092,7 +1092,7 @@ fn the_network_view_draws_a_flexray_generator_row() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    let described = load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    let described = load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml"));
     // The slot and ECU the description itself pairs up -- an entry cannot exist
     // for any other combination.
     let (slot, ecu, edit) = app
@@ -1161,7 +1161,7 @@ fn the_flexray_tab_lists_the_slots_a_script_can_read() {
     let _ui_lock = ui_lock();
     let mut ctx = harness();
     let mut app = App::headless();
-    if load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml") {
+    if load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml")) {
         assert!(
             app.fr_db(0)
                 .expect("the bus has a description")
@@ -1205,11 +1205,11 @@ fn the_buses_window_draws_two_flexray_watches() {
     app.buses_view.open = true;
     app.hw.attach_fr_mock(0, 5);
     app.hw.attach_fr_mock(1, 6);
-    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
-    load_fr_db(&mut app, 1, "assets/fibex/PowerTrain_v2.xml");
+    load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml"));
+    load_fr_db(&mut app, 1, crate::test_assets::path("PowerTrain_v2.xml"));
     // A third bus with a description and no port at all: the list has to show
     // it, because loading a description is state the user can create and undo.
-    load_fr_db(&mut app, 2, "assets/fibex/PowerTrain2_v2.xml");
+    load_fr_db(&mut app, 2, crate::test_assets::path("PowerTrain2_v2.xml"));
     app.refresh_snapshot();
     assert_eq!(
         app.snap
@@ -1241,7 +1241,7 @@ fn the_network_view_draws_flexray_clusters_with_and_without_a_description() {
     let mut ctx = harness();
     let mut app = App::headless();
     app.network_view.open = true;
-    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml"));
     let q0 = app.hw.attach_fr_mock(0, 5);
     // Bus 1 is watched and carries traffic, but never gets a description.
     let q1 = app.hw.attach_fr_mock(1, 6);
@@ -1297,7 +1297,7 @@ fn editor_popups_draw_without_panicking() {
     // default the slot to one the schedule really has.
     app.add_fr_trigger();
     frames(&mut app, &mut ctx, 3);
-    load_fr_db(&mut app, 0, "assets/arxml/PowerTrain.arxml");
+    load_fr_db(&mut app, 0, crate::test_assets::path("PowerTrain.arxml"));
     app.add_fr_trigger();
     app.settle();
     assert_eq!(
@@ -1331,17 +1331,15 @@ fn a_plot_window_never_starves_the_replay() {
     use crate::app::PopupTarget;
     use std::time::Duration;
     let _ui_lock = ui_lock();
-    if !std::path::Path::new("assets/fibex/Logging.blf").exists() {
-        panic!(
-            "assets/fibex/Logging.blf missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
-        );
+    if !std::path::Path::new(crate::test_assets::logging_blf_two()).exists() {
+        panic!("the generated replay fixture is missing");
     }
     let mut ctx = harness();
     // The real app: the core runs on its own thread, which is the shape
     // the stall was reported in.
     let mut app = App::new();
-    app.load_log("assets/fibex/Logging.blf");
-    let bytes = std::fs::read("assets/arxml/PowerTrain.arxml").expect("arxml");
+    app.load_log(crate::test_assets::logging_blf_two());
+    let bytes = std::fs::read(crate::test_assets::path("PowerTrain.arxml")).expect("arxml");
     let text = crate::dbc::text_from_bytes(bytes);
     let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));
     let (slot, _, sigs) = db
@@ -1352,7 +1350,7 @@ fn a_plot_window_never_starves_the_replay() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "assets/arxml/PowerTrain.arxml".into(),
+            path: crate::test_assets::path("PowerTrain.arxml").into(),
             db,
         },
     );
@@ -1468,10 +1466,11 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
     let mut app = App::new();
     app.send(crate::bus::BusCommand::LoadDbc {
         ch: 0,
-        paths: vec!["assets/sample.dbc".to_string()],
+        paths: vec![crate::test_assets::path("sample.dbc").to_string()],
     });
-    let text =
-        crate::dbc::text_from_bytes(std::fs::read("assets/arxml/PowerTrain.arxml").expect("arxml"));
+    let text = crate::dbc::text_from_bytes(
+        std::fs::read(crate::test_assets::path("PowerTrain.arxml")).expect("arxml"),
+    );
     let db = std::sync::Arc::new(crate::fr_db::FrDb::parse(&text).expect("parses"));
     let (slot, _, sigs) = db
         .slot_signals()
@@ -1481,7 +1480,7 @@ fn a_replay_of_our_own_recording_keeps_pace_behind_a_plot_window() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "assets/arxml/PowerTrain.arxml".into(),
+            path: crate::test_assets::path("PowerTrain.arxml").into(),
             db,
         },
     );

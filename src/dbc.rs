@@ -86,7 +86,7 @@ fn numeric(v: &NumericValue) -> f64 {
 }
 
 /// Attribute names that declare a message's send cycle, best first. Vector and
-/// CANoe write `GenMsgCycleTime`; `assets/motbus.dbc` uses the older bare
+/// CANoe write `GenMsgCycleTime`; the built-in motbus DBC uses the older bare
 /// `CycleTime`, so both are honoured.
 const CYCLE_ATTRS: [&str; 2] = ["GenMsgCycleTime", "CycleTime"];
 
@@ -744,9 +744,9 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
 
     #[test]
     fn declared_cycle_time_from_motbus() {
-        let motbus = std::fs::read_to_string("assets/motbus.dbc").unwrap();
+        let motbus = std::fs::read_to_string(crate::test_assets::path("motbus.dbc")).unwrap();
         let db = load_dbc_str(&motbus).unwrap();
-        // assets/motbus.dbc:62-63 give these two explicit values...
+        // The built-in motbus DBC gives these two explicit values...
         assert_eq!(
             db.messages[&(0x64, false)].cycle_us,
             Some(133_000),
@@ -765,7 +765,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
         );
 
         // sample.dbc declares no attributes at all, which is not a claim of 0.
-        let sample = std::fs::read_to_string("assets/sample.dbc").unwrap();
+        let sample = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         assert_eq!(
             load_dbc_str(&sample).unwrap().messages[&(0x100, false)].cycle_us,
             None
@@ -814,7 +814,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
 
     #[test]
     fn sample_dbc_parses() {
-        let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
+        let content = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         let table = load_dbc_str(&content).unwrap();
         assert_eq!(table.order.len(), 3);
         let engine = table.messages.get(&(0x100, false)).unwrap();
@@ -836,7 +836,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
 
     #[test]
     fn node_tx_and_rx_lookups() {
-        let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
+        let content = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         let table = load_dbc_str(&content).unwrap();
         assert_eq!(table.node_tx_ids("EngineECU"), vec![0x100]);
         assert_eq!(table.node_tx_ids("ChassisECU"), vec![0x200, 0x320]);
@@ -860,7 +860,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
 
     #[test]
     fn decode_engine_speed() {
-        let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
+        let content = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         let table = load_dbc_str(&content).unwrap();
         // raw 12000 * 0.25 = 3000 rpm, little-endian 16 bit at bit 0
         let frame = frame_with(0x100, &[0xE0, 0x2E]);
@@ -871,7 +871,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
 
     #[test]
     fn encode_signal_roundtrip() {
-        let content = std::fs::read_to_string("assets/sample.dbc").unwrap();
+        let content = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         let table = load_dbc_str(&content).unwrap();
         let mut data = [0u8; MAX_CAN_FD_LEN];
         assert!(table.encode_signal(0x100, "EngineSpeed", 3000.0, &mut data));

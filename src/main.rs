@@ -27,6 +27,7 @@ mod profile;
 mod project;
 mod recorder;
 mod replay_map;
+mod sample_data;
 mod script;
 mod sim;
 mod source;
@@ -41,13 +42,17 @@ mod workspace;
 #[cfg(test)]
 #[path = "headless_tests.rs"]
 mod headless_tests;
-
 /// 无头 UI 冒烟测试：不接渲染器逐帧跑真实绘制路径。
 #[cfg(test)]
 mod ui_tests;
 
 #[cfg(test)]
 mod can_arxml_tests;
+
+#[cfg(test)]
+mod test_assets;
+#[cfg(test)]
+mod test_assets_data;
 
 use std::sync::Arc;
 use std::time::Instant;

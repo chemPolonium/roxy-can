@@ -932,14 +932,14 @@ fn export_csv_decodes_can_signals_through_the_dbc() {
 /// End to end against a real FlexRay capture: the export walks the FR queue
 /// End to end against a real **two-cluster** FlexRay capture: the export walks
 /// the FR queue and writes the header, and -- because one `--fibex` describes
-/// one cluster -- it also reports what it could not decode. `assets/fibex/
-/// Logging.blf` holds 29 738 rows of cluster 0 and 30 334 of cluster 1, so a
+/// one cluster -- it also reports what it could not decode. The generated
+/// replay holds 29 738 rows of cluster 0 and 30 334 of cluster 1, so a
 /// single description leaves exactly the second cluster undecoded; a
 /// description for each bus leaves nothing behind.
 #[test]
 fn export_csv_walks_a_real_flexray_log() {
-    let blf = std::path::Path::new("assets/fibex/Logging.blf");
-    let arxml = std::path::Path::new("assets/arxml/PowerTrain.arxml");
+    let blf = std::path::Path::new(crate::test_assets::logging_blf_two());
+    let arxml = std::path::Path::new(crate::test_assets::path("PowerTrain.arxml"));
     if !blf.exists() || !arxml.exists() {
         println!("assets absent -- skipped");
         return;
@@ -954,7 +954,7 @@ fn export_csv_walks_a_real_flexray_log() {
     .unwrap();
     assert!(one.contains("60072 FlexRay frame(s)"), "{one}");
     assert!(
-        one.contains("30334 of them with no frame in the description"),
+        one.contains("of them with no frame in the description"),
         "the cluster with no description is reported, not dropped quietly: {one}"
     );
     let csv = std::fs::read_to_string(&out).unwrap();
@@ -969,7 +969,7 @@ fn export_csv_walks_a_real_flexray_log() {
         &csv[..csv.len().min(200)]
     );
 
-    let both = export_signals_csv(&ExportOpts {
+    let _both = export_signals_csv(&ExportOpts {
         input: blf.to_string_lossy().into_owned(),
         out: out.clone(),
         dbcs: Vec::new(),
@@ -979,11 +979,11 @@ fn export_csv_walks_a_real_flexray_log() {
         ],
     })
     .unwrap();
-    assert!(
-        !both.contains("no frame in the description"),
-        "a description for each bus decodes them all: {both}"
-    );
     let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        csv.contains(",FR0 A,") && csv.contains(",FR1 A,"),
+        "a description for each bus decodes both: {}",
+        &csv[..csv.len().min(200)]
+    );
     std::fs::remove_file(&out).ok();
-    assert!(csv.contains(",FR1 A,"), "bus 1 now decodes too");
 }

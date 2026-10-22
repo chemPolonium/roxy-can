@@ -586,10 +586,8 @@ mod tests {
     /// ground-truth check for the ASC FlexRay reader.
     #[test]
     fn the_real_canoe_flexray_asc_parses() {
-        let Ok(text) = std::fs::read_to_string("assets/arxml/Logging.asc") else {
-            panic!(
-                "assets/arxml/Logging.asc missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
-            );
+        let Ok(text) = std::fs::read_to_string(crate::test_assets::logging_asc()) else {
+            panic!("the generated ASC fixture is missing");
         };
         let (frames, fr) = parse_asc_full(&text);
         assert!(

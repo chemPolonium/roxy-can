@@ -1,4 +1,27 @@
-VERSION "DNPBNNNYNNNNNNNNNNNNNNNNNNYYYNYNNNNNNNNNNN/4/%%%/4/'%**4NNN///"
+//! Built-in starter databases. The desktop and web demos no longer read a
+//! DBC file from disk: the two small databases ship as source text and are
+//! parsed on startup, so a checkout or packaged build needs no assets folder.
+
+pub const SAMPLE_DBC: &str = r#"VERSION "roxy-can sample database"
+
+NS_ :
+
+BU_: EngineECU ChassisECU Dashboard
+
+BO_ 256 EngineStatus: 8 EngineECU
+ SG_ EngineSpeed : 0|16@1+ (0.25,0) [0|8000] "rpm" Dashboard,ChassisECU
+ SG_ EngineTemp : 16|8@1+ (1,-40) [-40|215] "degC" Dashboard
+ SG_ ThrottlePos : 24|8@1+ (0.4,0) [0|100] "%" ChassisECU
+
+BO_ 512 VehicleState: 8 ChassisECU
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|300] "km/h" Dashboard,EngineECU
+ SG_ GearPosition : 16|3@1+ (1,0) [0|6] "" Dashboard
+
+BO_ 800 BrakeInfo: 8 ChassisECU
+ SG_ BrakePressure : 0|16@1+ (0.1,0) [0|100] "bar" Dashboard,EngineECU
+"#;
+
+pub const MOTBUS_DBC: &str = r#"VERSION "DNPBNNNYNNNNNNNNNNNNNNNNNNYYYNYNNNNNNNNNNN/4/%%%/4/'%**4NNN///"
 
 
 NS_ : 
@@ -68,3 +91,13 @@ VAL_ 100 IdleRunning 0 "Running" 1 "Idle" ;
 VAL_ 201 GearLock 1 "Gear_Lock_On" 0 "Gear_Lock_Off" ;
 SIG_VALTYPE_ 199 WheelSpeedFR : 1;
 SIG_VALTYPE_ 199 WheelSpeedFL : 1;
+"#;
+
+/// Text of a built-in database named by a `builtin:` path.
+pub fn text(name: &str) -> Option<&'static str> {
+    match name {
+        "sample.dbc" => Some(SAMPLE_DBC),
+        "motbus.dbc" => Some(MOTBUS_DBC),
+        _ => None,
+    }
+}
