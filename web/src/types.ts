@@ -369,6 +369,8 @@ export interface Frame {
 }
 
 export interface Message {
+  kind: string;
+  addr: string;
   bus: number;
   busName: string;
   id: number;

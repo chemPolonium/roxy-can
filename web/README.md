@@ -118,7 +118,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   definitions are saved with the project. Values reset to Init when a
   measurement starts, and scripts reach them through `sys_get` / `sys_set`.
 - The lower panel has **Messages / Statistics / Bus / Spec / Write**.
-  Statistics shows CAN aggregate count, min/avg/max/jitter and share; Jitter
+  Messages and Statistics include CAN, FlexRay and Ethernet rows when the
+  session carries them: FR addresses read `slot N` and use the loaded
+  cluster description, Ethernet rows use EtherType and the matched flow name.
+  Statistics shows aggregate count, min/avg/max/jitter and share; Jitter
   folds away below 1280 px and the row tooltip keeps the full values. Bus
   shows per-bus load, send distance, bursts and per-class frame rates with a
   one-minute load sparkline. Spec reads the project's tolerance/grace, the

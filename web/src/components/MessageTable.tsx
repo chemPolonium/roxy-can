@@ -39,7 +39,7 @@ export function MessageTable({ rows }: { rows: Message[] }) {
       <table class="data-table message-table">
         <colgroup>
           <col style={{ width: "46px" }} />
-          <col style={{ width: "58px" }} />
+          <col style={{ width: "72px" }} />
           <col style={{ width: wide ? "120px" : undefined }} />
           <col style={{ width: "52px" }} />
           <col style={{ width: "62px" }} />
@@ -59,9 +59,9 @@ export function MessageTable({ rows }: { rows: Message[] }) {
         </thead>
         <tbody>
           {rows.map((message) => (
-            <tr key={`${message.bus}-${message.id}-${message.extended}`}>
+            <tr key={`${message.kind}-${message.bus}-${message.id}-${message.extended}`}>
               <td>{message.busName}</td>
-              <td class="mono">{hexId(message)}</td>
+              <td class="mono">{message.addr || hexId(message)}</td>
               <td class="name" title={message.name}>
                 {message.name || <span class="dash">—</span>}
               </td>

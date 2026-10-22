@@ -3079,6 +3079,8 @@ struct WebFrame {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebMessage {
+    kind: String,
+    addr: String,
     bus: u8,
     bus_name: String,
     id: u32,
@@ -3185,7 +3187,23 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .collect();
     tx.sort_by_key(|entry| (entry.channel, entry.id));
 
-    let total_frames: u64 = snap.aggs.iter().map(|agg| agg.count).sum();
+    let total_frames: u64 = snap
+        .aggs
+        .iter()
+        .map(|agg| agg.count)
+        .chain(snap.fr_aggs.iter().map(|agg| agg.count))
+        .chain(snap.eth_aggs.iter().map(|agg| agg.count))
+        .sum();
+    let share_text = |count: u64| {
+        format!(
+            "{:.1}%",
+            if total_frames > 0 {
+                count as f64 / total_frames as f64 * 100.0
+            } else {
+                0.0
+            }
+        )
+    };
     let ms = |value: f64, count: u64| {
         if count >= 2 {
             format!("{:.2}", value / 1000.0)
@@ -3193,7 +3211,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             "-".to_string()
         }
     };
-    let stats: Vec<WebStatsRow> = snap
+    let mut stats: Vec<WebStatsRow> = snap
         .aggs
         .iter()
         .map(|agg| {
@@ -3220,18 +3238,47 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 avg_ms: ms(agg.cycle_us, agg.count),
                 max_ms: ms(agg.max_us, agg.count),
                 jitter_ms: ms(agg.jitter_us, agg.count),
-                share: format!(
-                    "{:.1}%",
-                    if total_frames > 0 {
-                        agg.count as f64 / total_frames as f64 * 100.0
-                    } else {
-                        0.0
-                    }
-                ),
+                share: share_text(agg.count),
                 len: agg.len,
             }
         })
         .collect();
+    for agg in &snap.fr_aggs {
+        let name = App::fr_frame_name(agg);
+        stats.push(WebStatsRow {
+            label: if name.is_empty() {
+                format!("slot {}", agg.slot)
+            } else {
+                format!("slot {}  {name}", agg.slot)
+            },
+            bus: app.fr_bus_name(agg.bus),
+            count: agg.count,
+            min_ms: ms(agg.min_us, agg.count),
+            avg_ms: ms(agg.cycle_us, agg.count),
+            max_ms: ms(agg.max_us, agg.count),
+            jitter_ms: ms(agg.jitter_us, agg.count),
+            share: share_text(agg.count),
+            len: agg.payload.len().min(u8::MAX as usize) as u8,
+        });
+    }
+    for agg in &snap.eth_aggs {
+        let vlan = agg
+            .key
+            .vlan
+            .map(|vlan| format!("VLAN {vlan}  "))
+            .unwrap_or_default();
+        stats.push(WebStatsRow {
+            label: format!("{vlan}{}", app.eth_flow_name(&agg.key)),
+            bus: app.eth_bus_label(agg.key.bus),
+            count: agg.count,
+            min_ms: ms(agg.min_us, agg.count),
+            avg_ms: ms(agg.cycle_us, agg.count),
+            max_ms: ms(agg.max_us, agg.count),
+            jitter_ms: ms(agg.jitter_us, agg.count),
+            share: share_text(agg.count),
+            len: agg.key.len.min(u8::MAX as usize) as u8,
+        });
+    }
 
     let triggers: Vec<WebTrigger> = snap
         .triggers
@@ -3589,22 +3636,78 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     let mut messages: Vec<WebMessage> = snap
         .aggs
         .iter()
-        .map(|m| WebMessage {
-            bus: m.channel,
-            bus_name: bus_name(m.channel),
-            id: m.id,
-            extended: m.extended,
-            name: db(m.channel)
-                .and_then(|d| d.message_name(m.id))
-                .unwrap_or("")
-                .to_string(),
-            count: m.count,
-            cycle_ms: m.cycle_us / 1000.0,
-            len: m.len,
-            data: hex(m.payload()),
+        .map(|m| {
+            let addr = if m.extended {
+                format!("{:08X}x", m.id)
+            } else {
+                format!("{:03X}", m.id)
+            };
+            WebMessage {
+                kind: "can".to_string(),
+                addr,
+                bus: m.channel,
+                bus_name: bus_name(m.channel),
+                id: m.id,
+                extended: m.extended,
+                name: db(m.channel)
+                    .and_then(|d| d.message_name(m.id))
+                    .unwrap_or("")
+                    .to_string(),
+                count: m.count,
+                cycle_ms: m.cycle_us / 1000.0,
+                len: m.len,
+                data: hex(m.payload()),
+            }
         })
         .collect();
-    messages.sort_by_key(|m| (m.bus, m.id));
+    for m in &snap.fr_aggs {
+        let name = App::fr_frame_name(m).to_string();
+        messages.push(WebMessage {
+            kind: "fr".to_string(),
+            addr: format!("slot {}", m.slot),
+            bus: m.bus,
+            bus_name: app.fr_bus_name(m.bus),
+            id: m.slot as u32,
+            extended: false,
+            name: if name.is_empty() {
+                format!("slot {}", m.slot)
+            } else {
+                name
+            },
+            count: m.count,
+            cycle_ms: m.cycle_us / 1000.0,
+            len: m.payload.len().min(u8::MAX as usize) as u8,
+            data: hex(&m.payload),
+        });
+    }
+    for a in &snap.eth_aggs {
+        let vlan = a
+            .key
+            .vlan
+            .map(|vlan| format!("VLAN {vlan}  "))
+            .unwrap_or_default();
+        messages.push(WebMessage {
+            kind: "eth".to_string(),
+            addr: format!("0x{:04X}", a.key.ethertype),
+            bus: a.key.bus,
+            bus_name: app.eth_bus_label(a.key.bus),
+            id: a.key.ethertype as u32,
+            extended: false,
+            name: format!("{vlan}{}", app.eth_flow_name(&a.key)),
+            count: a.count,
+            cycle_ms: a.cycle_us / 1000.0,
+            len: a.key.len.min(u8::MAX as usize) as u8,
+            data: String::new(),
+        });
+    }
+    messages.sort_by_key(|m| {
+        let order = match m.kind.as_str() {
+            "can" => 0,
+            "fr" => 1,
+            _ => 2,
+        };
+        (order, m.bus, m.id)
+    });
 
     let write: Vec<WebLine> = snap
         .write
