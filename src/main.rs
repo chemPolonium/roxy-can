@@ -518,9 +518,11 @@ fn main() {
     if desktop {
         args.retain(|arg| arg != "--desktop");
     }
-    if args.iter().any(|arg| arg == "--web") || (args.is_empty() && !desktop) {
+    let explicit_web = args.iter().any(|arg| arg == "--web");
+    if explicit_web || (args.is_empty() && !desktop) {
         cli::attach_parent_console();
-        web::run(&args);
+        let open = !desktop && !explicit_web && std::env::var_os("ROXY_WEB_NO_OPEN").is_none();
+        web::run(&args, open);
         return;
     }
     match cli::parse_args(&args) {

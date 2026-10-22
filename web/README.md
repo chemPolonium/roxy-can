@@ -26,7 +26,9 @@ cargo run -- --desktop                          # native window instead
 With neither flag the generator demo starts automatically. `--project` loads
 the project but leaves it stopped; `--replay` loads the log and starts
 playback. A project and a replay can be combined. `--port <n>` changes the
-port (default 2010). `--web` remains an explicit synonym for the default.
+port (default 2010). A bare launch opens the browser; `--web` remains an
+explicit synonym for the default and keeps scripted runs silent
+(`ROXY_WEB_NO_OPEN=1` does the same).
 The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 

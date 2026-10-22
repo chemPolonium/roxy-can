@@ -56,7 +56,7 @@
 
 ```sh
 cd web && npm install && npm run build && cd ..
-cargo run                       # Web UI, http://127.0.0.1:2010
+cargo run                       # Web UI, opens http://127.0.0.1:2010
 cargo run -- --desktop          # 原生 Dear ImGui 工作区（后备）
 ```
 

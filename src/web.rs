@@ -163,7 +163,7 @@ const TICK_EVERY: Duration = Duration::from_millis(5);
 
 /// Serve the web UI until the process is killed. `--port <n>` overrides the
 /// default, `--web` itself is already consumed by the caller.
-pub fn run(args: &[String]) {
+pub fn run(args: &[String], open: bool) {
     let port = args
         .iter()
         .position(|arg| arg == "--port")
@@ -245,9 +245,38 @@ pub fn run(args: &[String]) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
             .unwrap_or_else(|e| panic!("bind 127.0.0.1:{port}: {e}"));
-        println!("roxy-can web ui: http://127.0.0.1:{port}");
+        let url = format!("http://127.0.0.1:{port}");
+        println!("roxy-can web ui: {url}");
+        if open {
+            open_browser(&url);
+        }
         axum::serve(listener, app).await.expect("web server");
     });
+}
+
+/// The default launch has no terminal to copy the URL from (release builds
+/// are windowless), so opening the browser is how double-click reaches the
+/// UI. `--web` and `ROXY_WEB_NO_OPEN=1` keep scripted runs silent.
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg(url);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    let _ = command.spawn();
 }
 
 fn reset_visual_stores(
