@@ -1474,7 +1474,7 @@ export function App() {
     },
     {
       id: "pick-signals",
-      label: "Pick chart signals…",
+      label: "Choose chart signals…",
       group: "Signals",
       hint: "Choose and order the Signals lanes",
       run: openPicker,
@@ -2115,9 +2115,10 @@ export function App() {
                 <button
                   type="button"
                   class="mini"
+                  title="Choose the signals to plot"
                   onClick={() => void openPicker()}
                 >
-                  Pick signals…
+                  + Signals
                 </button>
               )}
               {chartTab === "monitor" && (
@@ -2125,9 +2126,10 @@ export function App() {
                   <button
                     type="button"
                     class="mini"
+                    title="Choose the signals to watch"
                     onClick={() => void openMonitorPicker()}
                   >
-                    + Signal
+                    + Signals
                   </button>
                   <button
                     type="button"
@@ -2144,9 +2146,10 @@ export function App() {
                   <button
                     type="button"
                     class="mini"
+                    title="Choose the signals to track"
                     onClick={() => void openDataPicker()}
                   >
-                    + Signal
+                    + Signals
                   </button>
                   <button
                     type="button"
@@ -2163,9 +2166,10 @@ export function App() {
                   <button
                     type="button"
                     class="mini"
+                    title="Choose the signals to show as bands"
                     onClick={() => void openStatePicker()}
                   >
-                    + Signal
+                    + Signals
                   </button>
                   <button
                     type="button"
