@@ -1,16 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { SignalSeries } from "../types";
-
-export const SIGNAL_COLORS = [
-  "#4c9dff",
-  "#54c08a",
-  "#f2b45e",
-  "#c77dff",
-  "#ef6b6b",
-  "#4ecdc4",
-  "#ff9f43",
-  "#a3e635",
-];
+import { palette, type Theme } from "../theme";
 
 const GUTTER = 108;
 const AXIS_H = 18;
@@ -62,9 +52,11 @@ function valueText(value: number): string {
 export function SignalChart({
   series,
   markers = [],
+  theme,
 }: {
   series: SignalSeries[];
   markers?: number[];
+  theme: Theme;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<View>({ windowS: 30, endS: null });
@@ -75,6 +67,7 @@ export function SignalChart({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const colors = palette(theme);
 
     const draw = () => {
       const width = canvas.clientWidth;
@@ -89,11 +82,11 @@ export function SignalChart({
       ctx.clearRect(0, 0, width, height);
 
       if (series.length === 0) {
-        ctx.fillStyle = "#8a97a8";
+        ctx.fillStyle = colors.signalEmpty;
         ctx.font = "11px 'Segoe UI', sans-serif";
         ctx.textAlign = "center";
         ctx.fillText("No signals subscribed", width / 2, height / 2 - 2);
-        ctx.fillStyle = "#5d6a7a";
+        ctx.fillStyle = colors.signalHint;
         ctx.font = "9px 'Segoe UI', sans-serif";
         ctx.fillText(
           "The demo session wires eight DBC signals",
@@ -119,7 +112,7 @@ export function SignalChart({
 
       // Trigger markers: amber dashed lines behind the lanes.
       ctx.save();
-      ctx.strokeStyle = "#e6b455";
+      ctx.strokeStyle = colors.signalMarker;
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 4]);
@@ -140,12 +133,12 @@ export function SignalChart({
       for (let i = 0; i < series.length; i += 1) {
         const signal = series[i];
         const top = TOP + i * laneH;
-        const color = SIGNAL_COLORS[signal.color % SIGNAL_COLORS.length];
+        const color = colors.signals[signal.color % colors.signals.length];
         if (i % 2 === 1) {
-          ctx.fillStyle = "rgba(255, 255, 255, 0.018)";
+          ctx.fillStyle = colors.signalStripe;
           ctx.fillRect(0, top, width, laneH);
         }
-        ctx.strokeStyle = "#182029";
+        ctx.strokeStyle = colors.signalLine;
         ctx.beginPath();
         ctx.moveTo(0, top + laneH - 0.5);
         ctx.lineTo(width, top + laneH - 0.5);
@@ -160,10 +153,10 @@ export function SignalChart({
         // Gutter: colour tab, name, then bus/current value.
         ctx.fillStyle = color;
         ctx.fillRect(4, top + 5, 3, Math.max(10, laneH - 12));
-        ctx.fillStyle = "#c9d6e5";
+        ctx.fillStyle = colors.signalName;
         ctx.font = "10px 'Segoe UI', sans-serif";
         ctx.fillText(signal.name, 13, top + 13);
-        ctx.fillStyle = "#7d8999";
+        ctx.fillStyle = colors.signalMeta;
         ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
         const unit = signal.unit ? ` ${signal.unit}` : "";
         ctx.fillText(
@@ -173,7 +166,7 @@ export function SignalChart({
         );
 
         if (visible <= 0) {
-          ctx.fillStyle = "#556273";
+          ctx.fillStyle = colors.signalNoSamples;
           ctx.font = "9px 'Segoe UI', sans-serif";
           ctx.fillText("no samples in view", GUTTER + 8, top + laneH / 2 + 3);
           continue;
@@ -198,7 +191,7 @@ export function SignalChart({
         const y = (value: number) =>
           plotTop + plotH - ((value - min) / (max - min)) * plotH;
 
-        ctx.strokeStyle = "#212a35";
+        ctx.strokeStyle = colors.signalMidLine;
         ctx.beginPath();
         ctx.moveTo(GUTTER, plotTop + plotH / 2 + 0.5);
         ctx.lineTo(width - 8, plotTop + plotH / 2 + 0.5);
@@ -254,13 +247,13 @@ export function SignalChart({
       for (let i = 0; i <= 4; i += 1) {
         const frac = i / 4;
         const x = GUTTER + plotW * frac;
-        ctx.strokeStyle = "#1b232d";
+        ctx.strokeStyle = colors.signalTimeGrid;
         ctx.beginPath();
         ctx.moveTo(x + 0.5, TOP);
         ctx.lineTo(x + 0.5, height - AXIS_H);
         ctx.stroke();
         const seconds = -view.windowS * (1 - frac);
-        ctx.fillStyle = "#5f6d7e";
+        ctx.fillStyle = colors.signalAxisLabel;
         const label =
           Math.abs(seconds) >= 10
             ? `${seconds.toFixed(0)}s`
@@ -272,9 +265,9 @@ export function SignalChart({
       ctx.font = "9px 'Segoe UI', sans-serif";
       const tag = live ? "LIVE" : "HOLD · double-click to follow";
       const tagWidth = ctx.measureText(tag).width;
-      ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
+      ctx.fillStyle = colors.signalTagBg;
       ctx.fillRect(width - tagWidth - 16, 1, tagWidth + 14, 12);
-      ctx.fillStyle = live ? "#54c08a" : "#e0a54a";
+      ctx.fillStyle = live ? colors.signalLive : colors.signalHold;
       ctx.fillText(tag, width - 8, 10);
     };
 
@@ -282,7 +275,7 @@ export function SignalChart({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [series, view, markers]);
+  }, [series, view, markers, theme]);
 
   const plotWidth = () => {
     const canvas = canvasRef.current;

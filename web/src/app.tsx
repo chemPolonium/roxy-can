@@ -32,7 +32,7 @@ import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
 import type { MonitorPatch } from "./components/MonitorPanel";
-import { BUS_COLORS, RateChart } from "./components/RateChart";
+import { RateChart } from "./components/RateChart";
 import { SignalChart } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
 import { SpecPanel } from "./components/SpecPanel";
@@ -51,6 +51,13 @@ import {
 } from "./components/TraceFilterModal";
 import type { TraceFilter } from "./components/TraceFilterModal";
 import type { StateRow } from "./types";
+import {
+  applyTheme,
+  loadTheme,
+  palette,
+  saveTheme,
+  type Theme,
+} from "./theme";
 
 type RightTab = "messages" | "statistics" | "bus" | "spec" | "activity";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
@@ -214,9 +221,16 @@ export function App() {
   const [hardwareError, setHardwareError] = useState("");
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
+  const chartPalette = palette(theme);
+
+  useEffect(() => {
+    applyTheme(theme);
+    saveTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     try {
@@ -943,6 +957,15 @@ export function App() {
         >
           ?
         </button>
+        <button
+          type="button"
+          class="theme-toggle"
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        >
+          {theme === "dark" ? "Light" : "Dark"}
+        </button>
       </section>
 
       {state?.runMode === "Replay" && state.log && (
@@ -1272,14 +1295,15 @@ export function App() {
               <>
                 <div class="chart-legend">
                   <span class="legend-key">
-                    <i style={{ background: "#4c9dff" }} />
+                    <i style={{ background: chartPalette.rateTotal }} />
                     Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
                   </span>
                   {state?.channels.map((channel, index) => (
                     <span class="legend-key" key={channel.name}>
                       <i
                         style={{
-                          background: BUS_COLORS[index % BUS_COLORS.length],
+                          background:
+                            chartPalette.buses[index % chartPalette.buses.length],
                         }}
                       />
                       {channel.name}{" "}
@@ -1291,13 +1315,19 @@ export function App() {
                 <RateChart
                   points={state?.series ?? []}
                   channels={state?.channels ?? []}
+                  theme={theme}
                 />
               </>
             ) : chartTab === "signals" ? (
-              <SignalChart series={signals} markers={state?.markers ?? []} />
+              <SignalChart
+                series={signals}
+                markers={state?.markers ?? []}
+                theme={theme}
+              />
             ) : chartTab === "monitor" ? (
               <MonitorPanel
                 rows={state?.monitor ?? []}
+                theme={theme}
                 onEdit={editMonitor}
                 onRemove={(row) =>
                   void run({
@@ -1342,6 +1372,7 @@ export function App() {
               <StatePanel
                 rows={state?.stateRows ?? []}
                 windowS={state?.stateWindowS ?? 20}
+                theme={theme}
                 onWindow={(seconds) =>
                   void run({ type: "set_state_window", seconds })
                 }
@@ -1473,7 +1504,7 @@ export function App() {
                 )}
               </div>
             ) : tab === "bus" ? (
-              <BusStatsPanel buses={state?.busStats ?? []} />
+              <BusStatsPanel buses={state?.busStats ?? []} theme={theme} />
             ) : tab === "spec" ? (
               <SpecPanel
                 rows={state?.specRows ?? []}

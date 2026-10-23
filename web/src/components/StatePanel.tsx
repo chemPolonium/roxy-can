@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "preact/hooks";
 import type { StateBand, StateRow } from "../types";
+import { palette, type Theme } from "../theme";
 
 interface Props {
   rows: StateRow[];
   windowS: number;
+  theme: Theme;
   onWindow: (seconds: number) => void;
   onRemove: (row: StateRow) => void;
   onRule: (row: StateRow) => void;
@@ -11,17 +13,6 @@ interface Props {
 
 /** Few-state fills are deliberately high-contrast: a 0/1 signal reads as a
     square wave even when each band is only a few pixels wide. */
-const COLORS = [
-  "#4c9dff",
-  "#e6b455",
-  "#59c48a",
-  "#e17171",
-  "#b07cf0",
-  "#57c8d8",
-  "#d0d7e2",
-  "#c67f4a",
-];
-
 const WINDOWS: [number, string][] = [
   [5, "5 s"],
   [20, "20 s"],
@@ -30,11 +21,12 @@ const WINDOWS: [number, string][] = [
   [1800, "30 min"],
 ];
 
-function StateStrip({ bands }: { bands: StateBand[] }) {
+function StateStrip({ bands, theme }: { bands: StateBand[]; theme: Theme }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
+    const colors = palette(theme);
     const draw = () => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -46,42 +38,49 @@ function StateStrip({ bands }: { bands: StateBand[] }) {
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#0a0e13";
+      ctx.fillStyle = colors.stateBg;
       ctx.fillRect(0, 0, w, h);
       const distinct = new Set(bands.map((band) => band.label)).size;
-      if (distinct > COLORS.length) {
+      if (distinct > colors.states.length) {
         // An analog sweep is not a set of readable states; one neutral band
         // reads better than hundreds of one-pixel color stripes.
-        ctx.fillStyle = "#3a4c62";
+        ctx.fillStyle = colors.stateNeutral;
         ctx.fillRect(0, 1, w, h - 2);
       } else {
         for (const band of bands) {
           const x = band.start * w;
           const bw = Math.max(1, (band.end - band.start) * w);
           ctx.globalAlpha = 0.82;
-          ctx.fillStyle = COLORS[band.color % COLORS.length];
+          ctx.fillStyle = colors.states[band.color % colors.states.length];
           ctx.fillRect(x, 1, Math.max(1, bw), h - 2);
           ctx.globalAlpha = 1;
           if (bw > 34) {
-            ctx.fillStyle = "#0d141b";
+            ctx.fillStyle = colors.stateLabel;
             ctx.font = '9px "Cascadia Mono", Consolas, monospace';
             ctx.textBaseline = "middle";
             ctx.fillText(band.label, x + 4, h / 2);
           }
         }
       }
-      ctx.fillStyle = "#56b6ff";
+      ctx.fillStyle = colors.stateMarker;
       ctx.fillRect(w - 1, 0, 1, h);
     };
     draw();
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [bands]);
+  }, [bands, theme]);
   return <canvas class="state-strip" ref={ref} />;
 }
 
-export function StatePanel({ rows, windowS, onWindow, onRemove, onRule }: Props) {
+export function StatePanel({
+  rows,
+  windowS,
+  theme,
+  onWindow,
+  onRemove,
+  onRule,
+}: Props) {
   const options = WINDOWS.some(([seconds]) => seconds === windowS)
     ? WINDOWS
     : [...WINDOWS, [windowS, `${windowS} s`] as [number, string]].sort(
@@ -124,7 +123,7 @@ export function StatePanel({ rows, windowS, onWindow, onRemove, onRule }: Props)
                 <strong>{row.name}</strong>
                 <small>{row.bus}</small>
               </div>
-              <StateStrip bands={row.bands} />
+              <StateStrip bands={row.bands} theme={theme} />
               <span class="state-current" title="Current state">
                 {row.current}
               </span>

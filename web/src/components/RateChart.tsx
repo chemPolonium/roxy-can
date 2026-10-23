@@ -1,25 +1,22 @@
 import { useEffect, useRef } from "preact/hooks";
 import type { Channel, SeriesPoint } from "../types";
-
-const GRID = "#1c2530";
-const AXIS = "#697687";
-const TOTAL = "#4c9dff";
-export const BUS_COLORS = ["#54c08a", "#f2b45e", "#c77dff", "#ff7b72"];
-const FILL_TOP = "rgba(76, 157, 255, 0.28)";
-const FILL_BOTTOM = "rgba(76, 157, 255, 0.01)";
+import { palette, type Theme } from "../theme";
 
 export function RateChart({
   points,
   channels,
+  theme,
 }: {
   points: SeriesPoint[];
   channels: Channel[];
+  theme: Theme;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const colors = palette(theme);
 
     const draw = () => {
       const width = canvas.clientWidth;
@@ -50,7 +47,7 @@ export function RateChart({
       const loadMax = Math.min(100, Math.max(5, loadPeak * 1.15));
       const n = points.length;
 
-      ctx.strokeStyle = GRID;
+      ctx.strokeStyle = colors.rateGrid;
       ctx.lineWidth = 1;
       ctx.font = "10px 'Cascadia Mono', Consolas, monospace";
       ctx.textBaseline = "middle";
@@ -61,7 +58,7 @@ export function RateChart({
         ctx.lineTo(pad.left + plotW, y + 0.5);
         ctx.stroke();
         const value = max * (1 - i / 4);
-        ctx.fillStyle = AXIS;
+        ctx.fillStyle = colors.rateAxis;
         ctx.textAlign = "right";
         ctx.fillText(
           value >= 100 ? value.toFixed(0) : value.toFixed(1),
@@ -71,7 +68,7 @@ export function RateChart({
       }
 
       // Right axis is load on its own scale, independent of frames/s.
-      ctx.fillStyle = "#546171";
+      ctx.fillStyle = colors.rateEmpty;
       ctx.textAlign = "left";
       for (const pct of [loadMax, loadMax / 2, 0]) {
         const y = pad.top + plotH - (pct / loadMax) * plotH;
@@ -88,8 +85,8 @@ export function RateChart({
           pad.top + plotH - (Math.min(loadMax, value) / loadMax) * plotH;
 
         const fill = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
-        fill.addColorStop(0, FILL_TOP);
-        fill.addColorStop(1, FILL_BOTTOM);
+        fill.addColorStop(0, colors.rateFillTop);
+        fill.addColorStop(1, colors.rateFillBottom);
         ctx.beginPath();
         ctx.moveTo(x(0), pad.top + plotH);
         points.forEach((point, i) => ctx.lineTo(x(i), yRate(point.total)));
@@ -122,14 +119,14 @@ export function RateChart({
           ctx.stroke();
         };
 
-        line((point) => point.total, TOTAL, yRate, 1.8);
+        line((point) => point.total, colors.rateTotal, yRate, 1.8);
         channels.forEach((_, bus) => {
-          const color = BUS_COLORS[bus % BUS_COLORS.length];
+          const color = colors.buses[bus % colors.buses.length];
           line((point) => point.busRates[bus], color, yRate);
         });
         ctx.setLineDash([3, 3]);
         channels.forEach((_, bus) => {
-          const color = BUS_COLORS[bus % BUS_COLORS.length];
+          const color = colors.buses[bus % colors.buses.length];
           line((point) => point.busLoads[bus], color, yLoad, 1);
         });
         ctx.setLineDash([]);
@@ -137,11 +134,11 @@ export function RateChart({
         const last = points[n - 1];
         ctx.beginPath();
         ctx.arc(x(n - 1), yRate(last.total), 2.4, 0, Math.PI * 2);
-        ctx.fillStyle = TOTAL;
+        ctx.fillStyle = colors.rateTotal;
         ctx.fill();
       }
 
-      ctx.fillStyle = AXIS;
+      ctx.fillStyle = colors.rateAxis;
       ctx.font = "10px 'Segoe UI', sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
@@ -154,7 +151,7 @@ export function RateChart({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [points, channels]);
+  }, [points, channels, theme]);
 
   return <canvas class="rate-chart" ref={canvasRef} />;
 }

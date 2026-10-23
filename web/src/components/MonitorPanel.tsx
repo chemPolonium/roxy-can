@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
+import { palette, type Theme } from "../theme";
 
 export interface MonitorPatch {
   digits?: number;
@@ -11,12 +12,10 @@ export interface MonitorPatch {
 
 interface Props {
   rows: MonitorRow[];
+  theme: Theme;
   onEdit: (row: MonitorRow, patch: MonitorPatch) => void;
   onRemove: (row: MonitorRow) => void;
 }
-
-/** Rule colors; the row's `color` index cycles through this palette. */
-const COLORS = ["#4c9dff", "#59c48a", "#e6b455", "#e17171", "#b07cf0", "#57c8d8"];
 
 function ThresholdInput({
   value,
@@ -59,7 +58,8 @@ function ThresholdInput({
   );
 }
 
-export function MonitorPanel({ rows, onEdit, onRemove }: Props) {
+export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
+  const colors = palette(theme).monitors;
   if (rows.length === 0) {
     return (
       <div class="monitor-empty">
@@ -70,7 +70,7 @@ export function MonitorPanel({ rows, onEdit, onRemove }: Props) {
   return (
     <div class="monitor-list">
       {rows.map((row) => {
-        const color = COLORS[row.color % COLORS.length];
+        const color = colors[row.color % colors.length];
         const hot =
           row.hasValue &&
           row.ruleOn &&
@@ -136,7 +136,7 @@ export function MonitorPanel({ rows, onEdit, onRemove }: Props) {
                 class="monitor-color"
                 style={{ background: color }}
                 title="Cycle the rule color"
-                onClick={() => onEdit(row, { color: (row.color + 1) % COLORS.length })}
+                onClick={() => onEdit(row, { color: (row.color + 1) % colors.length })}
               />
             </div>
           </div>

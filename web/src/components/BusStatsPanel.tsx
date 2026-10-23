@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "preact/hooks";
 import type { BusStats } from "../types";
+import { palette, type Theme } from "../theme";
 
-function Spark({ points }: { points: number[] }) {
+function Spark({ points, theme }: { points: number[]; theme: Theme }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
+    const colors = palette(theme);
     const draw = () => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -17,7 +19,7 @@ function Spark({ points }: { points: number[] }) {
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#0b1016";
+      ctx.fillStyle = colors.sparkBg;
       ctx.fillRect(0, 0, w, h);
       if (points.length < 2) return;
       const peak = Math.max(0.25, ...points);
@@ -29,12 +31,12 @@ function Spark({ points }: { points: number[] }) {
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
-      ctx.strokeStyle = "#59b6ff";
+      ctx.strokeStyle = colors.sparkLine;
       ctx.lineWidth = 1.5;
       ctx.stroke();
       if (peak >= 1) {
         const y = h - (1 / peak) * h;
-        ctx.strokeStyle = "rgb(230 90 90 / 55%)";
+        ctx.strokeStyle = colors.sparkThreshold;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, y);
@@ -46,11 +48,17 @@ function Spark({ points }: { points: number[] }) {
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [points]);
+  }, [points, theme]);
   return <canvas class="busstat-spark" ref={ref} />;
 }
 
-export function BusStatsPanel({ buses }: { buses: BusStats[] }) {
+export function BusStatsPanel({
+  buses,
+  theme,
+}: {
+  buses: BusStats[];
+  theme: Theme;
+}) {
   if (buses.length === 0) {
     return (
       <div class="busstat-empty">
@@ -66,7 +74,7 @@ export function BusStatsPanel({ buses }: { buses: BusStats[] }) {
             <strong>{bus.name}</strong>
             <span>{bus.kbps} kbit/s</span>
             <em>now {(bus.loadNow * 100).toFixed(2)}%</em>
-            <Spark points={bus.loadHistory} />
+            <Spark points={bus.loadHistory} theme={theme} />
           </header>
           <div class="busstat-rows">
             {bus.rows.map((row) => (
