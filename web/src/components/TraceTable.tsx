@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import {
   useEffect,
   useLayoutEffect,
@@ -179,6 +180,8 @@ export function TraceTable({
   onColumnsChange,
   jump,
   onJumpDone,
+  title,
+  tools,
   onQuery,
   onChartCursor,
   onSetChartCursor,
@@ -191,6 +194,8 @@ export function TraceTable({
   onColumnsChange: (next: TraceColumnPrefs) => void;
   jump?: TraceJump | null;
   onJumpDone?: () => void;
+  title?: ComponentChildren;
+  tools?: ComponentChildren;
   onQuery?: (text: string) => void;
   onChartCursor?: (tUs: number) => void;
   onSetChartCursor?: (slot: "A" | "B", tUs: number) => void;
@@ -337,6 +342,54 @@ export function TraceTable({
       ? -1
       : sortedRows.findIndex((frame) => frameKey(frame) === selectedKey);
   const selectedFrame = selectedIndex >= 0 ? sortedRows[selectedIndex] : null;
+  const mark = (frame: Frame): Mark => ({
+    key: frameKey(frame),
+    tUs: frame.tUs,
+  });
+  const head = (
+    <div class="panel-head">
+      <div class="panel-title">{title}</div>
+      <div class="panel-tools">
+        {tools}
+        <span class="panel-tools-sep" />
+        <button
+          type="button"
+          class="mini"
+          disabled={!selectedFrame}
+          title="Set cursor A on the selected row"
+          onClick={() => {
+            if (!selectedFrame) return;
+            setCursorA(mark(selectedFrame));
+            onSetChartCursor?.("A", selectedFrame.tUs);
+          }}
+        >
+          Set A
+        </button>
+        <button
+          type="button"
+          class="mini"
+          disabled={!selectedFrame}
+          title="Set cursor B on the selected row"
+          onClick={() => {
+            if (!selectedFrame) return;
+            setCursorB(mark(selectedFrame));
+            onSetChartCursor?.("B", selectedFrame.tUs);
+          }}
+        >
+          Set B
+        </button>
+        <button
+          type="button"
+          class="mini"
+          disabled={!selectedFrame}
+          title="Copy the selected row"
+          onClick={() => selectedFrame && copyText(rowText(selectedFrame))}
+        >
+          Copy
+        </button>
+      </div>
+    </div>
+  );
 
   const moveSelection = (delta: number) => {
     if (sortedRows.length === 0) return;
@@ -367,10 +420,13 @@ export function TraceTable({
 
   if (total === 0) {
     return (
-      <div class="empty">
-        <strong>No frames yet</strong>
-        <span>Start the simulation or clear the filter.</span>
-      </div>
+      <>
+        {head}
+        <div class="empty">
+          <strong>No frames yet</strong>
+          <span>Start the simulation or clear the filter.</span>
+        </div>
+      </>
     );
   }
 
@@ -381,7 +437,6 @@ export function TraceTable({
   );
   const topHeight = start * ROW_H;
   const bottomHeight = Math.max(0, (total - end) * ROW_H);
-  const mark = (frame: Frame): Mark => ({ key: frameKey(frame), tUs: frame.tUs });
   const cycleSort = (key: SortKey) => {
     if (sortKey !== key) {
       setSortKey(key);
@@ -450,61 +505,40 @@ export function TraceTable({
   };
 
   return (
-    <div class="trace-body">
-      <div class="trace-cursors">
-        <span class="trace-selection">
-          {selectedFrame
-            ? `Row ${(selectedFrame.tUs / 1e6).toFixed(6)} · ↑/↓ · Ctrl+C`
-            : selectedKey
-              ? "Selected row left the buffer"
-              : "Click a row · ↑/↓ moves · Ctrl+C copies"}
-        </span>
-        {(cursorA || cursorB) && (
-          <span class="trace-cursor-times">
-            {cursorA && `A ${(cursorA.tUs / 1e6).toFixed(6)}`}
-            {cursorA && cursorB && " · "}
-            {cursorB && `B ${(cursorB.tUs / 1e6).toFixed(6)}`}
-            {cursorA && cursorB && ` · Δt ${deltaText(cursorA.tUs, cursorB.tUs)}`}
+    <>
+      {head}
+      <div class="trace-body">
+        <div class="trace-cursors">
+          <span class="trace-selection">
+            {selectedFrame
+              ? `Row ${(selectedFrame.tUs / 1e6).toFixed(6)} · ↑/↓ · Ctrl+C`
+              : selectedKey
+                ? "Selected row left the buffer"
+                : "Click a row · ↑/↓ moves · Ctrl+C copies"}
           </span>
-        )}
-        <span class="spacer" />
-        <button
-          type="button"
-          disabled={!selectedFrame}
-          title="Set cursor A on the selected row"
-          onClick={() => selectedFrame && setCursorA(mark(selectedFrame))}
-        >
-          Set A
-        </button>
-        <button
-          type="button"
-          disabled={!selectedFrame}
-          title="Set cursor B on the selected row"
-          onClick={() => selectedFrame && setCursorB(mark(selectedFrame))}
-        >
-          Set B
-        </button>
-        <button
-          type="button"
-          disabled={!selectedFrame}
-          title="Copy the selected row"
-          onClick={() => selectedFrame && copyText(rowText(selectedFrame))}
-        >
-          Copy
-        </button>
-        {(cursorA || cursorB) && (
-          <button
-            type="button"
-            title="Clear both cursors"
-            onClick={() => {
-              setCursorA(null);
-              setCursorB(null);
-            }}
-          >
-            Clear
-          </button>
-        )}
-      </div>
+          {(cursorA || cursorB) && (
+            <span class="trace-cursor-times">
+              {cursorA && `A ${(cursorA.tUs / 1e6).toFixed(6)}`}
+              {cursorA && cursorB && " · "}
+              {cursorB && `B ${(cursorB.tUs / 1e6).toFixed(6)}`}
+              {cursorA && cursorB &&
+                ` · Δt ${deltaText(cursorA.tUs, cursorB.tUs)}`}
+            </span>
+          )}
+          {(cursorA || cursorB) && (
+            <button
+              type="button"
+              title="Clear both cursors"
+              onClick={() => {
+                setCursorA(null);
+                setCursorB(null);
+              }}
+            >
+              Clear
+            </button>
+          )}
+          <span class="spacer" />
+        </div>
       <div
         class="table-scroll"
         ref={scrollRef}
@@ -700,6 +734,7 @@ export function TraceTable({
           </button>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

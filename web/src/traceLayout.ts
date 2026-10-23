@@ -28,7 +28,7 @@ export const TRACE_COLUMNS: TraceColumnDef[] = [
   { id: "time", label: "Time", width: 92, min: 72, max: 220, locked: true },
   { id: "bus", label: "Bus", width: 54, min: 40, max: 140 },
   { id: "id", label: "ID", width: 80, min: 56, max: 180 },
-  { id: "name", label: "Name", width: 170, min: 80, max: 420 },
+  { id: "name", label: "Name", width: 150, min: 80, max: 420 },
   { id: "dir", label: "Dir", width: 40, min: 34, max: 90 },
   { id: "len", label: "Len", width: 46, min: 38, max: 120 },
   { id: "data", label: "Data", width: 0, min: 0, max: 0, flex: true },
@@ -70,6 +70,9 @@ export function loadTraceColumns(): TraceColumnPrefs {
         column.id,
       );
     }
+    // 170px was the first shipped default; move those sessions to the
+    // tighter Name column instead of leaving a hole next to Dir.
+    if (saved.widths?.name === 170) widths.name = 150;
     const hidden = (Array.isArray(saved.hidden) ? saved.hidden : []).filter(
       (id): id is TraceColumnId =>
         TRACE_COLUMNS.some((column) => column.id === id && !column.locked && !column.flex),

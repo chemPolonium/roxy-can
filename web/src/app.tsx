@@ -1977,63 +1977,6 @@ export function App() {
         }}
       >
         <section class="panel trace-panel">
-          <div class="panel-head">
-            <div class="panel-title">
-              <h2>Trace</h2>
-              <span>
-                {visibleRows.length.toLocaleString()} shown /{" "}
-                {traceRows.length.toLocaleString()} rows
-              </span>
-            </div>
-            <div class="panel-tools">
-              <button
-                type="button"
-                class="mini"
-                onClick={() => openExport("trace")}
-                title="Export the trace to an ASC or PCAP host file"
-              >
-                Export…
-              </button>
-              <button
-                type="button"
-                class={`mini ${traceFilterActive(traceFilter) ? "on" : ""}`}
-                onClick={() => setTraceFilterOpen(true)}
-                title="Direction, DBC-only, payload and time filters"
-              >
-                Filters
-              </button>
-              <ColumnsMenu columns={traceColumns} onChange={setTraceColumns} />
-              <select
-                value={bus}
-                onChange={(e) => {
-                  setBus((e.target as HTMLSelectElement).value);
-                }}
-              >
-                <option value="all">All buses</option>
-                {state?.channels.map((channel) => (
-                  <option key={channel.name} value={channel.name}>
-                    {channel.name}
-                  </option>
-                ))}
-                {state?.frBuses.map((fr) => (
-                  <option key={fr.name} value={fr.name}>
-                    {fr.name}
-                  </option>
-                ))}
-                {state?.ethBuses.map((eth) => (
-                  <option key={eth.name} value={eth.name}>
-                    {eth.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="search"
-                value={query}
-                placeholder="Filter id, name, data…"
-                onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-              />
-            </div>
-          </div>
           <TraceTable
             key={`${bus}:${query}:${traceEpoch}`}
             rows={visibleRows}
@@ -2041,6 +1984,70 @@ export function App() {
             onColumnsChange={setTraceColumns}
             jump={traceJump}
             onJumpDone={() => setTraceJump(null)}
+            title={
+              <>
+                <h2>Trace</h2>
+                <span class="meta">
+                  {visibleRows.length.toLocaleString()} shown /{" "}
+                  {traceRows.length.toLocaleString()} rows
+                </span>
+              </>
+            }
+            tools={
+              <>
+                <button
+                  type="button"
+                  class="mini"
+                  onClick={() => openExport("trace")}
+                  title="Export the trace to an ASC or PCAP host file"
+                >
+                  Export…
+                </button>
+                <button
+                  type="button"
+                  class={`mini ${traceFilterActive(traceFilter) ? "on" : ""}`}
+                  onClick={() => setTraceFilterOpen(true)}
+                  title="Direction, DBC-only, payload and time filters"
+                >
+                  Filters
+                </button>
+                <ColumnsMenu
+                  columns={traceColumns}
+                  onChange={setTraceColumns}
+                />
+                <select
+                  value={bus}
+                  onChange={(e) => {
+                    setBus((e.target as HTMLSelectElement).value);
+                  }}
+                >
+                  <option value="all">All buses</option>
+                  {state?.channels.map((channel) => (
+                    <option key={channel.name} value={channel.name}>
+                      {channel.name}
+                    </option>
+                  ))}
+                  {state?.frBuses.map((fr) => (
+                    <option key={fr.name} value={fr.name}>
+                      {fr.name}
+                    </option>
+                  ))}
+                  {state?.ethBuses.map((eth) => (
+                    <option key={eth.name} value={eth.name}>
+                      {eth.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="search"
+                  value={query}
+                  placeholder="Filter id, name, data…"
+                  onInput={(e) =>
+                    setQuery((e.target as HTMLInputElement).value)
+                  }
+                />
+              </>
+            }
             onQuery={setQuery}
             onChartCursor={placeChartCursor}
             onSetChartCursor={setChartCursorAt}

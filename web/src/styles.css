@@ -366,11 +366,16 @@ input::placeholder {
 
 .stat {
   display: flex;
+  flex: 1 1 0;
   align-items: center;
   gap: 7px;
+  min-width: 0;
   padding: 0 14px;
-  border-right: 1px solid var(--line-soft);
   white-space: nowrap;
+}
+
+.stat + .stat {
+  border-left: 1px solid var(--line-soft);
 }
 
 .stat:first-child {
@@ -491,16 +496,39 @@ input::placeholder {
   min-width: 0;
 }
 
+.panel-tools > button,
+.panel-tools > select {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .panel-tools select {
   width: 100px;
 }
 
 .panel-tools input {
-  width: 190px;
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 70px;
+  max-width: 220px;
+}
+
+.panel-tools-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--line-soft);
 }
 
 .columns-menu {
   position: relative;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.columns-menu button {
+  white-space: nowrap;
 }
 
 .columns-menu-panel {
@@ -3813,6 +3841,14 @@ button.danger:hover:not(:disabled) {
   }
 }
 
+@media (max-width: 1200px) {
+  /* The Trace header now carries the row actions too; drop the row count
+     before the filter box has to shrink below usability. */
+  .trace-panel .panel-head .meta {
+    display: none;
+  }
+}
+
 @media (max-width: 1100px) {
   /* Signal/Monitor/Data/State each add head actions; the fullscreen icon
      needs a little room before the header starts clipping. */
@@ -3822,6 +3858,20 @@ button.danger:hover:not(:disabled) {
 
   .chart-panel .panel-head .tabs button {
     padding: 2px 6px;
+  }
+
+  .stats .stat {
+    gap: 5px;
+    padding: 0 9px;
+  }
+
+  .stats .stat span {
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+  }
+
+  .stats .stat strong {
+    font-size: 11px;
   }
 }
 

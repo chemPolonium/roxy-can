@@ -56,7 +56,7 @@ export function ColumnsMenu({
           setOpen(true);
         }}
       >
-        Columns
+        Columns <span aria-hidden="true">▾</span>
       </button>
       {open && pos && (
         <div
