@@ -16,9 +16,29 @@ export interface SignalView {
 export interface ChartCursor {
   id: number;
   t: number;
+  /// Trace's Set cursor A/B owns these labels; extra chart cursors take the
+  /// next free letter.
+  label?: "A" | "B";
 }
 
 export type ChartSignalAction = "monitor" | "data" | "state" | "remove";
+
+export function cursorLabels(cursors: ChartCursor[]): string[] {
+  const used = new Set<string>();
+  for (const cursor of cursors) {
+    if (cursor.label) used.add(cursor.label);
+  }
+  let next = 0;
+  return cursors.map((cursor) => {
+    if (cursor.label) return cursor.label;
+    let label = "";
+    do {
+      label = String.fromCharCode(65 + (next++ % 26));
+    } while (used.has(label));
+    used.add(label);
+    return label;
+  });
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -342,6 +362,11 @@ export function SignalChart({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const colors = palette(theme);
+    const labels = cursorLabels(cursors);
+    const aIndex = labels.indexOf("A");
+    const bIndex = labels.indexOf("B");
+    const cursorA = aIndex >= 0 ? cursors[aIndex] : undefined;
+    const cursorB = bIndex >= 0 ? cursors[bIndex] : undefined;
 
     const draw = () => {
       const width = canvas.clientWidth;
@@ -452,9 +477,9 @@ export function SignalChart({
           continue;
         }
 
-        if (fullscreen && laneH >= 52 && cursors.length >= 2) {
-          const first = sampleAt(points, cursors[0].t);
-          const second = sampleAt(points, cursors[1].t);
+        if (fullscreen && laneH >= 52 && cursorA && cursorB) {
+          const first = sampleAt(points, cursorA.t);
+          const second = sampleAt(points, cursorB.t);
           if (first !== null && second !== null) {
             ctx.fillStyle = colors.signalMeta;
             ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
@@ -588,12 +613,14 @@ export function SignalChart({
             if (value === null) continue;
             const x = GUTTER + ((cursor.t - start) / view.windowS) * plotW;
             const vy = y(value);
-            const cursorColor = colors.cursorColors[ci % colors.cursorColors.length];
+            const labelIndex = labels[ci].charCodeAt(0) - 65;
+            const cursorColor =
+              colors.cursorColors[labelIndex % colors.cursorColors.length];
             ctx.fillStyle = cursorColor;
             ctx.beginPath();
             ctx.arc(x, vy, 2.2, 0, Math.PI * 2);
             ctx.fill();
-            const label = `${String.fromCharCode(65 + (ci % 26))} ${valueText(value)}${unit}`;
+            const label = `${labels[ci]} ${valueText(value)}${unit}`;
             ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
             const labelW = ctx.measureText(label).width;
             const onRight = x + 6 + labelW + 8 <= width - 8;
@@ -633,7 +660,8 @@ export function SignalChart({
         const cursor = cursors[i];
         if (cursor.t < start || cursor.t > end) continue;
         const x = GUTTER + ((cursor.t - start) / view.windowS) * plotW;
-        const color = colors.cursorColors[i % colors.cursorColors.length];
+        const labelIndex = labels[i].charCodeAt(0) - 65;
+        const color = colors.cursorColors[labelIndex % colors.cursorColors.length];
         ctx.strokeStyle = color;
         ctx.globalAlpha = 0.9;
         ctx.lineWidth = 1;
@@ -642,7 +670,7 @@ export function SignalChart({
         ctx.lineTo(x + 0.5, height - AXIS_H);
         ctx.stroke();
         ctx.globalAlpha = 1;
-        const label = `${String.fromCharCode(65 + (i % 26))} ${cursor.t.toFixed(3)}s`;
+        const label = `${labels[i]} ${cursor.t.toFixed(3)}s`;
         ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
         const labelW = ctx.measureText(label).width;
         const labelX = clamp(x + 4, 4, width - labelW - 12);
@@ -698,6 +726,15 @@ export function SignalChart({
     return Math.max(1, (canvas?.clientWidth ?? 0) - GUTTER - 8);
   };
   const menuSignal = laneMenu ? series[laneMenu.index] : undefined;
+  const cursorLabelList = cursorLabels(cursors);
+  const cursorA =
+    cursorLabelList.indexOf("A") >= 0
+      ? cursors[cursorLabelList.indexOf("A")]
+      : undefined;
+  const cursorB =
+    cursorLabelList.indexOf("B") >= 0
+      ? cursors[cursorLabelList.indexOf("B")]
+      : undefined;
 
   return (
     <div class="signal-chart-wrap">
@@ -866,12 +903,12 @@ export function SignalChart({
             Clear
           </button>
         )}
-        {cursors.length >= 2 && (
+        {cursorA && cursorB && (
           <span
             class="chart-cursor-delta"
             title="Time between cursors A and B"
           >
-            Δt {Math.abs(cursors[1].t - cursors[0].t).toFixed(3)}s
+            Δt {Math.abs(cursorB.t - cursorA.t).toFixed(3)}s
           </span>
         )}
       </div>

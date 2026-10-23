@@ -136,10 +136,12 @@ export function TraceTable({
   rows,
   onQuery,
   onChartCursor,
+  onSetChartCursor,
 }: {
   rows: Frame[];
   onQuery?: (text: string) => void;
   onChartCursor?: (tUs: number) => void;
+  onSetChartCursor?: (slot: "A" | "B", tUs: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
@@ -479,6 +481,7 @@ export function TraceTable({
             type="button"
             onClick={() => {
               setCursorA(mark(menu.frame));
+              onSetChartCursor?.("A", menu.frame.tUs);
               setMenu(null);
             }}
           >
@@ -488,6 +491,7 @@ export function TraceTable({
             type="button"
             onClick={() => {
               setCursorB(mark(menu.frame));
+              onSetChartCursor?.("B", menu.frame.tUs);
               setMenu(null);
             }}
           >

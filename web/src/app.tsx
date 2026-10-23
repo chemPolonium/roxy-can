@@ -35,6 +35,7 @@ import type { MonitorPatch } from "./components/MonitorPanel";
 import { RateChart } from "./components/RateChart";
 import {
   SignalChart,
+  cursorLabels,
   type ChartCursor,
   type ChartSignalAction,
   type SignalView,
@@ -469,6 +470,29 @@ export function App() {
     if (action !== "remove") {
       setChartTab(action);
     }
+  };
+
+  const setChartCursorAt = (slot: "A" | "B", tUs: number) => {
+    const t = tUs / 1e6;
+    const id = chartCursorSeq.current++;
+    setChartCursors((old) => {
+      const existing = old.find((cursor) => cursor.label === slot);
+      if (existing) {
+        return old.map((cursor) =>
+          cursor.id === existing.id ? { ...cursor, t } : cursor,
+        );
+      }
+      const labels = cursorLabels(old);
+      const index = labels.indexOf(slot);
+      if (index >= 0 && !old[index].label) {
+        return old.map((cursor, i) =>
+          i === index ? { ...cursor, t, label: slot } : cursor,
+        );
+      }
+      return [...old, { id, t, label: slot }];
+    });
+    setSignalView((old) => ({ ...old, endS: t + old.windowS / 2 }));
+    setChartTab("signals");
   };
 
   const placeChartCursor = (tUs: number) => {
@@ -1328,6 +1352,7 @@ export function App() {
             rows={visibleRows}
             onQuery={setQuery}
             onChartCursor={placeChartCursor}
+            onSetChartCursor={setChartCursorAt}
           />
         </section>
 
