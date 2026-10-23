@@ -5,6 +5,7 @@ interface Props {
 }
 
 const SHORTCUTS: [string, string][] = [
+  ["Ctrl+K", "Command palette"],
   ["F9", "Start / stop the measurement"],
   ["Ctrl+S", "Save the open project"],
   ["Ctrl+Shift+S", "Open Session (Save as / switch session)"],

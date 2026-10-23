@@ -23,6 +23,8 @@ import {
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
+import { CommandPalette } from "./components/CommandPalette";
+import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
 import { ExportModal } from "./components/ExportModal";
 import { FilePick } from "./components/FilePick";
@@ -75,9 +77,66 @@ interface Layout {
 }
 
 const LAYOUT_KEY = "roxy-can-web.layout";
+const VIEW_KEY = "roxy-can-web.view";
 const TRACE_CAP = 50_000;
 const SIGNAL_CAP = 12_000;
 const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
+
+interface SavedView {
+  tab: RightTab;
+  chartTab: ChartTab;
+  signalView: SignalView;
+  cursors: ChartCursor[];
+}
+
+function loadView(): Partial<SavedView> {
+  try {
+    const raw = localStorage.getItem(VIEW_KEY);
+    if (!raw) return {};
+    const saved = JSON.parse(raw) as Partial<SavedView>;
+    const tabs: RightTab[] = [
+      "messages",
+      "statistics",
+      "bus",
+      "spec",
+      "activity",
+    ];
+    const chartTabs: ChartTab[] = [
+      "rate",
+      "signals",
+      "monitor",
+      "data",
+      "state",
+    ];
+    const windowS = clamp(Number(saved.signalView?.windowS) || 30, 1, 120);
+    const rawEnd = saved.signalView?.endS;
+    const endS = typeof rawEnd === "number" && Number.isFinite(rawEnd) ? rawEnd : null;
+    const cursors: ChartCursor[] = [];
+    if (Array.isArray(saved.cursors)) {
+      for (const cursor of saved.cursors.slice(0, 16)) {
+        if (!Number.isFinite(cursor?.id) || !Number.isFinite(cursor?.t)) continue;
+        const label =
+          cursor.label === "A" || cursor.label === "B" ? cursor.label : undefined;
+        cursors.push({
+          id: cursor.id,
+          t: cursor.t,
+          ...(label ? { label } : {}),
+        });
+      }
+    }
+    return {
+      tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
+      chartTab:
+        saved.chartTab && chartTabs.includes(saved.chartTab)
+          ? saved.chartTab
+          : undefined,
+      signalView: { windowS, endS },
+      cursors,
+    };
+  } catch {
+    return {};
+  }
+}
 
 /// The backend's series/catalog key for an observer row. CAN ids start at 0,
 /// so FlexRay keys need the prefix to stay distinct.
@@ -192,8 +251,11 @@ export function App() {
   const [panelQuery, setPanelQuery] = useState("");
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
-  const [tab, setTab] = useState<RightTab>("messages");
-  const [chartTab, setChartTab] = useState<ChartTab>("rate");
+  const [savedView] = useState(loadView);
+  const [tab, setTab] = useState<RightTab>(savedView.tab ?? "messages");
+  const [chartTab, setChartTab] = useState<ChartTab>(
+    savedView.chartTab ?? "rate",
+  );
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [savePath, setSavePath] = useState("");
@@ -229,23 +291,73 @@ export function App() {
   const [drag, setDrag] = useState<Drag>(null);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [signalView, setSignalView] = useState<SignalView>({
-    windowS: 30,
-    endS: null,
-  });
-  const [chartCursors, setChartCursors] = useState<ChartCursor[]>([]);
+  const [signalView, setSignalView] = useState<SignalView>(
+    savedView.signalView ?? { windowS: 30, endS: null },
+  );
+  const [chartCursors, setChartCursors] = useState<ChartCursor[]>(
+    savedView.cursors ?? [],
+  );
   const [chartFullscreen, setChartFullscreen] = useState(false);
+  const [toast, setToast] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
   const chartPanelRef = useRef<HTMLElement>(null);
-  const chartCursorSeq = useRef(1);
+  const chartCursorSeq = useRef(
+    Math.max(0, ...(savedView.cursors ?? []).map((cursor) => cursor.id)) + 1,
+  );
+  const toastTimer = useRef<number | null>(null);
+  const lastStatus = useRef("");
+  const lastPhase = useRef("");
   const chartPalette = palette(theme);
+
+  const showToast = (message: string) => {
+    if (!message) return;
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setToast(message);
+    toastTimer.current = window.setTimeout(() => {
+      setToast("");
+      toastTimer.current = null;
+    }, 2600);
+  };
 
   useEffect(() => {
     applyTheme(theme);
     saveTheme(theme);
   }, [theme]);
+
+  // Transport changes deserve a message even though the status line keeps
+  // showing the bus state rather than the command result.
+  useEffect(() => {
+    if (!state) return;
+    const phase = !state.measuring
+      ? "Stopped"
+      : state.tracePaused
+        ? "Paused"
+        : "Running";
+    const previous = lastPhase.current;
+    lastPhase.current = phase;
+    if (!previous || previous === phase) return;
+    if (phase !== "Running") showToast(phase);
+    else showToast(previous === "Paused" ? "Resumed" : "Started");
+  }, [state?.measuring, state?.tracePaused]);
+
+  useEffect(() => {
+    const status = state?.status?.trim() ?? "";
+    if (!status || status === lastStatus.current) return;
+    lastStatus.current = status;
+    // The transport effect above already announces these words.
+    if (/^(stopped|paused|running)$/i.test(status)) return;
+    showToast(status);
+  }, [state?.status]);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -316,6 +428,22 @@ export function App() {
       // Storage can be unavailable in private mode; the session layout still works.
     }
   }, [layout]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        VIEW_KEY,
+        JSON.stringify({
+          tab,
+          chartTab,
+          signalView,
+          cursors: chartCursors,
+        }),
+      );
+    } catch {
+      // Same fallback as the splitter layout.
+    }
+  }, [tab, chartTab, signalView, chartCursors]);
 
   useEffect(() => {
     let alive = true;
@@ -469,6 +597,32 @@ export function App() {
     void run({ type: "chart_signal", key, action });
     if (action !== "remove") {
       setChartTab(action);
+    }
+  };
+
+  const copyChartSelection = async (
+    target: "monitor" | "data" | "state",
+  ) => {
+    setPickerOpen(false);
+    const keys = signals.map((signal) => signal.key);
+    if (keys.length === 0) {
+      showToast("No chart signals to copy");
+      return;
+    }
+    setBusy(true);
+    try {
+      await Promise.all(
+        keys.map((key) =>
+          sendCommand({ type: "chart_signal", key, action: target }),
+        ),
+      );
+      setError("");
+      setChartTab(target);
+      showToast(`Copied ${keys.length} signal(s) to ${target}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -680,6 +834,9 @@ export function App() {
       } else if (mod && key === "e") {
         event.preventDefault();
         openExport("trace");
+      } else if (mod && key === "k") {
+        event.preventDefault();
+        setPaletteOpen(true);
       } else if (event.key === "?") {
         setHelpOpen(true);
       }
@@ -713,6 +870,38 @@ export function App() {
     setSysvarsOpen(false);
     setStatePickerOpen(true);
     void loadCatalog();
+  };
+
+  const closeDialogs = () => {
+    setSessionOpen(false);
+    setScriptsOpen(false);
+    setBusesOpen(false);
+    setPickerOpen(false);
+    setMonitorPickerOpen(false);
+    setDataPickerOpen(false);
+    setStatePickerOpen(false);
+    setGeneratorOpen(false);
+    setTriggersOpen(false);
+    setSysvarsOpen(false);
+    setExportOpen(false);
+    setHelpOpen(false);
+    setTraceFilterOpen(false);
+    setStateRule(null);
+  };
+
+  const openBuses = () => {
+    closeDialogs();
+    setBusesOpen(true);
+  };
+
+  const openSession = () => {
+    closeDialogs();
+    setSessionOpen(true);
+  };
+
+  const openHelp = () => {
+    closeDialogs();
+    setHelpOpen(true);
   };
 
   const editMonitor = (
@@ -977,6 +1166,216 @@ export function App() {
   const dataKeys = new Set((state?.data ?? []).map(rowKey));
   const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
 
+  const addPaletteCursor = () => {
+    if (signals.length === 0) {
+      showToast("No chart signals to measure");
+      return;
+    }
+    let last = 0;
+    for (const signal of signals) {
+      const point = signal.points[signal.points.length - 1];
+      if (point) last = Math.max(last, point[0]);
+    }
+    const end = signalView.endS ?? last;
+    addChartCursor(end - signalView.windowS / 2);
+    setChartTab("signals");
+  };
+
+  const paletteCommands: PaletteCommand[] = [
+    {
+      id: "open-session",
+      label: "Open Session…",
+      group: "Open",
+      hint: "Projects, replay logs and recording",
+      run: openSession,
+    },
+    {
+      id: "open-buses",
+      label: "Open Buses…",
+      group: "Open",
+      hint: "DBC, hardware and bus modes",
+      run: openBuses,
+    },
+    {
+      id: "open-generator",
+      label: "Open Generator…",
+      group: "Open",
+      hint: "Messages, cycles and signal sources",
+      run: openGenerator,
+    },
+    {
+      id: "open-triggers",
+      label: "Open Triggers…",
+      group: "Open",
+      hint: "Conditions, actions and recording limits",
+      run: openTriggers,
+    },
+    {
+      id: "open-sysvars",
+      label: "Open SysVars…",
+      group: "Open",
+      hint: "System variable definitions and values",
+      run: openSysvars,
+    },
+    {
+      id: "open-scripts",
+      label: "Open Scripts…",
+      group: "Open",
+      hint: "Node scripts and their logs",
+      run: () => {
+        closeDialogs();
+        setScriptsOpen(true);
+      },
+    },
+    {
+      id: "pick-signals",
+      label: "Pick chart signals…",
+      group: "Signals",
+      hint: "Choose and order the Signals lanes",
+      run: openPicker,
+    },
+    {
+      id: "add-cursor",
+      label: "Add signal cursor",
+      group: "Signals",
+      hint: "Place a time cursor in the middle of the view",
+      run: addPaletteCursor,
+    },
+    {
+      id: "clear-cursors",
+      label: "Clear signal cursors",
+      group: "Signals",
+      run: clearChartCursors,
+    },
+    {
+      id: "copy-monitor",
+      label: "Copy chart signals to Monitor",
+      group: "Signals",
+      run: () => void copyChartSelection("monitor"),
+    },
+    {
+      id: "copy-data",
+      label: "Copy chart signals to Data",
+      group: "Signals",
+      run: () => void copyChartSelection("data"),
+    },
+    {
+      id: "copy-state",
+      label: "Copy chart signals to State",
+      group: "Signals",
+      run: () => void copyChartSelection("state"),
+    },
+    {
+      id: "chart-rate",
+      label: "Show Rate",
+      group: "Chart",
+      run: () => setChartTab("rate"),
+    },
+    {
+      id: "chart-signals",
+      label: "Show Signals",
+      group: "Chart",
+      run: () => setChartTab("signals"),
+    },
+    {
+      id: "chart-monitor",
+      label: "Show Monitor",
+      group: "Chart",
+      run: () => setChartTab("monitor"),
+    },
+    {
+      id: "chart-data",
+      label: "Show Data",
+      group: "Chart",
+      run: () => setChartTab("data"),
+    },
+    {
+      id: "chart-state",
+      label: "Show State",
+      group: "Chart",
+      run: () => setChartTab("state"),
+    },
+    {
+      id: "tab-messages",
+      label: "Show Messages",
+      group: "Lower panel",
+      run: () => setTab("messages"),
+    },
+    {
+      id: "tab-statistics",
+      label: "Show Statistics",
+      group: "Lower panel",
+      run: () => setTab("statistics"),
+    },
+    {
+      id: "tab-bus",
+      label: "Show Bus statistics",
+      group: "Lower panel",
+      run: () => setTab("bus"),
+    },
+    {
+      id: "tab-spec",
+      label: "Show Spec",
+      group: "Lower panel",
+      run: () => setTab("spec"),
+    },
+    {
+      id: "tab-write",
+      label: "Show Write log",
+      group: "Lower panel",
+      run: () => setTab("activity"),
+    },
+    {
+      id: "fullscreen",
+      label: chartFullscreen ? "Exit fullscreen chart" : "Fullscreen chart",
+      group: "View",
+      run: toggleChartFullscreen,
+    },
+    {
+      id: "theme",
+      label:
+        theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+      group: "View",
+      run: () => setTheme(theme === "dark" ? "light" : "dark"),
+    },
+    ...(canControl && !measuring && !needsLog
+      ? [
+          {
+            id: "start",
+            label: "Start measurement",
+            group: "Measurement",
+            hint: "F9",
+            run: () => void run({ type: "start" }),
+          },
+        ]
+      : []),
+    ...(canControl && measuring
+      ? [
+          {
+            id: "stop",
+            label: "Stop measurement",
+            group: "Measurement",
+            run: () => void run({ type: "stop" }),
+          },
+          {
+            id: "pause",
+            label: state?.tracePaused
+              ? "Resume measurement"
+              : "Pause measurement",
+            group: "Measurement",
+            run: () =>
+              void run({ type: "pause", on: !state?.tracePaused }),
+          },
+        ]
+      : []),
+    {
+      id: "help",
+      label: "Shortcuts and about",
+      group: "Help",
+      run: openHelp,
+    },
+  ];
+
   return (
     <div class="app">
       <header class="topbar">
@@ -1106,6 +1505,15 @@ export function App() {
             type="button"
             class="primary"
             disabled={!canControl || measuring || needsLog}
+            title={
+              !online
+                ? "Waiting for the bus core"
+                : needsLog
+                  ? "Load a replay log first"
+                  : measuring
+                    ? "Measurement is already running"
+                    : "Start measurement"
+            }
             onClick={() => void run({ type: "start" })}
           >
             Start
@@ -1113,6 +1521,7 @@ export function App() {
           <button
             type="button"
             disabled={!canControl || !measuring}
+            title={measuring ? "Stop measurement" : "Measurement is not running"}
             onClick={() => void run({ type: "stop" })}
           >
             Stop
@@ -1120,6 +1529,13 @@ export function App() {
           <button
             type="button"
             disabled={!canControl || !measuring}
+            title={
+              measuring
+                ? state?.tracePaused
+                  ? "Resume measurement"
+                  : "Pause measurement"
+                : "Measurement is not running"
+            }
             onClick={() => void run({ type: "pause", on: !state?.tracePaused })}
           >
             {state?.tracePaused ? "Resume" : "Pause"}
@@ -1127,6 +1543,7 @@ export function App() {
           <button
             type="button"
             disabled={!canControl}
+            title="Clear the visible trace; measurement keeps running"
             onClick={() => void run({ type: "clear_trace" })}
           >
             Clear trace
@@ -1578,6 +1995,8 @@ export function App() {
                 onClearCursors={clearChartCursors}
                 onSignalAction={chartSignalAction}
                 fullscreen={chartFullscreen}
+                measuring={measuring}
+                paused={state?.tracePaused ?? false}
               />
             ) : chartTab === "monitor" ? (
               <MonitorPanel
@@ -2019,6 +2438,7 @@ export function App() {
           selected={selectedKeys}
           kinds={["can", "fr", "eth"]}
           onToggle={toggleSignal}
+          onCopyTo={copyChartSelection}
           onClose={() => setPickerOpen(false)}
         />
       )}
@@ -2413,6 +2833,17 @@ export function App() {
               </p>
             </div>
           </div>
+        </div>
+      )}
+      {paletteOpen && (
+        <CommandPalette
+          commands={paletteCommands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {toast && (
+        <div class="toast" role="status" title={toast}>
+          {toast}
         </div>
       )}
     </div>

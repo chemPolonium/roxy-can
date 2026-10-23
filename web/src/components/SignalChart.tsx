@@ -238,6 +238,8 @@ export function SignalChart({
   onClearCursors,
   onSignalAction,
   fullscreen,
+  measuring,
+  paused,
 }: {
   series: SignalSeries[];
   markers?: number[];
@@ -251,6 +253,8 @@ export function SignalChart({
   onClearCursors: () => void;
   onSignalAction: (key: string, action: ChartSignalAction) => void;
   fullscreen: boolean;
+  measuring: boolean;
+  paused: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -656,6 +660,14 @@ export function SignalChart({
       }
 
       ctx.textAlign = "left";
+      ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
+      const timeLabels: {
+        x: number;
+        color: string;
+        text: string;
+        w: number;
+        labelX: number;
+      }[] = [];
       for (let i = 0; i < cursors.length; i += 1) {
         const cursor = cursors[i];
         if (cursor.t < start || cursor.t > end) continue;
@@ -670,14 +682,30 @@ export function SignalChart({
         ctx.lineTo(x + 0.5, height - AXIS_H);
         ctx.stroke();
         ctx.globalAlpha = 1;
-        const label = `${labels[i]} ${cursor.t.toFixed(3)}s`;
-        ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
-        const labelW = ctx.measureText(label).width;
-        const labelX = clamp(x + 4, 4, width - labelW - 12);
+        const text = `${labels[i]} ${cursor.t.toFixed(3)}s`;
+        timeLabels.push({
+          x,
+          color,
+          text,
+          w: ctx.measureText(text).width + 8,
+          labelX: 0,
+        });
+      }
+      // Nearby cursors would stack their time chips on top of each other:
+      // lay the chips out in order, then slide the row back into view.
+      timeLabels.sort((a, b) => a.x - b.x);
+      let nextLabel = 4;
+      for (const entry of timeLabels) {
+        entry.labelX = Math.max(entry.x + 4, nextLabel);
+        nextLabel = entry.labelX + entry.w + 4;
+      }
+      const shift = Math.max(0, nextLabel - 4 - (width - 4));
+      for (const entry of timeLabels) {
+        const labelX = Math.max(4, entry.labelX - shift);
         ctx.fillStyle = colors.signalTagBg;
-        ctx.fillRect(labelX, TOP + 2, labelW + 8, 12);
-        ctx.fillStyle = color;
-        ctx.fillText(label, labelX + 4, TOP + 10);
+        ctx.fillRect(labelX, TOP + 2, entry.w, 12);
+        ctx.fillStyle = entry.color;
+        ctx.fillText(entry.text, labelX + 4, TOP + 10);
       }
 
       if (reorder) {
@@ -698,11 +726,19 @@ export function SignalChart({
 
       ctx.textAlign = "right";
       ctx.font = "9px 'Segoe UI', sans-serif";
-      const tag = live ? "LIVE" : "HOLD · double-click to follow";
+      const tag = !measuring
+        ? "STOPPED"
+        : paused
+          ? "PAUSED"
+          : live
+            ? "LIVE"
+            : "HOLD · double-click to follow";
       const tagWidth = ctx.measureText(tag).width;
       ctx.fillStyle = colors.signalTagBg;
       ctx.fillRect(width - tagWidth - 16, 1, tagWidth + 14, 12);
-      ctx.fillStyle = live ? colors.signalLive : colors.signalHold;
+      ctx.fillStyle = live && measuring && !paused
+        ? colors.signalLive
+        : colors.signalHold;
       ctx.fillText(tag, width - 8, 10);
     };
 
@@ -719,6 +755,8 @@ export function SignalChart({
     cursors,
     fullscreen,
     hoverCursorId,
+    measuring,
+    paused,
   ]);
 
   const plotWidth = () => {

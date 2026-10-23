@@ -19,6 +19,7 @@ interface Props {
     signal: CatalogSignal,
     on: boolean,
   ) => void;
+  onCopyTo?: (target: "monitor" | "data" | "state") => void;
   onClose: () => void;
 }
 
@@ -37,6 +38,7 @@ export function SignalPicker({
   title = "Signals",
   kinds,
   onToggle,
+  onCopyTo,
   onClose,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -172,6 +174,32 @@ export function SignalPicker({
               </section>
             ))}
         </div>
+        {onCopyTo && (
+          <div class="picker-copy">
+            <span>Copy this selection to</span>
+            <button
+              type="button"
+              disabled={selected.size === 0}
+              onClick={() => onCopyTo("monitor")}
+            >
+              Monitor
+            </button>
+            <button
+              type="button"
+              disabled={selected.size === 0}
+              onClick={() => onCopyTo("data")}
+            >
+              Data
+            </button>
+            <button
+              type="button"
+              disabled={selected.size === 0}
+              onClick={() => onCopyTo("state")}
+            >
+              State
+            </button>
+          </div>
+        )}
         <p class="hint picker-hint">
           Selection is session-only for now. Unselecting removes the bus
           subscription and its curve.
