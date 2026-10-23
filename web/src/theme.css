@@ -97,10 +97,6 @@
   color: #5d6a7a;
 }
 
-[data-theme="light"] .theme-toggle {
-  color: var(--muted);
-}
-
 [data-theme="light"] .legend-key b {
   color: #26313f;
 }

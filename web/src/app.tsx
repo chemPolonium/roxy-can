@@ -829,7 +829,42 @@ export function App() {
     <div class="app">
       <header class="topbar">
         <div class="brand">
-          <div class="logo">R</div>
+          <div class="brand-tools">
+            <button
+              type="button"
+              class="brand-tool"
+              aria-label="Shortcuts and about"
+              title="Shortcuts and about"
+              onClick={() => setHelpOpen(true)}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+                <path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9.5h8" />
+              </svg>
+              <span class="brand-tool-label">Shortcuts</span>
+            </button>
+            <button
+              type="button"
+              class="brand-tool theme-toggle"
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? (
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="3.2" />
+                  <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M13 10.2A5.6 5.6 0 0 1 5.8 3a5.5 5.5 0 1 0 7.2 7.2z" />
+                </svg>
+              )}
+              <span class="brand-tool-label">
+                {theme === "dark" ? "Light" : "Dark"}
+              </span>
+            </button>
+          </div>
           <div class="brand-text">
             <h1>
               roxy-can <span class="tag">web spike</span>
@@ -961,23 +996,6 @@ export function App() {
           <strong>{state?.runMode ?? state?.mode ?? "—"}</strong>
         </div>
         {error && <div class="error-pill">{error}</div>}
-        <button
-          type="button"
-          class="help-link"
-          title="Shortcuts and about (?)"
-          onClick={() => setHelpOpen(true)}
-        >
-          ?
-        </button>
-        <button
-          type="button"
-          class="theme-toggle"
-          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        >
-          {theme === "dark" ? "Light" : "Dark"}
-        </button>
       </section>
 
       {state?.runMode === "Replay" && state.log && (
