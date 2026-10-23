@@ -75,6 +75,7 @@ export function SignalChart({
     null,
   );
   const [cursors, setCursors] = useState<ChartCursor[]>([]);
+  const [hoverCursor, setHoverCursor] = useState(false);
   const cursorSeq = useRef(1);
   const cursorDragRef = useRef<number | null>(null);
   const timeBounds = bounds(series);
@@ -412,7 +413,7 @@ export function SignalChart({
   return (
     <div class="signal-chart-wrap">
       <canvas
-        class={`signal-chart ${reorder ? "reordering" : ""}`}
+        class={`signal-chart ${reorder ? "reordering" : ""} ${hoverCursor ? "cursor-hover" : ""}`}
         ref={canvasRef}
         aria-label="Live signal curves"
         title="Drag a signal name to reorder · drag a cursor to move it · wheel zooms"
@@ -450,10 +451,12 @@ export function SignalChart({
           if (event.button !== 0) return;
           const cursor = cursorAt(event.clientX, event.clientY);
           if (cursor !== null) {
+            setHoverCursor(true);
             event.currentTarget.setPointerCapture(event.pointerId);
             cursorDragRef.current = cursor;
             return;
           }
+          setHoverCursor(false);
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left < GUTTER) {
             const lane = laneAt(event.clientY);
@@ -473,6 +476,7 @@ export function SignalChart({
         onPointerMove={(event) => {
           const cursor = cursorDragRef.current;
           if (cursor !== null) {
+            setHoverCursor(true);
             const t = timeAt(event.clientX);
             setCursors((old) =>
               old.map((entry) => (entry.id === cursor ? { ...entry, t } : entry)),
@@ -481,6 +485,7 @@ export function SignalChart({
           }
           const reordering = reorderRef.current;
           if (reordering) {
+            setHoverCursor(false);
             const to = laneAt(event.clientY, true) ?? reordering.to;
             if (to !== reordering.to) {
               reorderRef.current = { ...reordering, to };
@@ -489,7 +494,12 @@ export function SignalChart({
             return;
           }
           const drag = dragRef.current;
-          if (!drag) return;
+          if (!drag) {
+            const over = cursorAt(event.clientX, event.clientY) !== null;
+            if (over !== hoverCursor) setHoverCursor(over);
+            return;
+          }
+          setHoverCursor(false);
           const delta =
             ((drag.x - event.clientX) / plotWidth()) * view.windowS;
           const nextEnd = clamp(
@@ -522,6 +532,16 @@ export function SignalChart({
           reorderRef.current = null;
           setReorder(null);
           dragRef.current = null;
+          setHoverCursor(false);
+        }}
+        onPointerLeave={() => {
+          if (
+            cursorDragRef.current === null &&
+            reorderRef.current === null &&
+            dragRef.current === null
+          ) {
+            setHoverCursor(false);
+          }
         }}
         onDblClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();

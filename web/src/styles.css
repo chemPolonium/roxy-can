@@ -909,6 +909,10 @@ input::placeholder {
   cursor: grabbing;
 }
 
+.signal-chart.cursor-hover {
+  cursor: ew-resize;
+}
+
 .chart-tabs {
   flex: 0 0 auto;
 }
