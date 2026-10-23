@@ -605,6 +605,11 @@ export type Command =
   | { type: "select_eth_signal"; bus: number; frame: string; name: string }
   | { type: "unselect_eth_signal"; bus: number; frame: string; name: string }
   | { type: "move_signal"; key: string; to: number }
+  | {
+      type: "chart_signal";
+      key: string;
+      action: "monitor" | "data" | "state" | "remove";
+    }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
   | { type: "attach_fr_hardware"; bus: number; index: number }

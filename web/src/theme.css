@@ -164,6 +164,10 @@
   background: #eef4fb;
 }
 
+[data-theme="light"] .signal-menu .signal-menu-remove {
+  color: #b42318;
+}
+
 [data-theme="light"] .data-table th {
   background: #f1f4f8;
   color: #5d6a7a;

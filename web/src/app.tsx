@@ -36,6 +36,7 @@ import { RateChart } from "./components/RateChart";
 import {
   SignalChart,
   type ChartCursor,
+  type ChartSignalAction,
   type SignalView,
 } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
@@ -291,6 +292,10 @@ export function App() {
     if (!chartFullscreen) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A menu opened inside fullscreen owns the first Escape.
+      if (document.querySelector(".signal-menu, .trace-menu, .modal-backdrop")) {
+        return;
+      }
       const panel = chartPanelRef.current;
       if (!panel) return;
       panel.classList.remove("chart-fullscreen");
@@ -458,6 +463,13 @@ export function App() {
   };
 
   const clearChartCursors = () => setChartCursors([]);
+
+  const chartSignalAction = (key: string, action: ChartSignalAction) => {
+    void run({ type: "chart_signal", key, action });
+    if (action !== "remove") {
+      setChartTab(action);
+    }
+  };
 
   const placeChartCursor = (tUs: number) => {
     const t = tUs / 1e6;
@@ -1451,25 +1463,54 @@ export function App() {
                   {state ? state.fps.toFixed(0) : "—"} f/s
                 </strong>
               )}
-              <button
-                type="button"
-                class="chart-focus"
-                aria-label={
-                  chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
-                }
-                title={
-                  chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
-                }
-                onClick={toggleChartFullscreen}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  {chartFullscreen ? (
-                    <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
-                  ) : (
-                    <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
-                  )}
-                </svg>
-              </button>
+              <div class="chart-head-tools">
+                {chartFullscreen && (
+                  <button
+                    type="button"
+                    class="chart-theme"
+                    aria-label={
+                      theme === "dark"
+                        ? "Switch to light theme"
+                        : "Switch to dark theme"
+                    }
+                    title={
+                      theme === "dark"
+                        ? "Switch to light theme"
+                        : "Switch to dark theme"
+                    }
+                    onClick={() =>
+                      setTheme(theme === "dark" ? "light" : "dark")
+                    }
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      {theme === "dark" ? (
+                        <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M8 5a3 3 0 1 0 3 3" />
+                      ) : (
+                        <path d="M13 10.2A5.6 5.6 0 0 1 5.8 3a5.5 5.5 0 1 0 7.2 7.2z" />
+                      )}
+                    </svg>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  class="chart-focus"
+                  aria-label={
+                    chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
+                  }
+                  title={
+                    chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
+                  }
+                  onClick={toggleChartFullscreen}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    {chartFullscreen ? (
+                      <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+                    ) : (
+                      <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+                    )}
+                  </svg>
+                </button>
+              </div>
             </div>
             {chartTab === "rate" ? (
               <>
@@ -1510,6 +1551,7 @@ export function App() {
                 onAddCursor={addChartCursor}
                 onMoveCursor={moveChartCursor}
                 onClearCursors={clearChartCursors}
+                onSignalAction={chartSignalAction}
                 fullscreen={chartFullscreen}
               />
             ) : chartTab === "monitor" ? (

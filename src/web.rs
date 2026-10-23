@@ -635,6 +635,32 @@ fn chart_unselect(app: &mut App, key: &SigKey) {
     app.prune_signal(key);
 }
 
+/// Applies a Signals context-menu action. Watching only adds a reader;
+/// removing a chart lane leaves any observer that already watches it alone.
+fn chart_signal_action(app: &mut App, store: &mut SignalStore, key: &SigKey, action: &str) -> bool {
+    match action {
+        "monitor" => app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true),
+        "data" => {
+            if app.data_windows.is_empty() {
+                app.new_data_window();
+            }
+            app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
+        }
+        "state" => {
+            if app.state_trackers.is_empty() {
+                app.new_state_window();
+            }
+            app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
+        }
+        "remove" => {
+            chart_unselect(app, key);
+            store.unselect(key);
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// Moves a chart lane in both the session cache and the first Graphics
 /// window. The window order is what a project save persists, while the cache
 /// order is what the web UI draws.
@@ -1486,6 +1512,10 @@ enum WebCommand {
         key: String,
         to: usize,
     },
+    ChartSignal {
+        key: String,
+        action: String,
+    },
     AttachHardware {
         bus: u8,
         driver: String,
@@ -2080,6 +2110,20 @@ fn app_loop(
                         && let Ok(mut store) = signals.lock()
                     {
                         chart_move(&mut app, &mut store, &target, to);
+                    }
+                }
+                WebCommand::ChartSignal { key, action } => {
+                    let target = signals.lock().ok().and_then(|store| {
+                        store
+                            .keys()
+                            .into_iter()
+                            .find(|candidate| series_key(candidate) == key)
+                    });
+                    if let Some(target) = target
+                        && let Ok(mut store) = signals.lock()
+                        && !chart_signal_action(&mut app, &mut store, &target, &action)
+                    {
+                        app.status = format!("unknown chart signal action: {action}");
                     }
                 }
                 WebCommand::AttachHardware { bus, driver, index } => {
@@ -5440,6 +5484,45 @@ mod tests {
             .collect();
         assert_eq!(saved, expected);
         assert!(!store.primed, "the next sync reseeds in the new order");
+    }
+
+    /// The lane context menu can add a signal to each observer and remove it
+    /// from the chart without disturbing observers that already watch it.
+    #[test]
+    fn chart_signal_actions_reach_observers_and_remove_only_the_lane() {
+        let mut app = App::headless();
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut store = SignalStore::default();
+        chart_select_key(&mut app, key.clone());
+        store.select_key(&app, key.clone());
+
+        for action in ["monitor", "data", "state"] {
+            assert!(chart_signal_action(&mut app, &mut store, &key, action));
+        }
+        assert!(app.monitor_view.rows.iter().any(|row| row.key == key));
+        assert!(
+            app.data_windows
+                .first()
+                .is_some_and(|window| window.signals.iter().any(|row| row.key == key))
+        );
+        assert!(
+            app.state_trackers
+                .first()
+                .is_some_and(|window| window.signals.iter().any(|row| row.key == key))
+        );
+
+        assert!(chart_signal_action(&mut app, &mut store, &key, "remove"));
+        assert!(!store.is_selected(&key));
+        assert!(
+            app.graphics
+                .first()
+                .is_none_or(|window| window.signals.iter().all(|row| row.key != key))
+        );
+        assert!(
+            app.monitor_view.rows.iter().any(|row| row.key == key),
+            "removing a chart lane keeps observer rows"
+        );
+        assert!(!chart_signal_action(&mut app, &mut store, &key, "nope"));
     }
 
     /// The Bus Statistics tab reads the same BusLoad numbers as the core

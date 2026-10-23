@@ -18,6 +18,8 @@ export interface ChartCursor {
   t: number;
 }
 
+export type ChartSignalAction = "monitor" | "data" | "state" | "remove";
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -78,6 +80,7 @@ export function SignalChart({
   onAddCursor,
   onMoveCursor,
   onClearCursors,
+  onSignalAction,
   fullscreen,
 }: {
   series: SignalSeries[];
@@ -90,6 +93,7 @@ export function SignalChart({
   onAddCursor: (t: number) => void;
   onMoveCursor: (id: number, t: number) => void;
   onClearCursors: () => void;
+  onSignalAction: (key: string, action: ChartSignalAction) => void;
   fullscreen: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -101,6 +105,11 @@ export function SignalChart({
     null,
   );
   const [hoverCursorId, setHoverCursorId] = useState<number | null>(null);
+  const [laneMenu, setLaneMenu] = useState<{
+    x: number;
+    y: number;
+    index: number;
+  } | null>(null);
   const cursorDragRef = useRef<number | null>(null);
   const timeBounds = bounds(series);
   const liveEnd = view.endS ?? timeBounds.last;
@@ -170,6 +179,27 @@ export function SignalChart({
     const frac = clamp((clientX - rect.left - GUTTER) / plotW, 0, 1);
     return start + frac * (end - start);
   };
+
+  useEffect(() => {
+    if (!laneMenu) return;
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".signal-menu")
+      ) {
+        setLaneMenu(null);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLaneMenu(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [laneMenu]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -479,6 +509,7 @@ export function SignalChart({
     const canvas = canvasRef.current;
     return Math.max(1, (canvas?.clientWidth ?? 0) - GUTTER - 8);
   };
+  const menuSignal = laneMenu ? series[laneMenu.index] : undefined;
 
   return (
     <div class="signal-chart-wrap">
@@ -616,6 +647,18 @@ export function SignalChart({
             onView(() => ({ windowS: 30, endS: null }));
           }
         }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (event.clientX - rect.left >= GUTTER) return;
+          const lane = laneAt(event.clientY);
+          if (lane === null) return;
+          setLaneMenu({
+            x: event.clientX,
+            y: event.clientY,
+            index: lane,
+          });
+        }}
       />
       <div class="chart-cursor-tools">
         <button
@@ -644,6 +687,76 @@ export function SignalChart({
           </span>
         )}
       </div>
+      {laneMenu && menuSignal && (
+        <div
+          class="trace-menu signal-menu"
+          style={{
+            left: `${Math.min(laneMenu.x, window.innerWidth - 190)}px`,
+            top: `${Math.min(laneMenu.y, window.innerHeight - 240)}px`,
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              onSignalAction(menuSignal.key, "monitor");
+              setLaneMenu(null);
+            }}
+          >
+            Watch in Monitor
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSignalAction(menuSignal.key, "data");
+              setLaneMenu(null);
+            }}
+          >
+            Watch in Data
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSignalAction(menuSignal.key, "state");
+              setLaneMenu(null);
+            }}
+          >
+            Watch in State
+          </button>
+          <div class="signal-menu-sep" />
+          <button
+            type="button"
+            disabled={laneMenu.index === 0}
+            onClick={() => {
+              onReorder(menuSignal.key, laneMenu.index - 1);
+              setLaneMenu(null);
+            }}
+          >
+            Move up
+          </button>
+          <button
+            type="button"
+            disabled={laneMenu.index === series.length - 1}
+            onClick={() => {
+              onReorder(menuSignal.key, laneMenu.index + 1);
+              setLaneMenu(null);
+            }}
+          >
+            Move down
+          </button>
+          <button
+            type="button"
+            class="signal-menu-remove"
+            onClick={() => {
+              onSignalAction(menuSignal.key, "remove");
+              setLaneMenu(null);
+            }}
+          >
+            Remove from chart
+          </button>
+        </div>
+      )}
     </div>
   );
 }
