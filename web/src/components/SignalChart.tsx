@@ -45,6 +45,19 @@ function lowerBound(points: [number, number][], target: number): number {
   return lo;
 }
 
+/// Signal value at a cursor time, interpolated the same way the line is
+/// drawn between samples.
+function sampleAt(points: [number, number][], target: number): number | null {
+  if (points.length === 0) return null;
+  const index = lowerBound(points, target);
+  if (index === 0) return points[0][1];
+  if (index >= points.length) return points[points.length - 1][1];
+  const [t0, v0] = points[index - 1];
+  const [t1, v1] = points[index];
+  if (t1 <= t0) return v1;
+  return v0 + ((v1 - v0) * (target - t0)) / (t1 - t0);
+}
+
 function valueText(value: number): string {
   if (!Number.isFinite(value)) return "—";
   if (Math.abs(value) >= 1000) return value.toFixed(0);
@@ -382,6 +395,33 @@ export function SignalChart({
           }
         }
         ctx.stroke();
+
+        if (fullscreen && cursors.length > 0) {
+          for (let ci = 0; ci < cursors.length; ci += 1) {
+            const cursor = cursors[ci];
+            if (cursor.t < start || cursor.t > end) continue;
+            const value = sampleAt(points, cursor.t);
+            if (value === null) continue;
+            const x = GUTTER + ((cursor.t - start) / view.windowS) * plotW;
+            const vy = y(value);
+            const cursorColor = colors.cursorColors[ci % colors.cursorColors.length];
+            ctx.fillStyle = cursorColor;
+            ctx.beginPath();
+            ctx.arc(x, vy, 2.2, 0, Math.PI * 2);
+            ctx.fill();
+            const label = `${String.fromCharCode(65 + (ci % 26))} ${valueText(value)}`;
+            ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
+            const labelW = ctx.measureText(label).width;
+            const onRight = x + 6 + labelW + 8 <= width - 8;
+            const labelX = onRight ? x + 6 : x - 6 - labelW - 8;
+            const labelY = clamp(vy - 6, top + 2, top + laneH - 14);
+            ctx.fillStyle = colors.signalTagBg;
+            ctx.fillRect(labelX, labelY, labelW + 8, 12);
+            ctx.fillStyle = cursorColor;
+            ctx.textAlign = "left";
+            ctx.fillText(label, labelX + 4, labelY + 9);
+          }
+        }
       }
 
       // Shared time axis.
@@ -458,7 +498,7 @@ export function SignalChart({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [series, view, markers, theme, reorder, cursors]);
+  }, [series, view, markers, theme, reorder, cursors, fullscreen]);
 
   const plotWidth = () => {
     const canvas = canvasRef.current;
