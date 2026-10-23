@@ -59,6 +59,8 @@ export interface Palette {
   signalTagBg: string;
   signalLive: string;
   signalHold: string;
+  signalAccent: string;
+  signalDrag: string;
 }
 
 const DARK: Palette = {
@@ -111,6 +113,8 @@ const DARK: Palette = {
   signalTagBg: "rgba(10, 12, 16, 0.86)",
   signalLive: "#54c08a",
   signalHold: "#e0a54a",
+  signalAccent: "#4c9dff",
+  signalDrag: "rgba(76, 157, 255, 0.10)",
 };
 
 const LIGHT: Palette = {
@@ -163,6 +167,8 @@ const LIGHT: Palette = {
   signalTagBg: "rgba(255, 255, 255, 0.92)",
   signalLive: "#1f7a52",
   signalHold: "#a15f00",
+  signalAccent: "#1f6fd0",
+  signalDrag: "rgba(31, 111, 208, 0.08)",
 };
 
 export function palette(theme: Theme): Palette {

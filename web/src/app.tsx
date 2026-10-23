@@ -648,6 +648,18 @@ export function App() {
     );
   };
 
+  const moveSignal = (key: string, to: number) => {
+    const from = signals.findIndex((signal) => signal.key === key);
+    const target = clamp(to, 0, signals.length - 1);
+    if (from < 0 || from === target) return;
+    const next = [...signals];
+    const [moved] = next.splice(from, 1);
+    next.splice(target, 0, moved);
+    signalRef.current = { ...signalRef.current, series: next };
+    setSignals(next);
+    void run({ type: "move_signal", key, to: target });
+  };
+
   const refreshHardware = () => void run({ type: "refresh_hardware" });
   const attachHardware = (bus: number, driver: string, index: number) =>
     void run({ type: "attach_hardware", bus, driver, index });
@@ -1323,6 +1335,7 @@ export function App() {
                 series={signals}
                 markers={state?.markers ?? []}
                 theme={theme}
+                onReorder={moveSignal}
               />
             ) : chartTab === "monitor" ? (
               <MonitorPanel

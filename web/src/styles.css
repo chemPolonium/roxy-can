@@ -800,7 +800,8 @@ input::placeholder {
   touch-action: none;
 }
 
-.signal-chart:active {
+.signal-chart:active,
+.signal-chart.reordering {
   cursor: grabbing;
 }
 

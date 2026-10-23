@@ -604,6 +604,7 @@ export type Command =
   | { type: "unselect_fr_signal"; bus: number; slot: number; name: string }
   | { type: "select_eth_signal"; bus: number; frame: string; name: string }
   | { type: "unselect_eth_signal"; bus: number; frame: string; name: string }
+  | { type: "move_signal"; key: string; to: number }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
   | { type: "attach_fr_hardware"; bus: number; index: number }

@@ -635,6 +635,41 @@ fn chart_unselect(app: &mut App, key: &SigKey) {
     app.prune_signal(key);
 }
 
+/// Moves a chart lane in both the session cache and the first Graphics
+/// window. The window order is what a project save persists, while the cache
+/// order is what the web UI draws.
+fn chart_move(app: &mut App, store: &mut SignalStore, key: &SigKey, to: usize) {
+    if !store.move_selected(key, to) {
+        return;
+    }
+    let order = store.keys();
+    let Some(window) = app.graphics.first_mut() else {
+        return;
+    };
+    let Some(position) = window.signals.iter().position(|signal| &signal.key == key) else {
+        return;
+    };
+    let moved = window.signals.remove(position);
+    // Insert relative to the selected neighbours, leaving any hidden desktop
+    // rows in place around the reordered web lanes.
+    let insert_at = order
+        .get(to + 1)
+        .and_then(|next| window.signals.iter().position(|signal| &signal.key == next))
+        .or_else(|| {
+            to.checked_sub(1)
+                .and_then(|previous| order.get(previous))
+                .and_then(|previous| {
+                    window
+                        .signals
+                        .iter()
+                        .position(|signal| &signal.key == previous)
+                        .map(|index| index + 1)
+                })
+        })
+        .unwrap_or(window.signals.len());
+    window.signals.insert(insert_at, moved);
+}
+
 /// Replaces a State row's custom value-definition bands. Cuts are sorted
 /// and deduplicated; names are padded so every band has a label.
 fn set_state_rule(app: &mut App, key: &SigKey, cuts: Vec<f64>, names: Vec<String>) {
@@ -1447,6 +1482,10 @@ enum WebCommand {
         frame: String,
         name: String,
     },
+    MoveSignal {
+        key: String,
+        to: usize,
+    },
     AttachHardware {
         bus: u8,
         driver: String,
@@ -2028,6 +2067,19 @@ fn app_loop(
                         if let Ok(mut store) = signals.lock() {
                             store.unselect(&key);
                         }
+                    }
+                }
+                WebCommand::MoveSignal { key, to } => {
+                    let target = signals.lock().ok().and_then(|store| {
+                        store
+                            .keys()
+                            .into_iter()
+                            .find(|candidate| series_key(candidate) == key)
+                    });
+                    if let Some(target) = target
+                        && let Ok(mut store) = signals.lock()
+                    {
+                        chart_move(&mut app, &mut store, &target, to);
                     }
                 }
                 WebCommand::AttachHardware { bus, driver, index } => {
@@ -3128,6 +3180,23 @@ impl SignalStore {
             self.selected.remove(pos);
         }
         self.primed = false;
+    }
+
+    /// Reorders one lane. Colors travel with the signal; the next sync
+    /// rebuilds the per-lane buffers and bumps the epoch so the frontend
+    /// replaces its lane list rather than merging against stale indexes.
+    fn move_selected(&mut self, key: &SigKey, to: usize) -> bool {
+        let Some(from) = self.selected.iter().position(|signal| &signal.key == key) else {
+            return false;
+        };
+        let to = to.min(self.selected.len().saturating_sub(1));
+        if from == to {
+            return false;
+        }
+        let signal = self.selected.remove(from);
+        self.selected.insert(to, signal);
+        self.primed = false;
+        true
     }
 
     /// CAN channel indices shift down when a bus is removed. Drop signals on
@@ -5341,6 +5410,36 @@ mod tests {
                 .first()
                 .is_none_or(|window| window.signals.iter().all(|row| row.key != key))
         );
+    }
+
+    /// A chart drag must reorder both the session lanes and the Graphics
+    /// window, because only the window order reaches a saved project.
+    #[test]
+    fn moving_a_chart_lane_updates_store_and_graphics_order() {
+        let mut app = App::headless();
+        let keys = [
+            SigKey::can(0, 0x100, false, "EngineSpeed"),
+            SigKey::can(0, 0x200, false, "VehicleSpeed"),
+            SigKey::can(0, 0x320, false, "BrakePressure"),
+        ];
+        let mut store = SignalStore::default();
+        for key in &keys {
+            chart_select_key(&mut app, key.clone());
+            store.select_key(&app, key.clone());
+        }
+
+        chart_move(&mut app, &mut store, &keys[0], 2);
+
+        let expected = vec![keys[1].clone(), keys[2].clone(), keys[0].clone()];
+        assert_eq!(store.keys(), expected);
+        let window = app.graphics.first().expect("a graphics window");
+        let saved: Vec<SigKey> = window
+            .signals
+            .iter()
+            .map(|signal| signal.key.clone())
+            .collect();
+        assert_eq!(saved, expected);
+        assert!(!store.primed, "the next sync reseeds in the new order");
     }
 
     /// The Bus Statistics tab reads the same BusLoad numbers as the core

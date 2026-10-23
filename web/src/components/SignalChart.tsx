@@ -53,16 +53,40 @@ export function SignalChart({
   series,
   markers = [],
   theme,
+  onReorder,
 }: {
   series: SignalSeries[];
   markers?: number[];
   theme: Theme;
+  onReorder: (key: string, to: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<View>({ windowS: 30, endS: null });
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
+  const reorderRef = useRef<{ key: string; from: number; to: number } | null>(
+    null,
+  );
+  const [reorder, setReorder] = useState<{ from: number; to: number } | null>(
+    null,
+  );
   const timeBounds = bounds(series);
   const liveEnd = view.endS ?? timeBounds.last;
+
+  /// Which lane is under the pointer. Reorder drags clamp above/below the
+  /// stack to the first/last lane; a plain click outside the lanes does not
+  /// start a drag.
+  const laneAt = (clientY: number, clampOutside = false): number | null => {
+    const canvas = canvasRef.current;
+    if (!canvas || series.length === 0) return null;
+    const rect = canvas.getBoundingClientRect();
+    const laneH = Math.max(1, (rect.height - TOP - AXIS_H) / series.length);
+    const y = clientY - rect.top;
+    if (y < TOP || y >= TOP + laneH * series.length) {
+      if (!clampOutside) return null;
+      return y < TOP ? 0 : series.length - 1;
+    }
+    return clamp(Math.floor((y - TOP) / laneH), 0, series.length - 1);
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -261,6 +285,22 @@ export function SignalChart({
         ctx.fillText(label, x, height - 5);
       }
 
+      if (reorder) {
+        const top = TOP + reorder.from * laneH;
+        ctx.fillStyle = colors.signalDrag;
+        ctx.fillRect(0, top, width, laneH);
+        ctx.strokeStyle = colors.signalAccent;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0.5, top + 0.5, width - 1, laneH - 1);
+        if (reorder.to !== reorder.from) {
+          const marker =
+            TOP +
+            (reorder.to > reorder.from ? reorder.to + 1 : reorder.to) * laneH;
+          ctx.fillStyle = colors.signalAccent;
+          ctx.fillRect(0, marker - 1, width, 2);
+        }
+      }
+
       ctx.textAlign = "right";
       ctx.font = "9px 'Segoe UI', sans-serif";
       const tag = live ? "LIVE" : "HOLD · double-click to follow";
@@ -275,7 +315,7 @@ export function SignalChart({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [series, view, markers, theme]);
+  }, [series, view, markers, theme, reorder]);
 
   const plotWidth = () => {
     const canvas = canvasRef.current;
@@ -284,9 +324,10 @@ export function SignalChart({
 
   return (
     <canvas
-      class="signal-chart"
+      class={`signal-chart ${reorder ? "reordering" : ""}`}
       ref={canvasRef}
       aria-label="Live signal curves"
+      title="Drag a signal name to reorder · wheel zooms the time window"
       onWheel={(event) => {
         event.preventDefault();
         const canvas = canvasRef.current;
@@ -319,6 +360,15 @@ export function SignalChart({
       }}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientX - rect.left < GUTTER) {
+          const lane = laneAt(event.clientY);
+          if (lane === null) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          reorderRef.current = { key: series[lane].key, from: lane, to: lane };
+          setReorder({ from: lane, to: lane });
+          return;
+        }
         event.currentTarget.setPointerCapture(event.pointerId);
         dragRef.current = {
           x: event.clientX,
@@ -327,6 +377,15 @@ export function SignalChart({
         setView((old) => ({ ...old, endS: liveEnd }));
       }}
       onPointerMove={(event) => {
+        const reordering = reorderRef.current;
+        if (reordering) {
+          const to = laneAt(event.clientY, true) ?? reordering.to;
+          if (to !== reordering.to) {
+            reorderRef.current = { ...reordering, to };
+            setReorder({ from: reordering.from, to });
+          }
+          return;
+        }
         const drag = dragRef.current;
         if (!drag) return;
         const delta =
@@ -342,13 +401,28 @@ export function SignalChart({
         }));
       }}
       onPointerUp={(event) => {
+        const reordering = reorderRef.current;
+        reorderRef.current = null;
+        setReorder(null);
         dragRef.current = null;
-        event.currentTarget.releasePointerCapture(event.pointerId);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        if (reordering && reordering.to !== reordering.from) {
+          onReorder(reordering.key, reordering.to);
+        }
       }}
       onPointerCancel={() => {
+        reorderRef.current = null;
+        setReorder(null);
         dragRef.current = null;
       }}
-      onDblClick={() => setView({ windowS: 30, endS: null })}
+      onDblClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientX - rect.left >= GUTTER) {
+          setView({ windowS: 30, endS: null });
+        }
+      }}
     />
   );
 }
