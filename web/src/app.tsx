@@ -33,7 +33,11 @@ import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
 import type { MonitorPatch } from "./components/MonitorPanel";
 import { RateChart } from "./components/RateChart";
-import { SignalChart } from "./components/SignalChart";
+import {
+  SignalChart,
+  type ChartCursor,
+  type SignalView,
+} from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
 import { SpecPanel } from "./components/SpecPanel";
 import { ScriptsModal } from "./components/ScriptsModal";
@@ -223,9 +227,17 @@ export function App() {
   const [drag, setDrag] = useState<Drag>(null);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [signalView, setSignalView] = useState<SignalView>({
+    windowS: 30,
+    endS: null,
+  });
+  const [chartCursors, setChartCursors] = useState<ChartCursor[]>([]);
+  const [chartFullscreen, setChartFullscreen] = useState(false);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
+  const chartPanelRef = useRef<HTMLElement>(null);
+  const chartCursorSeq = useRef(1);
   const chartPalette = palette(theme);
 
   useEffect(() => {
@@ -253,6 +265,43 @@ export function App() {
       window.removeEventListener("keydown", escape);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    const panel = chartPanelRef.current;
+    if (!panel) return;
+    const sync = () => {
+      if (document.fullscreenElement === panel) {
+        setChartFullscreen(true);
+        return;
+      }
+      panel.classList.remove("chart-fullscreen");
+      setChartFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      panel.classList.remove("chart-fullscreen");
+      if (document.fullscreenElement === panel) {
+        void document.exitFullscreen();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chartFullscreen) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const panel = chartPanelRef.current;
+      if (!panel) return;
+      panel.classList.remove("chart-fullscreen");
+      setChartFullscreen(false);
+      if (document.fullscreenElement === panel) {
+        void document.exitFullscreen();
+      }
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [chartFullscreen]);
 
   useEffect(() => {
     try {
@@ -397,10 +446,54 @@ export function App() {
     }
   };
 
+  const addChartCursor = (t: number) => {
+    const id = chartCursorSeq.current++;
+    setChartCursors((old) => [...old, { id, t }]);
+  };
+
+  const moveChartCursor = (id: number, t: number) => {
+    setChartCursors((old) =>
+      old.map((cursor) => (cursor.id === id ? { ...cursor, t } : cursor)),
+    );
+  };
+
+  const clearChartCursors = () => setChartCursors([]);
+
+  const placeChartCursor = (tUs: number) => {
+    const t = tUs / 1e6;
+    if (!chartCursors.some((cursor) => Math.abs(cursor.t - t) < 1e-6)) {
+      addChartCursor(t);
+    }
+    setSignalView((old) => ({ ...old, endS: t + old.windowS / 2 }));
+    setChartTab("signals");
+  };
+
+  const toggleChartFullscreen = () => {
+    const panel = chartPanelRef.current;
+    if (!panel) return;
+    if (chartFullscreen) {
+      panel.classList.remove("chart-fullscreen");
+      setChartFullscreen(false);
+      if (document.fullscreenElement === panel) {
+        void document.exitFullscreen();
+      }
+      return;
+    }
+    panel.classList.add("chart-fullscreen");
+    setChartFullscreen(true);
+    void panel.requestFullscreen().catch(() => {});
+  };
+
+  const resetChartTools = () => {
+    setChartCursors([]);
+    setSignalView({ windowS: 30, endS: null });
+  };
+
   const loadProject = (path: string) => {
     const value = path.trim();
     if (!value) return;
     void run({ type: "open_project", path: value });
+    resetChartTools();
     setSessionOpen(false);
     setScriptsOpen(false);
   };
@@ -409,6 +502,7 @@ export function App() {
     const value = path.trim();
     if (!value) return;
     void run({ type: "open_log", path: value });
+    resetChartTools();
     setSessionOpen(false);
     setScriptsOpen(false);
   };
@@ -1221,6 +1315,7 @@ export function App() {
             key={`${bus}:${query}:${traceEpoch}`}
             rows={visibleRows}
             onQuery={setQuery}
+            onChartCursor={placeChartCursor}
           />
         </section>
 
@@ -1239,7 +1334,7 @@ export function App() {
             gridTemplateRows: `minmax(0, ${layout.right}fr) 5px minmax(0, ${1 - layout.right}fr)`,
           }}
         >
-          <section class="panel chart-panel">
+          <section class="panel chart-panel" ref={chartPanelRef}>
             <div class="panel-head">
               <div class="tabs chart-tabs">
                 <button
@@ -1248,7 +1343,8 @@ export function App() {
                   onClick={() => setChartTab("rate")}
                 >
                   Rate
-                </button>                <button
+                </button>
+                <button
                   type="button"
                   class={chartTab === "signals" ? "on" : ""}
                   onClick={() => setChartTab("signals")}
@@ -1355,6 +1451,25 @@ export function App() {
                   {state ? state.fps.toFixed(0) : "—"} f/s
                 </strong>
               )}
+              <button
+                type="button"
+                class="chart-focus"
+                aria-label={
+                  chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
+                }
+                title={
+                  chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
+                }
+                onClick={toggleChartFullscreen}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  {chartFullscreen ? (
+                    <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+                  ) : (
+                    <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+                  )}
+                </svg>
+              </button>
             </div>
             {chartTab === "rate" ? (
               <>
@@ -1389,6 +1504,13 @@ export function App() {
                 markers={state?.markers ?? []}
                 theme={theme}
                 onReorder={moveSignal}
+                view={signalView}
+                onView={(update) => setSignalView(update)}
+                cursors={chartCursors}
+                onAddCursor={addChartCursor}
+                onMoveCursor={moveChartCursor}
+                onClearCursors={clearChartCursors}
+                fullscreen={chartFullscreen}
               />
             ) : chartTab === "monitor" ? (
               <MonitorPanel

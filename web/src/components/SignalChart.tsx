@@ -7,13 +7,13 @@ const AXIS_H = 18;
 /// A thin status strip above the lanes keeps LIVE/HOLD off the curves.
 const TOP = 14;
 
-interface View {
+export interface SignalView {
   windowS: number;
   /// null = follow the newest sample; a number freezes a historical window.
   endS: number | null;
 }
 
-interface ChartCursor {
+export interface ChartCursor {
   id: number;
   t: number;
 }
@@ -72,14 +72,27 @@ export function SignalChart({
   markers = [],
   theme,
   onReorder,
+  view,
+  onView,
+  cursors,
+  onAddCursor,
+  onMoveCursor,
+  onClearCursors,
+  fullscreen,
 }: {
   series: SignalSeries[];
   markers?: number[];
   theme: Theme;
   onReorder: (key: string, to: number) => void;
+  view: SignalView;
+  onView: (update: (old: SignalView) => SignalView) => void;
+  cursors: ChartCursor[];
+  onAddCursor: (t: number) => void;
+  onMoveCursor: (id: number, t: number) => void;
+  onClearCursors: () => void;
+  fullscreen: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [view, setView] = useState<View>({ windowS: 30, endS: null });
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
   const reorderRef = useRef<{ key: string; from: number; to: number } | null>(
     null,
@@ -87,10 +100,7 @@ export function SignalChart({
   const [reorder, setReorder] = useState<{ from: number; to: number } | null>(
     null,
   );
-  const [cursors, setCursors] = useState<ChartCursor[]>([]);
-  const [hoverCursor, setHoverCursor] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
-  const cursorSeq = useRef(1);
+  const [hoverCursorId, setHoverCursorId] = useState<number | null>(null);
   const cursorDragRef = useRef<number | null>(null);
   const timeBounds = bounds(series);
   const liveEnd = view.endS ?? timeBounds.last;
@@ -126,13 +136,8 @@ export function SignalChart({
     // Keep successive cursors apart; dropping every one at the exact centre
     // would stack their lines and labels.
     const slots = [0.5, 0.7, 0.3, 0.6, 0.4, 0.8, 0.2, 0.9];
-    setCursors((old) => [
-      ...old,
-      {
-        id: cursorSeq.current++,
-        t: start + (end - start) * slots[old.length % slots.length],
-      },
-    ]);
+    const fraction = slots[cursors.length % slots.length];
+    onAddCursor(start + (end - start) * fraction);
   };
 
   const cursorAt = (clientX: number, clientY: number): number | null => {
@@ -165,60 +170,6 @@ export function SignalChart({
     const frac = clamp((clientX - rect.left - GUTTER) / plotW, 0, 1);
     return start + frac * (end - start);
   };
-
-  const exitFullscreen = () => {
-    const panel = canvasRef.current?.closest<HTMLElement>(".chart-panel");
-    if (!panel) return;
-    panel.classList.remove("chart-fullscreen");
-    setFullscreen(false);
-    if (document.fullscreenElement === panel) {
-      void document.exitFullscreen();
-    }
-  };
-
-  const toggleFullscreen = () => {
-    const panel = canvasRef.current?.closest<HTMLElement>(".chart-panel");
-    if (!panel) return;
-    if (fullscreen) {
-      exitFullscreen();
-      return;
-    }
-    // The fixed overlay is also the fallback when the browser refuses a
-    // programmatic Fullscreen request.
-    panel.classList.add("chart-fullscreen");
-    setFullscreen(true);
-    void panel.requestFullscreen().catch(() => {});
-  };
-
-  useEffect(() => {
-    const panel = canvasRef.current?.closest<HTMLElement>(".chart-panel");
-    if (!panel) return;
-    const sync = () => {
-      if (document.fullscreenElement === panel) {
-        setFullscreen(true);
-        return;
-      }
-      panel.classList.remove("chart-fullscreen");
-      setFullscreen(false);
-    };
-    document.addEventListener("fullscreenchange", sync);
-    return () => {
-      document.removeEventListener("fullscreenchange", sync);
-      panel.classList.remove("chart-fullscreen");
-      if (document.fullscreenElement === panel) {
-        void document.exitFullscreen();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!fullscreen) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") exitFullscreen();
-    };
-    window.addEventListener("keydown", escape);
-    return () => window.removeEventListener("keydown", escape);
-  }, [fullscreen]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -328,6 +279,20 @@ export function SignalChart({
           continue;
         }
 
+        if (fullscreen && laneH >= 52 && cursors.length >= 2) {
+          const first = sampleAt(points, cursors[0].t);
+          const second = sampleAt(points, cursors[1].t);
+          if (first !== null && second !== null) {
+            ctx.fillStyle = colors.signalMeta;
+            ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
+            ctx.fillText(
+              `Δ ${valueText(second - first)}${unit}`,
+              13,
+              top + 39,
+            );
+          }
+        }
+
         let min = Number.POSITIVE_INFINITY;
         let max = Number.NEGATIVE_INFINITY;
         for (let k = from; k < to; k += 1) {
@@ -396,9 +361,10 @@ export function SignalChart({
         }
         ctx.stroke();
 
-        if (fullscreen && cursors.length > 0) {
+        if (fullscreen || hoverCursorId !== null) {
           for (let ci = 0; ci < cursors.length; ci += 1) {
             const cursor = cursors[ci];
+            if (!fullscreen && cursor.id !== hoverCursorId) continue;
             if (cursor.t < start || cursor.t > end) continue;
             const value = sampleAt(points, cursor.t);
             if (value === null) continue;
@@ -409,7 +375,7 @@ export function SignalChart({
             ctx.beginPath();
             ctx.arc(x, vy, 2.2, 0, Math.PI * 2);
             ctx.fill();
-            const label = `${String.fromCharCode(65 + (ci % 26))} ${valueText(value)}`;
+            const label = `${String.fromCharCode(65 + (ci % 26))} ${valueText(value)}${unit}`;
             ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
             const labelW = ctx.measureText(label).width;
             const onRight = x + 6 + labelW + 8 <= width - 8;
@@ -498,7 +464,16 @@ export function SignalChart({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [series, view, markers, theme, reorder, cursors, fullscreen]);
+  }, [
+    series,
+    view,
+    markers,
+    theme,
+    reorder,
+    cursors,
+    fullscreen,
+    hoverCursorId,
+  ]);
 
   const plotWidth = () => {
     const canvas = canvasRef.current;
@@ -508,7 +483,7 @@ export function SignalChart({
   return (
     <div class="signal-chart-wrap">
       <canvas
-        class={`signal-chart ${reorder ? "reordering" : ""} ${hoverCursor ? "cursor-hover" : ""}`}
+        class={`signal-chart ${reorder ? "reordering" : ""} ${hoverCursorId !== null ? "cursor-hover" : ""}`}
         ref={canvasRef}
         aria-label="Live signal curves"
         title="Drag a signal name to reorder · drag a cursor to move it · wheel zooms"
@@ -537,21 +512,21 @@ export function SignalChart({
           );
           // Zooming must not take the chart out of LIVE; only a pan changes
           // whether the window follows the newest sample.
-          setView({
+          onView((old) => ({
             windowS: nextWindow,
-            endS: view.endS === null ? null : nextEnd,
-          });
+            endS: old.endS === null ? null : nextEnd,
+          }));
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           const cursor = cursorAt(event.clientX, event.clientY);
           if (cursor !== null) {
-            setHoverCursor(true);
+            setHoverCursorId(cursor);
             event.currentTarget.setPointerCapture(event.pointerId);
             cursorDragRef.current = cursor;
             return;
           }
-          setHoverCursor(false);
+          setHoverCursorId(null);
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left < GUTTER) {
             const lane = laneAt(event.clientY);
@@ -566,21 +541,18 @@ export function SignalChart({
             x: event.clientX,
             endS: liveEnd,
           };
-          setView((old) => ({ ...old, endS: liveEnd }));
+          onView((old) => ({ ...old, endS: liveEnd }));
         }}
         onPointerMove={(event) => {
           const cursor = cursorDragRef.current;
           if (cursor !== null) {
-            setHoverCursor(true);
-            const t = timeAt(event.clientX);
-            setCursors((old) =>
-              old.map((entry) => (entry.id === cursor ? { ...entry, t } : entry)),
-            );
+            setHoverCursorId(cursor);
+            onMoveCursor(cursor, timeAt(event.clientX));
             return;
           }
           const reordering = reorderRef.current;
           if (reordering) {
-            setHoverCursor(false);
+            setHoverCursorId(null);
             const to = laneAt(event.clientY, true) ?? reordering.to;
             if (to !== reordering.to) {
               reorderRef.current = { ...reordering, to };
@@ -590,11 +562,11 @@ export function SignalChart({
           }
           const drag = dragRef.current;
           if (!drag) {
-            const over = cursorAt(event.clientX, event.clientY) !== null;
-            if (over !== hoverCursor) setHoverCursor(over);
+            const over = cursorAt(event.clientX, event.clientY);
+            if (over !== hoverCursorId) setHoverCursorId(over);
             return;
           }
-          setHoverCursor(false);
+          setHoverCursorId(null);
           const delta =
             ((drag.x - event.clientX) / plotWidth()) * view.windowS;
           const nextEnd = clamp(
@@ -602,7 +574,7 @@ export function SignalChart({
             timeBounds.first + view.windowS,
             timeBounds.last,
           );
-          setView((old) => ({
+          onView((old) => ({
             ...old,
             endS: nextEnd >= timeBounds.last ? null : nextEnd,
           }));
@@ -627,7 +599,7 @@ export function SignalChart({
           reorderRef.current = null;
           setReorder(null);
           dragRef.current = null;
-          setHoverCursor(false);
+          setHoverCursorId(null);
         }}
         onPointerLeave={() => {
           if (
@@ -635,13 +607,13 @@ export function SignalChart({
             reorderRef.current === null &&
             dragRef.current === null
           ) {
-            setHoverCursor(false);
+            setHoverCursorId(null);
           }
         }}
         onDblClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left >= GUTTER) {
-            setView({ windowS: 30, endS: null });
+            onView(() => ({ windowS: 30, endS: null }));
           }
         }}
       />
@@ -658,18 +630,19 @@ export function SignalChart({
           <button
             type="button"
             title="Remove all time cursors"
-            onClick={() => setCursors([])}
+            onClick={onClearCursors}
           >
             Clear
           </button>
         )}
-        <button
-          type="button"
-          title={fullscreen ? "Exit fullscreen" : "Fullscreen chart"}
-          onClick={toggleFullscreen}
-        >
-          {fullscreen ? "Exit" : "Fullscreen"}
-        </button>
+        {cursors.length >= 2 && (
+          <span
+            class="chart-cursor-delta"
+            title="Time between cursors A and B"
+          >
+            Δt {Math.abs(cursors[1].t - cursors[0].t).toFixed(3)}s
+          </span>
+        )}
       </div>
     </div>
   );

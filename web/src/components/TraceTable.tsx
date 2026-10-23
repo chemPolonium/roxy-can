@@ -135,9 +135,11 @@ function TraceRow({
 export function TraceTable({
   rows,
   onQuery,
+  onChartCursor,
 }: {
   rows: Frame[];
   onQuery?: (text: string) => void;
+  onChartCursor?: (tUs: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
@@ -490,6 +492,16 @@ export function TraceTable({
             }}
           >
             Set cursor B
+          </button>
+          <button
+            type="button"
+            disabled={!onChartCursor}
+            onClick={() => {
+              onChartCursor?.(menu.frame.tUs);
+              setMenu(null);
+            }}
+          >
+            Place chart cursor
           </button>
           <button
             type="button"
