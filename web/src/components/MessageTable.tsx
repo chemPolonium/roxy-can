@@ -6,14 +6,10 @@ function hexId(message: Message): string {
   return `0x${message.id.toString(16).toUpperCase().padStart(width, "0")}`;
 }
 
-function countText(count: number): string {
-  return count >= 10_000 ? `${(count / 1000).toFixed(1)}k` : count.toLocaleString();
-}
-
-/// Below ~1280px the payload column squeezes both itself and the name into
+/// Below 1280px the payload column squeezes both itself and the name into
 /// ellipses; the Trace still carries the bytes, so drop it there.
 function useWideColumns(): boolean {
-  const query = "(min-width: 1281px)";
+  const query = "(min-width: 1280px)";
   const [wide, setWide] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
     const media = window.matchMedia(query);
@@ -49,11 +45,9 @@ export function MessageTable({
       <table class="data-table message-table">
         <colgroup>
           <col style={{ width: "46px" }} />
-          <col style={{ width: "72px" }} />
-          <col style={{ width: wide ? "120px" : undefined }} />
-          <col style={{ width: "52px" }} />
+          <col style={{ width: "70px" }} />
+          <col style={{ width: wide ? "118px" : undefined }} />
           <col style={{ width: "62px" }} />
-          <col style={{ width: "30px" }} />
           {wide && <col />}
         </colgroup>
         <thead>
@@ -61,9 +55,7 @@ export function MessageTable({
             <th>Bus</th>
             <th>ID</th>
             <th>Name</th>
-            <th class="num">Count</th>
             <th class="num">Cycle</th>
-            <th class="num">Len</th>
             {wide && <th>Data</th>}
           </tr>
         </thead>
@@ -75,11 +67,9 @@ export function MessageTable({
               <td class="name" title={message.name}>
                 {message.name || <span class="dash">—</span>}
               </td>
-              <td class="num mono">{countText(message.count)}</td>
               <td class="num mono">
                 {message.cycleMs > 0 ? `${message.cycleMs.toFixed(1)} ms` : "event"}
               </td>
-              <td class="num mono">{message.len}</td>
               {wide && (
                 <td class="mono data" title={message.data}>
                   {message.data || <span class="dash">—</span>}
