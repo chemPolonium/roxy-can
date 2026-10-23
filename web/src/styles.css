@@ -226,43 +226,41 @@ input::placeholder {
   text-overflow: ellipsis;
 }
 
-.tag {
-  border: 1px solid #34404e;
+.presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
   border-radius: 3px;
-  padding: 0 5px;
-  color: #93a1b3;
+  color: var(--muted);
   font-size: 9.5px;
   font-weight: 500;
-  text-transform: uppercase;
   letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.presence .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px rgb(84 192 138 / 55%);
+}
+
+.presence.off {
+  color: var(--error);
+}
+
+.presence.off .dot {
+  background: var(--error);
+  box-shadow: 0 0 6px rgb(239 107 107 / 40%);
 }
 
 .actions {
   display: flex;
   gap: 5px;
   margin-left: auto;
-}
-
-.link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 96px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.link .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 8px rgb(84 192 138 / 55%);
-}
-
-.link.off .dot {
-  background: var(--error);
-  box-shadow: 0 0 8px rgb(239 107 107 / 40%);
 }
 
 .stats {
@@ -3748,21 +3746,15 @@ button.danger:hover:not(:disabled) {
   }
 }
 
-/* The web spike must also survive a narrow window; below this width the
-   fixed shell stacks instead of shrinking the Trace table to two columns. */
+/* 窄窗口下固定外壳改为堆叠，避免 Trace 表被压到只剩两列。 */
 @media (max-width: 900px) {
   .topbar {
     gap: 8px;
     padding: 0 8px;
   }
 
-  .brand p,
-  .tag {
+  .brand p {
     display: none;
-  }
-
-  .link {
-    min-width: 0;
   }
 
   .workspace {

@@ -62,11 +62,6 @@
   background: linear-gradient(180deg, #ffffff 0%, #f3f6fa 100%);
 }
 
-[data-theme="light"] .tag {
-  border-color: #c9d2dd;
-  color: #5d6a7a;
-}
-
 [data-theme="light"] .stats,
 [data-theme="light"] .replaybar,
 [data-theme="light"] .statusbar {

@@ -309,6 +309,7 @@ export function App() {
   );
   const toastTimer = useRef<number | null>(null);
   const lastStatus = useRef("");
+  const statusReady = useRef(false);
   const lastPhase = useRef("");
   const chartPalette = palette(theme);
 
@@ -347,6 +348,11 @@ export function App() {
     const status = state?.status?.trim() ?? "";
     if (!status || status === lastStatus.current) return;
     lastStatus.current = status;
+    // The first snapshot only restores state; it is not a new command result.
+    if (!statusReady.current) {
+      statusReady.current = true;
+      return;
+    }
     // The transport effect above already announces these words.
     if (/^(stopped|paused|running)$/i.test(status)) return;
     showToast(status);
@@ -1431,7 +1437,12 @@ export function App() {
           </div>
           <div class="brand-text">
             <h1>
-              roxy-can <span class="tag">web spike</span>
+              roxy-can
+              <span class={`presence ${online ? "on" : "off"}`}>
+                <span class="dot" />
+                {online ? "live" : "reconnecting"}
+              </span>
+              {state?.recording && <span class="rec-badge">REC</span>}
             </h1>
             <p>
               {state
@@ -1456,23 +1467,7 @@ export function App() {
           >
             Triggers…
           </button>
-          <button
-            type="button"
-            disabled={!online}
-            onClick={() => {
-              setSessionOpen(false);
-    setScriptsOpen(false);
-              setPickerOpen(false);
-              setMonitorPickerOpen(false);
-              setDataPickerOpen(false);
-              setStatePickerOpen(false);
-              setGeneratorOpen(false);
-              setTriggersOpen(false);
-              setSysvarsOpen(false);
-              setScriptsOpen(false);
-              setBusesOpen(true);
-            }}
-          >
+          <button type="button" disabled={!online} onClick={openBuses}>
             Buses…
           </button>
           <button
@@ -1482,23 +1477,7 @@ export function App() {
           >
             SysVars…
           </button>
-          <button
-            type="button"
-            disabled={!online}
-            onClick={() => {
-              setPickerOpen(false);
-              setMonitorPickerOpen(false);
-              setDataPickerOpen(false);
-              setStatePickerOpen(false);
-              setScriptsOpen(false);
-              setBusesOpen(false);
-              setGeneratorOpen(false);
-              setTriggersOpen(false);
-              setSysvarsOpen(false);
-              setScriptsOpen(false);
-              setSessionOpen(true);
-            }}
-          >
+          <button type="button" disabled={!online} onClick={openSession}>
             Session…
           </button>
           <button
@@ -1548,11 +1527,6 @@ export function App() {
           >
             Clear trace
           </button>
-        </div>
-        <div class={`link ${online ? "on" : "off"}`}>
-          <span class="dot" />
-          {online ? "live" : "reconnecting"}
-          {state?.recording && <span class="rec-badge">REC</span>}
         </div>
       </header>
 
