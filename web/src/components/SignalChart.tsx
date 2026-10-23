@@ -60,6 +60,142 @@ function sampleAt(points: [number, number][], target: number): number | null {
   return v0 + ((v1 - v0) * (target - t0)) / (t1 - t0);
 }
 
+interface MinMaxBin {
+  t0: number;
+  min: number;
+  max: number;
+  last: number;
+}
+
+interface BinCache {
+  step: number;
+  firstT: number;
+  lastT: number;
+  bins: MinMaxBin[];
+}
+
+const BIN_STEPS = [
+  0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.25, 0.5, 1, 2, 4,
+  8, 16, 32, 64,
+];
+
+/// A stable absolute-time bucket grid: the same sample belongs to the same
+/// bucket no matter where the LIVE window currently starts.
+function pickBinStep(windowS: number, plotW: number): number {
+  const target = windowS / Math.max(1, plotW);
+  let step = BIN_STEPS[0];
+  for (const candidate of BIN_STEPS) {
+    if (candidate > target) break;
+    step = candidate;
+  }
+  return step;
+}
+
+function addBinPoint(
+  bins: MinMaxBin[],
+  step: number,
+  t: number,
+  value: number,
+): void {
+  const t0 = Math.floor(t / step) * step;
+  const tail = bins[bins.length - 1];
+  if (tail && tail.t0 === t0) {
+    if (value < tail.min) tail.min = value;
+    if (value > tail.max) tail.max = value;
+    tail.last = value;
+    return;
+  }
+  bins.push({ t0, min: value, max: value, last: value });
+}
+
+function rebuildBins(points: [number, number][], step: number): BinCache {
+  const bins: MinMaxBin[] = [];
+  for (const [t, value] of points) addBinPoint(bins, step, t, value);
+  return {
+    step,
+    firstT: points[0][0],
+    lastT: points[points.length - 1][0],
+    bins,
+  };
+}
+
+/// Appends only the samples that arrived since the last draw and drops bins
+/// whose points have left the ring. Rebuilds from scratch on a reset or a
+/// zoom step change.
+function updateBins(
+  cache: BinCache,
+  points: [number, number][],
+  step: number,
+): BinCache {
+  const firstT = points[0][0];
+  const lastT = points[points.length - 1][0];
+  if (
+    cache.step !== step ||
+    lastT < cache.lastT ||
+    firstT < cache.firstT - 1e-9 ||
+    cache.bins.length === 0
+  ) {
+    return rebuildBins(points, step);
+  }
+
+  while (cache.bins.length && cache.bins[0].t0 + step <= firstT) {
+    cache.bins.shift();
+  }
+  // The head bin may still contain samples that were trimmed from the ring.
+  if (cache.bins.length && cache.bins[0].t0 < firstT) {
+    const t0 = cache.bins[0].t0;
+    const from = lowerBound(points, t0);
+    const to = lowerBound(points, t0 + step);
+    if (from >= to) {
+      cache.bins.shift();
+    } else {
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      let last = points[from][1];
+      for (let i = from; i < to; i++) {
+        const value = points[i][1];
+        if (value < min) min = value;
+        if (value > max) max = value;
+        last = value;
+      }
+      cache.bins[0].min = min;
+      cache.bins[0].max = max;
+      cache.bins[0].last = last;
+    }
+  }
+
+  const start = lowerBound(points, cache.lastT + 1e-9);
+  for (let i = start; i < points.length; i += 1) {
+    addBinPoint(cache.bins, step, points[i][0], points[i][1]);
+  }
+  cache.firstT = firstT;
+  cache.lastT = lastT;
+  return cache;
+}
+
+function visibleBinRange(
+  bins: MinMaxBin[],
+  step: number,
+  start: number,
+  end: number,
+): [number, number] {
+  let lo = 0;
+  let hi = bins.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bins[mid].t0 + step <= start) lo = mid + 1;
+    else hi = mid;
+  }
+  const from = lo;
+  hi = bins.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bins[mid].t0 > end) hi = mid;
+    else lo = mid + 1;
+  }
+  return [from, lo];
+}
+
 function valueText(value: number): string {
   if (!Number.isFinite(value)) return "—";
   if (Math.abs(value) >= 1000) return value.toFixed(0);
@@ -111,6 +247,7 @@ export function SignalChart({
     index: number;
   } | null>(null);
   const cursorDragRef = useRef<number | null>(null);
+  const binCacheRef = useRef(new Map<string, BinCache>());
   const timeBounds = bounds(series);
   const liveEnd = view.endS ?? timeBounds.last;
 
@@ -219,6 +356,7 @@ export function SignalChart({
       ctx.clearRect(0, 0, width, height);
 
       if (series.length === 0) {
+        binCacheRef.current.clear();
         ctx.fillStyle = colors.signalEmpty;
         ctx.font = "11px 'Segoe UI', sans-serif";
         ctx.textAlign = "center";
@@ -231,6 +369,11 @@ export function SignalChart({
           height / 2 + 14,
         );
         return;
+      }
+
+      const liveKeys = new Set(series.map((signal) => signal.key));
+      for (const key of binCacheRef.current.keys()) {
+        if (!liveKeys.has(key)) binCacheRef.current.delete(key);
       }
 
       const live = view.endS === null;
@@ -323,13 +466,47 @@ export function SignalChart({
           }
         }
 
+        let raw = visible <= Math.max(1, Math.floor(plotW));
+        let step = 0;
+        let bins: MinMaxBin[] | null = null;
+        let binFrom = 0;
+        let binTo = 0;
         let min = Number.POSITIVE_INFINITY;
         let max = Number.NEGATIVE_INFINITY;
-        for (let k = from; k < to; k += 1) {
-          const value = points[k][1];
-          if (value < min) min = value;
-          if (value > max) max = value;
+
+        if (raw) {
+          for (let k = from; k < to; k += 1) {
+            const value = points[k][1];
+            if (value < min) min = value;
+            if (value > max) max = value;
+          }
+        } else {
+          step = pickBinStep(view.windowS, plotW);
+          const cached = binCacheRef.current.get(signal.key);
+          const updated = cached
+            ? updateBins(cached, points, step)
+            : rebuildBins(points, step);
+          binCacheRef.current.set(signal.key, updated);
+          bins = updated.bins;
+          [binFrom, binTo] = visibleBinRange(bins, step, start, end);
+          for (let i = binFrom; i < binTo; i += 1) {
+            const bin = bins[i];
+            if (bin.min < min) min = bin.min;
+            if (bin.max > max) max = bin.max;
+          }
         }
+
+        // A very short or edge-clipped range may produce no bins; fall back
+        // to the raw samples for this lane.
+        if (min === Number.POSITIVE_INFINITY) {
+          raw = true;
+          for (let k = from; k < to; k += 1) {
+            const value = points[k][1];
+            if (value < min) min = value;
+            if (value > max) max = value;
+          }
+        }
+
         if (min === max) {
           min -= 1;
           max += 1;
@@ -348,48 +525,59 @@ export function SignalChart({
         ctx.lineTo(width - 8, plotTop + plotH / 2 + 0.5);
         ctx.stroke();
 
-        const buckets = Math.max(1, Math.floor(plotW));
-        const lows = new Float64Array(buckets).fill(Number.POSITIVE_INFINITY);
-        const highs = new Float64Array(buckets).fill(Number.NEGATIVE_INFINITY);
-        const last = new Float64Array(buckets).fill(Number.NaN);
-        for (let k = from; k < to; k += 1) {
-          const [t, value] = points[k];
-          const bx = Math.min(
-            buckets - 1,
-            Math.max(0, Math.floor(((t - start) / view.windowS) * buckets)),
-          );
-          if (value < lows[bx]) lows[bx] = value;
-          if (value > highs[bx]) highs[bx] = value;
-          last[bx] = value;
-        }
-
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.55;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let bx = 0; bx < buckets; bx += 1) {
-          if (Number.isNaN(last[bx])) continue;
-          const x = GUTTER + bx + 0.5;
-          ctx.moveTo(x, y(lows[bx]));
-          ctx.lineTo(x, y(highs[bx]));
-        }
-        ctx.stroke();
-
-        ctx.globalAlpha = 1;
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        let started = false;
-        for (let bx = 0; bx < buckets; bx += 1) {
-          if (Number.isNaN(last[bx])) continue;
-          const x = GUTTER + bx + 0.5;
-          if (!started) {
-            ctx.moveTo(x, y(last[bx]));
-            started = true;
-          } else {
-            ctx.lineTo(x, y(last[bx]));
+        if (raw) {
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          let started = false;
+          for (let k = from; k < to; k += 1) {
+            const [t, value] = points[k];
+            const x = GUTTER + ((t - start) / view.windowS) * plotW;
+            if (!started) {
+              ctx.moveTo(x, y(value));
+              started = true;
+            } else {
+              ctx.lineTo(x, y(value));
+            }
           }
+          ctx.stroke();
+        } else if (bins) {
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.55;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let i = binFrom; i < binTo; i += 1) {
+            const bin = bins[i];
+            const x =
+              GUTTER +
+              ((bin.t0 + step / 2 - start) / view.windowS) * plotW +
+              0.5;
+            ctx.moveTo(x, y(bin.max));
+            ctx.lineTo(x, y(bin.min));
+          }
+          ctx.stroke();
+
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          let started = false;
+          for (let i = binFrom; i < binTo; i += 1) {
+            const bin = bins[i];
+            const x =
+              GUTTER +
+              ((bin.t0 + step / 2 - start) / view.windowS) * plotW +
+              0.5;
+            if (!started) {
+              ctx.moveTo(x, y(bin.last));
+              started = true;
+            } else {
+              ctx.lineTo(x, y(bin.last));
+            }
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
+        ctx.globalAlpha = 1;
 
         if (fullscreen || hoverCursorId !== null) {
           for (let ci = 0; ci < cursors.length; ci += 1) {
