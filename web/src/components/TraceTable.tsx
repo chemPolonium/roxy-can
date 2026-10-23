@@ -538,6 +538,9 @@ export function TraceTable({
             </button>
           )}
           <span class="spacer" />
+          <span class="trace-hint">
+            Right-click a row for cursors and analysis
+          </span>
         </div>
       <div
         class="table-scroll"

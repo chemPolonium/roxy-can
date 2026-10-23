@@ -62,8 +62,9 @@ export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
   const colors = palette(theme).monitors;
   if (rows.length === 0) {
     return (
-      <div class="monitor-empty">
-        no rows -- add a signal to watch its live value from across the room
+      <div class="empty">
+        <strong>No signals yet</strong>
+        <span>Add a signal to watch its live value.</span>
       </div>
     );
   }

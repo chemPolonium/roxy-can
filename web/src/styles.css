@@ -118,7 +118,7 @@ input::placeholder {
   align-items: center;
   gap: 18px;
   flex: 0 0 50px;
-  padding: 0 12px;
+  padding: 0 8px;
   background: linear-gradient(180deg, #121820 0%, #0e1319 100%);
   border-bottom: 1px solid var(--line);
 }
@@ -275,7 +275,7 @@ input::placeholder {
   display: flex;
   align-items: stretch;
   flex: 0 0 35px;
-  padding: 0 12px;
+  padding: 0 8px;
   gap: 0;
   background: #0c1016;
   border-bottom: 1px solid var(--line);
@@ -290,7 +290,7 @@ input::placeholder {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
-  padding: 4px 12px;
+  padding: 4px 8px;
   background: #0f151d;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
@@ -370,16 +370,12 @@ input::placeholder {
   align-items: center;
   gap: 7px;
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 8px;
   white-space: nowrap;
 }
 
 .stat + .stat {
   border-left: 1px solid var(--line-soft);
-}
-
-.stat:first-child {
-  padding-left: 0;
 }
 
 .stat span {
@@ -428,7 +424,7 @@ input::placeholder {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  padding: 7px;
+  padding: 8px;
 }
 
 .panel {
@@ -450,6 +446,24 @@ input::placeholder {
   padding: 0 8px;
   background: var(--head);
   border-bottom: 1px solid var(--line);
+  --ctl-h: 24px;
+}
+
+/* One control height across every panel head: tabs, toolbar buttons,
+   filters and the chart icon would otherwise differ by a few pixels. */
+.panel-head .tabs button,
+.panel-head .mini,
+.panel-head > button,
+.panel-head select,
+.panel-head input,
+.panel-head .chart-focus,
+.panel-head .chart-theme {
+  height: var(--ctl-h);
+}
+
+.panel-head .chart-focus,
+.panel-head .chart-theme {
+  width: var(--ctl-h);
 }
 
 .panel-title {
@@ -787,6 +801,18 @@ body.col-resizing {
   min-height: 0;
   overflow: auto;
   scrollbar-color: #2c3846 #0c1016;
+}
+
+.trace-hint {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .trace-hint {
+    display: none;
+  }
 }
 
 .trace-menu {
@@ -1166,7 +1192,7 @@ body.col-resizing {
   align-items: center;
   gap: 12px;
   flex: 0 0 24px;
-  padding: 0 10px;
+  padding: 0 8px;
   background: #0c1015;
   border-top: 1px solid var(--line);
   color: #657284;
@@ -2753,16 +2779,6 @@ button.danger:hover:not(:disabled) {
   line-height: 15px;
 }
 
-.state-empty {
-  display: grid;
-  flex: 1 1 auto;
-  place-items: center;
-  padding: 16px;
-  color: var(--muted);
-  font-size: 10.5px;
-  text-align: center;
-}
-
 .state-bands {
   padding: 0 3px;
   color: var(--muted);
@@ -2980,16 +2996,6 @@ button.danger:hover:not(:disabled) {
   background: linear-gradient(90deg, #2f7fe0, #56b6ff);
   border-radius: 2px;
   transition: width 0.12s linear;
-}
-
-.data-empty {
-  display: grid;
-  flex: 1 1 auto;
-  place-items: center;
-  padding: 16px;
-  color: var(--muted);
-  font-size: 10.5px;
-  text-align: center;
 }
 
 /* Specification: latched database-promise verdicts with the tolerance and
@@ -3338,16 +3344,6 @@ button.danger:hover:not(:disabled) {
   padding: 0;
   border: 1px solid rgb(255 255 255 / 25%);
   border-radius: 3px;
-}
-
-.monitor-empty {
-  display: grid;
-  flex: 1 1 auto;
-  place-items: center;
-  padding: 16px;
-  color: var(--muted);
-  font-size: 10.5px;
-  text-align: center;
 }
 
 /* Node scripts: a compact list plus a plain textarea editor (no syntax

@@ -9,9 +9,9 @@ interface Props {
 export function DataPanel({ rows, onVisible, onRemove }: Props) {
   if (rows.length === 0) {
     return (
-      <div class="data-empty">
-        no signals -- add one to watch value, raw wire value, min/avg/max and
-        the database-scaled bar
+      <div class="empty">
+        <strong>No signals yet</strong>
+        <span>Add a signal to watch live, raw and scaled values.</span>
       </div>
     );
   }

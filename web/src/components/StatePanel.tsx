@@ -109,8 +109,9 @@ export function StatePanel({
         </span>
       </div>
       {rows.length === 0 ? (
-        <div class="state-empty">
-          no signals -- add one to watch its states as horizontal bands
+        <div class="empty">
+          <strong>No signals yet</strong>
+          <span>Add a signal to watch its states as bands.</span>
         </div>
       ) : (
         <div class="state-rows">
