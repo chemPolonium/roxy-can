@@ -132,11 +132,6 @@
   color: #1f7a52 !important;
 }
 
-[data-theme="light"] .trace-table tbody tr.selected td,
-[data-theme="light"] .trace-table tbody tr.selected:hover td {
-  background: #e3eefc;
-}
-
 [data-theme="light"] .table-scroll {
   scrollbar-color: #bcc7d4 #f1f4f8;
 }
@@ -183,6 +178,11 @@
 
 [data-theme="light"] .data-table tbody tr:hover td {
   background: #edf3fa;
+}
+
+[data-theme="light"] .data-table tbody tr.selected td,
+[data-theme="light"] .data-table tbody tr.selected:hover td {
+  background: #d8e8fb;
 }
 
 [data-theme="light"] .data-table .name {

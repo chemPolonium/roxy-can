@@ -783,11 +783,6 @@ body.col-resizing {
   color: #8fd3a8;
 }
 
-.trace-table tbody tr.selected td,
-.trace-table tbody tr.selected:hover td {
-  background: #16283b;
-}
-
 .trace-table tbody tr.cursor-a td:first-child {
   box-shadow: inset 2px 0 #e6b455;
 }
@@ -908,6 +903,13 @@ body.col-resizing {
 
 .data-table tbody tr:hover td {
   background: #16202b;
+}
+
+/* Selection must outrank both the zebra stripe and the hover tint, which
+   carry the same specificity but sit earlier in the cascade. */
+.data-table tbody tr.selected td,
+.data-table tbody tr.selected:hover td {
+  background: #16283b;
 }
 
 .data-table .num {
