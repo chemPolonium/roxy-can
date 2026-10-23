@@ -97,6 +97,20 @@
   color: #5d6a7a;
 }
 
+[data-theme="light"] .brand-menu-panel {
+  box-shadow: 0 10px 28px rgb(31 45 61 / 18%);
+}
+
+[data-theme="light"] .brand-menu-panel button {
+  border: 0;
+  background: transparent;
+  color: #1f2937;
+}
+
+[data-theme="light"] .brand-menu-panel button:hover:not(:disabled) {
+  background: #eef4fb;
+}
+
 [data-theme="light"] .legend-key b {
   color: #26313f;
 }

@@ -222,6 +222,7 @@ export function App() {
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [drag, setDrag] = useState<Drag>(null);
   const [theme, setTheme] = useState<Theme>(loadTheme);
+  const [menuOpen, setMenuOpen] = useState(false);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
@@ -231,6 +232,27 @@ export function App() {
     applyTheme(theme);
     saveTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".brand-menu")
+      ) {
+        setMenuOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     try {
@@ -829,41 +851,54 @@ export function App() {
     <div class="app">
       <header class="topbar">
         <div class="brand">
-          <div class="brand-tools">
+          <div class="brand-menu">
             <button
               type="button"
-              class="brand-tool"
-              aria-label="Shortcuts and about"
-              title="Shortcuts and about"
-              onClick={() => setHelpOpen(true)}
+              class="logo"
+              aria-label="roxy-can menu"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-controls="brand-menu-panel"
+              title="Menu"
+              onClick={() => setMenuOpen((open) => !open)}
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
-                <path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9.5h8" />
-              </svg>
-              <span class="brand-tool-label">Shortcuts</span>
+              R
             </button>
-            <button
-              type="button"
-              class="brand-tool theme-toggle"
-              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            >
-              {theme === "dark" ? (
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <circle cx="8" cy="8" r="3.2" />
-                  <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M13 10.2A5.6 5.6 0 0 1 5.8 3a5.5 5.5 0 1 0 7.2 7.2z" />
-                </svg>
-              )}
-              <span class="brand-tool-label">
-                {theme === "dark" ? "Light" : "Dark"}
-              </span>
-            </button>
+            {menuOpen && (
+              <div class="brand-menu-panel" id="brand-menu-panel" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setHelpOpen(true);
+                    setMenuOpen(false);
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+                    <path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9.5h8" />
+                  </svg>
+                  <span>Shortcuts</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={theme === "dark"}
+                  onClick={() => {
+                    setTheme(theme === "dark" ? "light" : "dark");
+                    setMenuOpen(false);
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M13 10.2A5.6 5.6 0 0 1 5.8 3a5.5 5.5 0 1 0 7.2 7.2z" />
+                  </svg>
+                  <span>Dark mode</span>
+                  <span class="brand-menu-state">
+                    {theme === "dark" ? "On" : "Off"}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
           <div class="brand-text">
             <h1>

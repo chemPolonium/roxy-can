@@ -104,6 +104,8 @@ input::placeholder {
 }
 
 .topbar {
+  position: relative;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 18px;
@@ -120,32 +122,71 @@ input::placeholder {
   min-width: 0;
 }
 
-.brand-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.brand-menu {
+  position: relative;
 }
 
-.brand-tool {
+.brand-menu .logo {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: linear-gradient(145deg, #2f7fe0, #174d91);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%);
+  cursor: pointer;
+}
+
+.brand-menu .logo:hover:not(:disabled) {
+  border-color: transparent;
+  background: linear-gradient(145deg, #3588ea, #1a579f);
+}
+
+.brand-menu .logo[aria-expanded="true"] {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    inset 0 0 0 1px rgb(255 255 255 / 12%);
+}
+
+.brand-menu-panel {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  min-width: 178px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 48%);
+}
+
+.brand-menu-panel button {
   display: flex;
   align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 7px;
-  border-color: var(--line);
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 3px;
   background: transparent;
-  color: var(--muted);
-  font-size: 10.5px;
-  line-height: 20px;
-}
-
-.brand-tool:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
   color: inherit;
+  font-size: 11px;
+  text-align: left;
 }
 
-.brand-tool svg {
+.brand-menu-panel button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.brand-menu-panel svg {
   width: 13px;
   height: 13px;
   flex: 0 0 auto;
@@ -156,8 +197,10 @@ input::placeholder {
   stroke-linejoin: round;
 }
 
-.brand-tool-label {
-  white-space: nowrap;
+.brand-menu-state {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .brand-text {
@@ -3424,16 +3467,6 @@ button.danger:hover:not(:disabled) {
 
   .sv-range {
     display: none;
-  }
-}
-
-@media (max-width: 1180px) {
-  .brand-tool-label {
-    display: none;
-  }
-
-  .brand-tool {
-    padding: 0 6px;
   }
 }
 
