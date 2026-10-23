@@ -913,6 +913,18 @@ input::placeholder {
   cursor: ew-resize;
 }
 
+.chart-panel.chart-fullscreen,
+.chart-panel:fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+}
+
 .chart-tabs {
   flex: 0 0 auto;
 }

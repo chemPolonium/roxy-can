@@ -76,6 +76,7 @@ export function SignalChart({
   );
   const [cursors, setCursors] = useState<ChartCursor[]>([]);
   const [hoverCursor, setHoverCursor] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const cursorSeq = useRef(1);
   const cursorDragRef = useRef<number | null>(null);
   const timeBounds = bounds(series);
@@ -151,6 +152,60 @@ export function SignalChart({
     const frac = clamp((clientX - rect.left - GUTTER) / plotW, 0, 1);
     return start + frac * (end - start);
   };
+
+  const exitFullscreen = () => {
+    const panel = canvasRef.current?.closest<HTMLElement>(".chart-panel");
+    if (!panel) return;
+    panel.classList.remove("chart-fullscreen");
+    setFullscreen(false);
+    if (document.fullscreenElement === panel) {
+      void document.exitFullscreen();
+    }
+  };
+
+  const toggleFullscreen = () => {
+    const panel = canvasRef.current?.closest<HTMLElement>(".chart-panel");
+    if (!panel) return;
+    if (fullscreen) {
+      exitFullscreen();
+      return;
+    }
+    // The fixed overlay is also the fallback when the browser refuses a
+    // programmatic Fullscreen request.
+    panel.classList.add("chart-fullscreen");
+    setFullscreen(true);
+    void panel.requestFullscreen().catch(() => {});
+  };
+
+  useEffect(() => {
+    const panel = canvasRef.current?.closest<HTMLElement>(".chart-panel");
+    if (!panel) return;
+    const sync = () => {
+      if (document.fullscreenElement === panel) {
+        setFullscreen(true);
+        return;
+      }
+      panel.classList.remove("chart-fullscreen");
+      setFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      panel.classList.remove("chart-fullscreen");
+      if (document.fullscreenElement === panel) {
+        void document.exitFullscreen();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") exitFullscreen();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [fullscreen]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -568,6 +623,13 @@ export function SignalChart({
             Clear
           </button>
         )}
+        <button
+          type="button"
+          title={fullscreen ? "Exit fullscreen" : "Fullscreen chart"}
+          onClick={toggleFullscreen}
+        >
+          {fullscreen ? "Exit" : "Fullscreen"}
+        </button>
       </div>
     </div>
   );
