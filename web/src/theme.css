@@ -18,6 +18,8 @@
   --ok: #1f8a5b;
   --warn: #a16207;
   --error: #c23838;
+  --scroll-track: #f1f4f8;
+  --scroll-thumb: #bcc7d4;
 }
 
 [data-theme="light"] body {
@@ -130,15 +132,6 @@
 [data-theme="light"] .th-sort.on,
 [data-theme="light"] .fr-watch {
   color: #1f7a52 !important;
-}
-
-[data-theme="light"] .table-scroll {
-  scrollbar-color: #bcc7d4 #f1f4f8;
-}
-
-[data-theme="light"] .table-scroll::-webkit-scrollbar-thumb {
-  border-color: #f1f4f8;
-  background: #bcc7d4;
 }
 
 [data-theme="light"] .table-scroll:focus-visible {

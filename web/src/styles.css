@@ -18,6 +18,8 @@
   --ok: #54c08a;
   --warn: #e0a54a;
   --error: #ef6b6b;
+  --scroll-track: #0c1016;
+  --scroll-thumb: #293442;
 }
 
 * {
@@ -795,7 +797,6 @@ body.col-resizing {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  scrollbar-color: #2c3846 #0c1016;
 }
 
 .trace-hint {
@@ -846,14 +847,86 @@ body.col-resizing {
   outline-offset: -1px;
 }
 
-.table-scroll::-webkit-scrollbar {
+/* Every scrollable surface shares one scrollbar: tables, observer lists,
+   modal bodies and the bus cards. */
+:is(
+  .table-scroll,
+  .activity,
+  .busstat-list,
+  .monitor-list,
+  .data-list,
+  .state-rows,
+  .spec-list,
+  .picker-body,
+  .palette-list,
+  .buses-body,
+  .gen-body,
+  .trig-body,
+  .scripts-list,
+  .script-log,
+  .script-textarea,
+  .sv-table,
+  .help-modal,
+  .export-modal,
+  .session-modal,
+  .state-rule-modal,
+  .state-band-list
+) {
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+
+:is(
+  .table-scroll,
+  .activity,
+  .busstat-list,
+  .monitor-list,
+  .data-list,
+  .state-rows,
+  .spec-list,
+  .picker-body,
+  .palette-list,
+  .buses-body,
+  .gen-body,
+  .trig-body,
+  .scripts-list,
+  .script-log,
+  .script-textarea,
+  .sv-table,
+  .help-modal,
+  .export-modal,
+  .session-modal,
+  .state-rule-modal,
+  .state-band-list
+)::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-.table-scroll::-webkit-scrollbar-thumb {
-  background: #293442;
-  border: 2px solid #0c1016;
+:is(
+  .table-scroll,
+  .activity,
+  .busstat-list,
+  .monitor-list,
+  .data-list,
+  .state-rows,
+  .spec-list,
+  .picker-body,
+  .palette-list,
+  .buses-body,
+  .gen-body,
+  .trig-body,
+  .scripts-list,
+  .script-log,
+  .script-textarea,
+  .sv-table,
+  .help-modal,
+  .export-modal,
+  .session-modal,
+  .state-rule-modal,
+  .state-band-list
+)::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 2px solid var(--scroll-track);
   border-radius: 6px;
 }
 
