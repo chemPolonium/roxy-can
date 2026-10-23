@@ -118,6 +118,11 @@
   color: #1557a8;
 }
 
+[data-theme="light"] .th-sort,
+[data-theme="light"] .th-sort:hover:not(:disabled) {
+  background: none;
+}
+
 [data-theme="light"] .th-sort:hover {
   color: #0f172a;
 }
