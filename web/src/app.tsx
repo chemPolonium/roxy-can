@@ -13,7 +13,13 @@ import type {
   TriggerLimits,
   TxEntry,
 } from "./types";
-import { fetchCatalog, fetchHardware, fetchState, sendCommand } from "./api";
+import {
+  describeError,
+  fetchCatalog,
+  fetchHardware,
+  fetchState,
+  sendCommand,
+} from "./api";
 import {
   clearDownload,
   isDownloadName,
@@ -23,6 +29,7 @@ import {
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
+import { ColumnsMenu } from "./components/ColumnsMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
@@ -50,7 +57,9 @@ import { StateRuleModal } from "./components/StateRuleModal";
 import { StatsTable } from "./components/StatsTable";
 import { SysVarsModal } from "./components/SysVarsModal";
 import type { SysVarEdit } from "./components/SysVarsModal";
+import { TimeJump } from "./components/TimeJump";
 import { TraceTable } from "./components/TraceTable";
+import type { TraceJump } from "./components/TraceTable";
 import {
   EMPTY_TRACE_FILTER,
   TraceFilterModal,
@@ -66,6 +75,11 @@ import {
   saveTheme,
   type Theme,
 } from "./theme";
+import {
+  DEFAULT_TRACE_COLUMNS,
+  loadTraceColumns,
+  saveTraceColumns,
+} from "./traceLayout";
 
 type RightTab = "messages" | "statistics" | "bus" | "spec" | "activity";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
@@ -300,6 +314,9 @@ export function App() {
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [toast, setToast] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [timeJumpOpen, setTimeJumpOpen] = useState(false);
+  const [traceJump, setTraceJump] = useState<TraceJump | null>(null);
+  const [traceColumns, setTraceColumns] = useState(loadTraceColumns);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
@@ -307,10 +324,13 @@ export function App() {
   const chartCursorSeq = useRef(
     Math.max(0, ...(savedView.cursors ?? []).map((cursor) => cursor.id)) + 1,
   );
+  const traceJumpSeq = useRef(0);
   const toastTimer = useRef<number | null>(null);
   const lastStatus = useRef("");
   const statusReady = useRef(false);
   const lastPhase = useRef("");
+  const lastOnline = useRef<boolean | null>(null);
+  const connectedOnce = useRef(false);
   const chartPalette = palette(theme);
 
   const showToast = (message: string) => {
@@ -357,6 +377,22 @@ export function App() {
     if (/^(stopped|paused|running)$/i.test(status)) return;
     showToast(status);
   }, [state?.status]);
+
+  useEffect(() => {
+    const previous = lastOnline.current;
+    lastOnline.current = online;
+    if (previous === null) return;
+    // The boot poll turns the link on for the first time; that is not a
+    // recovery, so only later transitions are worth announcing.
+    if (!connectedOnce.current) {
+      connectedOnce.current = online;
+      return;
+    }
+    if (previous === online) return;
+    showToast(
+      online ? "Connection restored" : "Connection to the bus core lost — retrying…",
+    );
+  }, [online]);
 
   useEffect(
     () => () => {
@@ -436,6 +472,10 @@ export function App() {
   }, [layout]);
 
   useEffect(() => {
+    saveTraceColumns(traceColumns);
+  }, [traceColumns]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(
         VIEW_KEY,
@@ -509,7 +549,7 @@ export function App() {
       } catch (e) {
         if (!alive) return;
         setOnline(false);
-        setError(String(e));
+        setError(describeError(e));
       } finally {
         inFlight = false;
       }
@@ -580,7 +620,9 @@ export function App() {
       await sendCommand(command);
       setError("");
     } catch (e) {
-      setError(String(e));
+      const message = describeError(e);
+      setError(message);
+      showToast(message);
     } finally {
       setBusy(false);
     }
@@ -626,10 +668,192 @@ export function App() {
       setChartTab(target);
       showToast(`Copied ${keys.length} signal(s) to ${target}`);
     } catch (e) {
-      setError(String(e));
+      const message = describeError(e);
+      setError(message);
+      showToast(message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const catalogMessageFor = (
+    frame: Frame,
+    source: Catalog | null = catalog,
+  ): CatalogMessage | null => {
+    const channel = source?.channels.find(
+      (entry) => entry.kind === frame.kind && entry.index === frame.bus,
+    );
+    return (
+      channel?.messages.find(
+        (message) =>
+          message.id === frame.id && message.extended === frame.extended,
+      ) ?? null
+    );
+  };
+
+  const signalCommand = (
+    frame: Frame,
+    message: CatalogMessage,
+    name: string,
+    target: "chart" | "monitor",
+  ): Command => {
+    if (target === "monitor") {
+      return {
+        type: "add_monitor",
+        kind: frame.kind,
+        ch: frame.bus,
+        id: frame.id,
+        ext: frame.extended,
+        frame: message.frame,
+        name,
+      };
+    }
+    if (frame.kind === "fr") {
+      return {
+        type: "select_fr_signal",
+        bus: frame.bus,
+        slot: frame.id,
+        name,
+      };
+    }
+    if (frame.kind === "eth") {
+      return {
+        type: "select_eth_signal",
+        bus: frame.bus,
+        frame: message.frame ?? frame.name,
+        name,
+      };
+    }
+    return {
+      type: "select_signal",
+      ch: frame.bus,
+      id: frame.id,
+      ext: frame.extended,
+      name,
+    };
+  };
+
+  /// The Trace right-click path: decode the whole message instead of making
+  /// the user reopen the catalog and hunt for each signal.
+  const addFrameSignals = async (
+    frame: Frame,
+    target: "chart" | "monitor",
+  ) => {
+    setBusy(true);
+    try {
+      // The Trace menu can be the first thing a session touches; the picker
+      // is not the only entry point for the catalog any more.
+      let source = catalog;
+      if (!source) {
+        source = await fetchCatalog();
+        setCatalog(source);
+        setCatalogError("");
+      }
+      const message = catalogMessageFor(frame, source);
+      if (!message || message.signals.length === 0) {
+        showToast("No decoded signals in this frame");
+        return;
+      }
+      const existing = new Set(
+        target === "chart"
+          ? signals.map((signal) => signal.key)
+          : (state?.monitor ?? []).map(rowKey),
+      );
+      const pending = message.signals.filter(
+        (signal) => !existing.has(signal.key),
+      );
+      if (pending.length === 0) {
+        showToast(
+          target === "chart"
+            ? "This message is already on the chart"
+            : "This message is already watched",
+        );
+        return;
+      }
+      await Promise.all(
+        pending.map((signal) =>
+          sendCommand(signalCommand(frame, message, signal.name, target)),
+        ),
+      );
+      setError("");
+      setChartTab(target === "chart" ? "signals" : "monitor");
+      showToast(
+        `${pending.length} signal(s) added to ${target === "chart" ? "the chart" : "Monitor"}`,
+      );
+    } catch (e) {
+      const text = describeError(e);
+      setError(text);
+      showToast(text);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const viewTimeUs = (tUs: number): number => {
+    const latest = traceRows[0]?.tUs ?? 0;
+    const target = latest > 0 ? Math.min(tUs, latest) : tUs;
+    traceJumpSeq.current += 1;
+    setTraceJump({ tUs: target, nonce: traceJumpSeq.current });
+    setSignalView((old) => ({ ...old, endS: target / 1e6 + old.windowS / 2 }));
+    setChartTab(signals.length > 0 ? "signals" : "rate");
+    return target;
+  };
+
+  const goToTimeUs = (tUs: number, explainBehind = true) => {
+    setTimeJumpOpen(false);
+    const seconds = tUs / 1e6;
+    const replaying =
+      state?.runMode === "Replay" &&
+      Boolean(state.log) &&
+      state.measuring &&
+      state.replayPosUs != null;
+    // Replay is forward-only. A target ahead of the playhead becomes a play
+    // target instead of a view jump, so the chart keeps following real data.
+    if (replaying && state?.replayPosUs != null && tUs > state.replayPosUs) {
+      void run({ type: "replay_play_to", target_us: tUs });
+      showToast(`Replaying to ${seconds.toFixed(3)} s`);
+      return;
+    }
+    const latest = traceRows[0]?.tUs ?? 0;
+    if (latest > 0 && tUs > latest) {
+      showToast(`Newest frame is at ${(latest / 1e6).toFixed(3)} s`);
+    }
+    const target = viewTimeUs(tUs);
+    if (replaying && explainBehind) {
+      showToast(`Replay only moves forward · view at ${(target / 1e6).toFixed(3)} s`);
+    }
+  };
+
+  // Trigger jumps walk the *view*, not the playhead: after jumping to a
+  // marker the next pair is relative to where the user is looking.
+  const markerReferenceUs =
+    signalView.endS !== null
+      ? Math.round((signalView.endS - signalView.windowS / 2) * 1e6)
+      : (state?.replayPosUs ?? traceRows[0]?.tUs ?? 0);
+
+  const prevTriggerUs = useMemo(() => {
+    let best: number | null = null;
+    for (const marker of state?.markers ?? []) {
+      const t = Math.round(marker * 1e6);
+      if (t < markerReferenceUs - 1) best = t;
+    }
+    return best;
+  }, [markerReferenceUs, state?.markers]);
+
+  const nextTriggerUs = useMemo(() => {
+    for (const marker of state?.markers ?? []) {
+      const t = Math.round(marker * 1e6);
+      if (t > markerReferenceUs + 1) return t;
+    }
+    return null;
+  }, [markerReferenceUs, state?.markers]);
+
+  const resetLayout = () => {
+    setLayout(DEFAULT_LAYOUT);
+    setTraceColumns(DEFAULT_TRACE_COLUMNS);
+    setSignalView({ windowS: 30, endS: null });
+    if (chartFullscreen) toggleChartFullscreen();
+    showToast("Layout reset");
   };
 
   const setChartCursorAt = (slot: "A" | "B", tUs: number) => {
@@ -730,7 +954,7 @@ export function App() {
       setCatalog(await fetchCatalog());
       setCatalogError("");
     } catch (e) {
-      setCatalogError(String(e));
+      setCatalogError(describeError(e));
     } finally {
       setCatalogLoading(false);
     }
@@ -824,6 +1048,18 @@ export function App() {
       }
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (event.altKey && !mod && /^[1-5]$/.test(event.key)) {
+        event.preventDefault();
+        const tabs: ChartTab[] = [
+          "rate",
+          "signals",
+          "monitor",
+          "data",
+          "state",
+        ];
+        setChartTab(tabs[Number(event.key) - 1]);
+        return;
+      }
       if (event.key === "F9") {
         event.preventDefault();
         void run({ type: state?.measuring ? "stop" : "start" });
@@ -843,6 +1079,9 @@ export function App() {
       } else if (mod && key === "k") {
         event.preventDefault();
         setPaletteOpen(true);
+      } else if (mod && key === "g") {
+        event.preventDefault();
+        setTimeJumpOpen(true);
       } else if (event.key === "?") {
         setHelpOpen(true);
       }
@@ -1302,6 +1541,35 @@ export function App() {
       run: () => setChartTab("state"),
     },
     {
+      id: "go-to-time",
+      label: "Go to time…",
+      group: "Time",
+      hint: "Ctrl+G · Trace, chart and replay",
+      run: () => setTimeJumpOpen(true),
+    },
+    ...(prevTriggerUs !== null
+      ? [
+          {
+            id: "prev-trigger",
+            label: "Go to previous trigger",
+            group: "Time",
+            hint: `${(prevTriggerUs / 1e6).toFixed(3)} s`,
+            run: () => viewTimeUs(prevTriggerUs),
+          },
+        ]
+      : []),
+    ...(nextTriggerUs !== null
+      ? [
+          {
+            id: "next-trigger",
+            label: "Go to next trigger",
+            group: "Time",
+            hint: `${(nextTriggerUs / 1e6).toFixed(3)} s`,
+            run: () => viewTimeUs(nextTriggerUs),
+          },
+        ]
+      : []),
+    {
       id: "tab-messages",
       label: "Show Messages",
       group: "Lower panel",
@@ -1344,6 +1612,13 @@ export function App() {
       group: "View",
       run: () => setTheme(theme === "dark" ? "light" : "dark"),
     },
+    {
+      id: "reset-layout",
+      label: "Reset layout",
+      group: "View",
+      hint: "Splitters, Trace columns and chart window",
+      run: resetLayout,
+    },
     ...(canControl && !measuring && !needsLog
       ? [
           {
@@ -1383,7 +1658,7 @@ export function App() {
   ];
 
   return (
-    <div class="app">
+    <div class={`app ${state && !online ? "offline" : ""}`}>
       <header class="topbar">
         <div class="brand">
           <div class="brand-menu">
@@ -1604,6 +1879,26 @@ export function App() {
             >
               Step
             </button>
+            {state.markers.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  disabled={prevTriggerUs === null}
+                  title="Show the previous trigger in Trace and the chart; playback keeps running"
+                  onClick={() => prevTriggerUs !== null && viewTimeUs(prevTriggerUs)}
+                >
+                  Prev trigger
+                </button>
+                <button
+                  type="button"
+                  disabled={nextTriggerUs === null}
+                  title="Show the next trigger in Trace and the chart; playback keeps running"
+                  onClick={() => nextTriggerUs !== null && viewTimeUs(nextTriggerUs)}
+                >
+                  Next trigger
+                </button>
+              </>
+            )}
             <label>
               Play for
               <select
@@ -1707,6 +2002,7 @@ export function App() {
               >
                 Filters
               </button>
+              <ColumnsMenu columns={traceColumns} onChange={setTraceColumns} />
               <select
                 value={bus}
                 onChange={(e) => {
@@ -1741,9 +2037,16 @@ export function App() {
           <TraceTable
             key={`${bus}:${query}:${traceEpoch}`}
             rows={visibleRows}
+            columns={traceColumns}
+            onColumnsChange={setTraceColumns}
+            jump={traceJump}
+            onJumpDone={() => setTraceJump(null)}
             onQuery={setQuery}
             onChartCursor={placeChartCursor}
             onSetChartCursor={setChartCursorAt}
+            onAddToChart={(frame) => void addFrameSignals(frame, "chart")}
+            onWatch={(frame) => void addFrameSignals(frame, "monitor")}
+            onShowTime={(tUs) => goToTimeUs(tUs, false)}
           />
         </section>
 
@@ -2226,6 +2529,11 @@ export function App() {
               : state?.status || "waiting for core")}
         </span>
         <span class="spacer" />
+        {toast && (
+          <span class="toast" role="status" title={toast}>
+            {toast}
+          </span>
+        )}
         <span>poll 10 Hz</span>
         <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
         <span>{window.location.host}</span>
@@ -2410,6 +2718,8 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={selectedKeys}
+          charted={selectedKeys}
+          watched={monitorKeys}
           kinds={["can", "fr", "eth"]}
           onToggle={toggleSignal}
           onCopyTo={copyChartSelection}
@@ -2423,6 +2733,8 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={monitorKeys}
+          charted={selectedKeys}
+          watched={monitorKeys}
           title="Monitor signals"
           kinds={["can", "fr", "eth"]}
           onToggle={(channel, message, signal, on) =>
@@ -2458,6 +2770,8 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={dataKeys}
+          charted={selectedKeys}
+          watched={monitorKeys}
           title="Data signals"
           kinds={["can", "fr", "eth"]}
           onToggle={(channel, message, signal, on) =>
@@ -2493,6 +2807,8 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={stateKeys}
+          charted={selectedKeys}
+          watched={monitorKeys}
           title="State signals"
           kinds={["can", "fr", "eth"]}
           onToggle={(channel, message, signal, on) =>
@@ -2815,10 +3131,12 @@ export function App() {
           onClose={() => setPaletteOpen(false)}
         />
       )}
-      {toast && (
-        <div class="toast" role="status" title={toast}>
-          {toast}
-        </div>
+      {timeJumpOpen && (
+        <TimeJump
+          maxS={traceRows.length > 0 ? traceRows[0].tUs / 1e6 : null}
+          onGo={(seconds) => goToTimeUs(Math.round(seconds * 1e6))}
+          onClose={() => setTimeJumpOpen(false)}
+        />
       )}
     </div>
   );

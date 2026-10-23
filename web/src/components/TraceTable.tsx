@@ -6,10 +6,15 @@ import {
   useState,
 } from "preact/hooks";
 import type { Frame } from "../types";
+import {
+  columnWidth,
+  TRACE_COLUMNS,
+  type TraceColumnId,
+  type TraceColumnPrefs,
+} from "../traceLayout";
 
 const ROW_H = 21;
 const OVERSCAN = 8;
-const COLUMNS = 7;
 /// New rows arrive at the head every 100 ms. Only a live feed prepends this
 /// many, so the anchor search does not need to scan the whole 50k buffer.
 const ANCHOR_SCAN = 10_000;
@@ -89,6 +94,7 @@ function deltaText(a: number, b: number): string {
 
 function TraceRow({
   frame,
+  visible,
   selected,
   cursorA,
   cursorB,
@@ -96,6 +102,7 @@ function TraceRow({
   onMenu,
 }: {
   frame: Frame;
+  visible: TraceColumnId[];
   selected: boolean;
   cursorA: boolean;
   cursorB: boolean;
@@ -111,20 +118,49 @@ function TraceRow({
     .join(" ");
   return (
     <tr class={classes} onClick={onSelect} onContextMenu={onMenu}>
-      <td class="num mono">{(frame.tUs / 1e6).toFixed(6)}</td>
-      <td>{frame.busName}</td>
-      <td class="mono">
-        {frame.addr || hexId(frame)}
-        {frame.fd && <span class="badge">FD</span>}
-      </td>
-      <td class="name" title={frame.name}>
-        {frame.name || <span class="dash">—</span>}
-      </td>
-      <td class={frame.dir === "Tx" ? "tx" : "rx"}>{frame.dir}</td>
-      <td class="num mono">{frame.len}</td>
-      <td class="mono data" title={frame.data}>
-        {frame.data || <span class="dash">—</span>}
-      </td>
+      {visible.map((id) => {
+        switch (id) {
+          case "time":
+            return (
+              <td key={id} class="num mono">
+                {(frame.tUs / 1e6).toFixed(6)}
+              </td>
+            );
+          case "bus":
+            return <td key={id}>{frame.busName}</td>;
+          case "id":
+            return (
+              <td key={id} class="mono">
+                {frame.addr || hexId(frame)}
+                {frame.fd && <span class="badge">FD</span>}
+              </td>
+            );
+          case "name":
+            return (
+              <td key={id} class="name" title={frame.name}>
+                {frame.name || <span class="dash">—</span>}
+              </td>
+            );
+          case "dir":
+            return (
+              <td key={id} class={frame.dir === "Tx" ? "tx" : "rx"}>
+                {frame.dir}
+              </td>
+            );
+          case "len":
+            return (
+              <td key={id} class="num mono">
+                {frame.len}
+              </td>
+            );
+          case "data":
+            return (
+              <td key={id} class="mono data" title={frame.data}>
+                {frame.data || <span class="dash">—</span>}
+              </td>
+            );
+        }
+      })}
     </tr>
   );
 }
@@ -132,16 +168,35 @@ function TraceRow({
 /// Fixed-row-height virtualization: the table keeps its column layout and
 /// sticky header, only the tbody window is in the DOM, and two spacer rows
 /// carry the unrendered height. Five thousand rows cost about thirty nodes.
+export interface TraceJump {
+  tUs: number;
+  nonce: number;
+}
+
 export function TraceTable({
   rows,
+  columns,
+  onColumnsChange,
+  jump,
+  onJumpDone,
   onQuery,
   onChartCursor,
   onSetChartCursor,
+  onAddToChart,
+  onWatch,
+  onShowTime,
 }: {
   rows: Frame[];
+  columns: TraceColumnPrefs;
+  onColumnsChange: (next: TraceColumnPrefs) => void;
+  jump?: TraceJump | null;
+  onJumpDone?: () => void;
   onQuery?: (text: string) => void;
   onChartCursor?: (tUs: number) => void;
   onSetChartCursor?: (slot: "A" | "B", tUs: number) => void;
+  onAddToChart?: (frame: Frame) => void;
+  onWatch?: (frame: Frame) => void;
+  onShowTime?: (tUs: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
@@ -164,6 +219,39 @@ export function TraceTable({
     return [...rows].sort((a, b) => sign * compareFrames(a, b, sortKey));
   }, [rows, sortKey, sortDir]);
   const total = sortedRows.length;
+  const visible = TRACE_COLUMNS.filter(
+    (column) => !columns.hidden.includes(column.id),
+  );
+
+  // A one-off jump from the go-to-time box or a palette command: park the
+  // nearest frame about a third of the way down instead of at the very top.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!jump || !element || sortedRows.length === 0) return;
+    let best = 0;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < sortedRows.length; i += 1) {
+      const delta = Math.abs(sortedRows[i].tUs - jump.tUs);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = i;
+      }
+    }
+    const header = element.querySelector("thead")?.clientHeight ?? 0;
+    const top = Math.max(
+      0,
+      best * ROW_H - header - (element.clientHeight - header) / 3,
+    );
+    element.scrollTop = top;
+    scrollTopRef.current = top;
+    setScrollTop(top);
+    setSelectedKey(frameKey(sortedRows[best]));
+    scrollRef.current?.focus();
+    // Consume the jump so a later filter change (which remounts the table)
+    // does not scroll back to the old target.
+    onJumpDone?.();
+    // sortedRows is replaced on every poll; the jump itself drives this.
+  }, [jump]);
 
   useEffect(() => {
     if (!menu) return;
@@ -316,6 +404,51 @@ export function TraceTable({
     </button>
   );
 
+  const startResize = (event: PointerEvent, id: TraceColumnId) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const def = TRACE_COLUMNS.find((column) => column.id === id);
+    const startX = event.clientX;
+    const startWidth = columnWidth(columns, id);
+    const move = (moveEvent: PointerEvent) => {
+      const width = Math.min(
+        def?.max ?? 420,
+        Math.max(def?.min ?? 40, startWidth + moveEvent.clientX - startX),
+      );
+      onColumnsChange({
+        ...columns,
+        widths: { ...columns.widths, [id]: width },
+      });
+    };
+    const up = () => {
+      document.body.classList.remove("col-resizing");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    document.body.classList.add("col-resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const headerFor = (id: TraceColumnId) => {
+    switch (id) {
+      case "time":
+        return sortButton("Time", "time");
+      case "bus":
+        return sortButton("Bus", "bus");
+      case "id":
+        return sortButton("ID", "id");
+      case "name":
+        return sortButton("Name", "name");
+      case "dir":
+        return sortButton("Dir", "dir");
+      case "len":
+        return sortButton("Len", "len");
+      case "data":
+        return "Data";
+    }
+  };
+
   return (
     <div class="trace-body">
       <div class="trace-cursors">
@@ -399,29 +532,44 @@ export function TraceTable({
       >
         <table class="data-table trace-table">
           <colgroup>
-            <col style={{ width: "92px" }} />
-            <col style={{ width: "54px" }} />
-            <col style={{ width: "80px" }} />
-            <col style={{ width: "22%" }} />
-            <col style={{ width: "40px" }} />
-            <col style={{ width: "46px" }} />
-            <col />
+            {visible.map((column) =>
+              column.flex ? (
+                <col key={column.id} />
+              ) : (
+                <col
+                  key={column.id}
+                  style={{ width: `${columnWidth(columns, column.id)}px` }}
+                />
+              ),
+            )}
           </colgroup>
           <thead>
             <tr>
-              <th class="num">{sortButton("Time", "time")}</th>
-              <th>{sortButton("Bus", "bus")}</th>
-              <th>{sortButton("ID", "id")}</th>
-              <th>{sortButton("Name", "name")}</th>
-              <th>{sortButton("Dir", "dir")}</th>
-              <th class="num">{sortButton("Len", "len")}</th>
-              <th>Data</th>
+              {visible.map((column) => (
+                <th
+                  key={column.id}
+                  class={
+                    column.id === "time" || column.id === "len" ? "num" : ""
+                  }
+                >
+                  {headerFor(column.id)}
+                  {!column.flex && (
+                    <span
+                      class="col-resize"
+                      onPointerDown={(event) => startResize(event, column.id)}
+                    />
+                  )}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {topHeight > 0 && (
               <tr class="spacer" aria-hidden="true">
-                <td colSpan={COLUMNS} style={{ height: `${topHeight}px` }} />
+                <td
+                  colSpan={visible.length}
+                  style={{ height: `${topHeight}px` }}
+                />
               </tr>
             )}
             {sortedRows.slice(start, end).map((frame, index) => {
@@ -430,6 +578,7 @@ export function TraceTable({
                 <TraceRow
                   key={`${key}:${start + index}`}
                   frame={frame}
+                  visible={visible.map((column) => column.id)}
                   selected={key === selectedKey}
                   cursorA={key === cursorA?.key}
                   cursorB={key === cursorB?.key}
@@ -452,7 +601,10 @@ export function TraceTable({
             })}
             {bottomHeight > 0 && (
               <tr class="spacer" aria-hidden="true">
-                <td colSpan={COLUMNS} style={{ height: `${bottomHeight}px` }} />
+                <td
+                  colSpan={visible.length}
+                  style={{ height: `${bottomHeight}px` }}
+                />
               </tr>
             )}
           </tbody>
@@ -462,8 +614,8 @@ export function TraceTable({
         <div
           class="trace-menu"
           style={{
-            left: `${Math.min(menu.x, window.innerWidth - 190)}px`,
-            top: `${Math.min(menu.y, window.innerHeight - 150)}px`,
+            left: `${Math.min(menu.x, window.innerWidth - 210)}px`,
+            top: `${Math.min(menu.y, window.innerHeight - 250)}px`,
           }}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -506,6 +658,36 @@ export function TraceTable({
             }}
           >
             Place chart cursor
+          </button>
+          <button
+            type="button"
+            disabled={!onShowTime}
+            onClick={() => {
+              onShowTime?.(menu.frame.tUs);
+              setMenu(null);
+            }}
+          >
+            Show at this time
+          </button>
+          <button
+            type="button"
+            disabled={!onAddToChart}
+            onClick={() => {
+              onAddToChart?.(menu.frame);
+              setMenu(null);
+            }}
+          >
+            Add signals to chart
+          </button>
+          <button
+            type="button"
+            disabled={!onWatch}
+            onClick={() => {
+              onWatch?.(menu.frame);
+              setMenu(null);
+            }}
+          >
+            Watch in Monitor
           </button>
           <button
             type="button"

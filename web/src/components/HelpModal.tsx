@@ -6,6 +6,8 @@ interface Props {
 
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+K", "Command palette"],
+  ["Ctrl+G", "Go to time in Trace, chart and replay"],
+  ["Alt+1…5", "Switch Rate / Signals / Monitor / Data / State"],
   ["F9", "Start / stop the measurement"],
   ["Ctrl+S", "Save the open project"],
   ["Ctrl+Shift+S", "Open Session (Save as / switch session)"],

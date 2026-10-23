@@ -11,6 +11,8 @@ interface Props {
   loading: boolean;
   error: string;
   selected: Set<string>;
+  charted?: Set<string>;
+  watched?: Set<string>;
   title?: string;
   kinds?: string[];
   onToggle: (
@@ -35,6 +37,8 @@ export function SignalPicker({
   loading,
   error,
   selected,
+  charted,
+  watched,
   title = "Signals",
   kinds,
   onToggle,
@@ -163,6 +167,12 @@ export function SignalPicker({
                             }
                           />
                           <span>{signal.name}</span>
+                          {charted?.has(signal.key) && (
+                            <small class="picker-mark">chart</small>
+                          )}
+                          {watched?.has(signal.key) && (
+                            <small class="picker-mark">mon</small>
+                          )}
                           <em>
                             {signal.unit || "no unit"} · {signal.min}..{signal.max}
                           </em>

@@ -1,5 +1,24 @@
 import type { Catalog, Command, Hardware, Script, Snapshot } from "./types";
 
+/// Browser fetch failures surface as bare TypeErrors; translate the common
+/// ones so the UI can offer a reason instead of a stack-trace fragment.
+export function describeError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  if (
+    error instanceof TypeError ||
+    /failed to fetch|networkerror|load failed/i.test(text)
+  ) {
+    return "Connection to the bus core lost — retrying…";
+  }
+  if (/^state: \d+$/.test(text)) {
+    return "The bus core did not return a snapshot.";
+  }
+  if (/^command: 503$/.test(text)) {
+    return "The bus core is not accepting commands.";
+  }
+  return text;
+}
+
 export async function fetchState(
   epoch: number | null,
   seq: number,
