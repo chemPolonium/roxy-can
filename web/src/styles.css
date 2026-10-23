@@ -516,11 +516,11 @@ input::placeholder {
   white-space: nowrap;
 }
 
-.panel-tools select {
+.panel-tools > select {
   width: 100px;
 }
 
-.panel-tools input {
+.panel-tools > input {
   flex: 1 1 120px;
   width: auto;
   min-width: 70px;
