@@ -1926,6 +1926,9 @@ fn app_loop(
                 }
                 WebCommand::Pause { on } => {
                     app.send(BusCommand::SetTracePaused(on));
+                    // The rate window spans wall time; do not let a pause or
+                    // resume turn the frozen interval into a false sample.
+                    rate_window.clear();
                 }
                 WebCommand::ReplayStep { delta_us } => {
                     app.send(BusCommand::ReplayStep { delta_us });
@@ -2783,56 +2786,56 @@ fn app_loop(
         app.update();
         if last_publish.elapsed() >= PUBLISH_EVERY {
             let now = Instant::now();
-            rate_window.push_back((now, app.snap.frame_counter));
-            while rate_window.len() > 2
-                && now.duration_since(rate_window[0].0) > Duration::from_secs(1)
-            {
-                rate_window.pop_front();
-            }
-            let (started, frames_then) = rate_window[0];
-            let elapsed = now.duration_since(started).as_secs_f64();
-            // A one-second window reads as the bus rate; the per-lap EMA
-            // swings with the generator's batch arrivals and makes the
-            // chart look like noise.
-            // A one-second window needs a moment to fill; feeding the
-            // frontend the per-lap EMA before that put a 500 f/s spike at
-            // the left edge and squashed the whole chart.
-            let mut fps = if elapsed >= 0.5 {
-                app.snap.frame_counter.saturating_sub(frames_then) as f64 / elapsed
-            } else {
-                0.0
-            };
-            let bus_count = app.snap.channels.len();
-            let (mut bus_rates, mut bus_loads) = if app.snap.measuring {
-                (
-                    app.snap
+            let mut fps = 0.0;
+            // A stopped or paused measurement has no rate to report. Keep the
+            // chart at its last point instead of growing a tail of zeros.
+            if app.snap.measuring && !app.snap.trace_paused {
+                rate_window.push_back((now, app.snap.frame_counter));
+                while rate_window.len() > 2
+                    && now.duration_since(rate_window[0].0) > Duration::from_secs(1)
+                {
+                    rate_window.pop_front();
+                }
+                let (started, frames_then) = rate_window[0];
+                let elapsed = now.duration_since(started).as_secs_f64();
+                // A one-second window reads as the bus rate; the per-lap EMA
+                // swings with the generator's batch arrivals and makes the
+                // chart look like noise.
+                // A one-second window needs a moment to fill; feeding the
+                // frontend the per-lap EMA before that put a 500 f/s spike at
+                // the left edge and squashed the whole chart.
+                // Skip the fill-in period instead of plotting synthetic zeros:
+                // the chart should continue from its last real rate.
+                if elapsed >= 0.5 {
+                    fps = app.snap.frame_counter.saturating_sub(frames_then) as f64 / elapsed;
+                    let bus_count = app.snap.channels.len();
+                    let mut bus_rates: Vec<f64> = app
+                        .snap
                         .bus_loads
                         .iter()
                         .map(|load| load.frame_rate())
-                        .collect(),
-                    app.snap
+                        .collect();
+                    let mut bus_loads: Vec<f64> = app
+                        .snap
                         .bus_loads
                         .iter()
                         .map(|load| load.load() * 100.0)
-                        .collect(),
-                )
-            } else {
-                fps = 0.0;
-                (vec![0.0; bus_count], vec![0.0; bus_count])
-            };
-            if bus_rates.len() < bus_count {
-                bus_rates.resize(bus_count, 0.0);
-            }
-            if bus_loads.len() < bus_count {
-                bus_loads.resize(bus_count, 0.0);
-            }
-            series.push_back(WebSeriesPoint {
-                total: fps,
-                bus_rates,
-                bus_loads,
-            });
-            if series.len() > SERIES_POINTS {
-                series.pop_front();
+                        .collect();
+                    if bus_rates.len() < bus_count {
+                        bus_rates.resize(bus_count, 0.0);
+                    }
+                    if bus_loads.len() < bus_count {
+                        bus_loads.resize(bus_count, 0.0);
+                    }
+                    series.push_back(WebSeriesPoint {
+                        total: fps,
+                        bus_rates,
+                        bus_loads,
+                    });
+                    if series.len() > SERIES_POINTS {
+                        series.pop_front();
+                    }
+                }
             }
             if let Ok(mut store) = trace.lock() {
                 store.sync(&app);
