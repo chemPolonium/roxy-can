@@ -317,7 +317,12 @@ export function SignalChart({
           timeBounds.first + nextWindow,
           timeBounds.last,
         );
-        setView({ windowS: nextWindow, endS: nextEnd });
+        // Zooming must not take the chart out of LIVE; only a pan changes
+        // whether the window follows the newest sample.
+        setView({
+          windowS: nextWindow,
+          endS: view.endS === null ? null : nextEnd,
+        });
       }}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
