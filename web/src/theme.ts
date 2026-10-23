@@ -61,6 +61,7 @@ export interface Palette {
   signalHold: string;
   signalAccent: string;
   signalDrag: string;
+  cursorColors: string[];
 }
 
 const DARK: Palette = {
@@ -115,6 +116,7 @@ const DARK: Palette = {
   signalHold: "#e0a54a",
   signalAccent: "#4c9dff",
   signalDrag: "rgba(76, 157, 255, 0.10)",
+  cursorColors: ["#e6b455", "#c77dff", "#4ecdc4", "#ff9f43", "#4c9dff", "#54c08a"],
 };
 
 const LIGHT: Palette = {
@@ -169,6 +171,7 @@ const LIGHT: Palette = {
   signalHold: "#a15f00",
   signalAccent: "#1f6fd0",
   signalDrag: "rgba(31, 111, 208, 0.08)",
+  cursorColors: ["#a15f00", "#7b3fbf", "#168c85", "#c25a00", "#1f6fd0", "#1f8a5b"],
 };
 
 export function palette(theme: Theme): Palette {

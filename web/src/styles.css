@@ -856,6 +856,40 @@ input::placeholder {
   font-weight: 500;
 }
 
+.signal-chart-wrap {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chart-cursor-tools {
+  position: absolute;
+  top: 0;
+  left: 6px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+}
+
+.chart-cursor-tools button {
+  height: 14px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.chart-cursor-tools button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: inherit;
+}
+
 .rate-chart,
 .signal-chart {
   display: block;

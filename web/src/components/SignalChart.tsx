@@ -13,6 +13,11 @@ interface View {
   endS: number | null;
 }
 
+interface ChartCursor {
+  id: number;
+  t: number;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -69,6 +74,9 @@ export function SignalChart({
   const [reorder, setReorder] = useState<{ from: number; to: number } | null>(
     null,
   );
+  const [cursors, setCursors] = useState<ChartCursor[]>([]);
+  const cursorSeq = useRef(1);
+  const cursorDragRef = useRef<number | null>(null);
   const timeBounds = bounds(series);
   const liveEnd = view.endS ?? timeBounds.last;
 
@@ -86,6 +94,61 @@ export function SignalChart({
       return y < TOP ? 0 : series.length - 1;
     }
     return clamp(Math.floor((y - TOP) / laneH), 0, series.length - 1);
+  };
+
+  const viewWindow = () => {
+    const range = bounds(series);
+    const end =
+      view.endS === null
+        ? range.last
+        : clamp(view.endS, range.first + view.windowS, range.last);
+    return { first: range.first, last: range.last, start: end - view.windowS, end };
+  };
+
+  const addCursor = () => {
+    if (series.length === 0) return;
+    const { start, end } = viewWindow();
+    // Keep successive cursors apart; dropping every one at the exact centre
+    // would stack their lines and labels.
+    const slots = [0.5, 0.7, 0.3, 0.6, 0.4, 0.8, 0.2, 0.9];
+    setCursors((old) => [
+      ...old,
+      {
+        id: cursorSeq.current++,
+        t: start + (end - start) * slots[old.length % slots.length],
+      },
+    ]);
+  };
+
+  const cursorAt = (clientX: number, clientY: number): number | null => {
+    const canvas = canvasRef.current;
+    if (!canvas || series.length === 0 || cursors.length === 0) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (clientY < rect.top + TOP || clientY > rect.bottom - AXIS_H) {
+      return null;
+    }
+    const plotW = Math.max(1, rect.width - GUTTER - 8);
+    const { start, end } = viewWindow();
+    let hit: { id: number; distance: number } | null = null;
+    for (const cursor of cursors) {
+      if (cursor.t < start || cursor.t > end) continue;
+      const x = GUTTER + ((cursor.t - start) / view.windowS) * plotW;
+      const distance = Math.abs(clientX - rect.left - x);
+      if (distance <= 5 && (!hit || distance < hit.distance)) {
+        hit = { id: cursor.id, distance };
+      }
+    }
+    return hit?.id ?? null;
+  };
+
+  const timeAt = (clientX: number): number => {
+    const canvas = canvasRef.current;
+    if (!canvas) return 0;
+    const rect = canvas.getBoundingClientRect();
+    const plotW = Math.max(1, rect.width - GUTTER - 8);
+    const { start, end } = viewWindow();
+    const frac = clamp((clientX - rect.left - GUTTER) / plotW, 0, 1);
+    return start + frac * (end - start);
   };
 
   useEffect(() => {
@@ -285,6 +348,30 @@ export function SignalChart({
         ctx.fillText(label, x, height - 5);
       }
 
+      ctx.textAlign = "left";
+      for (let i = 0; i < cursors.length; i += 1) {
+        const cursor = cursors[i];
+        if (cursor.t < start || cursor.t > end) continue;
+        const x = GUTTER + ((cursor.t - start) / view.windowS) * plotW;
+        const color = colors.cursorColors[i % colors.cursorColors.length];
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.9;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, TOP);
+        ctx.lineTo(x + 0.5, height - AXIS_H);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        const label = `${String.fromCharCode(65 + (i % 26))} ${cursor.t.toFixed(3)}s`;
+        ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
+        const labelW = ctx.measureText(label).width;
+        const labelX = clamp(x + 4, 4, width - labelW - 12);
+        ctx.fillStyle = colors.signalTagBg;
+        ctx.fillRect(labelX, TOP + 2, labelW + 8, 12);
+        ctx.fillStyle = color;
+        ctx.fillText(label, labelX + 4, TOP + 10);
+      }
+
       if (reorder) {
         const top = TOP + reorder.from * laneH;
         ctx.fillStyle = colors.signalDrag;
@@ -315,7 +402,7 @@ export function SignalChart({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [series, view, markers, theme, reorder]);
+  }, [series, view, markers, theme, reorder, cursors]);
 
   const plotWidth = () => {
     const canvas = canvasRef.current;
@@ -323,106 +410,145 @@ export function SignalChart({
   };
 
   return (
-    <canvas
-      class={`signal-chart ${reorder ? "reordering" : ""}`}
-      ref={canvasRef}
-      aria-label="Live signal curves"
-      title="Drag a signal name to reorder · wheel zooms the time window"
-      onWheel={(event) => {
-        event.preventDefault();
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        const plotW = plotWidth();
-        const frac = clamp(
-          (event.clientX - rect.left - GUTTER) / plotW,
-          0,
-          1,
-        );
-        const nextWindow = clamp(
-          view.windowS * Math.exp(event.deltaY * 0.0015),
-          1,
-          120,
-        );
-        const end = liveEnd;
-        const at = end - view.windowS + frac * view.windowS;
-        const nextEnd = clamp(
-          at + (1 - frac) * nextWindow,
-          timeBounds.first + nextWindow,
-          timeBounds.last,
-        );
-        // Zooming must not take the chart out of LIVE; only a pan changes
-        // whether the window follows the newest sample.
-        setView({
-          windowS: nextWindow,
-          endS: view.endS === null ? null : nextEnd,
-        });
-      }}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (event.clientX - rect.left < GUTTER) {
-          const lane = laneAt(event.clientY);
-          if (lane === null) return;
-          event.currentTarget.setPointerCapture(event.pointerId);
-          reorderRef.current = { key: series[lane].key, from: lane, to: lane };
-          setReorder({ from: lane, to: lane });
-          return;
-        }
-        event.currentTarget.setPointerCapture(event.pointerId);
-        dragRef.current = {
-          x: event.clientX,
-          endS: liveEnd,
-        };
-        setView((old) => ({ ...old, endS: liveEnd }));
-      }}
-      onPointerMove={(event) => {
-        const reordering = reorderRef.current;
-        if (reordering) {
-          const to = laneAt(event.clientY, true) ?? reordering.to;
-          if (to !== reordering.to) {
-            reorderRef.current = { ...reordering, to };
-            setReorder({ from: reordering.from, to });
+    <div class="signal-chart-wrap">
+      <canvas
+        class={`signal-chart ${reorder ? "reordering" : ""}`}
+        ref={canvasRef}
+        aria-label="Live signal curves"
+        title="Drag a signal name to reorder · drag a cursor to move it · wheel zooms"
+        onWheel={(event) => {
+          event.preventDefault();
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          const plotW = plotWidth();
+          const frac = clamp(
+            (event.clientX - rect.left - GUTTER) / plotW,
+            0,
+            1,
+          );
+          const nextWindow = clamp(
+            view.windowS * Math.exp(event.deltaY * 0.0015),
+            1,
+            120,
+          );
+          const end = liveEnd;
+          const at = end - view.windowS + frac * view.windowS;
+          const nextEnd = clamp(
+            at + (1 - frac) * nextWindow,
+            timeBounds.first + nextWindow,
+            timeBounds.last,
+          );
+          // Zooming must not take the chart out of LIVE; only a pan changes
+          // whether the window follows the newest sample.
+          setView({
+            windowS: nextWindow,
+            endS: view.endS === null ? null : nextEnd,
+          });
+        }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          const cursor = cursorAt(event.clientX, event.clientY);
+          if (cursor !== null) {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            cursorDragRef.current = cursor;
+            return;
           }
-          return;
-        }
-        const drag = dragRef.current;
-        if (!drag) return;
-        const delta =
-          ((drag.x - event.clientX) / plotWidth()) * view.windowS;
-        const nextEnd = clamp(
-          drag.endS + delta,
-          timeBounds.first + view.windowS,
-          timeBounds.last,
-        );
-        setView((old) => ({
-          ...old,
-          endS: nextEnd >= timeBounds.last ? null : nextEnd,
-        }));
-      }}
-      onPointerUp={(event) => {
-        const reordering = reorderRef.current;
-        reorderRef.current = null;
-        setReorder(null);
-        dragRef.current = null;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-        if (reordering && reordering.to !== reordering.from) {
-          onReorder(reordering.key, reordering.to);
-        }
-      }}
-      onPointerCancel={() => {
-        reorderRef.current = null;
-        setReorder(null);
-        dragRef.current = null;
-      }}
-      onDblClick={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (event.clientX - rect.left >= GUTTER) {
-          setView({ windowS: 30, endS: null });
-        }
-      }}
-    />
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (event.clientX - rect.left < GUTTER) {
+            const lane = laneAt(event.clientY);
+            if (lane === null) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            reorderRef.current = { key: series[lane].key, from: lane, to: lane };
+            setReorder({ from: lane, to: lane });
+            return;
+          }
+          event.currentTarget.setPointerCapture(event.pointerId);
+          dragRef.current = {
+            x: event.clientX,
+            endS: liveEnd,
+          };
+          setView((old) => ({ ...old, endS: liveEnd }));
+        }}
+        onPointerMove={(event) => {
+          const cursor = cursorDragRef.current;
+          if (cursor !== null) {
+            const t = timeAt(event.clientX);
+            setCursors((old) =>
+              old.map((entry) => (entry.id === cursor ? { ...entry, t } : entry)),
+            );
+            return;
+          }
+          const reordering = reorderRef.current;
+          if (reordering) {
+            const to = laneAt(event.clientY, true) ?? reordering.to;
+            if (to !== reordering.to) {
+              reorderRef.current = { ...reordering, to };
+              setReorder({ from: reordering.from, to });
+            }
+            return;
+          }
+          const drag = dragRef.current;
+          if (!drag) return;
+          const delta =
+            ((drag.x - event.clientX) / plotWidth()) * view.windowS;
+          const nextEnd = clamp(
+            drag.endS + delta,
+            timeBounds.first + view.windowS,
+            timeBounds.last,
+          );
+          setView((old) => ({
+            ...old,
+            endS: nextEnd >= timeBounds.last ? null : nextEnd,
+          }));
+        }}
+        onPointerUp={(event) => {
+          const cursor = cursorDragRef.current;
+          cursorDragRef.current = null;
+          const reordering = reorderRef.current;
+          reorderRef.current = null;
+          setReorder(null);
+          dragRef.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          if (cursor !== null) return;
+          if (reordering && reordering.to !== reordering.from) {
+            onReorder(reordering.key, reordering.to);
+          }
+        }}
+        onPointerCancel={() => {
+          cursorDragRef.current = null;
+          reorderRef.current = null;
+          setReorder(null);
+          dragRef.current = null;
+        }}
+        onDblClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (event.clientX - rect.left >= GUTTER) {
+            setView({ windowS: 30, endS: null });
+          }
+        }}
+      />
+      <div class="chart-cursor-tools">
+        <button
+          type="button"
+          disabled={series.length === 0}
+          title="Add a time cursor at the middle of the view"
+          onClick={addCursor}
+        >
+          + Cursor
+        </button>
+        {cursors.length > 0 && (
+          <button
+            type="button"
+            title="Remove all time cursors"
+            onClick={() => setCursors([])}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
