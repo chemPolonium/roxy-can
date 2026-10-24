@@ -1,13 +1,17 @@
-//! Offline reference runs: a log decoded with the current CAN databases and
-//! kept beside the live workspace. Only chart-selected CAN signals are
-//! sampled; the browser draws them behind the live curves.
+//! Offline reference runs: a log decoded with the current CAN, FlexRay and
+//! Ethernet descriptions and kept beside the live workspace. Only
+//! chart-selected signals are sampled; the browser draws them behind the live
+//! curves.
 use std::path::Path;
 
 use serde::Serialize;
 
-use crate::bus::ChannelView;
+use crate::app::App;
+use crate::can::frame::CanFrame;
+use crate::eth::EthFrame;
 use crate::log::open_stream;
 use crate::observe::SigKey;
+use crate::trace::FrRow;
 
 /// Sampling stride of a reference curve. The live chart is drawn at 5 ms;
 /// a reference is a comparison baseline, so 50 ms keeps long logs small.
@@ -29,84 +33,267 @@ pub struct ReferenceRun {
     pub signals: Vec<ReferenceSignal>,
 }
 
+enum TargetKind {
+    Can { ch: u8, id: u32, ext: bool },
+    Fr { bus: u8, slot: u16 },
+    Eth { bus: u8, frame: String },
+}
+
 struct Target {
+    key: SigKey,
     name: String,
-    ch: u8,
-    id: u32,
-    ext: bool,
     bus: String,
     unit: String,
+    kind: TargetKind,
     points: Vec<[f64; 2]>,
     last_us: Option<u64>,
 }
 
-/// Decodes `path` with the DBC on each bus, keeping only `keys` (CAN). A
-/// FlexRay or Ethernet chart lane is skipped: its key has no CAN triple.
-pub fn load(path: &str, keys: &[SigKey], channels: &[ChannelView]) -> Result<ReferenceRun, String> {
-    let mut targets: Vec<Target> = Vec::new();
+/// Resolves every selected key against its description. A key whose bus or
+/// signal is no longer described is dropped, exactly like the observer would
+/// stop updating it.
+fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
+    let mut targets = Vec::new();
     for key in keys {
-        let SigKey::Can { ch, id, ext, name } = key else {
-            continue;
-        };
-        let Some(channel) = channels.get(*ch as usize) else {
-            continue;
-        };
-        let Some(db) = channel.dbc.as_ref() else {
-            continue;
-        };
-        let unit = db
-            .messages
-            .get(&(*id, *ext))
-            .and_then(|message| message.signals.iter().find(|signal| signal.name == *name))
-            .map(|signal| signal.unit.clone())
-            .unwrap_or_default();
-        targets.push(Target {
-            name: name.clone(),
-            ch: *ch,
-            id: *id,
-            ext: *ext,
-            bus: channel.name.clone(),
-            unit,
-            points: Vec::new(),
-            last_us: None,
-        });
+        match key {
+            SigKey::Can { ch, id, ext, name } => {
+                let Some(channel) = app.snap.channels.get(*ch as usize) else {
+                    continue;
+                };
+                let Some(db) = channel.dbc.as_ref() else {
+                    continue;
+                };
+                let unit = db
+                    .messages
+                    .get(&(*id, *ext))
+                    .and_then(|message| message.signals.iter().find(|signal| signal.name == *name))
+                    .map(|signal| signal.unit.clone())
+                    .unwrap_or_default();
+                targets.push(Target {
+                    key: key.clone(),
+                    name: name.clone(),
+                    bus: channel.name.clone(),
+                    unit,
+                    kind: TargetKind::Can {
+                        ch: *ch,
+                        id: *id,
+                        ext: *ext,
+                    },
+                    points: Vec::new(),
+                    last_us: None,
+                });
+            }
+            SigKey::Fr { bus, slot, name } => {
+                let Some(cfg) = app.fr_buses.get(bus) else {
+                    continue;
+                };
+                let Some(signal) = cfg.db.slot_signal(*slot, name) else {
+                    continue;
+                };
+                targets.push(Target {
+                    key: key.clone(),
+                    name: name.clone(),
+                    bus: app.fr_bus_name(*bus),
+                    unit: signal.unit.clone(),
+                    kind: TargetKind::Fr {
+                        bus: *bus,
+                        slot: *slot,
+                    },
+                    points: Vec::new(),
+                    last_us: None,
+                });
+            }
+            SigKey::Eth { bus, frame, name } => {
+                let Some(db) = app.eth_db(*bus) else {
+                    continue;
+                };
+                let Some(def) = db.frames.iter().find(|def| def.name == *frame) else {
+                    continue;
+                };
+                let unit = def
+                    .pdus
+                    .iter()
+                    .flat_map(|pdu| pdu.signals.iter())
+                    .find(|signal| signal.name == *name)
+                    .map(|signal| signal.unit.clone())
+                    .unwrap_or_default();
+                targets.push(Target {
+                    key: key.clone(),
+                    name: name.clone(),
+                    bus: app.eth_bus_label(*bus),
+                    unit,
+                    kind: TargetKind::Eth {
+                        bus: *bus,
+                        frame: frame.clone(),
+                    },
+                    points: Vec::new(),
+                    last_us: None,
+                });
+            }
+        }
     }
+    targets
+}
+
+fn accept(target: &mut Target, name: &str, value: f64, t_us: u64) {
+    if target.name != name {
+        return;
+    }
+    if let Some(last) = target.last_us
+        && t_us < last + REFERENCE_STRIDE_US
+    {
+        return;
+    }
+    target.last_us = Some(t_us);
+    target.points.push([t_us as f64 / 1e6, value]);
+}
+
+fn handle_can(targets: &mut [Target], frame: &CanFrame, app: &App) {
+    let matching: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| {
+            matches!(
+                &target.kind,
+                TargetKind::Can { ch, id, ext }
+                    if *ch == frame.channel && *id == frame.id && *ext == frame.extended
+            )
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if matching.is_empty() {
+        return;
+    }
+    let Some(db) = app
+        .snap
+        .channels
+        .get(frame.channel as usize)
+        .and_then(|channel| channel.dbc.as_ref())
+    else {
+        return;
+    };
+    for decoded in db.decode_signals(frame) {
+        for &index in &matching {
+            accept(&mut targets[index], &decoded.name, decoded.phys, frame.t_us);
+        }
+    }
+}
+
+fn handle_fr(targets: &mut [Target], row: &FrRow, app: &App) {
+    let matching: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| {
+            matches!(
+                &target.kind,
+                TargetKind::Fr { bus, slot } if *bus == row.bus && *slot == row.slot
+            )
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if matching.is_empty() {
+        return;
+    }
+    let Some(db) = app.fr_db(row.bus) else {
+        return;
+    };
+    let Some(frame_ix) = db.frame_ix_at(row.slot, row.cycle, row.ab) else {
+        return;
+    };
+    for decoded in db.decode_signals(frame_ix, &row.payload) {
+        for &index in &matching {
+            accept(&mut targets[index], &decoded.name, decoded.phys, row.t_us);
+        }
+    }
+}
+
+fn handle_eth(targets: &mut [Target], frame: &EthFrame, app: &App) {
+    let matching: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(
+            |(_, target)| matches!(&target.kind, TargetKind::Eth { bus, .. } if *bus == frame.bus),
+        )
+        .map(|(index, _)| index)
+        .collect();
+    if matching.is_empty() {
+        return;
+    }
+    let Some(db) = app.eth_db(frame.bus) else {
+        return;
+    };
+    let flow = crate::eth::db::EthFlow {
+        vlan: frame.vlan,
+        dst: frame.dst,
+        src: frame.src,
+        ethertype: frame.ethertype,
+        payload_len: frame.len(),
+    };
+    let Some(decoded) = db.decode(&flow, &frame.payload, app.eth_length_includes_header) else {
+        return;
+    };
+    for &index in &matching {
+        let wanted = matches!(
+            &targets[index].kind,
+            TargetKind::Eth { frame: wanted, .. } if wanted == &decoded.frame_name
+        );
+        if !wanted {
+            continue;
+        }
+        for signal in &decoded.signals {
+            accept(
+                &mut targets[index],
+                &signal.name,
+                signal.physical,
+                frame.t_us,
+            );
+        }
+    }
+}
+
+/// Decodes `path` with the descriptions loaded on the app, keeping only the
+/// `keys` the chart is watching.
+pub fn load(path: &str, keys: &[SigKey], app: &App) -> Result<ReferenceRun, String> {
+    let mut targets = build_targets(app, keys);
     if targets.is_empty() {
-        return Err("reference: no CAN chart signals selected".to_string());
+        return Err("reference: no described chart signals selected".to_string());
     }
     let mut stream =
         open_stream(Path::new(path)).map_err(|e| format!("reference open failed: {e}"))?;
-    while let Some(frame) = stream.next_frame() {
-        let Some(channel) = channels.get(frame.channel as usize) else {
-            continue;
+    // CAN, FlexRay and Ethernet objects share one log timeline. Whichever the
+    // stream says is next is consumed first, so the 50 ms stride sees the same
+    // order a replay would.
+    let mut fr_rows: Vec<FrRow> = Vec::new();
+    let mut eth_frames: Vec<EthFrame> = Vec::new();
+    loop {
+        let can_t = stream.peek_t();
+        let fr_t = stream.peek_fr_t();
+        let eth_t = stream.peek_eth_t();
+        let Some(t) = [can_t, fr_t, eth_t].into_iter().flatten().min() else {
+            break;
         };
-        let Some(db) = channel.dbc.as_ref() else {
-            continue;
-        };
-        let matching: Vec<usize> = targets
-            .iter()
-            .enumerate()
-            .filter(|(_, target)| {
-                target.ch == frame.channel && target.id == frame.id && target.ext == frame.extended
-            })
-            .map(|(index, _)| index)
-            .collect();
-        if matching.is_empty() {
-            continue;
-        }
-        for decoded in db.decode_signals(&frame) {
-            for &index in &matching {
-                let target = &mut targets[index];
-                if target.name != decoded.name {
-                    continue;
-                }
-                if let Some(last) = target.last_us
-                    && frame.t_us < last + REFERENCE_STRIDE_US
-                {
-                    continue;
-                }
-                target.last_us = Some(frame.t_us);
-                target.points.push([frame.t_us as f64 / 1e6, decoded.phys]);
+        if can_t == Some(t) {
+            let Some(frame) = stream.next_frame() else {
+                break;
+            };
+            handle_can(&mut targets, &frame, app);
+        } else if fr_t == Some(t) {
+            fr_rows.clear();
+            stream.poll_fr_rows(t, &mut fr_rows);
+            if fr_rows.is_empty() {
+                break;
+            }
+            for row in &fr_rows {
+                handle_fr(&mut targets, row, app);
+            }
+        } else {
+            eth_frames.clear();
+            stream.poll_eth_frames(t, &mut eth_frames);
+            if eth_frames.is_empty() {
+                break;
+            }
+            for frame in &eth_frames {
+                handle_eth(&mut targets, frame, app);
             }
         }
     }
@@ -114,12 +301,7 @@ pub fn load(path: &str, keys: &[SigKey], channels: &[ChannelView]) -> Result<Ref
         .into_iter()
         .filter(|target| !target.points.is_empty())
         .map(|target| ReferenceSignal {
-            key: crate::web::series_key(&SigKey::can(
-                target.ch,
-                target.id,
-                target.ext,
-                &target.name,
-            )),
+            key: crate::web::series_key(&target.key),
             name: target.name,
             bus: target.bus,
             unit: target.unit,
@@ -127,11 +309,121 @@ pub fn load(path: &str, keys: &[SigKey], channels: &[ChannelView]) -> Result<Ref
         })
         .collect();
     if signals.is_empty() {
-        return Err("reference: no matching CAN samples in that log".to_string());
+        return Err("reference: no matching samples in that log".to_string());
     }
     let name = Path::new(path)
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string());
     Ok(ReferenceRun { name, signals })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::app::EthBusCfg;
+    use crate::can::frame::Direction;
+    use crate::log::AscWriter;
+
+    #[test]
+    fn a_flexray_reference_log_decodes_the_selected_slot_signal() {
+        let mut app = App::headless();
+        let path = crate::test_assets::path("PowerTrain.arxml");
+        let text = crate::dbc::text_from_bytes(std::fs::read(path).unwrap());
+        let db = crate::fr_db::FrDb::parse(&text).expect("PowerTrain.arxml parses");
+        // A frame the schedule resolves at its own base phase, with signals.
+        let (frame_ix, slot, cycle, signal) = (0..db.frames.len())
+            .find_map(|ix| {
+                let frame = db.frame_index(ix)?;
+                let slot = u16::try_from(frame.triggering.slot_id).ok()?;
+                let cycle = u8::try_from(frame.triggering.base_cycle).ok()?;
+                let resolved = db.frame_ix_at(slot, cycle, 0)?;
+                let signal = db.edit_signals(resolved).into_iter().next()?;
+                Some((resolved, slot, cycle, signal))
+            })
+            .expect("a scheduled frame declares a signal");
+        let length = db.frames[frame_ix].length as usize;
+        let bytes = (signal.bit + signal.size).div_ceil(8) as usize;
+        app.fr_buses.insert(
+            0,
+            crate::app::FrBusCfg {
+                path: path.into(),
+                db: Arc::new(db),
+            },
+        );
+        let db = app.fr_db(0).expect("bus 0 has a description");
+        let log =
+            std::env::temp_dir().join(format!("roxy_reference_fr_{}.asc", std::process::id()));
+        let mut writer = AscWriter::new(&log.to_string_lossy()).unwrap();
+        for i in 0..6u64 {
+            let mut payload = vec![0u8; bytes.max(length)];
+            assert!(db.encode_signal(frame_ix, &signal.name, 40.0 + i as f64, &mut payload));
+            writer
+                .write_fr(&FrRow {
+                    bus: 0,
+                    t_us: i * 100_000,
+                    ab: 0,
+                    slot,
+                    cycle,
+                    payload,
+                    header_crc: 0,
+                    flags: 0,
+                    name: None,
+                })
+                .unwrap();
+        }
+        writer.finish().ok();
+
+        let key = SigKey::fr(0, slot, &signal.name);
+        let run = load(&log.to_string_lossy(), std::slice::from_ref(&key), &app)
+            .expect("reference decodes FlexRay");
+        assert_eq!(run.signals.len(), 1);
+        assert_eq!(run.signals[0].bus, "FR0");
+        assert!(run.signals[0].points.len() >= 4, "stride keeps samples");
+        assert!(
+            run.signals[0]
+                .points
+                .iter()
+                .any(|point| (point[1] - 44.0).abs() < 1e-6),
+            "the driven physical value is decoded"
+        );
+        std::fs::remove_file(&log).ok();
+    }
+
+    #[test]
+    fn an_ethernet_reference_target_decodes_the_matched_frame() {
+        let mut app = App::headless();
+        let path = crate::test_assets::path("EthSample.arxml");
+        let text = std::fs::read_to_string(path).unwrap();
+        let db = crate::eth::db::EthDb::parse(&text).expect("EthSample.arxml parses");
+        app.eth_buses.insert(
+            0,
+            EthBusCfg {
+                path: path.into(),
+                db: Arc::new(db),
+            },
+        );
+        let key = SigKey::eth(0, "EthFrame", "Sig");
+        let mut targets = build_targets(&app, std::slice::from_ref(&key));
+        assert_eq!(targets.len(), 1, "the selected frame and signal resolve");
+        let mut payload = vec![0u8; 22];
+        payload[1] = 0xD2;
+        payload[2] = 0x04; // raw 1234 · factor 0.1
+        let frame = EthFrame::new(
+            1_000_000,
+            0,
+            Direction::Rx,
+            [0; 6],
+            [0; 6],
+            Some(100),
+            0x0800,
+            payload,
+        );
+        handle_eth(&mut targets, &frame, &app);
+        assert_eq!(targets[0].points.len(), 1);
+        assert!((targets[0].points[0][1] - 123.4).abs() < 1e-9);
+        assert_eq!(targets[0].unit, "");
+    }
 }

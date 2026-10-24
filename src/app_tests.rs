@@ -1438,12 +1438,8 @@ fn a_reference_log_decodes_the_selected_can_signals() {
     }
     writer.finish().ok();
 
-    let run = crate::reference::load(
-        &path.to_string_lossy(),
-        std::slice::from_ref(&key),
-        &app.snap.channels,
-    )
-    .expect("reference decodes");
+    let run = crate::reference::load(&path.to_string_lossy(), std::slice::from_ref(&key), &app)
+        .expect("reference decodes");
     assert_eq!(run.signals.len(), 1);
     assert_eq!(run.signals[0].key, crate::web::series_key(&key));
     assert!(

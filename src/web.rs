@@ -1859,8 +1859,8 @@ enum WebCommand {
         rev: u64,
         workspace: serde_json::Value,
     },
-    /// Decode another ASC/BLF with the current DBCs and keep its selected
-    /// CAN signals as a comparison baseline.
+    /// Decode another ASC/BLF with the current descriptions and keep its
+    /// selected CAN, FlexRay and Ethernet signals as a comparison baseline.
     LoadReference {
         path: String,
     },
@@ -2795,7 +2795,7 @@ fn app_loop(
                 }
                 WebCommand::LoadReference { path } => {
                     let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
-                    match crate::reference::load(&path, &keys, &app.snap.channels) {
+                    match crate::reference::load(&path, &keys, &app) {
                         Ok(run) => {
                             let count = run.signals.len();
                             app.status =

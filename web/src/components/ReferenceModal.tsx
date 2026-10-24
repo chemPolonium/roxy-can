@@ -177,8 +177,8 @@ export function ReferenceModal({
                 />
               </div>
               <p class="hint">
-                ASC/BLF is decoded on the host with the current DBCs; CAN chart
-                signals are compared.
+                ASC/BLF is decoded on the host with the current DBC, FIBEX and
+                ARXML descriptions; matching chart signals are compared.
               </p>
               {logError && <p class="modal-error">{logError}</p>}
             </div>
