@@ -833,10 +833,16 @@ impl App {
     /// is frontend policy; the removal itself goes through the command so
     /// the bus owns its own map.
     pub fn prune_signal(&mut self, key: &SigKey) {
-        let in_use = self
-            .graphics
-            .iter()
-            .any(|g| g.signals.iter().any(|s| &s.key == key))
+        // A derived lane's subscription is owned by its definition; the
+        // definition command removes it, never an observer row going away.
+        if matches!(key, SigKey::Derived { .. }) {
+            return;
+        }
+        let in_use = self.session_chart_keep.contains(key)
+            || self
+                .graphics
+                .iter()
+                .any(|g| g.signals.iter().any(|s| &s.key == key))
             || self
                 .data_windows
                 .iter()

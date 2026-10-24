@@ -623,6 +623,16 @@ fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
     chart_select_key(app, SigKey::can(ch, id, ext, name));
 }
 
+/// Refreshes the core's chart-keep set from the session selection. Called
+/// just before an observer drops a row: the chart owns that subscription even
+/// when the lane never entered the project's Graphics window (the demo's
+/// eight lanes), so pruning must not unmount it.
+fn sync_chart_keep(app: &mut App, signals: &std::sync::Mutex<SignalStore>) {
+    if let Ok(store) = signals.lock() {
+        app.set_session_chart_keep(store.keys());
+    }
+}
+
 fn chart_select_key(app: &mut App, key: SigKey) {
     if app.graphics.is_empty() {
         app.new_graphics_window();
@@ -664,8 +674,9 @@ fn chart_signal_action(app: &mut App, store: &mut SignalStore, key: &SigKey, act
             app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
         }
         "remove" => {
-            chart_unselect(app, key);
             store.unselect(key);
+            app.set_session_chart_keep(store.keys());
+            chart_unselect(app, key);
         }
         _ => return false,
     }
@@ -2080,11 +2091,10 @@ fn app_loop(
                         .lock()
                         .map(|store| store.is_selected(&key))
                         .unwrap_or(false);
-                    if selected {
+                    if selected && let Ok(mut store) = signals.lock() {
+                        store.unselect(&key);
+                        app.set_session_chart_keep(store.keys());
                         chart_unselect(&mut app, &key);
-                        if let Ok(mut store) = signals.lock() {
-                            store.unselect(&key);
-                        }
                     }
                 }
                 WebCommand::SelectFrSignal { bus, slot, name } => {
@@ -2106,11 +2116,10 @@ fn app_loop(
                         .lock()
                         .map(|store| store.is_selected(&key))
                         .unwrap_or(false);
-                    if selected {
+                    if selected && let Ok(mut store) = signals.lock() {
+                        store.unselect(&key);
+                        app.set_session_chart_keep(store.keys());
                         chart_unselect(&mut app, &key);
-                        if let Ok(mut store) = signals.lock() {
-                            store.unselect(&key);
-                        }
                     }
                 }
                 WebCommand::SelectEthSignal { bus, frame, name } => {
@@ -2132,11 +2141,10 @@ fn app_loop(
                         .lock()
                         .map(|store| store.is_selected(&key))
                         .unwrap_or(false);
-                    if selected {
+                    if selected && let Ok(mut store) = signals.lock() {
+                        store.unselect(&key);
+                        app.set_session_chart_keep(store.keys());
                         chart_unselect(&mut app, &key);
-                        if let Ok(mut store) = signals.lock() {
-                            store.unselect(&key);
-                        }
                     }
                 }
                 WebCommand::MoveSignal { key, to } => {
@@ -2400,6 +2408,7 @@ fn app_loop(
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
+                    sync_chart_keep(&mut app, &signals);
                     app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
                 }
                 WebCommand::ClearMonitor => {
@@ -2409,6 +2418,7 @@ fn app_loop(
                         .iter()
                         .map(|row| row.key.clone())
                         .collect();
+                    sync_chart_keep(&mut app, &signals);
                     for key in keys {
                         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
                     }
@@ -2461,6 +2471,7 @@ fn app_loop(
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
+                    sync_chart_keep(&mut app, &signals);
                     app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, false);
                 }
                 WebCommand::ClearData => {
@@ -2475,6 +2486,7 @@ fn app_loop(
                                 .collect()
                         })
                         .unwrap_or_default();
+                    sync_chart_keep(&mut app, &signals);
                     for key in keys {
                         app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, false);
                     }
@@ -2529,6 +2541,7 @@ fn app_loop(
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
+                    sync_chart_keep(&mut app, &signals);
                     app.set_win_signal(crate::workspace::PopupTarget::State(0), key, false);
                 }
                 WebCommand::ClearState => {
@@ -2543,6 +2556,7 @@ fn app_loop(
                                 .collect()
                         })
                         .unwrap_or_default();
+                    sync_chart_keep(&mut app, &signals);
                     for key in keys {
                         app.set_win_signal(crate::workspace::PopupTarget::State(0), key, false);
                     }

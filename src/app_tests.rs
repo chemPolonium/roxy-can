@@ -1600,6 +1600,52 @@ fn a_derived_trigger_follows_the_core_sampled_value() {
     assert_eq!(app.triggers[0].fired, 2, "a new crossing fires again");
 }
 
+/// The chart is a subscription owner even for lanes that never entered the
+/// project's Graphics window (the demo's eight lanes). Clearing Data must not
+/// unmount the live curve; only the last owner going away may unsubscribe.
+#[test]
+fn clearing_an_observer_keeps_a_chart_owned_subscription() {
+    let mut app = App::headless();
+    let key = SigKey::can(0, 0x100, false, "A");
+    app.subscribe_signal(key.clone());
+    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
+    app.set_session_chart_keep([key.clone()]);
+    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), false);
+    assert!(
+        app.subs.contains_key(&key),
+        "the chart still owns the subscription"
+    );
+
+    app.set_session_chart_keep(Vec::<SigKey>::new());
+    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
+    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), false);
+    assert!(
+        !app.subs.contains_key(&key),
+        "no chart lane and no observer left: prune unsubscribes"
+    );
+}
+
+/// A derived lane's subscription belongs to its definition, so removing the
+/// observer row (or a chart copy) must leave the lane sampling.
+#[test]
+fn removing_a_derived_observer_row_keeps_its_lane_subscribed() {
+    let mut app = App::headless();
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Sum".into(),
+        expression: "[A] + 0".into(),
+        ..Default::default()
+    }]);
+    let key = SigKey::derived("d", "Sum");
+    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
+    app.set_session_chart_keep(Vec::<SigKey>::new());
+    app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), false);
+    assert!(
+        app.subs.contains_key(&key),
+        "the definition keeps the lane subscribed"
+    );
+}
+
 #[test]
 fn a_derived_trigger_fires_inside_a_real_step() {
     let mut app = App::headless();

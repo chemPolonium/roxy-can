@@ -259,6 +259,12 @@ pub struct App {
     /// Derived-channel definitions. The project file stores this list and the
     /// core samples the curves; the web modal reads it back from the snapshot.
     pub derived_defs: Vec<crate::derived::DerivedDef>,
+    /// Chart lanes the web shell keeps subscribed even though they are not in
+    /// the first Graphics window (the demo session's eight lanes). Refreshed
+    /// from the session selection just before an observer drops a row, so a
+    /// Data/Monitor/State clear never unmounts a live chart lane. Session
+    /// state: the project's Graphics rows are what persist real picks.
+    pub(crate) session_chart_keep: std::collections::HashSet<crate::observe::SigKey>,
     /// Factory layout restored by New Project.
     pub default_layout: String,
     /// Layout queued for the next project reset.
@@ -484,6 +490,7 @@ impl App {
             reference: None,
             reference_rev: 0,
             derived_defs: Vec::new(),
+            session_chart_keep: std::collections::HashSet::new(),
             default_layout: String::new(),
             pending_layout: None,
             pnp_signature,
@@ -760,6 +767,15 @@ impl App {
         }
         self.derived_defs = defs.clone();
         self.send(crate::bus::BusCommand::SetDerived(defs));
+    }
+
+    /// Replaces the session chart keep set. The web shell calls this from the
+    /// selection store immediately before an observer removes a row.
+    pub(crate) fn set_session_chart_keep(
+        &mut self,
+        keys: impl IntoIterator<Item = crate::observe::SigKey>,
+    ) {
+        self.session_chart_keep = keys.into_iter().collect();
     }
 
     /// The State bands a derived channel carries, if its definition names any.
