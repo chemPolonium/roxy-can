@@ -37,7 +37,11 @@ import { DataPanel } from "./components/DataPanel";
 import { DbcExplorer } from "./components/DbcExplorer";
 import { DerivedModal } from "./components/DerivedModal";
 import { EventJumpModal } from "./components/EventJumpModal";
-import { buildAlignedCsv, type DerivedDef } from "./derived";
+import {
+  buildAlignedCsv,
+  resolveDerivedSources,
+  type DerivedDef,
+} from "./derived";
 import { ExportModal } from "./components/ExportModal";
 import { FilePick } from "./components/FilePick";
 import { GeneratorModal } from "./components/GeneratorModal";
@@ -187,6 +191,16 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
           : [],
         names: Array.isArray(names)
           ? names.filter((name) => typeof name === "string").map(String)
+          : [],
+        sources: Array.isArray(definition.sources)
+          ? definition.sources
+              .filter(
+                (source) =>
+                  typeof source?.name === "string" &&
+                  typeof source?.key === "string",
+              )
+              .slice(0, 64)
+              .map((source) => ({ name: source.name, key: source.key }))
           : [],
       });
     }
@@ -912,7 +926,13 @@ export function App() {
   const clearChartCursors = () => setChartCursors([]);
 
   const saveDerived = (defs: DerivedDef[]) => {
-    void run({ type: "set_derived", defs });
+    // Pin the editor's resolution; the core never guesses between same-named
+    // signals on different buses.
+    const pinned = defs.map((definition) => ({
+      ...definition,
+      sources: resolveDerivedSources(definition.expression, signals),
+    }));
+    void run({ type: "set_derived", defs: pinned });
   };
 
   const removeDerived = (key?: string) => {

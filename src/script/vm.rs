@@ -629,19 +629,21 @@ impl Vm {
             }
             // `derived("Name")`: a core-sampled math channel, addressed by
             // its definition name. There is no id to type and no bus to
-            // guess, which is why it does not overload `sig`.
+            // guess, which is why it does not overload `sig`. A lane that has
+            // not produced its first sample reads 0 -- a script that runs on
+            // `on start` or on the first frame must not be killed by "not
+            // sampled yet"; `sys_get` treats undefined keys the same way.
             "derived" => {
                 let Value::Str(name) = &args[0] else {
                     return Err(VmError("derived(\"Name\") needs a string".into()));
                 };
-                match self.host_input.derived_signals.get(name) {
-                    Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "derived: no value for {name:?} (not sampled yet)"
-                        )));
-                    }
-                }
+                let value = self
+                    .host_input
+                    .derived_signals
+                    .get(name)
+                    .copied()
+                    .unwrap_or(0.0);
+                self.stack.push(Value::Float(value));
                 return Ok(());
             }
             // `send` / `send_ext`: identical argument shapes; the ext form
@@ -1654,13 +1656,15 @@ mod tests {
     }
 
     /// `derived("Name")` reads the core's sampled math channels by definition
-    /// name; a lane that has not produced a sample is an error, not zero.
+    /// name. Before the first sample it reads 0, so a handler that runs at
+    /// start is not killed by a lane that simply has not ticked yet.
     #[test]
-    fn derived_reads_the_core_sampled_lane() {
+    fn derived_reads_the_core_sampled_lane_and_defaults_to_zero() {
         let script = compile(
             r#"
                 let v = derived("Speed error");
-                print(v);
+                let missing = derived("Missing");
+                print(v, missing);
             "#,
         )
         .unwrap();
@@ -1669,11 +1673,7 @@ mod tests {
             .derived_signals
             .insert("Speed error".to_string(), 7.5);
         vm.run().unwrap();
-        assert_eq!(vm.output, ["7.5"]);
-
-        let mut vm = Vm::new(compile("derived(\"Missing\");").unwrap());
-        let e = vm.run().unwrap_err();
-        assert!(e.to_string().contains("not sampled"), "{e}");
+        assert_eq!(vm.output, ["7.5 0.0"]);
     }
 
     /// `sys_set` queues a write for the host; the queue drains like the

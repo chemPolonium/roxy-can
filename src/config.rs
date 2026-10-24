@@ -2477,6 +2477,7 @@ mod tests {
             expression: "[EngineSpeed] + 1".into(),
             cuts: vec![10.0],
             names: vec!["low".into(), "high".into()],
+            sources: Vec::new(),
         }];
         app.set_derived_defs(defs.clone());
         let key = crate::observe::SigKey::derived("d1", "Sum");

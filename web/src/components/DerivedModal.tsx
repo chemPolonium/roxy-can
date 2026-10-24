@@ -81,6 +81,11 @@ export function DerivedModal({
                     {definition.unit && <em>{definition.unit}</em>}
                   </span>
                   <code>{definition.expression}</code>
+                  {definition.error && (
+                    <span class="derived-error" title={definition.error}>
+                      error
+                    </span>
+                  )}
                   {onRule && (
                     <button
                       type="button"

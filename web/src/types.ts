@@ -279,6 +279,11 @@ export interface StateRule {
   names: string[];
 }
 
+export interface DerivedSource {
+  name: string;
+  key: string;
+}
+
 export interface DerivedDef {
   id: string;
   name: string;
@@ -286,6 +291,7 @@ export interface DerivedDef {
   expression: string;
   cuts: number[];
   names: string[];
+  sources?: DerivedSource[];
   error?: string;
 }
 

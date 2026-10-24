@@ -1,6 +1,6 @@
-import type { DerivedDef, SignalSeries } from "./types";
+import type { DerivedDef, DerivedSource, SignalSeries } from "./types";
 
-export type { DerivedDef };
+export type { DerivedDef, DerivedSource };
 
 type Node =
   | { kind: "number"; value: number }
@@ -336,6 +336,29 @@ export function validateDerivedExpression(
     return null;
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/// The exact lanes the editor resolved for each `[reference]`. The core uses
+/// these instead of guessing by name, so an observer that later watches a
+/// same-named signal on another bus cannot turn a working lane ambiguous.
+export function resolveDerivedSources(
+  expression: string,
+  series: SignalSeries[],
+): DerivedSource[] {
+  try {
+    const ast = new Parser(tokenize(expression)).parse();
+    const names = new Set<string>();
+    collectRefs(ast, names);
+    const resolved = resolveRefs(names, series);
+    // Keep whatever resolved even when one reference did not: the core falls
+    // back to name resolution only for the missing ones.
+    return [...resolved.refs.entries()].map(([name, signal]) => ({
+      name,
+      key: signal.key,
+    }));
+  } catch {
+    return [];
   }
 }
 

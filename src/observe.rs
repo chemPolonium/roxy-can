@@ -455,6 +455,40 @@ impl SigKey {
             | Self::Derived { name, .. } => name,
         }
     }
+
+    /// The wire form the web API, CSV headers and derived sources use.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
+            Self::Fr { bus, slot, name } => format!("fr:{bus}:{slot}:{name}"),
+            Self::Eth { bus, frame, name } => format!("eth:{bus}:{frame}:{name}"),
+            Self::Derived { id, .. } => format!("derived:{id}"),
+        }
+    }
+
+    /// Parses [`Self::text`]. A derived key carries only its id here; callers
+    /// that need the display name resolve it from the definition list.
+    pub fn from_text(text: &str) -> Option<Self> {
+        if let Some(rest) = text.strip_prefix("fr:") {
+            let mut parts = rest.splitn(3, ':');
+            let bus = parts.next()?.parse().ok()?;
+            let slot = parts.next()?.parse().ok()?;
+            return Some(Self::fr(bus, slot, parts.next()?));
+        }
+        if let Some(rest) = text.strip_prefix("eth:") {
+            let mut parts = rest.splitn(3, ':');
+            let bus = parts.next()?.parse().ok()?;
+            let frame = parts.next()?;
+            return Some(Self::eth(bus, frame, parts.next()?));
+        }
+        if let Some(id) = text.strip_prefix("derived:") {
+            return (!id.is_empty()).then(|| Self::derived(id, ""));
+        }
+        let mut parts = text.splitn(3, ':');
+        let ch = parts.next()?.parse().ok()?;
+        let id = parts.next()?.parse().ok()?;
+        Some(Self::can(ch, id, false, parts.next()?))
+    }
 }
 
 pub struct GfxSignal {

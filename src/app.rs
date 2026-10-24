@@ -746,6 +746,66 @@ impl App {
     pub fn set_derived_defs(&mut self, defs: Vec<crate::derived::DerivedDef>) {
         let ids: std::collections::HashSet<String> =
             defs.iter().map(|def| def.id.clone()).collect();
+        // The key carries the display name, so a rename is a key change. Move
+        // the observer rows and their per-key State maps to the new key
+        // instead of leaving them pointing at a subscription that is gone.
+        let renames: std::collections::HashMap<crate::observe::SigKey, crate::observe::SigKey> =
+            defs.iter()
+                .filter_map(|def| {
+                    let old = self
+                        .derived_defs
+                        .iter()
+                        .find(|old| old.id == def.id && old.name != def.name)?;
+                    Some((
+                        crate::observe::SigKey::derived(&def.id, &old.name),
+                        crate::observe::SigKey::derived(&def.id, &def.name),
+                    ))
+                })
+                .collect();
+        if !renames.is_empty() {
+            for row in &mut self.monitor_view.rows {
+                if let Some(new) = renames.get(&row.key) {
+                    if row.label == row.key.name() {
+                        row.label = new.name().to_string();
+                    }
+                    row.key = new.clone();
+                }
+            }
+            for window in &mut self.graphics {
+                for signal in &mut window.signals {
+                    if let Some(new) = renames.get(&signal.key) {
+                        signal.key = new.clone();
+                    }
+                }
+            }
+            for window in &mut self.data_windows {
+                for signal in &mut window.signals {
+                    if let Some(new) = renames.get(&signal.key) {
+                        signal.key = new.clone();
+                    }
+                }
+            }
+            fn remap_map<V>(
+                map: &mut std::collections::HashMap<crate::observe::SigKey, V>,
+                renames: &std::collections::HashMap<crate::observe::SigKey, crate::observe::SigKey>,
+            ) {
+                for (old, new) in renames {
+                    if let Some(value) = map.remove(old) {
+                        map.insert(new.clone(), value);
+                    }
+                }
+            }
+            for window in &mut self.state_trackers {
+                for signal in &mut window.signals {
+                    if let Some(new) = renames.get(&signal.key) {
+                        signal.key = new.clone();
+                    }
+                }
+                remap_map(&mut window.rules, &renames);
+                remap_map(&mut window.overrides, &renames);
+                remap_map(&mut window.color_slots, &renames);
+            }
+        }
         let keep = |key: &crate::observe::SigKey| !matches!(key, crate::observe::SigKey::Derived { id, .. } if !ids.contains(id));
         self.monitor_view.rows.retain(|row| keep(&row.key));
         for window in &mut self.data_windows {

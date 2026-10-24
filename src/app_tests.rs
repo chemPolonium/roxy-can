@@ -1468,6 +1468,7 @@ fn derived_channels_sample_their_subscribed_sources() {
         expression: "[A] + [B]".into(),
         cuts: vec![12.0],
         names: vec!["low".into(), "high".into()],
+        sources: Vec::new(),
     }]);
     let key = SigKey::derived("d1", "Sum");
     let sub = app.subs.get(&key).expect("the derived lane is subscribed");
@@ -1644,6 +1645,165 @@ fn removing_a_derived_observer_row_keeps_its_lane_subscribed() {
         app.subs.contains_key(&key),
         "the definition keeps the lane subscribed"
     );
+}
+
+/// The editor pins the exact lane behind each reference. A later observer
+/// that watches a same-named signal on another bus must not turn the pinned
+/// lane ambiguous and silently stop it.
+#[test]
+fn pinned_derived_sources_ignore_same_named_observers() {
+    let mut app = App::headless();
+    let a = SigKey::can(0, 0x100, false, "A");
+    app.subscribe_signal(a.clone());
+    app.subs.get_mut(&a).unwrap().push_sample(0, 1.0, 1);
+    let def = crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Sum".into(),
+        expression: "[A] + 1".into(),
+        sources: vec![crate::derived::DerivedSource {
+            name: "A".into(),
+            key: a.text(),
+        }],
+        ..Default::default()
+    };
+    app.set_derived_defs(vec![def.clone()]);
+    // A second subscription with the same signal name, as Monitor/Data can
+    // introduce, would make name-only resolution ambiguous.
+    app.subscribe_signal(SigKey::can(1, 0x200, false, "A"));
+    app.subs.get_mut(&a).unwrap().push_sample(100_000, 2.0, 1);
+    app.set_derived_defs(vec![def]);
+    assert_eq!(app.derived[0].error, None, "the pinned key still resolves");
+    let values: Vec<f64> = app
+        .subs
+        .get(&SigKey::derived("d", "Sum"))
+        .unwrap()
+        .history
+        .iter()
+        .map(|(_, value)| *value)
+        .collect();
+    assert_eq!(values, vec![2.0, 3.0]);
+}
+
+/// An unresolved reference is reported to the editor instead of leaving the
+/// lane empty with no explanation.
+#[test]
+fn an_unresolved_derived_reference_reaches_the_snapshot() {
+    let mut app = App::headless();
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Broken".into(),
+        expression: "[Missing] + 1".into(),
+        ..Default::default()
+    }]);
+    assert!(
+        app.snap.derived_errors.contains_key("d"),
+        "the core's reason rides the snapshot"
+    );
+}
+
+/// A rename changes the key (the name is part of it), so observer rows and
+/// their per-key State maps have to move to the new key with it.
+#[test]
+fn renaming_a_derived_channel_remaps_observer_keys() {
+    let mut app = App::headless();
+    let def = |name: &str| crate::derived::DerivedDef {
+        id: "d".into(),
+        name: name.into(),
+        expression: "[A] + 0".into(),
+        ..Default::default()
+    };
+    app.set_derived_defs(vec![def("Old")]);
+    let old = SigKey::derived("d", "Old");
+    let new = SigKey::derived("d", "New");
+    for target in [
+        crate::workspace::PopupTarget::Monitor,
+        crate::workspace::PopupTarget::Data(0),
+        crate::workspace::PopupTarget::State(0),
+    ] {
+        app.set_win_signal(target, old.clone(), true);
+    }
+    app.set_derived_defs(vec![def("New")]);
+    assert!(
+        app.monitor_view
+            .rows
+            .iter()
+            .any(|row| row.key == new && row.label == "New"),
+        "Monitor row and label follow the definition"
+    );
+    assert!(
+        app.data_windows[0]
+            .signals
+            .iter()
+            .any(|signal| signal.key == new)
+    );
+    assert!(
+        app.state_trackers[0]
+            .signals
+            .iter()
+            .any(|signal| signal.key == new)
+    );
+    assert!(app.subs.contains_key(&new));
+    assert!(!app.subs.contains_key(&old));
+}
+
+/// Deleting a derived channel takes its threshold rules with it; a rule with
+/// no lane can never fire and must not linger in the project.
+#[test]
+fn deleting_a_derived_channel_drops_its_trigger_rules() {
+    let mut app = App::headless();
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Sum".into(),
+        expression: "[A] + 0".into(),
+        ..Default::default()
+    }]);
+    app.send(crate::bus::BusCommand::AddTrigger {
+        cond: crate::trigger::TriggerCond::DerivedSignal {
+            id: "d".into(),
+            threshold: 3.0,
+            rising: true,
+        },
+        action: crate::trigger::TriggerAction::InsertMarker,
+    });
+    assert_eq!(app.triggers.len(), 1);
+    app.set_derived_defs(Vec::new());
+    assert!(
+        app.triggers.is_empty(),
+        "the rule referenced a lane that no longer exists"
+    );
+}
+
+/// A script may read a derived lane at start, before the first sample. The
+/// value reads 0 and the node stays healthy instead of being marked errored.
+#[test]
+fn a_script_can_read_derived_at_start() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "reader".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on start { print(derived(\"Late\")); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    let node = app.snap.nodes.first().expect("node present");
+    assert!(
+        !node.errored,
+        "missing first sample is not fatal: {:?}",
+        node.log
+    );
+    assert!(
+        node.log.iter().any(|line| line.contains("0")),
+        "the lane reads zero: {:?}",
+        node.log
+    );
+    app.stop();
 }
 
 #[test]

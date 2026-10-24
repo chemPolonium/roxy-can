@@ -768,6 +768,10 @@ pub struct Snapshot {
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
+    /// Derived lanes whose expression could not be sampled, by definition
+    /// id. The editor shows the core's reason instead of leaving an empty
+    /// curve unexplained.
+    pub derived_errors: std::collections::BTreeMap<String, String>,
     /// The file the recorder derived its last output from; the replay
     /// start button falls back to it.
     pub last_record: String,
@@ -1255,6 +1259,9 @@ pub(crate) struct DerivedRuntime {
     pub(crate) key: SigKey,
     expr: Option<crate::derived::Expr>,
     refs: Vec<String>,
+    /// Reference text -> exact key the editor resolved. Empty for definitions
+    /// saved before the editor pinned its sources.
+    pinned: Vec<(String, SigKey)>,
     pub(crate) error: Option<String>,
     /// Newest source timestamp already sampled; `None` means backfill from
     /// whatever history the sources still hold.
@@ -1285,6 +1292,11 @@ fn resolve_derived_ref(
     channels: &[Channel],
     own: &SigKey,
 ) -> Option<SigKey> {
+    // The editor also accepts a full key (`[0:256:RPM]`), so a verbatim
+    // match wins before interpreting the text as `Bus:Name`.
+    if let Some(key) = keys.iter().find(|key| key != &own && key.text() == text) {
+        return Some(key.clone());
+    }
     let (bus, name) = match text.split_once(':') {
         Some((bus, name)) if !bus.is_empty() && !name.is_empty() => (Some(bus), name),
         _ => (None, text),
@@ -2959,6 +2971,16 @@ impl BusCore {
                 .collect(),
             real_bus: self.hw.live,
             triggers: self.triggers.clone(),
+            derived_errors: self
+                .derived
+                .iter()
+                .filter_map(|runtime| {
+                    runtime
+                        .error
+                        .clone()
+                        .map(|error| (runtime.def.id.clone(), error))
+                })
+                .collect(),
             last_record: self.recorder.last_record.clone(),
             channels: self
                 .channels
@@ -3247,9 +3269,38 @@ impl BusCore {
         for key in stale {
             self.subs.remove(&key);
         }
+        // A threshold rule whose lane no longer exists can never fire again;
+        // leaving it in the list (and in the project) would read as active
+        // monitoring. The lane is the rule's subject, so it goes with it.
+        let ids: std::collections::HashSet<String> =
+            defs.iter().map(|def| def.id.clone()).collect();
+        self.triggers.retain(|trigger| {
+            !matches!(
+                &trigger.cond,
+                TriggerCond::DerivedSignal { id, .. } if !ids.contains(id)
+            )
+        });
+        let names_by_id: HashMap<String, String> = defs
+            .iter()
+            .map(|def| (def.id.clone(), def.name.clone()))
+            .collect();
         let mut runtimes = Vec::with_capacity(defs.len());
         for def in defs {
             let key = SigKey::derived(&def.id, &def.name);
+            let pinned: Vec<(String, SigKey)> = def
+                .sources
+                .iter()
+                .filter_map(|source| {
+                    let key = SigKey::from_text(&source.key)?;
+                    // A derived source's wire form carries only its id; the
+                    // definition list supplies the name half of the key.
+                    let key = match key {
+                        SigKey::Derived { id, .. } => SigKey::derived(&id, names_by_id.get(&id)?),
+                        key => key,
+                    };
+                    Some((source.name.clone(), key))
+                })
+                .collect();
             self.subscribe_signal(key.clone());
             let reused = previous.remove(&def.id);
             let (last, reset) = match &reused {
@@ -3282,6 +3333,7 @@ impl BusCore {
                 key,
                 expr,
                 refs,
+                pinned,
                 error,
                 last_t_us: last,
             });
@@ -3302,16 +3354,25 @@ impl BusCore {
         // database: a derived lane follows what the run is actually watching.
         let all_keys: Vec<SigKey> = self.subs.keys().cloned().collect();
         for index in 0..self.derived.len() {
-            let (key, refs, last) = {
+            let (key, refs, pinned, last) = {
                 let runtime = &self.derived[index];
                 if runtime.expr.is_none() {
                     continue;
                 }
-                (runtime.key.clone(), runtime.refs.clone(), runtime.last_t_us)
+                (
+                    runtime.key.clone(),
+                    runtime.refs.clone(),
+                    runtime.pinned.clone(),
+                    runtime.last_t_us,
+                )
             };
             let mut sources = Vec::with_capacity(refs.len());
             let mut unresolved = false;
             for text in &refs {
+                if let Some((_, source)) = pinned.iter().find(|(name, _)| name == text) {
+                    sources.push(source.clone());
+                    continue;
+                }
                 match resolve_derived_ref(text, &all_keys, &self.channels, &key) {
                     Some(source) => sources.push(source),
                     None => unresolved = true,
@@ -3324,15 +3385,17 @@ impl BusCore {
                 ));
                 continue;
             }
+            // Only the points newer than the previous sweep are new work.
+            // Walking the whole hour-long cache here would turn every step
+            // into a full-history scan once a session has run for a while.
+            let since = last.map_or(0, |last| last.saturating_add(1));
             let mut times: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
             for source in &sources {
                 let Some(sub) = self.subs.get(source) else {
                     continue;
                 };
-                for (t, _) in sub.history.iter() {
-                    if last.is_none_or(|last| *t > last) {
-                        times.insert(*t);
-                    }
+                for (t, _) in sub.history.range(since, u64::MAX) {
+                    times.insert(*t);
                 }
             }
             if times.is_empty() {

@@ -608,11 +608,8 @@ fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
         })
         .unwrap_or_default();
     for key in keys {
-        if let SigKey::Can { ch, id, ext, name } = &key {
-            let (ch, id, ext, name) = (*ch, *id, *ext, name.clone());
-            store.select(app, ch, id, ext, &name);
-            app.subscribe(SigKey::can(ch, id, ext, name));
-        }
+        store.select_key(app, key.clone());
+        app.subscribe(key);
     }
 }
 
@@ -3679,12 +3676,7 @@ fn row_address(key: &SigKey) -> RowAddress {
 }
 
 pub(crate) fn series_key(key: &SigKey) -> String {
-    match key {
-        SigKey::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
-        SigKey::Fr { bus, slot, name } => format!("fr:{bus}:{slot}:{name}"),
-        SigKey::Eth { bus, frame, name } => format!("eth:{bus}:{frame}:{name}"),
-        SigKey::Derived { id, .. } => format!("derived:{id}"),
-    }
+    key.text()
 }
 
 fn signal_bus(app: &App, key: &SigKey) -> String {
@@ -4268,6 +4260,7 @@ struct WebDerivedDef {
     expression: String,
     cuts: Vec<f64>,
     names: Vec<String>,
+    sources: Vec<crate::derived::DerivedSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -5224,7 +5217,13 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 expression: def.expression.clone(),
                 cuts: def.cuts.clone(),
                 names: def.names.clone(),
-                error: crate::derived::parse(&def.expression).err(),
+                sources: def.sources.clone(),
+                error: app
+                    .snap
+                    .derived_errors
+                    .get(&def.id)
+                    .cloned()
+                    .or_else(|| crate::derived::parse(&def.expression).err()),
             })
             .collect(),
         replay_map,
@@ -5720,6 +5719,22 @@ mod tests {
                 .first()
                 .is_none_or(|window| window.signals.iter().all(|row| row.key != key))
         );
+    }
+
+    /// A saved project can carry FlexRay and Ethernet lanes too; restoring
+    /// only CAN keys would silently drop them from the chart on every load.
+    #[test]
+    fn a_load_restores_flexray_and_ethernet_chart_lanes() {
+        let mut app = App::headless();
+        let fr = SigKey::fr(0, 13, "CarSpeed");
+        let eth = SigKey::eth(0, "SpeedFrame", "Speed");
+        chart_select_key(&mut app, fr.clone());
+        chart_select_key(&mut app, eth.clone());
+
+        let mut store = SignalStore::default();
+        seed_chart_selection(&mut app, &mut store);
+        assert!(store.is_selected(&fr), "FlexRay lane restored");
+        assert!(store.is_selected(&eth), "Ethernet lane restored");
     }
 
     /// A chart drag must reorder both the session lanes and the Graphics
@@ -6347,6 +6362,7 @@ mod tests {
             expression: "[EngineSpeed] * 2".into(),
             cuts: vec![1000.0],
             names: vec!["low".into(), "high".into()],
+            sources: Vec::new(),
         }]);
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(5));

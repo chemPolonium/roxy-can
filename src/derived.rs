@@ -4,6 +4,16 @@
 //! `abs` / `sqrt` / `min` / `max`.
 use serde::{Deserialize, Serialize};
 
+/// One reference the editor resolved when the definition was saved: the text
+/// as it appears inside `[...]` and the exact series key it named. Pinning the
+/// key here keeps the core's choice identical to the editor's, even when a
+/// second bus later carries a signal with the same name.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DerivedSource {
+    pub name: String,
+    pub key: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DerivedDef {
     pub id: String,
@@ -17,6 +27,11 @@ pub struct DerivedDef {
     /// One name per band (`cuts.len() + 1` when present).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
+    /// Reference text -> series key, resolved by the editor against the chart
+    /// it was watching. Older projects have none and fall back to name
+    /// resolution in the core.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<DerivedSource>,
 }
 
 impl DerivedDef {
@@ -433,6 +448,7 @@ mod tests {
             expression: "[A] - [B]".into(),
             cuts: vec![10.0],
             names: vec!["ok".into(), "high".into()],
+            sources: Vec::new(),
         };
         let text = serde_json::to_string(&def).unwrap();
         let back: DerivedDef = serde_json::from_str(&text).unwrap();
