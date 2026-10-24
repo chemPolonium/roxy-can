@@ -36,6 +36,7 @@ import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
 import { DbcExplorer } from "./components/DbcExplorer";
 import { DerivedModal } from "./components/DerivedModal";
+import { EventJumpModal } from "./components/EventJumpModal";
 import {
   computeDerived,
   type DerivedDef,
@@ -115,6 +116,7 @@ interface SavedView {
   chartTab2: ChartTab;
   chartSplit: boolean;
   splitRatio: number;
+  overlay: boolean;
   signalView: SignalView;
   cursors: ChartCursor[];
   derived: DerivedDef[];
@@ -187,6 +189,7 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
         : undefined,
     chartSplit: typeof saved.chartSplit === "boolean" ? saved.chartSplit : false,
     splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
+    overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
     signalView: { windowS, endS },
     cursors,
     derived,
@@ -355,6 +358,9 @@ export function App() {
   );
   const [chartSplit, setChartSplit] = useState(savedView.chartSplit ?? false);
   const [splitRatio, setSplitRatio] = useState(savedView.splitRatio ?? 0.6);
+  const [signalOverlay, setSignalOverlay] = useState(
+    savedView.overlay ?? false,
+  );
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [savePath, setSavePath] = useState("");
@@ -409,6 +415,7 @@ export function App() {
     savedView.derived ?? [],
   );
   const [derivedOpen, setDerivedOpen] = useState(false);
+  const [eventOpen, setEventOpen] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const appliedWorkspaceRev = useRef(-1);
   const uiFps = useUiFps();
@@ -446,6 +453,7 @@ export function App() {
       setChartTab2("monitor");
       setChartSplit(false);
       setSplitRatio(0.6);
+      setSignalOverlay(false);
       setDerivedDefs([]);
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
@@ -461,6 +469,7 @@ export function App() {
     if (view.chartTab2) setChartTab2(view.chartTab2);
     if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
     if (typeof view.splitRatio === "number") setSplitRatio(view.splitRatio);
+    if (typeof view.overlay === "boolean") setSignalOverlay(view.overlay);
     if (view.derived) setDerivedDefs(view.derived);
     if (view.signalView) setSignalView(view.signalView);
     if (view.cursors) {
@@ -502,6 +511,7 @@ export function App() {
           chartTab2,
           chartSplit,
           splitRatio,
+          overlay: signalOverlay,
           signalView,
           cursors: chartCursors,
           traceColumns,
@@ -518,6 +528,7 @@ export function App() {
     chartTab2,
     chartSplit,
     splitRatio,
+    signalOverlay,
     signalView,
     chartCursors,
     traceColumns,
@@ -668,6 +679,7 @@ export function App() {
           chartTab2,
           chartSplit,
           splitRatio,
+          overlay: signalOverlay,
           signalView,
           cursors: chartCursors,
           derived: derivedDefs,
@@ -682,6 +694,7 @@ export function App() {
     chartTab2,
     chartSplit,
     splitRatio,
+    signalOverlay,
     signalView,
     chartCursors,
     derivedDefs,
@@ -1203,6 +1216,7 @@ export function App() {
         chartTab2,
         chartSplit,
         splitRatio,
+        overlay: signalOverlay,
         signalView,
         cursors: chartCursors,
         traceColumns,
@@ -1716,6 +1730,18 @@ export function App() {
     () => [...signals, ...derivedSeries],
     [signals, derivedSeries],
   );
+  const chartLatestS = useMemo(
+    () =>
+      signals.reduce((latest, signal) => {
+        const point = signal.points[signal.points.length - 1];
+        return point ? Math.max(latest, point[0]) : latest;
+      }, 0),
+    [signals],
+  );
+  const chartCenterS =
+    signalView.endS !== null
+      ? signalView.endS - signalView.windowS / 2
+      : chartLatestS;
 
   const openExplorer = () => {
     setExplorerOpen((open) => !open);
@@ -1870,6 +1896,13 @@ export function App() {
       group: "Signals",
       hint: "Math channel over the selected signals",
       run: () => setDerivedOpen(true),
+    },
+    {
+      id: "signal-event",
+      label: "Find signal event…",
+      group: "Signals",
+      hint: "Jump between rising edges of a condition",
+      run: () => setEventOpen(true),
     },
     {
       id: "add-cursor",
@@ -2100,6 +2133,8 @@ export function App() {
           reference={reference}
           onOpenReference={() => setReferenceOpen(true)}
           onOpenDerived={() => setDerivedOpen(true)}
+          overlay={signalOverlay}
+          onToggleOverlay={() => setSignalOverlay((value) => !value)}
         />
       );
     }
@@ -2767,7 +2802,9 @@ export function App() {
                 <span class="meta">
                   {chartTab === "rate"
                     ? "solid f/s · dashed load"
-                    : `${chartSeries.length} channels · wheel zoom`}
+                    : signalOverlay
+                      ? `${chartSeries.length} channels · overlay`
+                      : `${chartSeries.length} channels · wheel zoom`}
                 </span>
               )}
               {chartTab === "rate" && (
@@ -2892,6 +2929,8 @@ export function App() {
                   reference={reference}
                   onOpenReference={() => setReferenceOpen(true)}
                   onOpenDerived={() => setDerivedOpen(true)}
+                  overlay={signalOverlay}
+                  onToggleOverlay={() => setSignalOverlay((value) => !value)}
                 />
                 {chartCursors.length >= 2 && !chartSplit && (
                   <CursorAnalysis
@@ -3890,6 +3929,14 @@ export function App() {
         <CommandPalette
           commands={paletteCommands}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {eventOpen && (
+        <EventJumpModal
+          series={chartSeries}
+          nowS={chartCenterS}
+          onJump={(time) => viewTimeUs(Math.round(time * 1e6))}
+          onClose={() => setEventOpen(false)}
         />
       )}
       {derivedOpen && (

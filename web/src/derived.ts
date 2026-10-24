@@ -11,7 +11,12 @@ type Node =
   | { kind: "number"; value: number }
   | { kind: "ref"; name: string }
   | { kind: "unary"; op: "-"; value: Node }
-  | { kind: "binary"; op: "+" | "-" | "*" | "/"; left: Node; right: Node }
+  | {
+      kind: "binary";
+      op: "+" | "-" | "*" | "/" | ">" | "<" | ">=" | "<=" | "==" | "!=";
+      left: Node;
+      right: Node;
+    }
   | { kind: "call"; name: string; args: Node[] };
 
 interface Token {
@@ -29,7 +34,13 @@ function tokenize(source: string): Token[] {
       i += 1;
       continue;
     }
-    if ("+-*/".includes(ch)) {
+    const pair = source.slice(i, i + 2);
+    if ([">=", "<=", "==", "!="].includes(pair)) {
+      tokens.push({ kind: "op", text: pair });
+      i += 2;
+      continue;
+    }
+    if ("+-*/<>".includes(ch)) {
       tokens.push({ kind: "op", text: ch });
       i += 1;
       continue;
@@ -96,6 +107,24 @@ class Parser {
   }
 
   private expression(): Node {
+    let node = this.additive();
+    while (
+      this.peek().kind === "op" &&
+      [">", "<", ">=", "<=", "==", "!="].includes(this.peek().text)
+    ) {
+      const op = this.take("op").text as
+        | ">"
+        | "<"
+        | ">="
+        | "<="
+        | "=="
+        | "!=";
+      node = { kind: "binary", op, left: node, right: this.additive() };
+    }
+    return node;
+  }
+
+  private additive(): Node {
     let node = this.term();
     while (
       this.peek().kind === "op" &&
@@ -240,6 +269,18 @@ function evaluate(
           return left * right;
         case "/":
           return right === 0 ? null : left / right;
+        case ">":
+          return left > right ? 1 : 0;
+        case "<":
+          return left < right ? 1 : 0;
+        case ">=":
+          return left >= right ? 1 : 0;
+        case "<=":
+          return left <= right ? 1 : 0;
+        case "==":
+          return left === right ? 1 : 0;
+        case "!=":
+          return left !== right ? 1 : 0;
       }
       return null;
     }
@@ -300,6 +341,35 @@ export function validateDerivedExpression(
     return null;
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/// Rising-edge times where the condition becomes true. Used by the event
+/// jump dialog; the condition uses the same grammar as derived channels.
+export function conditionEvents(
+  expression: string,
+  series: SignalSeries[],
+): { times: number[]; error: string | null } {
+  const error = validateDerivedExpression(expression, series);
+  if (error) return { times: [], error };
+  try {
+    const ast = new Parser(tokenize(expression)).parse();
+    const names = new Set<string>();
+    collectRefs(ast, names);
+    const resolved = resolveRefs(names, series);
+    if (resolved.error) return { times: [], error: resolved.error };
+    const base = [...resolved.refs.values()][0];
+    const times: number[] = [];
+    let previous = false;
+    for (const [t] of base.points) {
+      const value = evaluate(ast, t, resolved.refs);
+      const truth = value !== null && value > 0;
+      if (truth && !previous) times.push(t);
+      previous = truth;
+    }
+    return { times, error: null };
+  } catch (e) {
+    return { times: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 

@@ -249,6 +249,8 @@ export function SignalChart({
   reference = null,
   onOpenReference,
   onOpenDerived,
+  overlay = false,
+  onToggleOverlay,
 }: {
   series: SignalSeries[];
   markers?: number[];
@@ -267,6 +269,8 @@ export function SignalChart({
   reference?: ReferenceOverlay | null;
   onOpenReference?: () => void;
   onOpenDerived?: () => void;
+  overlay?: boolean;
+  onToggleOverlay?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -277,6 +281,7 @@ export function SignalChart({
     null,
   );
   const [hoverCursorId, setHoverCursorId] = useState<number | null>(null);
+  const [overlayHidden, setOverlayHidden] = useState<Set<string>>(new Set());
   const [laneMenu, setLaneMenu] = useState<{
     x: number;
     y: number;
@@ -451,7 +456,98 @@ export function SignalChart({
       ctx.textBaseline = "alphabetic";
       ctx.textAlign = "left";
 
+      if (overlay) {
+        const plotTop = TOP + 4;
+        const plotBottom = height - AXIS_H - 4;
+        const plotH = Math.max(1, plotBottom - plotTop);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(GUTTER, TOP, width - GUTTER, height - TOP - AXIS_H);
+        ctx.clip();
+        for (const signal of series) {
+          if (overlayHidden.has(signal.key)) continue;
+          const color = colors.signals[signal.color % colors.signals.length];
+          let min = Number.POSITIVE_INFINITY;
+          let max = Number.NEGATIVE_INFINITY;
+          for (const [t, value] of signal.points) {
+            if (t < start || t > end) continue;
+            if (value < min) min = value;
+            if (value > max) max = value;
+          }
+          if (!Number.isFinite(min)) continue;
+          if (min === max) {
+            min -= 0.5;
+            max += 0.5;
+          }
+          const toY = (value: number) =>
+            plotBottom - ((value - min) / (max - min)) * plotH;
+          const stroke = (
+            points: [number, number][],
+            offset: number,
+            dashed: boolean,
+          ) => {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = dashed ? 0.45 : 0.9;
+            ctx.setLineDash(dashed ? [3, 3] : []);
+            ctx.beginPath();
+            let started = false;
+            for (const [rawT, value] of points) {
+              const t = rawT + offset;
+              if (t < start || t > end) continue;
+              const x = GUTTER + ((t - start) / view.windowS) * plotW;
+              const y = toY(value);
+              if (!started) {
+                ctx.moveTo(x, y);
+                started = true;
+              } else {
+                ctx.lineTo(x, y);
+              }
+            }
+            if (started) ctx.stroke();
+          };
+          stroke(signal.points, 0, false);
+          const ref = reference?.series[signal.key];
+          if (reference && ref) stroke(ref, reference.offsetS, true);
+        }
+        ctx.restore();
+
+        // Compact legend: one row per signal until the gutter runs out.
+        const rows = Math.max(
+          1,
+          Math.floor((height - TOP - AXIS_H - 22) / 13),
+        );
+        const shown = Math.min(series.length, rows);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, TOP, GUTTER, height - TOP - AXIS_H);
+        ctx.clip();
+        ctx.fillStyle = colors.signalMeta;
+        ctx.font = "8px 'Segoe UI', sans-serif";
+        ctx.fillText("OVERLAY · normalized", 13, TOP + 9);
+        for (let i = 0; i < shown; i += 1) {
+          const signal = series[i];
+          const color = colors.signals[signal.color % colors.signals.length];
+          const y = TOP + 24 + i * 13;
+          const visible = !overlayHidden.has(signal.key);
+          ctx.globalAlpha = visible ? 1 : 0.4;
+          ctx.fillStyle = color;
+          ctx.fillRect(4, y - 7, 7, 7);
+          ctx.fillStyle = colors.signalName;
+          ctx.font = "9px 'Segoe UI', sans-serif";
+          ctx.fillText(signal.name, 15, y);
+          ctx.globalAlpha = 1;
+        }
+        if (series.length > shown) {
+          ctx.fillStyle = colors.signalMeta;
+          ctx.font = "8px 'Segoe UI', sans-serif";
+          ctx.fillText(`+${series.length - shown} more`, 13, TOP + 30 + shown * 13);
+        }
+        ctx.restore();
+      }
+
       for (let i = 0; i < series.length; i += 1) {
+        if (overlay) break;
         const signal = series[i];
         const top = TOP + i * laneH;
         const color = colors.signals[signal.color % colors.signals.length];
@@ -808,6 +904,8 @@ export function SignalChart({
     measuring,
     paused,
     reference,
+    overlay,
+    overlayHidden,
   ]);
 
   const plotWidth = () => {
@@ -831,7 +929,11 @@ export function SignalChart({
         class={`signal-chart ${reorder ? "reordering" : ""} ${hoverCursorId !== null ? "cursor-hover" : ""}`}
         ref={canvasRef}
         aria-label="Live signal curves"
-        title="Drag a signal name to reorder · drag a cursor to move it · wheel zooms"
+        title={
+          overlay
+            ? "Click a legend row to show or hide a signal · drag a cursor to move it · wheel zooms"
+            : "Drag a signal name to reorder · drag a cursor to move it · wheel zooms"
+        }
         onWheel={(event) => {
           event.preventDefault();
           const canvas = canvasRef.current;
@@ -874,6 +976,25 @@ export function SignalChart({
           setHoverCursorId(null);
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left < GUTTER) {
+            if (overlay) {
+              const rows = Math.max(
+                1,
+                Math.floor((rect.height - TOP - AXIS_H - 22) / 13),
+              );
+              const index = Math.floor(
+                (event.clientY - rect.top - (TOP + 24)) / 13,
+              );
+              if (index >= 0 && index < Math.min(series.length, rows)) {
+                const key = series[index].key;
+                setOverlayHidden((old) => {
+                  const next = new Set(old);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                });
+              }
+              return;
+            }
             const lane = laneAt(event.clientY);
             if (lane === null || series[lane].key.startsWith("derived:")) return;
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -964,7 +1085,7 @@ export function SignalChart({
         onContextMenu={(event) => {
           event.preventDefault();
           const rect = event.currentTarget.getBoundingClientRect();
-          if (event.clientX - rect.left >= GUTTER) return;
+          if (overlay || event.clientX - rect.left >= GUTTER) return;
           const lane = laneAt(event.clientY);
           if (lane === null) return;
           setLaneMenu({
@@ -990,6 +1111,20 @@ export function SignalChart({
             onClick={onClearCursors}
           >
             Clear
+          </button>
+        )}
+        {onToggleOverlay && (
+          <button
+            type="button"
+            class={overlay ? "on" : ""}
+            title={
+              overlay
+                ? "Back to one lane per signal"
+                : "Overlay all signals on one normalized plot"
+            }
+            onClick={onToggleOverlay}
+          >
+            Overlay
           </button>
         )}
         {cursorA && cursorB && (
