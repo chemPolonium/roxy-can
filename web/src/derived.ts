@@ -1,13 +1,6 @@
-import type { SignalSeries, StateRule } from "./types";
+import type { DerivedDef, SignalSeries } from "./types";
 
-export interface DerivedDef {
-  id: string;
-  name: string;
-  unit: string;
-  expression: string;
-  /// Optional thresholds for the State observer; absent means no bands.
-  rule?: StateRule;
-}
+export type { DerivedDef };
 
 type Node =
   | { kind: "number"; value: number }
@@ -399,8 +392,9 @@ function csvNumber(value: number): string {
   return text;
 }
 
-/// Wide, time-aligned CSV of everything on the chart, including derived
-/// channels that the core cannot see. Sample-and-hold at a 10 ms floor.
+/// Wide, time-aligned CSV of everything on the chart. Derived channels are
+/// core series by now, so they arrive here like any other lane.
+/// Sample-and-hold at a 10 ms floor.
 export function buildAlignedCsv(
   series: SignalSeries[],
   fromS: number,
@@ -427,41 +421,6 @@ export function buildAlignedCsv(
       if (row.last !== null) out += csvNumber(row.last);
     }
     out += "\n";
-  }
-  return out;
-}
-
-export function computeDerived(
-  defs: DerivedDef[],
-  series: SignalSeries[],
-): SignalSeries[] {
-  const out: SignalSeries[] = [];
-  for (const def of defs) {
-    try {
-      const ast = new Parser(tokenize(def.expression)).parse();
-      const names = new Set<string>();
-      collectRefs(ast, names);
-      if (names.size === 0) continue;
-      const resolved = resolveRefs(names, series);
-      if (resolved.error) continue;
-      const base = [...resolved.refs.values()][0];
-      const points: [number, number][] = [];
-      for (const [t] of base.points) {
-        const value = evaluate(ast, t, resolved.refs);
-        if (value !== null && Number.isFinite(value)) points.push([t, value]);
-      }
-      if (points.length === 0) continue;
-      out.push({
-        key: `derived:${def.id}`,
-        name: def.name,
-        bus: "Derived",
-        unit: def.unit,
-        color: 100 + out.length,
-        points,
-      });
-    } catch {
-      // The editor shows the validation error; a broken lane simply drops out.
-    }
   }
   return out;
 }

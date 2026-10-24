@@ -17,6 +17,7 @@ mod config;
 mod core_loop;
 mod dbc;
 mod decode;
+mod derived;
 mod eth;
 mod export;
 mod fr_db;

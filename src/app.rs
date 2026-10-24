@@ -256,6 +256,9 @@ pub struct App {
     /// chart; session state, not part of the project.
     pub reference: Option<crate::reference::ReferenceRun>,
     pub reference_rev: u64,
+    /// Derived-channel definitions. The project file stores this list and the
+    /// core samples the curves; the web modal reads it back from the snapshot.
+    pub derived_defs: Vec<crate::derived::DerivedDef>,
     /// Factory layout restored by New Project.
     pub default_layout: String,
     /// Layout queued for the next project reset.
@@ -480,6 +483,7 @@ impl App {
             workspace_rev: 0,
             reference: None,
             reference_rev: 0,
+            derived_defs: Vec::new(),
             default_layout: String::new(),
             pending_layout: None,
             pnp_signature,
@@ -727,6 +731,48 @@ impl App {
             lane.publish();
         }
         self.read_snapshot();
+    }
+
+    /// Replaces the derived-channel list. Rows in the observers that point at
+    /// a definition the user just deleted go with it -- a lane with no
+    /// expression behind it would sit there empty forever.
+    pub fn set_derived_defs(&mut self, defs: Vec<crate::derived::DerivedDef>) {
+        let ids: std::collections::HashSet<String> =
+            defs.iter().map(|def| def.id.clone()).collect();
+        let keep = |key: &crate::observe::SigKey| !matches!(key, crate::observe::SigKey::Derived { id, .. } if !ids.contains(id));
+        self.monitor_view.rows.retain(|row| keep(&row.key));
+        for window in &mut self.data_windows {
+            window.signals.retain(|signal| keep(&signal.key));
+        }
+        for window in &mut self.state_trackers {
+            let dropped: Vec<crate::observe::SigKey> = window
+                .signals
+                .iter()
+                .filter(|signal| !keep(&signal.key))
+                .map(|signal| signal.key.clone())
+                .collect();
+            window.signals.retain(|signal| keep(&signal.key));
+            for key in dropped {
+                window.rules.remove(&key);
+                window.overrides.remove(&key);
+                window.color_slots.remove(&key);
+            }
+        }
+        self.derived_defs = defs.clone();
+        self.send(crate::bus::BusCommand::SetDerived(defs));
+    }
+
+    /// The State bands a derived channel carries, if its definition names any.
+    pub fn derived_rule(&self, id: &str) -> Option<crate::observe::StateRule> {
+        let def = self.derived_defs.iter().find(|def| def.id == id)?;
+        if !def.has_rule() {
+            return None;
+        }
+        Some(crate::observe::StateRule {
+            cuts: def.cuts.clone(),
+            names: def.names.clone(),
+            colors: vec![None; def.names.len().max(def.cuts.len() + 1)],
+        })
     }
 
     pub fn start_virtual(&mut self) {

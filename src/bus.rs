@@ -337,6 +337,9 @@ pub enum BusCommand {
     Unsubscribe {
         key: SigKey,
     },
+    /// Replace the derived-channel definitions. The core owns their sampled
+    /// subscriptions from here on; unchanged definitions keep their history.
+    SetDerived(Vec<crate::derived::DerivedDef>),
     /// Open `path` and replay it: generators stand down for the ids the
     /// log carries, a fresh replay source replaces the old input at
     /// `speed`, and run-scored state resets. `speed` is the frontend's
@@ -1149,6 +1152,10 @@ pub struct BusCore {
     pub(crate) loads_dirty: bool,
     /// Subscribed signals: latest value, min/max/avg, sampled history.
     pub(crate) subs: HashMap<SigKey, Subscription>,
+    /// Derived-channel definitions and their compiled expressions. The core
+    /// samples them once per step from their source subscriptions, so the
+    /// observers, exports and the chart read one series type.
+    pub(crate) derived: Vec<DerivedRuntime>,
     /// Bus-event markers, oldest first, capped oldest-out. Dropped by
     /// trigger actions and drawn by Graphics as vertical lines.
     pub(crate) markers: Vec<u64>,
@@ -1236,8 +1243,68 @@ pub struct BusCore {
 fn emitted_node_id(key: &SigKey) -> Option<u64> {
     match key {
         SigKey::Can { id, .. } => Some((id & !crate::app::EMITTED_ID_BASE) as u64),
-        SigKey::Fr { .. } | SigKey::Eth { .. } => None,
+        SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. } => None,
     }
+}
+
+/// One derived channel the core evaluates. `refs` keeps the reference text
+/// in first-appearance order; resolution against subscriptions happens every
+/// step, so adding a source lane later starts the lane without redefining it.
+pub(crate) struct DerivedRuntime {
+    pub(crate) def: crate::derived::DerivedDef,
+    pub(crate) key: SigKey,
+    expr: Option<crate::derived::Expr>,
+    refs: Vec<String>,
+    pub(crate) error: Option<String>,
+    /// Newest source timestamp already sampled; `None` means backfill from
+    /// whatever history the sources still hold.
+    last_t_us: Option<u64>,
+}
+
+/// The label a `[Bus:signal]` reference matches. Only the core's own bus
+/// table is available here; renamed FlexRay clusters keep their default
+/// `FRn` qualifier (the unqualified `[signal]` path covers them).
+fn derived_key_bus(key: &SigKey, channels: &[Channel]) -> String {
+    match key {
+        SigKey::Can { ch, .. } => channels
+            .get(*ch as usize)
+            .map(|channel| channel.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", ch + 1)),
+        SigKey::Fr { bus, .. } => format!("FR{bus}"),
+        SigKey::Eth { bus, .. } => format!("ETH{bus}"),
+        SigKey::Derived { .. } => "Derived".to_string(),
+    }
+}
+
+/// Resolves one expression reference against the live subscriptions.
+/// `Bus:signal` narrows by label; a name shared by two buses stays
+/// unresolved until the user qualifies it, mirroring the editor's rule.
+fn resolve_derived_ref(
+    text: &str,
+    keys: &[SigKey],
+    channels: &[Channel],
+    own: &SigKey,
+) -> Option<SigKey> {
+    let (bus, name) = match text.split_once(':') {
+        Some((bus, name)) if !bus.is_empty() && !name.is_empty() => (Some(bus), name),
+        _ => (None, text),
+    };
+    let mut found: Option<SigKey> = None;
+    for key in keys {
+        if key == own || key.name() != name {
+            continue;
+        }
+        if let Some(bus) = bus
+            && derived_key_bus(key, channels) != bus
+        {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(key.clone());
+    }
+    found
 }
 
 impl BusCore {
@@ -1291,6 +1358,7 @@ impl BusCore {
             published_fr_loads: Arc::new(Default::default()),
             loads_dirty: false,
             subs: HashMap::new(),
+            derived: Vec::new(),
             markers: Vec::new(),
             pre_buffer: std::collections::VecDeque::new(),
             post_roll: None,
@@ -1713,7 +1781,16 @@ impl BusCore {
                     self.injected_fr.push((bus, slot));
                 }
             }
-            BusCommand::Subscribe { key } => self.subscribe_signal(key),
+            BusCommand::Subscribe { key } => {
+                self.subscribe_signal(key);
+                // A source lane appearing after its derived channel was
+                // defined should start the curve immediately, even stopped.
+                self.evaluate_derived();
+            }
+            BusCommand::SetDerived(defs) => {
+                self.set_derived(defs);
+                self.evaluate_derived();
+            }
             BusCommand::LogStatus { kind, text } => self.write_push(kind, text),
             BusCommand::Unsubscribe { key } => {
                 self.subs.remove(&key);
@@ -1921,6 +1998,9 @@ impl BusCore {
                 }
                 self.tx_list.clear();
                 self.subs.clear();
+                for runtime in &mut self.derived {
+                    runtime.last_t_us = None;
+                }
             }
             BusCommand::ClearSpec => self.spec.clear(),
             BusCommand::SendNow { ch, id } => {
@@ -3124,6 +3204,153 @@ impl BusCore {
                 .and_then(|m| m.signals.iter().find(|s| &s.name == name))
                 .map(|s| s.type_tag.clone())
                 .unwrap_or_default(),
+            SigKey::Derived { .. } => String::new(),
+        }
+    }
+
+    /// Replaces the derived definitions. A definition whose expression or
+    /// name changed starts a fresh curve; an unchanged one keeps sampling
+    /// from where it was, so editing only its State bands costs no history.
+    fn set_derived(&mut self, defs: Vec<crate::derived::DerivedDef>) {
+        let mut previous: HashMap<String, (Option<u64>, crate::derived::DerivedDef)> = self
+            .derived
+            .drain(..)
+            .map(|runtime| (runtime.def.id.clone(), (runtime.last_t_us, runtime.def)))
+            .collect();
+        let new_keys: std::collections::HashSet<SigKey> = defs
+            .iter()
+            .map(|def| SigKey::derived(&def.id, &def.name))
+            .collect();
+        let stale: Vec<SigKey> = previous
+            .values()
+            .map(|(_, def)| SigKey::derived(&def.id, &def.name))
+            .filter(|key| !new_keys.contains(key))
+            .collect();
+        for key in stale {
+            self.subs.remove(&key);
+        }
+        let mut runtimes = Vec::with_capacity(defs.len());
+        for def in defs {
+            let key = SigKey::derived(&def.id, &def.name);
+            self.subscribe_signal(key.clone());
+            let reused = previous.remove(&def.id);
+            let (last, reset) = match &reused {
+                Some((last, old)) if old.expression == def.expression && old.name == def.name => {
+                    (*last, false)
+                }
+                _ => (None, true),
+            };
+            if let Some(sub) = self.subs.get_mut(&key) {
+                sub.unit = def.unit.clone();
+                sub.type_tag.clear();
+                if reset {
+                    sub.reset_measurement();
+                }
+            }
+            let parsed = crate::derived::parse(&def.expression);
+            let (expr, error) = match parsed {
+                Ok(expr) => (Some(expr), None),
+                Err(error) => (None, Some(error)),
+            };
+            let refs = expr
+                .as_ref()
+                .map(crate::derived::references)
+                .unwrap_or_default()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            runtimes.push(DerivedRuntime {
+                def,
+                key,
+                expr,
+                refs,
+                error,
+                last_t_us: last,
+            });
+        }
+        self.derived = runtimes;
+    }
+
+    /// Samples every derived channel from its sources' histories, oldest new
+    /// point first. Definitions are evaluated in list order, so a channel may
+    /// reference an earlier one; the union of all source timestamps is used,
+    /// with the newest sample at or before each instant (sample-and-hold),
+    /// exactly how the observers read a signal.
+    fn evaluate_derived(&mut self) {
+        if self.derived.is_empty() {
+            return;
+        }
+        // Sources are resolved against the subscriptions, never the whole
+        // database: a derived lane follows what the run is actually watching.
+        let all_keys: Vec<SigKey> = self.subs.keys().cloned().collect();
+        for index in 0..self.derived.len() {
+            let (key, refs, last) = {
+                let runtime = &self.derived[index];
+                if runtime.expr.is_none() {
+                    continue;
+                }
+                (runtime.key.clone(), runtime.refs.clone(), runtime.last_t_us)
+            };
+            let mut sources = Vec::with_capacity(refs.len());
+            let mut unresolved = false;
+            for text in &refs {
+                match resolve_derived_ref(text, &all_keys, &self.channels, &key) {
+                    Some(source) => sources.push(source),
+                    None => unresolved = true,
+                }
+            }
+            if unresolved {
+                self.derived[index].error = Some(format!(
+                    "unknown or ambiguous reference in [{}]",
+                    refs.join("], [")
+                ));
+                continue;
+            }
+            let mut times: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+            for source in &sources {
+                let Some(sub) = self.subs.get(source) else {
+                    continue;
+                };
+                for (t, _) in sub.history.iter() {
+                    if last.is_none_or(|last| *t > last) {
+                        times.insert(*t);
+                    }
+                }
+            }
+            if times.is_empty() {
+                continue;
+            }
+            let produced = {
+                let expr = self.derived[index].expr.as_ref().expect("checked above");
+                let mut produced = Vec::with_capacity(times.len());
+                for &t in &times {
+                    let value = crate::derived::eval(expr, &mut |name| {
+                        let position = refs.iter().position(|candidate| candidate == name)?;
+                        self.subs
+                            .get(&sources[position])
+                            .and_then(|sub| sub.history.at(t))
+                    });
+                    if let Some(value) = value {
+                        produced.push((t, value));
+                    }
+                }
+                produced
+            };
+            let end = times.into_iter().next_back().unwrap_or(0);
+            let stride = self.applied_stride_us;
+            if let Some(sub) = self.subs.get_mut(&key) {
+                for (t, value) in produced {
+                    sub.latest = value;
+                    sub.last_raw = value.round() as i64;
+                    sub.last_update_us = t;
+                    if t >= sub.last_sample_us + stride || sub.history.is_empty() {
+                        sub.push_sample(t, value, stride);
+                    }
+                }
+            }
+            let runtime = &mut self.derived[index];
+            runtime.last_t_us = Some(end);
+            runtime.error = None;
         }
     }
 
@@ -3558,7 +3785,9 @@ impl BusCore {
                 SigKey::Can { ch, id, ext, name } => {
                     remap(ch).map(|nc| (SigKey::can(nc, id, ext, name), s))
                 }
-                k @ (SigKey::Fr { .. } | SigKey::Eth { .. }) => Some((k, s)),
+                k @ (SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. }) => {
+                    Some((k, s))
+                }
             })
             .collect();
         self.spec.drop_channel(ch as u8);
@@ -4165,6 +4394,12 @@ impl BusCore {
         }
         for sub in self.subs.values_mut() {
             sub.reset_measurement();
+        }
+        // Derived curves are a view of this run's sources; the fresh run's
+        // history starts empty, so the sampler must backfill from zero rather
+        // than skip every point older than the last run's tail.
+        for runtime in &mut self.derived {
+            runtime.last_t_us = None;
         }
         // Every run starts from the declared values, CANoe-style -- and
         // republishes them, so observers never plot the last run's tail.
@@ -4829,6 +5064,7 @@ impl BusCore {
         if i > 0 || fr_landed || eth_landed {
             self.publish_trace();
         }
+        self.evaluate_derived();
         self.refresh_sub_histories();
 
         // One sample of the windowed numbers per step feeds the Min/Max/Avg

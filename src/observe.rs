@@ -406,6 +406,12 @@ pub enum SigKey {
         frame: String,
         name: String,
     },
+    /// A channel computed by the core from an expression over other signals.
+    /// `id` is the stable definition id; `name` is what every consumer shows.
+    Derived {
+        id: String,
+        name: String,
+    },
 }
 
 impl SigKey {
@@ -434,9 +440,19 @@ impl SigKey {
         }
     }
 
+    pub fn derived(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::Derived {
+            id: id.into(),
+            name: name.into(),
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
-            Self::Can { name, .. } | Self::Fr { name, .. } | Self::Eth { name, .. } => name,
+            Self::Can { name, .. }
+            | Self::Fr { name, .. }
+            | Self::Eth { name, .. }
+            | Self::Derived { name, .. } => name,
         }
     }
 }
@@ -720,9 +736,10 @@ impl App {
                     .and_then(|db| db.slot_signal(*slot, name))?;
                 (sig.min, sig.max)
             }
-            // The Ethernet matrix declares compu methods but no min..max, so
-            // an Ethernet signal falls back to its observed extremes.
-            SigKey::Eth { .. } => return None,
+            // The Ethernet matrix declares compu methods but no min..max, and
+            // a derived channel has no declaration at all: both fall back to
+            // their observed extremes.
+            SigKey::Eth { .. } | SigKey::Derived { .. } => return None,
         };
         (max > min).then_some((min, max))
     }

@@ -1865,6 +1865,11 @@ enum WebCommand {
         path: String,
     },
     ClearReference,
+    /// Replace the derived-channel definitions. The core samples the curves;
+    /// the snapshot carries the definitions back to the editor.
+    SetDerived {
+        defs: Vec<crate::derived::DerivedDef>,
+    },
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -2145,10 +2150,18 @@ fn app_loop(
                     }
                 }
                 WebCommand::ChartSignal { key, action } => {
-                    let target = signals.lock().ok().and_then(|store| {
+                    let selected = signals.lock().ok().and_then(|store| {
                         store
                             .keys()
                             .into_iter()
+                            .find(|candidate| series_key(candidate) == key)
+                    });
+                    // Derived lanes are not part of the selection list; a key
+                    // shaped `derived:<id>` names one straight from the defs.
+                    let target = selected.or_else(|| {
+                        app.derived_defs
+                            .iter()
+                            .map(|def| SigKey::derived(&def.id, &def.name))
                             .find(|candidate| series_key(candidate) == key)
                     });
                     if let Some(target) = target
@@ -2309,7 +2322,10 @@ fn app_loop(
                     };
                     let target = download_file_path(&path);
                     if kind == "signals" {
-                        let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
+                        let keys = signals
+                            .lock()
+                            .map(|store| store.keys_with_derived(&app))
+                            .unwrap_or_default();
                         app.export_signals_keys_csv(&keys, &target, range);
                     } else {
                         export_file(&mut app, &kind, &target, range);
@@ -2810,6 +2826,15 @@ fn app_loop(
                     app.reference = None;
                     app.reference_rev = app.reference_rev.wrapping_add(1);
                 }
+                WebCommand::SetDerived { defs } => {
+                    let count = defs.len();
+                    app.set_derived_defs(defs);
+                    app.status = if count == 1 {
+                        "1 derived channel".to_string()
+                    } else {
+                        format!("{count} derived channels")
+                    };
+                }
                 WebCommand::SimulateBusNodes { ch } => {
                     let nodes = app
                         .snap
@@ -3238,6 +3263,9 @@ struct SignalStore {
     selected: Vec<SelectedSignal>,
     buffers: Vec<SignalBuffer>,
     last_t: Vec<u64>,
+    /// Fingerprint of the derived definitions appended after the selected
+    /// signals; a change rebuilds the lane list (and its epoch).
+    derived_meta: String,
 }
 
 impl SignalStore {
@@ -3252,6 +3280,19 @@ impl SignalStore {
             .collect()
     }
 
+    /// Selected signals plus every derived channel, which is implicitly on
+    /// the chart (the derived editor is its on/off switch, not a lane menu).
+    fn keys_with_derived(&self, app: &App) -> Vec<SigKey> {
+        let mut keys = self.keys();
+        for def in &app.derived_defs {
+            let key = SigKey::derived(&def.id, &def.name);
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        keys
+    }
+
     /// Adds a selection without subscribing; the command handler owns the
     /// bus subscription so this stays a pure cache operation.
     fn select(&mut self, app: &App, ch: u8, id: u32, ext: bool, name: &str) {
@@ -3263,13 +3304,20 @@ impl SignalStore {
             return;
         }
         let name = match &key {
-            SigKey::Can { name, .. } | SigKey::Fr { name, .. } | SigKey::Eth { name, .. } => {
-                name.clone()
-            }
+            SigKey::Can { name, .. }
+            | SigKey::Fr { name, .. }
+            | SigKey::Eth { name, .. }
+            | SigKey::Derived { name, .. } => name.clone(),
         };
         let bus = signal_bus(app, &key);
         let unit = match &key {
             SigKey::Can { ch, id, ext, name } => signal_unit(app, *ch, *id, *ext, name),
+            SigKey::Derived { id, .. } => app
+                .derived_defs
+                .iter()
+                .find(|def| &def.id == id)
+                .map(|def| def.unit.clone())
+                .unwrap_or_default(),
             // FR/Eth units arrive with the first subscription publish.
             SigKey::Fr { .. } | SigKey::Eth { .. } => String::new(),
         };
@@ -3345,6 +3393,7 @@ impl SignalStore {
                             .iter()
                             .any(|candidate| &candidate.name == name)
                     }),
+                SigKey::Derived { id, .. } => app.derived_defs.iter().any(|def| &def.id == id),
                 _ => true,
             };
             if !exists {
@@ -3377,9 +3426,32 @@ impl SignalStore {
                 signal.unit = sub.unit.clone();
             }
         }
-        let mut reset = !self.primed;
+        // Derived channels are part of the chart by definition: the editor
+        // adds and removes them, so they follow the selected lanes here.
+        let mut signals = self.selected.clone();
+        for (index, def) in app.derived_defs.iter().enumerate() {
+            let key = SigKey::derived(&def.id, &def.name);
+            if signals.iter().any(|signal| signal.key == key) {
+                continue;
+            }
+            signals.push(SelectedSignal {
+                key,
+                name: def.name.clone(),
+                bus: "Derived".to_string(),
+                unit: def.unit.clone(),
+                color: 100 + index,
+            });
+        }
+        let derived_meta = app
+            .derived_defs
+            .iter()
+            .map(|def| format!("{}|{}|{}", def.id, def.name, def.unit))
+            .collect::<Vec<_>>()
+            .join(";");
+        let mut reset = !self.primed || derived_meta != self.derived_meta;
+        self.derived_meta = derived_meta;
         if self.primed {
-            for (i, signal) in self.selected.iter().enumerate() {
+            for (i, signal) in signals.iter().enumerate() {
                 let Some(sub) = signal_sub(app, &signal.key) else {
                     continue;
                 };
@@ -3393,8 +3465,8 @@ impl SignalStore {
             self.primed = true;
             self.epoch = self.epoch.wrapping_add(1).max(1);
             self.buffers.clear();
-            self.last_t = vec![0; self.selected.len()];
-            for (i, signal) in self.selected.iter().enumerate() {
+            self.last_t = vec![0; signals.len()];
+            for (i, signal) in signals.iter().enumerate() {
                 let sub = signal_sub(app, &signal.key);
                 let meta = signal_meta(signal);
                 let mut points = VecDeque::new();
@@ -3411,7 +3483,7 @@ impl SignalStore {
             return;
         }
 
-        for (i, signal) in self.selected.iter().enumerate() {
+        for (i, signal) in signals.iter().enumerate() {
             let Some(sub) = signal_sub(app, &signal.key) else {
                 continue;
             };
@@ -3480,6 +3552,7 @@ fn key_channel(key: &SigKey) -> u8 {
     match key {
         SigKey::Can { ch, .. } => *ch,
         SigKey::Fr { bus, .. } | SigKey::Eth { bus, .. } => *bus,
+        SigKey::Derived { .. } => 0,
     }
 }
 
@@ -3488,7 +3561,7 @@ fn key_id(key: &SigKey) -> u32 {
     match key {
         SigKey::Can { id, .. } => *id,
         SigKey::Fr { slot, .. } => *slot as u32,
-        SigKey::Eth { .. } => 0,
+        SigKey::Eth { .. } | SigKey::Derived { .. } => 0,
     }
 }
 
@@ -3533,6 +3606,7 @@ fn command_key(
             .ok()
             .map(|slot| SigKey::fr(ch, slot, name)),
         "eth" => frame.map(|frame| SigKey::eth(ch, frame, name)),
+        "derived" => frame.map(|id| SigKey::derived(id, name)),
         _ => None,
     }
 }
@@ -3571,6 +3645,13 @@ fn row_address(key: &SigKey) -> RowAddress {
             ext: false,
             frame: Some(frame.clone()),
         },
+        SigKey::Derived { id, .. } => RowAddress {
+            kind: "derived",
+            ch: 0,
+            id: 0,
+            ext: false,
+            frame: Some(id.clone()),
+        },
     }
 }
 
@@ -3579,6 +3660,7 @@ pub(crate) fn series_key(key: &SigKey) -> String {
         SigKey::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
         SigKey::Fr { bus, slot, name } => format!("fr:{bus}:{slot}:{name}"),
         SigKey::Eth { bus, frame, name } => format!("eth:{bus}:{frame}:{name}"),
+        SigKey::Derived { id, .. } => format!("derived:{id}"),
     }
 }
 
@@ -3587,6 +3669,7 @@ fn signal_bus(app: &App, key: &SigKey) -> String {
         SigKey::Can { ch, .. } => bus_name(app, *ch),
         SigKey::Fr { bus, .. } => app.fr_bus_name(*bus),
         SigKey::Eth { bus, .. } => app.eth_bus_label(*bus),
+        SigKey::Derived { .. } => "Derived".to_string(),
     }
 }
 
@@ -3830,6 +3913,9 @@ struct WebState {
     workspace_rev: u64,
     reference: Option<crate::reference::ReferenceRun>,
     reference_rev: u64,
+    /// Definitions the editor lists; the values ride the normal signal
+    /// streams under `derived:<id>` keys.
+    derived: Vec<WebDerivedDef>,
     replay_map: WebReplayMap,
     buses: Vec<WebBus>,
     fr_buses: Vec<WebFrBus>,
@@ -4147,6 +4233,19 @@ struct WebDataRow {
     max: String,
     frac: f64,
     visible: bool,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDerivedDef {
+    id: String,
+    name: String,
+    unit: String,
+    expression: String,
+    cuts: Vec<f64>,
+    names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4743,7 +4842,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                                     crate::dbc::fmt_decoded(&sub.type_tag, sub.latest)
                                 }),
                                 sub.unit.clone(),
-                                sub.last_raw.to_string(),
+                                if kind == "derived" {
+                                    "-".to_string()
+                                } else {
+                                    sub.last_raw.to_string()
+                                },
                                 crate::dbc::fmt_decoded(&sub.type_tag, sub.min),
                                 crate::dbc::fmt_decoded(&sub.type_tag, sub.avg),
                                 crate::dbc::fmt_decoded(&sub.type_tag, sub.max),
@@ -4808,7 +4911,15 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         frame,
                     } = row_address(&signal.key);
                     let name = signal.key.name().to_string();
-                    let rule = window.rules.get(&signal.key);
+                    // A derived channel carries its bands on the definition
+                    // (that is what the editor persists), not per window.
+                    let derived_rule = match &signal.key {
+                        SigKey::Derived { id, .. } if !window.rules.contains_key(&signal.key) => {
+                            app.derived_rule(id)
+                        }
+                        _ => None,
+                    };
+                    let rule = window.rules.get(&signal.key).or(derived_rule.as_ref());
                     let (current, bands) = match signal_sub(app, &signal.key) {
                         Some(sub) => {
                             let held = sub.history.at(lo);
@@ -5064,6 +5175,19 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         workspace_rev: app.workspace_rev,
         reference: app.reference.clone(),
         reference_rev: app.reference_rev,
+        derived: app
+            .derived_defs
+            .iter()
+            .map(|def| WebDerivedDef {
+                id: def.id.clone(),
+                name: def.name.clone(),
+                unit: def.unit.clone(),
+                expression: def.expression.clone(),
+                cuts: def.cuts.clone(),
+                names: def.names.clone(),
+                error: crate::derived::parse(&def.expression).err(),
+            })
+            .collect(),
         replay_map,
         buses,
         fr_buses,
@@ -6164,6 +6288,65 @@ mod tests {
                 .any(|[_, value]| *value != 0.0),
             "the generator sources produced non-zero signal values"
         );
+    }
+
+    /// A derived definition is enough: the core samples it, the chart store
+    /// appends it after the selected lanes, and the observer rows name it
+    /// like any other signal, with the State bands from its definition.
+    #[test]
+    fn a_derived_channel_reaches_the_chart_and_the_state_observer() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(5));
+            app.update();
+        }
+        app.set_derived_defs(vec![crate::derived::DerivedDef {
+            id: "d1".into(),
+            name: "Double".into(),
+            unit: "rpm".into(),
+            expression: "[EngineSpeed] * 2".into(),
+            cuts: vec![1000.0],
+            names: vec!["low".into(), "high".into()],
+        }]);
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(5));
+            app.update();
+        }
+        let key = SigKey::derived("d1", "Double");
+        app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
+
+        let mut signals = SignalStore::default();
+        for spec in &SIGNALS {
+            signals.select(&app, spec.ch, spec.id, false, spec.name);
+        }
+        signals.sync(&app);
+        let seeded = signals.seed();
+        let derived = seeded
+            .iter()
+            .find(|series| series.key == "derived:d1")
+            .expect("the derived lane rides after the selected signals");
+        assert_eq!(derived.bus, "Derived");
+        assert_eq!(derived.unit, "rpm");
+        assert!(!derived.points.is_empty(), "the core sampled the lane");
+
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        let row = state
+            .state_rows
+            .iter()
+            .find(|row| row.kind == "derived")
+            .expect("the State observer lists the lane");
+        assert_eq!(row.name, "Double");
+        assert!(row.rule.is_some(), "the definition's bands reached the row");
+        assert!(!row.bands.is_empty());
+        let monitor = state
+            .monitor
+            .iter()
+            .find(|row| row.kind == "derived")
+            .expect("the Monitor observer lists the lane");
+        assert_eq!(monitor.name, "Double");
+        app.stop();
     }
 
     /// At the cap the store must trim its oldest row without discarding the

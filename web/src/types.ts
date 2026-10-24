@@ -35,6 +35,7 @@ export interface State {
     }[];
   } | null;
   referenceRev: number;
+  derived: DerivedDef[];
   replayMap: ReplayMap;
   buses: Bus[];
   frBuses: FrBus[];
@@ -275,6 +276,16 @@ export interface StateBand {
 export interface StateRule {
   cuts: number[];
   names: string[];
+}
+
+export interface DerivedDef {
+  id: string;
+  name: string;
+  unit: string;
+  expression: string;
+  cuts: number[];
+  names: string[];
+  error?: string;
 }
 
 export interface StateRow {
@@ -703,4 +714,5 @@ export type Command =
     }
   | { type: "set_web_workspace"; rev: number; workspace: unknown }
   | { type: "load_reference"; path: string }
-  | { type: "clear_reference" };
+  | { type: "clear_reference" }
+  | { type: "set_derived"; defs: DerivedDef[] };

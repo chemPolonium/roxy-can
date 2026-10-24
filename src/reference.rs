@@ -130,6 +130,9 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                     last_us: None,
                 });
             }
+            // A derived channel has no counterpart in an offline log: its
+            // expression is evaluated from the live run, not decoded.
+            SigKey::Derived { .. } => continue,
         }
     }
     targets

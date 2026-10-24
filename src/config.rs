@@ -306,6 +306,10 @@ pub struct SignalCfg {
     /// naming the Ethernet bus. Absent for CAN and FlexRay signals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eth_frame: Option<String>,
+    /// The definition id of a derived channel. Present for observer rows that
+    /// read a computed lane instead of a bus signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived: Option<String>,
     pub signal: String,
     #[serde(default = "true_default")]
     pub visible: bool,
@@ -379,6 +383,9 @@ pub struct MonitorRowCfg {
     /// See [`SignalCfg::eth_frame`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eth_frame: Option<String>,
+    /// See [`SignalCfg::derived`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived: Option<String>,
     pub signal: String,
     #[serde(default)]
     pub label: String,
@@ -826,17 +833,22 @@ pub struct Config {
     /// to the core so the web shell can evolve without a schema bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<serde_json::Value>,
+    /// Derived channels: expression, unit and State bands. The core owns
+    /// sampling, so the file carries the definitions, not their samples.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived: Vec<crate::derived::DerivedDef>,
 }
 
 /// The project-file fields a signal key writes: the CAN triple, or the
 /// FlexRay bus in `ch` with its slot in `fr_slot`, or the Ethernet bus in
 /// `ch` with the frame name in `eth_frame`. A FlexRay or Ethernet signal no
 /// longer borrows an arbitration id, so nothing here can be mistaken for one.
-fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>, Option<String>) {
+fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>, Option<String>, Option<String>) {
     match key {
-        SigKey::Can { ch, id, ext, .. } => (*ch, *id, *ext, None, None),
-        SigKey::Fr { bus, slot, .. } => (*bus, 0, false, Some(*slot), None),
-        SigKey::Eth { bus, frame, .. } => (*bus, 0, false, None, Some(frame.clone())),
+        SigKey::Can { ch, id, ext, .. } => (*ch, *id, *ext, None, None, None),
+        SigKey::Fr { bus, slot, .. } => (*bus, 0, false, Some(*slot), None, None),
+        SigKey::Eth { bus, frame, .. } => (*bus, 0, false, None, Some(frame.clone()), None),
+        SigKey::Derived { id, .. } => (0, 0, false, None, None, Some(id.clone())),
     }
 }
 
@@ -851,8 +863,12 @@ fn sig_key(
     ext: bool,
     fr_slot: Option<u16>,
     eth_frame: Option<String>,
+    derived: Option<String>,
     signal: String,
 ) -> SigKey {
+    if let Some(id) = derived {
+        return SigKey::derived(id, signal);
+    }
     if let Some(frame) = eth_frame {
         return SigKey::eth(ch, frame, signal);
     }
@@ -867,13 +883,14 @@ fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
     signals
         .iter()
         .map(|s| {
-            let (ch, id, ext, fr_slot, eth_frame) = sig_cfg_of(&s.key);
+            let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(&s.key);
             SignalCfg {
                 ch,
                 id,
                 ext,
                 fr_slot,
                 eth_frame,
+                derived,
                 signal: s.key.name().to_string(),
                 visible: s.visible,
                 y_mode: s.y_mode.to_u8(),
@@ -945,6 +962,7 @@ fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
                 s.ext,
                 s.fr_slot,
                 s.eth_frame.clone(),
+                s.derived.clone(),
                 s.signal.clone(),
             ),
             visible: s.visible,
@@ -1133,13 +1151,14 @@ impl Config {
                 .rows
                 .iter()
                 .map(|r| {
-                    let (ch, id, ext, fr_slot, eth_frame) = sig_cfg_of(&r.key);
+                    let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(&r.key);
                     MonitorRowCfg {
                         ch,
                         id,
                         ext,
                         fr_slot,
                         eth_frame,
+                        derived,
                         signal: r.key.name().to_string(),
                         label: r.label.clone(),
                         digits: r.digits,
@@ -1162,13 +1181,14 @@ impl Config {
                         .signals
                         .iter()
                         .map(|s| {
-                            let (ch, id, ext, fr_slot, eth_frame) = sig_cfg_of(&s.key);
+                            let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(&s.key);
                             SignalCfg {
                                 ch,
                                 id,
                                 ext,
                                 fr_slot,
                                 eth_frame,
+                                derived,
                                 signal: s.key.name().to_string(),
                                 visible: s.visible,
                                 y_mode: s.y_mode.to_u8(),
@@ -1344,6 +1364,7 @@ impl Config {
                 })
                 .collect(),
             web: app.web_workspace.clone(),
+            derived: app.derived_defs.clone(),
         }
     }
 
@@ -1377,6 +1398,7 @@ impl Config {
     pub fn apply(self, app: &mut App) -> Vec<String> {
         let mut problems: Vec<String> = Vec::new();
         app.web_workspace = self.web;
+        app.set_derived_defs(self.derived);
         // Description sources are rebuilt from this file; a project that
         // carries none must not inherit the previous project's cluster maps.
         app.can_arxml.clear();
@@ -1585,7 +1607,15 @@ impl Config {
                 .monitor_rows
                 .into_iter()
                 .map(|m| crate::app::MonitorRow {
-                    key: sig_key(m.ch, m.id, m.ext, m.fr_slot, m.eth_frame, m.signal),
+                    key: sig_key(
+                        m.ch,
+                        m.id,
+                        m.ext,
+                        m.fr_slot,
+                        m.eth_frame,
+                        m.derived,
+                        m.signal,
+                    ),
                     label: m.label,
                     digits: m.digits,
                     rule_on: m.rule_on,
@@ -2420,6 +2450,38 @@ mod tests {
             (r.digits, r.rule_on, r.rising, r.threshold, r.color),
             (2, true, false, 87.5, 3)
         );
+    }
+
+    /// Derived definitions and the observer rows that read them belong to
+    /// the project now, not to the browser's workspace blob.
+    #[test]
+    fn derived_definitions_and_rows_round_trip_with_the_project() {
+        let mut app = App::headless();
+        let defs = vec![crate::derived::DerivedDef {
+            id: "d1".into(),
+            name: "Sum".into(),
+            unit: "V".into(),
+            expression: "[EngineSpeed] + 1".into(),
+            cuts: vec![10.0],
+            names: vec!["low".into(), "high".into()],
+        }];
+        app.set_derived_defs(defs.clone());
+        let key = crate::observe::SigKey::derived("d1", "Sum");
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
+        let config = Config::from_app(&app, None);
+        assert_eq!(config.derived, defs, "the file carries the definitions");
+        assert_eq!(
+            config.monitor_rows[0].derived.as_deref(),
+            Some("d1"),
+            "the row stores the definition id, not a fake CAN address"
+        );
+        let json = serde_json::to_string(&config).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<Config>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        assert_eq!(restored.derived_defs, defs);
+        assert_eq!(restored.monitor_view.rows[0].key, key);
     }
 
     /// Which roles a bus declares has to outlive the session, or the bus

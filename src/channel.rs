@@ -243,6 +243,7 @@ impl App {
             SigKey::Can { ch, .. } => self.channel_name(*ch),
             SigKey::Fr { bus, .. } => self.fr_bus_name(*bus),
             SigKey::Eth { bus, .. } => self.eth_bus_label(*bus),
+            SigKey::Derived { .. } => "Derived".to_string(),
         }
     }
 
@@ -320,7 +321,7 @@ impl App {
             // manage, so such a curve is neither dropped nor shifted.
             signals.retain(|s| match &s.key {
                 SigKey::Can { ch, .. } => remap(*ch).is_some(),
-                SigKey::Fr { .. } | SigKey::Eth { .. } => true,
+                SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. } => true,
             });
             for s in signals.iter_mut() {
                 if let SigKey::Can { ch, .. } = &mut s.key {
@@ -361,9 +362,10 @@ impl App {
         // Monitor rows carry signal keys too.
         self.monitor_view.rows.retain(|r| match &r.key {
             // Same rule as the curve lists: the removed CAN channel takes its
-            // CAN rows with it and leaves every FlexRay and Ethernet row alone.
+            // CAN rows with it and leaves every FlexRay, Ethernet and derived
+            // row alone.
             SigKey::Can { ch, .. } => remap(*ch).is_some(),
-            SigKey::Fr { .. } | SigKey::Eth { .. } => true,
+            SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. } => true,
         });
         for r in &mut self.monitor_view.rows {
             if let SigKey::Can { ch, .. } = &mut r.key

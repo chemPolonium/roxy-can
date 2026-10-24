@@ -9,7 +9,6 @@ import type {
   Hardware,
   SignalSeries,
   State,
-  StateBand,
   TriggerEdit,
   TriggerLimits,
   TxEntry,
@@ -38,12 +37,7 @@ import { DataPanel } from "./components/DataPanel";
 import { DbcExplorer } from "./components/DbcExplorer";
 import { DerivedModal } from "./components/DerivedModal";
 import { EventJumpModal } from "./components/EventJumpModal";
-import {
-  buildAlignedCsv,
-  computeDerived,
-  statsOf,
-  type DerivedDef,
-} from "./derived";
+import { buildAlignedCsv, type DerivedDef } from "./derived";
 import { ExportModal } from "./components/ExportModal";
 import { FilePick } from "./components/FilePick";
 import { GeneratorModal } from "./components/GeneratorModal";
@@ -172,25 +166,28 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       ) {
         continue;
       }
-      const rule =
-        definition.rule &&
-        Array.isArray(definition.rule.cuts) &&
-        Array.isArray(definition.rule.names)
-          ? {
-              cuts: definition.rule.cuts
-                .filter((cut) => Number.isFinite(cut))
-                .map(Number),
-              names: definition.rule.names
-                .filter((name) => typeof name === "string")
-                .map(String),
-            }
-          : undefined;
+      // The pre-core editor nested bands under `rule`; accept both shapes so
+      // an old workspace imports its definitions and bands unharmed.
+      const legacy = definition as DerivedDef & {
+        rule?: { cuts?: unknown; names?: unknown };
+      };
+      const cuts: unknown = Array.isArray(definition.cuts)
+        ? definition.cuts
+        : legacy.rule?.cuts;
+      const names: unknown = Array.isArray(definition.names)
+        ? definition.names
+        : legacy.rule?.names;
       derived.push({
         id: definition.id,
         name: definition.name,
         unit: typeof definition.unit === "string" ? definition.unit : "",
         expression: definition.expression,
-        ...(rule ? { rule } : {}),
+        cuts: Array.isArray(cuts)
+          ? cuts.filter((cut) => Number.isFinite(cut)).map(Number)
+          : [],
+        names: Array.isArray(names)
+          ? names.filter((name) => typeof name === "string").map(String)
+          : [],
       });
     }
   }
@@ -258,6 +255,7 @@ function rowKey(row: {
 }): string {
   if (row.kind === "fr") return `fr:${row.ch}:${row.id}:${row.name}`;
   if (row.kind === "eth") return `eth:${row.ch}:${row.frame}:${row.name}`;
+  if (row.kind === "derived") return `derived:${row.frame}`;
   return `${row.ch}:${row.id}:${row.name}`;
 }
 
@@ -428,9 +426,11 @@ export function App() {
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [reference, setReference] = useState<ReferenceRun | null>(null);
   const [referenceOpen, setReferenceOpen] = useState(false);
-  const [derivedDefs, setDerivedDefs] = useState<DerivedDef[]>(
-    savedView.derived ?? [],
-  );
+  const [derivedDefs, setDerivedDefs] = useState<DerivedDef[]>([]);
+  // Definitions saved by the pre-core editor; imported once when the core
+  // reports none, then the project's own list takes over.
+  const legacyDerived = useRef<DerivedDef[]>(savedView.derived ?? []);
+  const derivedHydrated = useRef(false);
   const [derivedOpen, setDerivedOpen] = useState(false);
   const [derivedRule, setDerivedRule] = useState<DerivedDef | null>(null);
   const [eventOpen, setEventOpen] = useState(false);
@@ -473,7 +473,7 @@ export function App() {
       setChartSplit(false);
       setSplitRatio(0.6);
       setSignalOverlay(false);
-      setDerivedDefs([]);
+      legacyDerived.current = [];
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
@@ -489,7 +489,7 @@ export function App() {
     if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
     if (typeof view.splitRatio === "number") setSplitRatio(view.splitRatio);
     if (typeof view.overlay === "boolean") setSignalOverlay(view.overlay);
-    if (view.derived) setDerivedDefs(view.derived);
+    if (view.derived) legacyDerived.current = view.derived;
     if (view.signalView) setSignalView(view.signalView);
     if (view.cursors) {
       setChartCursors(view.cursors);
@@ -512,9 +512,30 @@ export function App() {
       return;
     }
     appliedWorkspaceRev.current = rev;
+    // A newly opened project may carry definitions only the old browser-side
+    // editor understood; give the import below another chance to see them.
+    derivedHydrated.current = false;
     if (rev > 0) applyWorkspace(state.workspace);
     setWorkspaceHydrated(true);
   }, [state?.workspaceRev]);
+
+  // The core owns the derived list; mirror it for the editor. A project saved
+  // by the old browser-only editor carries its definitions in the workspace,
+  // so import those once when the core reports none.
+  const derivedSignature = useMemo(
+    () => JSON.stringify(state?.derived ?? []),
+    [state?.derived],
+  );
+  useEffect(() => {
+    if (!state) return;
+    setDerivedDefs(state.derived ?? []);
+    if (derivedHydrated.current || !workspaceHydrated) return;
+    derivedHydrated.current = true;
+    if ((state.derived?.length ?? 0) === 0 && legacyDerived.current.length > 0) {
+      void run({ type: "set_derived", defs: legacyDerived.current });
+      legacyDerived.current = [];
+    }
+  }, [derivedSignature, workspaceHydrated, state?.workspaceRev]);
 
   // Keep the backend copy warm so any save or autosave carries the current
   // tabs, cursors, splitters and Trace columns.
@@ -534,7 +555,6 @@ export function App() {
           signalView,
           cursors: chartCursors,
           traceColumns,
-          derived: derivedDefs,
           layout,
         },
       }).catch(() => {});
@@ -551,7 +571,6 @@ export function App() {
     signalView,
     chartCursors,
     traceColumns,
-    derivedDefs,
     layout,
     state?.workspaceRev,
   ]);
@@ -726,7 +745,6 @@ export function App() {
           overlay: signalOverlay,
           signalView,
           cursors: chartCursors,
-          derived: derivedDefs,
         }),
       );
     } catch {
@@ -741,7 +759,6 @@ export function App() {
     signalOverlay,
     signalView,
     chartCursors,
-    derivedDefs,
   ]);
 
   useEffect(() => {
@@ -894,18 +911,19 @@ export function App() {
 
   const clearChartCursors = () => setChartCursors([]);
 
+  const saveDerived = (defs: DerivedDef[]) => {
+    void run({ type: "set_derived", defs });
+  };
+
   const removeDerived = (key?: string) => {
     if (!key) return;
-    setDerivedDefs((defs) =>
-      defs.filter((definition) => `derived:${definition.id}` !== key),
-    );
+    const id = key.startsWith("derived:") ? key.slice("derived:".length) : key;
+    saveDerived(derivedDefs.filter((definition) => definition.id !== id));
   };
 
   const stateRowRule = (row: StateRow) => {
     if (row.kind === "derived") {
-      const def = derivedDefs.find(
-        (definition) => `derived:${definition.id}` === row.frame,
-      );
+      const def = derivedDefs.find((definition) => definition.id === row.frame);
       if (def) setDerivedRule(def);
       return;
     }
@@ -933,7 +951,8 @@ export function App() {
       if (action === "remove") {
         removeDerived(key);
       } else {
-        showToast("Derived channels already appear in Monitor, Data and State");
+        void run({ type: "chart_signal", key, action });
+        setChartTab(action);
       }
       return;
     }
@@ -1296,7 +1315,6 @@ export function App() {
         signalView,
         cursors: chartCursors,
         traceColumns,
-        derived: derivedDefs,
         layout,
       },
     });
@@ -1802,75 +1820,9 @@ export function App() {
   }, [chartCursors]);
   const dataKeys = new Set((state?.data ?? []).map(rowKey));
   const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
-  const derivedSeries = useMemo(
-    () => computeDerived(derivedDefs, signals),
-    [derivedDefs, signals],
-  );
-  const chartSeries = useMemo(
-    () => [...signals, ...derivedSeries],
-    [signals, derivedSeries],
-  );
-  const derivedMonitorRows = useMemo(
-    () =>
-      derivedSeries.map((signal, index) => {
-        const point = signal.points[signal.points.length - 1];
-        return {
-          kind: "derived",
-          ch: 0,
-          id: index,
-          ext: false,
-          frame: signal.key,
-          name: signal.name,
-          label: signal.name,
-          bus: "Derived",
-          value: point ? point[1] : 0,
-          hasValue: Boolean(point),
-          unit: signal.unit,
-          digits: 2,
-          ruleOn: false,
-          rising: true,
-          threshold: 0,
-          color: 100 + index,
-        };
-      }),
-    [derivedSeries],
-  );
-  const derivedDataRows = useMemo(
-    () =>
-      derivedSeries.map((signal, index) => {
-        const point = signal.points[signal.points.length - 1];
-        const stats = statsOf(signal.points);
-        const format = (value: number) => {
-          const magnitude = Math.abs(value);
-          return magnitude >= 1000
-            ? value.toFixed(0)
-            : magnitude >= 1
-              ? value.toFixed(2)
-              : value.toFixed(3);
-        };
-        return {
-          kind: "derived",
-          ch: 0,
-          id: index,
-          ext: false,
-          frame: signal.key,
-          name: signal.name,
-          bus: "Derived",
-          value: point ? format(point[1]) : "—",
-          unit: signal.unit,
-          raw: "—",
-          min: stats ? format(stats.min) : "—",
-          avg: stats ? format(stats.avg) : "—",
-          max: stats ? format(stats.max) : "—",
-          frac:
-            point && stats && stats.max > stats.min
-              ? clamp((point[1] - stats.min) / (stats.max - stats.min), 0, 1)
-              : 0,
-          visible: true,
-        };
-      }),
-    [derivedSeries],
-  );
+  // Derived channels are ordinary core subscriptions now, so the chart
+  // series and every observer row include them without synthesis here.
+  const chartSeries = signals;
   const chartLatestS = useMemo(
     () =>
       signals.reduce((latest, signal) => {
@@ -1879,74 +1831,9 @@ export function App() {
       }, 0),
     [signals],
   );
-  const derivedStateRows = useMemo(() => {
-    const windowS = state?.stateWindowS ?? 20;
-    const start = chartLatestS - windowS;
-    return derivedSeries.flatMap((signal, index) => {
-      const def = derivedDefs.find(
-        (definition) => `derived:${definition.id}` === signal.key,
-      );
-      if (!def?.rule || def.rule.cuts.length === 0) return [];
-      const cuts = def.rule.cuts;
-      const names = def.rule.names;
-      const bandFor = (value: number) =>
-        cuts.filter((cut) => value >= cut).length;
-      const labelFor = (band: number) => names[band] ?? `band ${band}`;
-      const points = signal.points.filter(([t]) => t >= start);
-      if (points.length === 0) return [];
-      const bands: StateBand[] = [];
-      let band = bandFor(points[0][1]);
-      let bandStart = 0;
-      for (const [t, value] of points) {
-        const next = bandFor(value);
-        const frac = clamp((t - start) / windowS, 0, 1);
-        if (next !== band) {
-          if (frac > bandStart) {
-            bands.push({
-              start: bandStart,
-              end: frac,
-              label: labelFor(band),
-              color: band,
-            });
-          }
-          bandStart = frac;
-          band = next;
-        }
-      }
-      bands.push({
-        start: bandStart,
-        end: 1,
-        label: labelFor(band),
-        color: band,
-      });
-      return [
-        {
-          kind: "derived",
-          ch: 0,
-          id: index,
-          ext: false,
-          frame: signal.key,
-          name: signal.name,
-          bus: "Derived",
-          current: labelFor(band),
-          bands,
-          rule: def.rule,
-        },
-      ];
-    });
-  }, [derivedSeries, derivedDefs, state?.stateWindowS, chartLatestS]);
-  const monitorRows = useMemo(
-    () => [...(state?.monitor ?? []), ...derivedMonitorRows],
-    [state?.monitor, derivedMonitorRows],
-  );
-  const dataRows = useMemo(
-    () => [...(state?.data ?? []), ...derivedDataRows],
-    [state?.data, derivedDataRows],
-  );
-  const stateRows = useMemo(
-    () => [...(state?.stateRows ?? []), ...derivedStateRows],
-    [state?.stateRows, derivedStateRows],
-  );
+  const monitorRows = state?.monitor ?? [];
+  const dataRows = state?.data ?? [];
+  const stateRows = state?.stateRows ?? [];
   const chartCenterS =
     signalView.endS !== null
       ? signalView.endS - signalView.windowS / 2
@@ -3819,22 +3706,26 @@ export function App() {
       {derivedRule && (
         <StateRuleModal
           signal={`${derivedRule.name} · Derived`}
-          rule={derivedRule.rule ?? null}
+          rule={
+            derivedRule.cuts.length > 0
+              ? { cuts: derivedRule.cuts, names: derivedRule.names }
+              : null
+          }
           onApply={(cuts, names) => {
-            setDerivedDefs((defs) =>
-              defs.map((definition) =>
+            saveDerived(
+              derivedDefs.map((definition) =>
                 definition.id === derivedRule.id
-                  ? { ...definition, rule: { cuts, names } }
+                  ? { ...definition, cuts, names }
                   : definition,
               ),
             );
             setDerivedRule(null);
           }}
           onClear={() => {
-            setDerivedDefs((defs) =>
-              defs.map((definition) =>
+            saveDerived(
+              derivedDefs.map((definition) =>
                 definition.id === derivedRule.id
-                  ? { ...definition, rule: undefined }
+                  ? { ...definition, cuts: [], names: [] }
                   : definition,
               ),
             );
@@ -4186,13 +4077,11 @@ export function App() {
           defs={derivedDefs}
           series={signals}
           onSave={(definition) => {
-            setDerivedDefs((defs) => [...defs, definition]);
+            saveDerived([...derivedDefs, definition]);
             showToast(`Derived ${definition.name} added`);
           }}
           onRemove={(id) =>
-            setDerivedDefs((defs) =>
-              defs.filter((definition) => definition.id !== id),
-            )
+            saveDerived(derivedDefs.filter((definition) => definition.id !== id))
           }
           onRule={(definition) => {
             setDerivedOpen(false);

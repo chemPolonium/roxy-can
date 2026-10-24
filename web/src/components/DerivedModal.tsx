@@ -48,6 +48,8 @@ export function DerivedModal({
       name: name.trim(),
       unit: unit.trim(),
       expression: expression.trim(),
+      cuts: [],
+      names: [],
     });
     setName("");
     setUnit("");
@@ -86,7 +88,7 @@ export function DerivedModal({
                       title="Edit the State threshold bands"
                       onClick={() => onRule(definition)}
                     >
-                      {definition.rule ? "Bands…" : "Add bands…"}
+                      {definition.cuts.length > 0 ? "Bands…" : "Add bands…"}
                     </button>
                   )}
                   <button
@@ -153,8 +155,8 @@ export function DerivedModal({
             </div>
             <div class="derived-actions">
               <span class="hint">
-                Derived channels are chart-only for now; their definitions
-                travel with the project.
+                The core samples every derived channel; definitions and State
+                bands travel with the project.
               </span>
               <span class="spacer" />
               <button type="button" onClick={onClose}>

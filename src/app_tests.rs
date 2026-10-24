@@ -1450,6 +1450,107 @@ fn a_reference_log_decodes_the_selected_can_signals() {
 }
 
 #[test]
+fn derived_channels_sample_their_subscribed_sources() {
+    let mut app = App::headless();
+    let a = SigKey::can(0, 0x100, false, "A");
+    let b = SigKey::can(0, 0x101, false, "B");
+    app.subscribe_signal(a.clone());
+    app.subscribe_signal(b.clone());
+    for i in 0..5u64 {
+        let t = i * 100_000;
+        app.subs.get_mut(&a).unwrap().push_sample(t, i as f64, 1);
+        app.subs.get_mut(&b).unwrap().push_sample(t, 10.0, 1);
+    }
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d1".into(),
+        name: "Sum".into(),
+        unit: "V".into(),
+        expression: "[A] + [B]".into(),
+        cuts: vec![12.0],
+        names: vec!["low".into(), "high".into()],
+    }]);
+    let key = SigKey::derived("d1", "Sum");
+    let sub = app.subs.get(&key).expect("the derived lane is subscribed");
+    let points: Vec<(u64, f64)> = sub.history.iter().copied().collect();
+    assert_eq!(points.len(), 5, "every source instant is sampled");
+    assert_eq!(points[0], (0, 10.0));
+    assert_eq!(points[4], (400_000, 14.0));
+    assert_eq!(sub.unit, "V");
+    assert!(
+        app.derived_rule("d1").is_some(),
+        "bands travel with the def"
+    );
+    assert_eq!(app.derived[0].error, None);
+}
+
+#[test]
+fn a_derived_channel_can_use_an_earlier_derived_channel() {
+    let mut app = App::headless();
+    let a = SigKey::can(0, 0x100, false, "A");
+    app.subscribe_signal(a.clone());
+    for i in 0..3u64 {
+        app.subs
+            .get_mut(&a)
+            .unwrap()
+            .push_sample(i * 100_000, (i + 1) as f64, 1);
+    }
+    app.set_derived_defs(vec![
+        crate::derived::DerivedDef {
+            id: "sum".into(),
+            name: "Sum".into(),
+            unit: String::new(),
+            expression: "[A] + 1".into(),
+            ..Default::default()
+        },
+        crate::derived::DerivedDef {
+            id: "twice".into(),
+            name: "Twice".into(),
+            unit: String::new(),
+            expression: "[Sum] * 2".into(),
+            ..Default::default()
+        },
+    ]);
+    let twice = app
+        .subs
+        .get(&SigKey::derived("twice", "Twice"))
+        .expect("the second lane samples after the first");
+    let values: Vec<f64> = twice.history.iter().map(|(_, value)| *value).collect();
+    assert_eq!(values, vec![4.0, 6.0, 8.0]);
+}
+
+#[test]
+fn a_derived_channel_waits_for_a_source_that_appears_later() {
+    let mut app = App::headless();
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Late".into(),
+        unit: String::new(),
+        expression: "[C] * 2".into(),
+        ..Default::default()
+    }]);
+    assert!(
+        app.derived[0].error.is_some(),
+        "no subscription can resolve the reference yet"
+    );
+    let c = SigKey::can(0, 0x102, false, "C");
+    app.send(crate::bus::BusCommand::Subscribe { key: c.clone() });
+    for i in 0..2u64 {
+        app.subs
+            .get_mut(&c)
+            .unwrap()
+            .push_sample(i * 100_000, (i + 3) as f64, 1);
+    }
+    app.send(crate::bus::BusCommand::Subscribe { key: c });
+    let sub = app
+        .subs
+        .get(&SigKey::derived("d", "Late"))
+        .expect("the lane samples once its source exists");
+    let values: Vec<f64> = sub.history.iter().map(|(_, value)| *value).collect();
+    assert_eq!(values, vec![6.0, 8.0]);
+    assert_eq!(app.derived[0].error, None);
+}
+
+#[test]
 fn aligned_signal_csv_writes_one_row_per_time_step() {
     let mut app = App::headless();
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
