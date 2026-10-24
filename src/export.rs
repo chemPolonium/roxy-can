@@ -2,6 +2,21 @@ use crate::app::{App, MessageAgg};
 use crate::can::frame::{CanFrame, Direction};
 use crate::log::AscWriter;
 
+/// Six decimals are enough for signal values; drop the trailing zeros so a
+/// CSV cell reads `130.17`, not `130.17000000000002`.
+fn csv_value(value: f64) -> String {
+    let mut text = format!("{value:.6}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
 fn wall_stamp(us: u64) -> String {
     let s = us / 1_000_000;
     let ms = (us % 1_000_000) / 1_000;
@@ -609,7 +624,7 @@ impl App {
                 }
                 out.push(',');
                 if let Some(value) = last[i] {
-                    out.push_str(&format!("{value}"));
+                    out.push_str(&csv_value(value));
                 }
             }
             out.push('\n');
