@@ -246,6 +246,12 @@ pub struct App {
     pub recent_projects: Vec<String>,
     /// Legacy dock-layout text embedded on save.
     pub layout_cache: String,
+    /// Frontend workspace embedded in the project: tabs, cursors, column
+    /// layout and splitters. Opaque to the core.
+    pub web_workspace: Option<serde_json::Value>,
+    /// Bumped whenever a project or autosave is loaded so the web shell
+    /// knows to adopt the file's workspace exactly once.
+    pub workspace_rev: u64,
     /// Factory layout restored by New Project.
     pub default_layout: String,
     /// Layout queued for the next project reset.
@@ -466,6 +472,8 @@ impl App {
             project_path: None,
             recent_projects: Vec::new(),
             layout_cache: String::new(),
+            web_workspace: None,
+            workspace_rev: 0,
             default_layout: String::new(),
             pending_layout: None,
             pnp_signature,

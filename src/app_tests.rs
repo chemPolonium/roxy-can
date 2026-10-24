@@ -1414,6 +1414,42 @@ fn tx_generator_emits_frames() {
 }
 
 #[test]
+fn trace_export_honors_an_absolute_range() {
+    let mut app = App::headless();
+    for tx in &mut app.tx_list {
+        tx.active = true;
+        tx.cycle_us = 10_000;
+    }
+    open_all_gates(&mut app);
+    app.start_virtual();
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    app.stop();
+    let mut times: Vec<u64> = app.snap.trace.iter().map(|frame| frame.t_us).collect();
+    times.sort_unstable();
+    assert!(times.len() >= 4, "the fixture produced frames");
+    let from = times[times.len() / 4];
+    let to = times[times.len() * 3 / 4];
+    assert!(from < to, "the test picks a real interval");
+
+    let path =
+        std::env::temp_dir().join(format!("roxy_can_range_export_{}.asc", std::process::id()));
+    app.export_trace_range(0, &path.to_string_lossy(), from, to);
+    let content = std::fs::read_to_string(&path).unwrap();
+    let frames = crate::log::asc::parse_asc(&content);
+    assert!(!frames.is_empty(), "the range still holds frames");
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame.t_us >= from && frame.t_us <= to),
+        "nothing outside the A/B cursors is exported"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn export_trace_writes_parseable_asc() {
     let mut app = App::headless();
     for tx in &mut app.tx_list {
@@ -2867,6 +2903,44 @@ fn project_round_trips_through_an_rxproj_file() {
     assert_eq!(restored.trace_windows[0].filter, "Motor");
     assert_eq!(restored.channels.len(), app.channels.len());
     assert_eq!(restored.tx_list.len(), app.tx_list.len());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn the_web_workspace_round_trips_without_dirtying_the_project() {
+    let mut app = App::headless();
+    app.mark_clean();
+    let workspace = serde_json::json!({
+        "tab": "statistics",
+        "chartTab": "signals",
+        "signalView": { "windowS": 45.0, "endS": null },
+        "cursors": [{ "id": 3, "t": 12.5 }],
+        "traceColumns": { "widths": { "name": 150 }, "hidden": ["bus"] },
+        "layout": { "main": 0.5, "right": 0.6 }
+    });
+    app.web_workspace = Some(workspace.clone());
+    assert!(
+        !app.is_dirty(),
+        "moving panels or cursors is not a semantic workspace change"
+    );
+
+    let path =
+        std::env::temp_dir().join(format!("roxy_web_workspace_{}.rxproj", std::process::id()));
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+    let rev = app.workspace_rev;
+
+    let mut restored = App::headless();
+    restored.open_project_path(&path);
+    assert_eq!(restored.web_workspace, Some(workspace));
+    assert!(restored.workspace_rev > rev, "loading bumps the revision");
+    assert!(!restored.is_dirty(), "the loaded file is clean");
+
+    restored.new_project();
+    assert_eq!(restored.web_workspace, None);
+    assert!(
+        restored.workspace_rev > rev + 1,
+        "a new project also resets the revision"
+    );
     std::fs::remove_file(&path).ok();
 }
 

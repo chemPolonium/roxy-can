@@ -22,12 +22,27 @@ impl App {
     /// the whole run, not just the hot ring's window. FlexRay and Ethernet rows
     /// have no archive, so the export covers the ring for them.
     pub fn export_trace(&mut self, win: usize, path: &str) {
+        self.export_trace_inner(win, path, None);
+    }
+
+    /// Exports only the frames and FlexRay rows inside `[from_us, to_us]`.
+    /// Used by the web export dialog's A/B cursor range.
+    pub fn export_trace_range(&mut self, win: usize, path: &str, from_us: u64, to_us: u64) {
+        if from_us >= to_us {
+            self.status = "export: the range end must be after its start".to_string();
+            return;
+        }
+        self.export_trace_inner(win, path, Some((from_us, to_us)));
+    }
+
+    fn export_trace_inner(&mut self, win: usize, path: &str, range: Option<(u64, u64)>) {
         let Some(w) = self.trace_windows.get(win) else {
             return;
         };
         let flt = w.filter_lens();
+        let within = |t_us: u64| range.is_none_or(|(from, to)| t_us >= from && t_us <= to);
         if path.to_ascii_lowercase().ends_with(".pcap") {
-            self.export_trace_pcap(path, &flt);
+            self.export_trace_pcap(path, &flt, range);
             return;
         }
         if self.snap.trace.is_empty() && self.snap.fr_trace.is_empty() {
@@ -41,7 +56,7 @@ impl App {
                 crate::trace::SpillFile::read_all(archive_path)
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|f| self.trace_match_lens(&flt, f))
+                    .filter(|f| self.trace_match_lens(&flt, f) && within(f.t_us))
                     .collect(),
                 total,
             ),
@@ -54,14 +69,14 @@ impl App {
                     .trace
                     .iter()
                     .copied()
-                    .filter(|f| self.trace_match_lens(&flt, f)),
+                    .filter(|f| self.trace_match_lens(&flt, f) && within(f.t_us)),
             )
             .collect();
         let rows: Vec<crate::trace::FrRow> = self
             .snap
             .fr_trace
             .iter()
-            .filter(|r| self.trace_fr_match(&flt, r))
+            .filter(|r| self.trace_fr_match(&flt, r) && within(r.t_us))
             .cloned()
             .collect();
         if frames.is_empty() && rows.is_empty() {
@@ -112,12 +127,18 @@ impl App {
     /// frame is "now": a capture opened in Wireshark then reads as a recent
     /// log instead of 1970. The capture has no direction field; Rx and Tx both
     /// become ordinary wire frames, as a physical capture would show them.
-    fn export_trace_pcap(&mut self, path: &str, flt: &crate::workspace::TraceFilter) {
+    fn export_trace_pcap(
+        &mut self,
+        path: &str,
+        flt: &crate::workspace::TraceFilter,
+        range: Option<(u64, u64)>,
+    ) {
+        let within = |t_us: u64| range.is_none_or(|(from, to)| t_us >= from && t_us <= to);
         let frames: Vec<crate::eth::EthFrame> = self
             .snap
             .eth_trace
             .iter()
-            .filter(|f| self.trace_eth_match(flt, f))
+            .filter(|f| self.trace_eth_match(flt, f) && within(f.t_us))
             .cloned()
             .collect();
         if frames.is_empty() {

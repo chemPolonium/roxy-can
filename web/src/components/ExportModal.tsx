@@ -8,7 +8,12 @@ import {
 
 interface Props {
   initialKind: string;
-  onExport: (kind: string, path: string) => void;
+  range?: { fromUs: number; toUs: number } | null;
+  onExport: (
+    kind: string,
+    path: string,
+    range?: { fromUs: number; toUs: number },
+  ) => void;
   onClose: () => void;
 }
 
@@ -30,7 +35,12 @@ function withExt(path: string, ext: string): string {
   return `${path}${ext}`;
 }
 
-export function ExportModal({ initialKind, onExport, onClose }: Props) {
+export function ExportModal({
+  initialKind,
+  range = null,
+  onExport,
+  onClose,
+}: Props) {
   const [kind, setKind] = useState(
     KINDS.some(([value]) => value === initialKind) ? initialKind : "trace",
   );
@@ -39,6 +49,7 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
   );
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [useRange, setUseRange] = useState(range !== null);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -49,12 +60,14 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
   const current = KINDS.find(([value]) => value === kind) ?? KINDS[0];
   const name = path.trim();
   const canDownload = isDownloadName(name);
+  const selectedRange =
+    kind === "trace" && useRange && range ? range : undefined;
 
   const exportAndDownload = async () => {
     setDownloading(true);
     setDownloadError("");
     await clearDownload(name);
-    onExport(kind, name);
+    onExport(kind, name, selectedRange);
     const url = await waitForDownload(name);
     setDownloading(false);
     if (!url) {
@@ -109,11 +122,27 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
               }
               onKeyDown={(event) => {
                 if (event.key === "Enter" && path.trim()) {
-                  onExport(kind, path.trim());
+                  onExport(kind, path.trim(), selectedRange);
                 }
               }}
             />
           </label>
+          {kind === "trace" && range && (
+            <label class="export-range">
+              <input
+                type="checkbox"
+                checked={useRange}
+                onChange={(event) =>
+                  setUseRange((event.target as HTMLInputElement).checked)
+                }
+              />
+              Only between cursors A and B
+              <em>
+                {(range.fromUs / 1e6).toFixed(3)} –{" "}
+                {(range.toUs / 1e6).toFixed(3)} s
+              </em>
+            </label>
+          )}
           <p class="hint">
             A bare file name exports into the host's download folder and
             <strong> Export &amp; download</strong> saves it through the
@@ -128,7 +157,7 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
               type="button"
               class="primary"
               disabled={!name || downloading}
-              onClick={() => onExport(kind, name)}
+              onClick={() => onExport(kind, name, selectedRange)}
             >
               Export
             </button>

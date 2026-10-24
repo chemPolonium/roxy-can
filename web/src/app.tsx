@@ -33,6 +33,7 @@ import { ColumnsMenu } from "./components/ColumnsMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
+import { DbcExplorer } from "./components/DbcExplorer";
 import { ExportModal } from "./components/ExportModal";
 import { FilePick } from "./components/FilePick";
 import { GeneratorModal } from "./components/GeneratorModal";
@@ -78,6 +79,7 @@ import {
 import {
   DEFAULT_TRACE_COLUMNS,
   loadTraceColumns,
+  parseTraceColumns,
   saveTraceColumns,
 } from "./traceLayout";
 
@@ -103,50 +105,59 @@ interface SavedView {
   cursors: ChartCursor[];
 }
 
+interface SavedWorkspace extends Partial<SavedView> {
+  traceColumns?: unknown;
+  layout?: unknown;
+}
+
+function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
+  const tabs: RightTab[] = [
+    "messages",
+    "statistics",
+    "bus",
+    "spec",
+    "activity",
+  ];
+  const chartTabs: ChartTab[] = [
+    "rate",
+    "signals",
+    "monitor",
+    "data",
+    "state",
+  ];
+  const windowS = clamp(Number(saved.signalView?.windowS) || 30, 1, 120);
+  const rawEnd = saved.signalView?.endS;
+  const endS =
+    typeof rawEnd === "number" && Number.isFinite(rawEnd) ? rawEnd : null;
+  const cursors: ChartCursor[] = [];
+  if (Array.isArray(saved.cursors)) {
+    for (const cursor of saved.cursors.slice(0, 16)) {
+      if (!Number.isFinite(cursor?.id) || !Number.isFinite(cursor?.t)) continue;
+      const label =
+        cursor.label === "A" || cursor.label === "B" ? cursor.label : undefined;
+      cursors.push({
+        id: cursor.id,
+        t: cursor.t,
+        ...(label ? { label } : {}),
+      });
+    }
+  }
+  return {
+    tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
+    chartTab:
+      saved.chartTab && chartTabs.includes(saved.chartTab)
+        ? saved.chartTab
+        : undefined,
+    signalView: { windowS, endS },
+    cursors,
+  };
+}
+
 function loadView(): Partial<SavedView> {
   try {
     const raw = localStorage.getItem(VIEW_KEY);
     if (!raw) return {};
-    const saved = JSON.parse(raw) as Partial<SavedView>;
-    const tabs: RightTab[] = [
-      "messages",
-      "statistics",
-      "bus",
-      "spec",
-      "activity",
-    ];
-    const chartTabs: ChartTab[] = [
-      "rate",
-      "signals",
-      "monitor",
-      "data",
-      "state",
-    ];
-    const windowS = clamp(Number(saved.signalView?.windowS) || 30, 1, 120);
-    const rawEnd = saved.signalView?.endS;
-    const endS = typeof rawEnd === "number" && Number.isFinite(rawEnd) ? rawEnd : null;
-    const cursors: ChartCursor[] = [];
-    if (Array.isArray(saved.cursors)) {
-      for (const cursor of saved.cursors.slice(0, 16)) {
-        if (!Number.isFinite(cursor?.id) || !Number.isFinite(cursor?.t)) continue;
-        const label =
-          cursor.label === "A" || cursor.label === "B" ? cursor.label : undefined;
-        cursors.push({
-          id: cursor.id,
-          t: cursor.t,
-          ...(label ? { label } : {}),
-        });
-      }
-    }
-    return {
-      tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
-      chartTab:
-        saved.chartTab && chartTabs.includes(saved.chartTab)
-          ? saved.chartTab
-          : undefined,
-      signalView: { windowS, endS },
-      cursors,
-    };
+    return normalizeView(JSON.parse(raw));
   } catch {
     return {};
   }
@@ -170,15 +181,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function parseLayout(value: unknown): Layout | null {
+  if (!value || typeof value !== "object") return null;
+  const saved = value as Partial<Layout>;
+  return {
+    main: clamp(Number(saved.main) || DEFAULT_LAYOUT.main, 0.4, 0.78),
+    right: clamp(Number(saved.right) || DEFAULT_LAYOUT.right, 0.34, 0.8),
+  };
+}
+
 function loadLayout(): Layout {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return DEFAULT_LAYOUT;
-    const saved = JSON.parse(raw) as Partial<Layout>;
-    return {
-      main: clamp(Number(saved.main) || DEFAULT_LAYOUT.main, 0.4, 0.78),
-      right: clamp(Number(saved.right) || DEFAULT_LAYOUT.right, 0.34, 0.8),
-    };
+    return parseLayout(JSON.parse(raw)) ?? DEFAULT_LAYOUT;
   } catch {
     return DEFAULT_LAYOUT;
   }
@@ -317,6 +333,9 @@ export function App() {
   const [timeJumpOpen, setTimeJumpOpen] = useState(false);
   const [traceJump, setTraceJump] = useState<TraceJump | null>(null);
   const [traceColumns, setTraceColumns] = useState(loadTraceColumns);
+  const [explorerOpen, setExplorerOpen] = useState(false);
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const appliedWorkspaceRev = useRef(-1);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
@@ -342,6 +361,77 @@ export function App() {
       toastTimer.current = null;
     }, 2600);
   };
+
+  const applyWorkspace = (raw: unknown) => {
+    if (!raw || typeof raw !== "object") {
+      setTab("messages");
+      setChartTab("rate");
+      setSignalView({ windowS: 30, endS: null });
+      setChartCursors([]);
+      setTraceColumns(DEFAULT_TRACE_COLUMNS);
+      setLayout(DEFAULT_LAYOUT);
+      chartCursorSeq.current = 1;
+      return;
+    }
+    const saved = raw as SavedWorkspace;
+    const view = normalizeView(saved);
+    if (view.tab) setTab(view.tab);
+    if (view.chartTab) setChartTab(view.chartTab);
+    if (view.signalView) setSignalView(view.signalView);
+    if (view.cursors) {
+      setChartCursors(view.cursors);
+      chartCursorSeq.current =
+        Math.max(0, ...view.cursors.map((cursor) => cursor.id)) + 1;
+    }
+    const columns = parseTraceColumns(saved.traceColumns);
+    if (columns) setTraceColumns(columns);
+    const nextLayout = parseLayout(saved.layout);
+    if (nextLayout) setLayout(nextLayout);
+  };
+
+  // A project load bumps the revision once; adopt its workspace then, but
+  // leave the local view alone on the first (untitled) snapshot.
+  useEffect(() => {
+    if (!state) return;
+    const rev = state.workspaceRev ?? 0;
+    if (rev === appliedWorkspaceRev.current) {
+      setWorkspaceHydrated(true);
+      return;
+    }
+    appliedWorkspaceRev.current = rev;
+    if (rev > 0) applyWorkspace(state.workspace);
+    setWorkspaceHydrated(true);
+  }, [state?.workspaceRev]);
+
+  // Keep the backend copy warm so any save or autosave carries the current
+  // tabs, cursors, splitters and Trace columns.
+  useEffect(() => {
+    if (!workspaceHydrated || !state) return;
+    const timer = window.setTimeout(() => {
+      void sendCommand({
+        type: "set_web_workspace",
+        rev: state.workspaceRev ?? 0,
+        workspace: {
+          tab,
+          chartTab,
+          signalView,
+          cursors: chartCursors,
+          traceColumns,
+          layout,
+        },
+      }).catch(() => {});
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [
+    workspaceHydrated,
+    tab,
+    chartTab,
+    signalView,
+    chartCursors,
+    traceColumns,
+    layout,
+    state?.workspaceRev,
+  ]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -856,6 +946,25 @@ export function App() {
     showToast("Layout reset");
   };
 
+  const applyLayoutPreset = (preset: "trace" | "analysis" | "replay") => {
+    if (preset === "trace") {
+      setLayout({ main: 0.78, right: 0.5 });
+      setChartTab("rate");
+      setTab("messages");
+      showToast("Layout: Trace focus");
+    } else if (preset === "analysis") {
+      setLayout({ main: 0.52, right: 0.62 });
+      setChartTab("signals");
+      setTab("statistics");
+      showToast("Layout: Analysis");
+    } else {
+      setLayout({ main: 0.64, right: 0.55 });
+      setChartTab("rate");
+      setTab("messages");
+      showToast("Layout: Replay");
+    }
+  };
+
   const setChartCursorAt = (slot: "A" | "B", tUs: number) => {
     const t = tUs / 1e6;
     const id = chartCursorSeq.current++;
@@ -927,8 +1036,25 @@ export function App() {
     setScriptsOpen(false);
   };
 
-  const saveProject = (path: string | null) => {
-    void run({ type: "save_project", path });
+  const pushWorkspace = () =>
+    sendCommand({
+      type: "set_web_workspace",
+      rev: state?.workspaceRev ?? 0,
+      workspace: {
+        tab,
+        chartTab,
+        signalView,
+        cursors: chartCursors,
+        traceColumns,
+        layout,
+      },
+    });
+
+  const saveProject = async (path: string | null) => {
+    // Flush the current view before the file is written; the debounced sync
+    // may still be waiting and would otherwise save the previous workspace.
+    await pushWorkspace().catch(() => {});
+    await run({ type: "save_project", path });
   };
 
   const saveAndDownload = async () => {
@@ -937,7 +1063,7 @@ export function App() {
     setSaveDownloading(true);
     setSaveDownloadError("");
     await clearDownload(name);
-    saveProject(name);
+    await saveProject(name);
     const url = await waitForDownload(name);
     setSaveDownloading(false);
     if (!url) {
@@ -1068,7 +1194,7 @@ export function App() {
         setSessionOpen(true);
       } else if (mod && key === "s") {
         event.preventDefault();
-        if (state?.projectPath) void run({ type: "save_project", path: null });
+        if (state?.projectPath) void saveProject(null);
         else setSessionOpen(true);
       } else if (mod && key === "o") {
         event.preventDefault();
@@ -1408,8 +1534,54 @@ export function App() {
       : "";
   const selectedKeys = new Set(signals.map((signal) => signal.key));
   const monitorKeys = new Set((state?.monitor ?? []).map(rowKey));
+  const exportRange = useMemo(() => {
+    const labels = cursorLabels(chartCursors);
+    const a = chartCursors[labels.indexOf("A")];
+    const b = chartCursors[labels.indexOf("B")];
+    if (!a || !b) return null;
+    const fromUs = Math.round(Math.min(a.t, b.t) * 1e6);
+    const toUs = Math.round(Math.max(a.t, b.t) * 1e6);
+    return fromUs >= 0 && toUs > 0 && fromUs < toUs
+      ? { fromUs, toUs }
+      : null;
+  }, [chartCursors]);
   const dataKeys = new Set((state?.data ?? []).map(rowKey));
   const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
+
+  const openExplorer = () => {
+    setExplorerOpen((open) => !open);
+    if (!catalog) void loadCatalog();
+  };
+
+  const addExplorerChart = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+  ) => {
+    if (!selectedKeys.has(signal.key)) {
+      toggleSignal(channel, message, signal, true);
+    }
+    setChartTab("signals");
+  };
+
+  const addExplorerMonitor = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+  ) => {
+    if (!monitorKeys.has(signal.key)) {
+      void run({
+        type: "add_monitor",
+        kind: channel.kind,
+        ch: channel.index,
+        id: message.id,
+        ext: message.extended,
+        frame: message.frame,
+        name: signal.name,
+      });
+    }
+    setChartTab("monitor");
+  };
 
   const addPaletteCursor = () => {
     if (signals.length === 0) {
@@ -1478,6 +1650,13 @@ export function App() {
       group: "Signals",
       hint: "Choose and order the Signals lanes",
       run: openPicker,
+    },
+    {
+      id: "open-dbc",
+      label: "Open DBC explorer",
+      group: "Signals",
+      hint: "Search the database and add lanes or watches",
+      run: openExplorer,
     },
     {
       id: "add-cursor",
@@ -1611,6 +1790,27 @@ export function App() {
         theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
       group: "View",
       run: () => setTheme(theme === "dark" ? "light" : "dark"),
+    },
+    {
+      id: "layout-trace",
+      label: "Layout: Trace focus",
+      group: "View",
+      hint: "Wide Trace, compact observers",
+      run: () => applyLayoutPreset("trace"),
+    },
+    {
+      id: "layout-analysis",
+      label: "Layout: Analysis",
+      group: "View",
+      hint: "Signals and Statistics side by side",
+      run: () => applyLayoutPreset("analysis"),
+    },
+    {
+      id: "layout-replay",
+      label: "Layout: Replay",
+      group: "View",
+      hint: "Trace with Rate and room for the replay bar",
+      run: () => applyLayoutPreset("replay"),
     },
     {
       id: "reset-layout",
@@ -1964,8 +2164,50 @@ export function App() {
               </button>
             </form>
           </div>
-          <span class="spacer" />
-          <span class="replay-hint">forward only · pauses at the target</span>
+          {state.replayPosUs != null &&
+            state.replayTotalUs != null &&
+            state.replayTotalUs > 0 && (
+              <div class="replay-track-row">
+                <div
+                  class="replay-track"
+                  title="Click ahead to play there; clicking behind only moves the view"
+                  onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const frac = clamp(
+                    (event.clientX - rect.left) / rect.width,
+                    0,
+                    1,
+                  );
+                  goToTimeUs(Math.round(frac * state.replayTotalUs!));
+                }}
+              >
+                <span
+                  class="replay-fill"
+                  style={{
+                    width: `${(state.replayPosUs / state.replayTotalUs) * 100}%`,
+                  }}
+                />
+                {state.markers.map((marker) => (
+                  <span
+                    key={marker}
+                    class="replay-mark"
+                    style={{
+                      left: `${clamp((marker * 1e6) / state.replayTotalUs! * 100, 0, 100)}%`,
+                    }}
+                  />
+                ))}
+                <span
+                  class="replay-cursor"
+                  style={{
+                    left: `${(state.replayPosUs / state.replayTotalUs) * 100}%`,
+                  }}
+                />
+                </div>
+                <span class="replay-hint">
+                  forward only · pauses at the target
+                </span>
+              </div>
+            )}
         </section>
       )}
 
@@ -1995,6 +2237,14 @@ export function App() {
             }
             tools={
               <>
+                <button
+                  type="button"
+                  class={`mini ${explorerOpen ? "on" : ""}`}
+                  title="Browse DBC signals and add them to the chart or Monitor"
+                  onClick={openExplorer}
+                >
+                  DBC
+                </button>
                 <button
                   type="button"
                   class="mini"
@@ -2055,6 +2305,18 @@ export function App() {
             onWatch={(frame) => void addFrameSignals(frame, "monitor")}
             onShowTime={(tUs) => goToTimeUs(tUs, false)}
           />
+          {explorerOpen && (
+            <DbcExplorer
+              catalog={catalog}
+              loading={catalogLoading}
+              error={catalogError}
+              charted={selectedKeys}
+              watched={monitorKeys}
+              onAddChart={addExplorerChart}
+              onAddMonitor={addExplorerMonitor}
+              onClose={() => setExplorerOpen(false)}
+            />
+          )}
         </section>
 
         <div
@@ -2852,8 +3114,16 @@ export function App() {
       {exportOpen && (
         <ExportModal
           initialKind={exportKind}
-          onExport={(kind, path) => {
-            void run({ type: "export", kind, path });
+          range={exportRange}
+          onExport={(kind, path, range) => {
+            void run({
+              type: "export",
+              kind,
+              path,
+              ...(range
+                ? { from_us: range.fromUs, to_us: range.toUs }
+                : {}),
+            });
             setExportOpen(false);
           }}
           onClose={() => setExportOpen(false)}
@@ -2920,7 +3190,125 @@ export function App() {
               </button>
             </header>
             <div class="session-body">
-              <section>
+              <div class="session-tasks">
+                <section class="session-task">
+                  <h3>Connect real bus</h3>
+                  <p>
+                    Attach a Vector or Kvaser channel, load its DBC and map
+                    node roles.
+                  </p>
+                  <div class="task-actions">
+                    <button
+                      type="button"
+                      class="primary"
+                      onClick={() => {
+                        setSessionOpen(false);
+                        openBuses();
+                      }}
+                    >
+                      Open Buses…
+                    </button>
+                  </div>
+                  <span class="task-state">
+                    {(state?.buses.filter((bus) => bus.attached).length ?? 0) ===
+                    0
+                      ? "No adapter attached"
+                      : `${state?.buses.filter((bus) => bus.attached).length} adapter(s) attached · ${
+                          state?.realBus ? "real bus on" : "simulation only"
+                        }`}
+                  </span>
+                </section>
+
+                <section class="session-task">
+                  <h3>Simulate</h3>
+                  <p>
+                    Start the loaded DBC with the generator. Attached hardware
+                    is used when Real bus is on.
+                  </p>
+                  <div class="task-actions">
+                    <button
+                      type="button"
+                      class="primary"
+                      disabled={!canControl || measuring || needsLog}
+                      title={
+                        !online
+                          ? "Waiting for the bus core"
+                          : needsLog
+                            ? "Load a replay log first"
+                            : measuring
+                              ? "Measurement is already running"
+                              : "Start measurement"
+                      }
+                      onClick={() => {
+                        void run({ type: "start" });
+                        setSessionOpen(false);
+                      }}
+                    >
+                      Start
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSessionOpen(false);
+                        openGenerator();
+                      }}
+                    >
+                      Generator…
+                    </button>
+                  </div>
+                  <span class="task-state">
+                    {measuring
+                      ? `${state?.runMode ?? ""} · ${state?.fps.toFixed(0)} f/s`
+                      : needsLog
+                        ? "Load a replay log first"
+                        : "Ready with the loaded DBC"}
+                  </span>
+                </section>
+
+                <section class="session-task">
+                  <h3>Replay</h3>
+                  <p>
+                    Open an ASC or BLF and play it forward with the same
+                    analysis tools.
+                  </p>
+                  <form
+                    class="task-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      loadLog(logPath);
+                    }}
+                  >
+                    <input
+                      value={logPath}
+                      placeholder="C:\logs\drive.asc or .blf"
+                      onInput={(event) =>
+                        setLogPath((event.target as HTMLInputElement).value)
+                      }
+                    />
+                    <div class="task-actions">
+                      <button
+                        type="submit"
+                        class="primary"
+                        disabled={!logPath.trim()}
+                      >
+                        Open &amp; play
+                      </button>
+                      <FilePick
+                        label="Choose…"
+                        accept=".asc,.blf"
+                        onError={setError}
+                        onPick={(path) => {
+                          setLogPath(path);
+                          loadLog(path);
+                        }}
+                      />
+                    </div>
+                  </form>
+                  {recent(state?.recentLogs ?? [], loadLog)}
+                </section>
+              </div>
+
+              <section class="session-section">
                 <h3>Project</h3>
                 <p class="session-current">
                   {state?.project
@@ -2961,13 +3349,15 @@ export function App() {
                   <button
                     type="button"
                     disabled={!state?.projectPath}
-                    onClick={() => saveProject(null)}
+                    onClick={() => void saveProject(null)}
                   >
                     Save
                   </button>
                   <input
                     value={savePath}
-                    placeholder={state?.projectPath || "Save as file name or host path…"}
+                    placeholder={
+                      state?.projectPath || "Save as file name or host path…"
+                    }
                     onInput={(event) =>
                       setSavePath((event.target as HTMLInputElement).value)
                     }
@@ -2975,7 +3365,7 @@ export function App() {
                   <button
                     type="button"
                     disabled={!savePath.trim()}
-                    onClick={() => saveProject(savePath.trim())}
+                    onClick={() => void saveProject(savePath.trim())}
                   >
                     Save as
                   </button>
@@ -2994,139 +3384,108 @@ export function App() {
                 {recent(state?.recentProjects ?? [], loadProject)}
               </section>
 
-              <section>
-                <h3>Replay log</h3>
-                <p class="session-current">
-                  {state?.log
-                    ? `Current: ${state.log}${state.logInfo ? ` · ${state.logInfo}` : ""}`
-                    : "No log loaded"}
-                </p>
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    loadLog(logPath);
-                  }}
-                >
-                  <input
-                    value={logPath}
-                    placeholder="C:\logs\drive.asc or .blf"
-                    onInput={(event) =>
-                      setLogPath((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  <button
-                    type="submit"
-                    class="primary"
-                    disabled={!logPath.trim()}
-                  >
-                    Open &amp; play
-                  </button>
-                  <FilePick
-                    label="Choose file…"
-                    accept=".asc,.blf"
-                    onError={setError}
-                    onPick={(path) => {
-                      setLogPath(path);
-                      loadLog(path);
-                    }}
-                  />
-                </form>
-                {recent(state?.recentLogs ?? [], loadLog)}
-              </section>
-
-              <section>
-                <h3>Recording</h3>
-                <p class="session-current">
-                  {state?.recording
-                    ? state.recordFile
-                      ? `Recording: ${fileNameOf(state.recordFile)}`
-                      : "Armed — starts with the measurement"
-                    : state?.recordFile
-                      ? `Last: ${fileNameOf(state.recordFile)}`
-                      : "Not recording"}
-                </p>
-                <div class="record-row">
-                  <input
-                    value={recordName}
-                    placeholder="record"
-                    disabled={state?.recording}
-                    title="File name; a date suffix is added under the project's Record/ folder"
-                    onInput={(event) =>
-                      setRecordName((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  <select
-                    value={recordFormat}
-                    disabled={state?.recording}
-                    title="Recording format"
-                    onChange={(event) =>
-                      setRecordFormat(
-                        Number((event.target as HTMLSelectElement).value),
-                      )
-                    }
-                  >
-                    <option value={0}>ASC</option>
-                    <option value={1}>BLF</option>
-                  </select>
-                  <button
-                    type="button"
-                    class={state?.recording ? "danger" : ""}
-                    onClick={() =>
-                      void run({
-                        type: "record_toggle",
-                        name: state?.recording
-                          ? null
-                          : recordName.trim() || "record",
-                        format: state?.recording ? null : recordFormat,
-                      })
-                    }
-                  >
-                    {state?.recording ? "Stop recording" : "Record"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={state?.recording || !state?.recordFile}
-                    title={
-                      state?.recording
-                        ? "Stop recording before downloading"
-                        : "Save the last recording through the browser"
-                    }
-                    onClick={() => {
-                      if (!state?.recordFile) return;
-                      triggerDownload(
-                        "/api/recording",
-                        fileNameOf(state.recordFile),
-                      );
-                    }}
-                  >
-                    Download
-                  </button>
-                </div>
-                <p class="hint">
-                  Relative names land in Record/ beside the project; an absolute
-                  path is used as typed. Recording while stopped arms the file
-                  for the next Start.
-                </p>
-                <label class="record-filter">
-                  Only ids / FR slots
-                  <input
-                    value={recordFilter}
-                    placeholder="100, 3F4x, FR0:13"
-                    spellcheck={false}
-                    onInput={(event) =>
-                      setRecordFilter((event.target as HTMLInputElement).value)
-                    }
-                    onBlur={() =>
-                      void run({ type: "set_record_filter", text: recordFilter })
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        (event.target as HTMLInputElement).blur();
+              <details class="session-more">
+                <summary>Recording</summary>
+                <div class="session-more-body">
+                  <p class="session-current">
+                    {state?.recording
+                      ? state.recordFile
+                        ? `Recording: ${fileNameOf(state.recordFile)}`
+                        : "Armed — starts with the measurement"
+                      : state?.recordFile
+                        ? `Last: ${fileNameOf(state.recordFile)}`
+                        : "Not recording"}
+                  </p>
+                  <div class="record-row">
+                    <input
+                      value={recordName}
+                      placeholder="record"
+                      disabled={state?.recording}
+                      title="File name; a date suffix is added under the project's Record/ folder"
+                      onInput={(event) =>
+                        setRecordName(
+                          (event.target as HTMLInputElement).value,
+                        )
                       }
-                    }}
-                  />
-                </label>
-              </section>
+                    />
+                    <select
+                      value={recordFormat}
+                      disabled={state?.recording}
+                      title="Recording format"
+                      onChange={(event) =>
+                        setRecordFormat(
+                          Number((event.target as HTMLSelectElement).value),
+                        )
+                      }
+                    >
+                      <option value={0}>ASC</option>
+                      <option value={1}>BLF</option>
+                    </select>
+                    <button
+                      type="button"
+                      class={state?.recording ? "danger" : ""}
+                      onClick={() =>
+                        void run({
+                          type: "record_toggle",
+                          name: state?.recording
+                            ? null
+                            : recordName.trim() || "record",
+                          format: state?.recording ? null : recordFormat,
+                        })
+                      }
+                    >
+                      {state?.recording ? "Stop recording" : "Record"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={state?.recording || !state?.recordFile}
+                      title={
+                        state?.recording
+                          ? "Stop recording before downloading"
+                          : "Save the last recording through the browser"
+                      }
+                      onClick={() => {
+                        if (!state?.recordFile) return;
+                        triggerDownload(
+                          "/api/recording",
+                          fileNameOf(state.recordFile),
+                        );
+                      }}
+                    >
+                      Download
+                    </button>
+                  </div>
+                  <p class="hint">
+                    Relative names land in Record/ beside the project; an
+                    absolute path is used as typed. Recording while stopped arms
+                    the file for the next Start.
+                  </p>
+                  <label class="record-filter">
+                    Only ids / FR slots
+                    <input
+                      value={recordFilter}
+                      placeholder="100, 3F4x, FR0:13"
+                      spellcheck={false}
+                      onInput={(event) =>
+                        setRecordFilter(
+                          (event.target as HTMLInputElement).value,
+                        )
+                      }
+                      onBlur={() =>
+                        void run({
+                          type: "set_record_filter",
+                          text: recordFilter,
+                        })
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          (event.target as HTMLInputElement).blur();
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              </details>
 
               <p class="hint">
                 Paths are resolved on the host. Opening a project or log stops

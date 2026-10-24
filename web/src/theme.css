@@ -303,6 +303,11 @@
   background: #f8fafc;
 }
 
+[data-theme="light"] .bus-role.real {
+  border-color: #a9c8ea;
+  color: #1557a8;
+}
+
 [data-theme="light"] .gen-bus-head {
   border-bottom-color: #d4dbe4;
   background: #eef2f7;

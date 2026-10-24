@@ -22,6 +22,8 @@ export interface State {
   replaySpeed: number;
   recentProjects: string[];
   recentLogs: string[];
+  workspace: unknown;
+  workspaceRev: number;
   replayMap: ReplayMap;
   buses: Bus[];
   frBuses: FrBus[];
@@ -477,7 +479,13 @@ export type Command =
   | { type: "set_spec_tolerance"; value: number }
   | { type: "set_spec_grace"; value: number }
   | { type: "clear_spec" }
-  | { type: "export"; kind: string; path: string }
+  | {
+      type: "export";
+      kind: string;
+      path: string;
+      from_us?: number;
+      to_us?: number;
+    }
   | { type: "clear_trace" }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
@@ -681,4 +689,5 @@ export type Command =
       pre_frames: number;
       post_frames: number;
       marker_cap: number;
-    };
+    }
+  | { type: "set_web_workspace"; rev: number; workspace: unknown };

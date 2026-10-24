@@ -822,6 +822,10 @@ pub struct Config {
     pub spec: SpecCfg,
     #[serde(default)]
     pub triggers: Vec<TriggerCfg>,
+    /// Frontend workspace (tabs, cursors, column widths, splitters). Opaque
+    /// to the core so the web shell can evolve without a schema bump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<serde_json::Value>,
 }
 
 /// The project-file fields a signal key writes: the CAN triple, or the
@@ -1339,6 +1343,7 @@ impl Config {
                     }
                 })
                 .collect(),
+            web: app.web_workspace.clone(),
         }
     }
 
@@ -1371,6 +1376,7 @@ impl Config {
     /// returns.
     pub fn apply(self, app: &mut App) -> Vec<String> {
         let mut problems: Vec<String> = Vec::new();
+        app.web_workspace = self.web;
         // Description sources are rebuilt from this file; a project that
         // carries none must not inherit the previous project's cluster maps.
         app.can_arxml.clear();

@@ -68,6 +68,7 @@ function rateOptions(standard: number[], current: number): number[] {
 function BusCard({
   bus,
   channels,
+  realBus,
   loading,
   onAttach,
   onDetach,
@@ -80,6 +81,7 @@ function BusCard({
 }: {
   bus: Bus;
   channels: HwChannel[];
+  realBus: boolean;
   loading: boolean;
   onAttach: (bus: number, driver: string, index: number) => void;
   onDetach: (bus: number) => void;
@@ -128,6 +130,14 @@ function BusCard({
     setFd(next.fd);
     onSetRates(bus.index, next.arb, next.fd);
   };
+  const simulated = bus.nodes.filter((node) => node.simulated).length;
+  const role = bus.attached
+    ? realBus
+      ? `Real · ${bus.attached.driver} ch${bus.attached.adapter}`
+      : "Attached · sim mode"
+    : bus.nodes.length > 0
+      ? `${simulated}/${bus.nodes.length} simulated`
+      : "No hardware";
 
   return (
     <section class="bus-card">
@@ -150,6 +160,22 @@ function BusCard({
             }
           }}
         />
+        <span
+          class={`bus-role ${
+            bus.attached ? (realBus ? "real" : "attached") : "sim"
+          }`}
+          title={
+            bus.attached
+              ? realBus
+                ? "Attached adapter is used on the wire"
+                : "Adapter configured; Real bus is off"
+              : bus.nodes.length > 0
+                ? "These nodes generate traffic in simulation"
+                : "No adapter attached and no DBC nodes"
+          }
+        >
+          {role}
+        </span>
         <label class="rate-field">
           Arb
           <select
@@ -294,6 +320,11 @@ function BusCard({
           <select
             value={channelChoice}
             disabled={channels.length === 0 || loading}
+            title={
+              channels.length === 0
+                ? "Plug in the adapter, then use Refresh hardware"
+                : "Pick the adapter channel for this bus"
+            }
             onChange={(event) =>
               setChannelChoice((event.target as HTMLSelectElement).value)
             }
@@ -313,6 +344,13 @@ function BusCard({
             type="button"
             class="primary"
             disabled={!selected || loading}
+            title={
+              selected
+                ? "Attach this channel using the configured rates"
+                : channels.length === 0
+                  ? "No adapter found; plug it in and use Refresh hardware"
+                  : "Select a channel first"
+            }
             onClick={() => {
               if (selected) {
                 setChannelChoice(channelKey(selected));
@@ -323,7 +361,11 @@ function BusCard({
             Attach
           </button>
           <span class="hint">
-            Uses this bus's configured arbitration/FD rates.
+            {selected
+              ? "Uses this bus's configured arbitration/FD rates."
+              : channels.length === 0
+                ? "Plug in the adapter, then use Refresh hardware above."
+                : "Pick a channel above, then Attach."}
           </span>
         </div>
       )}
@@ -457,6 +499,7 @@ export function BusesModal({
               key={bus.index}
               bus={bus}
               channels={channels}
+              realBus={realBus}
               loading={loading}
               onAttach={onAttach}
               onDetach={onDetach}

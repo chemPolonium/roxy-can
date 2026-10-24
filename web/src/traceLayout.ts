@@ -57,27 +57,35 @@ export function columnWidth(
     : (def?.width ?? 80);
 }
 
+export function parseTraceColumns(value: unknown): TraceColumnPrefs | null {
+  if (!value || typeof value !== "object") return null;
+  const saved = value as Partial<TraceColumnPrefs>;
+  if (!saved.widths || typeof saved.widths !== "object") return null;
+  const widths: TraceColumnPrefs["widths"] = {};
+  for (const column of TRACE_COLUMNS) {
+    if (column.flex) continue;
+    widths[column.id] = columnWidth(
+      { widths: saved.widths ?? {}, hidden: [] },
+      column.id,
+    );
+  }
+  // 170px was the first shipped default; move those sessions to the
+  // tighter Name column instead of leaving a hole next to Dir.
+  if (saved.widths?.name === 170) widths.name = 150;
+  const hidden = (Array.isArray(saved.hidden) ? saved.hidden : []).filter(
+    (id): id is TraceColumnId =>
+      TRACE_COLUMNS.some(
+        (column) => column.id === id && !column.locked && !column.flex,
+      ),
+  );
+  return { widths, hidden };
+}
+
 export function loadTraceColumns(): TraceColumnPrefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_TRACE_COLUMNS;
-    const saved = JSON.parse(raw) as Partial<TraceColumnPrefs>;
-    const widths: TraceColumnPrefs["widths"] = {};
-    for (const column of TRACE_COLUMNS) {
-      if (column.flex) continue;
-      widths[column.id] = columnWidth(
-        { widths: saved.widths ?? {}, hidden: [] },
-        column.id,
-      );
-    }
-    // 170px was the first shipped default; move those sessions to the
-    // tighter Name column instead of leaving a hole next to Dir.
-    if (saved.widths?.name === 170) widths.name = 150;
-    const hidden = (Array.isArray(saved.hidden) ? saved.hidden : []).filter(
-      (id): id is TraceColumnId =>
-        TRACE_COLUMNS.some((column) => column.id === id && !column.locked && !column.flex),
-    );
-    return { widths, hidden };
+    return parseTraceColumns(JSON.parse(raw)) ?? DEFAULT_TRACE_COLUMNS;
   } catch {
     return DEFAULT_TRACE_COLUMNS;
   }

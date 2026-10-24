@@ -322,6 +322,53 @@ input::placeholder {
   gap: 5px;
 }
 
+.replay-track-row {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.replay-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 14px;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.replay-track:hover {
+  border-color: var(--accent);
+}
+
+.replay-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent-soft);
+}
+
+.replay-mark {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--warn);
+  opacity: 0.8;
+}
+
+.replay-cursor {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgb(76 157 255 / 60%);
+}
+
 .replay-nav label {
   display: flex;
   align-items: center;
@@ -438,6 +485,130 @@ input::placeholder {
   border: 1px solid var(--line);
   border-radius: 3px;
   overflow: hidden;
+}
+
+.trace-panel {
+  position: relative;
+}
+
+.dbc-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgb(0 0 0 / 16%);
+}
+
+.dbc-drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  width: min(340px, calc(100% - 40px));
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  box-shadow: 10px 0 30px rgb(0 0 0 / 30%);
+}
+
+.dbc-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--head);
+  border-bottom: 1px solid var(--line);
+}
+
+.dbc-drawer-head strong {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.dbc-drawer-search {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.dbc-drawer-search input {
+  width: 100%;
+}
+
+.dbc-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 8px;
+}
+
+.dbc-channel h4 {
+  margin: 7px 10px 4px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dbc-message {
+  margin: 0 6px 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.dbc-message-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 7px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 10.5px;
+}
+
+.dbc-message-head em {
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.dbc-signal {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.dbc-signal:last-child {
+  border-bottom: 0;
+}
+
+.dbc-signal-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+
+.dbc-signal em {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.dbc-signal button {
+  flex: 0 0 auto;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 9px;
 }
 
 .panel-head {
@@ -1342,6 +1513,30 @@ body.col-resizing {
   width: 100%;
 }
 
+.export-body .export-range {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.export-body .export-range input {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+}
+
+.export-range em {
+  margin-left: auto;
+  color: inherit;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 9.5px;
+  font-style: normal;
+}
+
 .export-body .hint code {
   padding: 1px 3px;
   background: #151c24;
@@ -1363,7 +1558,7 @@ body.col-resizing {
 }
 
 .session-modal {
-  width: min(620px, 100%);
+  width: min(680px, 100%);
   max-height: min(680px, 88vh);
   overflow: auto;
   background: #10141a;
@@ -1778,6 +1973,27 @@ button.mini.on {
   color: #8b98a9;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 10.5px;
+}
+
+.bus-role {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.bus-role.real {
+  border-color: #2d5c88;
+  color: #8fc8ff;
+}
+
+.bus-role.attached {
+  color: #aab7c7;
 }
 
 .bus-dbcs {
@@ -2583,6 +2799,89 @@ button.mini.on {
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.session-tasks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.session-task {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.session-task h3 {
+  margin: 0;
+  color: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.session-task p {
+  min-height: 46px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.session-task .task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.session-task .task-form {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-task .task-form input {
+  width: 100%;
+  min-width: 0;
+}
+
+.session-task .task-state {
+  margin-top: auto;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+
+.session-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.session-more {
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.session-more summary {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.session-more-body {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
 }
 
 .session-current {

@@ -562,13 +562,24 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
 /// Runs the core exporter for a web export request. Trace picks ASC or PCAP
 /// by the path's extension; the others write CSV/TXT. Exporters target the
 /// first matching observer window, which starts as an All-buses view.
-fn export_file(app: &mut App, kind: &str, path: &str) {
+/// Adopts a browser workspace only if it belongs to the current project
+/// revision; a debounce from the previous project is dropped.
+fn set_web_workspace(app: &mut App, rev: u64, workspace: serde_json::Value) {
+    if rev == app.workspace_rev {
+        app.web_workspace = Some(workspace);
+    }
+}
+
+fn export_file(app: &mut App, kind: &str, path: &str, range: Option<(u64, u64)>) {
     if path.trim().is_empty() {
         app.status = "export needs a path".to_string();
         return;
     }
     match kind {
-        "trace" => app.export_trace(0, path),
+        "trace" => match range {
+            Some((from, to)) => app.export_trace_range(0, path, from, to),
+            None => app.export_trace(0, path),
+        },
         "messages" => app.export_messages_csv(0, path),
         "stats" => app.export_stats_csv(0, path),
         "write" => app.export_write_txt(path),
@@ -1612,6 +1623,11 @@ enum WebCommand {
     Export {
         kind: String,
         path: String,
+        /// Optional trace interval, in microseconds; ignored by non-trace kinds.
+        #[serde(default)]
+        from_us: Option<u64>,
+        #[serde(default)]
+        to_us: Option<u64>,
     },
     SetSysVar {
         namespace: String,
@@ -1835,6 +1851,13 @@ enum WebCommand {
         pre_frames: usize,
         post_frames: u32,
         marker_cap: usize,
+    },
+    /// Adopt the browser's workspace for the current project revision. A
+    /// late debounce from the previous project carries its old revision and
+    /// is dropped instead of overwriting the newly loaded file.
+    SetWebWorkspace {
+        rev: u64,
+        workspace: serde_json::Value,
     },
 }
 
@@ -2268,8 +2291,17 @@ fn app_loop(
                 WebCommand::ClearSpec => {
                     app.send(BusCommand::ClearSpec);
                 }
-                WebCommand::Export { kind, path } => {
-                    export_file(&mut app, &kind, &download_file_path(&path));
+                WebCommand::Export {
+                    kind,
+                    path,
+                    from_us,
+                    to_us,
+                } => {
+                    let range = match (from_us, to_us) {
+                        (Some(from), Some(to)) => Some((from, to)),
+                        _ => None,
+                    };
+                    export_file(&mut app, &kind, &download_file_path(&path), range);
                 }
                 WebCommand::SetSysVar {
                     namespace,
@@ -2745,6 +2777,9 @@ fn app_loop(
                         TriggerCmd::SetPostFrames(post_frames),
                         TriggerCmd::SetMarkerCap(marker_cap),
                     ]);
+                }
+                WebCommand::SetWebWorkspace { rev, workspace } => {
+                    set_web_workspace(&mut app, rev, workspace);
                 }
                 WebCommand::SimulateBusNodes { ch } => {
                     let nodes = app
@@ -3760,6 +3795,10 @@ struct WebState {
     replay_speed: f64,
     recent_projects: Vec<String>,
     recent_logs: Vec<String>,
+    /// Workspace adopted from the saved project plus the revision that owns
+    /// it; the browser applies it once per revision.
+    workspace: Option<serde_json::Value>,
+    workspace_rev: u64,
     replay_map: WebReplayMap,
     buses: Vec<WebBus>,
     fr_buses: Vec<WebFrBus>,
@@ -4990,6 +5029,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         recent_projects: app.recent_projects.clone(),
         recent_logs: app.recent_log.clone(),
+        workspace: app.web_workspace.clone(),
+        workspace_rev: app.workspace_rev,
         replay_map,
         buses,
         fr_buses,
@@ -5043,6 +5084,32 @@ mod tests {
     /// The demo path must produce real frames through the headless App; a
     /// broken seed would otherwise leave the web UI looking connected but
     /// permanently empty.
+    #[test]
+    fn stale_workspace_updates_are_dropped_after_a_project_load() {
+        let mut app = App::headless();
+        set_web_workspace(&mut app, 0, serde_json::json!({ "tab": "statistics" }));
+        assert_eq!(
+            app.web_workspace,
+            Some(serde_json::json!({ "tab": "statistics" }))
+        );
+
+        // A new project loaded behind the browser's back bumps the revision;
+        // the previous debounce still carries the old one.
+        app.workspace_rev = 2;
+        set_web_workspace(&mut app, 1, serde_json::json!({ "tab": "messages" }));
+        assert_eq!(
+            app.web_workspace,
+            Some(serde_json::json!({ "tab": "statistics" })),
+            "the late update from the old project must not overwrite the new one"
+        );
+
+        set_web_workspace(&mut app, 2, serde_json::json!({ "tab": "signals" }));
+        assert_eq!(
+            app.web_workspace,
+            Some(serde_json::json!({ "tab": "signals" }))
+        );
+    }
+
     #[test]
     fn the_demo_seeds_and_publishes_real_traffic() {
         let mut app = App::headless();
@@ -5422,7 +5489,7 @@ mod tests {
             ("spec", dir.join("roxy_web_export_spec.csv"), "# database"),
         ];
         for (kind, path, header) in &files {
-            export_file(&mut app, kind, path.to_str().unwrap());
+            export_file(&mut app, kind, path.to_str().unwrap(), None);
             let text = std::fs::read_to_string(path).unwrap_or_default();
             assert!(
                 text.contains(header),

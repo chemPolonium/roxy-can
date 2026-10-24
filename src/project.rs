@@ -53,6 +53,9 @@ impl App {
         let recent_log = std::mem::take(&mut self.recent_log);
         let recent_projects = std::mem::take(&mut self.recent_projects);
         let default_layout = std::mem::take(&mut self.default_layout);
+        // Revisions must keep increasing across a reset, or the browser would
+        // not notice that the new project's workspace arrived.
+        let workspace_rev = self.workspace_rev;
         // Rebuild on the same drive the workspace was on: the web host's
         // reset replaces the core thread (the old one exits with its dropped
         // sender), tests rebuild their hand-cranked core.
@@ -66,6 +69,7 @@ impl App {
         self.recent_log = recent_log;
         self.recent_projects = recent_projects;
         self.default_layout = default_layout;
+        self.workspace_rev = workspace_rev;
     }
 
     /// Display name of the current project: the file stem, or "Untitled".
@@ -94,7 +98,11 @@ impl App {
     /// Serializable snapshot of the workspace configuration, used to tell
     /// whether anything changed since the last load/save/reset.
     pub(crate) fn config_snapshot(&self) -> String {
-        serde_json::to_string(&Config::from_app(self, None)).unwrap_or_default()
+        // The web workspace is saved but never marks a project dirty: moving
+        // a panel or a cursor is not a semantic change to the bench setup.
+        let mut cfg = Config::from_app(self, None);
+        cfg.web = None;
+        serde_json::to_string(&cfg).unwrap_or_default()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -187,6 +195,7 @@ impl App {
                 let mut cfg = proj.config;
                 cfg.resolve_paths(path.parent());
                 let problems = cfg.apply(self);
+                self.workspace_rev = self.workspace_rev.wrapping_add(1);
                 self.project_path = Some(path.to_path_buf());
                 self.retarget_record_draft();
                 if !proj.layout.is_empty() {
@@ -261,6 +270,7 @@ impl App {
         let mut cfg = proj.config;
         cfg.resolve_paths(base);
         let problems = cfg.apply(self);
+        self.workspace_rev = self.workspace_rev.wrapping_add(1);
         self.project_path = proj.project.map(PathBuf::from);
         if !proj.layout.is_empty() {
             self.pending_layout = Some(proj.layout);
@@ -275,6 +285,7 @@ impl App {
     /// observer windows, no generator entries, default layout.
     pub fn new_project(&mut self) {
         self.reset_to_defaults();
+        self.workspace_rev = self.workspace_rev.wrapping_add(1);
         // The bus half of "empty" is a command; wait for it to land so
         // the baseline below describes the emptied workspace.
         self.send(crate::bus::BusCommand::ClearDatabases);
