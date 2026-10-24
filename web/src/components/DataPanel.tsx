@@ -22,15 +22,19 @@ export function DataPanel({ rows, onVisible, onRemove }: Props) {
           class={`data-row ${row.visible ? "" : "hidden"}`}
           key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
         >
-          <label class="data-check" title="Show this signal in the value table">
-            <input
-              type="checkbox"
-              checked={row.visible}
-              onChange={(event) =>
-                onVisible(row, (event.target as HTMLInputElement).checked)
-              }
-            />
-          </label>
+          {row.kind === "derived" ? (
+            <span class="data-check" />
+          ) : (
+            <label class="data-check" title="Show this signal in the value table">
+              <input
+                type="checkbox"
+                checked={row.visible}
+                onChange={(event) =>
+                  onVisible(row, (event.target as HTMLInputElement).checked)
+                }
+              />
+            </label>
+          )}
           <div class="data-name" title={`${row.bus} · ${row.name}`}>
             <strong>{row.name}</strong>
             <small>{row.bus}</small>

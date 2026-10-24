@@ -373,6 +373,21 @@ export function conditionEvents(
   }
 }
 
+export function statsOf(
+  points: [number, number][],
+): { min: number; max: number; avg: number } | null {
+  if (points.length === 0) return null;
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  let sum = 0;
+  for (const [, value] of points) {
+    if (value < min) min = value;
+    if (value > max) max = value;
+    sum += value;
+  }
+  return { min, max, avg: sum / points.length };
+}
+
 function csvNumber(value: number): string {
   let text = value.toFixed(6);
   if (text.includes(".")) {

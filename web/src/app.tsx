@@ -40,6 +40,7 @@ import { EventJumpModal } from "./components/EventJumpModal";
 import {
   buildAlignedCsv,
   computeDerived,
+  statsOf,
   type DerivedDef,
 } from "./derived";
 import { ExportModal } from "./components/ExportModal";
@@ -877,12 +878,17 @@ export function App() {
 
   const clearChartCursors = () => setChartCursors([]);
 
+  const removeDerived = (key?: string) => {
+    if (!key) return;
+    setDerivedDefs((defs) =>
+      defs.filter((definition) => `derived:${definition.id}` !== key),
+    );
+  };
+
   const chartSignalAction = (key: string, action: ChartSignalAction) => {
     if (key.startsWith("derived:")) {
       if (action === "remove") {
-        setDerivedDefs((defs) =>
-          defs.filter((definition) => `derived:${definition.id}` !== key),
-        );
+        removeDerived(key);
       } else {
         showToast("Derived channels are chart-only for now");
       }
@@ -1488,6 +1494,10 @@ export function App() {
     },
     patch: MonitorPatch,
   ) => {
+    if (row.kind === "derived") {
+      showToast("Derived rows are managed in the Derived dialog");
+      return;
+    }
     void run({
       type: "edit_monitor",
       kind: row.kind,
@@ -1756,6 +1766,75 @@ export function App() {
   const chartSeries = useMemo(
     () => [...signals, ...derivedSeries],
     [signals, derivedSeries],
+  );
+  const derivedMonitorRows = useMemo(
+    () =>
+      derivedSeries.map((signal, index) => {
+        const point = signal.points[signal.points.length - 1];
+        return {
+          kind: "derived",
+          ch: 0,
+          id: index,
+          ext: false,
+          frame: signal.key,
+          name: signal.name,
+          label: signal.name,
+          bus: "Derived",
+          value: point ? point[1] : 0,
+          hasValue: Boolean(point),
+          unit: signal.unit,
+          digits: 2,
+          ruleOn: false,
+          rising: true,
+          threshold: 0,
+          color: 100 + index,
+        };
+      }),
+    [derivedSeries],
+  );
+  const derivedDataRows = useMemo(
+    () =>
+      derivedSeries.map((signal, index) => {
+        const point = signal.points[signal.points.length - 1];
+        const stats = statsOf(signal.points);
+        const format = (value: number) => {
+          const magnitude = Math.abs(value);
+          return magnitude >= 1000
+            ? value.toFixed(0)
+            : magnitude >= 1
+              ? value.toFixed(2)
+              : value.toFixed(3);
+        };
+        return {
+          kind: "derived",
+          ch: 0,
+          id: index,
+          ext: false,
+          frame: signal.key,
+          name: signal.name,
+          bus: "Derived",
+          value: point ? format(point[1]) : "—",
+          unit: signal.unit,
+          raw: "—",
+          min: stats ? format(stats.min) : "—",
+          avg: stats ? format(stats.avg) : "—",
+          max: stats ? format(stats.max) : "—",
+          frac:
+            point && stats && stats.max > stats.min
+              ? clamp((point[1] - stats.min) / (stats.max - stats.min), 0, 1)
+              : 0,
+          visible: true,
+        };
+      }),
+    [derivedSeries],
+  );
+  const monitorRows = useMemo(
+    () => [...(state?.monitor ?? []), ...derivedMonitorRows],
+    [state?.monitor, derivedMonitorRows],
+  );
+  const dataRows = useMemo(
+    () => [...(state?.data ?? []), ...derivedDataRows],
+    [state?.data, derivedDataRows],
   );
   const chartLatestS = useMemo(
     () =>
@@ -2180,19 +2259,21 @@ export function App() {
     if (tab === "monitor") {
       return (
         <MonitorPanel
-          rows={state?.monitor ?? []}
+          rows={monitorRows}
           theme={theme}
           onEdit={editMonitor}
           onRemove={(row) =>
-            void run({
-              type: "remove_monitor",
-              kind: row.kind,
-              ch: row.ch,
-              id: row.id,
-              ext: row.ext,
-              frame: row.frame,
-              name: row.name,
-            })
+            row.kind === "derived"
+              ? removeDerived(row.frame)
+              : void run({
+                  type: "remove_monitor",
+                  kind: row.kind,
+                  ch: row.ch,
+                  id: row.id,
+                  ext: row.ext,
+                  frame: row.frame,
+                  name: row.name,
+                })
           }
         />
       );
@@ -2200,29 +2281,33 @@ export function App() {
     if (tab === "data") {
       return (
         <DataPanel
-          rows={state?.data ?? []}
+          rows={dataRows}
           onVisible={(row, visible) =>
-            void run({
-              type: "set_data_visible",
-              kind: row.kind,
-              ch: row.ch,
-              id: row.id,
-              ext: row.ext,
-              frame: row.frame,
-              name: row.name,
-              visible,
-            })
+            row.kind === "derived"
+              ? showToast("Derived rows are always visible")
+              : void run({
+                  type: "set_data_visible",
+                  kind: row.kind,
+                  ch: row.ch,
+                  id: row.id,
+                  ext: row.ext,
+                  frame: row.frame,
+                  name: row.name,
+                  visible,
+                })
           }
           onRemove={(row) =>
-            void run({
-              type: "remove_data",
-              kind: row.kind,
-              ch: row.ch,
-              id: row.id,
-              ext: row.ext,
-              frame: row.frame,
-              name: row.name,
-            })
+            row.kind === "derived"
+              ? removeDerived(row.frame)
+              : void run({
+                  type: "remove_data",
+                  kind: row.kind,
+                  ch: row.ch,
+                  id: row.id,
+                  ext: row.ext,
+                  frame: row.frame,
+                  name: row.name,
+                })
           }
         />
       );
@@ -2989,46 +3074,52 @@ export function App() {
               </div>
             ) : chartTab === "monitor" ? (
               <MonitorPanel
-                rows={state?.monitor ?? []}
+                rows={monitorRows}
                 theme={theme}
                 onEdit={editMonitor}
                 onRemove={(row) =>
-                  void run({
-                    type: "remove_monitor",
-                    kind: row.kind,
-                    ch: row.ch,
-                    id: row.id,
-                    ext: row.ext,
-                    frame: row.frame,
-                    name: row.name,
-                  })
+                  row.kind === "derived"
+                    ? removeDerived(row.frame)
+                    : void run({
+                        type: "remove_monitor",
+                        kind: row.kind,
+                        ch: row.ch,
+                        id: row.id,
+                        ext: row.ext,
+                        frame: row.frame,
+                        name: row.name,
+                      })
                 }
               />
             ) : chartTab === "data" ? (
               <DataPanel
-                rows={state?.data ?? []}
+                rows={dataRows}
                 onVisible={(row, visible) =>
-                  void run({
-                    type: "set_data_visible",
-                    kind: row.kind,
-                    ch: row.ch,
-                    id: row.id,
-                    ext: row.ext,
-                    frame: row.frame,
-                    name: row.name,
-                    visible,
-                  })
+                  row.kind === "derived"
+                    ? showToast("Derived rows are always visible")
+                    : void run({
+                        type: "set_data_visible",
+                        kind: row.kind,
+                        ch: row.ch,
+                        id: row.id,
+                        ext: row.ext,
+                        frame: row.frame,
+                        name: row.name,
+                        visible,
+                      })
                 }
                 onRemove={(row) =>
-                  void run({
-                    type: "remove_data",
-                    kind: row.kind,
-                    ch: row.ch,
-                    id: row.id,
-                    ext: row.ext,
-                    frame: row.frame,
-                    name: row.name,
-                  })
+                  row.kind === "derived"
+                    ? removeDerived(row.frame)
+                    : void run({
+                        type: "remove_data",
+                        kind: row.kind,
+                        ch: row.ch,
+                        id: row.id,
+                        ext: row.ext,
+                        frame: row.frame,
+                        name: row.name,
+                      })
                 }
               />
             ) : (

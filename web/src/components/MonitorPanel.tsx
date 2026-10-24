@@ -103,6 +103,7 @@ export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
                 ×
               </button>
             </div>
+            {row.kind !== "derived" && (
             <div class="monitor-rule">
               <button
                 type="button"
@@ -140,6 +141,7 @@ export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
                 onClick={() => onEdit(row, { color: (row.color + 1) % colors.length })}
               />
             </div>
+            )}
           </div>
         );
       })}
