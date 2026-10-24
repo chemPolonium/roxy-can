@@ -252,6 +252,10 @@ pub struct App {
     /// Bumped whenever a project or autosave is loaded so the web shell
     /// knows to adopt the file's workspace exactly once.
     pub workspace_rev: u64,
+    /// Offline reference run decoded from another log, shown behind the live
+    /// chart; session state, not part of the project.
+    pub reference: Option<crate::reference::ReferenceRun>,
+    pub reference_rev: u64,
     /// Factory layout restored by New Project.
     pub default_layout: String,
     /// Layout queued for the next project reset.
@@ -474,6 +478,8 @@ impl App {
             layout_cache: String::new(),
             web_workspace: None,
             workspace_rev: 0,
+            reference: None,
+            reference_rev: 0,
             default_layout: String::new(),
             pending_layout: None,
             pnp_signature,

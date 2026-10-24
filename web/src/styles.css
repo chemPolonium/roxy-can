@@ -3369,6 +3369,25 @@ button.danger:hover:not(:disabled) {
   font-size: 10px;
 }
 
+.reference-log {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.reference-log-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reference-log-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .reference-offset {
   display: flex;
   align-items: center;

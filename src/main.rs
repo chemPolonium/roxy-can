@@ -29,6 +29,7 @@ mod observe;
 mod profile;
 mod project;
 mod recorder;
+mod reference;
 mod replay_map;
 mod sample_data;
 mod script;

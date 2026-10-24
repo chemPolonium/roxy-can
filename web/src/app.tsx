@@ -38,6 +38,7 @@ import { DbcExplorer } from "./components/DbcExplorer";
 import { DerivedModal } from "./components/DerivedModal";
 import { EventJumpModal } from "./components/EventJumpModal";
 import {
+  buildAlignedCsv,
   computeDerived,
   type DerivedDef,
 } from "./derived";
@@ -418,6 +419,7 @@ export function App() {
   const [eventOpen, setEventOpen] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const appliedWorkspaceRev = useRef(-1);
+  const appliedReferenceRev = useRef(-1);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
@@ -536,6 +538,31 @@ export function App() {
     layout,
     state?.workspaceRev,
   ]);
+
+  // A reference decoded by the core replaces the CSV reference; clearing it
+  // in the core (or loading a new log) bumps the revision.
+  useEffect(() => {
+    if (!state) return;
+    const rev = state.referenceRev ?? 0;
+    if (rev === appliedReferenceRev.current) return;
+    appliedReferenceRev.current = rev;
+    if (rev <= 0) return;
+    if (!state.reference) {
+      setReference(null);
+      return;
+    }
+    const columns: ReferenceColumns = {};
+    for (const signal of state.reference.signals) {
+      columns[`${signal.bus}:${signal.name}`] = signal.points;
+    }
+    setReference({
+      name: state.reference.name,
+      offsetS: 0,
+      columns,
+      series: mapReferenceColumns(columns, signals),
+    });
+    showToast(`Reference ${state.reference.name} loaded`);
+  }, [state?.referenceRev]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -1743,6 +1770,17 @@ export function App() {
       ? signalView.endS - signalView.windowS / 2
       : chartLatestS;
 
+  const downloadChartCsv = (fromS: number, toS: number) => {
+    const csv = buildAlignedCsv(chartSeries, fromS, toS);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    triggerDownload(
+      url,
+      `signals-${fromS.toFixed(3)}-${toS.toFixed(3)}.csv`,
+    );
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`CSV downloaded · ${chartSeries.length} signals`);
+  };
+
   const openExplorer = () => {
     setExplorerOpen((open) => !open);
     if (!catalog) void loadCatalog();
@@ -1793,6 +1831,7 @@ export function App() {
   const clearReference = () => {
     setReference(null);
     setReferenceOpen(false);
+    void sendCommand({ type: "clear_reference" }).catch(() => {});
     showToast("Reference removed");
   };
 
@@ -2936,6 +2975,7 @@ export function App() {
                   <CursorAnalysis
                     series={chartSeries}
                     cursors={chartCursors}
+                    onDownloadRange={downloadChartCsv}
                     onExportRange={
                       exportRange
                         ? () => {
@@ -3968,6 +4008,11 @@ export function App() {
           }
           onApply={applyReference}
           onClear={clearReference}
+          onLoadLog={(path) => {
+            setReferenceOpen(false);
+            showToast("Loading reference…");
+            void run({ type: "load_reference", path });
+          }}
           onClose={() => setReferenceOpen(false)}
         />
       )}

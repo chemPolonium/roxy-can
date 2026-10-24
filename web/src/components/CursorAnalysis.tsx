@@ -56,10 +56,12 @@ export function CursorAnalysis({
   series,
   cursors,
   onExportRange,
+  onDownloadRange,
 }: {
   series: SignalSeries[];
   cursors: ChartCursor[];
   onExportRange?: () => void;
+  onDownloadRange?: (fromS: number, toS: number) => void;
 }) {
   const labels = cursorLabels(cursors);
   const aIndex = labels.indexOf("A");
@@ -77,11 +79,21 @@ export function CursorAnalysis({
         <span class="hint">
           {from.toFixed(3)} – {to.toFixed(3)} s
         </span>
+        {onDownloadRange && (
+          <button
+            type="button"
+            class="mini"
+            title="Download this interval including derived channels"
+            onClick={() => onDownloadRange(from, to)}
+          >
+            CSV ↓
+          </button>
+        )}
         {onExportRange && (
           <button
             type="button"
             class="mini"
-            title="Export this interval as an aligned signal CSV"
+            title="Host export of the live signals in this interval"
             onClick={onExportRange}
           >
             Export range…

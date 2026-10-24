@@ -1859,6 +1859,12 @@ enum WebCommand {
         rev: u64,
         workspace: serde_json::Value,
     },
+    /// Decode another ASC/BLF with the current DBCs and keep its selected
+    /// CAN signals as a comparison baseline.
+    LoadReference {
+        path: String,
+    },
+    ClearReference,
 }
 
 async fn command(State(api): State<ApiState>, Json(cmd): Json<WebCommand>) -> StatusCode {
@@ -2787,6 +2793,23 @@ fn app_loop(
                 WebCommand::SetWebWorkspace { rev, workspace } => {
                     set_web_workspace(&mut app, rev, workspace);
                 }
+                WebCommand::LoadReference { path } => {
+                    let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
+                    match crate::reference::load(&path, &keys, &app.snap.channels) {
+                        Ok(run) => {
+                            let count = run.signals.len();
+                            app.status =
+                                format!("reference loaded: {} · {count} signals", run.name);
+                            app.reference = Some(run);
+                            app.reference_rev = app.reference_rev.wrapping_add(1);
+                        }
+                        Err(error) => app.fail(error),
+                    }
+                }
+                WebCommand::ClearReference => {
+                    app.reference = None;
+                    app.reference_rev = app.reference_rev.wrapping_add(1);
+                }
                 WebCommand::SimulateBusNodes { ch } => {
                     let nodes = app
                         .snap
@@ -3551,7 +3574,7 @@ fn row_address(key: &SigKey) -> RowAddress {
     }
 }
 
-fn series_key(key: &SigKey) -> String {
+pub(crate) fn series_key(key: &SigKey) -> String {
     match key {
         SigKey::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
         SigKey::Fr { bus, slot, name } => format!("fr:{bus}:{slot}:{name}"),
@@ -3805,6 +3828,8 @@ struct WebState {
     /// it; the browser applies it once per revision.
     workspace: Option<serde_json::Value>,
     workspace_rev: u64,
+    reference: Option<crate::reference::ReferenceRun>,
+    reference_rev: u64,
     replay_map: WebReplayMap,
     buses: Vec<WebBus>,
     fr_buses: Vec<WebFrBus>,
@@ -5037,6 +5062,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         recent_logs: app.recent_log.clone(),
         workspace: app.web_workspace.clone(),
         workspace_rev: app.workspace_rev,
+        reference: app.reference.clone(),
+        reference_rev: app.reference_rev,
         replay_map,
         buses,
         fr_buses,

@@ -24,6 +24,17 @@ export interface State {
   recentLogs: string[];
   workspace: unknown;
   workspaceRev: number;
+  reference: {
+    name: string;
+    signals: {
+      key: string;
+      name: string;
+      bus: string;
+      unit: string;
+      points: [number, number][];
+    }[];
+  } | null;
+  referenceRev: number;
   replayMap: ReplayMap;
   buses: Bus[];
   frBuses: FrBus[];
@@ -690,4 +701,6 @@ export type Command =
       post_frames: number;
       marker_cap: number;
     }
-  | { type: "set_web_workspace"; rev: number; workspace: unknown };
+  | { type: "set_web_workspace"; rev: number; workspace: unknown }
+  | { type: "load_reference"; path: string }
+  | { type: "clear_reference" };

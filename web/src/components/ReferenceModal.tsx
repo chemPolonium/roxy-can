@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { FilePick } from "./FilePick";
 
 export interface ReferenceColumns {
   [label: string]: [number, number][];
@@ -38,11 +39,13 @@ export function ReferenceModal({
   current,
   onApply,
   onClear,
+  onLoadLog,
   onClose,
 }: {
   current: ReferenceData | null;
   onApply: (data: ReferenceData) => void;
   onClear: () => void;
+  onLoadLog?: (path: string) => void;
   onClose: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
@@ -51,6 +54,8 @@ export function ReferenceModal({
   );
   const [name, setName] = useState(current?.name ?? "");
   const [offset, setOffset] = useState(String(current?.offsetS ?? 0));
+  const [logPath, setLogPath] = useState("");
+  const [logError, setLogError] = useState("");
   const [error, setError] = useState("");
   const [reading, setReading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -137,6 +142,46 @@ export function ReferenceModal({
               ).toLocaleString()}{" "}
               rows
             </p>
+          )}
+          {onLoadLog && (
+            <div class="reference-log">
+              <div class="reference-log-row">
+                <input
+                  value={logPath}
+                  placeholder="Host path to a reference .asc or .blf"
+                  onInput={(event) => {
+                    setLogPath((event.target as HTMLInputElement).value);
+                    setLogError("");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && logPath.trim()) {
+                      onLoadLog(logPath.trim());
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={!logPath.trim()}
+                  onClick={() => onLoadLog(logPath.trim())}
+                >
+                  Load log
+                </button>
+                <FilePick
+                  label="Choose…"
+                  accept=".asc,.blf"
+                  onError={setLogError}
+                  onPick={(path) => {
+                    setLogPath(path);
+                    onLoadLog(path);
+                  }}
+                />
+              </div>
+              <p class="hint">
+                ASC/BLF is decoded on the host with the current DBCs; CAN chart
+                signals are compared.
+              </p>
+              {logError && <p class="modal-error">{logError}</p>}
+            </div>
           )}
           <label class="reference-offset">
             Reference offset

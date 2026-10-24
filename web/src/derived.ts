@@ -373,6 +373,47 @@ export function conditionEvents(
   }
 }
 
+function csvNumber(value: number): string {
+  let text = value.toFixed(6);
+  if (text.includes(".")) {
+    while (text.endsWith("0")) text = text.slice(0, -1);
+    if (text.endsWith(".")) text = text.slice(0, -1);
+  }
+  return text;
+}
+
+/// Wide, time-aligned CSV of everything on the chart, including derived
+/// channels that the core cannot see. Sample-and-hold at a 10 ms floor.
+export function buildAlignedCsv(
+  series: SignalSeries[],
+  fromS: number,
+  toS: number,
+): string {
+  if (!(fromS < toS) || series.length === 0) return "time_s\n";
+  const step = Math.max(0.01, (toS - fromS) / 20_000);
+  const rows = series.map((signal) => ({
+    points: signal.points,
+    index: 0,
+    last: null as number | null,
+  }));
+  let out = "time_s";
+  for (const signal of series) out += `,${signal.bus}:${signal.name}`;
+  out += "\n";
+  for (let t = fromS; t <= toS + 1e-9; t += step) {
+    out += csvNumber(t);
+    for (const row of rows) {
+      while (row.index < row.points.length && row.points[row.index][0] <= t) {
+        row.last = row.points[row.index][1];
+        row.index += 1;
+      }
+      out += ",";
+      if (row.last !== null) out += csvNumber(row.last);
+    }
+    out += "\n";
+  }
+  return out;
+}
+
 export function computeDerived(
   defs: DerivedDef[],
   series: SignalSeries[],

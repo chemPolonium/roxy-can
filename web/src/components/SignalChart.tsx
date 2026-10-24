@@ -1158,7 +1158,7 @@ export function SignalChart({
             class="reference-chip"
             title={`Reference ${reference.name}; its time + ${reference.offsetS.toFixed(3)} s is matched to the live time`}
           >
-            REF {reference.name} {reference.offsetS >= 0 ? "+" : ""}
+            REF {reference.offsetS >= 0 ? "+" : ""}
             {reference.offsetS.toFixed(3)}s
           </span>
         )}

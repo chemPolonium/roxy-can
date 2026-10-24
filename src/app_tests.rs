@@ -1414,6 +1414,46 @@ fn tx_generator_emits_frames() {
 }
 
 #[test]
+fn a_reference_log_decodes_the_selected_can_signals() {
+    let app = App::headless();
+    let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
+    let id = db.order[0].0;
+    let name = db.messages[&(id, false)].signals[0].name.clone();
+    let key = SigKey::can(0, id, false, name);
+    let path = std::env::temp_dir().join(format!("roxy_reference_{}.asc", std::process::id()));
+    let mut writer = AscWriter::new(&path.to_string_lossy()).unwrap();
+    for i in 0..6u8 {
+        let mut frame = CanFrame {
+            t_us: u64::from(i) * 100_000,
+            channel: 0,
+            id,
+            extended: false,
+            len: 8,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Rx,
+            flags: FrameFlags::NONE,
+        };
+        frame.data = [i + 1; MAX_CAN_FD_LEN];
+        writer.write(&frame).unwrap();
+    }
+    writer.finish().ok();
+
+    let run = crate::reference::load(
+        &path.to_string_lossy(),
+        std::slice::from_ref(&key),
+        &app.snap.channels,
+    )
+    .expect("reference decodes");
+    assert_eq!(run.signals.len(), 1);
+    assert_eq!(run.signals[0].key, crate::web::series_key(&key));
+    assert!(
+        run.signals[0].points.len() >= 4,
+        "the reference samples the log"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn aligned_signal_csv_writes_one_row_per_time_step() {
     let mut app = App::headless();
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
