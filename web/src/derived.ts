@@ -1,0 +1,339 @@
+import type { SignalSeries } from "./types";
+
+export interface DerivedDef {
+  id: string;
+  name: string;
+  unit: string;
+  expression: string;
+}
+
+type Node =
+  | { kind: "number"; value: number }
+  | { kind: "ref"; name: string }
+  | { kind: "unary"; op: "-"; value: Node }
+  | { kind: "binary"; op: "+" | "-" | "*" | "/"; left: Node; right: Node }
+  | { kind: "call"; name: string; args: Node[] };
+
+interface Token {
+  kind: "number" | "ref" | "name" | "op" | "paren" | "comma" | "end";
+  text: string;
+  value?: number;
+}
+
+function tokenize(source: string): Token[] {
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+    if ("+-*/".includes(ch)) {
+      tokens.push({ kind: "op", text: ch });
+      i += 1;
+      continue;
+    }
+    if (ch === "(" || ch === ")") {
+      tokens.push({ kind: "paren", text: ch });
+      i += 1;
+      continue;
+    }
+    if (ch === ",") {
+      tokens.push({ kind: "comma", text: ch });
+      i += 1;
+      continue;
+    }
+    if (ch === "[") {
+      const end = source.indexOf("]", i + 1);
+      if (end < 0) throw new Error("missing ]");
+      const name = source.slice(i + 1, end).trim();
+      if (!name) throw new Error("empty [signal]");
+      tokens.push({ kind: "ref", text: name });
+      i = end + 1;
+      continue;
+    }
+    const number = /^\d+(?:\.\d*)?|^\.\d+/.exec(source.slice(i));
+    if (number) {
+      tokens.push({ kind: "number", text: number[0], value: Number(number[0]) });
+      i += number[0].length;
+      continue;
+    }
+    const name = /^[A-Za-z_]\w*/.exec(source.slice(i));
+    if (name) {
+      tokens.push({ kind: "name", text: name[0] });
+      i += name[0].length;
+      continue;
+    }
+    throw new Error(`unexpected '${ch}'`);
+  }
+  tokens.push({ kind: "end", text: "" });
+  return tokens;
+}
+
+class Parser {
+  private index = 0;
+
+  constructor(private tokens: Token[]) {}
+
+  private peek(): Token {
+    return this.tokens[this.index];
+  }
+
+  private take(kind: Token["kind"], text?: string): Token {
+    const token = this.peek();
+    if (token.kind !== kind || (text !== undefined && token.text !== text)) {
+      throw new Error(`expected ${text ?? kind}`);
+    }
+    this.index += 1;
+    return token;
+  }
+
+  parse(): Node {
+    const node = this.expression();
+    if (this.peek().kind !== "end") throw new Error("unexpected trailing input");
+    return node;
+  }
+
+  private expression(): Node {
+    let node = this.term();
+    while (
+      this.peek().kind === "op" &&
+      (this.peek().text === "+" || this.peek().text === "-")
+    ) {
+      const op = this.take("op").text as "+" | "-";
+      node = { kind: "binary", op, left: node, right: this.term() };
+    }
+    return node;
+  }
+
+  private term(): Node {
+    let node = this.factor();
+    while (
+      this.peek().kind === "op" &&
+      (this.peek().text === "*" || this.peek().text === "/")
+    ) {
+      const op = this.take("op").text as "*" | "/";
+      node = { kind: "binary", op, left: node, right: this.factor() };
+    }
+    return node;
+  }
+
+  private factor(): Node {
+    const token = this.peek();
+    if (token.kind === "op" && token.text === "-") {
+      this.take("op");
+      return { kind: "unary", op: "-", value: this.factor() };
+    }
+    if (token.kind === "number") {
+      this.take("number");
+      return { kind: "number", value: token.value ?? 0 };
+    }
+    if (token.kind === "ref") {
+      this.take("ref");
+      return { kind: "ref", name: token.text };
+    }
+    if (token.kind === "paren" && token.text === "(") {
+      this.take("paren", "(");
+      const node = this.expression();
+      this.take("paren", ")");
+      return node;
+    }
+    if (token.kind === "name") {
+      const name = this.take("name").text;
+      this.take("paren", "(");
+      const args: Node[] = [];
+      if (!(this.peek().kind === "paren" && this.peek().text === ")")) {
+        args.push(this.expression());
+        while (this.peek().kind === "comma") {
+          this.take("comma");
+          args.push(this.expression());
+        }
+      }
+      this.take("paren", ")");
+      return { kind: "call", name, args };
+    }
+    throw new Error("expected a value");
+  }
+}
+
+function collectRefs(node: Node, out: Set<string>) {
+  if (node.kind === "ref") out.add(node.name);
+  else if (node.kind === "unary") collectRefs(node.value, out);
+  else if (node.kind === "binary") {
+    collectRefs(node.left, out);
+    collectRefs(node.right, out);
+  } else if (node.kind === "call") {
+    for (const arg of node.args) collectRefs(arg, out);
+  }
+}
+
+function resolveRefs(
+  names: Set<string>,
+  series: SignalSeries[],
+): { refs: Map<string, SignalSeries>; error?: string } {
+  const refs = new Map<string, SignalSeries>();
+  for (const name of names) {
+    const exact = series.filter(
+      (signal) =>
+        signal.name === name ||
+        `${signal.bus}:${signal.name}` === name ||
+        signal.key === name,
+    );
+    if (exact.length === 0) {
+      return { refs, error: `unknown signal [${name}]` };
+    }
+    if (exact.length > 1) {
+      return {
+        refs,
+        error: `[${name}] is ambiguous; use [Bus:Signal]`,
+      };
+    }
+    refs.set(name, exact[0]);
+  }
+  return { refs };
+}
+
+function valueAt(points: [number, number][], t: number): number | null {
+  if (points.length === 0) return null;
+  if (t <= points[0][0]) return points[0][1];
+  const last = points[points.length - 1];
+  if (t >= last[0]) return last[1];
+  let lo = 0;
+  let hi = points.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid][0] <= t) lo = mid;
+    else hi = mid;
+  }
+  const [t0, v0] = points[lo];
+  const [t1, v1] = points[hi];
+  return t1 > t0 ? v0 + ((v1 - v0) * (t - t0)) / (t1 - t0) : v0;
+}
+
+function evaluate(
+  node: Node,
+  t: number,
+  refs: Map<string, SignalSeries>,
+): number | null {
+  switch (node.kind) {
+    case "number":
+      return node.value;
+    case "ref": {
+      const signal = refs.get(node.name);
+      return signal ? valueAt(signal.points, t) : null;
+    }
+    case "unary": {
+      const value = evaluate(node.value, t, refs);
+      return value === null ? null : -value;
+    }
+    case "binary": {
+      const left = evaluate(node.left, t, refs);
+      const right = evaluate(node.right, t, refs);
+      if (left === null || right === null) return null;
+      switch (node.op) {
+        case "+":
+          return left + right;
+        case "-":
+          return left - right;
+        case "*":
+          return left * right;
+        case "/":
+          return right === 0 ? null : left / right;
+      }
+      return null;
+    }
+    case "call": {
+      const values = node.args.map((arg) => evaluate(arg, t, refs));
+      if (values.some((value) => value === null)) return null;
+      const nums = values as number[];
+      switch (node.name) {
+        case "abs":
+          return Math.abs(nums[0]);
+        case "sqrt":
+          return nums[0] >= 0 ? Math.sqrt(nums[0]) : null;
+        case "min":
+          return Math.min(...nums);
+        case "max":
+          return Math.max(...nums);
+        default:
+          return null;
+      }
+    }
+  }
+}
+
+function invalidCall(node: Node): string | null {
+  if (node.kind === "unary") return invalidCall(node.value);
+  if (node.kind === "binary") {
+    return invalidCall(node.left) ?? invalidCall(node.right);
+  }
+  if (node.kind === "call") {
+    if (!["abs", "sqrt", "min", "max"].includes(node.name)) {
+      return `unknown function ${node.name}()`;
+    }
+    if (node.name !== "min" && node.name !== "max" && node.args.length !== 1) {
+      return `${node.name}() takes one argument`;
+    }
+    if (node.args.length === 0) return `${node.name}() takes arguments`;
+    for (const arg of node.args) {
+      const error = invalidCall(arg);
+      if (error) return error;
+    }
+  }
+  return null;
+}
+
+export function validateDerivedExpression(
+  expression: string,
+  series: SignalSeries[],
+): string | null {
+  try {
+    const ast = new Parser(tokenize(expression)).parse();
+    const callError = invalidCall(ast);
+    if (callError) return callError;
+    const names = new Set<string>();
+    collectRefs(ast, names);
+    if (names.size === 0) return "reference at least one [signal]";
+    const resolved = resolveRefs(names, series);
+    if (resolved.error) return resolved.error;
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+export function computeDerived(
+  defs: DerivedDef[],
+  series: SignalSeries[],
+): SignalSeries[] {
+  const out: SignalSeries[] = [];
+  for (const def of defs) {
+    try {
+      const ast = new Parser(tokenize(def.expression)).parse();
+      const names = new Set<string>();
+      collectRefs(ast, names);
+      if (names.size === 0) continue;
+      const resolved = resolveRefs(names, series);
+      if (resolved.error) continue;
+      const base = [...resolved.refs.values()][0];
+      const points: [number, number][] = [];
+      for (const [t] of base.points) {
+        const value = evaluate(ast, t, resolved.refs);
+        if (value !== null && Number.isFinite(value)) points.push([t, value]);
+      }
+      if (points.length === 0) continue;
+      out.push({
+        key: `derived:${def.id}`,
+        name: def.name,
+        bus: "Derived",
+        unit: def.unit,
+        color: 100 + out.length,
+        points,
+      });
+    } catch {
+      // The editor shows the validation error; a broken lane simply drops out.
+    }
+  }
+  return out;
+}

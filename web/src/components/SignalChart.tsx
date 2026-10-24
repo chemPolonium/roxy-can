@@ -23,6 +23,12 @@ export interface ChartCursor {
 
 export type ChartSignalAction = "monitor" | "data" | "state" | "remove";
 
+export interface ReferenceOverlay {
+  name: string;
+  offsetS: number;
+  series: Record<string, [number, number][]>;
+}
+
 export function cursorLabels(cursors: ChartCursor[]): string[] {
   const used = new Set<string>();
   for (const cursor of cursors) {
@@ -240,6 +246,9 @@ export function SignalChart({
   fullscreen,
   measuring,
   paused,
+  reference = null,
+  onOpenReference,
+  onOpenDerived,
 }: {
   series: SignalSeries[];
   markers?: number[];
@@ -255,6 +264,9 @@ export function SignalChart({
   fullscreen: boolean;
   measuring: boolean;
   paused: boolean;
+  reference?: ReferenceOverlay | null;
+  onOpenReference?: () => void;
+  onOpenDerived?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -617,6 +629,35 @@ export function SignalChart({
         }
         ctx.globalAlpha = 1;
 
+        const refPoints = reference?.series[signal.key];
+        if (reference && refPoints && refPoints.length > 1) {
+          const stride = Math.max(
+            1,
+            Math.floor(refPoints.length / Math.max(1, plotW * 2)),
+          );
+          ctx.save();
+          ctx.globalAlpha = 0.55;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          let refStarted = false;
+          for (let ri = 0; ri < refPoints.length; ri += stride) {
+            const t = refPoints[ri][0] + reference.offsetS;
+            if (t < start || t > end) continue;
+            const x = GUTTER + ((t - start) / view.windowS) * plotW;
+            const vy = y(refPoints[ri][1]);
+            if (!refStarted) {
+              ctx.moveTo(x, vy);
+              refStarted = true;
+            } else {
+              ctx.lineTo(x, vy);
+            }
+          }
+          if (refStarted) ctx.stroke();
+          ctx.restore();
+        }
+
         if (fullscreen || hoverCursorId !== null) {
           for (let ci = 0; ci < cursors.length; ci += 1) {
             const cursor = cursors[ci];
@@ -766,6 +807,7 @@ export function SignalChart({
     hoverCursorId,
     measuring,
     paused,
+    reference,
   ]);
 
   const plotWidth = () => {
@@ -833,7 +875,7 @@ export function SignalChart({
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left < GUTTER) {
             const lane = laneAt(event.clientY);
-            if (lane === null) return;
+            if (lane === null || series[lane].key.startsWith("derived:")) return;
             event.currentTarget.setPointerCapture(event.pointerId);
             reorderRef.current = { key: series[lane].key, from: lane, to: lane };
             setReorder({ from: lane, to: lane });
@@ -956,6 +998,33 @@ export function SignalChart({
             title="Time between cursors A and B"
           >
             Δt {Math.abs(cursorB.t - cursorA.t).toFixed(3)}s
+          </span>
+        )}
+        {onOpenDerived && (
+          <button
+            type="button"
+            title="Create a math channel from the selected signals"
+            onClick={onOpenDerived}
+          >
+            Derived…
+          </button>
+        )}
+        {onOpenReference && (
+          <button
+            type="button"
+            title="Overlay an aligned CSV from a previous run"
+            onClick={onOpenReference}
+          >
+            Ref…
+          </button>
+        )}
+        {reference && (
+          <span
+            class="reference-chip"
+            title={`Reference ${reference.name}; its time + ${reference.offsetS.toFixed(3)} s is matched to the live time`}
+          >
+            REF {reference.name} {reference.offsetS >= 0 ? "+" : ""}
+            {reference.offsetS.toFixed(3)}s
           </span>
         )}
       </div>

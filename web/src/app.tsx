@@ -35,6 +35,11 @@ import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
 import { DbcExplorer } from "./components/DbcExplorer";
+import { DerivedModal } from "./components/DerivedModal";
+import {
+  computeDerived,
+  type DerivedDef,
+} from "./derived";
 import { ExportModal } from "./components/ExportModal";
 import { FilePick } from "./components/FilePick";
 import { GeneratorModal } from "./components/GeneratorModal";
@@ -44,6 +49,11 @@ import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
 import type { MonitorPatch } from "./components/MonitorPanel";
 import { RateChart } from "./components/RateChart";
+import {
+  ReferenceModal,
+  type ReferenceColumns,
+  type ReferenceData,
+} from "./components/ReferenceModal";
 import {
   SignalChart,
   cursorLabels,
@@ -107,6 +117,7 @@ interface SavedView {
   splitRatio: number;
   signalView: SignalView;
   cursors: ChartCursor[];
+  derived: DerivedDef[];
 }
 
 interface SavedWorkspace extends Partial<SavedView> {
@@ -146,6 +157,24 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       });
     }
   }
+  const derived: DerivedDef[] = [];
+  if (Array.isArray(saved.derived)) {
+    for (const definition of saved.derived.slice(0, 20)) {
+      if (
+        typeof definition?.id !== "string" ||
+        typeof definition?.name !== "string" ||
+        typeof definition?.expression !== "string"
+      ) {
+        continue;
+      }
+      derived.push({
+        id: definition.id,
+        name: definition.name,
+        unit: typeof definition.unit === "string" ? definition.unit : "",
+        expression: definition.expression,
+      });
+    }
+  }
   return {
     tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
     chartTab:
@@ -160,6 +189,7 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
     signalView: { windowS, endS },
     cursors,
+    derived,
   };
 }
 
@@ -171,6 +201,30 @@ function loadView(): Partial<SavedView> {
   } catch {
     return {};
   }
+}
+
+interface ReferenceRun extends ReferenceData {
+  series: Record<string, [number, number][]>;
+}
+
+/// Aligned-CSV headers are `bus:signal`; match them to the live lanes, with
+/// a unique-name fallback when the bus labels differ.
+function mapReferenceColumns(
+  columns: ReferenceColumns,
+  series: SignalSeries[],
+): Record<string, [number, number][]> {
+  const byKey: Record<string, [number, number][]> = {};
+  for (const signal of series) {
+    let points = columns[`${signal.bus}:${signal.name}`];
+    if (!points) {
+      const matches = Object.keys(columns).filter(
+        (label) => label.slice(label.lastIndexOf(":") + 1) === signal.name,
+      );
+      if (matches.length === 1) points = columns[matches[0]];
+    }
+    if (points && points.length > 0) byKey[signal.key] = points;
+  }
+  return byKey;
 }
 
 /// The backend's series/catalog key for an observer row. CAN ids start at 0,
@@ -349,6 +403,12 @@ export function App() {
   const [traceJump, setTraceJump] = useState<TraceJump | null>(null);
   const [traceColumns, setTraceColumns] = useState(loadTraceColumns);
   const [explorerOpen, setExplorerOpen] = useState(false);
+  const [reference, setReference] = useState<ReferenceRun | null>(null);
+  const [referenceOpen, setReferenceOpen] = useState(false);
+  const [derivedDefs, setDerivedDefs] = useState<DerivedDef[]>(
+    savedView.derived ?? [],
+  );
+  const [derivedOpen, setDerivedOpen] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const appliedWorkspaceRev = useRef(-1);
   const uiFps = useUiFps();
@@ -386,6 +446,7 @@ export function App() {
       setChartTab2("monitor");
       setChartSplit(false);
       setSplitRatio(0.6);
+      setDerivedDefs([]);
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
@@ -400,6 +461,7 @@ export function App() {
     if (view.chartTab2) setChartTab2(view.chartTab2);
     if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
     if (typeof view.splitRatio === "number") setSplitRatio(view.splitRatio);
+    if (view.derived) setDerivedDefs(view.derived);
     if (view.signalView) setSignalView(view.signalView);
     if (view.cursors) {
       setChartCursors(view.cursors);
@@ -443,6 +505,7 @@ export function App() {
           signalView,
           cursors: chartCursors,
           traceColumns,
+          derived: derivedDefs,
           layout,
         },
       }).catch(() => {});
@@ -458,6 +521,7 @@ export function App() {
     signalView,
     chartCursors,
     traceColumns,
+    derivedDefs,
     layout,
     state?.workspaceRev,
   ]);
@@ -606,6 +670,7 @@ export function App() {
           splitRatio,
           signalView,
           cursors: chartCursors,
+          derived: derivedDefs,
         }),
       );
     } catch {
@@ -619,6 +684,7 @@ export function App() {
     splitRatio,
     signalView,
     chartCursors,
+    derivedDefs,
   ]);
 
   useEffect(() => {
@@ -772,6 +838,16 @@ export function App() {
   const clearChartCursors = () => setChartCursors([]);
 
   const chartSignalAction = (key: string, action: ChartSignalAction) => {
+    if (key.startsWith("derived:")) {
+      if (action === "remove") {
+        setDerivedDefs((defs) =>
+          defs.filter((definition) => `derived:${definition.id}` !== key),
+        );
+      } else {
+        showToast("Derived channels are chart-only for now");
+      }
+      return;
+    }
     void run({ type: "chart_signal", key, action });
     if (action !== "remove") {
       setChartTab(action);
@@ -1096,6 +1172,7 @@ export function App() {
   const resetChartTools = () => {
     setChartCursors([]);
     setSignalView({ windowS: 30, endS: null });
+    setReference(null);
   };
 
   const loadProject = (path: string) => {
@@ -1129,6 +1206,7 @@ export function App() {
         signalView,
         cursors: chartCursors,
         traceColumns,
+        derived: derivedDefs,
         layout,
       },
     });
@@ -1630,6 +1708,14 @@ export function App() {
   }, [chartCursors]);
   const dataKeys = new Set((state?.data ?? []).map(rowKey));
   const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
+  const derivedSeries = useMemo(
+    () => computeDerived(derivedDefs, signals),
+    [derivedDefs, signals],
+  );
+  const chartSeries = useMemo(
+    () => [...signals, ...derivedSeries],
+    [signals, derivedSeries],
+  );
 
   const openExplorer = () => {
     setExplorerOpen((open) => !open);
@@ -1665,6 +1751,36 @@ export function App() {
     }
     setChartTab("monitor");
   };
+
+  const applyReference = (data: ReferenceData) => {
+    const mapped = mapReferenceColumns(data.columns, signals);
+    const count = Object.keys(mapped).length;
+    if (count === 0) {
+      showToast("Reference has no columns matching the chart signals");
+      return;
+    }
+    setReference({ ...data, series: mapped });
+    setReferenceOpen(false);
+    showToast(`Reference ${data.name} · ${count} signals`);
+  };
+
+  const clearReference = () => {
+    setReference(null);
+    setReferenceOpen(false);
+    showToast("Reference removed");
+  };
+
+  const signalSignature = signals.map((signal) => signal.key).join("|");
+
+  useEffect(() => {
+    if (!reference) return;
+    setReference((old) =>
+      old
+        ? { ...old, series: mapReferenceColumns(old.columns, signals) }
+        : old,
+    );
+    // Only a lane set change needs remapping; sample updates do not.
+  }, [signalSignature]);
 
   const addPaletteCursor = () => {
     if (signals.length === 0) {
@@ -1740,6 +1856,20 @@ export function App() {
       group: "Signals",
       hint: "Search the database and add lanes or watches",
       run: openExplorer,
+    },
+    {
+      id: "reference-csv",
+      label: "Overlay reference CSV…",
+      group: "Signals",
+      hint: "Compare a previous aligned export with an offset",
+      run: () => setReferenceOpen(true),
+    },
+    {
+      id: "derived-signal",
+      label: "New derived signal…",
+      group: "Signals",
+      hint: "Math channel over the selected signals",
+      run: () => setDerivedOpen(true),
     },
     {
       id: "add-cursor",
@@ -1953,7 +2083,7 @@ export function App() {
     if (tab === "signals") {
       return (
         <SignalChart
-          series={signals}
+          series={chartSeries}
           markers={state?.markers ?? []}
           theme={theme}
           onReorder={moveSignal}
@@ -1967,6 +2097,9 @@ export function App() {
           fullscreen={chartFullscreen}
           measuring={measuring}
           paused={state?.tracePaused ?? false}
+          reference={reference}
+          onOpenReference={() => setReferenceOpen(true)}
+          onOpenDerived={() => setDerivedOpen(true)}
         />
       );
     }
@@ -2634,7 +2767,7 @@ export function App() {
                 <span class="meta">
                   {chartTab === "rate"
                     ? "solid f/s · dashed load"
-                    : `${signals.length} channels · wheel zoom`}
+                    : `${chartSeries.length} channels · wheel zoom`}
                 </span>
               )}
               {chartTab === "rate" && (
@@ -2742,7 +2875,7 @@ export function App() {
             ) : chartTab === "signals" ? (
               <div class="signal-stack">
                 <SignalChart
-                  series={signals}
+                  series={chartSeries}
                   markers={state?.markers ?? []}
                   theme={theme}
                   onReorder={moveSignal}
@@ -2756,10 +2889,13 @@ export function App() {
                   fullscreen={chartFullscreen}
                   measuring={measuring}
                   paused={state?.tracePaused ?? false}
+                  reference={reference}
+                  onOpenReference={() => setReferenceOpen(true)}
+                  onOpenDerived={() => setDerivedOpen(true)}
                 />
                 {chartCursors.length >= 2 && !chartSplit && (
                   <CursorAnalysis
-                    series={signals}
+                    series={chartSeries}
                     cursors={chartCursors}
                     onExportRange={
                       exportRange
@@ -3754,6 +3890,38 @@ export function App() {
         <CommandPalette
           commands={paletteCommands}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {derivedOpen && (
+        <DerivedModal
+          defs={derivedDefs}
+          series={signals}
+          onSave={(definition) => {
+            setDerivedDefs((defs) => [...defs, definition]);
+            showToast(`Derived ${definition.name} added`);
+          }}
+          onRemove={(id) =>
+            setDerivedDefs((defs) =>
+              defs.filter((definition) => definition.id !== id),
+            )
+          }
+          onClose={() => setDerivedOpen(false)}
+        />
+      )}
+      {referenceOpen && (
+        <ReferenceModal
+          current={
+            reference
+              ? {
+                  name: reference.name,
+                  offsetS: reference.offsetS,
+                  columns: reference.columns,
+                }
+              : null
+          }
+          onApply={applyReference}
+          onClear={clearReference}
+          onClose={() => setReferenceOpen(false)}
         />
       )}
       {timeJumpOpen && (
