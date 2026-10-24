@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 
 export interface TraceFilter {
   dir: "all" | "Rx" | "Tx";
@@ -55,6 +55,13 @@ interface Props {
 
 export function TraceFilterModal({ filter, onApply, onClose }: Props) {
   const [draft, setDraft] = useState(filter);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
   const set = (patch: Partial<TraceFilter>) =>
     setDraft((current) => ({ ...current, ...patch }));
   const invalidTime =

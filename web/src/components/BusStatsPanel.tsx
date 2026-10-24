@@ -61,8 +61,9 @@ export function BusStatsPanel({
 }) {
   if (buses.length === 0) {
     return (
-      <div class="busstat-empty">
-        no bus statistics yet -- start a measurement to collect load numbers
+      <div class="empty">
+        <strong>No bus statistics yet</strong>
+        <span>Start a measurement to collect load and timing statistics.</span>
       </div>
     );
   }

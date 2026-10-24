@@ -160,6 +160,14 @@ export function SysVarsModal({
   const [draft, setDraft] = useState<Draft | null>(null);
   const checked = draft ? validate(draft) : null;
 
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
+
   const set = (patch: Partial<Draft>) =>
     setDraft((current) => (current ? { ...current, ...patch } : current));
 

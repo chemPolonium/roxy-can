@@ -1300,6 +1300,16 @@ body.col-resizing {
   background: rgb(0 0 0 / 58%);
 }
 
+/* One form height in dialogs: text/select boxes, compact action buttons and
+   the modal header close button line up on the same baseline. */
+.modal-backdrop > :not(.palette) button,
+.modal-backdrop > :not(.palette) select,
+.modal-backdrop
+  > :not(.palette)
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]) {
+  height: 26px;
+}
+
 .export-modal {
   width: min(560px, 100%);
   max-height: 88vh;
@@ -3310,16 +3320,6 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
   color: var(--muted);
   font-size: 9.5px;
-}
-
-.busstat-empty {
-  display: grid;
-  flex: 1 1 auto;
-  place-items: center;
-  padding: 16px;
-  color: var(--muted);
-  font-size: 10.5px;
-  text-align: center;
 }
 
 /* Monitor: big live values with an optional coloring rule. Each row stacks

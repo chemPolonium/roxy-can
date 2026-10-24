@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import {
   clearDownload,
   isDownloadName,
@@ -39,6 +39,13 @@ export function ExportModal({ initialKind, onExport, onClose }: Props) {
   );
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
   const current = KINDS.find(([value]) => value === kind) ?? KINDS[0];
   const name = path.trim();
   const canDownload = isDownloadName(name);

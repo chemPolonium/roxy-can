@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import type { StateRule } from "../types";
 
 interface Props {
@@ -39,6 +39,13 @@ export function StateRuleModal({
   onClose,
 }: Props) {
   const [draft, setDraft] = useState<Draft>(fromRule(rule));
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
   const parsed = draft.cuts.map((cut) => Number(cut));
   let error = "";
   if (parsed.some((cut) => !Number.isFinite(cut))) {

@@ -490,7 +490,7 @@ function BusGroup({
           type="button"
           class="mini"
           disabled={bus.dbcPaths.length === 0}
-          title="Set every DBC node on this bus to Simulated"
+          title="Set every DBC node on this bus to Simulated; entries still need On to transmit"
           onClick={() => onSimulate(bus.index)}
         >
           Simulate nodes
@@ -523,6 +523,7 @@ function BusGroup({
         <button
           type="button"
           disabled={!addId}
+          title="Add a message entry to this bus"
           onClick={() => {
             if (addId) {
               onAdd(bus.index, Number(addId));
