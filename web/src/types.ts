@@ -213,6 +213,7 @@ export interface TriggerEntry {
   bus: number;
   slot: number;
   varKey: string;
+  derivedId: string;
   actionKind: string;
   sendCh: number;
   sendId: number;
@@ -377,6 +378,7 @@ export interface TriggerEdit {
   bus: number;
   slot: number;
   key: string;
+  derivedId: string;
   action: string;
   sendCh: number;
   sendId: number;
@@ -702,6 +704,7 @@ export type Command =
       bus: number;
       slot: number;
       key: string;
+      derived_id: string;
       action: string;
       send_ch: number;
       send_id: number;

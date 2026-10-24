@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import type {
   Bus,
   Catalog,
+  DerivedDef,
   TriggerEdit,
   TriggerEntry,
   TriggerLimits,
@@ -15,6 +16,7 @@ interface Props {
   txEntries: TxEntry[];
   catalog: Catalog | null;
   catalogLoading: boolean;
+  derived: DerivedDef[];
   onAdd: (kind: string) => void;
   onToggle: (index: number, on: boolean) => void;
   onRemove: (index: number) => void;
@@ -30,6 +32,7 @@ const KINDS: [string, string][] = [
   ["error", "+ Error frames"],
   ["timeout", "+ Timeout"],
   ["sysvar", "+ SysVar"],
+  ["derived", "+ Derived"],
   ["fr_frame", "+ FR frame"],
   ["fr_signal", "+ FR signal"],
 ];
@@ -68,6 +71,7 @@ interface Draft {
   bus: number;
   slot: number;
   key: string;
+  derivedId: string;
   action: string;
   sendCh: number;
   sendId: number;
@@ -86,6 +90,7 @@ function draftOf(index: number, trigger: TriggerEntry): Draft {
     bus: trigger.bus,
     slot: trigger.slot,
     key: trigger.varKey || trigger.signal,
+    derivedId: trigger.derivedId || "",
     action: trigger.actionKind,
     sendCh: trigger.sendCh,
     sendId: trigger.sendId,
@@ -98,6 +103,7 @@ function TriggerEditor({
   txEntries,
   catalog,
   catalogLoading,
+  derived,
   onChange,
   onCancel,
   onSave,
@@ -107,6 +113,7 @@ function TriggerEditor({
   txEntries: TxEntry[];
   catalog: Catalog | null;
   catalogLoading: boolean;
+  derived: DerivedDef[];
   onChange: (next: Draft) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -121,13 +128,16 @@ function TriggerEditor({
   const signals = message?.signals ?? [];
   const needsSignal = draft.kind === "signal" || draft.kind === "fr_signal";
   const isFr = draft.kind === "fr_frame" || draft.kind === "fr_signal";
+  const isDerived = draft.kind === "derived";
   const needsThreshold =
     draft.kind === "signal" ||
     draft.kind === "fr_signal" ||
-    draft.kind === "sysvar";
-  const needsTarget = !isFr && draft.kind !== "sysvar";
+    draft.kind === "sysvar" ||
+    isDerived;
+  const needsTarget = !isFr && draft.kind !== "sysvar" && !isDerived;
   const canSave =
     (draft.kind !== "sysvar" || draft.key.trim().length > 0) &&
+    (!isDerived || draft.derivedId.length > 0) &&
     (!needsSignal || draft.signal.trim().length > 0);
 
   const chooseMessage = (messageId: number, extended: boolean) => {
@@ -292,6 +302,33 @@ function TriggerEditor({
           </label>
         )}
 
+        {isDerived && (
+          <label class="trig-field trig-wide">
+            Derived channel
+            <select
+              value={draft.derivedId}
+              onChange={(event) =>
+                set({
+                  derivedId: (event.target as HTMLSelectElement).value,
+                })
+              }
+            >
+              <option value="">
+                {derived.length === 0 ? "No derived channels yet" : "Pick a channel…"}
+              </option>
+              {derived.map((definition) => (
+                <option key={definition.id} value={definition.id}>
+                  {definition.name} · {definition.expression}
+                </option>
+              ))}
+              {draft.derivedId &&
+                !derived.some((definition) => definition.id === draft.derivedId) && (
+                  <option value={draft.derivedId}>{draft.derivedId}</option>
+                )}
+            </select>
+          </label>
+        )}
+
         {needsThreshold && (
           <>
             <label class="trig-field">
@@ -411,6 +448,7 @@ export function TriggersModal({
   txEntries,
   catalog,
   catalogLoading,
+  derived,
   onAdd,
   onToggle,
   onRemove,
@@ -455,6 +493,7 @@ export function TriggersModal({
       bus: draft.bus,
       slot: draft.slot,
       key: draft.key.trim(),
+      derivedId: draft.derivedId,
       action: draft.action,
       sendCh: draft.sendCh,
       sendId: draft.sendId,
@@ -549,6 +588,7 @@ export function TriggersModal({
               txEntries={txEntries}
               catalog={catalog}
               catalogLoading={catalogLoading}
+              derived={derived}
               onChange={setDraft}
               onCancel={() => setDraft(null)}
               onSave={save}

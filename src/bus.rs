@@ -2695,6 +2695,7 @@ impl BusCore {
                 signals: HashMap::new(),
                 fr_signals: HashMap::new(),
                 sysvars: HashMap::new(),
+                derived_signals: HashMap::new(),
             });
         }
         // System variables are global: every channel's nodes read the
@@ -2749,6 +2750,23 @@ impl BusCore {
                         input.fr_signals.insert(key.clone(), d.phys);
                     }
                 }
+            }
+        }
+        // Derived lanes are global, so every channel's nodes see the same
+        // table. The value is the newest sample the core took at the end of
+        // the previous lap -- `derived("Name")` in a step therefore reads the
+        // step's inputs, not a value computed after the step began.
+        if !inputs.is_empty() && !self.derived.is_empty() {
+            let derived: HashMap<String, f64> = self
+                .derived
+                .iter()
+                .filter_map(|runtime| {
+                    let sub = self.subs.get(&runtime.key)?;
+                    (!sub.history.is_empty()).then(|| (runtime.def.name.clone(), sub.latest))
+                })
+                .collect();
+            for input in inputs.values_mut() {
+                input.derived_signals = derived.clone();
             }
         }
         inputs
@@ -3841,6 +3859,7 @@ impl BusCore {
                 | TriggerCond::CycleTimeout { ch, .. } => ch,
                 // Global, or aiming at a FlexRay bus: no CAN index to shift.
                 TriggerCond::SysVar { .. }
+                | TriggerCond::DerivedSignal { .. }
                 | TriggerCond::FrFramePresent { .. }
                 | TriggerCond::FrSignalCross { .. } => continue,
             };
@@ -5552,6 +5571,7 @@ impl BusCore {
                     // or per FlexRay row in `eval_fr_triggers`.
                     TriggerCond::CycleTimeout { .. }
                     | TriggerCond::SysVar { .. }
+                    | TriggerCond::DerivedSignal { .. }
                     | TriggerCond::FrFramePresent { .. }
                     | TriggerCond::FrSignalCross { .. } => continue,
                 }
@@ -5601,6 +5621,29 @@ impl BusCore {
                         continue;
                     }
                     Some(self.timeout_silent(*ch, *id, now_us, grace))
+                }
+                TriggerCond::DerivedSignal {
+                    id,
+                    threshold,
+                    rising,
+                } => {
+                    if !self.triggers[i].enabled {
+                        continue;
+                    }
+                    // A lane with no samples yet has no opinion: the level
+                    // holds rather than reading a fabricated zero.
+                    let Some(runtime) = self.derived.iter().find(|runtime| &runtime.def.id == id)
+                    else {
+                        continue;
+                    };
+                    match self.subs.get(&runtime.key) {
+                        Some(sub) if !sub.history.is_empty() => Some(if *rising {
+                            sub.latest >= *threshold
+                        } else {
+                            sub.latest <= *threshold
+                        }),
+                        _ => None,
+                    }
                 }
                 TriggerCond::SysVar {
                     key,

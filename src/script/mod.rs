@@ -385,6 +385,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("sig", 2, 2),
     ("sig_named", 2, 2),
     ("fr_sig", 3, 3),
+    ("derived", 1, 1),
     ("bytes", 1, 1),
     ("len", 1, 1),
     ("set_period", 1, 1),
@@ -486,6 +487,10 @@ pub struct HostInput {
     pub signals: HashMap<(u32, String), f64>,
     pub fr_signals: HashMap<(u8, u16, String), f64>,
     pub sysvars: HashMap<String, f64>,
+    /// Core-sampled derived channels by definition name, read with
+    /// `derived("Name")`. Values are one lap old: the core samples the lane
+    /// after the nodes of a step have run.
+    pub derived_signals: HashMap<String, f64>,
 }
 
 /// A compile-time error, positioned at the offending source line and,

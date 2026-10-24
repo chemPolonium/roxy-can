@@ -1337,6 +1337,13 @@ impl Config {
                             *threshold,
                             *rising,
                         ),
+                        // The definition id rides the `signal` field, the
+                        // same convention the sysvar key uses.
+                        TriggerCond::DerivedSignal {
+                            id,
+                            threshold,
+                            rising,
+                        } => (7, 0, 0, false, id.clone(), *threshold, *rising),
                     };
                     TriggerCfg {
                         kind,
@@ -1731,6 +1738,12 @@ impl Config {
                         bus: c.ch,
                         slot: c.id.min(u32::from(u16::MAX)) as u16,
                         signal: c.signal.clone(),
+                        threshold: c.threshold,
+                        rising: c.rising,
+                    },
+                    // The definition id rides the `signal` field.
+                    7 => TriggerCond::DerivedSignal {
+                        id: c.signal.clone(),
                         threshold: c.threshold,
                         rising: c.rising,
                     },
@@ -2468,6 +2481,15 @@ mod tests {
         app.set_derived_defs(defs.clone());
         let key = crate::observe::SigKey::derived("d1", "Sum");
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
+        let cond = crate::trigger::TriggerCond::DerivedSignal {
+            id: "d1".into(),
+            threshold: 3.0,
+            rising: true,
+        };
+        app.send(crate::bus::BusCommand::AddTrigger {
+            cond: cond.clone(),
+            action: crate::trigger::TriggerAction::InsertMarker,
+        });
         let config = Config::from_app(&app, None);
         assert_eq!(config.derived, defs, "the file carries the definitions");
         assert_eq!(
@@ -2475,6 +2497,8 @@ mod tests {
             Some("d1"),
             "the row stores the definition id, not a fake CAN address"
         );
+        assert_eq!(config.triggers[0].kind, 7, "derived rule kind");
+        assert_eq!(config.triggers[0].signal, "d1", "the id rides signal");
         let json = serde_json::to_string(&config).unwrap();
         let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
@@ -2482,6 +2506,10 @@ mod tests {
             .apply(&mut restored);
         assert_eq!(restored.derived_defs, defs);
         assert_eq!(restored.monitor_view.rows[0].key, key);
+        assert_eq!(
+            restored.snap.triggers[0].cond, cond,
+            "the rule reads the same definition after reload"
+        );
     }
 
     /// Which roles a bus declares has to outlive the session, or the bus

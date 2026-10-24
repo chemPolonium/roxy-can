@@ -1551,6 +1551,86 @@ fn a_derived_channel_waits_for_a_source_that_appears_later() {
 }
 
 #[test]
+fn a_derived_trigger_follows_the_core_sampled_value() {
+    let mut app = App::headless();
+    let a = SigKey::can(0, 0x100, false, "A");
+    app.subscribe_signal(a.clone());
+    app.subs.get_mut(&a).unwrap().push_sample(0, 1.0, 1);
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Sum".into(),
+        expression: "[A] + 0".into(),
+        ..Default::default()
+    }]);
+    let key = SigKey::derived("d", "Sum");
+    {
+        let sub = app
+            .subs
+            .get_mut(&key)
+            .expect("the lane subscribed with its definition");
+        sub.latest = 5.0;
+        sub.push_sample(1_000_000, 5.0, 1);
+    }
+    app.send(crate::bus::BusCommand::AddTrigger {
+        cond: crate::trigger::TriggerCond::DerivedSignal {
+            id: "d".into(),
+            threshold: 3.0,
+            rising: true,
+        },
+        action: crate::trigger::TriggerAction::InsertMarker,
+    });
+    let mut status = String::new();
+    app.eval_timeout_triggers(2_000_000, 0, &mut status);
+    assert_eq!(app.triggers[0].fired, 1, "the first sweep crosses up");
+    assert!(app.markers.contains(&2_000_000), "the edge left a marker");
+
+    {
+        let sub = app.subs.get_mut(&key).unwrap();
+        sub.latest = 1.0;
+        sub.push_sample(3_000_000, 1.0, 1);
+    }
+    app.eval_timeout_triggers(4_000_000, 0, &mut status);
+    assert_eq!(app.triggers[0].fired, 1, "a level below the cut is quiet");
+    {
+        let sub = app.subs.get_mut(&key).unwrap();
+        sub.latest = 4.0;
+        sub.push_sample(5_000_000, 4.0, 1);
+    }
+    app.eval_timeout_triggers(6_000_000, 0, &mut status);
+    assert_eq!(app.triggers[0].fired, 2, "a new crossing fires again");
+}
+
+#[test]
+fn a_derived_trigger_fires_inside_a_real_step() {
+    let mut app = App::headless();
+    let a = SigKey::can(0, 0x100, false, "A");
+    app.subscribe_signal(a.clone());
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Sum".into(),
+        expression: "[A] + 0".into(),
+        ..Default::default()
+    }]);
+    app.send(crate::bus::BusCommand::AddTrigger {
+        cond: crate::trigger::TriggerCond::DerivedSignal {
+            id: "d".into(),
+            threshold: 3.0,
+            rising: true,
+        },
+        action: crate::trigger::TriggerAction::InsertMarker,
+    });
+    app.start_virtual();
+    app.subs.get_mut(&a).unwrap().push_sample(1_000, 5.0, 1);
+    app.advance_clock(2_000);
+    app.tick(2_000);
+    assert_eq!(
+        app.triggers[0].fired, 1,
+        "the step evaluates the lane and then the rule"
+    );
+    app.stop();
+}
+
+#[test]
 fn aligned_signal_csv_writes_one_row_per_time_step() {
     let mut app = App::headless();
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
@@ -6237,6 +6317,59 @@ fn sysvars_survive_a_project_roundtrip() {
     assert_eq!(v.def.unit, "Hz");
     assert_eq!(v.def.init, 2.5);
     assert_eq!(v.value, 2.5, "value starts at init");
+}
+
+/// A script reads the core's old math channels through `derived("Name")`:
+/// the value injected into every channel's host input is the newest sample
+/// from the previous lap.
+#[test]
+fn scripts_read_core_derived_channels_by_name() {
+    let mut app = App::headless();
+    let a = SigKey::can(0, 0x100, false, "A");
+    app.subscribe_signal(a);
+    app.set_derived_defs(vec![crate::derived::DerivedDef {
+        id: "d".into(),
+        name: "Sum".into(),
+        expression: "[A] + 0".into(),
+        ..Default::default()
+    }]);
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "reader".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on timer 1 { print(derived(\"Sum\")); }".to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    let key = SigKey::derived("d", "Sum");
+    {
+        let sub = app.subs.get_mut(&key).expect("the lane is subscribed");
+        sub.latest = 9.0;
+        sub.push_sample(1_000, 9.0, 1);
+    }
+    for t in 1..=20 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.settle();
+    let node = app.snap.nodes.first().expect("node present");
+    assert!(
+        !node.errored,
+        "the derived builtin compiles: {:?}",
+        node.log
+    );
+    assert!(
+        node.log.iter().any(|line| line.contains("9")),
+        "the script read the sampled lane: {:?}",
+        node.log
+    );
+    app.stop();
 }
 
 /// Frame-driven handlers can publish too: every matching frame becomes a

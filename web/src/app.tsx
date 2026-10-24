@@ -1709,6 +1709,7 @@ export function App() {
       bus: edit.bus,
       slot: edit.slot,
       key: edit.key,
+      derived_id: edit.derivedId,
       action: edit.action,
       send_ch: edit.sendCh,
       send_id: edit.sendId,
@@ -3357,6 +3358,7 @@ export function App() {
           txEntries={state?.tx ?? []}
           catalog={catalog}
           catalogLoading={catalogLoading}
+          derived={derivedDefs}
           onAdd={addTrigger}
           onToggle={setTriggerEnabled}
           onRemove={removeTrigger}

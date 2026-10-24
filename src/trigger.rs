@@ -70,6 +70,14 @@ pub enum TriggerCond {
         threshold: f64,
         rising: bool,
     },
+    /// A derived channel at or past a threshold. The lane is sampled once per
+    /// step, so the level is swept after that sampling and the edge can trail
+    /// the source frame by one lap.
+    DerivedSignal {
+        id: String,
+        threshold: f64,
+        rising: bool,
+    },
 }
 
 /// What a fired trigger does.
@@ -112,6 +120,7 @@ pub enum TriggerKind {
     FrSignal,
     Timeout,
     SysVar,
+    Derived,
 }
 
 /// Everything the Triggers window can ask for. The window draws read-only and
@@ -181,8 +190,10 @@ impl TriggerCond {
             | TriggerCond::IdPresent { ch, .. }
             | TriggerCond::ErrorFrame { ch }
             | TriggerCond::CycleTimeout { ch, .. } => Some(*ch),
-            // System variables are global; a FlexRay rule names a cluster.
+            // System variables and derived channels are global; a FlexRay
+            // rule names a cluster.
             TriggerCond::SysVar { .. }
+            | TriggerCond::DerivedSignal { .. }
             | TriggerCond::FrFramePresent { .. }
             | TriggerCond::FrSignalCross { .. } => None,
         }
@@ -246,6 +257,9 @@ impl TriggerCond {
                 threshold,
                 rising,
             } => format!("@{key} {} {threshold}", if *rising { ">=" } else { "<=" }),
+            // The window replaces `id` with the definition's name; this form
+            // only exists so the match is total.
+            TriggerCond::DerivedSignal { id, .. } => format!("derived {id}"),
         }
     }
 }
@@ -264,6 +278,7 @@ impl App {
                     TriggerKind::FrSignal => self.add_fr_signal_trigger(),
                     TriggerKind::Timeout => self.add_timeout_trigger(),
                     TriggerKind::SysVar => self.add_sysvar_trigger(),
+                    TriggerKind::Derived => self.add_derived_trigger(),
                 },
                 TriggerCmd::Remove(index) => self.remove_trigger(index),
                 TriggerCmd::SetEnabled { index, on } => {
@@ -317,14 +332,36 @@ impl App {
     pub fn trigger_summary(&self, i: usize) -> String {
         match self.snap.triggers.get(i) {
             Some(t) => {
-                // The two bus spaces name differently: a FlexRay rule reads
-                // its 路's name (`FR1` until the user renames it), a CAN one
-                // keeps its channel name.
-                let bus = match t.cond.fr_bus() {
-                    Some(b) => self.fr_bus_name(b),
-                    None => self.channel_name(t.cond.can_bus().unwrap_or(0)),
+                // The bus spaces name differently: a FlexRay rule reads its
+                // 路's name (`FR1` until the user renames it), a CAN one keeps
+                // its channel name, and a derived lane has no bus at all.
+                let bus = match &t.cond {
+                    TriggerCond::DerivedSignal { .. } => "Derived".to_string(),
+                    _ => match t.cond.fr_bus() {
+                        Some(b) => self.fr_bus_name(b),
+                        None => self.channel_name(t.cond.can_bus().unwrap_or(0)),
+                    },
                 };
-                format!("{bus}  {}", t.cond.short())
+                let text = match &t.cond {
+                    TriggerCond::DerivedSignal {
+                        id,
+                        threshold,
+                        rising,
+                    } => {
+                        let name = self
+                            .derived_defs
+                            .iter()
+                            .find(|def| &def.id == id)
+                            .map(|def| def.name.as_str())
+                            .unwrap_or(id);
+                        format!(
+                            "{name} {} {threshold} (derived)",
+                            if *rising { ">=" } else { "<=" }
+                        )
+                    }
+                    _ => t.cond.short(),
+                };
+                format!("{bus}  {text}")
             }
             None => String::new(),
         }
@@ -439,6 +476,21 @@ impl App {
             .unwrap_or_default();
         self.push_trigger(TriggerCond::SysVar {
             key,
+            threshold: 0.0,
+            rising: true,
+        });
+    }
+
+    pub fn add_derived_trigger(&mut self) {
+        // A rule needs a lane to read; the Derived dialog is where one is
+        // created, so an empty project gets an explanation instead of a rule
+        // that can never fire.
+        let Some(def) = self.derived_defs.first() else {
+            self.status = "add a derived channel before watching one".to_string();
+            return;
+        };
+        self.push_trigger(TriggerCond::DerivedSignal {
+            id: def.id.clone(),
             threshold: 0.0,
             rising: true,
         });

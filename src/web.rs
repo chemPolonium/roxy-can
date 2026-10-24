@@ -988,6 +988,7 @@ fn trigger_kind(cond: &TriggerCond) -> &'static str {
         TriggerCond::FrFramePresent { .. } => "fr_frame",
         TriggerCond::FrSignalCross { .. } => "fr_signal",
         TriggerCond::SysVar { .. } => "sysvar",
+        TriggerCond::DerivedSignal { .. } => "derived",
     }
 }
 
@@ -1000,6 +1001,7 @@ fn parse_trigger_kind(value: &str) -> Option<TriggerKind> {
         "fr_signal" => Some(TriggerKind::FrSignal),
         "timeout" => Some(TriggerKind::Timeout),
         "sysvar" => Some(TriggerKind::SysVar),
+        "derived" => Some(TriggerKind::Derived),
         _ => None,
     }
 }
@@ -1843,6 +1845,7 @@ enum WebCommand {
         bus: u8,
         slot: u16,
         key: String,
+        derived_id: String,
         action: String,
         send_ch: u8,
         send_id: u32,
@@ -2739,6 +2742,7 @@ fn app_loop(
                     bus,
                     slot,
                     key,
+                    derived_id,
                     action,
                     send_ch,
                     send_id,
@@ -2765,6 +2769,11 @@ fn app_loop(
                         },
                         "sysvar" => TriggerCond::SysVar {
                             key,
+                            threshold,
+                            rising,
+                        },
+                        "derived" => TriggerCond::DerivedSignal {
+                            id: derived_id,
                             threshold,
                             rising,
                         },
@@ -4131,6 +4140,7 @@ struct WebTrigger {
     bus: u8,
     slot: u16,
     var_key: String,
+    derived_id: String,
     action_kind: String,
     send_ch: u8,
     send_id: u32,
@@ -4685,6 +4695,21 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     rising,
                 } => {
                     view.var_key = key.clone();
+                    view.threshold = *threshold;
+                    view.rising = *rising;
+                }
+                TriggerCond::DerivedSignal {
+                    id,
+                    threshold,
+                    rising,
+                } => {
+                    view.derived_id = id.clone();
+                    view.signal = app
+                        .derived_defs
+                        .iter()
+                        .find(|def| &def.id == id)
+                        .map(|def| def.name.clone())
+                        .unwrap_or_else(|| id.clone());
                     view.threshold = *threshold;
                     view.rising = *rising;
                 }

@@ -1695,6 +1695,7 @@ BO_ 256 Real: 2 ECU
             signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
             fr_signals: HashMap::new(),
             sysvars: HashMap::new(),
+            derived_signals: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1.5", "2400.0"]);
@@ -1732,6 +1733,7 @@ BO_ 256 Real: 2 ECU
             .into_iter()
             .collect(),
             sysvars: HashMap::new(),
+            derived_signals: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(
@@ -1766,6 +1768,7 @@ BO_ 256 Real: 2 ECU
             signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
             fr_signals: HashMap::new(),
             sysvars: HashMap::new(),
+            derived_signals: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1234.0"]);

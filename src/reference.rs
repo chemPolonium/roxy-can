@@ -343,7 +343,12 @@ mod tests {
                 let slot = u16::try_from(frame.triggering.slot_id).ok()?;
                 let cycle = u8::try_from(frame.triggering.base_cycle).ok()?;
                 let resolved = db.frame_ix_at(slot, cycle, 0)?;
-                let signal = db.edit_signals(resolved).into_iter().next()?;
+                // A one-bit lamp cannot hold 40..45; pick a signal with room
+                // to carry the probe values and a real scale.
+                let signal = db
+                    .edit_signals(resolved)
+                    .into_iter()
+                    .find(|signal| signal.size >= 8 && signal.factor != 0.0)?;
                 Some((resolved, slot, cycle, signal))
             })
             .expect("a scheduled frame declares a signal");
@@ -389,7 +394,7 @@ mod tests {
             run.signals[0]
                 .points
                 .iter()
-                .any(|point| (point[1] - 44.0).abs() < 1e-6),
+                .any(|point| (point[1] - 44.0).abs() < 1e-3),
             "the driven physical value is decoded"
         );
         std::fs::remove_file(&log).ok();

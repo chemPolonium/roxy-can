@@ -627,6 +627,23 @@ impl Vm {
                 }
                 return Ok(());
             }
+            // `derived("Name")`: a core-sampled math channel, addressed by
+            // its definition name. There is no id to type and no bus to
+            // guess, which is why it does not overload `sig`.
+            "derived" => {
+                let Value::Str(name) = &args[0] else {
+                    return Err(VmError("derived(\"Name\") needs a string".into()));
+                };
+                match self.host_input.derived_signals.get(name) {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "derived: no value for {name:?} (not sampled yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
             // `send` / `send_ext`: identical argument shapes; the ext form
             // always travels extended, even for ids inside the standard
             // range (that is its whole point). `send(id, b0, ...)` or
@@ -1634,6 +1651,29 @@ mod tests {
             .insert("Demo::Speed".to_string(), 42.5);
         vm.run().unwrap();
         assert_eq!(vm.output, ["42.5 0.0"], "undefined keys read zero");
+    }
+
+    /// `derived("Name")` reads the core's sampled math channels by definition
+    /// name; a lane that has not produced a sample is an error, not zero.
+    #[test]
+    fn derived_reads_the_core_sampled_lane() {
+        let script = compile(
+            r#"
+                let v = derived("Speed error");
+                print(v);
+            "#,
+        )
+        .unwrap();
+        let mut vm = Vm::new(script);
+        vm.host_input
+            .derived_signals
+            .insert("Speed error".to_string(), 7.5);
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["7.5"]);
+
+        let mut vm = Vm::new(compile("derived(\"Missing\");").unwrap());
+        let e = vm.run().unwrap_err();
+        assert!(e.to_string().contains("not sampled"), "{e}");
     }
 
     /// `sys_set` queues a write for the host; the queue drains like the
