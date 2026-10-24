@@ -526,6 +526,107 @@ impl App {
         self.write_export(path, s);
     }
 
+    /// Time-aligned CSV of the Graphics window's visible signals: one row per
+    /// sample instant, one column per signal, values sample-and-held. The
+    /// optional range is the A/B cursor interval from the web shell.
+    pub fn export_signals_csv(&mut self, win: usize, path: &str, range: Option<(u64, u64)>) {
+        let Some(g) = self.graphics.get(win) else {
+            return;
+        };
+        let keys: Vec<crate::observe::SigKey> = g
+            .signals
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.key.clone())
+            .collect();
+        self.export_signals_keys_csv(&keys, path, range);
+    }
+
+    /// Same as [`Self::export_signals_csv`] for an explicit lane list; the web
+    /// shell's Signals panel keeps its selection in the web store rather than
+    /// a Graphics window, so it passes its keys here.
+    pub fn export_signals_keys_csv(
+        &mut self,
+        keys: &[crate::observe::SigKey],
+        path: &str,
+        range: Option<(u64, u64)>,
+    ) {
+        if keys.is_empty() {
+            self.status = "export: no visible chart signals".to_string();
+            return;
+        }
+        let mut series: Vec<(String, Vec<(u64, f64)>)> = Vec::new();
+        for key in keys {
+            let Some(sub) = self.sub_view(key) else {
+                continue;
+            };
+            let label = format!("{}:{}", self.sig_bus_label(key), key.name()).replace(',', "_");
+            series.push((label, sub.history.iter().copied().collect()));
+        }
+        if series.is_empty() {
+            self.status = "export: no signal history yet".to_string();
+            return;
+        }
+        let (start, end) = match range {
+            Some((from, to)) => (from, to),
+            None => {
+                let start = series
+                    .iter()
+                    .filter_map(|(_, points)| points.first().map(|p| p.0))
+                    .min()
+                    .unwrap_or(0);
+                let end = series
+                    .iter()
+                    .filter_map(|(_, points)| points.last().map(|p| p.0))
+                    .max()
+                    .unwrap_or(0);
+                (start, end)
+            }
+        };
+        if start >= end {
+            self.status = "export: no signal samples in that range".to_string();
+            return;
+        }
+        // Cap the grid at twenty thousand rows; very long captures keep a
+        // 10 ms floor so the CSV still opens quickly.
+        let step = ((end - start) / 20_000).max(10_000);
+        let mut out = String::from("time_s");
+        for (label, _) in &series {
+            out.push(',');
+            out.push_str(label);
+        }
+        out.push('\n');
+        let mut cursors = vec![0usize; series.len()];
+        let mut last: Vec<Option<f64>> = vec![None; series.len()];
+        let mut rows = 0usize;
+        let mut t = start;
+        while t <= end {
+            out.push_str(&format!("{:.6}", t as f64 / 1e6));
+            for (i, (_, points)) in series.iter().enumerate() {
+                while cursors[i] < points.len() && points[cursors[i]].0 <= t {
+                    last[i] = Some(points[cursors[i]].1);
+                    cursors[i] += 1;
+                }
+                out.push(',');
+                if let Some(value) = last[i] {
+                    out.push_str(&format!("{value}"));
+                }
+            }
+            out.push('\n');
+            rows += 1;
+            t = t.saturating_add(step);
+        }
+        match std::fs::write(path, out) {
+            Ok(()) => {
+                self.status = format!(
+                    "exported {rows} aligned rows × {} signals to {path}",
+                    series.len()
+                );
+            }
+            Err(e) => self.fail(format!("export failed: {e}")),
+        }
+    }
+
     pub fn export_data_dialog(&mut self, i: usize) {
         let name = self
             .data_windows

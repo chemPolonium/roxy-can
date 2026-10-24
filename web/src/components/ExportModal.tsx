@@ -23,7 +23,8 @@ const KINDS: [string, string, string][] = [
   ["stats", "Statistics (CSV)", ".csv"],
   ["data", "Data (CSV)", ".csv"],
   ["state", "State (CSV)", ".csv"],
-  ["graphics", "Signals chart (CSV)", ".csv"],
+  ["graphics", "Signals chart (long CSV)", ".csv"],
+  ["signals", "Signals (aligned CSV)", ".csv"],
   ["spec", "Specification (CSV)", ".csv"],
   ["write", "Write log (TXT)", ".txt"],
 ];
@@ -61,7 +62,9 @@ export function ExportModal({
   const name = path.trim();
   const canDownload = isDownloadName(name);
   const selectedRange =
-    kind === "trace" && useRange && range ? range : undefined;
+    (kind === "trace" || kind === "signals") && useRange && range
+      ? range
+      : undefined;
 
   const exportAndDownload = async () => {
     setDownloading(true);
@@ -127,7 +130,7 @@ export function ExportModal({
               }}
             />
           </label>
-          {kind === "trace" && range && (
+          {(kind === "trace" || kind === "signals") && range && (
             <label class="export-range">
               <input
                 type="checkbox"

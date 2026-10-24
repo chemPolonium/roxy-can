@@ -2301,7 +2301,13 @@ fn app_loop(
                         (Some(from), Some(to)) => Some((from, to)),
                         _ => None,
                     };
-                    export_file(&mut app, &kind, &download_file_path(&path), range);
+                    let target = download_file_path(&path);
+                    if kind == "signals" {
+                        let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
+                        app.export_signals_keys_csv(&keys, &target, range);
+                    } else {
+                        export_file(&mut app, &kind, &target, range);
+                    }
                 }
                 WebCommand::SetSysVar {
                     namespace,

@@ -29,6 +29,7 @@ import {
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
+import { CursorAnalysis } from "./components/CursorAnalysis";
 import { ColumnsMenu } from "./components/ColumnsMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteCommand } from "./components/CommandPalette";
@@ -101,6 +102,9 @@ const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
 interface SavedView {
   tab: RightTab;
   chartTab: ChartTab;
+  chartTab2: ChartTab;
+  chartSplit: boolean;
+  splitRatio: number;
   signalView: SignalView;
   cursors: ChartCursor[];
 }
@@ -148,6 +152,12 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       saved.chartTab && chartTabs.includes(saved.chartTab)
         ? saved.chartTab
         : undefined,
+    chartTab2:
+      saved.chartTab2 && chartTabs.includes(saved.chartTab2)
+        ? saved.chartTab2
+        : undefined,
+    chartSplit: typeof saved.chartSplit === "boolean" ? saved.chartSplit : false,
+    splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
     signalView: { windowS, endS },
     cursors,
   };
@@ -286,6 +296,11 @@ export function App() {
   const [chartTab, setChartTab] = useState<ChartTab>(
     savedView.chartTab ?? "rate",
   );
+  const [chartTab2, setChartTab2] = useState<ChartTab>(
+    savedView.chartTab2 ?? "monitor",
+  );
+  const [chartSplit, setChartSplit] = useState(savedView.chartSplit ?? false);
+  const [splitRatio, setSplitRatio] = useState(savedView.splitRatio ?? 0.6);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [savePath, setSavePath] = useState("");
@@ -340,6 +355,8 @@ export function App() {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
   const chartPanelRef = useRef<HTMLElement>(null);
+  const chartSplitRef = useRef<HTMLDivElement>(null);
+  const preSplitRight = useRef<number | null>(null);
   const chartCursorSeq = useRef(
     Math.max(0, ...(savedView.cursors ?? []).map((cursor) => cursor.id)) + 1,
   );
@@ -366,6 +383,9 @@ export function App() {
     if (!raw || typeof raw !== "object") {
       setTab("messages");
       setChartTab("rate");
+      setChartTab2("monitor");
+      setChartSplit(false);
+      setSplitRatio(0.6);
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
@@ -377,6 +397,9 @@ export function App() {
     const view = normalizeView(saved);
     if (view.tab) setTab(view.tab);
     if (view.chartTab) setChartTab(view.chartTab);
+    if (view.chartTab2) setChartTab2(view.chartTab2);
+    if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
+    if (typeof view.splitRatio === "number") setSplitRatio(view.splitRatio);
     if (view.signalView) setSignalView(view.signalView);
     if (view.cursors) {
       setChartCursors(view.cursors);
@@ -414,6 +437,9 @@ export function App() {
         workspace: {
           tab,
           chartTab,
+          chartTab2,
+          chartSplit,
+          splitRatio,
           signalView,
           cursors: chartCursors,
           traceColumns,
@@ -426,6 +452,9 @@ export function App() {
     workspaceHydrated,
     tab,
     chartTab,
+    chartTab2,
+    chartSplit,
+    splitRatio,
     signalView,
     chartCursors,
     traceColumns,
@@ -572,6 +601,9 @@ export function App() {
         JSON.stringify({
           tab,
           chartTab,
+          chartTab2,
+          chartSplit,
+          splitRatio,
           signalView,
           cursors: chartCursors,
         }),
@@ -579,7 +611,15 @@ export function App() {
     } catch {
       // Same fallback as the splitter layout.
     }
-  }, [tab, chartTab, signalView, chartCursors]);
+  }, [
+    tab,
+    chartTab,
+    chartTab2,
+    chartSplit,
+    splitRatio,
+    signalView,
+    chartCursors,
+  ]);
 
   useEffect(() => {
     let alive = true;
@@ -1013,6 +1053,46 @@ export function App() {
     void panel.requestFullscreen().catch(() => {});
   };
 
+  const toggleChartSplit = () => {
+    if (chartSplit) {
+      setChartSplit(false);
+      if (preSplitRight.current !== null) {
+        const right = preSplitRight.current;
+        preSplitRight.current = null;
+        setLayout((old) => ({ ...old, right }));
+      }
+      return;
+    }
+    preSplitRight.current = layout.right;
+    // Two panes need vertical room; give the chart column more of the right
+    // side while split, keeping the lower panel usable.
+    setLayout((old) => ({ ...old, right: Math.max(old.right, 0.72) }));
+    if (chartTab2 === chartTab) {
+      setChartTab2(chartTab === "signals" ? "monitor" : "signals");
+    }
+    setChartSplit(true);
+  };
+
+  const startSplitDrag = (event: PointerEvent) => {
+    event.preventDefault();
+    const area = chartSplitRef.current;
+    if (!area) return;
+    const rect = area.getBoundingClientRect();
+    const move = (moveEvent: PointerEvent) => {
+      setSplitRatio(
+        clamp((moveEvent.clientY - rect.top) / rect.height, 0.25, 0.75),
+      );
+    };
+    const up = () => {
+      document.body.classList.remove("row-resizing");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    document.body.classList.add("row-resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   const resetChartTools = () => {
     setChartCursors([]);
     setSignalView({ windowS: 30, endS: null });
@@ -1043,6 +1123,9 @@ export function App() {
       workspace: {
         tab,
         chartTab,
+        chartTab2,
+        chartSplit,
+        splitRatio,
         signalView,
         cursors: chartCursors,
         traceColumns,
@@ -1857,6 +1940,110 @@ export function App() {
     },
   ];
 
+  const renderSecondary = (tab: ChartTab) => {
+    if (tab === "rate") {
+      return (
+        <RateChart
+          points={state?.series ?? []}
+          channels={state?.channels ?? []}
+          theme={theme}
+        />
+      );
+    }
+    if (tab === "signals") {
+      return (
+        <SignalChart
+          series={signals}
+          markers={state?.markers ?? []}
+          theme={theme}
+          onReorder={moveSignal}
+          view={signalView}
+          onView={(update) => setSignalView(update)}
+          cursors={chartCursors}
+          onAddCursor={addChartCursor}
+          onMoveCursor={moveChartCursor}
+          onClearCursors={clearChartCursors}
+          onSignalAction={chartSignalAction}
+          fullscreen={chartFullscreen}
+          measuring={measuring}
+          paused={state?.tracePaused ?? false}
+        />
+      );
+    }
+    if (tab === "monitor") {
+      return (
+        <MonitorPanel
+          rows={state?.monitor ?? []}
+          theme={theme}
+          onEdit={editMonitor}
+          onRemove={(row) =>
+            void run({
+              type: "remove_monitor",
+              kind: row.kind,
+              ch: row.ch,
+              id: row.id,
+              ext: row.ext,
+              frame: row.frame,
+              name: row.name,
+            })
+          }
+        />
+      );
+    }
+    if (tab === "data") {
+      return (
+        <DataPanel
+          rows={state?.data ?? []}
+          onVisible={(row, visible) =>
+            void run({
+              type: "set_data_visible",
+              kind: row.kind,
+              ch: row.ch,
+              id: row.id,
+              ext: row.ext,
+              frame: row.frame,
+              name: row.name,
+              visible,
+            })
+          }
+          onRemove={(row) =>
+            void run({
+              type: "remove_data",
+              kind: row.kind,
+              ch: row.ch,
+              id: row.id,
+              ext: row.ext,
+              frame: row.frame,
+              name: row.name,
+            })
+          }
+        />
+      );
+    }
+    return (
+      <StatePanel
+        rows={state?.stateRows ?? []}
+        windowS={state?.stateWindowS ?? 20}
+        theme={theme}
+        onWindow={(seconds) =>
+          void run({ type: "set_state_window", seconds })
+        }
+        onRule={setStateRule}
+        onRemove={(row) =>
+          void run({
+            type: "remove_state",
+            kind: row.kind,
+            ch: row.ch,
+            id: row.id,
+            ext: row.ext,
+            frame: row.frame,
+            name: row.name,
+          })
+        }
+      />
+    );
+  };
+
   return (
     <div class={`app ${state && !online ? "offline" : ""}`}>
       <header class="topbar">
@@ -2456,6 +2643,22 @@ export function App() {
                 </strong>
               )}
               <div class="chart-head-tools">
+                <button
+                  type="button"
+                  class={`chart-focus ${chartSplit ? "on" : ""}`}
+                  aria-label="Split the chart panel"
+                  title={
+                    chartSplit
+                      ? "Remove the second chart pane"
+                      : "Show a second chart pane"
+                  }
+                  onClick={toggleChartSplit}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="2" y="2" width="12" height="5" rx="1" />
+                    <rect x="2" y="9" width="12" height="5" rx="1" />
+                  </svg>
+                </button>
                 {chartFullscreen && (
                   <button
                     type="button"
@@ -2504,6 +2707,11 @@ export function App() {
                 </button>
               </div>
             </div>
+            <div class="chart-split-area" ref={chartSplitRef}>
+              <div
+                class="chart-pane"
+                style={chartSplit ? { flex: `${splitRatio} 1 0` } : undefined}
+              >
             {chartTab === "rate" ? (
               <>
                 <div class="chart-legend">
@@ -2532,22 +2740,38 @@ export function App() {
                 />
               </>
             ) : chartTab === "signals" ? (
-              <SignalChart
-                series={signals}
-                markers={state?.markers ?? []}
-                theme={theme}
-                onReorder={moveSignal}
-                view={signalView}
-                onView={(update) => setSignalView(update)}
-                cursors={chartCursors}
-                onAddCursor={addChartCursor}
-                onMoveCursor={moveChartCursor}
-                onClearCursors={clearChartCursors}
-                onSignalAction={chartSignalAction}
-                fullscreen={chartFullscreen}
-                measuring={measuring}
-                paused={state?.tracePaused ?? false}
-              />
+              <div class="signal-stack">
+                <SignalChart
+                  series={signals}
+                  markers={state?.markers ?? []}
+                  theme={theme}
+                  onReorder={moveSignal}
+                  view={signalView}
+                  onView={(update) => setSignalView(update)}
+                  cursors={chartCursors}
+                  onAddCursor={addChartCursor}
+                  onMoveCursor={moveChartCursor}
+                  onClearCursors={clearChartCursors}
+                  onSignalAction={chartSignalAction}
+                  fullscreen={chartFullscreen}
+                  measuring={measuring}
+                  paused={state?.tracePaused ?? false}
+                />
+                {chartCursors.length >= 2 && !chartSplit && (
+                  <CursorAnalysis
+                    series={signals}
+                    cursors={chartCursors}
+                    onExportRange={
+                      exportRange
+                        ? () => {
+                            setExportKind("signals");
+                            setExportOpen(true);
+                          }
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
             ) : chartTab === "monitor" ? (
               <MonitorPanel
                 rows={state?.monitor ?? []}
@@ -2614,6 +2838,37 @@ export function App() {
                 }
               />
             )}
+              </div>
+              {chartSplit && (
+                <>
+                  <div class="chart-splitter" onPointerDown={startSplitDrag} />
+                  <div
+                    class="chart-pane"
+                    style={{ flex: `${1 - splitRatio} 1 0` }}
+                  >
+                    <div class="chart-subhead">
+                      <select
+                        value={chartTab2}
+                        aria-label="Second chart pane"
+                        onChange={(event) =>
+                          setChartTab2(
+                            (event.target as HTMLSelectElement)
+                              .value as ChartTab,
+                          )
+                        }
+                      >
+                        <option value="rate">Rate</option>
+                        <option value="signals">Signals</option>
+                        <option value="monitor">Monitor</option>
+                        <option value="data">Data</option>
+                        <option value="state">State</option>
+                      </select>
+                    </div>
+                    {renderSecondary(chartTab2)}
+                  </div>
+                </>
+              )}
+            </div>
           </section>
 
           <div

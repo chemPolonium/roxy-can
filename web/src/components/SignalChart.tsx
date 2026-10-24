@@ -459,20 +459,29 @@ export function SignalChart({
         const visible = to - from;
         const current = points.length ? points[points.length - 1][1] : null;
 
-        // Gutter: colour tab, name, then bus/current value.
+        // Gutter: colour tab, name, then bus/current value. A short lane
+        // (split pane) keeps only the name so neighbouring labels do not
+        // overlap.
+        const compactLane = laneH < 30;
         ctx.fillStyle = color;
-        ctx.fillRect(4, top + 5, 3, Math.max(10, laneH - 12));
+        ctx.fillRect(4, top + 4, 3, Math.max(8, laneH - 8));
         ctx.fillStyle = colors.signalName;
-        ctx.font = "10px 'Segoe UI', sans-serif";
-        ctx.fillText(signal.name, 13, top + 13);
-        ctx.fillStyle = colors.signalMeta;
-        ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
-        const unit = signal.unit ? ` ${signal.unit}` : "";
+        ctx.font = `${compactLane ? 9 : 10}px 'Segoe UI', sans-serif`;
         ctx.fillText(
-          `${signal.bus} · ${current === null ? "—" : valueText(current)}${unit}`,
+          signal.name,
           13,
-          top + 25,
+          compactLane ? top + laneH / 2 + 3 : top + 13,
         );
+        const unit = signal.unit ? ` ${signal.unit}` : "";
+        if (!compactLane) {
+          ctx.fillStyle = colors.signalMeta;
+          ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
+          ctx.fillText(
+            `${signal.bus} · ${current === null ? "—" : valueText(current)}${unit}`,
+            13,
+            top + 25,
+          );
+        }
 
         if (visible <= 0) {
           ctx.fillStyle = colors.signalNoSamples;

@@ -1414,6 +1414,69 @@ fn tx_generator_emits_frames() {
 }
 
 #[test]
+fn aligned_signal_csv_writes_one_row_per_time_step() {
+    let mut app = App::headless();
+    let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
+    let id = db.order[0].0;
+    let name = db.messages[&(id, false)].signals[0].name.clone();
+    let key = SigKey::can(0, id, false, name);
+    app.subscribe(key.clone());
+    app.graphics[0].signals.push(GfxSignal {
+        key: key.clone(),
+        visible: true,
+        y_mode: YMode::Auto,
+    });
+    for tx in &mut app.tx_list {
+        tx.active = true;
+        tx.cycle_us = 10_000;
+    }
+    open_all_gates(&mut app);
+    app.start_virtual();
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(11));
+        app.update();
+    }
+    app.stop();
+    let sub = app
+        .snap
+        .subs
+        .iter()
+        .find(|sub| sub.key == key)
+        .expect("signal subscribed");
+    let points: Vec<(u64, f64)> = sub.history.iter().copied().collect();
+    assert!(points.len() >= 2, "history sampled");
+    let from = points.first().unwrap().0;
+    let to = points.last().unwrap().0;
+    assert!(to > from + 20_000, "range spans several samples");
+
+    let path =
+        std::env::temp_dir().join(format!("roxy_aligned_signals_{}.csv", std::process::id()));
+    app.export_signals_csv(0, &path.to_string_lossy(), Some((from, to)));
+    let content = std::fs::read_to_string(&path).unwrap();
+    let mut lines = content.lines();
+    let header = lines.next().expect("header");
+    assert!(header.starts_with("time_s,"), "time column leads");
+    let rows: Vec<&str> = lines.collect();
+    assert!(rows.len() >= 3, "the grid has several rows");
+    let mut previous = 0.0;
+    for (index, row) in rows.iter().enumerate() {
+        let fields: Vec<&str> = row.split(',').collect();
+        assert_eq!(fields.len(), 2, "one time plus one signal column");
+        let time: f64 = fields[0].parse().expect("numeric time");
+        if index > 0 {
+            assert!(time > previous, "time is strictly increasing");
+        }
+        previous = time;
+        assert!(!fields[1].is_empty(), "sample-and-hold fills the value");
+    }
+    assert!(
+        previous <= to as f64 / 1e6,
+        "the grid stops at the requested end"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn trace_export_honors_an_absolute_range() {
     let mut app = App::headless();
     for tx in &mut app.tx_list {
