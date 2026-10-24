@@ -4287,7 +4287,7 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.script-meta input {
+.script-meta input:not([type="checkbox"]) {
   width: 190px;
 }
 
