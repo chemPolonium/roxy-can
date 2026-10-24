@@ -9,6 +9,7 @@ import type {
   Hardware,
   SignalSeries,
   State,
+  StateBand,
   TriggerEdit,
   TriggerLimits,
   TxEntry,
@@ -171,11 +172,25 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       ) {
         continue;
       }
+      const rule =
+        definition.rule &&
+        Array.isArray(definition.rule.cuts) &&
+        Array.isArray(definition.rule.names)
+          ? {
+              cuts: definition.rule.cuts
+                .filter((cut) => Number.isFinite(cut))
+                .map(Number),
+              names: definition.rule.names
+                .filter((name) => typeof name === "string")
+                .map(String),
+            }
+          : undefined;
       derived.push({
         id: definition.id,
         name: definition.name,
         unit: typeof definition.unit === "string" ? definition.unit : "",
         expression: definition.expression,
+        ...(rule ? { rule } : {}),
       });
     }
   }
@@ -417,6 +432,7 @@ export function App() {
     savedView.derived ?? [],
   );
   const [derivedOpen, setDerivedOpen] = useState(false);
+  const [derivedRule, setDerivedRule] = useState<DerivedDef | null>(null);
   const [eventOpen, setEventOpen] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const appliedWorkspaceRev = useRef(-1);
@@ -885,12 +901,39 @@ export function App() {
     );
   };
 
+  const stateRowRule = (row: StateRow) => {
+    if (row.kind === "derived") {
+      const def = derivedDefs.find(
+        (definition) => `derived:${definition.id}` === row.frame,
+      );
+      if (def) setDerivedRule(def);
+      return;
+    }
+    setStateRule(row);
+  };
+
+  const stateRowRemove = (row: StateRow) => {
+    if (row.kind === "derived") {
+      removeDerived(row.frame);
+      return;
+    }
+    void run({
+      type: "remove_state",
+      kind: row.kind,
+      ch: row.ch,
+      id: row.id,
+      ext: row.ext,
+      frame: row.frame,
+      name: row.name,
+    });
+  };
+
   const chartSignalAction = (key: string, action: ChartSignalAction) => {
     if (key.startsWith("derived:")) {
       if (action === "remove") {
         removeDerived(key);
       } else {
-        showToast("Derived channels are chart-only for now");
+        showToast("Derived channels already appear in Monitor, Data and State");
       }
       return;
     }
@@ -1828,6 +1871,70 @@ export function App() {
       }),
     [derivedSeries],
   );
+  const chartLatestS = useMemo(
+    () =>
+      signals.reduce((latest, signal) => {
+        const point = signal.points[signal.points.length - 1];
+        return point ? Math.max(latest, point[0]) : latest;
+      }, 0),
+    [signals],
+  );
+  const derivedStateRows = useMemo(() => {
+    const windowS = state?.stateWindowS ?? 20;
+    const start = chartLatestS - windowS;
+    return derivedSeries.flatMap((signal, index) => {
+      const def = derivedDefs.find(
+        (definition) => `derived:${definition.id}` === signal.key,
+      );
+      if (!def?.rule || def.rule.cuts.length === 0) return [];
+      const cuts = def.rule.cuts;
+      const names = def.rule.names;
+      const bandFor = (value: number) =>
+        cuts.filter((cut) => value >= cut).length;
+      const labelFor = (band: number) => names[band] ?? `band ${band}`;
+      const points = signal.points.filter(([t]) => t >= start);
+      if (points.length === 0) return [];
+      const bands: StateBand[] = [];
+      let band = bandFor(points[0][1]);
+      let bandStart = 0;
+      for (const [t, value] of points) {
+        const next = bandFor(value);
+        const frac = clamp((t - start) / windowS, 0, 1);
+        if (next !== band) {
+          if (frac > bandStart) {
+            bands.push({
+              start: bandStart,
+              end: frac,
+              label: labelFor(band),
+              color: band,
+            });
+          }
+          bandStart = frac;
+          band = next;
+        }
+      }
+      bands.push({
+        start: bandStart,
+        end: 1,
+        label: labelFor(band),
+        color: band,
+      });
+      return [
+        {
+          kind: "derived",
+          ch: 0,
+          id: index,
+          ext: false,
+          frame: signal.key,
+          name: signal.name,
+          bus: "Derived",
+          current: labelFor(band),
+          bands,
+          rule: def.rule,
+        },
+      ];
+    });
+  }, [derivedSeries, derivedDefs, state?.stateWindowS, chartLatestS]);
   const monitorRows = useMemo(
     () => [...(state?.monitor ?? []), ...derivedMonitorRows],
     [state?.monitor, derivedMonitorRows],
@@ -1836,13 +1943,9 @@ export function App() {
     () => [...(state?.data ?? []), ...derivedDataRows],
     [state?.data, derivedDataRows],
   );
-  const chartLatestS = useMemo(
-    () =>
-      signals.reduce((latest, signal) => {
-        const point = signal.points[signal.points.length - 1];
-        return point ? Math.max(latest, point[0]) : latest;
-      }, 0),
-    [signals],
+  const stateRows = useMemo(
+    () => [...(state?.stateRows ?? []), ...derivedStateRows],
+    [state?.stateRows, derivedStateRows],
   );
   const chartCenterS =
     signalView.endS !== null
@@ -2314,24 +2417,14 @@ export function App() {
     }
     return (
       <StatePanel
-        rows={state?.stateRows ?? []}
+        rows={stateRows}
         windowS={state?.stateWindowS ?? 20}
         theme={theme}
         onWindow={(seconds) =>
           void run({ type: "set_state_window", seconds })
         }
-        onRule={setStateRule}
-        onRemove={(row) =>
-          void run({
-            type: "remove_state",
-            kind: row.kind,
-            ch: row.ch,
-            id: row.id,
-            ext: row.ext,
-            frame: row.frame,
-            name: row.name,
-          })
-        }
+        onRule={stateRowRule}
+        onRemove={stateRowRemove}
       />
     );
   };
@@ -3124,24 +3217,14 @@ export function App() {
               />
             ) : (
               <StatePanel
-                rows={state?.stateRows ?? []}
+                rows={stateRows}
                 windowS={state?.stateWindowS ?? 20}
                 theme={theme}
                 onWindow={(seconds) =>
                   void run({ type: "set_state_window", seconds })
                 }
-                onRule={setStateRule}
-                onRemove={(row) =>
-                  void run({
-                    type: "remove_state",
-                    kind: row.kind,
-                    ch: row.ch,
-                    id: row.id,
-                    ext: row.ext,
-                    frame: row.frame,
-                    name: row.name,
-                  })
-                }
+                onRule={stateRowRule}
+                onRemove={stateRowRemove}
               />
             )}
               </div>
@@ -3733,6 +3816,34 @@ export function App() {
         />
       )}
 
+      {derivedRule && (
+        <StateRuleModal
+          signal={`${derivedRule.name} · Derived`}
+          rule={derivedRule.rule ?? null}
+          onApply={(cuts, names) => {
+            setDerivedDefs((defs) =>
+              defs.map((definition) =>
+                definition.id === derivedRule.id
+                  ? { ...definition, rule: { cuts, names } }
+                  : definition,
+              ),
+            );
+            setDerivedRule(null);
+          }}
+          onClear={() => {
+            setDerivedDefs((defs) =>
+              defs.map((definition) =>
+                definition.id === derivedRule.id
+                  ? { ...definition, rule: undefined }
+                  : definition,
+              ),
+            );
+            setDerivedRule(null);
+          }}
+          onClose={() => setDerivedRule(null)}
+        />
+      )}
+
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
 
       {sessionOpen && (
@@ -4083,6 +4194,10 @@ export function App() {
               defs.filter((definition) => definition.id !== id),
             )
           }
+          onRule={(definition) => {
+            setDerivedOpen(false);
+            setDerivedRule(definition);
+          }}
           onClose={() => setDerivedOpen(false)}
         />
       )}

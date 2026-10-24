@@ -1,10 +1,12 @@
-import type { SignalSeries } from "./types";
+import type { SignalSeries, StateRule } from "./types";
 
 export interface DerivedDef {
   id: string;
   name: string;
   unit: string;
   expression: string;
+  /// Optional thresholds for the State observer; absent means no bands.
+  rule?: StateRule;
 }
 
 type Node =

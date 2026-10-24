@@ -10,12 +10,14 @@ export function DerivedModal({
   series,
   onSave,
   onRemove,
+  onRule,
   onClose,
 }: {
   defs: DerivedDef[];
   series: SignalSeries[];
   onSave: (definition: DerivedDef) => void;
   onRemove: (id: string) => void;
+  onRule?: (definition: DerivedDef) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState("");
@@ -77,6 +79,16 @@ export function DerivedModal({
                     {definition.unit && <em>{definition.unit}</em>}
                   </span>
                   <code>{definition.expression}</code>
+                  {onRule && (
+                    <button
+                      type="button"
+                      class="mini"
+                      title="Edit the State threshold bands"
+                      onClick={() => onRule(definition)}
+                    >
+                      {definition.rule ? "Bands…" : "Add bands…"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     class="mini"
