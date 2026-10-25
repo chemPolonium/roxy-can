@@ -37,12 +37,6 @@ pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// far above every real identifier (max 0x1FFFFFFF), so a derived stream
 /// can never collide with a frame's own signals.
 pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
-/// Legacy: the synthetic id prefix FlexRay signals used when they shared the
-/// CAN subscription tuple (`(0, FR_SIG_BASE | slot, false, name)`). Nothing
-/// writes it any more -- [`crate::observe::SigKey::Fr`] says so outright -- but
-/// projects saved before the change still carry it, and loading them has to
-/// turn those keys into real FlexRay ones rather than drop the curves.
-pub const FR_SIG_BASE: u32 = 0x4000_0000;
 
 /// The subscription key for a FlexRay signal named `name` in `slot` on `bus`.
 /// Both the selection tree and the live decode build it from the resolved
@@ -92,11 +86,10 @@ pub use crate::generator::cycle_from_ms_text;
 #[cfg(test)]
 pub use crate::observe::SampleCache;
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, StateWin, YMode};
-pub use crate::project::PendingAction;
 #[cfg(test)]
 pub use crate::workspace::PopupTarget;
 pub use crate::workspace::{
-    Desktop, MsgWin, RowsBuild, SigScope, StatsWin, TraceFilter, TraceRow, TraceWin, WindowKind,
+    MsgWin, RowsBuild, SigScope, StatsWin, TraceFilter, TraceRow, TraceWin,
 };
 
 /// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot
@@ -244,8 +237,6 @@ pub struct App {
     /// Path of the currently open .rxproj project; None = untitled workspace.
     pub project_path: Option<PathBuf>,
     pub recent_projects: Vec<String>,
-    /// Legacy dock-layout text embedded on save.
-    pub layout_cache: String,
     /// Frontend workspace embedded in the project: tabs, cursors, column
     /// layout and splitters. Opaque to the core.
     pub web_workspace: Option<serde_json::Value>,
@@ -265,24 +256,14 @@ pub struct App {
     /// Data/Monitor/State clear never unmounts a live chart lane. Session
     /// state: the project's Graphics rows are what persist real picks.
     pub(crate) session_chart_keep: std::collections::HashSet<crate::observe::SigKey>,
-    /// Factory layout restored by New Project.
-    pub default_layout: String,
-    /// Layout queued for the next project reset.
-    pub pending_layout: Option<String>,
     /// Last Windows PnP signature for Vector USB devices and when it was
     /// polled. A transition to/from "no Vector USB at all" reopens the XL
     /// driver automatically (USB replug without pressing Refresh).
     pnp_signature: Option<Vec<String>>,
     last_pnp_poll: Instant,
-    /// Set when a destructive action must first pass the unsaved-project modal.
-    pub pending_action: Option<PendingAction>,
     /// Config JSON snapshot of the last clean state (loaded/saved/reset);
     /// compared against the live config to decide if anything changed.
     pub(crate) baseline: String,
-    /// Legacy named arrangements kept for project compatibility; always holds
-    /// at least one.
-    pub desktops: Vec<Desktop>,
-    pub active_desktop: usize,
     pub replay_speed: f64,
     /// Replay navigation drafts: the step size (ms), the play-for duration
     /// (s), and the absolute play-to time typed in the toolbar.
@@ -484,21 +465,15 @@ impl App {
             recent_log: Vec::new(),
             project_path: None,
             recent_projects: Vec::new(),
-            layout_cache: String::new(),
             web_workspace: None,
             workspace_rev: 0,
             reference: None,
             reference_rev: 0,
             derived_defs: Vec::new(),
             session_chart_keep: std::collections::HashSet::new(),
-            default_layout: String::new(),
-            pending_layout: None,
             pnp_signature,
             last_pnp_poll: Instant::now(),
-            pending_action: None,
             baseline: String::new(),
-            desktops: Vec::new(),
-            active_desktop: 0,
             replay_speed: 1.0,
             replay_step_ms: 100,
             replay_play_for_s: 5,
@@ -553,10 +528,6 @@ impl App {
         // first UI frame see the full bus, not an empty placeholder.
         app.read_snapshot();
         app.seed_startup_windows(every_window_kind);
-        let mut first = app.desktop_snapshot();
-        first.name = "Desktop 1".to_string();
-        app.desktops = vec![first];
-        app.active_desktop = 0;
         app.baseline = app.config_snapshot();
         app
     }

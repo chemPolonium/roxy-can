@@ -36,7 +36,7 @@ impl LogBusKind {
 
 /// 文件通道 → 工程里的一路。值 `None` 表示这一路文件通道不回放。
 /// `#[serde(default)]`：工程文件里没有这一项时读成"没配过映射"，
-/// 而不是解析失败——旧工程文件正是这样。
+/// 而不是解析失败——缺省就是空表。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplayMap {

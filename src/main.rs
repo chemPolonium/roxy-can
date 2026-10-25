@@ -1,6 +1,5 @@
-// The core keeps observer and project-file models that the retired desktop UI
-// used to populate. They still participate in project compatibility and tests;
-// pruning them is separate from the web migration.
+// The core keeps observer/text models that the headless tests and CLI drive;
+// the web shell builds its own DTOs on top of them.
 #![allow(dead_code)]
 
 use std::io::IsTerminal;

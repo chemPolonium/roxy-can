@@ -728,9 +728,6 @@ fn a_profile_overlay_drives_a_muted_project() {
     });
     app.settle();
     let proj = crate::config::ProjectFile {
-        version: 1,
-        layout: String::new(),
-        project: None,
         config: crate::config::Config::from_app(&app, None),
     };
     fs::write(
@@ -783,9 +780,6 @@ fn a_bad_profile_aborts_the_run_before_traffic() {
     let project = dir.join("net.rxproj");
     let app = crate::app::App::headless();
     let proj = crate::config::ProjectFile {
-        version: 1,
-        layout: String::new(),
-        project: None,
         config: crate::config::Config::from_app(&app, None),
     };
     fs::write(

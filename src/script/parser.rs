@@ -1394,18 +1394,6 @@ impl P {
                 self.expect(&Tok::RParen, "')'")?;
                 Ok(e)
             }
-            // The old CAPL-style accessors were removed in favour of the
-            // dot/bracket forms and the plain functions. Name the replacement
-            // so a legacy script fails with a migration hint, not a scanner
-            // mystery.
-            Some(Tok::Dollar) => self.err(
-                "$Message::Signal was removed; use Message.Signal, or \
-                 Message[\"Signal Name\"] when the name is not an identifier",
-            ),
-            Some(Tok::At) => self.err(
-                "@sysvar:: was removed; use sys_get(\"ns::name\") and \
-                 sys_set(\"ns::name\", value)",
-            ),
             _ => self.err("expected an expression"),
         }
     }
@@ -1951,24 +1939,5 @@ mod tests {
                 .unwrap_err()
                 .to_string();
         assert!(error.contains("duplicate handler"), "{error}");
-    }
-
-    /// The CAPL-style spellings are gone; the errors name the modern forms.
-    #[test]
-    fn legacy_accessor_forms_point_at_their_replacements() {
-        for source in [
-            "on start { print($EngineStatus::RPM); }",
-            "on start { $EngineStatus::RPM = 5; }",
-        ] {
-            let error = crate::script::compile(source).unwrap_err().to_string();
-            assert!(error.contains("Message.Signal"), "{source}: {error}");
-        }
-        for source in [
-            "on start { print(@sysvar::Demo::Setpoint); }",
-            "on start { @sysvar::Demo::Setpoint = 5; }",
-        ] {
-            let error = crate::script::compile(source).unwrap_err().to_string();
-            assert!(error.contains("sys_get"), "{source}: {error}");
-        }
     }
 }

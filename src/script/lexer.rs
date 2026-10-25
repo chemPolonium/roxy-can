@@ -42,11 +42,6 @@ pub enum Tok {
     /// `Message.Signal` -- the dotted read. A decimal point inside a number
     /// is consumed by the number lexer, so this only appears between names.
     Dot,
-    /// Legacy `$` token, kept only to report the removed `$Message::Signal`
-    /// form with a migration hint.
-    Dollar,
-    /// Legacy `@` token, kept only to report the removed `@sysvar::` form.
-    At,
     Assign,
     /// `+=` and friends: compound stores desugar to plain assignment.
     AssignAdd,
@@ -309,8 +304,6 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ScriptError> {
                     ';' => (Tok::Semi, 1),
                     ':' => (Tok::Colon, 1),
                     '.' => (Tok::Dot, 1),
-                    '$' => (Tok::Dollar, 1),
-                    '@' => (Tok::At, 1),
                     '=' => {
                         if chars.get(i + 1) == Some(&'=') {
                             (Tok::Eq, 2)

@@ -3253,58 +3253,6 @@ fn new_project_starts_completely_empty() {
 }
 
 #[test]
-fn untouched_workspace_quits_without_prompting() {
-    let mut app = App::headless();
-    app.request_quit();
-    assert!(app.quit, "clean untitled workspace quits silently");
-    assert!(app.pending_action.is_none());
-
-    let mut app = App::headless();
-    app.new_trace_window();
-    app.request_quit();
-    assert!(!app.quit, "modified workspace must confirm first");
-    assert_eq!(app.pending_action, Some(crate::app::PendingAction::Quit));
-}
-
-#[test]
-fn autosave_round_trips_the_workspace() {
-    let mut app = App::headless();
-    let path = std::env::temp_dir().join("roxy_can_autosave.rxproj");
-    assert!(app.save_project(Some(path.clone())));
-    app.trace_windows[0].filter = "Motor".to_string();
-    app.layout_cache = "[Window][Dockspace]\n".to_string();
-    app.write_autosave();
-
-    let mut restored = App::headless();
-    assert!(restored.load_autosave());
-    assert_eq!(restored.project_path.as_deref(), Some(path.as_path()));
-    assert_eq!(restored.trace_windows[0].filter, "Motor");
-    assert_eq!(
-        restored.pending_layout.as_deref(),
-        Some("[Window][Dockspace]\n")
-    );
-    assert!(!restored.is_dirty(), "restored autosave starts clean");
-    std::fs::remove_file(&path).ok();
-    std::fs::remove_file(crate::config::state_path(crate::config::AUTOSAVE_PATH)).ok();
-}
-
-#[test]
-fn delete_desktop_keeps_at_least_one() {
-    let mut app = App::headless();
-    app.delete_desktop(0);
-    assert_eq!(app.desktops.len(), 1, "the last desktop cannot be deleted");
-    app.add_desktop();
-    app.add_desktop();
-    assert_eq!(app.active_desktop, 2);
-    app.delete_desktop(2);
-    assert_eq!(app.desktops.len(), 2);
-    assert_eq!(app.active_desktop, 1, "deleting the active one falls back");
-    app.delete_desktop(0);
-    assert_eq!(app.active_desktop, 0, "indices shift when deleting below");
-    assert_eq!(app.desktops.len(), 1);
-}
-
-#[test]
 fn a_contended_mailbox_keeps_last_frames_snapshot() {
     let mut app = App::headless();
     assert_eq!(app.channel_name(0), "CAN1");
@@ -3362,17 +3310,6 @@ fn a_command_status_rides_the_next_snapshot() {
         app.status.contains("replay failed"),
         "an empty-handed command leaves the old status standing"
     );
-}
-
-#[test]
-fn new_project_resets_to_single_desktop() {
-    let mut app = App::headless();
-    app.add_desktop();
-    app.rename_desktop(1, "Analysis".to_string());
-    app.new_project();
-    assert_eq!(app.desktops.len(), 1);
-    assert_eq!(app.active_desktop, 0);
-    assert_eq!(app.desktops[0].name, "Desktop 1");
 }
 
 #[test]
@@ -6895,52 +6832,6 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
             .iter()
             .all(|(k, _)| matches!(k, SigKey::Can { ch: 0, .. })),
         "derived streams follow their node's bus"
-    );
-    app.stop();
-}
-
-/// Legacy projects carry scripts with no node binding; the free script
-/// is gone from the model. When the bus carries a database, a restored
-/// orphan is adopted by the database's first node, so it hangs under a
-/// node in the tree and is gated by that node's role like any other.
-#[test]
-fn an_orphan_script_is_adopted_by_the_first_dbc_node_on_its_bus() {
-    let mut app = App::headless();
-    // Simulate the restore shape: nodes restored before their adoption
-    // pass, still carrying no binding.
-    app.send(crate::bus::BusCommand::AddNode {
-        name: "orphan".to_string(),
-        channel: 0,
-        attached: None,
-    });
-    app.settle();
-    let node = app
-        .snap
-        .nodes
-        .iter()
-        .find(|n| n.name == "orphan")
-        .expect("node");
-    assert_eq!(
-        node.attached, None,
-        "fixture precondition: the script restored unbound"
-    );
-
-    // A database load sweeps the bus: the orphan gets adopted.
-    app.send(crate::bus::BusCommand::LoadDbc {
-        ch: 0,
-        paths: vec![crate::test_assets::path("sample.dbc").to_string()],
-    });
-    app.settle();
-    let node = app
-        .snap
-        .nodes
-        .iter()
-        .find(|n| n.name == "orphan")
-        .expect("node");
-    assert_eq!(
-        node.attached,
-        Some((0, "EngineECU".to_string())),
-        "the first DBC node gives the orphan a home"
     );
     app.stop();
 }

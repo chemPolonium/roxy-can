@@ -344,19 +344,6 @@ fn reset_visual_stores(
     rate_window.clear();
 }
 
-fn read_project_layout(path: &std::path::Path) -> String {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| {
-            value
-                .get("layout")
-                .and_then(|layout| layout.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_default()
-}
-
 /// Validates a system-variable definition coming from the web form. The core
 /// applies the same rules; the host is the boundary, so the web path checks
 /// them again instead of trusting the page.
@@ -1055,12 +1042,7 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 /// playback; no flags keeps the old demo behavior.
 fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
     if let Some(path) = project {
-        let layout = read_project_layout(std::path::Path::new(path));
         app.open_project_path(std::path::Path::new(path));
-        // Keep the project's legacy dock layout so a save does not wipe it.
-        if !layout.is_empty() {
-            app.layout_cache = layout;
-        }
     }
     if let Some(path) = replay {
         app.load_log(path);
@@ -2054,11 +2036,7 @@ fn app_loop(
                     }
                     app.send(BusCommand::ClearTrace);
                     app.send(BusCommand::ClearAggregates);
-                    let layout = read_project_layout(std::path::Path::new(&path));
                     app.open_project_path(std::path::Path::new(&path));
-                    if !layout.is_empty() {
-                        app.layout_cache = layout;
-                    }
                     // Same as the bootstrap load: applying the live layout
                     // is part of opening the project, not an unsaved edit.
                     app.mark_clean();
@@ -5388,21 +5366,16 @@ mod tests {
         );
     }
 
-    /// Loading a project through the web keeps the file's legacy layout and
-    /// leaves the workspace clean: the plot's fine stride is frontend state,
-    /// not a config edit that a later save would write back.
+    /// Loading a project through the web leaves the workspace clean: the
+    /// plot's fine stride is frontend state, not a config edit that a later
+    /// save would write back.
     #[test]
-    fn a_web_project_load_keeps_the_desktop_layout_and_stays_clean() {
+    fn a_web_project_load_stays_clean() {
         let path = std::env::temp_dir().join("roxy_web_layout_project.rxproj");
         let mut source = App::headless();
-        source.layout_cache = "[Window][Dockspace]\n".to_string();
         assert!(source.save_project(Some(path.clone())), "fixture saves");
         let mut app = App::headless();
         prepare_session(&mut app, Some(path.to_str().unwrap()), None);
-        assert!(
-            !app.layout_cache.is_empty(),
-            "the top-level dock layout survives the headless load"
-        );
         assert!(!app.is_dirty(), "web startup must not edit project config");
         app.plot_stride_us = Some(5_000);
         assert!(!app.is_dirty(), "the plot stride is frontend state");

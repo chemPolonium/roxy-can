@@ -1555,9 +1555,6 @@ impl BusCore {
                         n
                     })
                     .collect();
-                // Only genuinely orphan scripts (legacy saves with no
-                // binding) are adopted; bound ones keep their node.
-                self.adopt_orphan_scripts_all();
                 // Wholesale replacement mints new node ids: every existing
                 // derived-signal stream loses its owner.
                 self.emitted_streams.clear();
@@ -3546,7 +3543,6 @@ impl BusCore {
         self.nodes_dirty = true;
         let ch = self.channels.len() - 1;
         self.seed_entries_for_simulated(ch);
-        self.adopt_orphan_scripts(ch);
         let ids: Vec<u32> = dbc.order.iter().map(|&(id, _)| id).collect();
         for id in ids {
             self.add_entry(ch as u8, id);
@@ -3572,7 +3568,6 @@ impl BusCore {
             }
         }
         self.seed_entries_for_simulated(ch as usize);
-        self.adopt_orphan_scripts(ch as usize);
         *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
     }
 
@@ -3654,9 +3649,6 @@ impl BusCore {
         // fresh table has to meet them: Simulated nodes get entries for
         // messages the database newly declares.
         self.seed_entries_for_simulated(ch);
-        // Free scripts are legacy: the moment a database exists on their
-        // bus, they get a node to hang under.
-        self.adopt_orphan_scripts(ch);
         *status = match first_error {
             Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
             None => format!("{name} DBC loaded: {total} messages"),
@@ -3684,37 +3676,6 @@ impl BusCore {
             for id in ids {
                 self.add_entry(ch as u8, id);
             }
-        }
-    }
-
-    /// Binds every free script node on the bus to the database's first
-    /// node. Projects from before script bindings existed carry scripts
-    /// with no node; the free script is gone from the model, so an orphan
-    /// gets a home as soon as a database can host one.
-    fn adopt_orphan_scripts(&mut self, ch: usize) {
-        let first = self.channels[ch]
-            .dbc
-            .as_ref()
-            .and_then(|db| db.nodes.first().cloned());
-        let Some(first) = first else {
-            return;
-        };
-        let mut changed = false;
-        for node in &mut self.nodes {
-            if node.channel as usize == ch && node.attached.is_none() {
-                node.attached = Some((ch as u8, first.clone()));
-                changed = true;
-            }
-        }
-        if changed {
-            self.nodes_dirty = true;
-        }
-    }
-
-    /// Adoption pass across every bus -- the project-restore shape.
-    fn adopt_orphan_scripts_all(&mut self) {
-        for ch in 0..self.channels.len() {
-            self.adopt_orphan_scripts(ch);
         }
     }
 

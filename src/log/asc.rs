@@ -154,11 +154,10 @@ impl AscWriter {
     }
 }
 
-/// Parses a Vector/CANoe `.asc` log. Handles classic frames (with the `d`/`r`
-/// frame-type token), CAN FD frames (`CANFD` line marker) and, for
-/// backward-compatibility, the older type-token-less layout this tool emitted
-/// before the Vector rewrite. Remote and error frames are recognised and
-/// skipped cleanly.
+/// Parses a Vector/CANoe `.asc` log: classic frames (with the `d`/`r`
+/// frame-type token), CAN FD frames (`CANFD` line marker), and FlexRay
+/// receive rows. Remote and error frames are recognised and skipped
+/// cleanly.
 /// Parses an ASC log's CAN frames. The FlexRay-aware variant is
 /// [`parse_asc_full`]; this wrapper keeps the plain-CAN entry point the
 /// tests use. Non-test builds go through [`parse_asc_full`].
@@ -343,11 +342,12 @@ fn parse_classic(t_us: u64, toks: &[&str], base: u32) -> Option<CanFrame> {
     let (id, extended) = parse_id(toks[2], base)?;
     let dir = parse_dir(toks[3])?;
     // Vector inserts a frame-type token (`d` data / `r` remote / `e` error)
-    // before the DLC; the legacy roxy-can layout omits it.
-    let (frametype, dlc_idx) = match toks[4].to_ascii_lowercase().as_str() {
-        "d" | "r" | "e" => (toks[4].to_ascii_lowercase(), 5),
-        _ => ("d".to_string(), 4),
-    };
+    // before the DLC. A line without it is not an ASC frame.
+    let frametype = toks.get(4)?.to_ascii_lowercase();
+    if !matches!(frametype.as_str(), "d" | "r" | "e") {
+        return None;
+    }
+    let dlc_idx = 5;
     let (flags, len, data) = match frametype.as_str() {
         "e" => (FrameFlags::ERROR, 0u8, [0u8; MAX_CAN_FD_LEN]),
         "r" => {
@@ -897,11 +897,17 @@ mod tests {
 
     #[test]
     fn skips_header_and_junk() {
-        let s = "date Mon Jan 01\nbase hex  timestamps hex\ninternal events logged\n0.000000 Start of measurement\nfoo bar\n1.000000  1  200  Rx  8  11 22 33 44 55 66 77 88\n";
+        let s = "date Mon Jan 01\nbase hex  timestamps hex\ninternal events logged\n0.000000 Start of measurement\nfoo bar\n1.000000  1  200  Rx  d 8  11 22 33 44 55 66 77 88\n";
         let parsed = parse_asc(s);
-        assert_eq!(parsed.len(), 1, "legacy type-token-less line still parses");
+        assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, 0x200);
         assert_eq!(parsed[0].len, 8);
+    }
+
+    #[test]
+    fn a_line_without_the_frame_type_token_is_not_a_frame() {
+        let s = "0.000000 Start of measurement\n1.000000  1  200  Rx  8  11 22 33 44 55 66 77 88\n";
+        assert!(parse_asc(s).is_empty());
     }
 
     #[test]

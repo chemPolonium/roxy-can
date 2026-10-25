@@ -120,7 +120,6 @@ interface SavedView {
   overlay: boolean;
   signalView: SignalView;
   cursors: ChartCursor[];
-  derived: DerivedDef[];
 }
 
 interface SavedWorkspace extends Partial<SavedView> {
@@ -160,51 +159,6 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       });
     }
   }
-  const derived: DerivedDef[] = [];
-  if (Array.isArray(saved.derived)) {
-    for (const definition of saved.derived.slice(0, 20)) {
-      if (
-        typeof definition?.id !== "string" ||
-        typeof definition?.name !== "string" ||
-        typeof definition?.expression !== "string"
-      ) {
-        continue;
-      }
-      // The pre-core editor nested bands under `rule`; accept both shapes so
-      // an old workspace imports its definitions and bands unharmed.
-      const legacy = definition as DerivedDef & {
-        rule?: { cuts?: unknown; names?: unknown };
-      };
-      const cuts: unknown = Array.isArray(definition.cuts)
-        ? definition.cuts
-        : legacy.rule?.cuts;
-      const names: unknown = Array.isArray(definition.names)
-        ? definition.names
-        : legacy.rule?.names;
-      derived.push({
-        id: definition.id,
-        name: definition.name,
-        unit: typeof definition.unit === "string" ? definition.unit : "",
-        expression: definition.expression,
-        cuts: Array.isArray(cuts)
-          ? cuts.filter((cut) => Number.isFinite(cut)).map(Number)
-          : [],
-        names: Array.isArray(names)
-          ? names.filter((name) => typeof name === "string").map(String)
-          : [],
-        sources: Array.isArray(definition.sources)
-          ? definition.sources
-              .filter(
-                (source) =>
-                  typeof source?.name === "string" &&
-                  typeof source?.key === "string",
-              )
-              .slice(0, 64)
-              .map((source) => ({ name: source.name, key: source.key }))
-          : [],
-      });
-    }
-  }
   return {
     tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
     chartTab:
@@ -220,7 +174,6 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
     signalView: { windowS, endS },
     cursors,
-    derived,
   };
 }
 
@@ -441,10 +394,6 @@ export function App() {
   const [reference, setReference] = useState<ReferenceRun | null>(null);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [derivedDefs, setDerivedDefs] = useState<DerivedDef[]>([]);
-  // Definitions saved by the pre-core editor; imported once when the core
-  // reports none, then the project's own list takes over.
-  const legacyDerived = useRef<DerivedDef[]>(savedView.derived ?? []);
-  const derivedHydrated = useRef(false);
   const [derivedOpen, setDerivedOpen] = useState(false);
   const [derivedRule, setDerivedRule] = useState<DerivedDef | null>(null);
   const [eventOpen, setEventOpen] = useState(false);
@@ -487,7 +436,6 @@ export function App() {
       setChartSplit(false);
       setSplitRatio(0.6);
       setSignalOverlay(false);
-      legacyDerived.current = [];
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
@@ -503,7 +451,6 @@ export function App() {
     if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
     if (typeof view.splitRatio === "number") setSplitRatio(view.splitRatio);
     if (typeof view.overlay === "boolean") setSignalOverlay(view.overlay);
-    if (view.derived) legacyDerived.current = view.derived;
     if (view.signalView) setSignalView(view.signalView);
     if (view.cursors) {
       setChartCursors(view.cursors);
@@ -526,16 +473,11 @@ export function App() {
       return;
     }
     appliedWorkspaceRev.current = rev;
-    // A newly opened project may carry definitions only the old browser-side
-    // editor understood; give the import below another chance to see them.
-    derivedHydrated.current = false;
     if (rev > 0) applyWorkspace(state.workspace);
     setWorkspaceHydrated(true);
   }, [state?.workspaceRev]);
 
-  // The core owns the derived list; mirror it for the editor. A project saved
-  // by the old browser-only editor carries its definitions in the workspace,
-  // so import those once when the core reports none.
+  // The core owns the derived list; mirror it for the editor.
   const derivedSignature = useMemo(
     () => JSON.stringify(state?.derived ?? []),
     [state?.derived],
@@ -543,13 +485,7 @@ export function App() {
   useEffect(() => {
     if (!state) return;
     setDerivedDefs(state.derived ?? []);
-    if (derivedHydrated.current || !workspaceHydrated) return;
-    derivedHydrated.current = true;
-    if ((state.derived?.length ?? 0) === 0 && legacyDerived.current.length > 0) {
-      void run({ type: "set_derived", defs: legacyDerived.current });
-      legacyDerived.current = [];
-    }
-  }, [derivedSignature, workspaceHydrated, state?.workspaceRev]);
+  }, [derivedSignature, state?.workspaceRev]);
 
   // Keep the backend copy warm so any save or autosave carries the current
   // tabs, cursors, splitters and Trace columns.

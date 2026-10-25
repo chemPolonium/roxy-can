@@ -57,13 +57,6 @@ const OBJ_CAN_ERROR_EXT: u32 = 73;
 /// writes the Ex form.
 const OBJ_FR_RCVMESSAGE: u32 = 50;
 const OBJ_FR_RCVMESSAGE_EX: u32 = 66;
-/// Legacy Ethernet frame object. The body starts with MacAddresses, channel,
-/// direction, ethertype and the VLAN tag fields; payload follows it.
-const OBJ_ETH_FRAME: u32 = 71;
-/// Fixed body header of [`OBJ_ETH_FRAME`] (Vector's
-/// `blf_ethernetframeheader_t`: src[6], channel u16, dst[6], direction u16,
-/// ethtype u16, tpid u16, tci u16, payloadlength u16, res u64).
-const ETH_FRAME_HEADER_SIZE: usize = 32;
 
 /// Object-header flag values steering the timestamp interpretation. Vector's
 /// reference reader treats `flags == 1` as 10 µs ticks and *anything else* as
@@ -104,8 +97,6 @@ pub struct BlfStream {
     /// CAN frames. Delivered via `poll_fr_rows` as the same containers are
     /// read, in file order.
     fr_pending: VecDeque<crate::trace::FrRow>,
-    /// Ethernet frames encountered in the same containers.
-    eth_pending: VecDeque<crate::eth::EthFrame>,
     /// Sticky: did any scan ever surface a CAN frame?
     saw_can: bool,
     /// Set once a scan reaches EOF having seen no CAN frame. The whole file
@@ -159,7 +150,6 @@ impl BlfStream {
             describe,
             pending: VecDeque::new(),
             fr_pending: VecDeque::new(),
-            eth_pending: VecDeque::new(),
             saw_can: false,
             no_can_frames: false,
             t_base: None,
@@ -239,12 +229,7 @@ impl BlfStream {
                 return true;
             }
         };
-        parse_container_objects(
-            &decoded,
-            &mut self.pending,
-            &mut self.fr_pending,
-            &mut self.eth_pending,
-        );
+        parse_container_objects(&decoded, &mut self.pending, &mut self.fr_pending);
         true
     }
 
@@ -330,25 +315,10 @@ impl FrameStream for BlfStream {
     }
 
     fn peek_eth_t(&mut self) -> Option<u64> {
-        while self.eth_pending.is_empty()
-            && self.pending.is_empty()
-            && self.fr_pending.is_empty()
-            && self.enter_next_container()
-        {}
-        let raw = self.eth_pending.front().map(|f| f.t_us);
-        raw.map(|t| self.rebase(t))
+        None
     }
 
-    fn poll_eth_frames(&mut self, upto_t_us: u64, out: &mut Vec<crate::eth::EthFrame>) {
-        while let Some(front) = self.eth_pending.front() {
-            if self.rebase(front.t_us) > upto_t_us {
-                break;
-            }
-            let mut f = self.eth_pending.pop_front().expect("checked above");
-            f.t_us = self.rebase(f.t_us);
-            out.push(f);
-        }
-    }
+    fn poll_eth_frames(&mut self, _upto_t_us: u64, _out: &mut Vec<crate::eth::EthFrame>) {}
 }
 
 struct ObjectHeader {
@@ -420,7 +390,6 @@ fn parse_container_objects(
     bytes: &[u8],
     out: &mut VecDeque<CanFrame>,
     fr_out: &mut VecDeque<crate::trace::FrRow>,
-    eth_out: &mut VecDeque<crate::eth::EthFrame>,
 ) {
     let mut pos = match next_object(bytes, 0) {
         Some(at) => at,
@@ -448,13 +417,11 @@ fn parse_container_objects(
                 OBJ_FR_RCVMESSAGE | OBJ_FR_RCVMESSAGE_EX => {
                     decode_fr_rcv(h.object_type == OBJ_FR_RCVMESSAGE_EX, body, t_us)
                 }
-                OBJ_ETH_FRAME => decode_eth_frame(body, t_us).map(FrOrCan::Eth),
                 _ => None,
             };
             match decoded {
                 Some(FrOrCan::Can(f)) => out.push_back(f),
                 Some(FrOrCan::Fr(r)) => fr_out.push_back(r),
-                Some(FrOrCan::Eth(f)) => eth_out.push_back(f),
                 None => {}
             }
         }
@@ -470,50 +437,6 @@ fn parse_container_objects(
 enum FrOrCan {
     Can(CanFrame),
     Fr(crate::trace::FrRow),
-    Eth(crate::eth::EthFrame),
-}
-
-/// `blf_ethernetframeheader_t` (object type 71): MACs, channel, direction,
-/// ethertype, VLAN TPID/TCI and payload length, followed by the payload.
-fn decode_eth_frame(body: &[u8], t_us: u64) -> Option<crate::eth::EthFrame> {
-    if body.len() < ETH_FRAME_HEADER_SIZE {
-        return None;
-    }
-    let src: [u8; 6] = body[0..6].try_into().ok()?;
-    let channel = u16_at(body, 6);
-    let dst: [u8; 6] = body[8..14].try_into().ok()?;
-    let direction = u16_at(body, 14);
-    let ethertype = u16_at(body, 16);
-    let tpid = u16_at(body, 18);
-    let tci = u16_at(body, 20);
-    let payload_len = u16_at(body, 22) as usize;
-    let available = body.len() - ETH_FRAME_HEADER_SIZE;
-    let take = payload_len.min(available);
-    let payload = body[ETH_FRAME_HEADER_SIZE..ETH_FRAME_HEADER_SIZE + take].to_vec();
-    let vlan = if tpid == 0x8100 || tpid == 0x88A8 {
-        Some(tci & 0x0FFF)
-    } else {
-        None
-    };
-    let mut frame = crate::eth::EthFrame::new(
-        t_us,
-        channel.min(u16::from(u8::MAX)) as u8,
-        if direction == 0 {
-            crate::can::frame::Direction::Rx
-        } else {
-            crate::can::frame::Direction::Tx
-        },
-        dst,
-        src,
-        vlan,
-        ethertype,
-        payload,
-    );
-    frame.truncated = take < payload_len;
-    if vlan.is_some() {
-        frame.vlan_tpid = Some(tpid);
-    }
-    Some(frame)
 }
 
 /// `FlexRayVFrReceiveMsg` (50) and `FlexRayVFrReceiveMsgEx` (66): the
@@ -2525,41 +2448,5 @@ mod record_times {
             s.describe()
         );
         std::fs::remove_file(&path).ok();
-    }
-}
-
-#[cfg(test)]
-mod eth_tests {
-    use super::*;
-
-    #[test]
-    fn an_ethernet_object_decodes_macs_vlan_and_payload() {
-        let mut body = vec![0u8; ETH_FRAME_HEADER_SIZE + 4];
-        body[0..6].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
-        body[6..8].copy_from_slice(&3u16.to_le_bytes());
-        body[8..14].copy_from_slice(&[9, 8, 7, 6, 5, 4]);
-        body[14..16].copy_from_slice(&1u16.to_le_bytes());
-        body[16..18].copy_from_slice(&0x88B5u16.to_le_bytes());
-        body[18..20].copy_from_slice(&0x8100u16.to_le_bytes());
-        body[20..22].copy_from_slice(&0x0064u16.to_le_bytes());
-        body[22..24].copy_from_slice(&4u16.to_le_bytes());
-        body[32..36].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
-
-        let f = decode_eth_frame(&body, 1_234).expect("decoded");
-        assert_eq!(f.t_us, 1_234);
-        assert_eq!(f.bus, 3);
-        assert!(matches!(f.dir, crate::can::frame::Direction::Tx));
-        assert_eq!(f.src, [1, 2, 3, 4, 5, 6]);
-        assert_eq!(f.dst, [9, 8, 7, 6, 5, 4]);
-        assert_eq!(f.vlan, Some(100));
-        assert_eq!(f.vlan_tpid, Some(0x8100), "the C-VLAN tag is preserved");
-        assert_eq!(f.ethertype, 0x88B5);
-        assert_eq!(&*f.payload, &[0xDE, 0xAD, 0xBE, 0xEF]);
-
-        // An S-VLAN is a different tag and must not come back as a C-VLAN.
-        body[18..20].copy_from_slice(&0x88A8u16.to_le_bytes());
-        let s = decode_eth_frame(&body, 1_234).expect("decoded");
-        assert_eq!(s.vlan_tpid, Some(0x88A8));
-        assert!(!f.truncated);
     }
 }

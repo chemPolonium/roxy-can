@@ -1,41 +1,19 @@
-//! Workspace persistence as project files (.rxproj): buses,
-//! observer windows, signals, filters, the generator and the legacy dock
-//! layout text are bundled in one JSON file. A small `roxy-can.meta.json`
-//! remembers the last opened project. The legacy `roxy-can.json` (no
-//! project path) is still read once as a migration fallback.
+//! Workspace persistence as project files (.rxproj): buses, observer
+//! windows, signals, filters and the generator are bundled in one JSON
+//! file. A small `roxy-can.meta.json` remembers the last opened project.
 use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::app::{
-    App, DataWindow, Desktop, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin,
-    WindowKind, YMode,
+    App, DataWindow, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin, YMode,
 };
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 use crate::trigger::{TriggerAction, TriggerCond};
 
-pub const CONFIG_PATH: &str = "roxy-can.json";
-pub const META_PATH: &str = "roxy-can.meta.json";
-pub const AUTOSAVE_PATH: &str = "roxy-can.autosave.rxproj";
 pub const PROJECT_EXT: &str = "rxproj";
-
-/// The directory where roxy-can stores its state files (meta, autosave).
-/// Uses `%APPDATA%\roxy-can\` on Windows; created on first access.
-/// Falls back to the current directory when `APPDATA` is not set.
-pub fn state_dir() -> std::path::PathBuf {
-    let base = std::env::var("APPDATA")
-        .map(|d| std::path::PathBuf::from(d).join("roxy-can"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    std::fs::create_dir_all(&base).ok();
-    base
-}
-
-/// Full path for a state file: the state directory joined with the name.
-pub fn state_path(name: &str) -> std::path::PathBuf {
-    state_dir().join(name)
-}
 
 /// Stores a DBC path relative to the project directory when possible, so a
 /// project folder can be moved or shared; paths outside the project are
@@ -74,30 +52,10 @@ pub fn resolve_dbc(p: &str, base: Option<&Path>) -> String {
     p.to_string()
 }
 
-/// One project file: semantic workspace state plus the legacy dock layout.
+/// One project file: the semantic workspace state.
 #[derive(Serialize, Deserialize)]
 pub struct ProjectFile {
-    #[serde(default = "one_default_u32")]
-    pub version: u32,
-    #[serde(default)]
-    pub layout: String,
-    /// Only set in autosaves: the project the workspace belonged to.
-    #[serde(default)]
-    pub project: Option<String>,
     pub config: Config,
-}
-
-fn one_default_u32() -> u32 {
-    1
-}
-
-/// Startup driver written on every exit.
-#[derive(Serialize, Deserialize, Default)]
-pub struct Meta {
-    #[serde(default)]
-    pub last_project: Option<String>,
-    #[serde(default)]
-    pub recent_projects: Vec<String>,
 }
 
 fn true_default() -> bool {
@@ -109,11 +67,6 @@ fn one_default() -> f64 {
 fn ten_default() -> u32 {
     10
 }
-
-/// 旧版工程文件里 ∞ 的替身：`serde_json` 写不出一个无穷大的数，当时存的是
-/// 这个数。阶梯里没有 100 这一档，`--speed` 也不落进工程文件，所以文件里
-/// 看到它只有这一个意思——那份工程存的是 as-fast-as-possible。
-const LEGACY_FASTEST_SPEED: f64 = 100.0;
 
 fn trace_limit_default() -> usize {
     crate::app::TRACE_LIMIT
@@ -138,15 +91,8 @@ pub struct ChannelCfg {
     /// guessed. Absent from projects saved before the role model.
     #[serde(default)]
     pub node_roles: std::collections::BTreeMap<String, String>,
-    /// Legacy v0.5-v0.10 field: names of nodes ticked as simulated.
-    /// Merged in as `Simulated` roles on load; no longer written. Absent
-    /// from projects saved before v0.5, which then load with nothing
-    /// simulated.
-    #[serde(default, skip_serializing)]
-    pub sim_nodes: Vec<String>,
     /// Arbitration and CAN FD data-phase bitrates in kbit/s, for the load
-    /// view. Absent from projects saved before v0.8, which load with the
-    /// defaults.
+    /// view.
     #[serde(default = "default_bitrate")]
     pub bitrate_kbps: u32,
     #[serde(default = "default_fd_data_bitrate")]
@@ -297,9 +243,7 @@ pub struct SignalCfg {
     #[serde(default)]
     pub ext: bool,
     /// The FlexRay slot carrying the signal, with `ch` naming the FlexRay
-    /// bus. Absent for a CAN signal; a project saved before it existed puts
-    /// its FlexRay signals in `id` behind `FR_SIG_BASE`, which
-    /// [`sig_key`] migrates.
+    /// bus. Absent for a CAN signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fr_slot: Option<u16>,
     /// The ARXML Ethernet frame the signal was decoded from, with `ch`
@@ -416,7 +360,7 @@ pub struct NodeCfg {
     #[serde(default = "true_default")]
     pub enabled: bool,
     /// 绑定的 DBC 节点 (总线, 节点名)：绑定脚本的发帧受该节点角色开关
-    /// 控制。旧工程缺省为 None（独立脚本）。
+    /// 控制。缺省为 None（独立脚本）。
     #[serde(default)]
     pub attached: Option<(u8, String)>,
 }
@@ -520,36 +464,6 @@ pub struct FrTxCfg {
     pub srcs: Vec<SrcCfg>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct DesktopCfg {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub layout: String,
-    #[serde(default)]
-    pub open: Vec<(u8, String)>,
-    #[serde(default = "true_default")]
-    pub show_tx: bool,
-    #[serde(default = "true_default")]
-    pub show_network: bool,
-    #[serde(default = "true_default")]
-    pub show_measurement: bool,
-    #[serde(default)]
-    pub show_buses: bool,
-    #[serde(default)]
-    pub show_triggers: bool,
-    #[serde(default)]
-    pub show_bus_stats: bool,
-    #[serde(default)]
-    pub show_spec: bool,
-    #[serde(default)]
-    pub show_id_filter: bool,
-    #[serde(default)]
-    pub show_sysvars: bool,
-    #[serde(default = "true_default")]
-    pub show_write: bool,
-}
-
 fn cycle_default() -> u64 {
     100_000
 }
@@ -626,13 +540,6 @@ impl Default for SpecCfg {
     }
 }
 
-/// The project-file format version [`Config`] writes. Reader logic keys
-/// migrations off this, not off the crate version: the format moves only
-/// when its meaning does. Projects older than the field load as version 0
-/// (the pre-role-model format) and read fine -- every field has its own
-/// default, per the missing-key convention.
-pub const SCHEMA_VERSION: u32 = 1;
-
 /// One FlexRay bus in a project file: which bus the description belongs to
 /// and the file it was parsed from. Slot numbers repeat across clusters, so
 /// a path without its bus index would not say what it describes.
@@ -704,10 +611,6 @@ fn marker_cap_default() -> usize {
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
-    /// The format version the file was written with. Absent from the
-    /// earliest projects, which therefore read as 0.
-    #[serde(default)]
-    pub schema_version: u32,
     /// Trigger-recording context sizes (pre-trigger, post-roll, marker
     /// cap). Absent fields load at the defaults the constants carried.
     #[serde(default)]
@@ -739,42 +642,17 @@ pub struct Config {
     pub eth_frame_length_includes_header: bool,
     /// 回放通道映射：日志里的通道编号 → 本工程的第几路。日志只记编号，而那是
     /// 录它的那个人工程里的编号，所以这层对应关系属于工程。缺省（没有这一项，
-    /// 或空表）= 按编号原样用，旧工程读进来行为不变。
+    /// 或空表）= 按编号原样用。
     #[serde(
         default,
         skip_serializing_if = "crate::replay_map::ReplayMap::is_empty"
     )]
     pub replay_map: crate::replay_map::ReplayMap,
-    /// Legacy: the single description file from before FlexRay got a bus
-    /// index. It loads as bus 0, which is the only bus a project of that
-    /// shape could have watched; new files write `fr_buses` and drop this.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fr_fibex: Option<String>,
-    #[serde(default = "true_default")]
-    pub show_tx: bool,
-    #[serde(default = "true_default")]
-    pub show_network: bool,
-    #[serde(default = "true_default")]
-    pub show_measurement: bool,
-    #[serde(default)]
-    pub show_buses: bool,
-    #[serde(default)]
-    pub show_triggers: bool,
-    #[serde(default)]
-    pub show_bus_stats: bool,
-    #[serde(default)]
-    pub show_spec: bool,
-    #[serde(default)]
-    pub show_id_filter: bool,
-    #[serde(default)]
-    pub show_sysvars: bool,
-    #[serde(default = "true_default")]
-    pub show_write: bool,
     /// 回放倍速。`∞`（as-fast-as-possible）在 JSON 里写不出一个数，所以那一档
     /// 记在 `replay_fastest` 上，这个数只在有限倍速时有意义。
     #[serde(default = "one_default")]
     pub replay_speed: f64,
-    /// 上一档的"是不是 ∞"。缺省 false，所以旧工程文件照原样读。
+    /// 上一档的"是不是 ∞"。缺省 false。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replay_fastest: bool,
     /// Throttled text refresh for number readouts, in Hz; 0 follows the
@@ -819,12 +697,8 @@ pub struct Config {
     pub counters: Counters,
     #[serde(default)]
     pub recent_dbc: Vec<String>,
-    #[serde(default, alias = "recent_asc")]
+    #[serde(default)]
     pub recent_log: Vec<String>,
-    #[serde(default)]
-    pub desktops: Vec<DesktopCfg>,
-    #[serde(default)]
-    pub active_desktop: usize,
     #[serde(default)]
     pub spec: SpecCfg,
     #[serde(default)]
@@ -852,11 +726,7 @@ fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>, Option<String>, Opti
     }
 }
 
-/// The key a project-file field set names, migrating what older projects
-/// wrote: they had no `fr_slot` and squeezed FlexRay into `id` behind
-/// `FR_SIG_BASE`, with the slot in the low bits and the bus fixed to the only
-/// one a FlexRay watch could have. Loading those as FlexRay keys is what keeps
-/// their curves.
+/// The key a project-file field set names.
 fn sig_key(
     ch: u8,
     id: u32,
@@ -874,7 +744,6 @@ fn sig_key(
     }
     match fr_slot {
         Some(slot) => SigKey::fr(ch, slot, signal),
-        None if id & crate::app::FR_SIG_BASE != 0 => SigKey::fr(0, (id & 0x3F_FF) as u16, signal),
         None => SigKey::can(ch, id, ext, signal),
     }
 }
@@ -930,28 +799,6 @@ fn value_src(c: SrcCfg) -> Option<ValueSrc> {
     })
 }
 
-fn desktop_cfg(d: &Desktop) -> DesktopCfg {
-    DesktopCfg {
-        name: d.name.clone(),
-        layout: d.layout.clone(),
-        open: d
-            .open_windows
-            .iter()
-            .map(|(k, n)| (k.to_u8(), n.clone()))
-            .collect(),
-        show_tx: d.show_tx,
-        show_network: d.show_network,
-        show_measurement: d.show_measurement,
-        show_buses: d.show_buses,
-        show_triggers: d.show_triggers,
-        show_bus_stats: d.show_bus_stats,
-        show_spec: d.show_spec,
-        show_id_filter: d.show_id_filter,
-        show_sysvars: d.show_sysvars,
-        show_write: d.show_write,
-    }
-}
-
 fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
     signals
         .iter()
@@ -976,7 +823,6 @@ impl Config {
         // Bus-side reads go through the snapshot, like every other
         // frontend read of the bus.
         Config {
-            schema_version: SCHEMA_VERSION,
             channels: app
                 .snap
                 .channels
@@ -1001,7 +847,6 @@ impl Config {
                             .iter()
                             .map(|(n, r)| (n.clone(), r.tag().to_string()))
                             .collect(),
-                        sim_nodes: Vec::new(),
                         bitrate_kbps: c.bitrate_kbps,
                         fd_data_kbps: c.fd_data_kbps,
                     }
@@ -1042,21 +887,6 @@ impl Config {
                 .collect(),
             eth_frame_length_includes_header: app.eth_length_includes_header,
             replay_map: app.snap.replay_map.clone(),
-            // Written only by the legacy loader; a save drops it in favour of
-            // `fr_buses` above.
-            fr_fibex: None,
-            // Panel visibility was a desktop-window concept; the web shell
-            // keeps these fields for file compatibility only.
-            show_tx: false,
-            show_network: false,
-            show_measurement: false,
-            show_buses: false,
-            show_triggers: false,
-            show_bus_stats: false,
-            show_spec: false,
-            show_id_filter: false,
-            show_sysvars: false,
-            show_write: false,
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
             replay_fastest: !app.replay_speed.is_finite(),
             replay_speed: if app.replay_speed.is_finite() {
@@ -1268,18 +1098,6 @@ impl Config {
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
             recent_log: app.recent_log.clone(),
-            desktops: {
-                let mut ds: Vec<DesktopCfg> = app.desktops.iter().map(desktop_cfg).collect();
-                // The active desktop's stored state can lag behind the live
-                // windows; persist the live snapshot instead.
-                if let Some(d) = ds.get_mut(app.active_desktop) {
-                    let mut live = desktop_cfg(&app.desktop_snapshot());
-                    live.name = d.name.clone();
-                    *d = live;
-                }
-                ds
-            },
-            active_desktop: app.active_desktop,
             spec: SpecCfg {
                 tolerance_percent: app.spec_tol_pct,
                 grace_cycles: app.spec_grace,
@@ -1384,9 +1202,6 @@ impl Config {
                 *p = resolve_dbc(p, base);
             }
         }
-        if let Some(p) = &mut self.fr_fibex {
-            *p = resolve_dbc(p, base);
-        }
         for f in &mut self.fr_buses {
             f.path = resolve_dbc(&f.path, base);
         }
@@ -1427,18 +1242,12 @@ impl Config {
             }
             for (i, c) in self.channels.iter().enumerate() {
                 // Role declarations: drop unknown spellings (the 未知码丢条
-                // convention), then fold the legacy simulated-name list in
-                // -- old projects keep their nodes simulating.
-                let mut roles: std::collections::BTreeMap<String, crate::app::NodeRole> = c
+                // convention).
+                let roles: std::collections::BTreeMap<String, crate::app::NodeRole> = c
                     .node_roles
                     .iter()
                     .filter_map(|(n, r)| crate::app::NodeRole::parse(r).map(|r| (n.clone(), r)))
                     .collect();
-                for n in &c.sim_nodes {
-                    roles
-                        .entry(n.clone())
-                        .or_insert(crate::app::NodeRole::Simulated);
-                }
                 app.send(crate::bus::BusCommand::SetChannelConfig {
                     ch: i as u8,
                     name: Some(c.name.clone()),
@@ -1770,24 +1579,13 @@ impl Config {
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = if self.replay_fastest {
             f64::INFINITY
-        } else if (self.replay_speed - LEGACY_FASTEST_SPEED).abs() < 1e-9 {
-            // 老工程文件里 ∞ 存的就是 100.0（那时写不出 inf）。照 ∞ 认回来，
-            // 别把用户选的 as-fast-as-possible 悄悄改成 100 倍。
-            f64::INFINITY
         } else {
             self.replay_speed.clamp(0.01, 100.0)
         };
         // The FlexRay descriptions: each bus's file is parsed back into that
         // bus's database so a FlexRay replay decodes against the same network.
         // A file that moved or broke is reported, not fatal.
-        // `fr_buses` is per-bus; the older single path describes bus 0, the
-        // only bus that session could have watched.
-        let legacy = (self.fr_buses.is_empty() && self.fr_fibex.is_some()).then(|| FrBusFile {
-            bus: 0,
-            path: self.fr_fibex.clone().unwrap_or_default(),
-            cluster: String::new(),
-        });
-        for file in self.fr_buses.iter().chain(legacy.iter()) {
+        for file in &self.fr_buses {
             let path = &file.path;
             let parsed = std::fs::read(path)
                 .map_err(|e| e.to_string())
@@ -1932,65 +1730,7 @@ impl Config {
         for key in keys {
             app.subscribe(key);
         }
-        if !self.desktops.is_empty() {
-            app.desktops = self
-                .desktops
-                .into_iter()
-                .enumerate()
-                .map(|(i, d)| Desktop {
-                    name: if d.name.trim().is_empty() {
-                        format!("Desktop {}", i + 1)
-                    } else {
-                        d.name
-                    },
-                    layout: d.layout,
-                    open_windows: d
-                        .open
-                        .into_iter()
-                        .filter_map(|(k, n)| WindowKind::from_u8(k).map(|k| (k, n)))
-                        .collect(),
-                    show_tx: d.show_tx,
-                    show_network: d.show_network,
-                    show_measurement: d.show_measurement,
-                    show_buses: d.show_buses,
-                    show_triggers: d.show_triggers,
-                    show_bus_stats: d.show_bus_stats,
-                    show_spec: d.show_spec,
-                    show_id_filter: d.show_id_filter,
-                    show_sysvars: d.show_sysvars,
-                    show_write: d.show_write,
-                })
-                .collect();
-            app.active_desktop = self.active_desktop.min(app.desktops.len() - 1);
-        } else {
-            // Legacy config without desktops: fold the restored window state
-            // into a single default desktop.
-            let mut snap = app.desktop_snapshot();
-            snap.name = "Desktop 1".to_string();
-            app.desktops = vec![snap];
-            app.active_desktop = 0;
-        }
-        let target = app.desktops[app.active_desktop].clone();
-        app.apply_desktop(&target);
         problems
-    }
-}
-
-impl App {
-    /// Restores the legacy `roxy-can.json` workspace if one exists; used
-    /// only as a one-time migration when no project meta file is found.
-    pub fn load_config(&mut self) {
-        let Ok(text) = std::fs::read_to_string(state_path(CONFIG_PATH)) else {
-            return;
-        };
-        match serde_json::from_str::<Config>(&text) {
-            Ok(cfg) => {
-                let problems = cfg.apply(self);
-                self.mark_clean();
-                self.report_load_problems(problems);
-            }
-            Err(e) => self.fail(format!("config ignored: {e}")),
-        }
     }
 }
 
@@ -2342,14 +2082,13 @@ mod tests {
         assert_eq!(restored.tx_list[0].srcs, app.tx_list[0].srcs);
     }
 
-    /// v0.3 project files have no `srcs` key at all: they must load with
-    /// nothing driven, which is exactly how those generators behave today.
+    /// An entry with no `srcs` key loads with nothing driven.
     #[test]
-    fn legacy_tx_entry_without_srcs_stays_flat() {
+    fn a_tx_entry_without_srcs_stays_flat() {
         let mut restored = App::headless();
-        let legacy = r#"{"tx":[{"channel":0,"id":256,"active":true,"cycle_us":20000,
+        let text = r#"{"tx":[{"channel":0,"id":256,"active":true,"cycle_us":20000,
                                "data_text":"01 02","data":[1,2]}]}"#;
-        serde_json::from_str::<Config>(legacy)
+        serde_json::from_str::<Config>(text)
             .unwrap()
             .apply(&mut restored);
         let tx = restored
@@ -2552,177 +2291,17 @@ mod tests {
         );
     }
 
-    /// Old projects carry the simulated names as a plain list; they load
-    /// as `Simulated` role declarations. Role names the program does not
-    /// know are dropped, per the unknown-code convention -- including the
-    /// retired `Monitor` word, which the two-state model folds into
-    /// `Absent`.
+    /// `name`/`dbc_path` stay required, since accepting a nameless bus would
+    /// hide real corruption; optional role/bitrate fields default.
     #[test]
-    fn legacy_sim_nodes_become_roles_and_unknown_roles_are_dropped() {
-        let cfg: Config = serde_json::from_str(
-            r#"{"channels":[{"name":"A","dbc_path":"sample.dbc",
-                 "sim_nodes":["ABS"],
-                 "node_roles":{"GearBox":"Monitor","DashBoard":"Bogus"}}]}"#,
-        )
-        .unwrap();
-        assert_eq!(cfg.channels[0].sim_nodes, ["ABS"]);
-        assert_eq!(
-            cfg.channels[0]
-                .node_roles
-                .get("DashBoard")
-                .map(String::as_str),
-            Some("Bogus"),
-            "the raw file keeps unknown names; the restore filters them"
-        );
-        let mut app = App::headless();
-        cfg.apply(&mut app);
-        assert_eq!(
-            app.channels[0].role_of("ABS"),
-            NodeRole::Simulated,
-            "the legacy simulated list migrated"
-        );
-        assert_eq!(
-            app.channels[0].role_of("GearBox"),
-            NodeRole::Absent,
-            "the retired Monitor word lands as Absent, the same behaviour"
-        );
-        assert_eq!(
-            app.channels[0].role_of("DashBoard"),
-            NodeRole::Absent,
-            "an unknown role name is dropped, not guessed"
-        );
-    }
-
-    /// Projects saved before simulated nodes existed carry no `sim_nodes` key.
-    /// They must load with nothing simulated -- and `name`/`dbc_path` must stay
-    /// required, since accepting a nameless bus would hide real corruption.
-    #[test]
-    fn legacy_channel_config_without_sim_nodes_still_loads() {
+    fn a_channel_config_needs_its_name_and_path() {
         let cfg: Config =
             serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
         assert_eq!(cfg.channels.len(), 1);
-        assert!(cfg.channels[0].sim_nodes.is_empty());
         assert!(cfg.channels[0].node_roles.is_empty());
         assert!(
             serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
             "name is still required"
-        );
-    }
-
-    /// Projects saved while FlexRay signals borrowed a CAN id (bit 30 set, the
-    /// slot in the low bits) must come back as real FlexRay keys, and saving
-    /// them again must state the slot outright -- a key that round-trips
-    /// through a fake arbitration id would break the moment a second cluster
-    /// or a real id range touches it.
-    #[test]
-    fn legacy_flexray_keys_migrate_and_stop_being_synthetic() {
-        let cfg: Config = serde_json::from_str(
-            r#"{"graphics":[{"name":"G","opened":true,"signals":[
-                 {"ch":0,"id":1073741837,"signal":"CarSpeed"}]}]}"#,
-        )
-        .unwrap();
-        let mut restored = App::headless();
-        cfg.apply(&mut restored);
-        let key = &restored.graphics[0].signals[0].key;
-        assert!(
-            matches!(
-                key,
-                crate::observe::SigKey::Fr {
-                    bus: 0,
-                    slot: 13,
-                    ..
-                }
-            ),
-            "the synthetic id loads as a FlexRay key, not a CAN message: {key:?}"
-        );
-        assert_eq!(key.name(), "CarSpeed");
-
-        let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
-        assert!(json.contains("\"fr_slot\":13"), "the slot says so: {json}");
-        assert!(
-            !json.contains("1073741837"),
-            "no synthetic arbitration id survives a save: {json}"
-        );
-        let mut again = App::headless();
-        serde_json::from_str::<Config>(&json)
-            .unwrap()
-            .apply(&mut again);
-        assert_eq!(
-            again.graphics[0].signals[0].key, *key,
-            "the key is stable across saves"
-        );
-    }
-
-    /// The FR watch of a project saved before FlexRay had a bus index states
-    /// one description file: it describes bus 0, the only bus such a session
-    /// could have watched. Saving again must state the bus outright, and a
-    /// second cluster has to survive the trip.
-    #[test]
-    fn a_legacy_single_fibex_path_becomes_a_bus_entry() {
-        let arxml = crate::test_assets::path("PowerTrain.arxml");
-        let fibex = crate::test_assets::path("PowerTrain_v2.xml");
-        if !std::path::Path::new(arxml).exists() || !std::path::Path::new(fibex).exists() {
-            panic!(
-                "{arxml} or {fibex} missing -- it is tracked in the repository, so a broken checkout must fail, not skip"
-            );
-        }
-        let json = serde_json::json!({ "fr_fibex": arxml }).to_string();
-        let cfg: Config = serde_json::from_str(&json).unwrap();
-        let mut restored = App::headless();
-        cfg.apply(&mut restored);
-        assert_eq!(
-            restored.fr_buses.keys().copied().collect::<Vec<_>>(),
-            vec![0],
-            "the legacy path lands on bus 0"
-        );
-        assert!(restored.fr_db(0).is_some(), "and parses into a description");
-        assert_eq!(
-            restored.fr_dbs.keys().copied().collect::<Vec<_>>(),
-            vec![0],
-            "the core is handed what the project loaded, so a replay decodes \
-             without pushing again at the moment of use"
-        );
-
-        // A second cluster on a second bus, as the Buses window's picker
-        // would have left it.
-        let text = crate::dbc::text_from_bytes(std::fs::read(fibex).expect("fibex"));
-        let db = crate::fr_db::FrDb::parse(&text).expect("the bundled FIBEX parses");
-        restored.fr_buses.insert(
-            1,
-            crate::app::FrBusCfg {
-                path: fibex.to_string(),
-                db: std::sync::Arc::new(db),
-            },
-        );
-
-        let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
-        assert!(
-            json.contains(r#""fr_buses":[{"bus":0"#) && json.contains(r#"},{"bus":1,"#),
-            "both buses are stated: {json}"
-        );
-        assert!(
-            !json.contains("\"fr_fibex\""),
-            "the legacy field is not written again: {json}"
-        );
-
-        let mut again = App::headless();
-        serde_json::from_str::<Config>(&json)
-            .unwrap()
-            .apply(&mut again);
-        assert_eq!(
-            again.fr_buses.keys().copied().collect::<Vec<_>>(),
-            vec![0, 1],
-            "each bus keeps its own description"
-        );
-        assert_eq!(
-            again.fr_dbs.keys().copied().collect::<Vec<_>>(),
-            vec![0, 1],
-            "and the core is told about both"
-        );
-        assert_ne!(
-            again.fr_db(0).expect("bus 0").frames[0].name,
-            again.fr_db(1).expect("bus 1").frames[0].name,
-            "the two entries are the two files, not one copied twice"
         );
     }
 
@@ -2854,10 +2433,10 @@ mod tests {
         );
     }
 
-    /// Projects saved before the load view existed carry no bitrate keys;
-    /// they load at the defaults rather than failing or reading zero.
+    /// Omitted bitrate keys load at the defaults rather than failing or
+    /// reading zero.
     #[test]
-    fn legacy_channel_config_without_bitrates_loads_at_defaults() {
+    fn omitted_bitrates_load_at_defaults() {
         let cfg: Config =
             serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
         assert_eq!(
@@ -2965,22 +2544,6 @@ mod tests {
         assert_eq!(restored.limits.marker_cap, 2_048);
     }
 
-    /// The format version travels with the file: new files carry the
-    /// current version, files from before the field existed read as 0.
-    /// Both load -- the number is for future migrations to branch on.
-    #[test]
-    fn the_project_file_carries_its_schema_version() {
-        let app = App::headless();
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        assert!(
-            json.contains(r#""schema_version":1"#),
-            "new files are stamped with the current version"
-        );
-        let cfg: Config =
-            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
-        assert_eq!(cfg.schema_version, 0, "pre-versioning files read as 0");
-    }
-
     /// The two monitor thresholds are a project-level opinion about how
     /// strictly to read the database, so they must survive a save.
     #[test]
@@ -3030,25 +2593,8 @@ mod tests {
     #[test]
     fn missing_fields_fall_back_to_defaults() {
         let cfg: Config = serde_json::from_str("{}").unwrap();
-        assert!(cfg.show_tx);
         assert_eq!(cfg.replay_speed, 1.0);
         assert!(cfg.channels.is_empty());
-    }
-
-    /// v0.2.x persisted `recent_asc`; the field became `recent_log` when BLF
-    /// joined. The alias keeps an old `roxy-can.json` loadable, and the next
-    /// save must migrate it forward rather than keep emitting the old key.
-    #[test]
-    fn legacy_recent_asc_key_migrates_to_recent_log() {
-        let mut restored = App::headless();
-        serde_json::from_str::<Config>(r#"{"recent_asc":["old1.asc","old2.asc"]}"#)
-            .unwrap()
-            .apply(&mut restored);
-        assert_eq!(restored.recent_log, ["old1.asc", "old2.asc"]);
-
-        let json = serde_json::to_string(&Config::from_app(&restored, None)).unwrap();
-        assert!(json.contains(r#""recent_log""#), "writes the new key");
-        assert!(!json.contains("recent_asc"), "stops writing the legacy key");
     }
 
     /// Project files saved before the Dots toggle existed must keep the
@@ -3105,19 +2651,13 @@ mod tests {
     }
 
     #[test]
-    fn project_file_round_trips_layout_and_config() {
+    fn project_file_round_trips_config() {
         let app = App::headless();
         let proj = ProjectFile {
-            version: 1,
-            layout: "[Window][Trace 1]\nPos=10,20\n[Docking][Data]\n".to_string(),
-            project: None,
             config: Config::from_app(&app, None),
         };
         let text = serde_json::to_string(&proj).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.version, 1);
-        assert!(back.layout.contains("[Docking][Data]"));
-        assert_eq!(back.project, None);
         assert_eq!(back.config.channels.len(), app.channels.len());
     }
 
@@ -3153,7 +2693,7 @@ mod tests {
             "一条映射都没有时不写这一项"
         );
 
-        // 旧工程文件里没有这一项 —— 读成"没有映射"，并且把上一份工程留在
+        // 文件里没有这一项 —— 读成"没有映射"，并且把上一份工程留在
         // 核心里的那张表清掉，与窗口、生成器条目同一条规则。
         let mut leftover = App::headless();
         leftover.set_replay_map(map);
@@ -3168,9 +2708,8 @@ mod tests {
         );
     }
 
-    /// ∞ 存回来还得是 ∞。JSON 写不出一个无穷大的数，以前工程里存的是
-    /// `100.0` 这个替身：重开工程倍速悄悄变成 100 倍，而下拉框上根本没有
-    /// 100 这一档，于是显示成 1x —— 屏幕说 1x，日志在飞快跑。
+    /// ∞ 存回来还得是 ∞。JSON 写不出一个无穷大的数，所以那一档记在
+    /// `replay_fastest` 开关上。
     #[test]
     fn as_fast_as_possible_survives_a_project_round_trip() {
         let mut app = App::headless();
@@ -3185,17 +2724,6 @@ mod tests {
             .expect("a project carrying the flag loads")
             .apply(&mut restored);
         assert_eq!(restored.replay_speed, f64::INFINITY);
-
-        // 老文件：只有 `"replay_speed": 100.0`，没有这个开关。
-        let mut from_old = App::headless();
-        serde_json::from_str::<Config>("{\"replay_speed\":100.0}")
-            .expect("an old project file loads")
-            .apply(&mut from_old);
-        assert_eq!(
-            from_old.replay_speed,
-            f64::INFINITY,
-            "文件里的 100.0 就是当年的 ∞"
-        );
 
         // 正常倍速不受牵连，也不该多出这一项。
         let mut finite = App::headless();
