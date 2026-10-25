@@ -18,13 +18,14 @@
 //!
 //! on message 0x100 {                  // frame with this id arrives
 //!     let rpm = sig(0x100, "RPM");    // latest published value (error if unseen)
-//!     let cmd = $EngineCmd::Target;   // the same read, CANoe-style sugar
+//!     let cmd = EngineCmd.Target;     // same read by DBC message/signal name
+//!     let tmp = EngineCmd["Target"];  // bracket form for non-identifier names
 //!     send(0x200, rpm * 2);           // raw payload: int bytes 0..255
 //! }
 //!
 //! on timer 50 {
-//!     @sysvar::Demo::Setpoint = 90;   // sugar for sys_set("Demo::Setpoint", 90)
-//!     print(@sysvar::Demo::Setpoint); // sugar for sys_get
+//!     sys_set("Demo::Setpoint", 90);
+//!     print(sys_get("Demo::Setpoint"));
 //! }
 //!
 //! on message * {                      // every frame, whatever its id
@@ -284,7 +285,7 @@ pub struct Script {
     /// Literal `set_sig` write values `(id, signal, value)` (only calls
     /// whose value constant-folded), for the host's range check.
     pub set_sig_values: Vec<(u32, String, f64)>,
-    /// `$Message::Signal` reads, as `(message name, signal name)` pairs
+    /// Named reads (`Message.Signal` / `Message["Signal Name"]`) as pairs
     /// from the sugar's desugaring. The names are literals, so the host
     /// can resolve them against the database at node start -- a typo is
     /// an assembly error, not a runtime surprise.

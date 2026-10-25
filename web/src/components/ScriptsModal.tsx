@@ -130,8 +130,23 @@ function completionPlacement(
   return { left, top };
 }
 
+function catalogMessage(
+  catalog: Catalog | null,
+  channel: number,
+  name: string,
+) {
+  return (
+    catalog?.channels
+      .find(
+        (candidate) => candidate.kind === "can" && candidate.index === channel,
+      )
+      ?.messages.find((candidate) => candidate.name === name) ?? null
+  );
+}
+
 /// Completion is deliberately context-light: a word prefix matches keywords,
-/// builtins and derived/sysvar call templates; inside `derived("…")` (or
+/// builtins and derived/sysvar call templates; `Message.` and `Message["…"]`
+/// list that message's DBC signals; inside `derived("…")` (or
 /// `sys_get`/`sys_set`) only the matching names are offered.
 function buildCandidates(
   value: string,
@@ -165,13 +180,7 @@ function buildCandidates(
     const dotted = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
     if (dotted) {
       const [, messageName, partial = ""] = dotted;
-      const dbcChannel = catalog?.channels.find(
-        (candidate) =>
-          candidate.kind === "can" && candidate.index === channel,
-      );
-      const message = dbcChannel?.messages.find(
-        (candidate) => candidate.name === messageName,
-      );
+      const message = catalogMessage(catalog, channel, messageName);
       if (!message) return null;
       const query = partial.toLowerCase();
       const items = message.signals
@@ -198,16 +207,29 @@ function buildCandidates(
   let end = caret;
   let prefix = "";
   let stringFn: string | null = null;
+  let stringMessage: string | null = null;
   if (inString) {
     const beforeQuote = lineBefore.slice(0, quoteAt).trimEnd();
-    const fn =
-      /([A-Za-z_]\w*)\s*\([^()]*$/.exec(beforeQuote)?.[1] ?? null;
-    if (fn !== "derived" && fn !== "sys_get" && fn !== "sys_set") return null;
-    stringFn = fn;
+    const bracket = /([A-Za-z_]\w*)\s*\[\s*$/.exec(beforeQuote);
+    if (bracket) {
+      stringFn = "signal";
+      stringMessage = bracket[1];
+    } else {
+      const fn =
+        /([A-Za-z_]\w*)\s*\([^()]*$/.exec(beforeQuote)?.[1] ?? null;
+      if (fn !== "derived" && fn !== "sys_get" && fn !== "sys_set") return null;
+      stringFn = fn;
+    }
     start = lineStart + quoteAt + 1;
     end = caret;
     prefix = value.slice(start, caret);
-    if (prefix.length === 0 && !allowEmpty) return null;
+    if (
+      prefix.length === 0 &&
+      !allowEmpty &&
+      stringFn !== "signal"
+    ) {
+      return null;
+    }
   } else {
     const word = /[A-Za-z_]\w*$/.exec(lineBefore)?.[0] ?? "";
     if (word.length < 2 && !allowEmpty) return null;
@@ -218,7 +240,25 @@ function buildCandidates(
 
   const items: CompletionItem[] = [];
   if (stringFn) {
-    if (stringFn === "derived") {
+    if (stringFn === "signal") {
+      const message = catalogMessage(
+        catalog,
+        channel,
+        stringMessage ?? "",
+      );
+      if (!message) return null;
+      for (const signal of message.signals) {
+        items.push({
+          label: signal.name,
+          detail: signal.unit
+            ? `${message.name} · ${signal.unit}`
+            : message.name,
+          insert: signal.name,
+          caret: signal.name.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "derived") {
       for (const definition of derived) {
         items.push({
           label: definition.name,

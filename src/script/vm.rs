@@ -113,7 +113,7 @@ pub struct Vm {
     /// xorshift64 state for `random()`; re-seedable via `srand`.
     pub rng: u64,
     /// Message name → id, injected by the host from its database for
-    /// `$Message::Signal` reads (`sig_named`). Pure data: the kernel
+    /// Named reads (`sig_named`, from `Message.Signal` / brackets). Pure data: the kernel
     /// stays bus-free -- the host decides what the names mean.
     pub named_messages: std::collections::HashMap<String, u32>,
 }
@@ -153,7 +153,7 @@ impl Vm {
     /// Re-arms the instruction budget for one callback: every handler run
     /// gets the full allowance, so a chatty node cannot starve its own
     /// later events.
-    /// The `$Message::Signal` name pairs the host needs when re-resolving
+    /// The named-read pairs the host needs when re-resolving
     /// its name→id map against a reloaded database.
     pub fn named_signal_refs(&self) -> &[(String, String)] {
         &self.script.named_signal_refs
@@ -580,7 +580,7 @@ impl Vm {
                 return Ok(());
             }
             "sig_named" => {
-                // sig_named("Message", "Signal") -- the `$Message::Signal`
+                // sig_named("Message", "Signal") -- the named-read
                 // sugar. The host injected the message-name → id map from
                 // its database at start; the read then behaves exactly
                 // like `sig`.

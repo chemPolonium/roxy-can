@@ -260,18 +260,18 @@ send(0x200, buf);
 let rpm = sig(0x100, "EngineSpeed");
 ```
 
-### Message.Signal / $Message::Signal
+### Message.Signal / Message["Signal Name"]
 
 按 DBC 报文名和信号名读取最新物理值，不需要记 id：
 
 ```c
 let rpm = EngineStatus.EngineSpeed;
-let temp = $EngineStatus::EngineTemp;   // 两种写法等价
+let temp = EngineStatus["Engine Temp"];   // 名字不是标识符时用下标
 ```
 
 - 节点启动时用它所在通道的 DBC 把 `Message` 解析成 id；报文名或信号名拼错会在启动日志里以 `[check]` 报出，不会静默读到 0。
 - 只读。写信号仍走 `set_sig(buffer, id, "Name", value)`，因为写入需要先有一帧的原始字节。
-- 点号形式要求报文名、信号名都是标识符（字母/数字/下划线）。名字里有空格或连字符时用 `sig_named("Message", "Signal")`。
+- 点号要求报文名、信号名都是标识符（字母/数字/下划线）；下标里的字符串可以是任意 DBC 名字。
 
 ### fr_sig(cluster, slot, "Name")
 
@@ -396,17 +396,18 @@ on timer 50 {
 | `bit_not(a)` | 按位取反 |
 | `bit_shl(a, n)` / `bit_shr(a, n)` | 左移/右移 |
 
-## 信号与系统变量的速记
+## 信号与系统变量的访问
 
-读信号、读系统变量除函数形式外还有两种等价速记，名字都进静态检查（拼错是显式失败）：
+信号按“报文.信号”读取，名字进静态检查（拼错是显式失败）：
 
 ```c
-let rpm = $EngineStatus::RPM;                 // 等价 sig(id, "RPM")，id 由库里的报文名解析
-let target = @sysvar::Demo::Setpoint;         // 等价 sys_get("Demo::Setpoint")
-@sysvar::Demo::Setpoint = target * 0.9;       // 等价 sys_set(..)，写入仍受界限钳位
+let rpm = EngineStatus.RPM;                   // 报文名由所在通道的 DBC 解析
+let temp = EngineStatus["Engine Temp"];       // 非标识符名字
+let target = sys_get("Demo::Setpoint");       // 系统变量仍用函数
+sys_set("Demo::Setpoint", target * 0.9);      // 写入受定义的界限钳位
 ```
 
-信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义，`$…` 只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对这两种速记的名字。
+信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义，点号/下标只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对报文名和信号名。
 
 ## 波形内建
 

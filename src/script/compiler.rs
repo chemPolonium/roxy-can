@@ -206,8 +206,8 @@ struct Comp {
     /// Literal `set_sig` values: `(id, signal, value)` where the value
     /// constant-folded, for the host's range check at node start.
     set_sig_values: Vec<(u32, String, f64)>,
-    /// `$Message::Signal` reads as `(message, signal)` name pairs,
-    /// deduped, for the host's start check against the database.
+    /// Named reads (`Message.Signal`, `Message["Signal Name"]`) as
+    /// `(message, signal)` pairs, deduped, for the host's start check.
     named_signal_refs: Vec<(String, String)>,
     /// System variable keys (`"ns::name"`) named by literal-argument
     /// `sys_get` / `sys_set` calls, deduped, for the host's start check.
@@ -657,9 +657,9 @@ impl Comp {
                     {
                         self.sysvar_refs.push(key.clone());
                     }
-                    // `$Message::Signal` desugars into sig_named with two
-                    // string literals: record the pair so the host can
-                    // resolve both names against the database at start.
+                    // A named read desugars into sig_named with two string
+                    // literals: record the pair so the host can resolve both
+                    // names against the database at start.
                     if *name == "sig_named"
                         && let (Expr::Str(msg), Expr::Str(sig)) = (&args[0], &args[1])
                     {

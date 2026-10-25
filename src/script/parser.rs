@@ -472,41 +472,10 @@ impl P {
     }
 
     fn stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
-        // `$Message::Signal = v;` has no meaning here -- signal writes go
-        // through `set_sig`'s buffer semantics. Fail with the pointer to
-        // the real form instead of a confusing "expected ';'". (`::` lexes
-        // as two Colons, so the write shape is $ id : : id = .)
-        if self.at(&Tok::Dollar)
-            && matches!(
-                self.toks.get(self.pos + 1).map(|t| &t.tok),
-                Some(Tok::Ident(_))
-            )
-            && matches!(
-                self.toks.get(self.pos + 2).map(|t| &t.tok),
-                Some(Tok::Colon)
-            )
-            && matches!(
-                self.toks.get(self.pos + 3).map(|t| &t.tok),
-                Some(Tok::Colon)
-            )
-            && matches!(
-                self.toks.get(self.pos + 4).map(|t| &t.tok),
-                Some(Tok::Ident(_))
-            )
-            && matches!(
-                self.toks.get(self.pos + 5).map(|t| &t.tok),
-                Some(Tok::Assign)
-            )
-        {
-            return self.err(
-                "signal writes go through set_sig(buffer, id, \"Name\", value); \
-                 $Message::Signal is read-only",
-            );
-        }
-        // `Message.Signal = v;` is read-only for the same reason as the `$`
-        // form: writes carry a frame's raw bytes, which only `set_sig` can
-        // shape. Point at the real form instead of a generic lvalue error.
-        if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
+        // Signal reads are read-only: writes carry a frame's raw bytes,
+        // which only `set_sig` can shape. Point at the real form instead of
+        // a generic lvalue error. Both spellings are covered.
+        let dotted_write = matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Dot))
             && matches!(
                 self.toks.get(self.pos + 2).map(|t| &t.tok),
@@ -527,65 +496,41 @@ impl P {
                         | Tok::AssignShl
                         | Tok::AssignShr
                 )
+            );
+        let bracket_write = matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::LBracket)
             )
-        {
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::Str(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 3).map(|t| &t.tok),
+                Some(Tok::RBracket)
+            )
+            && matches!(
+                self.toks.get(self.pos + 4).map(|t| &t.tok),
+                Some(
+                    Tok::Assign
+                        | Tok::AssignAdd
+                        | Tok::AssignSub
+                        | Tok::AssignMul
+                        | Tok::AssignDiv
+                        | Tok::AssignMod
+                        | Tok::AssignBitAnd
+                        | Tok::AssignBitOr
+                        | Tok::AssignBitXor
+                        | Tok::AssignShl
+                        | Tok::AssignShr
+                )
+            );
+        if dotted_write || bracket_write {
             return self.err(
                 "signal writes go through set_sig(buffer, id, \"Name\", value); \
                  Message.Signal is read-only",
             );
-        }
-        // `@sysvar::ns::name = v;` -- the write form, desugared into
-        // `sys_set("ns::name", v)`. Reads fall through to the expression
-        // parser below.
-        if self.at(&Tok::At)
-            && matches!(
-                self.toks.get(self.pos + 1).map(|t| &t.tok),
-                Some(Tok::Ident(f)) if f == "sysvar"
-            )
-            && matches!(
-                self.toks.get(self.pos + 2).map(|t| &t.tok),
-                Some(Tok::Colon)
-            )
-            && matches!(
-                self.toks.get(self.pos + 3).map(|t| &t.tok),
-                Some(Tok::Colon)
-            )
-            && matches!(
-                self.toks.get(self.pos + 4).map(|t| &t.tok),
-                Some(Tok::Ident(_))
-            )
-            && matches!(
-                self.toks.get(self.pos + 5).map(|t| &t.tok),
-                Some(Tok::Colon)
-            )
-            && matches!(
-                self.toks.get(self.pos + 6).map(|t| &t.tok),
-                Some(Tok::Colon)
-            )
-            && matches!(
-                self.toks.get(self.pos + 7).map(|t| &t.tok),
-                Some(Tok::Ident(_))
-            )
-            && matches!(
-                self.toks.get(self.pos + 8).map(|t| &t.tok),
-                Some(Tok::Assign)
-            )
-        {
-            self.advance(); // @
-            self.advance(); // sysvar
-            self.expect(&Tok::Colon, "'::'")?;
-            self.expect(&Tok::Colon, "'::'")?;
-            let ns = self.ident("a namespace name")?;
-            self.expect(&Tok::Colon, "'::'")?;
-            self.expect(&Tok::Colon, "'::'")?;
-            let name = self.ident("a variable name after '::'")?;
-            self.advance(); // =
-            let expr = self.expr()?;
-            self.expect(&Tok::Semi, "';'")?;
-            return Ok(Stmt::Expr(Expr::Call(
-                "sys_set".to_string(),
-                vec![Expr::Str(format!("{ns}::{name}")), expr],
-            )));
         }
         if self.eat(&Tok::Let) {
             let name = self.ident("variable name")?;
@@ -1105,11 +1050,29 @@ impl P {
             }
             Some(Tok::Ident(name)) => {
                 self.advance();
-                // `Message.Signal` is the dotted spelling of the same read as
-                // `$Message::Signal`; both keep their names as literals so the
-                // host can resolve and check them at node start.
+                // `Message.Signal` keeps both names as literals so the host
+                // can resolve and check them against the node's DBC at start.
                 if self.eat(&Tok::Dot) {
                     let signal = self.ident("a signal name after '.'")?;
+                    return Ok(Expr::Call(
+                        "sig_named".to_string(),
+                        vec![Expr::Str(name), Expr::Str(signal)],
+                    ));
+                }
+                // `Message["Signal Name"]`: the bracket form handles names
+                // that are not identifiers. A non-literal index still falls
+                // through to ordinary byte-buffer indexing.
+                if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::LBracket))
+                    && let Some(Tok::Str(signal)) =
+                        self.toks.get(self.pos + 1).map(|t| t.tok.clone())
+                    && matches!(
+                        self.toks.get(self.pos + 2).map(|t| &t.tok),
+                        Some(Tok::RBracket)
+                    )
+                {
+                    self.advance(); // [
+                    self.advance(); // "signal"
+                    self.advance(); // ]
                     return Ok(Expr::Call(
                         "sig_named".to_string(),
                         vec![Expr::Str(name), Expr::Str(signal)],
@@ -1123,43 +1086,18 @@ impl P {
                 self.expect(&Tok::RParen, "')'")?;
                 Ok(e)
             }
-            // `$Message::Signal` -- the CANoe-style read, desugared into a
-            // `sig_named("Message", "Signal")` host call. The name stays a
-            // literal, so the static effect set remains derivable.
-            Some(Tok::Dollar) => {
-                self.advance();
-                let msg = self.ident("a message name after '$'")?;
-                self.expect(&Tok::Colon, "'::' between message and signal")?;
-                self.expect(&Tok::Colon, "'::' between message and signal")?;
-                let sig = self.ident("a signal name after '::'")?;
-                Ok(Expr::Call(
-                    "sig_named".to_string(),
-                    vec![Expr::Str(msg), Expr::Str(sig)],
-                ))
-            }
-            // `@sysvar::ns::name` reads one system variable, desugared
-            // into `sys_get("ns::name")`. Only the `sysvar` family exists
-            // here (CANoe's `@env::` has no counterpart).
-            Some(Tok::At) => {
-                self.advance();
-                let family = self.ident("'sysvar' after '@'")?;
-                if family != "sysvar" {
-                    return self.err(&format!(
-                        "unknown '@{}' family (only '@sysvar::ns::name' exists)",
-                        family
-                    ));
-                }
-                self.expect(&Tok::Colon, "'::' after 'sysvar'")?;
-                self.expect(&Tok::Colon, "'::' after 'sysvar'")?;
-                let ns = self.ident("a namespace name")?;
-                self.expect(&Tok::Colon, "'::' between namespace and name")?;
-                self.expect(&Tok::Colon, "'::' between namespace and name")?;
-                let name = self.ident("a variable name after '::'")?;
-                Ok(Expr::Call(
-                    "sys_get".to_string(),
-                    vec![Expr::Str(format!("{ns}::{name}"))],
-                ))
-            }
+            // The old CAPL-style accessors were removed in favour of the
+            // dot/bracket forms and the plain functions. Name the replacement
+            // so a legacy script fails with a migration hint, not a scanner
+            // mystery.
+            Some(Tok::Dollar) => self.err(
+                "$Message::Signal was removed; use Message.Signal, or \
+                 Message[\"Signal Name\"] when the name is not an identifier",
+            ),
+            Some(Tok::At) => self.err(
+                "@sysvar:: was removed; use sys_get(\"ns::name\") and \
+                 sys_set(\"ns::name\", value)",
+            ),
             _ => self.err("expected an expression"),
         }
     }
@@ -1413,67 +1351,57 @@ mod tests {
         assert_eq!(stmts.len(), 2, "capture plus the chain head");
     }
 
-    /// `$Message::Signal` and `@sysvar::ns::name` desugar into the
-    /// matching host calls with literal strings; the sysvar write form
-    /// desugars into a sys_set expression statement.
+    /// Bracket access is the escape hatch for DBC names that are not
+    /// identifiers; it desugars exactly like the dot form.
     #[test]
-    fn canoe_style_accessors_desugar() {
-        let e = expr_of("$EngineStatus::RPM");
-        match e {
-            Expr::Call(name, args) => {
-                assert_eq!(name, "sig_named");
-                assert_eq!(args.len(), 2);
-                assert!(matches!(&args[0], Expr::Str(m) if m == "EngineStatus"));
-                assert!(matches!(&args[1], Expr::Str(s) if s == "RPM"));
-            }
-            other => panic!("{other:?}"),
-        }
-        let e = expr_of("@sysvar::Demo::Setpoint");
-        match e {
-            Expr::Call(name, args) => {
-                assert_eq!(name, "sys_get");
-                assert!(matches!(&args[0], Expr::Str(k) if k == "Demo::Setpoint"));
-            }
-            other => panic!("{other:?}"),
-        }
-        let toks = super::super::lexer::lex("@sysvar::Demo::Setpoint = 5;").unwrap();
-        let mut p = P {
-            toks,
-            pos: 0,
-            fn_depth: 0,
-            switch_temps: 0,
+    fn a_bracket_read_handles_non_identifier_signal_names() {
+        let script =
+            crate::script::compile("on start { print(EngineStatus[\"Engine Speed\"]); }").unwrap();
+        assert_eq!(
+            script.named_signal_refs,
+            vec![("EngineStatus".to_string(), "Engine Speed".to_string())]
+        );
+        let Expr::Call(name, args) = expr_of("EngineStatus[\"Engine Speed\"]") else {
+            panic!("a bracket read must compile to a host call");
         };
-        match p.stmt().unwrap().stmt {
-            Stmt::Expr(Expr::Call(name, args)) => {
-                assert_eq!(name, "sys_set");
-                assert!(matches!(&args[0], Expr::Str(k) if k == "Demo::Setpoint"));
-                assert!(matches!(&args[1], Expr::Int(5)));
-            }
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(name, "sig_named");
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Expr::Str(message), Expr::Str(signal)]
+                    if message == "EngineStatus" && signal == "Engine Speed"
+            ),
+            "the names stay literal for the host's DBC resolution"
+        );
     }
 
-    /// A signal write through the sugar has no meaning (writes go through
-    /// `set_sig`'s buffer), and only the `sysvar` family exists for `@`.
     #[test]
-    fn canoe_style_accessors_reject_the_write_form_and_unknown_families() {
-        let toks = super::super::lexer::lex("$EngineStatus::RPM = 5;").unwrap();
-        let mut p = P {
-            toks,
-            pos: 0,
-            fn_depth: 0,
-            switch_temps: 0,
-        };
-        let err = p.stmt().unwrap_err().to_string();
-        assert!(err.contains("set_sig"), "{err}");
-        let toks = super::super::lexer::lex("print(@env::FOO);").unwrap();
-        let mut p = P {
-            toks,
-            pos: 0,
-            fn_depth: 0,
-            switch_temps: 0,
-        };
-        let err = p.stmt().unwrap_err().to_string();
-        assert!(err.contains("sysvar"), "{err}");
+    fn a_bracket_write_points_at_set_sig() {
+        let error = crate::script::compile("on start { EngineStatus[\"RPM\"] = 1; }")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("set_sig") && error.contains("read-only"),
+            "{error}"
+        );
+    }
+
+    /// The CAPL-style spellings are gone; the errors name the modern forms.
+    #[test]
+    fn legacy_accessor_forms_point_at_their_replacements() {
+        for source in [
+            "on start { print($EngineStatus::RPM); }",
+            "on start { $EngineStatus::RPM = 5; }",
+        ] {
+            let error = crate::script::compile(source).unwrap_err().to_string();
+            assert!(error.contains("Message.Signal"), "{source}: {error}");
+        }
+        for source in [
+            "on start { print(@sysvar::Demo::Setpoint); }",
+            "on start { @sysvar::Demo::Setpoint = 5; }",
+        ] {
+            let error = crate::script::compile(source).unwrap_err().to_string();
+            assert!(error.contains("sys_get"), "{source}: {error}");
+        }
     }
 }

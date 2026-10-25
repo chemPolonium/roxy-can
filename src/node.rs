@@ -193,7 +193,7 @@ impl ScriptNode {
                 );
             }
         }
-        // `$Message::Signal` 解析：数据库把报文名变成 id，只在这里做
+        // 命名信号读取（Message.Signal / Message["Signal Name"]）解析：数据库把报文名变成 id，只在这里做
         // 一次。VM 拿到的是纯 string → id 映射，语言内核保持零总线
         // 假设；解析不了的引用由 dbc_checks 在上面报 [check]。
         let mut named_messages = std::collections::HashMap::new();
@@ -321,7 +321,7 @@ impl ScriptNode {
         }
     }
 
-    /// Recomputes the `$Message::Signal` name→id map against `db` — a
+    /// Recomputes the named-read name→id map against `db` — a
     /// DBC reload may have moved a name onto a different id or dropped
     /// it. The map refreshes in place and every change lands in the node
     /// log as a `[reload]` line, so a stale read is explainable.
@@ -817,7 +817,7 @@ pub fn dbc_checks(
             ));
         }
     }
-    // `$Message::Signal` 的名字对同样要能落到库上：报文名查不到、或查
+    // 命名读取的名字对同样要能落到库上：报文名查不到、或查
     // 到了但信号名不在该报文里，都在装配时报出——拼错名字是显式失败。
     for (msg, sig) in &script.named_signal_refs {
         let Some(id) = db.message_id_by_name(msg) else {
@@ -1751,33 +1751,10 @@ BO_ 256 Real: 2 ECU
         );
     }
 
-    /// `$Message::Signal` reads the same published value `sig` would,
-    /// with the id resolved from the message name at start.
+    /// A named read resolves against the node channel's database at start,
+    /// then reads the published value.
     #[test]
-    fn the_dollar_read_resolves_the_message_name() {
-        let mut n = node(
-            r#"
-                on message 0x100 {
-                    print($EngineStatus::RPM);
-                }
-            "#,
-        );
-        n.start(Some(engine_dbc()));
-        let input = HostInput {
-            now_s: 0.0,
-            signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
-            fr_signals: HashMap::new(),
-            sysvars: HashMap::new(),
-            derived_signals: HashMap::new(),
-        };
-        n.dispatch_frame(0, 0x100, false, false, &[], &input);
-        assert_eq!(n.log_snapshot(), ["1234.0"]);
-    }
-
-    /// The dotted spelling resolves exactly like `$Message::Signal`: the node
-    /// reads its channel's database at start, then the published value.
-    #[test]
-    fn the_dotted_read_resolves_the_message_name() {
+    fn a_dotted_read_resolves_the_message_name() {
         let mut n = node(
             r#"
                 on message 0x100 {
@@ -1797,11 +1774,11 @@ BO_ 256 Real: 2 ECU
         assert_eq!(n.log_snapshot(), ["1234.0"]);
     }
 
-    /// Wrong message / signal names in `$` reads are assembly errors:
-    /// named at start as `[check]`, shared with `--check-script --dbc`.
+    /// Wrong message / signal names in named reads (dot or bracket) are
+    /// assembly errors, named at start as `[check]`.
     #[test]
-    fn dollar_reads_are_checked_against_the_dbc() {
-        let mut n = node("on start { print($EngineStatus::Nope); }");
+    fn named_reads_are_checked_against_the_dbc() {
+        let mut n = node("on start { print(EngineStatus.Nope); }");
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
@@ -1810,7 +1787,7 @@ BO_ 256 Real: 2 ECU
             n.log_snapshot()
         );
 
-        let mut n = node("on start { print($Ghost::RPM); }");
+        let mut n = node("on start { print(Ghost.RPM); }");
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
@@ -1819,12 +1796,12 @@ BO_ 256 Real: 2 ECU
             n.log_snapshot()
         );
 
-        let mut n = node("on start { print(EngineStatus.Nope); }");
+        let mut n = node("on start { print(EngineStatus[\"Nope\"]); }");
         n.attached = Some((0, "EngineECU".to_string()));
         n.start(Some(engine_dbc()));
         assert!(
             n.log_snapshot().iter().any(|l| l.contains("Nope")),
-            "the dotted form gets the same assembly check: {:?}",
+            "the bracket form gets the same assembly check: {:?}",
             n.log_snapshot()
         );
     }
@@ -1946,13 +1923,14 @@ BO_ 256 Real: 2 ECU
             "a parked node answers no further arrival"
         );
     }
-    /// form queues exactly the key and value the plain form would.
+    /// `sys_set` queues exactly the key and value; the old `@sysvar::`
+    /// spelling is gone.
     #[test]
-    fn the_at_sysvar_write_lands_in_sys_sets() {
+    fn sys_set_queues_the_key_and_value() {
         let mut n = node(
             r#"
                 on message 0x100 {
-                    @sysvar::Demo::Setpoint = 42;
+                    sys_set("Demo::Setpoint", 42);
                 }
             "#,
         );

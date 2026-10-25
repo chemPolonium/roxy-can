@@ -4637,7 +4637,7 @@ BO_ 300 RenamedMsg: 1 ECU
 /// `$` name→id maps in place (with a `[reload]` line in the node log):
 /// a wildcard node keeps reading the renamed message off its new id.
 #[test]
-fn a_dollar_read_follows_a_reload_that_moves_the_message_id() {
+fn a_named_read_follows_a_reload_that_moves_the_message_id() {
     let a = std::env::temp_dir().join("roxy_can_reload_named.dbc");
     let dbc = |id: u32| {
         format!(
@@ -4657,7 +4657,7 @@ fn a_dollar_read_follows_a_reload_that_moves_the_message_id() {
     let id = app.snap.nodes[0].id;
     app.send(crate::bus::BusCommand::SetNodeSource {
         id,
-        source: "on message * { print($EngineStatus::RPM); }".to_string(),
+        source: "on message * { print(EngineStatus.RPM); }".to_string(),
     });
     app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
     app.start_virtual();

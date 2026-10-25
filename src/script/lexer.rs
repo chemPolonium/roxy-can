@@ -42,9 +42,10 @@ pub enum Tok {
     /// `Message.Signal` -- the dotted read. A decimal point inside a number
     /// is consumed by the number lexer, so this only appears between names.
     Dot,
-    /// `$Message::Signal` -- the CANoe-style signal read.
+    /// Legacy `$` token, kept only to report the removed `$Message::Signal`
+    /// form with a migration hint.
     Dollar,
-    /// `@sysvar::ns::name` -- the CANoe-style system variable access.
+    /// Legacy `@` token, kept only to report the removed `@sysvar::` form.
     At,
     Assign,
     /// `+=` and friends: compound stores desugar to plain assignment.

@@ -462,7 +462,7 @@ impl SymbolTable {
         self.message_of(id).map(|m| m.name.as_str())
     }
 
-    /// Message name → id, declaration order. `$Message::Signal` reads
+    /// Message name → id, declaration order. Named signal reads
     /// and their start checks resolve through this.
     pub fn message_id_by_name(&self, name: &str) -> Option<u32> {
         self.order
