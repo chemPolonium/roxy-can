@@ -488,9 +488,7 @@ pub struct MsgWin {
     pub manual: HashSet<Pick>,
     pub filter: String,
     pub dbc_only: bool,
-    /// Message rows as of the last throttled text refresh (see
-    /// [`crate::app::App::sync_msg_text`]); the table draws these so the
-    /// counters hold still long enough to read. Session state only.
+    /// Text-sync test fixture.
     #[cfg(test)]
     pub(crate) text_keys: Vec<(u8, u32)>,
     #[cfg(test)]
@@ -505,8 +503,7 @@ pub struct StatsWin {
     pub opened: bool,
     pub scope: SigScope,
     pub manual: HashSet<Pick>,
-    /// Message Statistics rows as of the last throttled text refresh (see
-    /// [`crate::app::App::sync_stats_text`]). Session state only.
+    /// Text-sync test fixture.
     #[cfg(test)]
     pub(crate) text_keys: Vec<(u8, u32)>,
     #[cfg(test)]

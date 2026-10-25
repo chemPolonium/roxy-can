@@ -169,15 +169,13 @@ pub struct TraceCfg {
     pub name: String,
     pub opened: bool,
     pub scope: SigScope,
-    /// The window's hand-picked CAN ids. Kept as two lists (rather than one
-    /// list of a `Pick` enum) so an existing project file reads unchanged: a
-    /// FlexRay slot pick goes in `fr_manual` beside it, and a file written by
-    /// this version still loads in an older one -- it just ignores the new key.
+    /// The window's hand-picked CAN ids. FlexRay slot picks live beside them
+    /// in `fr_manual`; the two numbering spaces stay separate.
     #[serde(default)]
     pub manual: CanPicks,
     #[serde(default)]
     pub fr_manual: FrPicks,
-    /// Ethernet flow picks, absent from projects saved before Ethernet analysis.
+    /// Ethernet flow picks; empty when none are selected.
     #[serde(default)]
     pub eth_manual: EthPicks,
     #[serde(default)]
@@ -238,8 +236,7 @@ pub struct StatsCfg {
 pub struct SignalCfg {
     pub ch: u8,
     pub id: u32,
-    /// The message's frame class. Absent in older projects, which can
-    /// only have selected standard-class signals.
+    /// The message's frame class. Defaults to standard.
     #[serde(default)]
     pub ext: bool,
     /// The FlexRay slot carrying the signal, with `ch` naming the FlexRay
@@ -395,7 +392,7 @@ pub struct StateCfg {
     #[serde(default = "twenty_default")]
     pub time_window_s: f64,
     /// Minimum display duration in ms for a state band; shorter bands are
-    /// absorbed into their neighbour. Absent from older projects (0).
+    /// absorbed into their neighbour. Defaults to 0.
     #[serde(default)]
     pub min_shown_ms: u64,
 }
@@ -507,8 +504,8 @@ pub struct TriggerCfg {
     pub threshold: f64,
     #[serde(default)]
     pub rising: bool,
-    /// SignalCross only: the watched message's frame class. Absent in
-    /// older projects, which could only watch standard messages.
+    /// SignalCross only: the watched message's frame class. Defaults to
+    /// standard.
     #[serde(default)]
     pub ext: bool,
     pub action: u8,
@@ -549,7 +546,7 @@ pub struct FrBusFile {
     pub bus: u8,
     pub path: String,
     /// The named cluster inside a multi-cluster ARXML. Empty means the whole
-    /// file (the FIBEX path, or an older project).
+    /// file.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cluster: String,
 }
@@ -626,7 +623,7 @@ pub struct Config {
     /// What the user named each FlexRay 路, as `(bus, name)` pairs. Separate
     /// from `fr_buses` because a name is not a description: a cluster that only
     /// a replayed log carries can be named too. Absent means the `FR{n}`
-    /// default, so an older project file reads unchanged.
+    /// default.
     #[serde(default)]
     pub fr_names: Vec<(u8, String)>,
     /// Ethernet buses and their AUTOSAR matrices. Separate index space.
@@ -659,8 +656,7 @@ pub struct Config {
     /// frame rate.
     #[serde(default = "ten_default")]
     pub text_rate_hz: u32,
-    /// How many frames the trace ring retains. Absent from older
-    /// projects, which load with the default.
+    /// How many frames the trace ring retains; omitted keys use the default.
     #[serde(default = "trace_limit_default")]
     pub trace_limit: usize,
     #[serde(default)]
@@ -1292,13 +1288,12 @@ impl Config {
         for (ch, id) in stale {
             app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
         }
-        // The saved entries, and only those. This used to add a row for **every
-        // message in every loaded database** ("rebuild from the DBCs, then
-        // overlay"), because `set_entry_config` only edits an entry that already
-        // exists -- so opening a project filled the panel with the whole
-        // database, including the entries the user had deleted before saving.
-        // A message the databases no longer declare keeps its row on purpose:
-        // the generator has always accepted an entry the database does not know.
+        // The saved entries, and only those. Adding a row for every message in
+        // every loaded database would fill the panel with entries the user had
+        // deleted, because `set_entry_config` only edits an entry that already
+        // exists. A message the databases no longer declare keeps its row on
+        // purpose: the generator has always accepted an entry the database
+        // does not know.
         for t in &self.tx {
             app.add_tx(t.channel, t.id);
         }
@@ -1328,10 +1323,8 @@ impl Config {
             });
         }
         // Every window kind is restored as the file states it -- an empty list
-        // means the project has none of that kind. These used to be skipped
-        // when the saved list was empty, which let the six windows a fresh
-        // session boots with (app.rs's `shell`) leak back into a project whose
-        // user had deleted them.
+        // means the project has none of that kind; letting the default windows
+        // leak back in would resurrect what the user deleted.
         app.trace_windows = self
             .trace_windows
             .into_iter()
@@ -1760,8 +1753,7 @@ mod tests {
         app.trace_windows[0]
             .manual
             .insert(crate::workspace::Pick::Can { ch: 1, id: 0x123 });
-        // A hand-picked FlexRay slot rides along too, and lands in its own
-        // list in the file (`fr_manual`) so an older reader keeps the CAN half.
+        // A hand-picked FlexRay slot rides along in its own list.
         app.trace_windows[0]
             .manual
             .insert(crate::workspace::Pick::Fr { bus: 2, slot: 71 });
@@ -1797,13 +1789,8 @@ mod tests {
         assert_eq!(restored.channels.len(), app.channels.len());
     }
 
-    /// A project with no analysis windows gets none back.
-    ///
-    /// The restore used to skip a saved list that was empty, so the six windows
-    /// a fresh session boots with reappeared in a project whose user had deleted
-    /// them -- "I kept one Trace, and Graphics came back too". `new_project`
-    /// also used to miss the State Tracker kind, which is why the empty
-    /// workspace here is built through that path.
+    /// A project with no analysis windows gets none back: an empty saved list
+    /// means "none", and the default windows must not leak back in.
     #[test]
     fn a_project_without_windows_restores_without_windows() {
         let mut app = App::headless();
@@ -1836,12 +1823,7 @@ mod tests {
     }
 
     /// A restored project gets back the generator entries it saved -- and only
-    /// those.
-    ///
-    /// The restore used to rebuild the generator from the databases' own message
-    /// list, so opening a project added a row for every message in every attached
-    /// DBC: delete entries, save, reopen, and the node's whole transmit list is
-    /// back as inactive rows nobody asked for.
+    /// those; the databases' own message lists must not refill the panel.
     #[test]
     fn a_restored_project_keeps_just_its_own_generator_entries() {
         let mut app = App::headless();
@@ -1995,19 +1977,16 @@ mod tests {
             "the description came back too, so the slot still decodes"
         );
 
-        // The same file with the key removed is the older project: it loads.
+        // The same file with the key removed still loads.
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         doc.as_object_mut().unwrap().remove("fr_tx");
-        assert!(
-            !doc.to_string().contains("fr_tx"),
-            "the file really is older"
-        );
-        let mut legacy = App::headless();
+        assert!(!doc.to_string().contains("fr_tx"), "the key is really gone");
+        let mut restored = App::headless();
         serde_json::from_value::<Config>(doc)
-            .expect("a file without the new key loads")
-            .apply(&mut legacy);
+            .expect("a file without the key loads")
+            .apply(&mut restored);
         assert!(
-            legacy.fr_tx_list.is_empty(),
+            restored.fr_tx_list.is_empty(),
             "and carries no FlexRay entries"
         );
     }
@@ -2518,7 +2497,7 @@ mod tests {
             "and they still filter"
         );
 
-        // A file written before these keys existed reads as it always did.
+        // A file omitting these keys reads with their defaults.
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         for w in doc["trace_windows"].as_array_mut().unwrap() {
             let obj = w.as_object_mut().unwrap();
@@ -2526,11 +2505,11 @@ mod tests {
                 obj.remove(key);
             }
         }
-        let mut legacy = App::headless();
+        let mut restored = App::headless();
         serde_json::from_value::<Config>(doc)
-            .expect("an older file still loads")
-            .apply(&mut legacy);
-        let w = &legacy.trace_windows[0];
+            .expect("a file omitting them loads")
+            .apply(&mut restored);
+        let w = &restored.trace_windows[0];
         assert!(
             w.time_from.is_empty() && w.time_to.is_empty() && !w.fr_expand,
             "and carries no time bounds"
@@ -2609,10 +2588,9 @@ mod tests {
         assert!(cfg.channels.is_empty());
     }
 
-    /// Project files saved before the Dots toggle existed must keep the
-    /// behaviour they already had: markers default to on.
+    /// Omitted keys keep markers on.
     #[test]
-    fn graphics_config_defaults_markers_on_for_older_projects() {
+    fn graphics_config_defaults_markers_on() {
         let g: GfxCfg = serde_json::from_str(r#"{"name":"G1","opened":true}"#).unwrap();
         assert!(g.show_markers, "absent key keeps markers on");
         let off: GfxCfg =

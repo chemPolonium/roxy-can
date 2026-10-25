@@ -1,7 +1,7 @@
 //! The node scripting language: a small C-flavoured source text compiled
 //! to bytecode and run by a stack VM. Nothing here touches the bus --
-//! scripts are pure code plus host calls; the node runtime (S2) wires
-//! them into the core loop.
+//! scripts are pure code plus host calls; the node runtime wires them into
+//! the core loop.
 //!
 //! # Language reference (v1)
 //!
@@ -73,10 +73,6 @@
 //! and the VM dispatches by the same index; anything else resolves at
 //! runtime through the [`HostExternFn`] hook the embedder sets per node.
 //! The seam does not change the bytecode format.
-
-// S2 (the node runtime) is what calls into this module from the product
-// path; until it lands the module is reachable only from tests, which is
-// exactly why the dead-code sweep must stay quiet here.
 
 use std::collections::HashMap;
 
@@ -218,8 +214,8 @@ pub struct Handler {
     pub chunk: u16,
 }
 
-/// The event kinds a node can react to. The node runtime (S2) feeds
-/// these; the language only compiles the bodies.
+/// The event kinds a node can react to. The node runtime feeds these; the
+/// language only compiles the bodies.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HandlerKind {
     Start,

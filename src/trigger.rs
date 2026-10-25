@@ -1,7 +1,6 @@
-//! Trigger conditions and their evaluation -- the shared front end for
-//! the trigger layer (TODO item 8) and, later, reaction rules
-//! (`on message X -> send Y`, TODO item 10), which reuse the same
-//! matching and edge bookkeeping instead of growing a second evaluator.
+//! Trigger conditions and their evaluation: the shared front end for
+//! frame/signal/timeout rules and the reaction rules that send on an edge,
+//! reusing the same matching and edge bookkeeping.
 //!
 //! A trigger watches incoming frames in the measurement loop and tracks
 //! its condition's level; only the stored false->true edge fires the
@@ -11,10 +10,6 @@
 //! presence conditions ("this ID showed up", "an error frame appeared")
 //! latch for the whole run -- the interesting fact is that it happened,
 //! not that it keeps happening.
-//!
-//! The editing UI and project persistence land with the rest of item 8;
-//! until then some of this is reachable only from tests, which
-//! dead_code cannot see.
 
 use crate::app::App;
 
@@ -81,11 +76,10 @@ pub enum TriggerCond {
 
 /// What a fired trigger does.
 ///
-/// `Send` is the reaction rule of TODO item 10 riding the same evaluator:
-/// on the edge it transmits **one** frame from the generator entry with
-/// that (bus, id) -- payload assembled by the entry's own base bytes and
-/// waveform sources, stamped with the triggering frame's own timestamp so
-/// a reaction during replay lands on the log timeline like any injected
+/// `Send` transmits **one** frame from the generator entry with that
+/// (bus, id) on the edge -- payload assembled by the entry's own base bytes
+/// and waveform sources, stamped with the triggering frame's own timestamp
+/// so a reaction during replay lands on the log timeline like any injected
 /// frame. Referencing the entry keeps the rule alive across generator
 /// row edits; a missing entry is a no-op, not an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

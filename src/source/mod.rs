@@ -55,8 +55,8 @@ pub trait FrameStream: Send {
     }
 }
 
-/// One bus input. `Send` because stage 3 moves the whole core -- sources
-/// included -- onto the bus thread; sources are plain data.
+/// One bus input. `Send` because the core runs on its own thread and
+/// sources move with it; sources are plain data.
 pub trait FrameSource: Send {
     fn poll(&mut self, now_us: u64, out: &mut Vec<CanFrame>);
 

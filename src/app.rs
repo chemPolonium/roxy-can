@@ -95,8 +95,7 @@ fn strip_record_ext(path: &str) -> &str {
     }
 }
 
-/// One Message Statistics row as throttled text, refreshed on the text gate
-/// (see [`App::sync_stats_text`]): built strings, ready to draw.
+/// A Message Statistics row as throttled text, used by the text-sync tests.
 #[cfg(test)]
 #[derive(Clone)]
 pub struct StatsRowText {
@@ -110,8 +109,7 @@ pub struct StatsRowText {
     pub share: String,
 }
 
-/// One Messages row as throttled text (see [`App::sync_msg_text`]); the
-/// expanded row carries the pre-decoded signal name/value pairs.
+/// A Messages row as throttled text, used by the text-sync tests.
 #[cfg(test)]
 #[derive(Clone)]
 pub struct MsgRowText {
@@ -121,10 +119,7 @@ pub struct MsgRowText {
     pub id_key: String,
     pub bus: String,
     pub count: String,
-    /// Why the expanded row has no signals to show. Naming the actual reason
-    /// matters on a FlexRay table: "no description loaded" and "the
-    /// description has no frame for this slot" look identical in the window
-    /// and call for opposite fixes.
+    /// Why the expanded row has no signals to show.
     pub empty_note: Option<String>,
 }
 
@@ -170,10 +165,7 @@ impl Default for MonitorRow {
     }
 }
 
-/// Which generator row a dialog is drafting. The Interactive Generator holds
-/// two lists keyed differently -- CAN entries by `(channel, id)`, FlexRay
-/// entries by `(bus, slot)` -- and an index alone cannot say which one it came
-/// from, so the dialogs that serve both carry one of these.
+/// Which generator row a test helper is addressing.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GenRow {
@@ -184,8 +176,8 @@ pub enum GenRow {
 pub struct App {
     /// Where the bus actually lives. `Threaded` -- the production drive:
     /// the core runs on its own thread and only commands and snapshots
-    /// cross. `Manual` -- tests and the future headless CLI keep the core
-    /// here and crank its loop by hand, with `send` staying synchronous.
+    /// cross. `Manual` -- tests and the headless CLI keep the core here
+    /// and crank its loop by hand, with `send` staying synchronous.
     pub(crate) drive: CoreDrive,
     /// The bus as of this frame's one mailbox read; UI rendering never
     /// touches core state directly, only this shared copy.
@@ -218,8 +210,8 @@ pub struct App {
     /// Frontend workspace embedded in the project: tabs, cursors, column
     /// layout and splitters. Opaque to the core.
     pub web_workspace: Option<serde_json::Value>,
-    /// Bumped whenever a project or autosave is loaded so the web shell
-    /// knows to adopt the file's workspace exactly once.
+    /// Bumped whenever a project is loaded so the web shell knows to adopt
+    /// the file's workspace exactly once.
     pub workspace_rev: u64,
     /// Offline reference run decoded from another log, shown behind the live
     /// chart; session state, not part of the project.
@@ -337,14 +329,14 @@ pub struct App {
     pub(crate) state_counter: usize,
 }
 
-/// Which side of the stage-3 split the bus is on.
+/// Which drive owns the bus core.
 pub(crate) enum CoreDrive {
     /// The core runs on its own thread (`App::new`); this App holds only
     /// the command sender and the mailbox reader.
     Threaded,
     /// The core is a plain value here (`App::headless`): tests and the
-    /// future headless CLI crank the same loop laps by hand, with
-    /// synchronous `send`.
+    /// headless CLI crank the same loop laps by hand, with synchronous
+    /// `send`.
     Manual(Box<crate::core_loop::CoreLoop>),
 }
 
@@ -507,12 +499,11 @@ impl App {
 
     /// The observer windows a session boots with: **Trace and Messages**, the two
     /// an operator looks at first. Statistics / Graphics / Data / State Tracker
-    /// are one `+` in Measurement Setup away and are no longer handed to you
-    /// unasked -- they used to be six windows in every project, and every window
-    /// the workspace holds is a window the project file has to carry.
+    /// are one `+` in Measurement Setup away; every window the workspace holds
+    /// is a window the project file has to carry.
     ///
     /// `every_kind` is what the manual drive (tests, the headless CLI) passes to
-    /// keep one of each: those suites index each kind by position, and dock state
+    /// keep one of each: those suites index each kind by position, and a window
     /// that never renders costs nothing.
     pub(crate) fn seed_startup_windows(&mut self, every_kind: bool) {
         self.new_trace_window();
@@ -1005,7 +996,7 @@ impl App {
     /// slides the curve out of view as soon as the speed is not exactly 1x.
     ///
     /// While simulating it is `sim_t_us`, which stops during a pause; the wall
-    /// clock does not, so a paused window used to drift its own curve away.
+    /// clock does not, so anchoring on it would drift the curve away.
     pub fn plot_now_s(&self) -> f64 {
         if matches!(self.snap.mode, Mode::Replay)
             && let Some((pos, _)) = self.snap.replay
@@ -1206,8 +1197,8 @@ impl App {
     /// The frame an FlexRay aggregate row counts, in a table or an export. The
     /// row was keyed by that frame when the first arrival resolved it -- either
     /// through this bus's cluster description, or through the name the log
-    /// carried -- so the name is stored, not re-resolved: re-resolving is what
-    /// used to let a slot's row change frames as the cycles ran by.
+    /// carried -- so the name is stored, not re-resolved: re-resolving would
+    /// let a slot's row change frames as the cycles ran by.
     pub(crate) fn fr_frame_name(agg: &crate::aggregate::FrFrameAgg) -> &str {
         agg.name.as_deref().unwrap_or("")
     }

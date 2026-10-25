@@ -11,8 +11,8 @@
 //!   off they are virtual-only. A real node that must not be doubled is
 //!   declared Monitor (our traffic stays off) -- the user's call.
 //!
-//! The mapping is session state; the Profile overlay (phase 5) will
-//! carry it into projects.
+//! The mapping is session state; a Profile can carry the same mapping
+//! into a project.
 
 pub mod kvaser;
 pub mod vector;

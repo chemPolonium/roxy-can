@@ -703,8 +703,8 @@ fn chart_move(app: &mut App, store: &mut SignalStore, key: &SigKey, to: usize) {
         return;
     };
     let moved = window.signals.remove(position);
-    // Insert relative to the selected neighbours, leaving any hidden desktop
-    // rows in place around the reordered web lanes.
+    // Insert relative to the selected neighbours, leaving hidden rows in
+    // place around the reordered web lanes.
     let insert_at = order
         .get(to + 1)
         .and_then(|next| window.signals.iter().position(|signal| &signal.key == next))
@@ -5385,7 +5385,7 @@ mod tests {
     /// The web form's checks match the core validation, so a bad shape is
     /// rejected at the host boundary instead of becoming a broken variable.
     #[test]
-    fn web_sysvar_definitions_follow_the_desktop_rules() {
+    fn web_sysvar_definitions_follow_core_rules() {
         let ok = checked_sysvar(
             " Demo ".into(),
             "Setpoint".into(),
@@ -5677,7 +5677,7 @@ mod tests {
     /// The web export paths write the established formats: ASC for trace and
     /// CSV headers for Messages/Statistics/Data/State.
     #[test]
-    fn web_exports_write_the_desktop_formats() {
+    fn web_exports_write_standard_formats() {
         let mut app = App::headless();
         seed_demo(&mut app);
         for _ in 0..20 {

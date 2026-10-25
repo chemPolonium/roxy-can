@@ -1,11 +1,6 @@
 //! The bus core: everything that must keep running at the bus's own rate,
-//! independent of the frontend's frame loop.
-//!
-//! Phase 1 of the split (TODO.md, 主线): the struct exists and `App` derefs
-//! to it, so bus fields and methods migrate slice by slice while every
-//! existing access site keeps compiling. Everything is still driven from the
-//! UI thread; the command/snapshot boundary and the dedicated thread are
-//! stages 2 and 3.
+//! independent of the frontend's frame loop. Commands arrive from the
+//! frontend, snapshots go back; the core lives on its own thread.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -123,8 +118,7 @@ pub struct FrWatchView {
 
 /// What the frontend may ask the bus to do. One variant per transport
 /// action, deliberately carrying no UI state -- no picked file paths, no
-/// window selections; the frontend resolves those before asking. That is
-/// what lets the same enum cross a thread unchanged in stage 3.
+/// window selections; the frontend resolves those before asking.
 pub enum BusCommand {
     /// Fresh virtual run: swap in a new virtual source, blank every
     /// run-scored counter, measure against the wall clock.
@@ -371,9 +365,8 @@ pub enum BusCommand {
         ch: u8,
         paths: Vec<String>,
     },
-    /// Rewind the bus-name counter used to mint "CAN{n}" for new buses;
-    /// project restore pins it so the next added bus keeps counting from
-    /// where the project left off.
+    /// Sets the bus-name counter so the next added bus keeps counting from
+    /// where a restored project left off.
     SetBusCounter(usize),
     /// The dated ASC file the recorder derives its name from. Only read
     /// when recording actually arms.
@@ -698,11 +691,7 @@ pub struct NodeView {
 }
 
 /// What the frontend may see of the bus: one immutable, frame-shaped
-/// bundle of the read-only facts. Single-threaded it is a plain copy
-/// taken once per UI frame; stage 3 publishes it behind an Arc swap
-/// instead. Frontend reads go through the snapshot, never the live
-/// state, so the same rendering code works across the coming thread
-/// boundary.
+/// bundle of the read-only facts, published behind an Arc swap.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     /// Frames received this run.
@@ -733,8 +722,8 @@ pub struct Snapshot {
     /// Generation of the last Vector driver reopen. The Buses dropdown
     /// clears its cache when this changes, not when Refresh is clicked.
     pub hw_refresh: u64,
-    /// The bus-name counter used to mint "CAN{n}" for new buses; the
-    /// frontend reads it for saves and pins it back on project restore.
+    /// The counter that mints "CAN{n}" for new buses; the frontend reads it
+    /// for saves and pins it back on project restore.
     pub bus_counter: usize,
     /// The simulation clock, for frontends that anchor plots on bus time.
     pub sim_t_us: u64,
@@ -967,16 +956,10 @@ pub struct SubView {
     pub history: std::sync::Arc<crate::observe::SampleCache>,
 }
 
-/// Every (channel, id) the log file carries -- the twin-silencing set for
-/// replay. A plain full read of a temporary stream: parsing is the cost of
-/// one open, paid once per replay, never per frame.
-/// What a log carries, so a generator entry whose traffic the replay itself
-/// provides stands down for the run -- replaying a recording of this very
-/// simulation used to interleave two senders of one signal. CAN by
-/// `(channel, id)`, FlexRay by `(bus, slot)`; the two numbering spaces stay
-/// apart, because `(0, 5)` means both a CAN id and a slot.
-/// What a log carries, each numbering space on its own terms: CAN by
-/// `(channel, id)`, FlexRay by `(bus, slot)`.
+/// What each log carries, so a generator entry whose traffic the replay
+/// itself provides stands down for the run. CAN by `(channel, id)`, FlexRay
+/// by `(bus, slot)`; the two numbering spaces stay apart, because `(0, 5)`
+/// means both a CAN id and a slot.
 type LogIds = (
     std::collections::HashSet<(u8, u32)>,
     std::collections::HashSet<(u8, u16)>,
@@ -1020,10 +1003,9 @@ fn hw_fd_note(fd_data_kbps: Option<u32>, fd_active: bool, fd_error: Option<&str>
     }
 }
 
-/// The simulation half of the application. Fields move here from `App` in
-/// slices; during the migration `App` derefs to this, so existing field
-/// access keeps compiling. Crate-wide visibility is migration scaffolding --
-/// the command/snapshot boundary (stage 2) replaces it.
+/// The simulation half of the application: mode, generators, trace, the
+/// recorder and the observers. The frontend talks to it through commands
+/// and snapshots only.
 pub struct BusCore {
     /// Which timeline the bus runs on: Virtual generates against the sim
     /// clock, Replay follows a loaded log's own stamps.
@@ -1033,10 +1015,10 @@ pub struct BusCore {
     /// The bus's frame input: the virtual idle bus, or the log being replayed.
     pub(crate) source: Box<dyn crate::source::FrameSource>,
     /// Every (channel, id) the loaded log carries. While replaying,
-    /// generator entries carrying one of these ids stand down -- replaying
-    /// a recording of this very simulation used to interleave two senders
-    /// of one signal. Filled by [`App::replay`], consulted only in Replay
-    /// mode, never persisted.
+    /// generator entries carrying one of these ids stand down, so a replay
+    /// of this very simulation cannot interleave two senders of one signal.
+    /// Filled by [`App::replay`], consulted only in Replay mode, never
+    /// persisted.
     pub(crate) replay_ids: std::collections::HashSet<(u8, u32)>,
     /// The `(bus, slot)` pairs the loaded log carries, for the same reason
     /// [`Self::replay_ids`] exists: a FlexRay entry filling a slot the replayed
@@ -1069,12 +1051,10 @@ pub struct BusCore {
     /// Simulation clock: accumulates only while measuring and unpaused.
     /// Generator frames are stamped on it and their signal values are
     /// evaluated from it, so a pause freezes the bus in place instead of
-    /// letting it jump phase. Replay polling still uses the wall clock
-    /// (`last_tick_us`, still on `App` during the migration).
+    /// letting it jump phase. Replay polling uses the wall clock.
     pub(crate) sim_t_us: u64,
     /// `now_us()` at the previous accepted tick, the reference for `sim_t_us`.
     pub(crate) sim_prev_us: u64,
-    /// Next palette index handed to a new subscription.
     /// Frames received this run, capped at [`TRACE_LIMIT`] as a ring.
     pub(crate) trace: crate::trace::TraceRing,
     /// The ring as of the last publish, shared with snapshots. Rebuilt
@@ -1396,11 +1376,10 @@ impl BusCore {
         }
     }
 
-    /// Executes a command from the frontend. Single-threaded this is a
-    /// plain call (`App::send`); stage 3 sends the same enum over a
-    /// channel instead. Status text an action produces goes into `status`
-    /// -- the bus has no display of its own. Every command bumps the lap
-    /// counter so a caller can see progress through the snapshot.
+    /// Executes one command from the frontend. Status text an action
+    /// produces goes into `status` -- the bus has no display of its own.
+    /// Every command bumps the lap counter so a caller can see progress
+    /// through the snapshot.
     pub(crate) fn handle(&mut self, cmd: BusCommand, status: &mut String) {
         self.laps += 1;
         match cmd {
@@ -4687,7 +4666,6 @@ impl BusCore {
     /// run one full step. `step` alone assumes the caller maintains the
     /// clocks (as the UI loop does); `step_to` is what a deadline-driven
     /// loop calls when it wakes.
-    // Wired into the core thread's event loop (阶段 3).
     pub(crate) fn step_to(
         &mut self,
         now_us: u64,
@@ -5417,7 +5395,7 @@ impl BusCore {
             });
         // Only a strictly later timestamp marks a real cycle. A backwards
         // or repeated one is a discontinuity -- a seek, or an out-of-order
-        // log row -- and folding it in used to pin `min_us` at zero for the
+        // log row -- and folding it in would pin `min_us` at zero for the
         // rest of the run. The running average keeps its pre-seek value and
         // resumes blending at the next real interval.
         if agg.count > 0 && f.t_us > agg.last_t_us {
@@ -5885,9 +5863,8 @@ impl BusCore {
 mod tests {
     use super::*;
 
-    /// The bar names where the frames go. "(virtual)" used to be read as "not
-    /// on real hardware" even with a channel attached, which is how a bench
-    /// session gets doubted.
+    /// The wire note names where frames actually go; "(virtual)" must not be
+    /// read as "not on real hardware" while a channel is attached.
     #[test]
     fn the_wire_note_names_the_wire_the_frames_go_out_on() {
         assert_eq!(wire_note(0, true), "simulation");

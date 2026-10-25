@@ -1087,9 +1087,8 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
 // of header + a union; with the header's pshpack8 active, the RX-frame
 // member sits at tagData+0 and its payload at tagData+8.
 //
-// The module is deliberately ahead of the product: FR-3 wires these
-// channels into the bus pipeline, until then the binding is reachable
-// from tests and the CLI probes only -- hence the dead-code allowance.
+// The FlexRay channels are RX-only today; these bindings are exercised by
+// the CLI probes and tests until the bus pipeline consumes them.
 pub mod flexray {
     use super::*;
 

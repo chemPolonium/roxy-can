@@ -695,10 +695,8 @@ impl App {
         (max > min).then_some((min, max))
     }
 
-    /// Refreshes Data window `i`'s throttled text snapshot. Called every
-    /// frame: it does nothing unless the text gate says so or the visible
-    /// signal set changed (adding a signal must not wait a full period to
-    /// show its first value).
+    /// Refreshes Data window `i`'s throttled text fixture used by the text
+    /// sync tests.
     #[cfg(test)]
     pub(crate) fn sync_data_text(&mut self, i: usize) {
         let keys: Vec<SigKey> = self.data_windows[i]

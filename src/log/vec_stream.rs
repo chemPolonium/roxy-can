@@ -44,7 +44,7 @@ impl VecStream {
         }
     }
 
-    /// All three kinds the BLF reader can produce, for headless tests.
+    /// All three frame kinds this stream carries, for headless tests.
     #[cfg(test)]
     pub fn with_all(
         frames: Vec<CanFrame>,

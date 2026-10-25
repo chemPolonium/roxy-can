@@ -88,9 +88,7 @@ impl Channel {
 
     /// Records a role. `Absent` removes the entry: the map holds only
     /// deviations from the default, and a node's role outliving its
-    /// database is meaningless anyway. Old projects' `Monitor` entries
-    /// go the same way: the loader drops unknown role words, and the
-    /// two-state model has no monitor state to remember.
+    /// database is meaningless anyway.
     pub fn set_node_role(&mut self, node: &str, role: NodeRole) {
         match role {
             NodeRole::Absent => {
@@ -720,8 +718,7 @@ impl App {
     }
 
     /// The index a new FlexRay 路 takes: the first one with no description on
-    /// it. Kept apart from [`Self::add_flexray_bus`] because that one opens a
-    /// file dialog and this is the part worth asserting.
+    /// it.
     pub fn next_flexray_bus(&self) -> Option<u8> {
         (0..=u8::MAX).find(|b| !self.fr_buses.contains_key(b))
     }

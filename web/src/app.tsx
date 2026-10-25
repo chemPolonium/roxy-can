@@ -487,8 +487,8 @@ export function App() {
     setDerivedDefs(state.derived ?? []);
   }, [derivedSignature, state?.workspaceRev]);
 
-  // Keep the backend copy warm so any save or autosave carries the current
-  // tabs, cursors, splitters and Trace columns.
+  // Keep the backend copy warm so a save carries the current tabs, cursors,
+  // splitters and Trace columns.
   useEffect(() => {
     if (!workspaceHydrated || !state) return;
     const timer = window.setTimeout(() => {

@@ -1,9 +1,8 @@
-//! The core side of the stage-3 split: what runs "next to the bus", on
-//! the bus's own thread. [`CoreLoop`] owns the core plus its two pipes
-//! (the command inbox and the snapshot mailbox) and knows how to run one
-//! lap of work; [`spawn_lane`] is the real thread that waits on the next
-//! deadline and laps. Tests and the future headless CLI run the same
-//! laps by hand instead.
+//! The core side of the bus: what runs next to the bus, on the bus's own
+//! thread. [`CoreLoop`] owns the core plus its two pipes (the command inbox
+//! and the snapshot mailbox) and knows how to run one lap of work;
+//! [`spawn_lane`] is the real thread that waits on the next deadline and
+//! laps. Tests and the headless CLI run the same laps by hand instead.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -177,8 +176,7 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
             let mut clock_zero = Instant::now();
             // Stamp for the current pause, fed to `advance_clock` on the
             // first post-resume lap so replay shifts its log clock by the
-            // pause and sim time stays frozen across it -- the same
-            // contract the UI loop used to implement.
+            // pause and sim time stays frozen across it.
             let mut paused_at: Option<u64> = None;
             // Rate limit for the DBC auto-reload sweep: cheap stats, but
             // there is no reason to stat attached files every lap.

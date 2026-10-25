@@ -7,9 +7,8 @@
 //! the format is detected from the document root and, failing that,
 //! from characteristic element names.
 //!
-//! The parsed model is a plain data container -- many fields exist to
-//! describe the file faithfully before any view consumes them -- so
-//! dead-code analysis is silenced module-wide.
+//! The parsed model is a plain data container: many fields describe the
+//! file faithfully before a view consumes them.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -194,17 +193,15 @@ pub struct FrDb {
     pub ecus: Vec<String>,
     pub pdus: Vec<FrPdu>,
     pub frames: Vec<FrFrameDb>,
-    /// `PDU name -> index into `pdus``, filled by [`Self::parse`]. Decoding a
-    /// frame used to scan the whole PDU list once per PDU it carried, which on
-    /// a production cluster is per-arrival work: 5k PDUs x 20 PDUs x 1k rows/s.
+    /// `PDU name -> index into `pdus``, filled by [`Self::parse`]. Scanning
+    /// the whole PDU list once per carried PDU is per-arrival work on a
+    /// production cluster: 5k PDUs x 20 PDUs x 1k rows/s.
     pdu_ix: HashMap<String, usize>,
-    /// `slot id -> indices into `frames``, document order. `frame_at` scanned
-    /// every frame of the database for every arriving FlexRay row.
+    /// `slot id -> indices into `frames``, document order.
     slot_ix: HashMap<u32, Vec<usize>>,
     /// `frame index -> the signals that frame can carry`, in payload order.
-    /// Built by [`Self::assemble`] from the same walk the decoders used to do
-    /// per call: decoding one frame resolved its PDU names and rebased their
-    /// start positions again for every arrival.
+    /// Built by [`Self::assemble`] so decoding one frame does not resolve its
+    /// PDU names and rebase their start positions on every arrival.
     children: Vec<Vec<FrChild>>,
     /// `frame index -> each of its signals' end bit, ascending`. The number of
     /// decoded child rows a payload of `bytes` bytes carries is then one binary
@@ -2567,7 +2564,7 @@ mod tests {
     /// frame, and no name shared between occupants -- so the persisted key stays
     /// as it is. This test is the trigger to revisit that: a new cluster
     /// description that fails it is the one where the frame name has to join the
-    /// key (and the project-file migration with it).
+    /// key.
     #[test]
     fn no_two_occupants_of_a_slot_share_a_signal_name() {
         let mut assets = 0usize;

@@ -1410,9 +1410,8 @@ pub fn dbc_checks(
     lines
 }
 
-/// The node's host-registered builtins -- the S4 seam made real: anything
-/// beyond the language's builtin table lands here, and external
-/// simulation components will register the same way.
+/// The node's host-registered builtins: anything beyond the language's
+/// builtin table lands here.
 ///
 /// - `set_sig(buf, id, "Name", value)`: encodes one physical value into
 ///   the buffer through the channel database (buffer pads to 8 bytes).

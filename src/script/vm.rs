@@ -1,11 +1,11 @@
 //! The stack VM: executes a compiled [`Script`]. Frames are cheap and
 //! capped; every executed instruction decrements a budget so a runaway
-//! loop (S2: a runaway node callback) can never wedge the host.
+//! node callback can never wedge the host.
 
 use super::{HostInput, Op, Script, Value};
 use crate::sim::{SrcKind, ValueSrc, eval_phys};
 
-/// Where `print` output goes. The node runtime will plug its log ring in
+/// Where `print` output goes. The node runtime drains it into its log ring.
 /// here; tests collect into a `Vec<String>`.
 pub trait OutSink {
     fn write_line(&mut self, text: String);
@@ -38,8 +38,7 @@ const DEFAULT_BUDGET: u64 = 10_000_000;
 
 /// A host-registered extension builtin: name-driven, argument list in,
 /// optional result value out. `None` means "not one of mine" (the VM
-/// then reports an unknown function). This is the seam external
-/// simulation components plug into (S4).
+/// then reports an unknown function).
 pub type HostExternFn = Box<dyn FnMut(&str, &[Value]) -> Result<Option<Value>, String> + Send>;
 
 /// Timer control requested by the running handler. `SetPeriod`/`Stop`
@@ -217,8 +216,8 @@ impl Vm {
     }
 
     /// Runs one handler chunk against the current VM state: globals keep
-    /// their values between events, the value stack starts fresh. This is
-    /// how the node runtime will deliver events in S2.
+    /// their values between events, the value stack starts fresh. The node
+    /// runtime delivers events this way.
     pub fn run_handler(&mut self, chunk: u16) -> Result<(), VmError> {
         self.run_from(chunk as usize)
     }

@@ -4131,9 +4131,9 @@ fn an_insert_marker_trigger_stamps_the_bus_clock() {
     assert!(app.snap.markers.is_empty(), "markers are run-scored state");
 }
 
-/// The pre-trigger half of TODO item 8: a trigger-started recording opens
-/// with the frames that came before the event, oldest first, and the
-/// triggering frame itself lands right after them.
+/// A trigger-started recording opens with the frames that came before the
+/// event, oldest first, and the triggering frame itself lands right after
+/// them.
 #[test]
 fn a_trigger_started_recording_includes_the_pre_buffer() {
     let mut app = quiet_app();

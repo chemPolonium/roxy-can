@@ -27,7 +27,7 @@ pub struct SpannedStmt {
     pub stmt: Stmt,
 }
 
-/// An event handler declaration. The body runs when the node runtime (S2)
+/// An event handler declaration. The body runs when the node runtime
 /// delivers the event; here it only needs to compile.
 #[derive(Debug)]
 pub struct OnDecl {
