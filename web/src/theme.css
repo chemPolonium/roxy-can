@@ -486,6 +486,41 @@
   background: #e3eefc;
 }
 
+[data-theme="light"] .script-signature {
+  background: #ffffff;
+  border-color: #cdd8e4;
+  box-shadow: 0 8px 22px rgb(15 31 51 / 18%);
+  color: #667386;
+}
+
+[data-theme="light"] .script-signature .on {
+  color: #1f2937;
+}
+
+[data-theme="light"] .script-find {
+  background: #f7f9fb;
+  border-color: #d5dce5;
+}
+
+[data-theme="light"] .script-issue-line {
+  background: rgb(194 56 56 / 8%);
+  border-bottom-color: rgb(194 56 56 / 45%);
+}
+
+[data-theme="light"] .script-issue {
+  background: #fdecec;
+  border-color: #e5b4ae;
+  color: #8a2b22;
+}
+
+[data-theme="light"] .script-issue:hover:not(:disabled) {
+  background: #fbdcdc;
+}
+
+[data-theme="light"] .script-issue strong {
+  color: #b42318;
+}
+
 [data-theme="light"] .script-chips em {
   border-color: #d4dbe4;
 }

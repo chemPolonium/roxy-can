@@ -1654,7 +1654,9 @@ body.row-resizing {
 /* One form height in dialogs: text/select boxes, compact action buttons and
    the modal header close button line up on the same baseline. Multi-line
    buttons (the Node Scripts list) are exempt: they size to their content. */
-.modal-backdrop > :not(.palette) button:not(.script-item),
+.modal-backdrop
+  > :not(.palette)
+  button:not(.script-item):not(.script-issue),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
@@ -2788,25 +2790,35 @@ button.mini.on {
 
 .trig-actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
+  flex-direction: column;
+  gap: 6px;
   flex: 0 0 auto;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
 }
 
-.trig-actions .spacer {
-  flex: 1;
+.trig-adds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
-/* Keep the three limits and their Apply action on one line: when the add
-   buttons fill the row, the whole group wraps together instead of splitting. */
+/* The compact 26px modal height leaves the 18px line box no room, so block
+   layout drops the label; flex centering keeps it on the button's mid-line. */
+.trig-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Keep the three limits and their Apply action together on their own row,
+   right-aligned like the Apply buttons in the other dialogs. */
 .trig-limits {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 5px;
-  margin-left: auto;
 }
 
 .trig-limit {
@@ -4333,6 +4345,11 @@ button.danger:hover:not(:disabled) {
   pointer-events: none;
 }
 
+.script-highlight .hl-line {
+  min-height: 1.45em;
+  white-space: pre;
+}
+
 .script-textarea {
   resize: none;
   overflow: auto;
@@ -4359,7 +4376,8 @@ button.danger:hover:not(:disabled) {
 .script-complete {
   position: absolute;
   z-index: 6;
-  width: 300px;
+  width: 340px;
+  max-width: 100%;
   max-height: 190px;
   overflow: auto;
   padding: 4px;
@@ -4382,6 +4400,8 @@ button.danger:hover:not(:disabled) {
 }
 
 .script-complete-item strong {
+  flex: 0 0 auto;
+  max-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4389,7 +4409,10 @@ button.danger:hover:not(:disabled) {
 }
 
 .script-complete-item small {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
@@ -4399,6 +4422,29 @@ button.danger:hover:not(:disabled) {
 
 .script-complete-item.on {
   background: #17324d;
+}
+
+.script-signature {
+  position: absolute;
+  z-index: 5;
+  max-width: 340px;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid #2d4055;
+  border-radius: 4px;
+  background: #0d141d;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 45%);
+  color: #8fa0b3;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.script-signature .on {
+  color: #f2f6fb;
+  font-weight: 600;
 }
 
 .tok-comment {
@@ -4419,6 +4465,70 @@ button.danger:hover:not(:disabled) {
 
 .tok-fn {
   color: #c77dff;
+}
+
+.script-find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.script-find input {
+  flex: 1 1 150px;
+  min-width: 110px;
+  font-size: 10.5px;
+}
+
+.script-find-count {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.script-issue-line {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  background: rgb(239 107 107 / 10%);
+  border-bottom: 1px dashed rgb(239 107 107 / 50%);
+  pointer-events: none;
+}
+
+.script-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  background: #2a1517;
+  border: 1px solid #5a2a2a;
+  border-radius: 4px;
+  color: #f0b4b4;
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.script-issue:hover:not(:disabled) {
+  background: #341a1c;
+  border-color: #7a3a3a;
+}
+
+.script-issue strong {
+  flex: 0 0 auto;
+  color: #ff9d9d;
+  font-weight: 600;
+}
+
+.script-issue span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .script-actions {

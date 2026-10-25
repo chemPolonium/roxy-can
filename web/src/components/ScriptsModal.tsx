@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { fetchScriptHelp, fetchScripts } from "../api";
 import type {
   Bus,
@@ -22,6 +22,8 @@ interface Props {
 }
 
 const INDENT = "    ";
+const BRACKET_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS));
 
 interface CompletionItem {
   label: string;
@@ -39,6 +41,16 @@ interface Completion {
   active: number;
   left: number;
   top: number;
+  /// Alt+/ or arrow-key navigation: Enter/Tab may accept the selection.
+  manual: boolean;
+}
+
+interface SignatureHint {
+  name: string;
+  args: string[];
+  active: number;
+  left: number;
+  top: number;
 }
 
 function lineStartOf(text: string, position: number): number {
@@ -48,6 +60,318 @@ function lineStartOf(text: string, position: number): number {
 function lineEndOf(text: string, position: number): number {
   const end = text.indexOf("\n", position);
   return end < 0 ? text.length : end;
+}
+
+function lineOffset(text: string, line: number): number {
+  let offset = 0;
+  for (let current = 1; current < line; current += 1) {
+    const next = text.indexOf("\n", offset);
+    if (next < 0) return text.length;
+    offset = next + 1;
+  }
+  return offset;
+}
+
+function revealPosition(textarea: HTMLTextAreaElement, position: number) {
+  const style = getComputedStyle(textarea);
+  const lineHeight =
+    Number.parseFloat(style.lineHeight) ||
+    (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
+  const padTop = Number.parseFloat(style.paddingTop) || 0;
+  const line = textarea.value.slice(0, position).split("\n").length - 1;
+  const top = padTop + line * lineHeight;
+  if (top < textarea.scrollTop) {
+    textarea.scrollTop = Math.max(0, top - lineHeight);
+  } else if (top + lineHeight > textarea.scrollTop + textarea.clientHeight) {
+    textarea.scrollTop = top + lineHeight - textarea.clientHeight + lineHeight;
+  }
+}
+
+function findMatches(text: string, query: string): number[] {
+  if (!query) return [];
+  const haystack = text.toLowerCase();
+  const needle = query.toLowerCase();
+  const hits: number[] = [];
+  let at = 0;
+  while (at <= haystack.length) {
+    const found = haystack.indexOf(needle, at);
+    if (found < 0) break;
+    hits.push(found);
+    at = found + needle.length;
+  }
+  return hits;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+interface LocalSymbol {
+  name: string;
+  kind: "let" | "fn" | "param";
+}
+
+/// Declarations visible at the caret: top-level `fn` names and `let`
+/// variables whose enclosing block is still open. Comments and strings are
+/// skipped so their text cannot look like a declaration.
+function localSymbols(source: string, caret: number): LocalSymbol[] {
+  const isStart = (c: string) => /[A-Za-z_]/.test(c);
+  const isPart = (c: string) => /[A-Za-z0-9_]/.test(c);
+  const blocks: number[] = [];
+  const lets: { name: string; block: number }[] = [];
+  const functions: LocalSymbol[] = [];
+  const bodies: { start: number; end: number; params: string[] }[] = [];
+  let pending: { params: string[] } | null = null;
+  let body: { start: number; params: string[] } | null = null;
+  let snapshot: number[] | null = null;
+  let i = 0;
+  while (i < source.length) {
+    if (snapshot === null && i >= caret) snapshot = blocks.slice();
+    const c = source[i];
+    if (c === "/" && source[i + 1] === "/") {
+      i = lineEndOf(source, i);
+      continue;
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      i = end < 0 ? source.length : end + 2;
+      continue;
+    }
+    if (c === '"') {
+      i += 1;
+      while (i < source.length && source[i] !== '"') {
+        if (source[i] === "\\") i += 1;
+        i += 1;
+      }
+      i += 1;
+      continue;
+    }
+    if (c === "{") {
+      blocks.push(i);
+      if (pending) {
+        body = { start: i, params: pending.params };
+        pending = null;
+      }
+      i += 1;
+      continue;
+    }
+    if (c === "}") {
+      blocks.pop();
+      if (body && blocks.length === 0) {
+        bodies.push({ ...body, end: i });
+        body = null;
+      }
+      i += 1;
+      continue;
+    }
+    if (!isStart(c)) {
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    while (end < source.length && isPart(source[end])) end += 1;
+    const word = source.slice(i, end);
+    if (word === "let" && i < caret) {
+      let at = end;
+      while (at < source.length && /\s/.test(source[at])) at += 1;
+      if (isStart(source[at] ?? "")) {
+        let nameEnd = at + 1;
+        while (nameEnd < source.length && isPart(source[nameEnd])) nameEnd += 1;
+        lets.push({
+          name: source.slice(at, nameEnd),
+          block: blocks[blocks.length - 1] ?? -1,
+        });
+      }
+    } else if (word === "fn" && blocks.length === 0) {
+      let at = end;
+      while (at < source.length && /\s/.test(source[at])) at += 1;
+      if (isStart(source[at] ?? "")) {
+        let nameEnd = at + 1;
+        while (nameEnd < source.length && isPart(source[nameEnd])) nameEnd += 1;
+        functions.push({ name: source.slice(at, nameEnd), kind: "fn" });
+        let paren = nameEnd;
+        while (paren < source.length && /\s/.test(source[paren])) paren += 1;
+        if (source[paren] === "(") {
+          const params: string[] = [];
+          let p = paren + 1;
+          while (p < source.length && source[p] !== ")") {
+            if (isStart(source[p])) {
+              let pe = p + 1;
+              while (pe < source.length && isPart(source[pe])) pe += 1;
+              params.push(source.slice(p, pe));
+              p = pe;
+            } else {
+              p += 1;
+            }
+          }
+          pending = { params };
+        }
+      }
+    }
+    i = end;
+  }
+  if (snapshot === null) snapshot = blocks.slice();
+
+  const open = new Set(snapshot);
+  const activeParams: string[] = [];
+  for (const candidate of bodies) {
+    if (caret > candidate.start && caret <= candidate.end) {
+      activeParams.push(...candidate.params);
+    }
+  }
+  if (body && caret > body.start) activeParams.push(...body.params);
+
+  const seen = new Set<string>();
+  const out: LocalSymbol[] = [];
+  const push = (name: string, kind: LocalSymbol["kind"]) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    out.push({ name, kind });
+  };
+  for (const name of activeParams) push(name, "param");
+  for (const fn of functions) push(fn.name, fn.kind);
+  for (const variable of lets) {
+    if (variable.block !== -1 && !open.has(variable.block)) continue;
+    push(variable.name, "let");
+  }
+  return out;
+}
+
+/// Strings cannot span lines (the lexer rejects a newline inside one), so the
+/// quote state only needs the text from the current line start.
+function inStringAt(text: string, position: number): boolean {
+  let inside = false;
+  for (let i = lineStartOf(text, position); i < position; i += 1) {
+    if (text[i] === '"' && text[i - 1] !== "\\") inside = !inside;
+  }
+  return inside;
+}
+
+interface CallInfo {
+  name: string;
+  active: number;
+}
+
+/// Blank strings and comments while keeping offsets, so a bracket or comma
+/// inside them cannot affect the call shape.
+function maskCode(text: string): string {
+  const out = text.split("");
+  let quote = false;
+  let block = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (block) {
+      if (char === "*" && text[i + 1] === "/") {
+        out[i] = " ";
+        out[i + 1] = " ";
+        i += 1;
+        block = false;
+      } else if (char !== "\n") {
+        out[i] = " ";
+      }
+      continue;
+    }
+    if (quote) {
+      if (char === '"' && text[i - 1] !== "\\") quote = false;
+      if (char !== "\n") out[i] = " ";
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "*") {
+      out[i] = " ";
+      out[i + 1] = " ";
+      i += 1;
+      block = true;
+    } else if (char === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") {
+        out[i] = " ";
+        i += 1;
+      }
+      i -= 1;
+    } else if (char === '"') {
+      quote = true;
+      out[i] = " ";
+    }
+  }
+  return out.join("");
+}
+
+/// The innermost call still open at the caret, looking back far enough for
+/// multi-line argument lists but bounded so typing stays cheap.
+function callAtCaret(value: string, caret: number): CallInfo | null {
+  if (inStringAt(value, caret)) return null;
+  const floor = Math.max(0, caret - 4000);
+  let start = lineStartOf(value, caret);
+  for (let lines = 0; lines < 40 && start > floor; lines += 1) {
+    start = lineStartOf(value, start - 1);
+  }
+  const masked = maskCode(value.slice(start, caret));
+
+  let depth = 0;
+  let open = -1;
+  for (let i = masked.length - 1; i >= 0; i -= 1) {
+    const char = masked[i];
+    if (char === ")") {
+      depth += 1;
+    } else if (char === "(") {
+      if (depth === 0) {
+        open = i;
+        break;
+      }
+      depth -= 1;
+    }
+  }
+  if (open < 0) return null;
+
+  const lineStart = masked.lastIndexOf("\n", open - 1) + 1;
+  const name = /([A-Za-z_]\w*)\s*$/.exec(masked.slice(lineStart, open))?.[1];
+  if (!name) return null;
+
+  let active = 0;
+  let nested = 0;
+  for (let i = open + 1; i < masked.length; i += 1) {
+    const char = masked[i];
+    if (char === "(" || char === "[" || char === "{") {
+      nested += 1;
+    } else if (char === ")" || char === "]" || char === "}") {
+      nested = Math.max(0, nested - 1);
+    } else if (char === "," && nested === 0) {
+      active += 1;
+    }
+  }
+  return { name, active };
+}
+
+/// Split a usage string's argument list for the signature hint. Quoted
+/// commas and nested calls stay in one argument.
+function signatureArgs(usage: string): string[] {
+  const open = usage.indexOf("(");
+  const close = usage.lastIndexOf(")");
+  if (open < 0 || close <= open) return [];
+  const body = usage.slice(open + 1, close);
+  if (!body.trim()) return [];
+  const args: string[] = [];
+  let start = 0;
+  let quote = false;
+  let depth = 0;
+  for (let i = 0; i < body.length; i += 1) {
+    const char = body[i];
+    if (quote) {
+      if (char === '"' && body[i - 1] !== "\\") quote = false;
+      continue;
+    }
+    if (char === '"') {
+      quote = true;
+    } else if (char === "(" || char === "[" || char === "{") {
+      depth += 1;
+    } else if (char === ")" || char === "]" || char === "}") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === "," && depth === 0) {
+      args.push(body.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  args.push(body.slice(start).trim());
+  return args;
 }
 
 function leadingSpace(text: string): string {
@@ -97,10 +421,11 @@ function characterWidth(style: CSSStyleDeclaration): number {
 /// The editor uses a monospace font and `white-space: pre`, so the caret's
 /// pixel position is line/column arithmetic plus a character-width measure.
 /// The popup is clamped inside the editor and flips above near the bottom.
-function completionPlacement(
+function caretPlacement(
   textarea: HTMLTextAreaElement,
   position: number,
-  itemCount: number,
+  boxWidth: number,
+  boxHeight: number,
 ): { left: number; top: number } {
   const style = getComputedStyle(textarea);
   const padLeft = Number.parseFloat(style.paddingLeft) || 0;
@@ -121,14 +446,23 @@ function completionPlacement(
   const height = editor?.clientHeight ?? 0;
   const x = padLeft + column * charWidth - textarea.scrollLeft;
   const y = padTop + (line + 1) * lineHeight - textarea.scrollTop;
-  const popupWidth = 300;
-  const popupHeight = Math.min(190, 8 + Math.min(itemCount, 8) * 22);
-  const left = Math.max(4, Math.min(x, Math.max(4, width - popupWidth - 6)));
+  const left = Math.max(4, Math.min(x, Math.max(4, width - boxWidth - 6)));
   const top =
-    y + 2 + popupHeight <= height - 4
-      ? y + 2
-      : Math.max(4, y - popupHeight - 2);
+    y + 2 + boxHeight <= height - 4 ? y + 2 : Math.max(4, y - boxHeight - 2);
   return { left, top };
+}
+
+function completionPlacement(
+  textarea: HTMLTextAreaElement,
+  position: number,
+  itemCount: number,
+): { left: number; top: number } {
+  return caretPlacement(
+    textarea,
+    position,
+    340,
+    Math.min(190, 8 + Math.min(itemCount, 8) * 22),
+  );
 }
 
 function catalogMessages(
@@ -264,6 +598,9 @@ function buildCandidates(
   const lineStart = lineStartOf(value, caret);
   const lineBefore = value.slice(lineStart, caret);
   if (lineBefore.includes("//")) return null;
+  // Appending after a finished token needs the space the user was about to
+  // type (`on` + start → `on start`), but never before punctuation.
+  const separator = caret > 0 && /\w/.test(value[caret - 1]) ? " " : "";
 
   let inString = false;
   let quoteAt = -1;
@@ -278,12 +615,19 @@ function buildCandidates(
     }
   }
 
-  // `on message ` is a DBC context: list the channel's message names.
-  if (!inString) {
-    const handler = /^\s*on\s+message\s+([A-Za-z_]\w*)?$/.exec(lineBefore);
-    if (handler) {
-      const partial = handler[1] ?? "";
+  // A handler header has a fixed grammar, so only the next token of that
+  // clause is useful there; once `{` is passed, expressions take over and
+  // the general function/keyword candidates below apply again.
+  if (
+    !inString &&
+    /^\s*on(?:\s|$)/.test(lineBefore) &&
+    !lineBefore.includes("{")
+  ) {
+    const target = /^\s*on\s+message(?:\s+([A-Za-z_]\w*)?)?$/.exec(lineBefore);
+    if (target) {
+      const partial = target[1] ?? "";
       const query = partial.toLowerCase();
+      const lead = partial === "" ? separator : "";
       const items = catalogMessages(catalog, channel)
         .filter(
           (message) =>
@@ -293,13 +637,72 @@ function buildCandidates(
         .map((message) => ({
           label: message.name,
           detail: messageDetail(message),
-          insert: message.name,
-          caret: message.name.length,
+          insert: `${lead}${message.name}`,
+          caret: lead.length + message.name.length,
           rank: 0,
         }));
+      if (query === "") {
+        items.push({
+          label: "*",
+          detail: "every frame",
+          insert: `${lead}*`,
+          caret: lead.length + 1,
+          rank: 0,
+        });
+      }
       if (items.length === 0) return null;
       return { start: caret - partial.length, end: caret, items };
     }
+
+    const clause =
+      /^\s*on\s+(extended|fr)(?:\s+(?:\d+\s*)?([A-Za-z_]\w*)?)?$/.exec(
+        lineBefore,
+      );
+    if (clause) {
+      const [, name, partial = ""] = clause;
+      const word = name === "extended" ? "message" : "slot";
+      const detail =
+        name === "extended" ? "29-bit frame by id" : "FlexRay slot number";
+      if (partial === "" || word.startsWith(partial.toLowerCase())) {
+        const lead = partial === "" ? separator : "";
+        return {
+          start: caret - partial.length,
+          end: caret,
+          items: [
+            {
+              label: word,
+              detail: `event · ${name} ${detail}`,
+              insert: `${lead}${word}`,
+              caret: lead.length + word.length,
+              rank: 0,
+            },
+          ],
+        };
+      }
+      return null;
+    }
+
+    const event = /^\s*on(?:\s+([A-Za-z_]\w*)?)?$/.exec(lineBefore);
+    if (event) {
+      const partial = event[1] ?? "";
+      const query = partial.toLowerCase();
+      // A complete event word means the next token is its value or `{`.
+      if (EVENTS.some(([word]) => word.toLowerCase() === query)) return null;
+      const lead = partial === "" ? separator : "";
+      const items = EVENTS.filter(
+        ([word]) => query === "" || word.toLowerCase().startsWith(query),
+      ).map(([word, detail]) => ({
+        label: word,
+        detail: `event · ${detail}`,
+        insert: `${lead}${word}`,
+        caret: lead.length + word.length,
+        rank: 0,
+      }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+
+    return null;
   }
 
   // `this.` / `node.` are handler contexts, not catalog names.
@@ -800,7 +1203,24 @@ function buildCandidates(
       }
     }
   } else {
+    const locals = localSymbols(value, caret);
+    const localNames = new Set(locals.map((local) => local.name));
+    for (const local of locals) {
+      const isFn = local.kind === "fn";
+      items.push({
+        label: local.name,
+        detail: isFn
+          ? "script function"
+          : local.kind === "param"
+            ? "local · parameter"
+            : "local · let",
+        insert: isFn ? `${local.name}()` : local.name,
+        caret: isFn ? local.name.length + 1 : local.name.length,
+        rank: 0,
+      });
+    }
     for (const fn of functions) {
+      if (localNames.has(fn.name)) continue;
       const insert = `${fn.name}()`;
       items.push({
         label: fn.name,
@@ -811,6 +1231,7 @@ function buildCandidates(
       });
     }
     for (const keyword of KEYWORDS) {
+      if (localNames.has(keyword)) continue;
       items.push({
         label: keyword,
         detail: "keyword",
@@ -819,7 +1240,28 @@ function buildCandidates(
         rank: 1,
       });
     }
+    const claimed = new Set(items.map((item) => item.label));
+    for (const message of catalogMessages(catalog, channel)) {
+      if (
+        !/^[A-Za-z_]\w*$/.test(message.name) ||
+        claimed.has(message.name)
+      ) {
+        continue;
+      }
+      claimed.add(message.name);
+      items.push({
+        label: message.name,
+        detail: `CAN message · ${messageDetail(message)}`,
+        insert: message.name,
+        caret: message.name.length,
+        rank: 2,
+      });
+    }
     for (const definition of derived) {
+      if (localNames.has(definition.name) || claimed.has(definition.name)) {
+        continue;
+      }
+      claimed.add(definition.name);
       const insert = `derived("${quoted(definition.name)}")`;
       items.push({
         label: definition.name,
@@ -870,6 +1312,17 @@ on timer 1000 {
 }
 `;
 
+/// Contextual event words after `on`. They are not reserved by the parser, so
+/// they stay out of KEYWORDS (and its highlighter) and only appear here.
+const EVENTS: [string, string][] = [
+  ["start", "runs once when the measurement starts"],
+  ["message", "frame by id, name or *"],
+  ["extended", "29-bit frame by id"],
+  ["timer", "periodic tick or named one-shot"],
+  ["errorFrame", "error frames"],
+  ["fr", "FlexRay slot arrival"],
+];
+
 const KEYWORDS = new Set([
   "on",
   "start",
@@ -898,19 +1351,54 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
+interface HighlightLine {
+  html: string;
+  /// The line ends inside a block comment.
+  block: boolean;
+}
+
+const HL_TOKEN =
+  /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*/g;
+
 /// A deliberately small highlighter: comments, strings, numbers, keywords
 /// and call names. It paints the <pre> behind the textarea; the textarea
-/// itself keeps the caret and input handling.
-function highlight(source: string): string {
-  const token =
-    /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*/g;
+/// itself keeps the caret and input handling. Lines are highlighted one at
+/// a time so an edit only re-tokenizes the lines whose text or comment
+/// state actually changed.
+function highlightLine(
+  line: string,
+  startBlock: boolean,
+  nextParen: boolean,
+): HighlightLine {
   let out = "";
+  let at = 0;
+  if (startBlock) {
+    const end = line.indexOf("*/");
+    if (end < 0) {
+      return {
+        html: `<span class="tok-comment">${escapeHtml(line)}</span>`,
+        block: true,
+      };
+    }
+    const stop = end + 2;
+    out += `<span class="tok-comment">${escapeHtml(line.slice(0, stop))}</span>`;
+    at = stop;
+  }
+  const rest = line.slice(at);
+  HL_TOKEN.lastIndex = 0;
   let last = 0;
-  for (const match of source.matchAll(token)) {
-    const at = match.index ?? 0;
-    out += escapeHtml(source.slice(last, at));
+  for (const match of rest.matchAll(HL_TOKEN)) {
+    const index = match.index ?? 0;
+    const gap = rest.slice(last, index);
+    const open = gap.indexOf("/*");
+    if (open >= 0) {
+      out += escapeHtml(gap.slice(0, open));
+      out += `<span class="tok-comment">${escapeHtml(rest.slice(last + open))}</span>`;
+      return { html: out, block: true };
+    }
+    out += escapeHtml(gap);
     const text = match[0];
-    last = at + text.length;
+    last = index + text.length;
     if (text.startsWith("//") || text.startsWith("/*")) {
       out += `<span class="tok-comment">${escapeHtml(text)}</span>`;
     } else if (text.startsWith('"') || text.startsWith("'")) {
@@ -919,13 +1407,30 @@ function highlight(source: string): string {
       out += `<span class="tok-number">${text}</span>`;
     } else if (KEYWORDS.has(text)) {
       out += `<span class="tok-keyword">${text}</span>`;
-    } else if (/^\s*\(/.test(source.slice(last))) {
-      out += `<span class="tok-fn">${text}</span>`;
     } else {
-      out += escapeHtml(text);
+      const after = rest.slice(last);
+      const call = /^\s*\(/.test(after) || (after.trim() === "" && nextParen);
+      out += call
+        ? `<span class="tok-fn">${text}</span>`
+        : escapeHtml(text);
     }
   }
-  return out + escapeHtml(source.slice(last));
+  const tail = rest.slice(last);
+  const open = tail.indexOf("/*");
+  if (open >= 0) {
+    out += escapeHtml(tail.slice(0, open));
+    out += `<span class="tok-comment">${escapeHtml(tail.slice(open))}</span>`;
+    return { html: out, block: true };
+  }
+  out += escapeHtml(tail);
+  return { html: out, block: false };
+}
+
+interface HighlightState {
+  script: number | null;
+  entries: HighlightLine[];
+  nodes: HTMLDivElement[];
+  cache: Map<string, HighlightLine>;
 }
 
 function busName(buses: Bus[], channel: number): string {
@@ -948,9 +1453,17 @@ export function ScriptsModal({
   const [error, setError] = useState("");
   const [composing, setComposing] = useState(false);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const hlStateRef = useRef<HighlightState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [functions, setFunctions] = useState<ScriptFunctionHelp[]>([]);
   const [completion, setCompletion] = useState<Completion | null>(null);
+  const [signature, setSignature] = useState<SignatureHint | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findText, setFindText] = useState("");
+  const [replaceText, setReplaceText] = useState("");
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const issueLineRef = useRef<HTMLDivElement>(null);
   const [reload, setReload] = useState(0);
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
@@ -974,7 +1487,18 @@ export function ScriptsModal({
   useEffect(() => {
     // A different script has a different caret context.
     setCompletion(null);
+    setSignature(null);
+    setFindOpen(false);
+    setFindText("");
+    setReplaceText("");
   }, [selected]);
+
+  useEffect(() => {
+    if (findOpen) {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    }
+  }, [findOpen]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -1029,6 +1553,115 @@ export function ScriptsModal({
   const current = scripts.find((script) => script.id === selected) ?? null;
   const draft = selected != null ? (drafts[selected] ?? current?.source ?? "") : "";
 
+  useLayoutEffect(() => {
+    const pre = highlightRef.current;
+    if (!pre) return;
+    const lines = draft.split("\n");
+    const previous =
+      hlStateRef.current?.script === selected ? hlStateRef.current : null;
+    const cache = new Map<string, HighlightLine>();
+    const entries: HighlightLine[] = [];
+    let block = false;
+    for (let i = 0; i < lines.length; i += 1) {
+      const nextParen = /^\s*\(/.test(lines[i + 1] ?? "");
+      const key: string = `${block ? 1 : 0}${nextParen ? 1 : 0}${lines[i]}`;
+      let entry: HighlightLine | undefined =
+        previous?.cache.get(key) ?? cache.get(key);
+      if (!entry) entry = highlightLine(lines[i], block, nextParen);
+      cache.set(key, entry);
+      entries.push(entry);
+      block = entry.block;
+    }
+
+    const rebuild = () => {
+      pre.innerHTML = entries
+        .map((entry) => `<div class="hl-line">${entry.html}</div>`)
+        .join("");
+      const nodes = Array.from(pre.children) as HTMLDivElement[];
+      hlStateRef.current = { script: selected, entries, nodes, cache };
+    };
+
+    if (!previous) {
+      rebuild();
+      return;
+    }
+
+    const prefixLimit = Math.min(previous.entries.length, entries.length);
+    let prefix = 0;
+    while (
+      prefix < prefixLimit &&
+      previous.entries[prefix].html === entries[prefix].html
+    ) {
+      prefix += 1;
+    }
+    let suffix = 0;
+    while (
+      suffix < previous.entries.length - prefix &&
+      suffix < entries.length - prefix &&
+      previous.entries[previous.entries.length - 1 - suffix].html ===
+        entries[entries.length - 1 - suffix].html
+    ) {
+      suffix += 1;
+    }
+    const oldMiddle = previous.entries.length - prefix - suffix;
+    const newMiddle = entries.length - prefix - suffix;
+    if (oldMiddle + newMiddle > 600) {
+      rebuild();
+      return;
+    }
+    if (oldMiddle === newMiddle) {
+      const nodes = previous.nodes;
+      for (let i = prefix; i < prefix + newMiddle; i += 1) {
+        if (previous.entries[i].html !== entries[i].html) {
+          nodes[i].innerHTML = entries[i].html;
+        }
+      }
+      hlStateRef.current = { script: selected, entries, nodes, cache };
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    const added: HTMLDivElement[] = [];
+    for (let i = prefix; i < entries.length - suffix; i += 1) {
+      const node = document.createElement("div");
+      node.className = "hl-line";
+      node.innerHTML = entries[i].html;
+      fragment.appendChild(node);
+      added.push(node);
+    }
+    const before = previous.nodes[prefix] ?? null;
+    pre.insertBefore(fragment, before);
+    for (let i = prefix; i < previous.nodes.length - suffix; i += 1) {
+      previous.nodes[i].remove();
+    }
+    const nodes = [
+      ...previous.nodes.slice(0, prefix),
+      ...added,
+      ...previous.nodes.slice(previous.nodes.length - suffix),
+    ];
+    hlStateRef.current = { script: selected, entries, nodes, cache };
+  }, [draft, selected]);
+
+  const syncIssueMarker = (textarea: HTMLTextAreaElement | null) => {
+    const marker = issueLineRef.current;
+    const issue = current?.issue;
+    if (!textarea || !marker || !issue) return;
+    const style = getComputedStyle(textarea);
+    const lineHeight =
+      Number.parseFloat(style.lineHeight) ||
+      (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
+    const padTop = Number.parseFloat(style.paddingTop) || 0;
+    const top = padTop + (issue.line - 1) * lineHeight - textarea.scrollTop;
+    marker.style.top = `${top}px`;
+    marker.style.height = `${lineHeight}px`;
+    marker.style.display =
+      top + lineHeight < 0 || top > textarea.clientHeight ? "none" : "block";
+  };
+
+  useEffect(() => {
+    syncIssueMarker(textareaRef.current);
+  }, [current?.issue, selected, dirty]);
+
   useEffect(() => {
     setName(current?.name ?? "");
     setSavePath(current?.filePath || (current ? `${current.name}.rxcan` : ""));
@@ -1048,6 +1681,7 @@ export function ScriptsModal({
   const refreshCompletion = (
     textarea: HTMLTextAreaElement,
     allowEmpty: boolean,
+    manual = false,
   ) => {
     if (composing) {
       setCompletion(null);
@@ -1073,7 +1707,23 @@ export function ScriptsModal({
       caret,
       candidates.items.length,
     );
-    setCompletion({ ...candidates, active: 0, ...placement });
+    setCompletion({ ...candidates, active: 0, manual, ...placement });
+  };
+
+  const refreshSignature = (textarea: HTMLTextAreaElement) => {
+    const caret = textarea.selectionStart ?? 0;
+    const call = callAtCaret(textarea.value, caret);
+    const fn = call ? functions.find((item) => item.name === call.name) : null;
+    if (!call || !fn) {
+      setSignature(null);
+      return;
+    }
+    setSignature({
+      name: fn.name,
+      args: signatureArgs(fn.usage),
+      active: call.active,
+      ...caretPlacement(textarea, caret, 340, 28),
+    });
   };
 
   const applyCompletion = (item: CompletionItem) => {
@@ -1170,6 +1820,342 @@ export function ScriptsModal({
       `${shortened}}`,
       from + shortened.length + 1,
     );
+    refreshSignature(textarea);
+  };
+
+  /// Auto-closes `(`, `[` and `{`; wraps a selection; and skips over a closer
+  /// that is already under the caret. The `}` skip still runs the block
+  /// outdent, since an auto-closed brace sits on an indented line.
+  const handleBracket = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    const close = BRACKET_PAIRS[event.key];
+    if (close) {
+      event.preventDefault();
+      if (start !== end) {
+        const selected = textarea.value.slice(start, end);
+        replaceRange(
+          textarea,
+          start,
+          end,
+          `${event.key}${selected}${close}`,
+          start + 1,
+          end + 1,
+        );
+        setCompletion(null);
+        setSignature(null);
+      } else {
+        if (
+          textarea.value[start] !== close &&
+          !/\w/.test(textarea.value[start] ?? "")
+        ) {
+          replaceRange(
+            textarea,
+            start,
+            end,
+            `${event.key}${close}`,
+            start + 1,
+          );
+        } else {
+          replaceRange(textarea, start, end, event.key, start + 1);
+        }
+        setCompletion(null);
+        // replaceRange fires input before moving the caret inside, so the
+        // call context must be read once more from the opening bracket.
+        refreshSignature(textarea);
+      }
+      return;
+    }
+
+    if (!BRACKET_CLOSERS.has(event.key) || start !== end) return;
+    if (textarea.value[start] !== event.key) {
+      if (event.key === "}") handleClosingBrace(event);
+      return;
+    }
+    if (event.key === "}") {
+      const from = lineStartOf(textarea.value, start);
+      const prefix = textarea.value.slice(from, start);
+      if (prefix.length >= INDENT.length && /^ +$/.test(prefix)) {
+        event.preventDefault();
+        const shortened = prefix.slice(0, -INDENT.length);
+        replaceRange(
+          textarea,
+          from,
+          start + 1,
+          `${shortened}}`,
+          from + shortened.length + 1,
+        );
+        setCompletion(null);
+        refreshSignature(textarea);
+        return;
+      }
+    }
+    event.preventDefault();
+    textarea.setSelectionRange(start + 1, start + 1);
+    setCompletion(null);
+    refreshSignature(textarea);
+  };
+
+  /// Outside a string a quote opens an empty pair; inside one the next quote
+  /// closes it, and a quote already under the caret is stepped over.
+  const handleQuote = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start !== end) {
+      event.preventDefault();
+      const selected = textarea.value.slice(start, end);
+      replaceRange(textarea, start, end, `"${selected}"`, start + 1, end + 1);
+      setCompletion(null);
+      setSignature(null);
+      return;
+    }
+    if (textarea.value[start] === '"') {
+      event.preventDefault();
+      textarea.setSelectionRange(start + 1, start + 1);
+      setCompletion(null);
+      refreshSignature(textarea);
+      return;
+    }
+    if (inStringAt(textarea.value, start)) return;
+    event.preventDefault();
+    replaceRange(textarea, start, end, '""', start + 1);
+    refreshCompletion(textarea, true);
+    refreshSignature(textarea);
+  };
+
+  /// In leading whitespace, Backspace removes up to the previous indent stop
+  /// instead of one space, matching the four-space INDENT above.
+  const handleBackspace = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    if (start !== textarea.selectionEnd) return;
+    const from = lineStartOf(textarea.value, start);
+    const prefix = textarea.value.slice(from, start);
+    if (prefix.length === 0 || !/^ +$/.test(prefix)) return;
+    event.preventDefault();
+    const remove =
+      prefix.length -
+      Math.floor((prefix.length - 1) / INDENT.length) * INDENT.length;
+    replaceRange(textarea, start - remove, start, "", start - remove);
+    setCompletion(null);
+  };
+
+  const handleComment = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const value = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const from = lineStartOf(value, start);
+    const to = lineEndOf(value, end);
+    const lines = value.slice(from, to).split("\n");
+    const nonEmpty = lines.filter((line) => line.trim() !== "");
+    const commented =
+      nonEmpty.length > 0 && nonEmpty.every((line) => /^\s*\/\//.test(line));
+    const nextLines = lines.map((line) => {
+      if (!commented) {
+        const indent = /^\s*/.exec(line)?.[0] ?? "";
+        return `${indent}// ${line.slice(indent.length)}`;
+      }
+      const match = /^(\s*)\/\/ ?/.exec(line);
+      return match ? `${match[1]}${line.slice(match[0].length)}` : line;
+    });
+    event.preventDefault();
+    const next = nextLines.join("\n");
+    if (next === value.slice(from, to)) return;
+
+    let caret = start;
+    if (start === end && lines.length === 1) {
+      const indent = /^\s*/.exec(lines[0])?.[0].length ?? 0;
+      const at = from + indent;
+      if (commented) {
+        const removed = lines[0].length - nextLines[0].length;
+        caret = start <= at ? start : Math.max(at, start - removed);
+      } else {
+        caret =
+          start >= at ? start + nextLines[0].length - lines[0].length : start;
+      }
+    }
+    replaceRange(
+      textarea,
+      from,
+      to,
+      next,
+      start === end ? caret : from,
+      start === end ? caret : from + next.length,
+    );
+    setCompletion(null);
+    setSignature(null);
+  };
+
+  const handleMoveLine = (event: KeyboardEvent, direction: -1 | 1) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const value = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const from = lineStartOf(value, start);
+    const effectiveEnd =
+      end > start && end === lineStartOf(value, end) ? end - 1 : end;
+    const to = lineEndOf(value, effectiveEnd);
+    const block = value.slice(from, to);
+    if (direction < 0) {
+      if (from === 0) return;
+      const prevStart = lineStartOf(value, from - 1);
+      const prev = value.slice(prevStart, from - 1);
+      const shift = from - prevStart;
+      event.preventDefault();
+      replaceRange(
+        textarea,
+        prevStart,
+        to,
+        `${block}\n${prev}`,
+        start - shift,
+        end - shift,
+      );
+    } else {
+      if (to >= value.length) return;
+      const nextStart = to + 1;
+      const nextEnd = lineEndOf(value, nextStart);
+      const nextLine = value.slice(nextStart, nextEnd);
+      const shift = nextLine.length + 1;
+      event.preventDefault();
+      replaceRange(
+        textarea,
+        from,
+        nextEnd,
+        `${nextLine}\n${block}`,
+        start + shift,
+        end + shift,
+      );
+    }
+    setCompletion(null);
+    setSignature(null);
+  };
+
+  const handleDuplicateLine = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const value = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const from = lineStartOf(value, start);
+    const effectiveEnd =
+      end > start && end === lineStartOf(value, end) ? end - 1 : end;
+    const block = value.slice(from, lineEndOf(value, effectiveEnd));
+    event.preventDefault();
+    const added = block.length + 1;
+    replaceRange(
+      textarea,
+      lineEndOf(value, effectiveEnd),
+      lineEndOf(value, effectiveEnd),
+      `\n${block}`,
+      start + added,
+      end + added,
+    );
+    setCompletion(null);
+    setSignature(null);
+  };
+
+  const handleSmartHome = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    if (textarea.selectionStart !== textarea.selectionEnd) return;
+    const start = textarea.selectionStart;
+    const from = lineStartOf(textarea.value, start);
+    const indent = leadingSpace(textarea.value.slice(from)).length;
+    const first = from + indent;
+    const target = start === first ? from : first;
+    event.preventDefault();
+    textarea.setSelectionRange(target, target);
+    setCompletion(null);
+    setSignature(null);
+  };
+
+  const jumpToIssue = () => {
+    const textarea = textareaRef.current;
+    const issue = current?.issue;
+    if (!textarea || !issue) return;
+    const base = lineOffset(textarea.value, issue.line);
+    const end = lineEndOf(textarea.value, base);
+    const position = Math.min(
+      base + Math.max(0, (issue.col ?? 1) - 1),
+      end,
+    );
+    textarea.focus();
+    textarea.setSelectionRange(position, position);
+    revealPosition(textarea, position);
+  };
+
+  const findNext = (direction: -1 | 1) => {
+    const textarea = textareaRef.current;
+    if (!textarea || !findText) return;
+    const hits = findMatches(textarea.value, findText);
+    if (hits.length === 0) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    let index = -1;
+    if (direction > 0) {
+      const from = start === end ? start : end;
+      index = hits.findIndex((hit) => hit >= from);
+      if (index < 0) index = 0;
+    } else {
+      for (let i = hits.length - 1; i >= 0; i -= 1) {
+        if (hits[i] < start) {
+          index = i;
+          break;
+        }
+      }
+      if (index < 0) index = hits.length - 1;
+    }
+    textarea.setSelectionRange(hits[index], hits[index] + findText.length);
+    revealPosition(textarea, hits[index]);
+  };
+
+  const replaceCurrent = () => {
+    const textarea = textareaRef.current;
+    if (!textarea || !findText) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (
+      textarea.value.slice(start, end).toLowerCase() !== findText.toLowerCase()
+    ) {
+      findNext(1);
+      return;
+    }
+    replaceRange(
+      textarea,
+      start,
+      end,
+      replaceText,
+      start + replaceText.length,
+    );
+    findNext(1);
+    replaceInputRef.current?.focus();
+  };
+
+  const replaceAll = () => {
+    const textarea = textareaRef.current;
+    if (!textarea || !findText) return;
+    const pattern = new RegExp(escapeRegExp(findText), "gi");
+    const next = textarea.value.replace(pattern, () => replaceText);
+    if (next === textarea.value) return;
+    const caret = Math.min(textarea.selectionStart, next.length);
+    replaceRange(textarea, 0, textarea.value.length, next, caret);
+    replaceInputRef.current?.focus();
+  };
+
+  const closeFind = () => {
+    setFindOpen(false);
+    textareaRef.current?.focus();
   };
 
   const handleEditorKeyDown = (event: KeyboardEvent) => {
@@ -1177,11 +2163,59 @@ export function ScriptsModal({
     if (!textarea) return;
     if (composing || event.isComposing || event.keyCode === 229) return;
 
+    if (
+      event.key === "Backspace" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      handleBackspace(event);
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      setFindOpen(true);
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+      setCompletion(null);
+      setSignature(null);
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === "/") {
+      handleComment(event);
+      return;
+    }
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (event.key === "ArrowUp" && !event.shiftKey) {
+        handleMoveLine(event, -1);
+        return;
+      }
+      if (event.key === "ArrowDown" && event.shiftKey) {
+        handleDuplicateLine(event);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        handleMoveLine(event, 1);
+        return;
+      }
+    }
+    if (
+      event.key === "Home" &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      handleSmartHome(event);
+      return;
+    }
+
     // Alt+/ rather than Ctrl+Space: the latter is the Chinese IME's
     // on/off toggle on Windows and never reaches the page.
     if (event.altKey && (event.key === "/" || event.code === "Slash")) {
       event.preventDefault();
-      refreshCompletion(textarea, true);
+      refreshCompletion(textarea, true, true);
       return;
     }
 
@@ -1196,15 +2230,21 @@ export function ScriptsModal({
                 active:
                   (current.active + delta + current.items.length) %
                   current.items.length,
+                manual: true,
               }
             : current,
         );
         return;
       }
       if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        applyCompletion(completion.items[completion.active]);
-        return;
+        // Tab always accepts, but Enter must not turn a newline into a
+        // completion just because typing opened the list.
+        if (event.key === "Tab" || completion.manual) {
+          event.preventDefault();
+          applyCompletion(completion.items[completion.active]);
+          return;
+        }
+        setCompletion(null);
       }
       if (event.key === "Escape") {
         event.preventDefault();
@@ -1220,6 +2260,12 @@ export function ScriptsModal({
       ) {
         setCompletion(null);
       }
+    }
+    if (event.key === "Escape" && findOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFind();
+      return;
     }
 
     if (
@@ -1237,13 +2283,25 @@ export function ScriptsModal({
       return;
     }
     if (
-      event.key === "}" &&
+      (event.key === "(" ||
+        event.key === ")" ||
+        event.key === "[" ||
+        event.key === "]" ||
+        event.key === "{" ||
+        event.key === "}") &&
       !event.ctrlKey &&
       !event.metaKey &&
-      !event.altKey &&
-      !event.shiftKey
+      !event.altKey
     ) {
-      handleClosingBrace(event);
+      handleBracket(event);
+    }
+    if (
+      event.key === '"' &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      handleQuote(event);
     }
   };
 
@@ -1258,7 +2316,9 @@ export function ScriptsModal({
     });
     setScripts((list) =>
       list.map((script) =>
-        script.id === current.id ? { ...script, source: draft } : script,
+        script.id === current.id
+          ? { ...script, source: draft, issue: null }
+          : script,
       ),
     );
   };
@@ -1291,6 +2351,10 @@ export function ScriptsModal({
     selectNewest.current = true;
     setTimeout(() => setReload((tick) => tick + 1), 700);
   };
+
+  const issue = current?.issue ?? null;
+  const showIssue = !!issue && selected != null && !dirty.has(selected);
+  const findCount = findOpen && findText ? findMatches(draft, findText).length : 0;
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -1444,13 +2508,75 @@ export function ScriptsModal({
                     Enabled
                   </label>
                 </div>
+                {findOpen && (
+                  <div class="script-find">
+                    <input
+                      ref={findInputRef}
+                      value={findText}
+                      placeholder="Find…"
+                      spellcheck={false}
+                      onInput={(event) =>
+                        setFindText((event.target as HTMLInputElement).value)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          findNext(event.shiftKey ? -1 : 1);
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          closeFind();
+                        }
+                      }}
+                    />
+                    <input
+                      ref={replaceInputRef}
+                      value={replaceText}
+                      placeholder="Replace…"
+                      spellcheck={false}
+                      onInput={(event) =>
+                        setReplaceText((event.target as HTMLInputElement).value)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          replaceCurrent();
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          closeFind();
+                        }
+                      }}
+                    />
+                    <span class="script-find-count">
+                      {findCount} {findCount === 1 ? "match" : "matches"}
+                    </span>
+                    <button type="button" onClick={() => findNext(-1)}>
+                      Prev
+                    </button>
+                    <button type="button" onClick={() => findNext(1)}>
+                      Next
+                    </button>
+                    <button type="button" onClick={replaceCurrent}>
+                      Replace
+                    </button>
+                    <button type="button" onClick={replaceAll}>
+                      Replace all
+                    </button>
+                    <button type="button" onClick={closeFind}>
+                      Close
+                    </button>
+                  </div>
+                )}
                 <div class="script-editor">
                   <pre
                     ref={highlightRef}
                     class="script-highlight"
                     aria-hidden="true"
-                    dangerouslySetInnerHTML={{ __html: highlight(`${draft}\n`) }}
                   />
+                  {showIssue && issue && (
+                    <div ref={issueLineRef} class="script-issue-line" />
+                  )}
                   <textarea
                     ref={textareaRef}
                     class={`script-textarea ${composing ? "composing" : ""}`}
@@ -1467,6 +2593,7 @@ export function ScriptsModal({
                       const area = event.currentTarget as HTMLTextAreaElement;
                       edit(area.value);
                       if (!(event as InputEvent).isComposing) {
+                        refreshSignature(area);
                         refreshCompletion(area, false);
                       }
                     }}
@@ -1478,9 +2605,29 @@ export function ScriptsModal({
                         pre.scrollLeft = area.scrollLeft;
                       }
                       setCompletion(null);
+                      setSignature(null);
+                      syncIssueMarker(area);
                     }}
-                    onClick={() => setCompletion(null)}
-                    onBlur={() => setCompletion(null)}
+                    onClick={(event) => {
+                      setCompletion(null);
+                      refreshSignature(event.currentTarget);
+                    }}
+                    onKeyUp={(event) => {
+                      if (
+                        event.key === "ArrowLeft" ||
+                        event.key === "ArrowRight" ||
+                        event.key === "Home" ||
+                        event.key === "End"
+                      ) {
+                        refreshSignature(
+                          event.currentTarget as HTMLTextAreaElement,
+                        );
+                      }
+                    }}
+                    onBlur={() => {
+                      setCompletion(null);
+                      setSignature(null);
+                    }}
                   />
                   {completion && (
                     <div
@@ -1515,7 +2662,47 @@ export function ScriptsModal({
                       ))}
                     </div>
                   )}
+                  {signature && !completion && (
+                    <div
+                      class="script-signature"
+                      aria-hidden="true"
+                      style={{
+                        left: `${signature.left}px`,
+                        top: `${signature.top}px`,
+                      }}
+                    >
+                      {signature.name}(
+                      {signature.args.map((arg, index) => (
+                        <span key={index}>
+                          {index > 0 ? ", " : ""}
+                          <span
+                            class={
+                              index ===
+                              Math.min(
+                                signature.active,
+                                signature.args.length - 1,
+                              )
+                                ? "on"
+                                : ""
+                            }
+                          >
+                            {arg}
+                          </span>
+                        </span>
+                      ))}
+                      )
+                    </div>
+                  )}
                 </div>
+                {showIssue && issue && (
+                  <button type="button" class="script-issue" onClick={jumpToIssue}>
+                    <strong>
+                      line {issue.line}
+                      {issue.col ? `:${issue.col}` : ""}
+                    </strong>
+                    <span>{issue.message}</span>
+                  </button>
+                )}
                 <div class="script-actions">
                   <button
                     type="button"
@@ -1596,9 +2783,12 @@ export function ScriptsModal({
                 </div>
                 <p class="hint">
                   Scripts are C-like and recompile on every start; Apply while
-                  measuring restarts the node. Tab indents, Shift+Tab outdents,
-                  Alt+/ completes; comments, strings, numbers, keywords
-                  and calls are colored as you type.
+                  measuring restarts the node. Tab indents, Shift+Tab outdents.
+                  Suggestions follow the caret and Tab accepts them; Alt+/ opens
+                  the list, Enter accepts after arrowing. Known calls show their
+                  parameters. Brackets and double quotes pair automatically, and
+                  Backspace removes a whole indent. Ctrl+/ comments lines,
+                  Alt+↑/↓ moves them, Shift+Alt+↓ duplicates, Ctrl+F finds.
                 </p>
               </>
             ) : (

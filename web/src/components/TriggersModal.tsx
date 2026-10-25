@@ -527,12 +527,13 @@ export function TriggersModal({
         </header>
 
         <div class="trig-actions">
-          {KINDS.map(([kind, label]) => (
-            <button type="button" key={kind} onClick={() => onAdd(kind)}>
-              {label}
-            </button>
-          ))}
-          <span class="spacer" />
+          <div class="trig-adds">
+            {KINDS.map(([kind, label]) => (
+              <button type="button" key={kind} onClick={() => onAdd(kind)}>
+                {label}
+              </button>
+            ))}
+          </div>
           <div class="trig-limits">
             <label class="trig-limit">
               pre
