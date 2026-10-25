@@ -39,6 +39,10 @@ jobs:
           npm ci
           npm run build
 
+      - name: Test web editor
+        working-directory: web
+        run: npm test
+
       - name: Build all targets
         run: cargo build --all-targets
 

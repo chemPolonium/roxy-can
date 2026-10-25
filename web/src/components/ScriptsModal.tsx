@@ -25,7 +25,7 @@ const INDENT = "    ";
 const BRACKET_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
 const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS));
 
-interface CompletionItem {
+export interface CompletionItem {
   label: string;
   detail: string;
   insert: string;
@@ -87,7 +87,7 @@ function revealPosition(textarea: HTMLTextAreaElement, position: number) {
   }
 }
 
-function findMatches(text: string, query: string): number[] {
+export function findMatches(text: string, query: string): number[] {
   if (!query) return [];
   const haystack = text.toLowerCase();
   const needle = query.toLowerCase();
@@ -106,7 +106,7 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-interface LocalSymbol {
+export interface LocalSymbol {
   name: string;
   kind: "let" | "fn" | "param";
 }
@@ -114,7 +114,7 @@ interface LocalSymbol {
 /// Declarations visible at the caret: top-level `fn` names and `let`
 /// variables whose enclosing block is still open. Comments and strings are
 /// skipped so their text cannot look like a declaration.
-function localSymbols(source: string, caret: number): LocalSymbol[] {
+export function localSymbols(source: string, caret: number): LocalSymbol[] {
   const isStart = (c: string) => /[A-Za-z_]/.test(c);
   const isPart = (c: string) => /[A-Za-z0-9_]/.test(c);
   const blocks: number[] = [];
@@ -247,7 +247,7 @@ function inStringAt(text: string, position: number): boolean {
   return inside;
 }
 
-interface CallInfo {
+export interface CallInfo {
   name: string;
   active: number;
 }
@@ -297,7 +297,7 @@ function maskCode(text: string): string {
 
 /// The innermost call still open at the caret, looking back far enough for
 /// multi-line argument lists but bounded so typing stays cheap.
-function callAtCaret(value: string, caret: number): CallInfo | null {
+export function callAtCaret(value: string, caret: number): CallInfo | null {
   if (inStringAt(value, caret)) return null;
   const floor = Math.max(0, caret - 4000);
   let start = lineStartOf(value, caret);
@@ -343,7 +343,7 @@ function callAtCaret(value: string, caret: number): CallInfo | null {
 
 /// Split a usage string's argument list for the signature hint. Quoted
 /// commas and nested calls stay in one argument.
-function signatureArgs(usage: string): string[] {
+export function signatureArgs(usage: string): string[] {
   const open = usage.indexOf("(");
   const close = usage.lastIndexOf(")");
   if (open < 0 || close <= open) return [];
@@ -585,7 +585,7 @@ function messageDetail(message: { id: number; extended: boolean }) {
 /// builtins and derived/sysvar call templates; `Message.` and `Message["…"]`
 /// list that message's DBC signals; inside `derived("…")` (or
 /// `sys_get`/`sys_set`) only the matching names are offered.
-function buildCandidates(
+export function buildCandidates(
   value: string,
   caret: number,
   allowEmpty: boolean,
@@ -1351,7 +1351,7 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
-interface HighlightLine {
+export interface HighlightLine {
   html: string;
   /// The line ends inside a block comment.
   block: boolean;
@@ -1365,7 +1365,7 @@ const HL_TOKEN =
 /// itself keeps the caret and input handling. Lines are highlighted one at
 /// a time so an edit only re-tokenizes the lines whose text or comment
 /// state actually changed.
-function highlightLine(
+export function highlightLine(
   line: string,
   startBlock: boolean,
   nextParen: boolean,
