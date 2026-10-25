@@ -116,6 +116,10 @@ pub struct Vm {
     /// Named reads (`sig_named`, from `Message.Signal` / brackets). Pure data: the kernel
     /// stays bus-free -- the host decides what the names mean.
     pub named_messages: std::collections::HashMap<String, u32>,
+    /// `(cluster, signal name)` → slot, resolved from the cluster description
+    /// for dotted FlexRay reads (`FR0.CarSpeed`). Missing means the name was
+    /// unknown or ambiguous; `fr_sig(bus, slot, name)` is the explicit form.
+    pub fr_named_slots: std::collections::HashMap<(u8, String), u16>,
 }
 
 impl Vm {
@@ -142,6 +146,7 @@ impl Vm {
             fr_cycle: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
             named_messages: std::collections::HashMap::new(),
+            fr_named_slots: std::collections::HashMap::new(),
         }
     }
 
@@ -157,6 +162,12 @@ impl Vm {
     /// its name→id map against a reloaded database.
     pub fn named_signal_refs(&self) -> &[(String, String)] {
         &self.script.named_signal_refs
+    }
+
+    /// The dotted FlexRay reads `(cluster, signal)` the host resolved to
+    /// slots at start; re-resolved when the cluster description changes.
+    pub fn fr_named_refs(&self) -> &[(u8, String)] {
+        &self.script.fr_named_refs
     }
 
     pub fn reset_budget(&mut self, budget: u64) {
@@ -644,6 +655,58 @@ impl Vm {
                     .copied()
                     .unwrap_or(0.0);
                 self.stack.push(Value::Float(value));
+                return Ok(());
+            }
+            // `fr_sig_named(cluster, "Name")`: the dotted FlexRay read. The
+            // host resolved the signal name to its slot against the cluster
+            // description at start; an ambiguous/unknown name stays unmapped.
+            "fr_sig_named" => {
+                let (Value::Int(bus), Value::Str(sig)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "fr_sig_named(bus, \"Name\") needs an int and a string".into(),
+                    ));
+                };
+                let bus = u8::try_from(*bus)
+                    .map_err(|_| VmError("fr_sig_named: bus out of range (0..255)".into()))?;
+                let Some(&slot) = self.fr_named_slots.get(&(bus, sig.clone())) else {
+                    return Err(VmError(format!(
+                        "fr_sig_named: \"{sig}\" is unknown or ambiguous on FR{bus}; \
+                         use fr_sig({bus}, slot, \"{sig}\")"
+                    )));
+                };
+                match self.host_input.fr_signals.get(&(bus, slot, sig.clone())) {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "fr_sig_named: no value for FR{bus} slot {slot} {sig:?} (not seen yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
+            // `eth_sig(bus, "Frame", "Signal")`: the dotted Ethernet read.
+            "eth_sig" => {
+                let (Value::Int(bus), Value::Str(frame), Value::Str(sig)) =
+                    (&args[0], &args[1], &args[2])
+                else {
+                    return Err(VmError(
+                        "eth_sig(bus, \"Frame\", \"Signal\") needs an int and two strings".into(),
+                    ));
+                };
+                let bus = u8::try_from(*bus)
+                    .map_err(|_| VmError("eth_sig: bus out of range (0..255)".into()))?;
+                match self
+                    .host_input
+                    .eth_signals
+                    .get(&(bus, frame.clone(), sig.clone()))
+                {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "eth_sig: no value for ETH{bus} {frame:?} {sig:?} (not seen yet)"
+                        )));
+                    }
+                }
                 return Ok(());
             }
             // `send` / `send_ext`: identical argument shapes; the ext form
@@ -1864,6 +1927,51 @@ mod tests {
         // caught by the compiler's arity check, before any run.
         let e = compile("fr_send(0, 5);").expect_err("no payload compiles");
         assert!(e.to_string().contains("fr_send"), "{e}");
+    }
+
+    /// `FR0.Speed` is the host-resolved FlexRay read: the script carries
+    /// the name, the node start maps it to a slot, and the value comes from
+    /// the same per-slot table `fr_sig` reads.
+    #[test]
+    fn a_dotted_flexray_read_uses_the_host_slot_map() {
+        let script = compile("print(FR0.Speed);").unwrap();
+        assert_eq!(script.fr_named_refs, [(0, "Speed".to_string())]);
+        let mut vm = Vm::new(script);
+        vm.fr_named_slots.insert((0, "Speed".to_string()), 13);
+        vm.host_input
+            .fr_signals
+            .insert((0, 13, "Speed".to_string()), 42.0);
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["42.0"]);
+
+        let mut vm = Vm::new(compile("print(FR0.Nope);").unwrap());
+        let e = vm.run().unwrap_err().to_string();
+        assert!(
+            e.contains("unknown or ambiguous") && e.contains("fr_sig(0, slot"),
+            "{e}"
+        );
+    }
+
+    /// `ETH0.FrameA.Speed`: both names are checked against the ARXML at
+    /// start; the runtime value comes from the same decoded flow table the
+    /// observers use. An unseen signal is an error, not a zero.
+    #[test]
+    fn a_dotted_ethernet_read_uses_the_host_signal_table() {
+        let script = compile("print(ETH1.FrameA.Speed);").unwrap();
+        assert_eq!(
+            script.eth_named_refs,
+            [(1, "FrameA".to_string(), "Speed".to_string())]
+        );
+        let mut vm = Vm::new(script);
+        vm.host_input
+            .eth_signals
+            .insert((1, "FrameA".to_string(), "Speed".to_string()), 7.5);
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["7.5"]);
+
+        let mut vm = Vm::new(compile("print(ETH0.FrameA[\"Vehicle Speed\"]);").unwrap());
+        let e = vm.run().unwrap_err().to_string();
+        assert!(e.contains("not seen yet"), "{e}");
     }
 
     /// `set_fr_sig(路, 槽, "Name", 值)` queues the write for the host, which is

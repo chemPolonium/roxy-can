@@ -202,6 +202,17 @@ struct P {
     switch_temps: usize,
 }
 
+/// `FR3` / `ETH0`: a reserved bus qualifier, prefix plus digits. These
+/// names cannot be plain variables; `FR3.Signal` is how a FlexRay signal
+/// is read.
+fn bus_qualifier(name: &str, prefix: &str) -> Option<u32> {
+    let rest = name.strip_prefix(prefix)?;
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse().ok()
+}
+
 /// What can follow an identifier at statement position.
 #[derive(Clone, Copy, PartialEq)]
 enum AssignAhead {
@@ -270,6 +281,91 @@ impl P {
             }
             _ => self.err(&format!("expected {what}")),
         }
+    }
+
+    /// One name after a bus qualifier: `.Signal` or `["Signal Name"]`.
+    fn member(&mut self, what: &str) -> Result<String, ScriptError> {
+        if self.eat(&Tok::Dot) {
+            return self.ident(what);
+        }
+        if let Some(name) = self.literal_bracket() {
+            return Ok(name);
+        }
+        self.err(&format!("expected {what}"))
+    }
+
+    /// True when the next tokens are exactly `["literal"]` -- the bracket
+    /// form of a named read, as opposed to an ordinary index expression.
+    fn at_literal_bracket(&self) -> bool {
+        matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::LBracket))
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Str(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::RBracket)
+            )
+    }
+
+    /// Consumes `["literal"]` and returns the string; leaves the stream
+    /// untouched otherwise.
+    fn literal_bracket(&mut self) -> Option<String> {
+        if !self.at_literal_bracket() {
+            return None;
+        }
+        self.advance(); // [
+        let Some(Tok::Str(name)) = self.toks.get(self.pos).map(|t| t.tok.clone()) else {
+            return None;
+        };
+        self.advance(); // "name"
+        self.advance(); // ]
+        Some(name)
+    }
+
+    /// True when a statement begins with a named signal read of any
+    /// spelling (`M.Sig`, `M["Sig"]`, `FR0.Sig`, `ETH0.Frame.Sig`, ...)
+    /// followed by an assignment operator. Those reads are read-only.
+    fn signal_write_ahead(&self) -> bool {
+        let tok = |i: usize| self.toks.get(self.pos + i).map(|t| &t.tok);
+        if !matches!(tok(0), Some(Tok::Ident(_))) {
+            return false;
+        }
+        let mut i = 1;
+        let mut qualified = false;
+        loop {
+            match tok(i) {
+                Some(Tok::Dot) if matches!(tok(i + 1), Some(Tok::Ident(_))) => {
+                    i += 2;
+                    qualified = true;
+                }
+                Some(Tok::LBracket)
+                    if matches!(tok(i + 1), Some(Tok::Str(_)))
+                        && matches!(tok(i + 2), Some(Tok::RBracket)) =>
+                {
+                    i += 3;
+                    qualified = true;
+                }
+                _ => break,
+            }
+        }
+        qualified
+            && matches!(
+                tok(i),
+                Some(
+                    Tok::Assign
+                        | Tok::AssignAdd
+                        | Tok::AssignSub
+                        | Tok::AssignMul
+                        | Tok::AssignDiv
+                        | Tok::AssignMod
+                        | Tok::AssignBitAnd
+                        | Tok::AssignBitOr
+                        | Tok::AssignBitXor
+                        | Tok::AssignShl
+                        | Tok::AssignShr
+                )
+            )
     }
 
     fn fn_decl(&mut self) -> Result<FnDecl, ScriptError> {
@@ -545,63 +641,15 @@ impl P {
 
     fn stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
         // Signal reads are read-only: writes carry a frame's raw bytes,
-        // which only `set_sig` can shape. Point at the real form instead of
-        // a generic lvalue error. Both spellings are covered.
-        let dotted_write = matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Dot))
-            && matches!(
-                self.toks.get(self.pos + 2).map(|t| &t.tok),
-                Some(Tok::Ident(_))
-            )
-            && matches!(
-                self.toks.get(self.pos + 3).map(|t| &t.tok),
-                Some(
-                    Tok::Assign
-                        | Tok::AssignAdd
-                        | Tok::AssignSub
-                        | Tok::AssignMul
-                        | Tok::AssignDiv
-                        | Tok::AssignMod
-                        | Tok::AssignBitAnd
-                        | Tok::AssignBitOr
-                        | Tok::AssignBitXor
-                        | Tok::AssignShl
-                        | Tok::AssignShr
-                )
-            );
-        let bracket_write = matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
-            && matches!(
-                self.toks.get(self.pos + 1).map(|t| &t.tok),
-                Some(Tok::LBracket)
-            )
-            && matches!(
-                self.toks.get(self.pos + 2).map(|t| &t.tok),
-                Some(Tok::Str(_))
-            )
-            && matches!(
-                self.toks.get(self.pos + 3).map(|t| &t.tok),
-                Some(Tok::RBracket)
-            )
-            && matches!(
-                self.toks.get(self.pos + 4).map(|t| &t.tok),
-                Some(
-                    Tok::Assign
-                        | Tok::AssignAdd
-                        | Tok::AssignSub
-                        | Tok::AssignMul
-                        | Tok::AssignDiv
-                        | Tok::AssignMod
-                        | Tok::AssignBitAnd
-                        | Tok::AssignBitOr
-                        | Tok::AssignBitXor
-                        | Tok::AssignShl
-                        | Tok::AssignShr
-                )
-            );
-        if dotted_write || bracket_write {
+        // which only `set_sig` / `set_fr_sig` can shape. Point at the real
+        // form instead of a generic lvalue error. Every named spelling is
+        // covered: `M.Sig`, `M["Sig"]`, `FR0.Sig`, `ETH0.Frame.Sig` and
+        // their bracket variants.
+        if self.signal_write_ahead() {
             return self.err(
-                "signal writes go through set_sig(buffer, id, \"Name\", value); \
-                 Message.Signal is read-only",
+                "signal reads are read-only: write CAN signals through \
+                 set_sig(buffer, id, \"Name\", value) and FlexRay signals \
+                 through set_fr_sig(bus, slot, \"Name\", value)",
             );
         }
         if self.eat(&Tok::Let) {
@@ -1149,29 +1197,51 @@ impl P {
             }
             Some(Tok::Ident(name)) => {
                 self.advance();
-                // `Message.Signal` keeps both names as literals so the host
-                // can resolve and check them against the node's DBC at start.
-                if self.eat(&Tok::Dot) {
-                    let signal = self.ident("a signal name after '.'")?;
+                // `FRn.Signal` / `FRn["Signal Name"]`: the cluster number
+                // carries the bus, the host resolves the name to a slot
+                // against that cluster's description at start.
+                if let Some(bus) = bus_qualifier(&name, "FR") {
+                    if bus > u32::from(u8::MAX) {
+                        return self.err("the FlexRay bus index must be 0..255");
+                    }
+                    if !self.at(&Tok::Dot) && !self.at_literal_bracket() {
+                        return self.err(&format!(
+                            "{name} is a bus qualifier; read a signal as \
+                             {name}.Signal or {name}[\"Signal Name\"]"
+                        ));
+                    }
+                    let signal = self.member("a signal name after '.'")?;
                     return Ok(Expr::Call(
-                        "sig_named".to_string(),
-                        vec![Expr::Str(name), Expr::Str(signal)],
+                        "fr_sig_named".to_string(),
+                        vec![Expr::Int(bus as i64), Expr::Str(signal)],
                     ));
                 }
-                // `Message["Signal Name"]`: the bracket form handles names
-                // that are not identifiers. A non-literal index still falls
-                // through to ordinary byte-buffer indexing.
-                if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::LBracket))
-                    && let Some(Tok::Str(signal)) =
-                        self.toks.get(self.pos + 1).map(|t| t.tok.clone())
-                    && matches!(
-                        self.toks.get(self.pos + 2).map(|t| &t.tok),
-                        Some(Tok::RBracket)
-                    )
-                {
-                    self.advance(); // [
-                    self.advance(); // "signal"
-                    self.advance(); // ]
+                // `ETHn.Frame.Signal` / `ETHn["Frame"]["Signal Name"]`: two
+                // names after the bus, both literal so the host can verify
+                // them against the ARXML at start.
+                if let Some(bus) = bus_qualifier(&name, "ETH") {
+                    if bus > u32::from(u8::MAX) {
+                        return self.err("the Ethernet bus index must be 0..255");
+                    }
+                    if !self.at(&Tok::Dot) && !self.at_literal_bracket() {
+                        return self.err(&format!(
+                            "{name} is a bus qualifier; read a signal as \
+                             {name}.Frame.Signal or {name}[\"Frame\"][\"Signal Name\"]"
+                        ));
+                    }
+                    let frame = self.member("a frame name after '.'")?;
+                    let signal = self.member("a signal name after the frame name")?;
+                    return Ok(Expr::Call(
+                        "eth_sig".to_string(),
+                        vec![Expr::Int(bus as i64), Expr::Str(frame), Expr::Str(signal)],
+                    ));
+                }
+                // `Message.Signal` keeps both names as literals so the host
+                // can resolve and check them against the node's DBC at start.
+                // A non-literal bracket index still falls through to ordinary
+                // byte-buffer indexing.
+                if self.at(&Tok::Dot) || self.at_literal_bracket() {
+                    let signal = self.member("a signal name after '.'")?;
                     return Ok(Expr::Call(
                         "sig_named".to_string(),
                         vec![Expr::Str(name), Expr::Str(signal)],
@@ -1237,6 +1307,88 @@ mod tests {
             ),
             "the names stay literal for the host's DBC resolution"
         );
+    }
+
+    #[test]
+    fn bus_qualified_reads_desugar_into_host_calls() {
+        let script = crate::script::compile(
+            r#"
+                on start {
+                    print(FR1.CarSpeed);
+                    print(FR1["Car Speed"]);
+                    print(ETH0.FrameA.Speed);
+                    print(ETH0["Frame A"]["Speed X"]);
+                }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            script.fr_named_refs,
+            vec![(1, "CarSpeed".to_string()), (1, "Car Speed".to_string())]
+        );
+        assert_eq!(
+            script.eth_named_refs,
+            vec![
+                (0, "FrameA".to_string(), "Speed".to_string()),
+                (0, "Frame A".to_string(), "Speed X".to_string()),
+            ]
+        );
+        let Expr::Call(name, args) = expr_of("FR1.CarSpeed") else {
+            panic!("a FlexRay read must compile to a host call");
+        };
+        assert_eq!(name, "fr_sig_named");
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Expr::Int(bus), Expr::Str(signal)]
+                    if *bus == 1 && signal == "CarSpeed"
+            ),
+            "the bus and name stay literal for the host's description lookup"
+        );
+        let Expr::Call(name, args) = expr_of("ETH0.FrameA.Speed") else {
+            panic!("an Ethernet read must compile to a host call");
+        };
+        assert_eq!(name, "eth_sig");
+        assert!(matches!(
+            args.as_slice(),
+            [Expr::Int(0), Expr::Str(frame), Expr::Str(signal)]
+                if frame == "FrameA" && signal == "Speed"
+        ));
+    }
+
+    /// `FR0` on its own is a bus qualifier, not a variable: say what to
+    /// write instead of failing later at codegen.
+    #[test]
+    fn a_bus_qualifier_alone_names_the_required_form() {
+        for (src, want) in [
+            ("FR0", "FR0.Signal"),
+            ("ETH0", "ETH0.Frame.Signal"),
+            ("FR300.Speed", "0..255"),
+            ("ETH256.Frame.Speed", "0..255"),
+        ] {
+            let error = crate::script::compile(&format!("on start {{ print({src}); }}"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(want), "{src}: {error}");
+        }
+    }
+
+    #[test]
+    fn bus_qualified_writes_point_at_the_write_api() {
+        for src in [
+            "FR0.Speed = 1;",
+            "FR0[\"Speed\"] = 1;",
+            "ETH0.FrameA.Speed = 1;",
+            "ETH0[\"Frame A\"][\"Speed\"] = 1;",
+        ] {
+            let error = crate::script::compile(&format!("on start {{ {src} }}"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("read-only") && error.contains("set_fr_sig"),
+                "{src}: {error}"
+            );
+        }
     }
 
     #[test]

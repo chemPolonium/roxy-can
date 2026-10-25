@@ -1465,7 +1465,7 @@ impl BusCore {
                     let keys = self.sysvar_keys();
                     let last = self.nodes.last_mut().expect("just added");
                     last.sysvar_keys = keys;
-                    last.start(dbc);
+                    last.start_with(dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
                 }
                 self.nodes_dirty = true;
             }
@@ -1499,7 +1499,13 @@ impl BusCore {
                         .get(n.channel as usize)
                         .and_then(|c| c.dbc.clone());
                     n.sysvar_keys = keys;
-                    n.set_source(source, dbc, self.measuring);
+                    n.set_source(
+                        source,
+                        dbc,
+                        Some(&self.fr_dbs),
+                        Some(&self.eth_dbs),
+                        self.measuring,
+                    );
                     self.nodes_dirty = true;
                 }
             }
@@ -1511,7 +1517,13 @@ impl BusCore {
                         .get(n.channel as usize)
                         .and_then(|c| c.dbc.clone());
                     n.sysvar_keys = keys;
-                    n.set_enabled(on, dbc, self.measuring);
+                    n.set_enabled(
+                        on,
+                        dbc,
+                        Some(&self.fr_dbs),
+                        Some(&self.eth_dbs),
+                        self.measuring,
+                    );
                     self.nodes_dirty = true;
                 }
             }
@@ -1538,7 +1550,7 @@ impl BusCore {
                                 .get(n.channel as usize)
                                 .and_then(|c| c.dbc.clone());
                             n.sysvar_keys = keys.clone();
-                            n.start(dbc);
+                            n.start_with(dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
                         }
                         n
                     })
@@ -1679,6 +1691,14 @@ impl BusCore {
                 // the slot alone, so a description that appears or disappears
                 // mid-run re-tallies the rows that are on screen.
                 self.rebuild_fr_aggs();
+                // Dotted reads resolve their signal name to a slot from the
+                // previous description; re-resolve so a replaced cluster
+                // moves them with it instead of going silently stale.
+                if self.measuring {
+                    for node in &mut self.nodes {
+                        node.refresh_fr_named(&self.fr_dbs);
+                    }
+                }
             }
             BusCommand::SetEthDbs(dbs) => self.eth_dbs = dbs,
             BusCommand::SetEthLengthIncludesHeader(on) => self.eth_length_includes_header = on,
@@ -2361,7 +2381,7 @@ impl BusCore {
                     .get(node.channel as usize)
                     .and_then(|c| c.dbc.clone());
                 node.sysvar_keys = keys.clone();
-                node.start(dbc);
+                node.start_with(dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
             }
         }
         self.nodes_dirty = true;
@@ -2711,6 +2731,7 @@ impl BusCore {
                 now_s: now_us as f64 / 1e6,
                 signals: HashMap::new(),
                 fr_signals: HashMap::new(),
+                eth_signals: HashMap::new(),
                 sysvars: HashMap::new(),
                 derived_signals: HashMap::new(),
             });
@@ -2765,6 +2786,30 @@ impl BusCore {
                     let key = (*bus, *slot, d.name);
                     for input in inputs.values_mut() {
                         input.fr_signals.insert(key.clone(), d.phys);
+                    }
+                }
+            }
+        }
+        // Ethernet signals follow the same rule as the FlexRay block: one
+        // read per (bus, frame, signal), decoded from the flow tally against
+        // that bus's ARXML. `eth_sig`/`ETHn.Frame.Signal` address exactly
+        // this key, so an unmatched flow stays invisible rather than
+        // guessed into a frame definition.
+        if !inputs.is_empty() {
+            for (key, agg) in &self.eth_aggs {
+                let Some(db) = self.eth_dbs.get(&key.bus) else {
+                    continue;
+                };
+                let flow = key.flow();
+                let Some(decoded) = db.decode(&flow, &agg.payload, self.eth_length_includes_header)
+                else {
+                    continue;
+                };
+                let frame = decoded.frame_name;
+                for d in decoded.signals {
+                    let key = (key.bus, frame.clone(), d.name);
+                    for input in inputs.values_mut() {
+                        input.eth_signals.insert(key.clone(), d.physical);
                     }
                 }
             }

@@ -11061,3 +11061,85 @@ fn ethernet_flows_reach_messages_and_statistics_csv() {
     assert!(!std::fs::read_to_string(&stats).unwrap().contains("ETH0"));
     std::fs::remove_file(&stats).ok();
 }
+
+/// A decoded Ethernet signal feeds the node input table under
+/// `(bus, frame, signal)`, so `ETH0.Frame.Signal` reads the same value the
+/// observers plot. The starting DB is pushed before measurement, exactly as
+/// loading an ARXML does.
+#[test]
+fn an_ethernet_signal_drives_a_dotted_script_read() {
+    use crate::eth::db::{EthCluster, EthDb, EthFrameDef, EthPdu, EthSignal};
+    let mut app = quiet_app();
+    let db = EthDb {
+        clusters: vec![EthCluster {
+            name: "Cluster".into(),
+            vlans: vec![100],
+        }],
+        frames: vec![EthFrameDef {
+            name: "SpeedFrame".into(),
+            cluster: "Cluster".into(),
+            vlan: Some(100),
+            length: 8,
+            ethertype_hint: Some(0x0800),
+            pdus: vec![EthPdu {
+                name: "SpeedPdu".into(),
+                length: 8,
+                start_bit: 0,
+                signals: vec![EthSignal {
+                    name: "Speed".into(),
+                    start_bit: 0,
+                    size: 8,
+                    big_endian: false,
+                    signed: false,
+                    factor: 2.0,
+                    offset: 1.0,
+                    unit: "km/h".into(),
+                    values: vec![],
+                }],
+            }],
+        }],
+    };
+    app.eth_buses.insert(
+        0,
+        crate::app::EthBusCfg {
+            path: "synthetic.arxml".into(),
+            db: std::sync::Arc::new(db),
+        },
+    );
+    app.push_eth_db_to_core();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "eth-reader".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on message 0x100 { print(ETH0.SpeedFrame.Speed); }".to_string(),
+    });
+    app.settle();
+    app.ingest_eth(crate::eth::EthFrame::new(
+        1_000,
+        0,
+        Direction::Rx,
+        [9, 8, 7, 6, 5, 4],
+        [1, 2, 3, 4, 5, 6],
+        Some(100),
+        0x0800,
+        vec![42, 0, 0, 0, 0, 0, 0, 0],
+    ));
+    receive(
+        &mut app,
+        2_000,
+        vec![rx_frame(2_000, 0x100, 1, FrameFlags::NONE)],
+    );
+    let node = app.snap.nodes.iter().find(|n| n.id == id).expect("node");
+    assert!(!node.errored, "{:?}", node.log);
+    assert!(
+        node.log.iter().any(|l| l == "85.0"),
+        "factor and offset apply: {:?}",
+        node.log
+    );
+    app.stop();
+}

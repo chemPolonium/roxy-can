@@ -296,6 +296,11 @@ pub struct Script {
     /// can resolve them against the database at node start -- a typo is
     /// an assembly error, not a runtime surprise.
     pub named_signal_refs: Vec<(String, String)>,
+    /// Dotted FlexRay reads `FR{n}.Signal`, deduped. The node resolves each
+    /// name to its slot against the cluster description at start.
+    pub fr_named_refs: Vec<(u8, String)>,
+    /// Dotted Ethernet reads `ETH{n}.Frame.Signal`, deduped.
+    pub eth_named_refs: Vec<(u8, String, String)>,
     /// R2 spike: sends whose `(from, id, extended)` the compiler derived
     /// statically. Pure metadata -- the runtime behaviour is unchanged.
     pub send_refs: Vec<(String, u32, bool)>,
@@ -392,6 +397,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("sig", 2, 2),
     ("sig_named", 2, 2),
     ("fr_sig", 3, 3),
+    ("fr_sig_named", 2, 2),
+    ("eth_sig", 3, 3),
     ("derived", 1, 1),
     ("bytes", 1, 1),
     ("len", 1, 1),
@@ -449,6 +456,8 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("sig", "sig(id, \"Name\")"),
     ("sig_named", "sig_named(\"Message\", \"Signal\")"),
     ("fr_sig", "fr_sig(bus, slot, \"Name\")"),
+    ("fr_sig_named", "fr_sig_named(bus, \"Name\")"),
+    ("eth_sig", "eth_sig(bus, \"Frame\", \"Signal\")"),
     ("derived", "derived(\"Name\")"),
     ("bytes", "bytes(length)"),
     ("len", "len(value)"),
@@ -548,6 +557,9 @@ pub struct HostInput {
     pub now_s: f64,
     pub signals: HashMap<(u32, String), f64>,
     pub fr_signals: HashMap<(u8, u16, String), f64>,
+    /// Ethernet signal values by `(bus, ARXML frame name, signal name)`.
+    /// Decoded from the same per-flow aggregates the observers use.
+    pub eth_signals: HashMap<(u8, String, String), f64>,
     pub sysvars: HashMap<String, f64>,
     /// Core-sampled derived channels by definition name, read with
     /// `derived("Name")`. Values are one lap old: the core samples the lane

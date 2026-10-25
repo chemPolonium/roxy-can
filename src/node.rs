@@ -162,6 +162,17 @@ impl ScriptNode {
     /// or main errors land in the log and leave the node idle. `dbc` is
     /// the channel's database, backing the signal read/write builtins.
     pub fn start(&mut self, dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>) {
+        self.start_with(dbc, None, None);
+    }
+
+    /// [`Self::start`] plus the FlexRay/Ethernet descriptions the dotted
+    /// reads (`FR0.CarSpeed`, `ETH0.Frame.Signal`) resolve against.
+    pub fn start_with(
+        &mut self,
+        dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
+        fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
+        eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+    ) {
         self.errored = false;
         let script = match compile(&self.source) {
             Ok(s) => s,
@@ -251,9 +262,52 @@ impl ScriptNode {
                 ),
             }
         }
+        // Dotted FlexRay/Ethernet reads resolve their names once, here.
+        // The VM only ever sees a concrete slot; the Ethernet reads stay
+        // name-keyed because their host input is keyed the same way.
+        let mut fr_named_slots = HashMap::new();
+        for (bus, sig) in &script.fr_named_refs {
+            let Some(db) = fr_dbs.and_then(|dbs| dbs.get(bus)) else {
+                self.push_log(format!(
+                    "[check] FR{bus} has no cluster description for \"{sig}\""
+                ));
+                continue;
+            };
+            match fr_slot_of(db, *bus, sig) {
+                Ok(slot) => {
+                    fr_named_slots.insert((*bus, sig.clone()), slot);
+                }
+                Err(msg) => self.push_log(format!("[check] {msg}")),
+            }
+        }
+        for (bus, frame, sig) in &script.eth_named_refs {
+            let Some(db) = eth_dbs.and_then(|dbs| dbs.get(bus)) else {
+                self.push_log(format!(
+                    "[check] ETH{bus} has no description for \"{frame}.{sig}\""
+                ));
+                continue;
+            };
+            match db.frames.iter().find(|def| &def.name == frame) {
+                None => self.push_log(format!(
+                    "[check] Ethernet frame \"{frame}\" is not in the ETH{bus} description"
+                )),
+                Some(def)
+                    if !def
+                        .pdus
+                        .iter()
+                        .any(|pdu| pdu.signals.iter().any(|s| &s.name == sig)) =>
+                {
+                    self.push_log(format!(
+                        "[check] Ethernet signal \"{sig}\" is not in frame \"{frame}\" (ETH{bus})"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.named_messages = named_messages;
+        vm.fr_named_slots = fr_named_slots;
         vm.host_extern = Some(Box::new(move |name, args| {
             node_extern(dbc.as_deref(), name, args)
         }));
@@ -325,11 +379,13 @@ impl ScriptNode {
         &mut self,
         source: String,
         dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
+        fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
+        eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
         measuring: bool,
     ) {
         self.source = source;
         if measuring && self.enabled {
-            self.start(dbc);
+            self.start_with(dbc, fr_dbs, eth_dbs);
         } else if self.runtime.is_some() {
             self.runtime = None;
             self.errored = false;
@@ -342,12 +398,14 @@ impl ScriptNode {
         &mut self,
         on: bool,
         dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
+        fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
+        eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
         measuring: bool,
     ) {
         self.enabled = on;
         if measuring {
             if on {
-                self.start(dbc);
+                self.start_with(dbc, fr_dbs, eth_dbs);
             } else {
                 self.runtime = None;
                 self.errored = false;
@@ -465,6 +523,59 @@ impl ScriptNode {
             );
         }
         rt.named_handler_ids = resolved;
+    }
+
+    /// Re-resolves dotted FlexRay reads against a replaced cluster
+    /// description. The slot map updates in place and every change lands
+    /// in the log as a `[reload]` line, like a DBC reload does for named
+    /// message reads.
+    pub fn refresh_fr_named(
+        &mut self,
+        dbs: &std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>,
+    ) {
+        let Some(rt) = self.runtime.as_mut() else {
+            return;
+        };
+        let mut resolved = HashMap::new();
+        for (bus, sig) in rt.vm.fr_named_refs().to_vec() {
+            let Some(db) = dbs.get(&bus) else {
+                continue;
+            };
+            if let Ok(slot) = fr_slot_of(db, bus, &sig) {
+                resolved.insert((bus, sig), slot);
+            }
+        }
+        if rt.vm.fr_named_slots == resolved {
+            return;
+        }
+        let old = std::mem::replace(&mut rt.vm.fr_named_slots, resolved.clone());
+        for ((bus, sig), slot) in &resolved {
+            match old.get(&(*bus, sig.clone())) {
+                Some(previous) if previous == slot => {}
+                Some(previous) => Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    format!("[reload] FR{bus}.{sig} slot {previous} -> {slot}"),
+                ),
+                None => Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    format!("[reload] FR{bus}.{sig} resolved to slot {slot}"),
+                ),
+            }
+        }
+        for ((bus, sig), slot) in &old {
+            if !resolved.contains_key(&(*bus, sig.clone())) {
+                Self::push_log_into(
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                    format!("[reload] FR{bus}.{sig} unresolved (was slot {slot})"),
+                );
+            }
+        }
     }
 
     /// Delivers one bus frame: handlers for this id on this channel run,
@@ -903,6 +1014,32 @@ impl ScriptNode {
     }
 }
 
+/// The unique wire slot that declares `sig` in a FlexRay cluster
+/// description. Several frames can hold the same slot in different cycle
+/// phases; they all name the same wire address, so only *distinct* slots
+/// make a dotted read ambiguous. Every message already says which bus it
+/// is about, so the caller can log it verbatim.
+fn fr_slot_of(db: &crate::fr_db::FrDb, bus: u8, sig: &str) -> Result<u16, String> {
+    let mut slots: Vec<u16> = db
+        .slot_signals()
+        .iter()
+        .filter(|(_, _, names)| names.iter().any(|n| n == sig))
+        .map(|(slot, _, _)| *slot)
+        .collect();
+    slots.sort_unstable();
+    slots.dedup();
+    match slots.as_slice() {
+        [slot] => Ok(*slot),
+        [] => Err(format!(
+            "FlexRay signal \"{sig}\" is not declared in the FR{bus} description"
+        )),
+        many => Err(format!(
+            "FlexRay signal \"{sig}\" is declared in several FR{bus} slots ({many:?}); \
+             use fr_sig({bus}, slot, \"{sig}\")"
+        )),
+    }
+}
+
 /// The DBC-backed assembly checks a compiled script must pass at start:
 /// literal signal references exist, the send set matches the DBC's
 /// transmitter declarations (both directions), and literal `set_sig`
@@ -1142,6 +1279,45 @@ mod tests {
         let mut n = ScriptNode::new(1, "n".into(), 0);
         n.source = source.to_string();
         n
+    }
+
+    /// A FlexRay cluster with one frame per `(slot, signal)` pair, so two
+    /// pairs can declare the same signal in different slots.
+    fn fr_dbc(frames: &[(u16, &str)]) -> std::sync::Arc<crate::fr_db::FrDb> {
+        use crate::fr_db::{FrChannel, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+        let mut pdus = Vec::new();
+        let mut defs = Vec::new();
+        for (i, (slot, name)) in frames.iter().enumerate() {
+            let pdu = format!("P{i}");
+            pdus.push(FrPdu {
+                name: pdu.clone(),
+                length: 8,
+                dynamic: false,
+                comment: String::new(),
+                signals: vec![FrSignal {
+                    name: (*name).into(),
+                    length_bits: 8,
+                    factor: 1.0,
+                    max: 255.0,
+                    ..Default::default()
+                }],
+            });
+            defs.push(FrFrameDb {
+                name: format!("F{i}"),
+                length: 8,
+                payload_preamble: false,
+                triggering: FrTriggering {
+                    channel: FrChannel::Both,
+                    slot_id: u32::from(*slot),
+                    base_cycle: 0,
+                    cycle_repetition: 1,
+                    startup: false,
+                },
+                pdus: vec![(pdu, 0u32)],
+                comment: String::new(),
+            });
+        }
+        std::sync::Arc::new(FrDb::assemble(Default::default(), vec![], pdus, defs))
     }
 
     /// Two-node mini database: EngineECU transmits 0x100 + 0x101, GearBox
@@ -1817,6 +1993,7 @@ BO_ 256 Real: 2 ECU
             now_s: 1.5,
             signals: [((0x100, "RPM".to_string()), 2400.0)].into_iter().collect(),
             fr_signals: HashMap::new(),
+            eth_signals: HashMap::new(),
             sysvars: HashMap::new(),
             derived_signals: HashMap::new(),
         };
@@ -1855,6 +2032,7 @@ BO_ 256 Real: 2 ECU
             ]
             .into_iter()
             .collect(),
+            eth_signals: HashMap::new(),
             sysvars: HashMap::new(),
             derived_signals: HashMap::new(),
         };
@@ -1890,11 +2068,119 @@ BO_ 256 Real: 2 ECU
             now_s: 0.0,
             signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
             fr_signals: HashMap::new(),
+            eth_signals: HashMap::new(),
             sysvars: HashMap::new(),
             derived_signals: HashMap::new(),
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1234.0"]);
+    }
+
+    /// Dotted FlexRay reads resolve the signal name to its slot once, at
+    /// start, and then read the published per-slot value. A name that is
+    /// missing or lives in several slots is a start check, and the runtime
+    /// call names the explicit `fr_sig` form instead of guessing.
+    #[test]
+    fn a_dotted_flexray_read_resolves_the_signal_to_its_slot() {
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0, fr_dbc(&[(13, "CarSpeed")]));
+        let mut n = node("on message 0x100 { print(FR0.CarSpeed); }");
+        n.start_with(None, Some(&dbs), None);
+        assert!(!n.errored(), "{:?}", n.log_snapshot());
+        let input = HostInput {
+            fr_signals: [((0, 13, "CarSpeed".to_string()), 88.0)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot(), ["88.0"]);
+
+        let mut typo = node("on message 0x100 { print(FR0.CarSped); }");
+        typo.start_with(None, Some(&dbs), None);
+        assert!(
+            typo.log_snapshot()
+                .iter()
+                .any(|l| l.contains("[check]") && l.contains("CarSped")),
+            "{:?}",
+            typo.log_snapshot()
+        );
+
+        let mut ambiguous_dbs = std::collections::BTreeMap::new();
+        ambiguous_dbs.insert(0, fr_dbc(&[(13, "CarSpeed"), (14, "CarSpeed")]));
+        let mut ambiguous = node("on start { print(FR0.CarSpeed); }");
+        ambiguous.start_with(None, Some(&ambiguous_dbs), None);
+        assert!(
+            ambiguous
+                .log_snapshot()
+                .iter()
+                .any(|l| l.contains("several FR0 slots") && l.contains("fr_sig(0,")),
+            "{:?}",
+            ambiguous.log_snapshot()
+        );
+    }
+
+    /// Dotted Ethernet reads verify the frame and signal against the ARXML
+    /// at start; the value itself arrives through the published table.
+    #[test]
+    fn a_dotted_ethernet_read_checks_the_arxml_names() {
+        use crate::eth::db::{EthDb, EthFrameDef, EthPdu, EthSignal};
+        let frame = EthFrameDef {
+            name: "FrameA".into(),
+            length: 8,
+            pdus: vec![EthPdu {
+                name: "P".into(),
+                length: 8,
+                start_bit: 0,
+                signals: vec![EthSignal {
+                    name: "Speed".into(),
+                    size: 8,
+                    factor: 1.0,
+                    ..Default::default()
+                }],
+            }],
+            ..Default::default()
+        };
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(
+            0,
+            std::sync::Arc::new(EthDb {
+                frames: vec![frame],
+                ..Default::default()
+            }),
+        );
+
+        let mut n = node("on message 0x100 { print(ETH0.FrameA.Speed); }");
+        n.start_with(None, None, Some(&dbs));
+        assert!(!n.errored(), "{:?}", n.log_snapshot());
+        assert!(
+            !n.log_snapshot().iter().any(|l| l.contains("[check]")),
+            "{:?}",
+            n.log_snapshot()
+        );
+        let input = HostInput {
+            eth_signals: [((0, "FrameA".to_string(), "Speed".to_string()), 7.5)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot(), ["7.5"]);
+
+        for (src, want) in [
+            ("on start { print(ETH0.FrameB.Speed); }", "FrameB"),
+            ("on start { print(ETH0.FrameA.Torque); }", "Torque"),
+        ] {
+            let mut bad = node(src);
+            bad.start_with(None, None, Some(&dbs));
+            assert!(
+                bad.log_snapshot()
+                    .iter()
+                    .any(|l| l.contains("[check]") && l.contains(want)),
+                "{src}: {:?}",
+                bad.log_snapshot()
+            );
+        }
     }
 
     /// A named handler resolves its DBC message at start: it wakes on that

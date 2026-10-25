@@ -153,6 +153,32 @@ function catalogMessage(
   );
 }
 
+function catalogBus(catalog: Catalog | null, kind: string, index: number) {
+  return (
+    catalog?.channels.find(
+      (candidate) => candidate.kind === kind && candidate.index === index,
+    ) ?? null
+  );
+}
+
+/// `FR3` / `ETH0` → 3 / 0. A name that merely starts with the letters
+/// (`Frame`) is an ordinary identifier, matching the parser's rule.
+function busIndex(name: string, prefix: string): number | null {
+  if (!name.startsWith(prefix)) return null;
+  const rest = name.slice(prefix.length);
+  return /^\d+$/.test(rest) ? Number(rest) : null;
+}
+
+function signalItem(name: string, detail: string): CompletionItem {
+  return {
+    label: name,
+    detail,
+    insert: name,
+    caret: name.length,
+    rank: 0,
+  };
+}
+
 function messageDetail(message: { id: number; extended: boolean }) {
   return `0x${message.id.toString(16).toUpperCase()}${message.extended ? "x" : ""}`;
 }
@@ -212,6 +238,101 @@ function buildCandidates(
     }
   }
 
+  // `ETH0.Frame.` is two names deep: list that frame's signals. Checked
+  // before the one-dot forms so `ETH0.Frame` is not read as a CAN message.
+  if (!inString) {
+    const ethSignal =
+      /([A-Za-z_]\w*)\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (ethSignal) {
+      const [, busName, frameName, partial = ""] = ethSignal;
+      const bus = busIndex(busName, "ETH");
+      if (bus !== null) {
+        const frame = catalogBus(catalog, "eth", bus)?.messages.find(
+          (message) => message.name === frameName || message.frame === frameName,
+        );
+        if (!frame) return null;
+        const query = partial.toLowerCase();
+        const items = frame.signals
+          .filter(
+            (signal) =>
+              query === "" || signal.name.toLowerCase().includes(query),
+          )
+          .slice(0, 12)
+          .map((signal) =>
+            signalItem(
+              signal.name,
+              `ETH${bus} · ${frame.name}${signal.unit ? ` · ${signal.unit}` : ""}`,
+            ),
+          );
+        if (items.length === 0) return null;
+        return {
+          start: caret - partial.length,
+          end: caret,
+          items,
+        };
+      }
+    }
+    // `ETH0.` lists the bus's ARXML frames.
+    const ethFrame = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (ethFrame) {
+      const [, busName, partial = ""] = ethFrame;
+      const bus = busIndex(busName, "ETH");
+      if (bus !== null) {
+        const query = partial.toLowerCase();
+        const items = (catalogBus(catalog, "eth", bus)?.messages ?? [])
+          .filter(
+            (frame) =>
+              query === "" || frame.name.toLowerCase().includes(query),
+          )
+          .slice(0, 12)
+          .map((frame) => ({
+            label: frame.name,
+            detail: `ETH${bus} frame`,
+            insert: frame.name,
+            caret: frame.name.length,
+            rank: 0,
+          }));
+        if (items.length === 0) return null;
+        return { start: caret - partial.length, end: caret, items };
+      }
+    }
+    // `FR0.` lists every signal the cluster declares. A name shared by
+    // frames of the same slot is one entry: it reads the same wire slot.
+    const frSignal = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (frSignal) {
+      const [, busName, partial = ""] = frSignal;
+      const bus = busIndex(busName, "FR");
+      if (bus !== null) {
+        const busChannel = catalogBus(catalog, "fr", bus);
+        if (!busChannel) return null;
+        const seen = new Set<string>();
+        const query = partial.toLowerCase();
+        const items: CompletionItem[] = [];
+        for (const frame of busChannel.messages) {
+          for (const signal of frame.signals) {
+            if (seen.has(signal.name)) continue;
+            seen.add(signal.name);
+            if (query !== "" && !signal.name.toLowerCase().includes(query)) {
+              continue;
+            }
+            items.push(
+              signalItem(
+                signal.name,
+                `FR${bus} · ${frame.name}${signal.unit ? ` · ${signal.unit}` : ""}`,
+              ),
+            );
+          }
+        }
+        if (items.length === 0) return null;
+        return {
+          start: caret - partial.length,
+          end: caret,
+          items: items.slice(0, 12),
+        };
+      }
+    }
+  }
+
   // `Message.` is a DBC context: only that message's signals make sense.
   if (!inString) {
     const dotted = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
@@ -245,11 +366,25 @@ function buildCandidates(
   let prefix = "";
   let stringFn: string | null = null;
   let stringMessage: string | null = null;
+  let stringFrame: string | null = null;
   if (inString) {
     const beforeQuote = lineBefore.slice(0, quoteAt).trimEnd();
     const bracket = /([A-Za-z_]\w*)\s*\[\s*$/.exec(beforeQuote);
+    // `ETH0["Frame"]["`: the second bracket completes that frame's signals.
+    const ethSignal =
+      /([A-Za-z_]\w*)\s*\[\s*"([^"]*)"\s*\]\s*\[\s*$/.exec(beforeQuote);
     if (/^\s*on\s+message\s*$/.test(beforeQuote)) {
       stringFn = "message";
+    } else if (ethSignal && busIndex(ethSignal[1], "ETH") !== null) {
+      stringFn = "eth-signal";
+      stringMessage = String(busIndex(ethSignal[1], "ETH"));
+      stringFrame = ethSignal[2];
+    } else if (bracket && busIndex(bracket[1], "FR") !== null) {
+      stringFn = "fr-signal";
+      stringMessage = String(busIndex(bracket[1], "FR"));
+    } else if (bracket && busIndex(bracket[1], "ETH") !== null) {
+      stringFn = "eth-frame";
+      stringMessage = String(busIndex(bracket[1], "ETH"));
     } else if (bracket) {
       stringFn = "signal";
       stringMessage = bracket[1];
@@ -266,7 +401,10 @@ function buildCandidates(
       prefix.length === 0 &&
       !allowEmpty &&
       stringFn !== "signal" &&
-      stringFn !== "message"
+      stringFn !== "message" &&
+      stringFn !== "fr-signal" &&
+      stringFn !== "eth-frame" &&
+      stringFn !== "eth-signal"
     ) {
       return null;
     }
@@ -305,6 +443,55 @@ function buildCandidates(
             : message.name,
           insert: signal.name,
           caret: signal.name.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "fr-signal") {
+      const bus = Number(stringMessage);
+      const busChannel = catalogBus(catalog, "fr", bus);
+      if (!busChannel) return null;
+      const seen = new Set<string>();
+      for (const frame of busChannel.messages) {
+        for (const signal of frame.signals) {
+          if (seen.has(signal.name)) continue;
+          seen.add(signal.name);
+          items.push({
+            label: signal.name,
+            detail: `FR${bus} · ${frame.name}`,
+            insert: quoted(signal.name),
+            caret: quoted(signal.name).length,
+            rank: 0,
+          });
+        }
+      }
+    } else if (stringFn === "eth-frame") {
+      const bus = Number(stringMessage);
+      const busChannel = catalogBus(catalog, "eth", bus);
+      if (!busChannel) return null;
+      for (const frame of busChannel.messages) {
+        items.push({
+          label: frame.name,
+          detail: `ETH${bus} frame`,
+          insert: quoted(frame.name),
+          caret: quoted(frame.name).length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "eth-signal") {
+      const bus = Number(stringMessage);
+      const frame = catalogBus(catalog, "eth", bus)?.messages.find(
+        (message) => message.name === stringFrame,
+      );
+      if (!frame) return null;
+      for (const signal of frame.signals) {
+        const insert = quoted(signal.name);
+        items.push({
+          label: signal.name,
+          detail: signal.unit
+            ? `${frame.name} · ${signal.unit}`
+            : frame.name,
+          insert,
+          caret: insert.length,
           rank: 0,
         });
       }
@@ -706,7 +893,9 @@ export function ScriptsModal({
     if (!textarea) return;
     if (composing || event.isComposing || event.keyCode === 229) return;
 
-    if ((event.ctrlKey || event.metaKey) && event.key === " ") {
+    // Alt+/ rather than Ctrl+Space: the latter is the Chinese IME's
+    // on/off toggle on Windows and never reaches the page.
+    if (event.altKey && (event.key === "/" || event.code === "Slash")) {
       event.preventDefault();
       refreshCompletion(textarea, true);
       return;
@@ -1124,7 +1313,7 @@ export function ScriptsModal({
                 <p class="hint">
                   Scripts are C-like and recompile on every start; Apply while
                   measuring restarts the node. Tab indents, Shift+Tab outdents,
-                  Ctrl+Space completes; comments, strings, numbers, keywords
+                  Alt+/ completes; comments, strings, numbers, keywords
                   and calls are colored as you type.
                 </p>
               </>

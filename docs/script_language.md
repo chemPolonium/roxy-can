@@ -303,6 +303,38 @@ let temp = EngineStatus["Engine Temp"];   // 名字不是标识符时用下标
 - 节点启动时用它所在通道的 DBC 把 `Message` 解析成 id；报文名或信号名拼错会在启动日志里以 `[check]` 报出，不会静默读到 0。
 - 只读。写信号仍走 `set_sig(buffer, id, "Name", value)`，因为写入需要先有一帧的原始字节。
 - 点号要求报文名、信号名都是标识符（字母/数字/下划线）；下标里的字符串可以是任意 DBC 名字。
+- `FR` + 数字、`ETH` + 数字（如 `FR2`、`ETH0`）是保留的路号前缀，不能作为报文名或变量名。
+
+### FRn.Signal / FRn["Signal Name"]
+
+FlexRay 的按名读取，`n` 是 Buses 表格行末的 `#n`（cluster 索引）：
+
+```c
+on fr slot 13 {
+    let speed = FR0.CarSpeed;
+    let torque = FR1["Drive Torque"];
+}
+```
+
+- 启动时在该路的集群描述里把信号名解析成**唯一槽号**；名字不存在、或这一路没有描述，会在日志里报 `[check]`。
+- 同一个信号名声明在**多个不同槽**时无法判断该读哪一个，会报歧义；改用落槽号的 `fr_sig(bus, slot, "Name")`。同一槽被多帧按周期相位轮流占用不算歧义——它们读的是同一个线上槽。
+- 换集群描述（含测量中重载）会就地重解析，日志写 `[reload] FR0.CarSpeed slot 13 -> 20`。
+- 读到的值属于该槽**实际到达的那一帧**；信号尚未出现仍是运行时错误。
+
+### ETHn.Frame.Signal / ETHn["Frame"]["Signal Name"]
+
+Ethernet 的按名读取：`n` 是 Ethernet 路号，之后是 ARXML 的帧名与信号名：
+
+```c
+on message 0x100 {
+    let speed = ETH0.SpeedFrame.Speed;
+    let temp = ETH1["Body"]["Cabin Temp"];   // 名字不是标识符时用下标
+}
+```
+
+- 启动时用该路的 ARXML 核对帧名和信号名；帧不存在或该帧不声明这个信号，都会报 `[check]`。
+- 值来自与曲线 / Data 相同的按流解码表，只对 ARXML 能**唯一匹配**的流有效；没匹配上的流读值是运行时错误，不会猜成某个帧。
+- 目前只读：Ethernet 发送仍走生成器条目。
 
 ### fr_sig(cluster, slot, "Name")
 
@@ -438,7 +470,7 @@ let target = sys_get("Demo::Setpoint");       // 系统变量仍用函数
 sys_set("Demo::Setpoint", target * 0.9);      // 写入受定义的界限钳位
 ```
 
-信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义，点号/下标只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对报文名和信号名。
+信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义（FlexRay 用 `set_fr_sig`），`Message.Signal`、`FRn.Signal`、`ETHn.Frame.Signal` 及下标形式都只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对 CAN 报文名/信号名；FlexRay 与 Ethernet 的名字在节点启动时核对对应描述。
 
 ## 波形内建
 

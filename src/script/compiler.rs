@@ -36,6 +36,8 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         signal_refs: Vec::new(),
         set_sig_values: Vec::new(),
         named_signal_refs: Vec::new(),
+        fr_named_refs: Vec::new(),
+        eth_named_refs: Vec::new(),
         sysvar_refs: Vec::new(),
         recv_wildcard: false,
         cur_handler: None,
@@ -175,6 +177,8 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         signal_refs: c.signal_refs,
         set_sig_values: c.set_sig_values,
         named_signal_refs: c.named_signal_refs,
+        fr_named_refs: c.fr_named_refs,
+        eth_named_refs: c.eth_named_refs,
         send_refs: c.send_refs,
         recv_refs: c.recv_refs,
         recv_wildcard: c.recv_wildcard,
@@ -219,6 +223,10 @@ struct Comp {
     /// Named reads (`Message.Signal`, `Message["Signal Name"]`) as
     /// `(message, signal)` pairs, deduped, for the host's start check.
     named_signal_refs: Vec<(String, String)>,
+    /// Dotted FlexRay reads `FR{n}.Signal`, deduped.
+    fr_named_refs: Vec<(u8, String)>,
+    /// Dotted Ethernet reads `ETH{n}.Frame.Signal`, deduped.
+    eth_named_refs: Vec<(u8, String, String)>,
     /// System variable keys (`"ns::name"`) named by literal-argument
     /// `sys_get` / `sys_set` calls, deduped, for the host's start check.
     sysvar_refs: Vec<String>,
@@ -677,6 +685,27 @@ impl Comp {
                         let r = (msg.clone(), sig.clone());
                         if !self.named_signal_refs.contains(&r) {
                             self.named_signal_refs.push(r);
+                        }
+                    }
+                    // Dotted FR/ETH reads carry their bus and names as
+                    // literals; the host resolves the slot/frame at start.
+                    if *name == "fr_sig_named"
+                        && let (Expr::Int(bus), Expr::Str(sig)) = (&args[0], &args[1])
+                        && (0..=255).contains(bus)
+                    {
+                        let r = (*bus as u8, sig.clone());
+                        if !self.fr_named_refs.contains(&r) {
+                            self.fr_named_refs.push(r);
+                        }
+                    }
+                    if *name == "eth_sig"
+                        && let (Expr::Int(bus), Expr::Str(frame), Expr::Str(sig)) =
+                            (&args[0], &args[1], &args[2])
+                        && (0..=255).contains(bus)
+                    {
+                        let r = (*bus as u8, frame.clone(), sig.clone());
+                        if !self.eth_named_refs.contains(&r) {
+                            self.eth_named_refs.push(r);
                         }
                     }
                     // R2 fail-closed rule: every `send` / `send_ext` id
