@@ -4,7 +4,6 @@
 //! separate from CAN and FlexRay, with a byte cap because a single jumbo
 //! frame is far larger than a CAN frame. Decode (ARXML) and UI wiring build
 //! on this module.
-#![allow(dead_code)]
 
 pub mod db;
 pub mod frame;

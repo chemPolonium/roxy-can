@@ -11,8 +11,6 @@
 //! describe the file faithfully before any view consumes them -- so
 //! dead-code analysis is silenced module-wide.
 
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, HashMap};
 
 /// FlexRay transmission channel. A / B / both at once.
@@ -25,14 +23,6 @@ pub enum FrChannel {
 }
 
 impl FrChannel {
-    pub fn label(self) -> &'static str {
-        match self {
-            FrChannel::A => "A",
-            FrChannel::B => "B",
-            FrChannel::Both => "A+B",
-        }
-    }
-
     /// Whether this channel selection covers channel `ch`.
     pub fn covers(self, ch: FrChannel) -> bool {
         self == FrChannel::Both || self == ch
@@ -511,6 +501,7 @@ impl FrDb {
     /// count [`Self::frame_values`] walks its children to produce, read off the
     /// precomputed end bits instead. A Trace rebuild asks this for every row of
     /// the ring and keeps nothing but the answer (see [`crate::workspace::TraceRow::Fr`]).
+    #[cfg(test)]
     pub(crate) fn child_count(&self, frame_ix: usize, bytes: usize) -> usize {
         let bits = (bytes * 8) as u32;
         self.child_ends
@@ -530,6 +521,7 @@ impl FrDb {
     /// hex. FlexRay declares no per-signal message type, so the type tag is
     /// empty -- see [`crate::dbc::fmt_signal_value`], which leaves out whatever a
     /// signal has not got.
+    #[cfg(test)]
     fn signal_text(sig: &FrSignal, raw: u64, phys: f64) -> String {
         let label = Self::label_of(sig, phys);
         let mut text = crate::dbc::fmt_signal_value(phys, &sig.unit, "", label.as_deref());
@@ -543,6 +535,7 @@ impl FrDb {
     /// takes to walk and read them out
     /// ([`crate::headless_tests::perf_flexray_child_build_split`], `--release`),
     /// and a table shows a few dozen at a time.
+    #[cfg(test)]
     pub(crate) fn child_text(
         &self,
         frame_ix: usize,
@@ -556,6 +549,7 @@ impl FrDb {
 
     /// The name of child `child_ix` of `frame_ix` -- what [`Self::child_text`]
     /// prints first, without formatting the value. A column sort keys on this.
+    #[cfg(test)]
     pub(crate) fn child_name(&self, frame_ix: usize, child_ix: u32) -> Option<&str> {
         Some(self.child_signal_at(frame_ix, child_ix)?.name.as_str())
     }
@@ -563,6 +557,7 @@ impl FrDb {
     /// Decodes a frame payload into `(signal, text)` pairs: physical
     /// values with units, enumeration labels where the database has
     /// them. Takes the frame by index -- see [`Self::frame_ix_at`].
+    #[cfg(test)]
     pub fn decode(&self, frame_ix: usize, payload: &[u8]) -> Vec<(String, String)> {
         self.frame_values(frame_ix, payload)
             .filter_map(|(child_ix, raw, phys)| self.child_text(frame_ix, child_ix, raw, phys))
@@ -623,6 +618,7 @@ impl FrDb {
     /// includes a frame that declares no signals at all: a window's hand-picked
     /// selection admits rows *per slot*, so a slot has to be pickable whether or
     /// not anything under it is plottable.
+    #[cfg(test)]
     pub fn scheduled_slots(&self) -> Vec<(u16, Vec<String>)> {
         let mut slots: Vec<u32> = self.slot_ix.keys().copied().collect();
         slots.sort_unstable();
@@ -673,6 +669,7 @@ impl FrDb {
 
     /// `frame_ix`'s signals as the generator needs them to edit a value:
     /// position in the payload, encoding and range, in payload order.
+    #[cfg(test)]
     pub fn edit_signals(&self, frame_ix: usize) -> Vec<FrEditSignal> {
         self.children_of(frame_ix)
             .iter()
@@ -682,13 +679,9 @@ impl FrDb {
                     name: sig.name.clone(),
                     bit: u64::from(c.bit),
                     size: u64::from(sig.length_bits),
-                    big_endian: sig.big_endian,
                     signed: sig.signed,
                     factor: sig.factor,
                     offset: sig.offset,
-                    min: sig.min,
-                    max: sig.max,
-                    unit: sig.unit.clone(),
                 })
             })
             .collect()
@@ -739,18 +732,15 @@ impl FrDb {
 
 /// One generator-editable FlexRay signal: the drag handle's inputs, already
 /// resolved to a bit offset inside the frame payload.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct FrEditSignal {
     pub name: String,
     pub bit: u64,
     pub size: u64,
-    pub big_endian: bool,
     pub signed: bool,
     pub factor: f64,
     pub offset: f64,
-    pub min: f64,
-    pub max: f64,
-    pub unit: String,
 }
 
 // ----------------------------------------------------------------------

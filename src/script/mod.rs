@@ -79,7 +79,6 @@
 // S2 (the node runtime) is what calls into this module from the product
 // path; until it lands the module is reachable only from tests, which is
 // exactly why the dead-code sweep must stay quiet here.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 
@@ -199,7 +198,6 @@ pub enum Op {
     CallExtern(u16, u8),
     GetIndex,
     SetIndex,
-    Len,
     Pop,
     Return,
 }
@@ -208,7 +206,6 @@ pub enum Op {
 /// user functions and event handler bodies.
 #[derive(Debug)]
 pub struct Function {
-    pub name: String,
     pub arity: usize,
     pub code: Vec<Op>,
     /// Sparse op-index -> source-line table (first op on each new line).
@@ -543,6 +540,7 @@ fn extern_registry() -> &'static std::sync::Mutex<HashMap<String, ExternFn>> {
 /// Registers `name` as callable from scripts. Errors when the name
 /// collides with a builtin; re-registering an existing extern name
 /// replaces it, so a component can reload its models.
+#[cfg(test)]
 pub fn register_extern(name: &str, f: ExternFn) -> Result<(), String> {
     if HOST_FNS.iter().any(|(n, _, _)| *n == name) {
         return Err(format!("'{name}' is a builtin and cannot be replaced"));
@@ -626,6 +624,7 @@ pub(crate) fn run_for_output(src: &str) -> Result<Vec<String>, String> {
 }
 
 /// A stand-in external component: doubles its numeric argument.
+#[cfg(test)]
 fn regtest_double(args: &[Value]) -> Result<Option<Value>, String> {
     match args.first() {
         Some(Value::Int(n)) => Ok(Some(Value::Int(n * 2))),
@@ -635,6 +634,7 @@ fn regtest_double(args: &[Value]) -> Result<Option<Value>, String> {
 }
 
 /// A stand-in external procedure: acts, answers nothing.
+#[cfg(test)]
 fn regtest_noop(_args: &[Value]) -> Result<Option<Value>, String> {
     Ok(None)
 }

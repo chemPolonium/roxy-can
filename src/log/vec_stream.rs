@@ -17,6 +17,9 @@ pub struct VecStream {
 }
 
 impl VecStream {
+    /// The small-ASC path: CAN frames plus the FlexRay rows the same
+    /// parse produced.
+    #[cfg(test)]
     pub fn new(frames: Vec<CanFrame>) -> Self {
         VecStream {
             frames,

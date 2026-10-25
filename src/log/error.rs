@@ -8,11 +8,9 @@ pub enum LogError {
     Io(std::io::Error),
     /// Leading magic bytes did not match what the reader expected
     /// (e.g. a `.blf` file whose header is not `LOGG`).
-    #[allow(dead_code)]
     BadSignature,
     /// File ended mid-record. Only reported for fixed-layout formats; the
     /// ASC reader treats a truncated tail as EOF.
-    #[allow(dead_code)]
     Truncated,
     /// The extension resolved to a format whose reader is not built yet.
     UnsupportedFormat(&'static str),

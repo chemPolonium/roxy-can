@@ -1,7 +1,3 @@
-// The core keeps observer/text models that the headless tests and CLI drive;
-// the web shell builds its own DTOs on top of them.
-#![allow(dead_code)]
-
 use std::io::IsTerminal;
 
 mod aggregate;

@@ -1,4 +1,5 @@
 use crate::can::frame::CanFrame;
+#[cfg(test)]
 use crate::log::vec_stream::VecStream;
 use crate::source::{FrameSource, FrameStream};
 
@@ -43,7 +44,7 @@ impl ReplaySource {
     }
 
     /// Convenience constructor for tests and small in-memory captures.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn from_frames(frames: Vec<CanFrame>) -> Self {
         Self::new(Box::new(VecStream::new(frames)))
     }

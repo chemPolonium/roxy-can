@@ -157,10 +157,9 @@ impl ScriptNode {
         std::mem::take(&mut self.pending_lines)
     }
 
-    /// Arms the node for a measurement: recompile, run the main chunk
-    /// (globals initialize), fire `on start`, arm timers lazily. Compile
-    /// or main errors land in the log and leave the node idle. `dbc` is
-    /// the channel's database, backing the signal read/write builtins.
+    /// Arms the node for a measurement. Test convenience wrapper around
+    /// [`Self::start_with`].
+    #[cfg(test)]
     pub fn start(&mut self, dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>) {
         self.start_with(dbc, None, None);
     }

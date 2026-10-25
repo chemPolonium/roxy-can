@@ -34,6 +34,7 @@ pub enum Kind {
 }
 
 impl Kind {
+    #[cfg(test)]
     pub const ALL: [Kind; 4] = [Kind::Unknown, Kind::Dlc, Kind::Cycle, Kind::Missing];
 
     pub fn label(self) -> &'static str {
@@ -47,6 +48,7 @@ impl Kind {
 
     /// Position in [`Kind::ALL`], which the report window also indexes its
     /// per-rule filter flags with.
+    #[cfg(test)]
     pub fn index(self) -> usize {
         match self {
             Kind::Unknown => 0,

@@ -1349,13 +1349,15 @@ impl Config {
                 time_to: w.time_to,
                 filters_open: w.filters_open,
                 fr_expand: w.fr_expand,
-                mark_us: [None, None],
-                pick: None,
+                #[cfg(test)]
                 rows: std::collections::VecDeque::new(),
+                #[cfg(test)]
                 rows_build: None,
-                row_ends: Vec::new(),
+                #[cfg(test)]
                 rows_sorted: false,
+                #[cfg(test)]
                 shown_t_us: u64::MAX,
+                #[cfg(test)]
                 shown_count: 0,
             })
             .collect();
@@ -1369,8 +1371,11 @@ impl Config {
                 manual: merge_picks(w.manual, w.fr_manual, w.eth_manual),
                 filter: w.filter,
                 dbc_only: w.dbc_only,
+                #[cfg(test)]
                 text_keys: Vec::new(),
+                #[cfg(test)]
                 text_header: String::new(),
+                #[cfg(test)]
                 text_rows: Vec::new(),
             })
             .collect();
@@ -1382,8 +1387,11 @@ impl Config {
                 opened: w.opened,
                 scope: w.scope,
                 manual: merge_picks(w.manual, w.fr_manual, w.eth_manual),
+                #[cfg(test)]
                 text_keys: Vec::new(),
+                #[cfg(test)]
                 text_header: String::new(),
+                #[cfg(test)]
                 text_rows: Vec::new(),
             })
             .collect();
@@ -1396,14 +1404,16 @@ impl Config {
                 time_window_s: g.time_window_s.clamp(0.1, 3600.0),
                 stacked: g.stacked,
                 opened: g.opened,
+                #[cfg(test)]
                 t_offset_s: 0.0,
                 show_cursor: g.show_cursor,
-                cursor_s: [None, None],
-                cursor_drag: None,
                 zoom_enabled: g.zoom_enabled,
                 show_markers: g.show_markers,
+                #[cfg(test)]
                 y_locks: HashMap::new(),
+                #[cfg(test)]
                 legend_keys: Vec::new(),
+                #[cfg(test)]
                 legend: Vec::new(),
             })
             .collect();
@@ -1414,7 +1424,9 @@ impl Config {
                 name: d.name,
                 signals: sig_keys(&d.signals),
                 opened: d.opened,
+                #[cfg(test)]
                 text_keys: Vec::new(),
+                #[cfg(test)]
                 text_cache: Vec::new(),
             })
             .collect();

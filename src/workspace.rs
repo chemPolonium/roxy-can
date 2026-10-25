@@ -38,6 +38,7 @@ pub enum Pick {
 /// One Trace row: a CAN, FlexRay or Ethernet frame. The three share the Trace
 /// window's table, interleaved by time -- CANoe's Trace shape -- while their
 /// storage and the rest of each pipeline stay apart.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub enum TraceRow {
     Can(crate::can::frame::CanFrame),
@@ -58,6 +59,7 @@ pub enum TraceRow {
     Eth(crate::eth::EthFrame),
 }
 
+#[cfg(test)]
 impl TraceRow {
     pub fn t_us(&self) -> u64 {
         match self {
@@ -83,89 +85,13 @@ impl TraceRow {
     }
 }
 
-/// Which row of the merged Trace table the pointer picked: the arrival's
-/// microsecond, the bus it came on and its address (a CAN id, or a FlexRay slot),
-/// with the stream spelled out so the numbers cannot be read in the wrong space.
-///
-/// The address is not decoration: a simulation stamps every frame of one step
-/// with the same microsecond, so CAN1's id 100 and CAN1's id 200 arrive side by
-/// side at one instant -- and a pick that lit both would be a lie about which row
-/// the operator clicked, and one arrow press would jump two rows.
-///
-/// An expanded FlexRay frame's child rows carry their parent's key, so picking
-/// one of them picks the frame: the group is one arrival, and it highlights and
-/// steps as one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TracePick {
-    pub t_us: u64,
-    /// The CAN channel, FlexRay cluster or Ethernet bus -- never more than one
-    /// in a comparison, which is what the stream flags are for.
-    pub bus: u8,
-    /// CAN id, FlexRay slot, or the frame's EtherType.
-    pub addr: u32,
-    pub fr: bool,
-    pub eth: bool,
-    /// Ethernet ring sequence, which names one frame at a shared microsecond;
-    /// zero for the other two streams.
-    pub seq: u64,
-}
-
-impl TracePick {
-    /// The key of a cache entry.
-    pub fn of(row: &TraceRow) -> Self {
-        match row {
-            TraceRow::Can(f) => Self {
-                t_us: f.t_us,
-                bus: f.channel,
-                addr: f.id,
-                fr: false,
-                eth: false,
-                seq: 0,
-            },
-            TraceRow::Fr(r, _) => Self {
-                t_us: r.t_us,
-                bus: r.bus,
-                addr: u32::from(r.slot),
-                fr: true,
-                eth: false,
-                seq: 0,
-            },
-            TraceRow::Eth(f) => Self {
-                t_us: f.t_us,
-                bus: f.bus,
-                addr: u32::from(f.ethertype),
-                fr: false,
-                eth: true,
-                seq: f.seq,
-            },
-        }
-    }
-}
-
-/// One step through the rows on screen: `down` moves toward the older end (the
-/// list is newest-first), and an expanded FlexRay frame counts as one step -- its
-/// decoded children belong to it, so they never become stops of their own.
-/// Nothing picked starts at the newest row, and so does a pick whose row has left
-/// the cache (a filter that stopped matching it, the ring trimmed, a cleared
-/// trace): a keyboard that dead-ends reads as a broken control. Both ends clamp.
-pub(crate) fn step_pick(
-    rows: &std::collections::VecDeque<TraceRow>,
-    from: Option<TracePick>,
-    down: bool,
-) -> Option<TracePick> {
-    let Some(at) = from.and_then(|p| rows.iter().position(|r| TracePick::of(r) == p)) else {
-        return rows.front().map(TracePick::of);
-    };
-    let next = if down { at + 1 } else { at.saturating_sub(1) };
-    rows.get(next).map(TracePick::of).or(from)
-}
-
 /// The table rows a whole cache list occupies: `ends[i]` is the first table row
 /// *after* cache entry `i`, and the return value is the total the list covers.
 /// `ends` is a buffer the caller reuses (the Trace window's scratch pad, never
 /// read between draws), so a 50 000-row list costs no allocation per frame.
+#[cfg(test)]
 pub(crate) fn table_row_spans(
-    rows: &std::collections::VecDeque<TraceRow>,
+    #[cfg(test)] rows: &std::collections::VecDeque<TraceRow>,
     ends: &mut Vec<usize>,
 ) -> usize {
     ends.clear();
@@ -181,6 +107,7 @@ pub(crate) fn table_row_spans(
 /// Which cache entry table row `n` belongs to, and which part of it: offset `0`
 /// is the row itself, `1..` its decoded children. `ends` is what
 /// [`table_row_spans`] produced, and `n` must be inside it.
+#[cfg(test)]
 pub(crate) fn locate_row(ends: &[usize], n: usize) -> (usize, usize) {
     let ix = ends.partition_point(|&e| e <= n);
     (ix, n - if ix == 0 { 0 } else { ends[ix - 1] })
@@ -189,9 +116,6 @@ pub(crate) fn locate_row(ends: &[usize], n: usize) -> (usize, usize) {
 /// Which analysis window the Filter Selection popup edits.
 #[derive(Clone, Copy, PartialEq)]
 pub enum PopupTarget {
-    Trace(usize),
-    Messages(usize),
-    Stats(usize),
     Graphics(usize),
     Data(usize),
     State(usize),
@@ -355,48 +279,32 @@ pub struct TraceWin {
     /// Whether FlexRay rows expand into decoded signal child rows (needs
     /// the arriving row's own cluster description). Session state.
     pub fr_expand: bool,
-    /// The two measurement cursors, as the bus-clock microsecond of the row each
-    /// was set on (`[A, B]`, `None` = unset). Session state, like the plot's
-    /// pair: they point into the row ring, which a fresh measurement empties.
-    /// A row is named by its instant because the instant is what is being
-    /// measured -- two rows sharing a microsecond are simultaneous, and they
-    /// both take the mark.
-    pub mark_us: [Option<u64>; 2],
-    /// The row the pointer picked (`None` = nothing picked). Session state, for
-    /// the same reason as [`TraceWin::mark_us`]: it names an instant inside the
-    /// row ring, which a fresh measurement empties.
-    /// The stream is part of the key because one merged table holds both: a CAN
-    /// frame and a FlexRay frame stamped at the same microsecond are two
-    /// different rows, and lighting both up from one click would be a lie about
-    /// which one was meant.
-    pub pick: Option<TracePick>,
     /// The filtered, newest-first row cache the window draws (virtual
     /// scrolling: only the visible slice is submitted per frame).
     /// Rebuilt on the text gate; session state only. A double-ended queue
     /// because a steady run only *prepends* what arrived since the last gate
     /// (see [`RowsBuild`]), and prepending into a `Vec` would move every
     /// cached row each time.
+    #[cfg(test)]
     pub(crate) rows: std::collections::VecDeque<TraceRow>,
-    /// Scratch for the Trace table's draw: the running total of
-    /// [`TraceRow::span`] over `rows`, so the clipper can count *table* rows
-    /// while the cache holds one entry per frame. Rebuilt from the list at the
-    /// start of every draw and never read before that -- owning the buffer here
-    /// just keeps a 50 000-entry `Vec` from being allocated per frame.
-    pub(crate) row_ends: Vec<usize>,
     /// What [`crate::app::App::sync_trace_rows`] last built the cache from, or
     /// `None` when there is nothing to extend. Session state only.
+    #[cfg(test)]
     pub(crate) rows_build: Option<RowsBuild>,
     /// Set when a column-header sort re-orders the cache: a sorted cache is no
     /// longer time-ordered, so the next refresh rebuilds it from scratch
     /// instead of prepending a newest-first batch on top. Session state.
+    #[cfg(test)]
     pub(crate) rows_sorted: bool,
     /// The newest frame timestamp this window has revealed. Rows stream in
     /// batches on the text gate (see [`crate::app::App::sync_trace_rows`])
     /// instead of churning every frame; `u64::MAX` means everything so far.
     /// Survives ring wrap-around because committed rows only ever leave the
     /// front of the deque. Session state only.
+    #[cfg(test)]
     pub(crate) shown_t_us: u64,
     /// Matching-row count as of the last refresh, for the throttled header.
+    #[cfg(test)]
     pub(crate) shown_count: usize,
 }
 
@@ -437,6 +345,7 @@ impl TraceWin {
     /// answer is what hides rows, not what is filled in. The main row's own
     /// controls (scope, text, direction) stay out because they are visible, and
     /// so does `fr_expand`: it adds rows, it never hides one.
+    #[cfg(test)]
     pub fn hidden_conds(&self) -> Vec<&'static str> {
         let f = self.filter_lens();
         let mut conds = Vec::new();
@@ -475,6 +384,7 @@ fn parse_payload_pattern(text: &str) -> Option<Vec<u8>> {
 /// ring lengths are part of it because a cleared or overwritten ring is not
 /// "the same ring with more rows", however the timestamps look.
 #[derive(Clone, PartialEq)]
+#[cfg(test)]
 pub struct RowsBuild {
     lens: TraceFilter,
     /// Newest-first: the cache covers every matching row from this timestamp
@@ -503,6 +413,7 @@ pub struct RowsBuild {
     eth_len_includes_header: bool,
 }
 
+#[cfg(test)]
 impl RowsBuild {
     /// A record of the walk that just produced a cache.
     #[allow(clippy::too_many_arguments)]
@@ -580,8 +491,11 @@ pub struct MsgWin {
     /// Message rows as of the last throttled text refresh (see
     /// [`crate::app::App::sync_msg_text`]); the table draws these so the
     /// counters hold still long enough to read. Session state only.
+    #[cfg(test)]
     pub(crate) text_keys: Vec<(u8, u32)>,
+    #[cfg(test)]
     pub(crate) text_header: String,
+    #[cfg(test)]
     pub(crate) text_rows: Vec<crate::app::MsgRowText>,
 }
 
@@ -593,8 +507,11 @@ pub struct StatsWin {
     pub manual: HashSet<Pick>,
     /// Message Statistics rows as of the last throttled text refresh (see
     /// [`crate::app::App::sync_stats_text`]). Session state only.
+    #[cfg(test)]
     pub(crate) text_keys: Vec<(u8, u32)>,
+    #[cfg(test)]
     pub(crate) text_header: String,
+    #[cfg(test)]
     pub(crate) text_rows: Vec<crate::app::StatsRowText>,
 }
 
@@ -679,13 +596,15 @@ impl App {
             time_to: String::new(),
             filters_open: false,
             fr_expand: false,
-            mark_us: [None, None],
-            pick: None,
+            #[cfg(test)]
             rows: std::collections::VecDeque::new(),
+            #[cfg(test)]
             rows_build: None,
-            row_ends: Vec::new(),
+            #[cfg(test)]
             rows_sorted: false,
+            #[cfg(test)]
             shown_t_us: self.snap.trace.last().map(|f| f.t_us).unwrap_or(u64::MAX),
+            #[cfg(test)]
             shown_count: self.snap.trace.len(),
         });
     }
@@ -699,8 +618,11 @@ impl App {
             manual: HashSet::new(),
             filter: String::new(),
             dbc_only: false,
+            #[cfg(test)]
             text_keys: Vec::new(),
+            #[cfg(test)]
             text_header: String::new(),
+            #[cfg(test)]
             text_rows: Vec::new(),
         });
     }
@@ -712,8 +634,11 @@ impl App {
             opened: true,
             scope: SigScope::All,
             manual: HashSet::new(),
+            #[cfg(test)]
             text_keys: Vec::new(),
+            #[cfg(test)]
             text_header: String::new(),
+            #[cfg(test)]
             text_rows: Vec::new(),
         });
     }
@@ -726,14 +651,16 @@ impl App {
             time_window_s: 10.0,
             stacked: false,
             opened: true,
+            #[cfg(test)]
             t_offset_s: 0.0,
             show_cursor: true,
-            cursor_s: [None, None],
-            cursor_drag: None,
             zoom_enabled: false,
             show_markers: true,
+            #[cfg(test)]
             y_locks: HashMap::new(),
+            #[cfg(test)]
             legend_keys: Vec::new(),
+            #[cfg(test)]
             legend: Vec::new(),
         });
     }
@@ -744,7 +671,9 @@ impl App {
             name: format!("Data {}", self.data_counter),
             signals: Vec::new(),
             opened: true,
+            #[cfg(test)]
             text_keys: Vec::new(),
+            #[cfg(test)]
             text_cache: Vec::new(),
         });
     }
@@ -810,6 +739,7 @@ impl App {
     /// makes its clusters selectable without loading anything. The
     /// window's own choice is always kept, or a cluster would vanish from
     /// the list the moment its last row aged out of the ring.
+    #[cfg(test)]
     pub fn fr_scope_buses(&self, chosen: SigScope) -> Vec<u8> {
         let mut buses: Vec<u8> = self
             .fr_buses
@@ -824,44 +754,6 @@ impl App {
         buses.sort_unstable();
         buses.dedup();
         buses
-    }
-
-    /// The Ethernet buses the scope combo can offer: configured matrices and
-    /// buses that currently carry flows, plus the window's own choice so its
-    /// label survives the last row aging out.
-    pub fn eth_scope_buses(&self, chosen: SigScope) -> Vec<u8> {
-        let mut buses: Vec<u8> = self
-            .eth_buses
-            .keys()
-            .copied()
-            .chain(self.snap.eth_aggs.iter().map(|a| a.key.bus))
-            .collect();
-        if let SigScope::EthBus(b) = chosen {
-            buses.push(b);
-        }
-        buses.sort_unstable();
-        buses.dedup();
-        buses
-    }
-
-    /// Manual selection set of the window named by `t` (None for
-    /// Graphics/Data, which filter at the signal level).
-    pub fn win_manual(&self, t: PopupTarget) -> Option<&HashSet<Pick>> {
-        match t {
-            PopupTarget::Trace(i) => self.trace_windows.get(i).map(|w| &w.manual),
-            PopupTarget::Messages(i) => self.msg_windows.get(i).map(|w| &w.manual),
-            PopupTarget::Stats(i) => self.stats_windows.get(i).map(|w| &w.manual),
-            _ => None,
-        }
-    }
-
-    pub fn win_manual_mut(&mut self, t: PopupTarget) -> Option<&mut HashSet<Pick>> {
-        match t {
-            PopupTarget::Trace(i) => self.trace_windows.get_mut(i).map(|w| &mut w.manual),
-            PopupTarget::Messages(i) => self.msg_windows.get_mut(i).map(|w| &mut w.manual),
-            PopupTarget::Stats(i) => self.stats_windows.get_mut(i).map(|w| &mut w.manual),
-            _ => None,
-        }
     }
 
     /// Applies one Trace window's filter: scope, direction, DBC-only,

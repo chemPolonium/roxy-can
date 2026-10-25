@@ -15,7 +15,6 @@
 //! The editing UI and project persistence land with the rest of item 8;
 //! until then some of this is reachable only from tests, which
 //! dead_code cannot see.
-#![allow(dead_code)]
 
 use crate::app::App;
 
@@ -365,36 +364,6 @@ impl App {
             }
             None => String::new(),
         }
-    }
-
-    /// Signal names the database declares on `(ch, id)`, for the editor's
-    /// signal picker; empty when there is no database or message.
-    pub fn signal_names(&self, ch: u8, id: u32) -> Vec<String> {
-        self.channel_dbc(ch)
-            .and_then(|db| db.message_of(id))
-            .map(|m| m.signals.iter().map(|s| s.name.clone()).collect())
-            .unwrap_or_default()
-    }
-
-    /// Signal names the cluster description declares in `slot` on `bus`, for
-    /// the editor's FlexRay signal picker; empty when the bus has no
-    /// description or the slot declares no signals. A slot held by several
-    /// frames lists the union of their signals (a name two of them declare
-    /// appears once), because a rule is armed by `(bus, slot, signal)` and the
-    /// cycle it fires on decides which frame it read.
-    pub fn fr_signal_names(&self, bus: u8, slot: u16) -> Vec<String> {
-        let Some(db) = self.fr_db(bus) else {
-            return Vec::new();
-        };
-        let mut names: Vec<String> = db
-            .slot_signals()
-            .into_iter()
-            .filter(|(s, _, _)| *s == slot)
-            .flat_map(|(_, _, n)| n)
-            .collect();
-        names.sort();
-        names.dedup();
-        names
     }
 
     pub fn add_signal_trigger(&mut self) {

@@ -97,14 +97,17 @@ impl EthRing {
         self.next_seq = 0;
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.total
     }
 
+    #[cfg(test)]
     pub fn bytes(&self) -> usize {
         self.bytes
     }
 
+    #[cfg(test)]
     pub fn dropped(&self) -> u64 {
         self.dropped
     }
@@ -114,10 +117,10 @@ impl EthRing {
             chunks: self.chunks.clone(),
             tail: self.tail.clone(),
             total: self.total,
-            bytes: self.bytes,
         })
     }
 
+    #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &EthFrame> {
         self.chunks
             .iter()
@@ -132,7 +135,6 @@ pub struct EthTraceView {
     chunks: Vec<Arc<Vec<EthFrame>>>,
     tail: Vec<EthFrame>,
     total: usize,
-    bytes: usize,
 }
 
 impl EthTraceView {
@@ -140,14 +142,12 @@ impl EthTraceView {
         self.total
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.total == 0
     }
 
-    pub fn bytes(&self) -> usize {
-        self.bytes
-    }
-
+    #[cfg(test)]
     pub fn get(&self, i: usize) -> Option<&EthFrame> {
         let mut off = i;
         for c in &self.chunks {
@@ -159,6 +159,7 @@ impl EthTraceView {
         self.tail.get(off)
     }
 
+    #[cfg(test)]
     pub fn last(&self) -> Option<&EthFrame> {
         self.get(self.total.saturating_sub(1))
     }

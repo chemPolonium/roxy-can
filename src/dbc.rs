@@ -428,6 +428,7 @@ impl SymbolTable {
     }
 
     /// Signals received by the given node: (message, signal name, sender).
+    #[cfg(test)]
     pub fn node_rx_signals(&self, node: &str) -> Vec<(MsgKey, String, String)> {
         let mut out = Vec::new();
         for &key in &self.order {
@@ -623,6 +624,7 @@ pub fn fmt_decoded(type_tag: &str, phys: f64) -> String {
 /// One decoded value as the windows print it: the number, then the unit, then
 /// the type tag, then the enum label. Empty parts are skipped, so a unitless
 /// integer reads `3000 [u16]` rather than `3000  [u16]`.
+#[cfg(test)]
 pub fn fmt_signal_value(phys: f64, unit: &str, type_tag: &str, label: Option<&str>) -> String {
     let mut s = fmt_decoded(type_tag, phys);
     if !unit.is_empty() {

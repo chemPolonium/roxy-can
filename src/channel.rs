@@ -28,28 +28,12 @@ impl NodeRole {
     /// The two roles in display order (increasing presence).
     pub const ALL: [NodeRole; 2] = [NodeRole::Absent, NodeRole::Simulated];
 
-    /// The UI label.
-    pub fn label(self) -> &'static str {
-        match self {
-            NodeRole::Absent => "Absent",
-            NodeRole::Simulated => "Simulated",
-        }
-    }
-
     /// The project-file spelling (the Rust variant name, like the other
     /// persisted enums).
     pub fn tag(self) -> &'static str {
         match self {
             NodeRole::Absent => "Absent",
             NodeRole::Simulated => "Simulated",
-        }
-    }
-
-    /// One-line explanation shown under every role selector.
-    pub fn hint(self) -> &'static str {
-        match self {
-            NodeRole::Simulated => "Transmits its DBC messages",
-            NodeRole::Absent => "Messages come from replay blocks or real hardware",
         }
     }
 
@@ -146,6 +130,7 @@ impl App {
     /// What the database declares for this message: `Some(0)` for an
     /// event-triggered one, `None` when it says nothing at all. Snapshot
     /// read (shadows the `BusCore` lookup).
+    #[cfg(test)]
     pub fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
         self.channel_dbc(ch)
             .and_then(|db| db.message_of(id))
@@ -202,37 +187,6 @@ impl App {
             .filter(|n| !n.trim().is_empty())
             .cloned()
             .unwrap_or_else(|| format!("FR{bus}"))
-    }
-
-    /// The period the cluster description gives the frame occupying this slot:
-    /// how many cycles between its arrivals, times the cluster cycle length.
-    /// `None` when the bus has no description, or it schedules nothing there --
-    /// the generator's cycle dialog shows it as a hint, not as a value to guess.
-    pub fn fr_declared_period_us(&self, bus: u8, slot: u16) -> Option<u64> {
-        let db = self.fr_db(bus)?;
-        let f = db.frame_index(db.frame_ix_of_slot(slot)?)?;
-        let rep = f.triggering.cycle_repetition.max(1) as f64;
-        let us = (db.params.cycle_time_ms * rep * 1_000.0).round() as u64;
-        (us > 0).then_some(us)
-    }
-
-    /// The cluster's cycle time in µs -- the unit a static slot's period is
-    /// actually counted in. `None` when the 路 has no description, which is what
-    /// makes the generator fall back to plain milliseconds for that entry rather
-    /// than inventing a cycle grid.
-    pub fn fr_cycle_time_us(&self, bus: u8) -> Option<u64> {
-        let ms = self.fr_db(bus)?.params.cycle_time_ms;
-        (ms > 0.0).then(|| (ms * 1_000.0).round() as u64)
-    }
-
-    /// How many bytes this slot's payload carries: the length the schedule
-    /// declares for the frame occupying it, `None` when nothing describes the slot
-    /// (then the entry's own length is all anyone knows). This is not a limit the
-    /// operator can move -- a FlexRay slot is that wide or it is not scheduled.
-    pub fn fr_declared_len(&self, bus: u8, slot: u16) -> Option<usize> {
-        let db = self.fr_db(bus)?;
-        let f = db.frame_index(db.frame_ix_of_slot(slot)?)?;
-        (f.length > 0).then_some(f.length as usize)
     }
 
     /// The bus a signal key lives on, spelled the way the tables and legends
@@ -395,34 +349,11 @@ impl App {
         // The status line ("bus CANx removed") came from the command.
     }
 
-    pub fn pick_dbc(&mut self) {
-        let ch = 0;
-        let name = self.channel_name(ch as u8);
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Open database for {name}"))
-            .add_filter("CAN databases", &["dbc", "arxml", "xml"])
-            .pick_file()
-        {
-            self.open_can_database_for(ch, p.to_string_lossy().into_owned());
-        }
-    }
-
-    /// Open a database directly for a given channel (used by the Buses window).
-    pub fn pick_dbc_for(&mut self, ch: usize) {
-        let name = self.channel_name(ch as u8);
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Open database for {name}"))
-            .add_filter("CAN databases", &["dbc", "arxml", "xml"])
-            .pick_file()
-        {
-            self.open_can_database_for(ch, p.to_string_lossy().into_owned());
-        }
-    }
-
     /// Opens either a DBC or a CAN ARXML on one existing bus. An ARXML with
     /// exactly one CAN cluster loads that cluster; a multi-cluster matrix is
     /// refused here with a pointer to the unified importer, which creates one
     /// bus per cluster instead of silently choosing one.
+    #[cfg(test)]
     pub fn open_can_database_for(&mut self, ch: usize, path: String) {
         let ext = std::path::Path::new(&path)
             .extension()
@@ -480,31 +411,6 @@ impl App {
     /// itself never names its clusters, so guessing (first free bus, in file
     /// picking order) silently reads one network's slots against the other's
     /// schedule -- plausible wrong names, the worst possible failure here.
-    pub fn pick_cluster_description(&mut self, bus: u8) {
-        let Some(path) = Self::pick_cluster_file() else {
-            return;
-        };
-        if let Some(bus) = self.load_cluster_description(&path, Some(bus)) {
-            let name = self
-                .fr_db(bus)
-                .map(|db| db.params.name.as_str())
-                .unwrap_or("");
-            self.status = format!(
-                "Loaded {} cluster description ({name}, not attached; used for replay decoding): {path}",
-                self.fr_bus_label(bus)
-            );
-        }
-    }
-
-    /// The shared file picker of the two entry points above.
-    fn pick_cluster_file() -> Option<String> {
-        let p = rfd::FileDialog::new()
-            .set_title("Open FlexRay cluster description")
-            .add_filter("Cluster descriptions", &["xml", "arxml", "fibex"])
-            .pick_file()?;
-        Some(p.to_string_lossy().into_owned())
-    }
-
     /// Loads one Ethernet AUTOSAR matrix. A `None` bus picks the first free
     /// Ethernet index; cancelling the picker adds nothing.
     pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
@@ -580,18 +486,6 @@ impl App {
         Some(bus)
     }
 
-    pub fn pick_eth_arxml(&mut self, bus: Option<u8>) -> Option<u8> {
-        let p = rfd::FileDialog::new()
-            .set_title("Open Ethernet communication matrix")
-            .add_filter("AUTOSAR ARXML", &["arxml", "xml"])
-            .pick_file()?;
-        self.load_eth_description(&p.to_string_lossy(), bus)
-    }
-
-    pub fn add_eth_bus(&mut self) {
-        let _ = self.pick_eth_arxml(None);
-    }
-
     /// The next free Ethernet bus index, the same "first gap" rule FlexRay uses.
     pub fn next_eth_bus(&self) -> Option<u8> {
         (0..=u8::MAX).find(|b| !self.eth_buses.contains_key(b))
@@ -615,21 +509,6 @@ impl App {
         self.can_arxml
             .insert(bus, (path.to_string(), cluster.to_string()));
         Ok(())
-    }
-
-    /// One dialog for every communication cluster in one ARXML file. Each
-    /// cluster becomes its own bus: CAN clusters add CAN buses, FlexRay and
-    /// Ethernet clusters take the next free index in their own numbering
-    /// space. Clusters already loaded from the same file are skipped.
-    pub fn import_arxml_dialog(&mut self) {
-        let Some(p) = rfd::FileDialog::new()
-            .set_title("Import AUTOSAR communication matrix")
-            .add_filter("AUTOSAR ARXML", &["arxml", "xml"])
-            .pick_file()
-        else {
-            return;
-        };
-        self.import_arxml_path(&p.to_string_lossy());
     }
 
     pub fn import_arxml_path(&mut self, path: &str) {
@@ -840,25 +719,6 @@ impl App {
         self.eth_buses.get(&bus).map(|cfg| cfg.db.as_ref())
     }
 
-    pub fn eth_bus_rows(&self) -> Vec<u8> {
-        self.eth_buses.keys().copied().collect()
-    }
-
-    /// The FlexRay twin of "+ Add bus". A FlexRay 路 *is* its cluster
-    /// description -- there is no such thing as an empty one -- so adding a bus
-    /// means picking that file, and it lands on the first index that carries
-    /// nothing. The port stays closed until the new row's 硬件 column picks one,
-    /// exactly the two steps a fresh CAN bus takes (add row, then attach).
-    /// Cancelling the picker adds nothing, which is also why no placeholder row
-    /// is needed.
-    pub fn add_flexray_bus(&mut self) {
-        let Some(bus) = self.next_flexray_bus() else {
-            self.status = "FlexRay bus index exhausted (256 buses)".to_string();
-            return;
-        };
-        self.pick_cluster_description(bus);
-    }
-
     /// The index a new FlexRay 路 takes: the first one with no description on
     /// it. Kept apart from [`Self::add_flexray_bus`] because that one opens a
     /// file dialog and this is the part worth asserting.
@@ -873,6 +733,7 @@ impl App {
     /// A cluster that only the log names is different -- it is real traffic that
     /// cannot be named yet, and giving it a description is what its row's
     /// `加载描述…` is for.
+    #[cfg(test)]
     pub fn fr_bus_rows(&self) -> Vec<u8> {
         let mut buses: Vec<u8> = self
             .fr_buses
@@ -1087,35 +948,7 @@ impl App {
         self.set_fr_watch(bus, Some(channel_index), &path);
     }
 
-    /// Attaches one more DBC file to the bus as an extra database (the
-    /// primary stays); re-attaching the same path is a no-op.
-    pub fn attach_dbc_to(&mut self, ch: usize, path: String) {
-        if self.can_arxml.contains_key(&(ch as u8)) {
-            self.status =
-                "This bus is loaded from an ARXML cluster; use Open... to replace its database"
-                    .to_string();
-            return;
-        }
-        let mut paths = self
-            .snap
-            .channels
-            .get(ch)
-            .map(|c| c.dbc_paths.clone())
-            .unwrap_or_default();
-        if paths.contains(&path) {
-            return;
-        }
-        paths.push(path);
-        self.send(crate::bus::BusCommand::LoadDbc {
-            ch: ch as u8,
-            paths,
-        });
-    }
-
-    /// Sets a bus's primary DBC path (extra attached databases stay) and
-    /// loads it; successful parses are recorded in the recent list.
-    /// "Table present after the load" is the success signal -- a failed
-    /// load leaves no table behind.
+    /// Replaces a bus's primary database.
     pub fn open_dbc_for(&mut self, ch: usize, path: String) {
         self.can_arxml.remove(&(ch as u8));
         let mut paths = self
@@ -1139,40 +972,9 @@ impl App {
         }
     }
 
-    /// Detaches the extra database at `extra_index` (0 = first extra; the
-    /// primary is detached with `open_dbc_for`'s replacement or by emptying
-    /// the path). Reloads the bus from the remaining list.
-    pub fn detach_dbc_extra(&mut self, ch: usize, extra_index: usize) {
-        let mut paths = self
-            .snap
-            .channels
-            .get(ch)
-            .map(|c| c.dbc_paths.clone())
-            .unwrap_or_default();
-        if extra_index + 1 < paths.len() {
-            paths.remove(extra_index + 1);
-            self.send(crate::bus::BusCommand::LoadDbc {
-                ch: ch as u8,
-                paths,
-            });
-        }
-    }
-
-    /// Opens a file-picker and attaches the picked DBC to the bus as an
-    /// extra database.
-    pub fn attach_dbc_dialog(&mut self, ch: usize) {
-        let name = self.channel_name(ch as u8);
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title(format!("Attach extra DBC to {name}"))
-            .add_filter("DBC files", &["dbc"])
-            .pick_file()
-        {
-            self.attach_dbc_to(ch, p.to_string_lossy().into_owned());
-        }
-    }
-
     /// Opens a file dropped onto the window: a DBC goes into the first
     /// bus, an ASC becomes the replay log.
+    #[cfg(test)]
     pub fn open_dropped(&mut self, path: &std::path::Path) {
         let ext = path
             .extension()

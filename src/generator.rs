@@ -99,19 +99,15 @@ pub(crate) fn hex_of(data: &[u8]) -> String {
         .join(" ")
 }
 
-/// How many bytes a payload's hex text holds -- the length a row shows when the
-/// schedule does not state one.
-pub fn hex_len_of(text: &str) -> usize {
-    text.split_whitespace().count()
-}
-
 /// Ceiling of the period the cycle dialog accepts, in milliseconds.
+#[cfg(test)]
 pub const TX_CYCLE_MAX_MS: u64 = 60_000;
 
 /// The cycle dialog's draft text as microseconds. Whole milliseconds only, and
 /// 0 stays meaningful: it is an event-triggered message. Anything that does not
 /// read as a period -- half-deleted, fractional, out of range -- is refused so
 /// the dialog can disable its confirm button rather than guess one.
+#[cfg(test)]
 pub fn cycle_from_ms_text(s: &str) -> Option<u64> {
     let ms: u64 = s.trim().parse().ok()?;
     (ms <= TX_CYCLE_MAX_MS).then_some(ms * 1_000)
@@ -120,6 +116,7 @@ pub fn cycle_from_ms_text(s: &str) -> Option<u64> {
 /// Which cycle count a period means on this cluster: `None` when it is not a
 /// whole number of cycles, which is what keeps a row honest about a period it
 /// inherited from a project whose cycle time has since changed.
+#[cfg(test)]
 pub fn cycles_of(period_us: u64, cycle_us: u64) -> Option<u64> {
     (cycle_us > 0 && period_us > 0 && period_us.is_multiple_of(cycle_us))
         .then(|| period_us / cycle_us)
@@ -130,6 +127,7 @@ pub fn cycles_of(period_us: u64, cycle_us: u64) -> Option<u64> {
 /// schedule decides when it transmits -- so 0 is refused with the reason rather
 /// than silently meaning "never" behind CAN's word for it. `Err` carries the
 /// sentence the dialog prints in place of the confirmation.
+#[cfg(test)]
 pub fn fr_cycle_draft(text: &str, cycle_us: u64) -> Result<(u64, u64), &'static str> {
     if cycle_us == 0 {
         return Err("This bus declares no cycle time; cycles cannot be counted");
@@ -285,6 +283,7 @@ impl App {
 
     /// The role declared for `node` on this bus; nodes without a
     /// declaration are `Absent`.
+    #[cfg(test)]
     pub fn node_role(&self, ch: u8, node: &str) -> NodeRole {
         self.snap
             .channels
@@ -331,6 +330,7 @@ impl App {
 
     /// Sets the record filter: only the CAN frames and FlexRay slots it names
     /// land in the recorded file; both halves empty records everything.
+    #[cfg(test)]
     pub fn set_record_filter(&mut self, filter: crate::recorder::RecordFilter) {
         self.send(crate::bus::BusCommand::SetRecordFilter { filter });
     }
@@ -449,6 +449,7 @@ impl App {
     }
 
     /// Adds or replaces the source driving `src.name` on generator `i`.
+    #[cfg(test)]
     pub fn set_source(&mut self, i: usize, src: ValueSrc) {
         let Some(tx) = self.snap.tx.get(i) else {
             return;
@@ -459,18 +460,9 @@ impl App {
 
     /// The source driving `sig` on this generator row, from this frame's
     /// snapshot. `None` means the base bytes are in charge of that signal.
-    pub fn gen_source(&self, row: crate::app::GenRow, sig: &str) -> Option<ValueSrc> {
-        let srcs = match row {
-            crate::app::GenRow::Can(i) => self.snap.tx.get(i).map(|t| t.srcs.clone()),
-            crate::app::GenRow::Fr(i) => self.snap.fr_tx.get(i).map(|t| t.srcs.clone()),
-        };
-        srcs?.into_iter().find(|s| s.name == sig)
-    }
-
-    /// Applies a drafted source to whichever row it belongs to.
+    #[cfg(test)]
     pub fn set_gen_source(&mut self, row: crate::app::GenRow, src: ValueSrc) {
         match row {
-            crate::app::GenRow::Can(i) => self.set_source(i, src),
             crate::app::GenRow::Fr(i) => {
                 let Some(tx) = self.snap.fr_tx.get(i) else {
                     return;
@@ -481,51 +473,12 @@ impl App {
         }
     }
 
-    /// Stops driving `sig`; the base bytes take over again.
-    pub fn clear_gen_source(&mut self, row: crate::app::GenRow, sig: &str) {
-        match row {
-            crate::app::GenRow::Can(i) => {
-                let Some(tx) = self.snap.tx.get(i) else {
-                    return;
-                };
-                let (ch, id) = (tx.channel, tx.id);
-                self.send(crate::bus::BusCommand::ClearEntrySource {
-                    ch,
-                    id,
-                    name: sig.to_string(),
-                });
-            }
-            crate::app::GenRow::Fr(i) => {
-                let Some(tx) = self.snap.fr_tx.get(i) else {
-                    return;
-                };
-                let (bus, slot) = (tx.bus, tx.slot);
-                self.send(crate::bus::BusCommand::ClearFrEntrySource {
-                    bus,
-                    slot,
-                    name: sig.to_string(),
-                });
-            }
-        }
-    }
-
     /// Writes a physical value into the row's base payload and drops only that
     /// signal's source. Whether the database can encode it is the bus's call; a
     /// failed pin simply changes nothing.
+    #[cfg(test)]
     pub fn pin_gen_signal(&mut self, row: crate::app::GenRow, sig: &str, phys: f64) {
         match row {
-            crate::app::GenRow::Can(i) => {
-                let Some(tx) = self.snap.tx.get(i) else {
-                    return;
-                };
-                let (ch, id) = (tx.channel, tx.id);
-                self.send(crate::bus::BusCommand::PinEntrySignal {
-                    ch,
-                    id,
-                    name: sig.to_string(),
-                    phys,
-                });
-            }
             crate::app::GenRow::Fr(i) => {
                 let Some(tx) = self.snap.fr_tx.get(i) else {
                     return;
@@ -537,59 +490,6 @@ impl App {
                     name: sig.to_string(),
                     phys,
                 });
-            }
-        }
-    }
-
-    /// A generator row's title and the bus it lives on, for the dialogs that
-    /// serve both halves of the window. `None` when the row is gone.
-    pub fn gen_title(&self, row: crate::app::GenRow) -> Option<(String, String)> {
-        match row {
-            crate::app::GenRow::Can(i) => {
-                let t = self.snap.tx.get(i)?;
-                Some((
-                    format!("{}  {:X}", t.name, t.id),
-                    self.channel_name(t.channel),
-                ))
-            }
-            crate::app::GenRow::Fr(i) => {
-                let t = self.snap.fr_tx.get(i)?;
-                Some((
-                    format!("{}  slot {}", t.name, t.slot),
-                    self.fr_bus_name(t.bus),
-                ))
-            }
-        }
-    }
-
-    /// The unit `sig` is declared with on this row's frame, for the dialog
-    /// header. Empty when neither the row nor its database knows the signal.
-    pub fn gen_signal_unit(&self, row: crate::app::GenRow, sig: &str) -> String {
-        match row {
-            crate::app::GenRow::Can(i) => self
-                .snap
-                .tx
-                .get(i)
-                .and_then(|t| self.channel_dbc(t.channel)?.message_of(t.id))
-                .and_then(|m| m.signals.iter().find(|s| s.name == sig))
-                .map(|s| s.unit.clone())
-                .unwrap_or_default(),
-            crate::app::GenRow::Fr(i) => {
-                let Some(t) = self.snap.fr_tx.get(i) else {
-                    return String::new();
-                };
-                let (bus, slot) = (t.bus, t.slot);
-                let Some(db) = self.fr_db(bus) else {
-                    return String::new();
-                };
-                let Some(ix) = db.frame_ix_of_slot(slot) else {
-                    return String::new();
-                };
-                db.edit_signals(ix)
-                    .into_iter()
-                    .find(|s| s.name == sig)
-                    .map(|s| s.unit)
-                    .unwrap_or_default()
             }
         }
     }

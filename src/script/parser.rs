@@ -151,26 +151,6 @@ pub enum BinOp {
     Shr,
 }
 
-impl BinOp {
-    /// The operator token family that stores back through compound
-    /// assignment: `x |= e` compiles as `x = x | e`.
-    pub fn assign_token(self) -> Option<Tok> {
-        Some(match self {
-            BinOp::Add => Tok::AssignAdd,
-            BinOp::Sub => Tok::AssignSub,
-            BinOp::Mul => Tok::AssignMul,
-            BinOp::Div => Tok::AssignDiv,
-            BinOp::Mod => Tok::AssignMod,
-            BinOp::BitAnd => Tok::AssignBitAnd,
-            BinOp::BitOr => Tok::AssignBitOr,
-            BinOp::BitXor => Tok::AssignBitXor,
-            BinOp::Shl => Tok::AssignShl,
-            BinOp::Shr => Tok::AssignShr,
-            _ => return None,
-        })
-    }
-}
-
 pub fn parse(toks: Vec<Token>) -> Result<Program, ScriptError> {
     let mut p = P {
         toks,

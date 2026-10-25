@@ -70,16 +70,6 @@ impl App {
             .unwrap_or_else(|| "Untitled".to_string())
     }
 
-    /// Project name with a `*` suffix when there are unsaved changes.
-    pub fn display_name(&self) -> String {
-        let name = self.project_name();
-        if self.is_dirty() {
-            format!("{name} *")
-        } else {
-            name
-        }
-    }
-
     pub fn push_recent_project(&mut self, path: String) {
         push_recent(&mut self.recent_projects, path);
     }
@@ -185,6 +175,7 @@ impl App {
 
     /// Starts a fresh, completely empty untitled workspace: no DBCs, no
     /// observer windows, no generator entries.
+    #[cfg(test)]
     pub fn new_project(&mut self) {
         self.reset_to_defaults();
         self.workspace_rev = self.workspace_rev.wrapping_add(1);

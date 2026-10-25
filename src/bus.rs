@@ -262,6 +262,7 @@ pub enum BusCommand {
     /// Write a physical value into the base payload and pin that signal
     /// by dropping only its source: grabbing a moving slider means
     /// "hold here".
+    #[cfg(test)]
     PinEntrySignal {
         ch: u8,
         id: u32,
@@ -305,21 +306,12 @@ pub enum BusCommand {
         slot: u16,
         src: crate::sim::ValueSrc,
     },
-    ClearFrEntrySource {
-        bus: u8,
-        slot: u16,
-        name: String,
-    },
+    #[cfg(test)]
     PinFrEntrySignal {
         bus: u8,
         slot: u16,
         name: String,
         phys: f64,
-    },
-    /// One frame from this entry, off the schedule.
-    SendFrNow {
-        bus: u8,
-        slot: u16,
     },
     /// Adds one line to the Write ring without touching the status bar. The
     /// frontend's own news -- a failed export, a refused operation, a project
@@ -494,6 +486,7 @@ pub enum BusCommand {
     },
     /// Edit a replay block's declaration wholesale. An enabled block
     /// reloads its queue from the log, so the edit takes effect at once.
+    #[cfg(test)]
     SetReplayBlock {
         id: u64,
         name: String,
@@ -535,6 +528,7 @@ pub enum BusCommand {
     },
     /// Blank every bus's database and drop the generator and the signal
     /// subscriptions with it -- the bus half of "new project".
+    #[cfg(test)]
     ClearDatabases,
     /// Latch-free the specification report: every row forgets it fired.
     /// The next run replaces the rows anyway; this is the in-run reset.
@@ -543,6 +537,7 @@ pub enum BusCommand {
     /// now: its own base bytes and waveform values, its schedule and
     /// active flag untouched. Delivered on the next step of a running bus;
     /// a request made while stopped is dropped.
+    #[cfg(test)]
     SendNow {
         ch: u8,
         id: u32,
@@ -589,6 +584,7 @@ pub enum BusCommand {
         value: f64,
     },
     /// Empties the Write window's ring.
+    #[cfg(test)]
     ClearWrite,
     /// CANoe-style bus mode: `real` connects every attachment to its
     /// adapter (RX feeds the bus, directed TX goes to the wire);
@@ -690,7 +686,6 @@ pub struct NodeView {
     pub enabled: bool,
     /// Optional file path if the node source was saved to or loaded from a
     /// standalone `.rxcan` file.
-    #[allow(dead_code)]
     pub file_path: Option<String>,
     /// 绑定的 DBC 节点 (总线, 节点名)（节点窗口按此聚合脚本）。
     pub attached: Option<(u8, String)>,
@@ -713,8 +708,10 @@ pub struct Snapshot {
     /// Frames received this run.
     pub frame_counter: u64,
     /// Current trace-ring length.
+    #[cfg(test)]
     pub trace_len: usize,
     /// Live signal subscriptions.
+    #[cfg(test)]
     pub sub_count: usize,
     /// Replay playhead and log length in µs, when a log with a known
     /// position is loaded.
@@ -749,6 +746,7 @@ pub struct Snapshot {
     /// Per-FlexRay-cluster occupancy rollups as of the last publish, keyed by
     /// cluster index (the number the tables print as `FR{n}`). The same window
     /// the CAN rows use, with a static slot's wire time as the unit.
+    #[cfg(test)]
     pub fr_loads: Arc<std::collections::BTreeMap<u8, crate::load::FrLoad>>,
     /// Simulation nodes as of the last publish: identity, source, state
     /// and log. The Nodes window's data source and the project save.
@@ -757,6 +755,7 @@ pub struct Snapshot {
     pub blocks: Vec<ReplayBlockView>,
     /// Derived-signal streams opened by `emit_value` so far: key plus the
     /// owning node's display name.
+    #[cfg(test)]
     pub emitted: Vec<(SigKey, String)>,
     /// The system variables as of this frame: definition plus live value.
     /// The manager window's data source and the project save.
@@ -813,6 +812,7 @@ pub struct Snapshot {
     /// Ethernet frames as of the last publish, oldest first, byte-capped.
     pub eth_trace: std::sync::Arc<crate::eth::EthTraceView>,
     /// FR rows the ring trimmed from its head since the run began.
+    #[cfg(test)]
     pub fr_dropped: u64,
     /// Which timeline the bus runs on this frame.
     pub mode: Mode,
@@ -914,7 +914,6 @@ pub struct TxView {
     pub data_text: String,
     /// The payload that goes out this frame: base with every driven
     /// source laid over it.
-    pub sent_data: [u8; crate::can::frame::MAX_CAN_FD_LEN],
     pub sent_text: String,
     pub srcs: Vec<crate::sim::ValueSrc>,
     pub muted: bool,
@@ -937,9 +936,6 @@ pub struct FrTxView {
     pub data_text: String,
     /// The payload of the frame that last went out, or the base if none has.
     pub sent_text: String,
-    /// The same bytes, for the signal handles that read their displayed value
-    /// back out of what actually goes out.
-    pub sent_data: Vec<u8>,
     pub srcs: Vec<crate::sim::ValueSrc>,
     /// The replayed log carries this slot itself, so the entry stands down for
     /// the run.
@@ -969,8 +965,6 @@ pub struct SubView {
     /// shared by Arc and rebuilt only when the cache actually changed,
     /// never deep-copied per frame.
     pub history: std::sync::Arc<crate::observe::SampleCache>,
-    /// Palette row assigned at subscribe time.
-    pub color: usize,
 }
 
 /// Every (channel, id) the log file carries -- the twin-silencing set for
@@ -1081,7 +1075,6 @@ pub struct BusCore {
     /// `now_us()` at the previous accepted tick, the reference for `sim_t_us`.
     pub(crate) sim_prev_us: u64,
     /// Next palette index handed to a new subscription.
-    pub(crate) color_counter: usize,
     /// Frames received this run, capped at [`TRACE_LIMIT`] as a ring.
     pub(crate) trace: crate::trace::TraceRing,
     /// The ring as of the last publish, shared with snapshots. Rebuilt
@@ -1144,7 +1137,6 @@ pub struct BusCore {
     /// polling its source.
     pub(crate) injected: Vec<(u8, u32)>,
     /// The same "one frame now" intent for a FlexRay slot.
-    pub(crate) injected_fr: Vec<(u8, u16)>,
     /// FlexRay frames queued by a script's `fr_send` during this step, with the
     /// node that wrote them so a refusal can reach that node's log. They enter
     /// the session at this step's generator block, or the next one's if the
@@ -1346,7 +1338,6 @@ impl BusCore {
             fr_tx_list: Vec::new(),
             sim_t_us: 0,
             sim_prev_us: 0,
-            color_counter: 0,
             trace: crate::trace::TraceRing::default(),
             published_trace: Arc::new(crate::trace::TraceView::default()),
             fr_trace: crate::trace::FrRing::default(),
@@ -1369,7 +1360,6 @@ impl BusCore {
             bus_loads,
             fr_loads: Default::default(),
             injected: Vec::new(),
-            injected_fr: Vec::new(),
             fr_from_scripts: Vec::new(),
             published_loads,
             published_fr_loads: Arc::new(Default::default()),
@@ -1618,6 +1608,7 @@ impl BusCore {
                     *status = format!("[sysvar] undefined: \"{key}\"");
                 }
             }
+            #[cfg(test)]
             BusCommand::ClearWrite => {
                 self.write_log.clear();
                 self.write_dirty = true;
@@ -1638,6 +1629,7 @@ impl BusCore {
                 attached,
                 ids,
             } => self.add_replay_block(name, channel, path, node_filter, attached, ids, status),
+            #[cfg(test)]
             BusCommand::SetReplayBlock {
                 id,
                 name,
@@ -1762,6 +1754,7 @@ impl BusCore {
                     tx.srcs.retain(|s| s.name != name);
                 }
             }
+            #[cfg(test)]
             BusCommand::PinEntrySignal { ch, id, name, phys } => {
                 self.pin_entry_signal(ch, id, &name, phys);
             }
@@ -1806,11 +1799,7 @@ impl BusCore {
                     }
                 }
             }
-            BusCommand::ClearFrEntrySource { bus, slot, name } => {
-                if let Some(tx) = self.fr_entry_mut(bus, slot) {
-                    tx.srcs.retain(|s| s.name != name);
-                }
-            }
+            #[cfg(test)]
             BusCommand::PinFrEntrySignal {
                 bus,
                 slot,
@@ -1818,11 +1807,6 @@ impl BusCore {
                 phys,
             } => {
                 self.pin_fr_entry_signal(bus, slot, &name, phys);
-            }
-            BusCommand::SendFrNow { bus, slot } => {
-                if self.measuring {
-                    self.injected_fr.push((bus, slot));
-                }
             }
             BusCommand::Subscribe { key } => {
                 self.subscribe_signal(key);
@@ -2034,6 +2018,7 @@ impl BusCore {
                 data_text,
                 srcs,
             } => self.set_entry_config(ch, id, active, cycle_us, fd, flags, data_text, srcs),
+            #[cfg(test)]
             BusCommand::ClearDatabases => {
                 for c in &mut self.channels {
                     c.dbc_paths.clear();
@@ -2046,6 +2031,7 @@ impl BusCore {
                 }
             }
             BusCommand::ClearSpec => self.spec.clear(),
+            #[cfg(test)]
             BusCommand::SendNow { ch, id } => {
                 // Only a running bus delivers: a stopped one would hold the
                 // request until some future run, which is never what the
@@ -2966,10 +2952,12 @@ impl BusCore {
         };
         Snapshot {
             frame_counter: self.frame_counter,
+            #[cfg(test)]
             trace_len: self.trace.len(),
             trace: Arc::clone(&self.published_trace),
             fr_trace: Arc::clone(&self.published_fr),
             eth_trace: Arc::clone(&self.published_eth),
+            #[cfg(test)]
             fr_dropped: self.fr_trace.dropped(),
             fr_watches: {
                 let mut watches: Vec<FrWatchView> = self
@@ -2985,6 +2973,7 @@ impl BusCore {
                 watches.sort_by_key(|w| w.bus);
                 watches
             },
+            #[cfg(test)]
             sub_count: self.subs.len(),
             replay,
             replay_map: self.replay_map.clone(),
@@ -2998,9 +2987,11 @@ impl BusCore {
             sim_t_us: self.sim_t_us,
             spec: self.spec.clone(),
             bus_loads: Arc::clone(&self.published_loads),
+            #[cfg(test)]
             fr_loads: Arc::clone(&self.published_fr_loads),
             nodes: Arc::clone(&self.published_nodes),
             blocks: (*self.published_blocks).clone(),
+            #[cfg(test)]
             emitted: self.emitted_streams.clone(),
             sysvars: self
                 .sysvars
@@ -3109,7 +3100,6 @@ impl BusCore {
                     max: s.max,
                     avg: s.avg,
                     history: s.published.clone(),
-                    color: s.color,
                 })
                 .collect(),
             markers: self.markers.clone(),
@@ -3136,7 +3126,6 @@ impl BusCore {
                         fd: t.flags.contains(crate::can::frame::FrameFlags::FD),
                         cycle_us: t.cycle_us,
                         data_text: t.data_text.clone(),
-                        sent_data,
                         sent_text: crate::generator::hex_text(&sent_data, sent_len),
                         srcs: t.srcs.clone(),
                         muted: matches!(self.mode, Mode::Replay)
@@ -3164,7 +3153,6 @@ impl BusCore {
                         cycle_us: t.cycle_us,
                         data_text: t.data_text.clone(),
                         sent_text: crate::generator::hex_of(sent),
-                        sent_data: sent.clone(),
                         srcs: t.srcs.clone(),
                         muted: matches!(self.mode, Mode::Replay)
                             && self.replay_fr_ids.contains(&(t.bus, t.slot)),
@@ -3244,8 +3232,6 @@ impl BusCore {
     /// subscription for the key is left untouched.
     pub(crate) fn subscribe_signal(&mut self, key: SigKey) {
         if !self.subs.contains_key(&key) {
-            let color = self.color_counter;
-            self.color_counter += 1;
             let type_tag = self.signal_meta(&key);
             self.subs.insert(
                 key,
@@ -3265,7 +3251,6 @@ impl BusCore {
                     history: crate::observe::SampleCache::default(),
                     published: std::sync::Arc::new(crate::observe::SampleCache::default()),
                     history_dirty: false,
-                    color,
                 },
             );
         }
@@ -4004,7 +3989,6 @@ impl BusCore {
         // What this 路 was asked to send, and what the loaded log was already
         // sending for it, both go with it.
         self.fr_tx_list.retain(|t| t.bus != bus);
-        self.injected_fr.retain(|(b, _)| *b != bus);
         // 这路的编号不会有人接替（删一路不把别的前挪），所以指向它的映射
         // 只是变成「不回放」；静音集合按新映射重算，不留这路的影子。
         self.replay_map
@@ -4127,6 +4111,7 @@ impl BusCore {
     // The signature mirrors the `SetReplayBlock` command one-to-one; a
     // payload struct would just relocate the field list.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn set_replay_block(
         &mut self,
         id: u64,
@@ -4241,6 +4226,7 @@ impl BusCore {
     /// Writes a physical value into the base payload and pins that signal
     /// by dropping only its source: grabbing a moving slider means "hold
     /// here". Returns false when the database cannot encode it.
+    #[cfg(test)]
     fn pin_entry_signal(&mut self, ch: u8, id: u32, name: &str, phys: f64) -> bool {
         let mut data = match self.entry_mut(ch, id) {
             Some(tx) => tx.data,
@@ -4381,6 +4367,7 @@ impl BusCore {
     /// that signal's source. False -- nothing changed -- when the bus has no
     /// description, the slot holds no frame in it, the frame has no such signal,
     /// or the entry's bytes do not reach it.
+    #[cfg(test)]
     fn pin_fr_entry_signal(&mut self, bus: u8, slot: u16, name: &str, phys: f64) -> bool {
         let (mut data, len) = match self.fr_entry_mut(bus, slot) {
             Some(t) => (t.data.clone(), t.len),
@@ -4486,7 +4473,6 @@ impl BusCore {
         // Send-now intents recorded while the old run was winding down
         // belong to it, not to the fresh one.
         self.injected.clear();
-        self.injected_fr.clear();
         self.fr_from_scripts.clear();
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
@@ -4702,7 +4688,6 @@ impl BusCore {
     /// clocks (as the UI loop does); `step_to` is what a deadline-driven
     /// loop calls when it wakes.
     // Wired into the core thread's event loop (阶段 3).
-    #[allow(dead_code)]
     pub(crate) fn step_to(
         &mut self,
         now_us: u64,
@@ -4962,7 +4947,6 @@ impl BusCore {
         // path like any other arrival: the watched port is receive-only, so what
         // an entry drives is this session -- Trace, Messages, the spec check, the
         // scripts and the recording -- not the wire.
-        let inject = std::mem::take(&mut self.injected_fr);
         let mut fr_gen: Vec<crate::trace::FrRow> = Vec::new();
         let dbs = &self.fr_dbs;
         let replaying = matches!(self.mode, Mode::Replay);
@@ -5000,32 +4984,6 @@ impl BusCore {
                     name: None,
                 });
             }
-        }
-        for (bus, slot) in inject {
-            let Some(tx) = self
-                .fr_tx_list
-                .iter_mut()
-                .find(|t| t.bus == bus && t.slot == slot)
-            else {
-                continue;
-            };
-            let payload = crate::generator::fr_tx_payload(&self.fr_dbs, tx, sim);
-            tx.last_sent = payload.clone();
-            let cycle = self
-                .fr_dbs
-                .get(&bus)
-                .map_or(0, |db| crate::generator::fr_cycle_at(db, sim));
-            fr_gen.push(crate::trace::FrRow {
-                bus,
-                t_us: sim,
-                ab: 2,
-                slot,
-                cycle,
-                payload,
-                header_crc: 0,
-                flags: 0,
-                name: None,
-            });
         }
         // A script's `fr_send` joins the session through the same funnel a
         // generator slot uses, so everything that sees an arrival sees it: Trace,

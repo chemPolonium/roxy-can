@@ -205,37 +205,10 @@ impl App {
         }
     }
 
-    pub fn export_trace_dialog(&mut self, win: usize) {
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title("Export Trace")
-            .set_file_name("trace_export.asc")
-            .add_filter("ASC (CAN / FlexRay)", &["asc"])
-            .add_filter("PCAP (Ethernet)", &["pcap"])
-            .save_file()
-        {
-            let path = p.to_string_lossy().to_string();
-            self.export_trace(win, &path);
-        }
-    }
-
-    fn csv_save_dialog(title: &str, name: &str) -> Option<std::path::PathBuf> {
-        rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(name)
-            .add_filter("CSV files", &["csv"])
-            .save_file()
-    }
-
     fn write_export(&mut self, path: &str, content: String) {
         match std::fs::write(path, content) {
             Ok(()) => self.status = format!("exported to {path}"),
             Err(e) => self.fail(format!("export failed: {e}")),
-        }
-    }
-
-    pub fn export_stats_dialog(&mut self, win: usize) {
-        if let Some(p) = Self::csv_save_dialog("Export Statistics as CSV", "statistics.csv") {
-            self.export_stats_csv(win, &p.to_string_lossy());
         }
     }
 
@@ -330,13 +303,6 @@ impl App {
         self.write_export(path, s);
     }
 
-    pub fn export_messages_dialog(&mut self, win: usize) {
-        if let Some(p) = Self::csv_save_dialog("Export Messages as CSV", "messages.csv") {
-            self.export_messages_csv(win, &p.to_string_lossy());
-        }
-    }
-
-    /// Exports the aggregation rows currently visible in the given Messages window.
     pub fn export_messages_csv(&mut self, win: usize, path: &str) {
         let Some(w) = self.msg_windows.get(win) else {
             return;
@@ -498,20 +464,6 @@ impl App {
         self.write_export(path, s);
     }
 
-    pub fn export_graphics_dialog(&mut self, i: usize) {
-        let name = self
-            .graphics
-            .get(i)
-            .map(|g| g.name.to_lowercase().replace(' ', "_"))
-            .unwrap_or_else(|| "graphics".to_string());
-        if let Some(p) =
-            Self::csv_save_dialog("Export Graphics history as CSV", &format!("{name}.csv"))
-        {
-            self.export_graphics_csv(i, &p.to_string_lossy());
-        }
-    }
-
-    /// Snapshot of the plotted signal history, long format: one row per sample.
     pub fn export_graphics_csv(&mut self, i: usize, path: &str) {
         let Some(g) = self.graphics.get(i) else {
             return;
@@ -544,6 +496,7 @@ impl App {
     /// Time-aligned CSV of the Graphics window's visible signals: one row per
     /// sample instant, one column per signal, values sample-and-held. The
     /// optional range is the A/B cursor interval from the web shell.
+    #[cfg(test)]
     pub fn export_signals_csv(&mut self, win: usize, path: &str, range: Option<(u64, u64)>) {
         let Some(g) = self.graphics.get(win) else {
             return;
@@ -639,44 +592,6 @@ impl App {
                 );
             }
             Err(e) => self.fail(format!("export failed: {e}")),
-        }
-    }
-
-    pub fn export_data_dialog(&mut self, i: usize) {
-        let name = self
-            .data_windows
-            .get(i)
-            .map(|d| d.name.to_lowercase().replace(' ', "_"))
-            .unwrap_or_else(|| "data".to_string());
-        if let Some(p) = Self::csv_save_dialog("Export Data values as CSV", &format!("{name}.csv"))
-        {
-            self.export_data_csv(i, &p.to_string_lossy());
-        }
-    }
-
-    pub fn export_state_dialog(&mut self, i: usize) {
-        let name = self
-            .state_trackers
-            .get(i)
-            .map(|w| w.name.to_lowercase().replace(' ', "_"))
-            .unwrap_or_else(|| "state".to_string());
-        if let Some(p) = Self::csv_save_dialog("Export state bands as CSV", &format!("{name}.csv"))
-        {
-            self.export_state_csv(i, &p.to_string_lossy());
-        }
-    }
-
-    /// The Write window's export: the whole system log as plain text,
-    /// same lines the window shows (the current per-kind filter applies,
-    /// so "what I see is what I save").
-    pub fn export_write_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title("Export Write log as text")
-            .set_file_name("write_log.txt")
-            .add_filter("Text files", &["txt", "log"])
-            .save_file()
-        {
-            self.export_write_txt(&p.to_string_lossy());
         }
     }
 
@@ -843,14 +758,6 @@ impl App {
             ));
         }
         self.write_export(path, s);
-    }
-
-    pub fn export_spec_dialog(&mut self) {
-        if let Some(p) =
-            App::csv_save_dialog("Export Specification report as CSV", "spec_report.csv")
-        {
-            self.export_spec_csv(&p.to_string_lossy());
-        }
     }
 }
 

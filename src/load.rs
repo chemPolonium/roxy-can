@@ -201,26 +201,6 @@ impl FrLoad {
         self.rate_sum += r;
         self.rate_n += 1;
     }
-
-    pub fn load_stats(&self) -> (Option<f64>, Option<f64>, Option<f64>) {
-        (
-            self.load_min,
-            self.load_max,
-            divide(self.load_sum, self.load_n),
-        )
-    }
-
-    pub fn rate_stats(&self) -> (Option<f64>, Option<f64>, Option<f64>) {
-        (
-            self.rate_min,
-            self.rate_max,
-            divide(self.rate_sum, self.rate_n),
-        )
-    }
-}
-
-fn divide(sum: f64, n: u64) -> Option<f64> {
-    (n > 0).then(|| sum / n as f64)
 }
 
 /// One bus's rolling traffic window and its run-long statistics: load and
@@ -472,7 +452,6 @@ impl BusLoad {
     /// Frames per second over the same window, all classes together. The
     /// statistics window splits by class now; the total stays for tests
     /// and future views.
-    #[allow(dead_code)]
     pub fn frame_rate(&self) -> f64 {
         self.recent.len() as f64 / (WINDOW_US as f64 / 1_000_000.0)
     }
@@ -482,7 +461,6 @@ impl BusLoad {
     /// load reads as a plain percentage in the Bus Statistics window --
     /// but the collection stays: tests pin the bucketing, and a future
     /// export path gets the history for free.
-    #[allow(dead_code)]
     pub fn history(&self) -> impl Iterator<Item = (u64, f64)> + '_ {
         self.buckets
             .iter()

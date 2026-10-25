@@ -39,7 +39,7 @@ impl Clone for SampleCache {
 impl SampleCache {
     /// Point count; the Data sparkline that read this is gone, but the
     /// accessor belongs with the rest of the slice API and the tests use it.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.total
     }
@@ -48,6 +48,7 @@ impl SampleCache {
         self.total == 0
     }
 
+    #[cfg(test)]
     pub fn first(&self) -> Option<(u64, f64)> {
         if let Some(c) = self.chunks.first() {
             return c.first().copied();
@@ -308,7 +309,6 @@ pub struct Subscription {
     /// Core-side only; the snapshot carries `published`.
     pub(crate) published: Arc<SampleCache>,
     pub(crate) history_dirty: bool,
-    pub color: usize,
 }
 
 impl Subscription {
@@ -522,37 +522,6 @@ pub enum YMode {
 impl YMode {
     pub const ALL: [YMode; 4] = [YMode::Auto, YMode::Lock, YMode::FitAll, YMode::Dbc];
 
-    /// One-letter form for the per-signal badge in the curve list.
-    pub fn short(&self) -> &'static str {
-        match self {
-            YMode::Auto => "A",
-            YMode::Lock => "L",
-            YMode::FitAll => "F",
-            YMode::Dbc => "D",
-        }
-    }
-
-    /// Full name, in menu and legend positions.
-    pub fn label(&self) -> &'static str {
-        match self {
-            YMode::Auto => "Auto",
-            YMode::Lock => "Lock",
-            YMode::FitAll => "Fit all",
-            YMode::Dbc => "DBC range",
-        }
-    }
-
-    /// One-line explanation for the hover hints -- the names alone leave
-    /// too much to guess.
-    pub fn hint(&self) -> &'static str {
-        match self {
-            YMode::Auto => "Fit the visible time window, rescaling every frame",
-            YMode::Lock => "Freeze the axis at the range on screen right now",
-            YMode::FitAll => "Grow to fit every value seen, never shrink back",
-            YMode::Dbc => "Scale by the min..max declared in the database",
-        }
-    }
-
     /// Project-file code; unknown values load as [`YMode::Auto`].
     pub fn to_u8(self) -> u8 {
         self as u8
@@ -569,20 +538,9 @@ pub struct GraphicsWindow {
     pub time_window_s: f64,
     pub stacked: bool,
     pub opened: bool,
+    #[cfg(test)]
     pub t_offset_s: f64,
     pub show_cursor: bool,
-    /// The two measurement cursors' times in seconds on the plot's own axis
-    /// (`[A, B]`, `None` = not placed yet). Session state, and deliberately not
-    /// project state: a cursor points into the sample ring, and a fresh
-    /// measurement empties that ring -- a restored time would name ground
-    /// nobody is standing on any more.
-    pub cursor_s: [Option<f64>; 2],
-    /// Which cursor the current mouse press owns, for as long as it holds it.
-    /// Without this the grab radius is re-tested every lap, and a pointer that
-    /// covers more than 6 px between two frames drops the line mid-drag and hands
-    /// the same gesture to the pan -- the cursor sticks, the view jumps. Session
-    /// state: it describes one press, nothing else.
-    pub cursor_drag: Option<usize>,
     pub zoom_enabled: bool,
     /// Draw a dot on each sample when the visible points are sparse enough to
     /// read individually.
@@ -590,12 +548,15 @@ pub struct GraphicsWindow {
     /// Frozen ranges while a signal's [`YMode::Lock`] is active, keyed by the
     /// signal key's debug text. Session state only -- leaving the mode clears
     /// the entry.
+    #[cfg(test)]
     pub(crate) y_locks: HashMap<String, (f64, f64)>,
     /// Legend readouts ("EngineSpeed = 100 rpm") as of the last throttled
     /// text refresh, aligned with `legend_keys`; the plot draws these so the
     /// digits hold still while the curve itself animates at full frame rate.
     /// Session state only.
+    #[cfg(test)]
     pub(crate) legend_keys: Vec<SigKey>,
+    #[cfg(test)]
     pub(crate) legend: Vec<String>,
 }
 
@@ -606,7 +567,9 @@ pub struct DataWindow {
     /// Value/unit/raw strings as of the last throttled text refresh; the
     /// table draws these so digits hold still long enough to read, while
     /// the bar next to them animates at full frame rate.
+    #[cfg(test)]
     pub(crate) text_keys: Vec<SigKey>,
+    #[cfg(test)]
     pub(crate) text_cache: Vec<[String; 6]>,
 }
 
@@ -628,35 +591,6 @@ impl StateRule {
     pub fn band(&self, v: f64) -> usize {
         self.cuts.partition_point(|&c| c <= v)
     }
-
-    /// Inserts a cut, growing names/colors with generated entries so the
-    /// band bookkeeping stays consistent.
-    pub fn add_cut(&mut self, c: f64) {
-        let i = self.cuts.partition_point(|&x| x < c);
-        self.cuts.insert(i, c);
-        self.names.insert(i, format!("State {}", self.names.len()));
-        self.colors.insert(i, None);
-    }
-
-    /// Removes cut `i`, merging the band below the boundary with the one
-    /// above it (the lower band's name and color survive).
-    pub fn remove_cut(&mut self, i: usize) {
-        if i >= self.cuts.len() {
-            return;
-        }
-        self.cuts.remove(i);
-        self.names.remove(i + 1);
-        self.colors.remove(i + 1);
-    }
-}
-
-/// Which swatch of a State Tracker editor the color picker is editing.
-#[derive(Clone, Copy, PartialEq)]
-pub enum PickTarget {
-    /// A custom band, by index into the rule's color list.
-    Band(usize),
-    /// A default-mode state, by the normalized bits of its value.
-    Value(u64),
 }
 
 /// The State Tracker window: signals rendered as constant-value state
@@ -709,23 +643,6 @@ impl Default for StateWin {
 use std::collections::HashMap;
 
 use crate::app::App;
-
-impl GraphicsWindow {
-    /// The throttled legend strings for `keys`, in the same order; an empty
-    /// string stands in until the first text refresh fills the snapshot.
-    pub(crate) fn legend_for(&self, keys: &[SigKey]) -> Vec<String> {
-        keys.iter()
-            .map(|key| {
-                self.legend_keys
-                    .iter()
-                    .position(|k| k == key)
-                    .and_then(|n| self.legend.get(n))
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .collect()
-    }
-}
 
 impl App {
     /// The sampling stride the signal caches should hold right now: derived
@@ -782,6 +699,7 @@ impl App {
     /// frame: it does nothing unless the text gate says so or the visible
     /// signal set changed (adding a signal must not wait a full period to
     /// show its first value).
+    #[cfg(test)]
     pub(crate) fn sync_data_text(&mut self, i: usize) {
         let keys: Vec<SigKey> = self.data_windows[i]
             .signals
@@ -817,6 +735,7 @@ impl App {
     /// "{name} = {value}" readouts the plot draws over the curves. Same gate
     /// as [`App::sync_data_text`]: no-op unless the text gate says so or the
     /// visible signal set changed.
+    #[cfg(test)]
     pub(crate) fn sync_gfx_legend(&mut self, i: usize) {
         let keys: Vec<SigKey> = self.graphics[i]
             .signals

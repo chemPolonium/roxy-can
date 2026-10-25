@@ -97,6 +97,7 @@ impl FrRing {
     }
 
     /// Rows trimmed from the head since the last clear.
+    #[cfg(test)]
     pub fn dropped(&self) -> u64 {
         self.dropped
     }
@@ -177,6 +178,7 @@ impl FrTraceView {
     }
 
     /// The newest row, the way [`TraceView::last`] gives the newest frame.
+    #[cfg(test)]
     pub fn last(&self) -> Option<&FrRow> {
         self.get(self.total.saturating_sub(1))
     }
@@ -376,6 +378,7 @@ impl TraceRing {
         })
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.total
     }
@@ -591,6 +594,7 @@ impl TraceView {
         self.archive.as_ref().map(|(p, n)| (p.as_path(), *n))
     }
 
+    #[cfg(test)]
     pub fn last(&self) -> Option<&CanFrame> {
         self.tail
             .last()

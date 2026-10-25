@@ -3,7 +3,7 @@
 
 use crate::app::App;
 use crate::observe::{SigKey, StateWin};
-use std::collections::HashMap;
+
 fn bits_of(v: f64) -> u64 {
     let q = quantize(v);
     if q == 0.0 { 0.0 } else { q }.to_bits()
@@ -41,8 +41,6 @@ fn table_label(app: &App, key: &crate::observe::SigKey, v: f64) -> Option<String
 pub(crate) struct StateSeg {
     pub t0_us: u64,
     pub t1_us: u64,
-    /// The quantized value itself, for state-color assignment.
-    pub value: f64,
     pub label: String,
 }
 
@@ -107,7 +105,6 @@ pub(crate) fn state_segments(
                 out.push(StateSeg {
                     t0_us: *t0,
                     t1_us: t,
-                    value: *cv,
                     label: std::mem::take(clabel),
                 });
                 *ck = k;
@@ -118,11 +115,10 @@ pub(crate) fn state_segments(
             None => cur = Some((k, label, t.max(lo_us), v)),
         }
     }
-    if let Some((_, label, t0, cv)) = cur {
+    if let Some((_, label, t0, _cv)) = cur {
         out.push(StateSeg {
             t0_us: t0,
             t1_us: hi_us.max(t0),
-            value: cv,
             label,
         });
     }
@@ -204,48 +200,4 @@ pub(crate) fn merge_short_segments(mut segs: Vec<StateSeg>, min_us: u64) -> Vec<
         }
     }
     segs
-}
-
-/// The palette slot of one state value, stable for the whole session: the
-/// first time a key is seen it takes the lowest free slot, and it keeps
-/// that slot even after leaving the view, so colors never reshuffle as
-/// the run goes on. Once every slot is spoken for, a brand-new key
-/// hashes into the palette and accepts a possible collision -- the
-/// alternative, reassigning slots, is what made colors drift. `palette`
-/// is the color set slots index into: the main palette for values, the
-/// muted defaults for custom bands.
-pub(crate) fn slot_for(slots: &mut HashMap<u64, usize>, v: f64, palette_len: usize) -> usize {
-    // -0.0 and 0.0 print the same label; they share a slot.
-    let bits = if v == 0.0 {
-        0.0f64.to_bits()
-    } else {
-        v.to_bits()
-    };
-    if let Some(&s) = slots.get(&bits) {
-        return s;
-    }
-    let mut used: Vec<usize> = slots.values().copied().collect();
-    used.sort_unstable();
-    used.dedup();
-    let slot = (0..palette_len)
-        .find(|s| !used.contains(s))
-        .unwrap_or_else(|| {
-            let mut h = bits;
-            h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            h = (h ^ (h >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            h ^= h >> 31;
-            (h % palette_len as u64) as usize
-        });
-    slots.insert(bits, slot);
-    slot
-}
-
-/// Dark or light label text, by the fill's relative luminance.
-pub(crate) fn text_on(fill: [f32; 4]) -> [f32; 4] {
-    let lum = 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2];
-    if lum > 0.55 {
-        [0.06, 0.06, 0.08, 1.0]
-    } else {
-        [0.92, 0.93, 0.95, 1.0]
-    }
 }

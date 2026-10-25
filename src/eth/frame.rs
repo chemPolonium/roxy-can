@@ -1,10 +1,6 @@
 use crate::can::frame::Direction;
 use std::sync::Arc;
 
-/// Largest payload an Ethernet frame may carry (jumbo frame, without the L2
-/// header/FCS).
-pub const MAX_ETH_LEN: usize = 9000;
-
 /// One captured Ethernet frame, stripped of its L2 header.
 ///
 /// `payload` excludes the 14-byte Ethernet II header (18 with a VLAN tag)
@@ -34,6 +30,7 @@ pub struct EthFrame {
 
 impl EthFrame {
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn new(
         t_us: u64,
         bus: u8,
@@ -61,9 +58,5 @@ impl EthFrame {
 
     pub fn len(&self) -> usize {
         self.payload.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.payload.is_empty()
     }
 }

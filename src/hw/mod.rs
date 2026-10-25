@@ -28,14 +28,6 @@ pub enum HwDriver {
 }
 
 impl HwDriver {
-    /// Short tag for combo labels: `[K] ch0` vs `[V] ch0`.
-    pub fn tag(self) -> &'static str {
-        match self {
-            HwDriver::Kvaser => "K",
-            HwDriver::Vector => "V",
-        }
-    }
-
     /// The persisted word (profile `[[hw]]` driver field). Both the long
     /// name and the tag parse, so a hand-written profile accepts either.
     pub fn word(self) -> &'static str {

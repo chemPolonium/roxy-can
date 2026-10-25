@@ -16,7 +16,6 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         constants: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
-            name: "<main>".to_string(),
             arity: 0,
             code: Vec::new(),
             lines: Vec::new(),
@@ -60,7 +59,6 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                 return c.err(&f.name, "duplicate function name");
             }
             c.functions.push(Function {
-                name: f.name.clone(),
                 arity: f.params.len(),
                 code: Vec::new(),
                 lines: Vec::new(),
@@ -990,7 +988,6 @@ impl Comp {
         let chunk = self.functions.len() as u16;
         let lines = std::mem::take(&mut self.line_marks);
         self.functions.push(Function {
-            name: label,
             arity: 0,
             code: std::mem::take(&mut self.code),
             lines,

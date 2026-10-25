@@ -17,13 +17,12 @@ pub(crate) enum Backing {
     Mapped {
         // Keeping the File alive is what pins the mapping on Windows; if it
         // drops first the map is torn down mid-iteration.
-        #[allow(dead_code)]
-        file: File,
+        _file: File,
         map: Mmap,
     },
     // Only the `from_bytes` test constructors build this variant; the arm has
     // to exist for the shared readers to compile in a normal build.
-    #[allow(dead_code)]
+    #[cfg(test)]
     Owned(Vec<u8>),
 }
 
@@ -35,7 +34,7 @@ impl Backing {
     pub(crate) fn map_path(path: &Path) -> Result<Self, LogError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file) }?;
-        Ok(Backing::Mapped { file, map })
+        Ok(Backing::Mapped { _file: file, map })
     }
 
     #[cfg(test)]
@@ -46,6 +45,7 @@ impl Backing {
     pub(crate) fn as_slice(&self) -> &[u8] {
         match self {
             Backing::Mapped { map, .. } => &map[..],
+            #[cfg(test)]
             Backing::Owned(v) => v.as_slice(),
         }
     }
@@ -59,6 +59,7 @@ impl Backing {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Backing::Mapped { .. } => "mmap",
+            #[cfg(test)]
             Backing::Owned(_) => "mem",
         }
     }

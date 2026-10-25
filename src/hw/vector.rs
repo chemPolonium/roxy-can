@@ -142,12 +142,8 @@ type XlFrSetConfiguration = unsafe extern "system" fn(
 type XlFrGetChannelConfiguration =
     unsafe extern "system" fn(XlPortHandle, XlAccess, *mut flexray::XLfrChannelConfig) -> XlStatus;
 type XlFrReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
-type XlGetApplConfig =
-    unsafe extern "system" fn(*const u8, u32, *mut u32, *mut u32, *mut u32, u32) -> XlStatus;
+#[cfg(test)]
 type XlSetApplConfig = unsafe extern "system" fn(*const u8, u32, u32, u32, u32, u32) -> XlStatus;
-/// Returns the channel mask directly (0 = not found), not a status.
-type XlGetChannelIndex = unsafe extern "system" fn(u32, u32, u32) -> XlAccess;
-
 /// Every vxlapi entry the tool needs. `None` members mean the export was
 /// missing -- the wrapper reports "driver not available".
 #[derive(Debug)]
@@ -170,12 +166,8 @@ struct Vxlapi {
     get_error_string: XlGetErrorString,
     /// The application's registered channel mapping; registration via
     /// `set_appl_config` on first use.
-    #[allow(dead_code)]
-    get_appl_config: XlGetApplConfig,
-    #[allow(dead_code)]
+    #[cfg(test)]
     set_appl_config: XlSetApplConfig,
-    #[allow(dead_code)]
-    get_channel_index: XlGetChannelIndex,
     /// FlexRay RX-only binding (FR-2).
     fr_set_configuration: XlFrSetConfiguration,
     fr_get_channel_configuration: XlFrGetChannelConfiguration,
@@ -273,9 +265,8 @@ impl Vxlapi {
             flush_receive_queue: need!(b"xlFlushReceiveQueue", XlFlushReceiveQueue),
             close_port: need!(b"xlClosePort", XlClosePort),
             get_error_string: need!(b"xlGetErrorString", XlGetErrorString),
-            get_appl_config: need!(b"xlGetApplConfig", XlGetApplConfig),
+            #[cfg(test)]
             set_appl_config: need!(b"xlSetApplConfig", XlSetApplConfig),
-            get_channel_index: need!(b"xlGetChannelIndex", XlGetChannelIndex),
             fr_set_configuration: need!(b"xlFrSetConfiguration", XlFrSetConfiguration),
             fr_get_channel_configuration: need!(
                 b"xlFrGetChannelConfiguration",
@@ -1100,7 +1091,6 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
 // channels into the bus pipeline, until then the binding is reachable
 // from tests and the CLI probes only -- hence the dead-code allowance.
 pub mod flexray {
-    #![allow(dead_code)]
     use super::*;
 
     /// The cluster parameters `xlFrSetConfiguration` takes. Zeroed means
@@ -1185,9 +1175,9 @@ pub mod flexray {
     /// network's parameters -- read them instead of asking the user.
     pub struct XLfrChannelConfig {
         pub status: u32,
-        pub cfg_mode: u32,
-        pub reserved: [u32; 6],
-        pub cluster: XLfrClusterConfig,
+        pub _cfg_mode: u32,
+        pub _reserved: [u32; 6],
+        pub _cluster: XLfrClusterConfig,
     }
 
     const _: () = assert!(std::mem::size_of::<XLfrChannelConfig>() == 348);
@@ -1502,9 +1492,9 @@ pub mod flexray {
             let lib = Vxlapi::lib().ok_or("Vector driver unavailable")?;
             let mut cfg = flexray::XLfrChannelConfig {
                 status: 0,
-                cfg_mode: 0,
-                reserved: [0; 6],
-                cluster: XLfrClusterConfig::default(),
+                _cfg_mode: 0,
+                _reserved: [0; 6],
+                _cluster: XLfrClusterConfig::default(),
             };
             let status =
                 unsafe { (lib.fr_get_channel_configuration)(self.port, self.mask, &mut cfg) };
@@ -1589,7 +1579,6 @@ pub mod flexray {
 /// address, and the CAN attach dropdown excludes them for the same
 /// reason. FR-3 will surface this in the Buses dropdown; today only the
 /// probes and tests reach it.
-#[allow(dead_code)]
 pub fn enumerate_flexray() -> Result<Vec<ChannelInfo>, String> {
     Ok(enumerate()?.into_iter().filter(|c| c.flexray).collect())
 }
@@ -1744,10 +1733,10 @@ mod tests {
                             println!(
                                 "channel cfg: status=0x{:08X} baudrate={} gMacroPerCycle={} gdMacrotick={} staticSlots={}",
                                 cfg.status,
-                                cfg.cluster.baudrate,
-                                cfg.cluster.g_macro_per_cycle,
-                                cfg.cluster.gd_macrotick,
-                                cfg.cluster.g_number_of_static_slots,
+                                cfg._cluster.baudrate,
+                                cfg._cluster.g_macro_per_cycle,
+                                cfg._cluster.gd_macrotick,
+                                cfg._cluster.g_number_of_static_slots,
                             );
                         }
                         let deadline =

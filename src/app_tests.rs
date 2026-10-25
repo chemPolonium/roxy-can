@@ -2820,7 +2820,6 @@ fn blank_sub() -> Subscription {
         history: SampleCache::default(),
         published: std::sync::Arc::new(SampleCache::default()),
         history_dirty: false,
-        color: 0,
     }
 }
 

@@ -70,14 +70,16 @@ type CanOpenChannel = unsafe extern "system" fn(i32, i32) -> CanHandle;
 type CanSetBusParams = unsafe extern "system" fn(i32, i32, u8, u8, u8, u8, u32) -> CanStatus;
 type CanSetBusParamsFd = unsafe extern "system" fn(i32, i32, u8, u8, u8) -> CanStatus;
 type CanGetChannelData = unsafe extern "system" fn(i32, i32, *mut c_void, *mut usize) -> CanStatus;
+#[cfg(test)]
+type CanGetVersion = unsafe extern "system" fn() -> u32;
+#[cfg(test)]
+type CanLocateHardware = unsafe extern "system" fn() -> CanStatus;
 type CanBusOn = unsafe extern "system" fn(i32) -> CanStatus;
 type CanBusOff = unsafe extern "system" fn(i32) -> CanStatus;
 type CanWrite = unsafe extern "system" fn(i32, u32, *const u8, u32, u32) -> CanStatus;
 type CanRead =
     unsafe extern "system" fn(i32, *mut u32, *mut u8, *mut u32, *mut u32, *mut u32) -> CanStatus;
 type CanClose = unsafe extern "system" fn(i32) -> CanStatus;
-type CanGetVersion = unsafe extern "system" fn() -> u32;
-type CanLocateHardware = unsafe extern "system" fn() -> CanStatus;
 
 /// Every canlib entry the tool needs. `None` members mean the DLL or the
 /// export was missing -- the wrapper reports "driver not available".
@@ -86,8 +88,6 @@ struct Canlib {
     initialize_library: CanInitializeLibrary,
     get_number_of_channels: CanGetNumberOfChannels,
     /// Serves the ignored live bring-up test.
-    #[allow(dead_code)]
-    get_channel_data: CanGetChannelData,
     open_channel: CanOpenChannel,
     set_bus_params: CanSetBusParams,
     /// FD data-phase bitrate; absent on very old drivers.
@@ -98,14 +98,15 @@ struct Canlib {
     read: CanRead,
     close: CanClose,
     /// Serves the ignored live bring-up test.
-    #[allow(dead_code)]
+    #[cfg(test)]
+    get_channel_data: CanGetChannelData,
+    #[cfg(test)]
     get_version: CanGetVersion,
     /// Serves the channel-name probe: canGetChannelData requires the
     /// device table this populates.
-    #[allow(dead_code)]
+    #[cfg(test)]
     locate_hardware: CanLocateHardware,
     /// Serves the handle-data probe (optional export).
-    #[allow(dead_code)]
     get_handle_data: Option<CanGetChannelData>,
 }
 
@@ -164,7 +165,6 @@ impl Canlib {
         Some(Canlib {
             initialize_library: need!(b"canInitializeLibrary", CanInitializeLibrary),
             get_number_of_channels: need!(b"canGetNumberOfChannels", CanGetNumberOfChannels),
-            get_channel_data: need!(b"canGetChannelData", CanGetChannelData),
             open_channel: need!(b"canOpenChannel", CanOpenChannel),
             set_bus_params: need!(b"canSetBusParams", CanSetBusParams),
             set_bus_params_fd: want!(b"canSetBusParamsFd", CanSetBusParamsFd),
@@ -173,7 +173,11 @@ impl Canlib {
             write: need!(b"canWrite", CanWrite),
             read: need!(b"canRead", CanRead),
             close: need!(b"canClose", CanClose),
+            #[cfg(test)]
+            get_channel_data: need!(b"canGetChannelData", CanGetChannelData),
+            #[cfg(test)]
             get_version: need!(b"canGetVersion", CanGetVersion),
+            #[cfg(test)]
             locate_hardware: need!(b"canLocateHardware", CanLocateHardware),
             get_handle_data: want!(b"canGetHandleData", CanGetChannelData),
         })

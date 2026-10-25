@@ -175,11 +175,11 @@ impl Vm {
         }
     }
 
+    #[cfg(test)]
     pub fn with_budget(mut self, budget: u64) -> Self {
         self.budget = budget;
         self
     }
-
     /// Re-arms the instruction budget for one callback: every handler run
     /// gets the full allowance, so a chatty node cannot starve its own
     /// later events.
@@ -434,21 +434,6 @@ impl Vm {
                         )));
                     }
                 }
-            }
-            Op::Len => {
-                let v = self.pop()?;
-                let n = match v {
-                    Value::Bytes(b) => b.lock().expect("buffer poisoned").len(),
-                    Value::Array(a) => a.lock().expect("array poisoned").len(),
-                    Value::Str(s) => s.chars().count(),
-                    other => {
-                        return Err(VmError(format!(
-                            "len needs a buffer or string, got {}",
-                            kind(&other)
-                        )));
-                    }
-                };
-                self.stack.push(Value::Int(n as i64));
             }
             Op::Jump(t) => {
                 self.frames.last_mut().expect("frame").ip = t as usize;

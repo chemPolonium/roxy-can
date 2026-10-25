@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::can::frame::{CanFrame, FrameFlags};
+#[cfg(test)]
+use crate::can::frame::CanFrame;
 // The tests module reaches `Direction` through this module's namespace.
 #[allow(unused_imports)]
 use crate::can::frame::Direction;
@@ -9,13 +10,6 @@ use crate::log::open_stream;
 use crate::spec::{GRACE_CYCLES, TOLERANCE_PERCENT};
 
 pub const TRACE_LIMIT: usize = 50_000;
-/// Initial/first-frame toolbar height; the toolbar measures its own content
-/// every frame and stores the result in [`App::toolbar_h`]. The dock space
-/// and first-use windows read the measured value, so font/DPI changes and
-/// extra rows do not need a magic constant.
-pub const TOOLBAR_H: f32 = 70.0;
-pub const STATUSBAR_H: f32 = 28.0;
-pub const TABSTRIP_H: f32 = 22.0;
 /// How far back sampled signal history is kept. Deliberately in seconds, not
 /// points: the Graphics window ladder goes up to an hour, and a point-count
 /// cap silently dropped the head of the curve mid-run the moment it filled,
@@ -29,8 +23,8 @@ pub(crate) const SAMPLE_INTERVAL_US: u64 = 50_000;
 pub(crate) const STRIDE_POINTS_PER_WINDOW: u64 = 200;
 pub(crate) const MIN_STRIDE_US: u64 = 1_000;
 /// Row cache cap of one Trace window (R1 virtual scrolling): the newest
-/// matching frames the clipper draws from. Memory ≈ 88 B per frame, so
-/// 200 k rows ≈ 18 MB per window in the worst case.
+/// matching frames the clipper draws from.
+#[cfg(test)]
 pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// Synthetic id prefix for derived signals: `emit_value` streams are
 /// keyed `(ch, EMITTED_ID_BASE | node_id, false, name)`. The prefix sits
@@ -60,25 +54,15 @@ pub struct EthBusCfg {
     pub path: String,
     pub db: std::sync::Arc<crate::eth::db::EthDb>,
 }
-/// Speed ladder shared by the toolbar combo and the slower/faster buttons.
 /// The replay speed ladder. The last entry is "as fast as possible":
 /// infinity makes the replay clock jump to the end immediately while the
 /// UI keeps stepping between polls, so every observer updates in chunks.
+#[cfg(test)]
 pub const REPLAY_SPEEDS: [f64; 5] = [0.5, 1.0, 2.0, 4.0, f64::INFINITY];
 /// Cycle a new generator entry gets when its DBC declares none. A declared
 /// value always wins; this is only the invention we fall back to.
 pub(crate) const DEFAULT_TX_CYCLE_US: u64 = 100_000;
 
-pub const PALETTE: [[f32; 4]; 8] = [
-    [0.30, 0.80, 1.00, 1.0],
-    [1.00, 0.65, 0.20, 1.0],
-    [0.45, 0.95, 0.45, 1.0],
-    [1.00, 0.40, 0.40, 1.0],
-    [0.75, 0.55, 1.00, 1.0],
-    [1.00, 0.85, 0.30, 1.0],
-    [0.35, 0.95, 0.85, 1.0],
-    [0.95, 0.55, 0.85, 1.0],
-];
 pub use crate::aggregate::MessageAgg;
 pub use crate::channel::{Channel, NodeRole};
 #[cfg(test)]
@@ -88,12 +72,13 @@ pub use crate::observe::SampleCache;
 pub use crate::observe::{DataWindow, GfxSignal, GraphicsWindow, StateWin, YMode};
 #[cfg(test)]
 pub use crate::workspace::PopupTarget;
-pub use crate::workspace::{
-    MsgWin, RowsBuild, SigScope, StatsWin, TraceFilter, TraceRow, TraceWin,
-};
+pub use crate::workspace::{MsgWin, SigScope, StatsWin, TraceWin};
+#[cfg(test)]
+pub use crate::workspace::{RowsBuild, TraceFilter, TraceRow};
 
 /// "{:.2}" milliseconds, the Min/Avg/Max cell format shared by the snapshot
 /// builders below.
+#[cfg(test)]
 fn ms_text(v: f64) -> String {
     format!("{:.2}", v / 1000.0)
 }
@@ -112,6 +97,7 @@ fn strip_record_ext(path: &str) -> &str {
 
 /// One Message Statistics row as throttled text, refreshed on the text gate
 /// (see [`App::sync_stats_text`]): built strings, ready to draw.
+#[cfg(test)]
 #[derive(Clone)]
 pub struct StatsRowText {
     pub label: String,
@@ -121,12 +107,12 @@ pub struct StatsRowText {
     pub avg: String,
     pub max: String,
     pub len: String,
-    pub flags: FrameFlags,
     pub share: String,
 }
 
 /// One Messages row as throttled text (see [`App::sync_msg_text`]); the
 /// expanded row carries the pre-decoded signal name/value pairs.
+#[cfg(test)]
 #[derive(Clone)]
 pub struct MsgRowText {
     pub label: String,
@@ -134,12 +120,7 @@ pub struct MsgRowText {
     /// legitimately appears on two buses when both load one DBC.
     pub id_key: String,
     pub bus: String,
-    pub dir: &'static str,
     pub count: String,
-    pub cycle: String,
-    pub flags: FrameFlags,
-    pub data: String,
-    pub signals: Vec<(String, String)>,
     /// Why the expanded row has no signals to show. Naming the actual reason
     /// matters on a FlexRay table: "no description loaded" and "the
     /// description has no frame for this slot" look identical in the window
@@ -172,7 +153,6 @@ pub struct MonitorRow {
 /// Rows watched by the Monitor panel; the web Monitor tab serializes them.
 #[derive(Default)]
 pub struct MonitorView {
-    pub open: bool,
     pub rows: Vec<MonitorRow>,
 }
 
@@ -194,10 +174,9 @@ impl Default for MonitorRow {
 /// two lists keyed differently -- CAN entries by `(channel, id)`, FlexRay
 /// entries by `(bus, slot)` -- and an index alone cannot say which one it came
 /// from, so the dialogs that serve both carry one of these.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GenRow {
-    /// Index into `Snapshot::tx`.
-    Can(usize),
     /// Index into `Snapshot::fr_tx`.
     Fr(usize),
 }
@@ -225,7 +204,6 @@ pub struct App {
     /// which now reads snapshot deltas: frames arrive on the core's
     /// clock, whatever drive is underneath.
     ema_prev: Option<(u64, u64)>,
-    pub quit: bool,
     pub t0: Instant,
     pub status: String,
     /// Absolute path of the log currently loaded for replay (`.asc`, `.blf`).
@@ -265,11 +243,6 @@ pub struct App {
     /// compared against the live config to decide if anything changed.
     pub(crate) baseline: String,
     pub replay_speed: f64,
-    /// Replay navigation drafts: the step size (ms), the play-for duration
-    /// (s), and the absolute play-to time typed in the toolbar.
-    pub replay_step_ms: u64,
-    pub replay_play_for_s: u64,
-    pub replay_to_buf: String,
     /// The Monitor rows shared by the web observers.
     pub(crate) monitor_view: MonitorView,
     /// Which Write categories the text export carries.
@@ -281,7 +254,6 @@ pub struct App {
     /// The recording file format: 0 = ASC, 1 = BLF. The toolbar combo
     /// selects this; the recorder picks the backend by extension.
     pub record_format: usize,
-    pub focus_title: Option<String>,
     /// The port each CAN row's 硬件 picker last chose, by bus. A failed attach
     /// leaves the driver holding nothing, so without this the cell falls back
     /// to the list's first entry and the row ends up showing a channel while
@@ -338,11 +310,14 @@ pub struct App {
     /// digits is unreadable, which is what this throttles.
     pub text_rate_hz: u32,
     /// True on frames where throttled text content should re-render.
+    #[cfg(test)]
     pub text_fresh: bool,
+    #[cfg(test)]
     last_text_refresh: std::time::Instant,
     /// The status bar's "| frames: .. | f/s | trace | signals" line as of the
     /// last throttled text refresh; the state and replay readouts beside it
     /// stay live. See [`App::sync_status_text`].
+    #[cfg(test)]
     pub(crate) status_counters: String,
     pub frame_rate: f64,
     pub trace_windows: Vec<TraceWin>,
@@ -456,7 +431,6 @@ impl App {
             knobs,
             snap: std::sync::Arc::new(crate::bus::Snapshot::default()),
             ema_prev: None,
-            quit: false,
             t0: Instant::now(),
             status: "stopped".to_string(),
             log_path: String::new(),
@@ -475,14 +449,10 @@ impl App {
             last_pnp_poll: Instant::now(),
             baseline: String::new(),
             replay_speed: 1.0,
-            replay_step_ms: 100,
-            replay_play_for_s: 5,
-            replay_to_buf: String::new(),
             monitor_view: Default::default(),
             write_filter: [true; 4],
             spec_tol_pct: TOLERANCE_PERCENT,
             spec_grace: GRACE_CYCLES,
-            focus_title: None,
             // The record draft: a file name, shown as-is in the toolbar
             // input. The directory is implicit (the open project's
             // Record/ folder, resolved when recording arms); the
@@ -505,8 +475,11 @@ impl App {
             limits: Default::default(),
             last_tick_us: 0,
             text_rate_hz: 10,
+            #[cfg(test)]
             text_fresh: true,
+            #[cfg(test)]
             last_text_refresh: std::time::Instant::now(),
+            #[cfg(test)]
             status_counters: String::new(),
             frame_rate: 0.0,
             trace_windows: Vec::new(),
@@ -850,6 +823,7 @@ impl App {
 
     /// Switches between simulation and replay; a running measurement is
     /// stopped first so the transport never outlives its source.
+    #[cfg(test)]
     pub fn switch_run_mode(&mut self, mode: Mode) {
         if mode == self.snap.run_mode {
             return;
@@ -993,6 +967,7 @@ impl App {
 
     /// Moves one notch along REPLAY_SPEEDS; negative slows down, positive
     /// speeds up, the ends clamp.
+    #[cfg(test)]
     pub fn step_replay_speed(&mut self, delta: i32) {
         let idx = REPLAY_SPEEDS
             .iter()
@@ -1005,6 +980,7 @@ impl App {
     /// Play/pause as a single action, shared by the toolbar button, Space and
     /// F9. A pause freezes the replay clock in place; resuming is the same
     /// action, and starting when nothing runs re-opens the selected log.
+    #[cfg(test)]
     pub fn toggle_play(&mut self) {
         if self.snap.measuring {
             self.send(crate::bus::BusCommand::SetTracePaused(
@@ -1040,6 +1016,7 @@ impl App {
     }
 
     /// Resets the pan offsets of all plot windows back to the live edge.
+    #[cfg(test)]
     pub fn jump_to_live(&mut self) {
         for g in &mut self.graphics {
             g.t_offset_s = 0.0;
@@ -1051,6 +1028,7 @@ impl App {
     /// [`App::sync_data_text`] -- a no-op unless the text gate says so or the
     /// visible message set changed, so a new id shows up without waiting a
     /// full period.
+    #[cfg(test)]
     pub(crate) fn sync_stats_text(&mut self, i: usize) {
         let (scope, manual) = {
             let w = &self.stats_windows[i];
@@ -1136,7 +1114,6 @@ impl App {
                     "-".to_string()
                 },
                 len: agg.len.to_string(),
-                flags: agg.flags,
                 share: share(agg.count),
             });
         }
@@ -1166,7 +1143,6 @@ impl App {
                     "-".to_string()
                 },
                 len: agg.payload.len().to_string(),
-                flags: crate::can::frame::FrameFlags::NONE,
                 share: share(agg.count),
             });
         }
@@ -1214,7 +1190,6 @@ impl App {
                     "-".to_string()
                 },
                 len: agg.key.len.to_string(),
-                flags: crate::can::frame::FrameFlags::NONE,
                 share: share(agg.count),
             });
         }
@@ -1341,45 +1316,17 @@ impl App {
     /// microseconds -- the unit the occupancy figure is built from. `None` when
     /// the bus has no description or its carries no slot timing, which the
     /// Statistics row shows as "-" rather than as a 0 % nobody measured.
+    #[cfg(test)]
     pub(crate) fn fr_slot_wire_us(&self, bus: u8) -> Option<f64> {
         self.fr_db(bus)
             .and_then(|db| crate::load::fr_slot_wire_us(&db.params))
-    }
-
-    /// Refreshes the observer text caches; each sync keeps its own text-gate
-    /// early return, so an unchanged window costs a check.
-    pub(crate) fn sync_observer_text(&mut self) {
-        for i in 0..self.msg_windows.len() {
-            if self.msg_windows[i].opened {
-                self.sync_msg_text(i);
-            }
-        }
-        for i in 0..self.stats_windows.len() {
-            if self.stats_windows[i].opened {
-                self.sync_stats_text(i);
-            }
-        }
-        for i in 0..self.data_windows.len() {
-            if self.data_windows[i].opened {
-                self.sync_data_text(i);
-            }
-        }
-        for i in 0..self.trace_windows.len() {
-            if self.trace_windows[i].opened {
-                self.sync_trace_rows(i);
-            }
-        }
-        for i in 0..self.graphics.len() {
-            if self.graphics[i].opened {
-                self.sync_gfx_legend(i);
-            }
-        }
     }
 
     /// Refreshes Messages window `i`'s throttled text snapshot: the header
     /// count and one pre-formatted struct per row, including the decoded
     /// signal pairs the expanded tree shows. Same gate as
     /// [`App::sync_data_text`].
+    #[cfg(test)]
     pub(crate) fn sync_msg_text(&mut self, i: usize) {
         let (scope, manual, dbc_only, filter) = {
             let w = &self.msg_windows[i];
@@ -1478,24 +1425,7 @@ impl App {
                     if agg.extended { "x" } else { "" }
                 ),
                 bus: self.channel_name(agg.channel),
-                dir: match (agg.rx > 0, agg.tx > 0) {
-                    (true, true) => "Rx+Tx",
-                    (false, true) => "Tx",
-                    _ => "Rx",
-                },
                 count: agg.count.to_string(),
-                cycle: if agg.count > 1 {
-                    format!(
-                        "{:.1} ±{:.1}",
-                        agg.cycle_us / 1000.0,
-                        agg.jitter_us / 1000.0
-                    )
-                } else {
-                    "-".to_string()
-                },
-                flags: agg.flags,
-                data: agg.payload().iter().map(|b| format!("{b:02X} ")).collect(),
-                signals,
                 empty_note,
             });
         }
@@ -1582,20 +1512,7 @@ impl App {
                         }
                     ),
                     bus: self.fr_bus_name(agg.bus),
-                    dir: "Rx",
                     count: agg.count.to_string(),
-                    cycle: if agg.count > 1 {
-                        format!(
-                            "{:.1} ±{:.1}",
-                            agg.cycle_us / 1000.0,
-                            agg.jitter_us / 1000.0
-                        )
-                    } else {
-                        "-".to_string()
-                    },
-                    flags: crate::can::frame::FrameFlags::NONE,
-                    data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
-                    signals,
                     empty_note,
                 });
             }
@@ -1680,20 +1597,7 @@ impl App {
                 bus: format!("ETH{}", agg.key.bus),
                 // The flow tally merges both capture directions, so it cannot
                 // name one; the Trace row carries the per-frame direction.
-                dir: "-",
                 count: agg.count.to_string(),
-                cycle: if agg.count > 1 {
-                    format!(
-                        "{:.1} ±{:.1}",
-                        agg.cycle_us / 1000.0,
-                        agg.jitter_us / 1000.0
-                    )
-                } else {
-                    "-".to_string()
-                },
-                flags: crate::can::frame::FrameFlags::NONE,
-                data: agg.payload.iter().map(|b| format!("{b:02X} ")).collect(),
-                signals,
                 empty_note,
             });
         }
@@ -1722,6 +1626,7 @@ impl App {
     /// rows into their decoded signals costs that walk the count of child rows
     /// per frame row, nothing else: the children are not entries of this list
     /// (see [`TraceRow::Fr`]).
+    #[cfg(test)]
     pub(crate) fn sync_trace_rows(&mut self, i: usize) {
         if !self.text_fresh {
             return;
@@ -1822,6 +1727,7 @@ impl App {
     /// bounds the walk to rows strictly newer than that timestamp (see
     /// [`App::sync_trace_rows`]); the result is prepended to `rows` in that
     /// case, and becomes the whole list otherwise.
+    #[cfg(test)]
     fn walk_rows(
         &self,
         i: usize,
@@ -1910,6 +1816,7 @@ impl App {
     /// signals of the frame its slot and cycle resolve to that this payload
     /// actually carries. Zero when the bus has no description, or its schedule
     /// has no frame in this slot at this cycle.
+    #[cfg(test)]
     fn fr_child_count(&self, row: &crate::trace::FrRow) -> u32 {
         let Some(db) = self.fr_db(row.bus) else {
             return 0;
@@ -1927,6 +1834,7 @@ impl App {
     /// reserved a table row for is one this resolves -- until the description
     /// behind the count is swapped out, which is the case `RowsBuild::fr_dbs`
     /// rebuilds the cache over instead of letting the rows print blank.
+    #[cfg(test)]
     pub(crate) fn fr_child_cell(
         &self,
         row: &crate::trace::FrRow,
@@ -1942,6 +1850,7 @@ impl App {
 
     /// Trace window `w`'s revealed frames, newest first: the whole buffer
     /// minus the not-yet-revealed tail beyond the watermark.
+    #[cfg(test)]
     pub(crate) fn trace_revealed<'a>(
         &'a self,
         w: &'a TraceWin,
@@ -1956,6 +1865,7 @@ impl App {
     /// Refreshes the status bar's throttled counters line. The state, the REC
     /// marker and the replay position beside it stay live on purpose: they
     /// change rarely or must track the replay position.
+    #[cfg(test)]
     pub(crate) fn sync_status_text(&mut self) {
         if !self.text_fresh {
             return;
@@ -1999,13 +1909,16 @@ impl App {
 
     pub fn update(&mut self) {
         self.watch_hardware_hotplug();
-        // The text-throttle gate runs before anything that can early-return:
-        // every frame decides once whether throttled readouts re-render.
-        self.text_fresh = self.text_rate_hz == 0
-            || self.last_text_refresh.elapsed()
-                >= std::time::Duration::from_millis(1000 / self.text_rate_hz.max(1) as u64);
-        if self.text_fresh {
-            self.last_text_refresh = std::time::Instant::now();
+        // The text-throttle gate only feeds the headless tests; the web DTOs
+        // read live values.
+        #[cfg(test)]
+        {
+            self.text_fresh = self.text_rate_hz == 0
+                || self.last_text_refresh.elapsed()
+                    >= std::time::Duration::from_millis(1000 / self.text_rate_hz.max(1) as u64);
+            if self.text_fresh {
+                self.last_text_refresh = std::time::Instant::now();
+            }
         }
         // The frontend's stepping policy, retuned every frame; the core
         // thread reads the knobs on each of its laps.
