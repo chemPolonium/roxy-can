@@ -95,6 +95,8 @@ export interface CatalogChannel {
   kind: string;
   index: number;
   name: string;
+  /// Cluster names the description carries, for the named FR/ETH spellings.
+  aliases?: string[];
   messages: CatalogMessage[];
 }
 

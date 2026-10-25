@@ -3,6 +3,7 @@ import { fetchScriptHelp, fetchScripts } from "../api";
 import type {
   Bus,
   Catalog,
+  CatalogMessage,
   Command,
   DerivedDef,
   Script,
@@ -161,6 +162,69 @@ function catalogBus(catalog: Catalog | null, kind: string, index: number) {
   );
 }
 
+/// A channel addressed by a description name (`FR.PowerTrain`,
+/// `ETH.Body`). The display name (`FR0`) also works, but only an
+/// unambiguous match resolves -- the same rule the script host applies.
+function catalogAliasBus(
+  catalog: Catalog | null,
+  kind: string,
+  alias: string,
+) {
+  const hits = (catalog?.channels ?? []).filter(
+    (candidate) =>
+      candidate.kind === kind &&
+      (candidate.name === alias || candidate.aliases?.includes(alias)),
+  );
+  return hits.length === 1 ? hits[0] : null;
+}
+
+function aliasItems(
+  catalog: Catalog | null,
+  kind: string,
+  detail: string,
+): CompletionItem[] {
+  const items: CompletionItem[] = [];
+  const seen = new Set<string>();
+  for (const channel of catalog?.channels ?? []) {
+    if (channel.kind !== kind) continue;
+    for (const alias of channel.aliases ?? []) {
+      if (seen.has(alias)) continue;
+      seen.add(alias);
+      items.push({
+        label: alias,
+        detail: `${detail} · ${channel.name}`,
+        insert: alias,
+        caret: alias.length,
+        rank: 0,
+      });
+    }
+  }
+  return items;
+}
+
+function frSignalItems(
+  channel: { index: number; messages: CatalogMessage[] },
+  partial: string,
+): CompletionItem[] {
+  const seen = new Set<string>();
+  const query = partial.toLowerCase();
+  const items: CompletionItem[] = [];
+  for (const frame of channel.messages) {
+    for (const signal of frame.signals) {
+      if (seen.has(signal.name)) continue;
+      seen.add(signal.name);
+      if (query !== "" && !signal.name.toLowerCase().includes(query)) continue;
+      items.push(
+        signalItem(
+          signal.name,
+          `FR${channel.index} · ${frame.name}${signal.unit ? ` · ${signal.unit}` : ""}`,
+        ),
+      );
+    }
+  }
+  return items.slice(0, 12);
+}
+
 /// `FR3` / `ETH0` → 3 / 0. A name that merely starts with the letters
 /// (`Frame`) is an ordinary identifier, matching the parser's rule.
 function busIndex(name: string, prefix: string): number | null {
@@ -233,6 +297,141 @@ function buildCandidates(
           caret: message.name.length,
           rank: 0,
         }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+  }
+
+  // `this.` / `node.` are handler contexts, not catalog names.
+  if (!inString) {
+    const context = /(this|node)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (context) {
+      const fields: {
+        label: string;
+        detail: string;
+        insert: string;
+        caret?: number;
+      }[] =
+        context[1] === "this"
+          ? [
+              { label: "bus", detail: "trigger bus", insert: "bus" },
+              { label: "id", detail: "CAN frame id", insert: "id" },
+              { label: "slot", detail: "FlexRay slot", insert: "slot" },
+              { label: "len", detail: "payload length", insert: "len" },
+              { label: "cycle", detail: "FlexRay cycle", insert: "cycle" },
+              {
+                label: "signal",
+                detail: 'triggering frame signal("Name")',
+                insert: 'signal("")',
+                caret: 8,
+              },
+            ]
+          : [
+              {
+                label: "bus",
+                detail: "the script's own CAN channel",
+                insert: "bus",
+              },
+            ];
+      const partial = context[2] ?? "";
+      const query = partial.toLowerCase();
+      const items = fields
+        .filter(
+          (field) => query === "" || field.label.toLowerCase().includes(query),
+        )
+        .map((field) => ({
+          label: field.label,
+          detail: field.detail,
+          insert: field.insert,
+          caret: field.caret ?? field.insert.length,
+          rank: 0,
+        }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+  }
+
+  // Named-cluster spellings: `FR.PowerTrain.`, `ETH.Body.`,
+  // `ETH.Body.Frame.`. They run before the numeric forms because the
+  // same regex shape would otherwise read the name as a CAN message.
+  if (!inString) {
+    const ethSignal =
+      /(?:^|[^\w.])ETH\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(
+        lineBefore,
+      );
+    if (ethSignal) {
+      const [, alias, frameName, partial = ""] = ethSignal;
+      const busChannel = catalogAliasBus(catalog, "eth", alias);
+      const frame = busChannel?.messages.find(
+        (message) => message.name === frameName || message.frame === frameName,
+      );
+      if (!busChannel || !frame) return null;
+      const query = partial.toLowerCase();
+      const items = frame.signals
+        .filter(
+          (signal) => query === "" || signal.name.toLowerCase().includes(query),
+        )
+        .slice(0, 12)
+        .map((signal) =>
+          signalItem(
+            signal.name,
+            `ETH.${alias} · ${frame.name}${signal.unit ? ` · ${signal.unit}` : ""}`,
+          ),
+        );
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+    const ethFrame =
+      /(?:^|[^\w.])ETH\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (ethFrame) {
+      const [, alias, partial = ""] = ethFrame;
+      const busChannel = catalogAliasBus(catalog, "eth", alias);
+      if (!busChannel) return null;
+      const query = partial.toLowerCase();
+      const items = busChannel.messages
+        .filter(
+          (frame) => query === "" || frame.name.toLowerCase().includes(query),
+        )
+        .slice(0, 12)
+        .map((frame) => ({
+          label: frame.name,
+          detail: `ETH.${alias} frame`,
+          insert: frame.name,
+          caret: frame.name.length,
+          rank: 0,
+        }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+    const ethBus = /(?:^|[^\w.])ETH\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (ethBus) {
+      const partial = ethBus[1] ?? "";
+      const items = aliasItems(catalog, "eth", "Ethernet cluster").filter(
+        (item) =>
+          partial === "" ||
+          item.label.toLowerCase().includes(partial.toLowerCase()),
+      );
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+    const frSignal =
+      /(?:^|[^\w.])FR\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (frSignal) {
+      const [, alias, partial = ""] = frSignal;
+      const busChannel = catalogAliasBus(catalog, "fr", alias);
+      if (!busChannel) return null;
+      const items = frSignalItems(busChannel, partial);
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+    const frBus = /(?:^|[^\w.])FR\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (frBus) {
+      const partial = frBus[1] ?? "";
+      const items = aliasItems(catalog, "fr", "FlexRay cluster").filter(
+        (item) =>
+          partial === "" ||
+          item.label.toLowerCase().includes(partial.toLowerCase()),
+      );
       if (items.length === 0) return null;
       return { start: caret - partial.length, end: caret, items };
     }
@@ -370,15 +569,38 @@ function buildCandidates(
   if (inString) {
     const beforeQuote = lineBefore.slice(0, quoteAt).trimEnd();
     const bracket = /([A-Za-z_]\w*)\s*\[\s*$/.exec(beforeQuote);
+    // Named-cluster bracket forms, deepest first.
+    const ethNamedSignal =
+      /(?:^|[^\w.])ETH\s*\[\s*"([^"]*)"\s*\]\s*\[\s*"([^"]*)"\s*\]\s*\[\s*$/.exec(
+        beforeQuote,
+      );
+    const ethNamedFrame =
+      /(?:^|[^\w.])ETH\s*\[\s*"([^"]*)"\s*\]\s*\[\s*$/.exec(beforeQuote);
+    const frNamedSignal =
+      /(?:^|[^\w.])FR\s*\[\s*"([^"]*)"\s*\]\s*\[\s*$/.exec(beforeQuote);
     // `ETH0["Frame"]["`: the second bracket completes that frame's signals.
     const ethSignal =
       /([A-Za-z_]\w*)\s*\[\s*"([^"]*)"\s*\]\s*\[\s*$/.exec(beforeQuote);
     if (/^\s*on\s+message\s*$/.test(beforeQuote)) {
       stringFn = "message";
+    } else if (ethNamedSignal) {
+      stringFn = "eth-named-signal";
+      stringMessage = ethNamedSignal[1];
+      stringFrame = ethNamedSignal[2];
+    } else if (ethNamedFrame) {
+      stringFn = "eth-named-frame";
+      stringMessage = ethNamedFrame[1];
+    } else if (frNamedSignal) {
+      stringFn = "fr-named-signal";
+      stringMessage = frNamedSignal[1];
     } else if (ethSignal && busIndex(ethSignal[1], "ETH") !== null) {
       stringFn = "eth-signal";
       stringMessage = String(busIndex(ethSignal[1], "ETH"));
       stringFrame = ethSignal[2];
+    } else if (bracket && bracket[1] === "FR") {
+      stringFn = "fr-bus";
+    } else if (bracket && bracket[1] === "ETH") {
+      stringFn = "eth-bus";
     } else if (bracket && busIndex(bracket[1], "FR") !== null) {
       stringFn = "fr-signal";
       stringMessage = String(busIndex(bracket[1], "FR"));
@@ -404,7 +626,12 @@ function buildCandidates(
       stringFn !== "message" &&
       stringFn !== "fr-signal" &&
       stringFn !== "eth-frame" &&
-      stringFn !== "eth-signal"
+      stringFn !== "eth-signal" &&
+      stringFn !== "fr-bus" &&
+      stringFn !== "eth-bus" &&
+      stringFn !== "fr-named-signal" &&
+      stringFn !== "eth-named-frame" &&
+      stringFn !== "eth-named-signal"
     ) {
       return null;
     }
@@ -443,6 +670,61 @@ function buildCandidates(
             : message.name,
           insert: signal.name,
           caret: signal.name.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "fr-bus" || stringFn === "eth-bus") {
+      const kind = stringFn === "fr-bus" ? "fr" : "eth";
+      const detail = kind === "fr" ? "FlexRay cluster" : "Ethernet cluster";
+      for (const item of aliasItems(catalog, kind, detail)) {
+        const insert = quoted(item.label);
+        items.push({
+          label: item.label,
+          detail: item.detail,
+          insert,
+          caret: insert.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "fr-named-signal") {
+      const busChannel = catalogAliasBus(catalog, "fr", stringMessage ?? "");
+      if (!busChannel) return null;
+      for (const item of frSignalItems(busChannel, "")) {
+        const insert = quoted(item.label);
+        items.push({
+          label: item.label,
+          detail: item.detail,
+          insert,
+          caret: insert.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "eth-named-frame") {
+      const busChannel = catalogAliasBus(catalog, "eth", stringMessage ?? "");
+      if (!busChannel) return null;
+      for (const frame of busChannel.messages) {
+        const insert = quoted(frame.name);
+        items.push({
+          label: frame.name,
+          detail: `${stringMessage} frame`,
+          insert,
+          caret: insert.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "eth-named-signal") {
+      const frame = catalogAliasBus(catalog, "eth", stringMessage ?? "")
+        ?.messages.find((message) => message.name === stringFrame);
+      if (!frame) return null;
+      for (const signal of frame.signals) {
+        const insert = quoted(signal.name);
+        items.push({
+          label: signal.name,
+          detail: signal.unit
+            ? `${frame.name} · ${signal.unit}`
+            : frame.name,
+          insert,
+          caret: insert.length,
           rank: 0,
         });
       }
@@ -605,6 +887,8 @@ const KEYWORDS = new Set([
   "false",
   "break",
   "continue",
+  "this",
+  "node",
 ]);
 
 function escapeHtml(text: string): string {

@@ -287,27 +287,67 @@ impl ScriptNode {
                 ));
                 continue;
             };
-            match db.frames.iter().find(|def| &def.name == frame) {
-                None => self.push_log(format!(
-                    "[check] Ethernet frame \"{frame}\" is not in the ETH{bus} description"
-                )),
-                Some(def)
-                    if !def
-                        .pdus
-                        .iter()
-                        .any(|pdu| pdu.signals.iter().any(|s| &s.name == sig)) =>
-                {
-                    self.push_log(format!(
-                        "[check] Ethernet signal \"{sig}\" is not in frame \"{frame}\" (ETH{bus})"
-                    ));
-                }
-                Some(_) => {}
+            if let Err(msg) = eth_signal_check(db, *bus, frame, sig) {
+                self.push_log(format!("[check] {msg}"));
             }
+        }
+        // Same reads with the bus named after its cluster description.
+        let mut fr_bus_named_slots = HashMap::new();
+        for (bus_name, sig) in &script.fr_bus_refs {
+            let Some(dbs) = fr_dbs else {
+                self.push_log(format!(
+                    "[check] FlexRay cluster {bus_name:?} is not loaded for \"{sig}\""
+                ));
+                continue;
+            };
+            let bus = match fr_bus_by_name(dbs, bus_name) {
+                Ok(bus) => bus,
+                Err(msg) => {
+                    self.push_log(format!("[check] {msg}"));
+                    continue;
+                }
+            };
+            let Some(db) = dbs.get(&bus) else {
+                continue;
+            };
+            match fr_slot_of(db, bus, sig) {
+                Ok(slot) => {
+                    fr_bus_named_slots.insert((bus_name.clone(), sig.clone()), (bus, slot));
+                }
+                Err(msg) => self.push_log(format!("[check] {msg}")),
+            }
+        }
+        let mut eth_bus_named_ids = HashMap::new();
+        for (bus_name, frame, sig) in &script.eth_bus_refs {
+            let Some(dbs) = eth_dbs else {
+                self.push_log(format!(
+                    "[check] Ethernet cluster {bus_name:?} is not loaded for \"{frame}.{sig}\""
+                ));
+                continue;
+            };
+            let bus = match eth_bus_by_name(dbs, bus_name) {
+                Ok(bus) => bus,
+                Err(msg) => {
+                    self.push_log(format!("[check] {msg}"));
+                    continue;
+                }
+            };
+            let Some(db) = dbs.get(&bus) else {
+                continue;
+            };
+            if let Err(msg) = eth_signal_check(db, bus, frame, sig) {
+                self.push_log(format!("[check] {msg}"));
+                continue;
+            }
+            eth_bus_named_ids.insert((bus_name.clone(), frame.clone(), sig.clone()), bus);
         }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.named_messages = named_messages;
         vm.fr_named_slots = fr_named_slots;
+        vm.fr_bus_named_slots = fr_bus_named_slots;
+        vm.eth_bus_named_ids = eth_bus_named_ids;
+        vm.node_channel = self.channel;
         vm.host_extern = Some(Box::new(move |name, args| {
             node_extern(dbc.as_deref(), name, args)
         }));
@@ -545,34 +585,130 @@ impl ScriptNode {
                 resolved.insert((bus, sig), slot);
             }
         }
-        if rt.vm.fr_named_slots == resolved {
+        if rt.vm.fr_named_slots != resolved {
+            let old = std::mem::replace(&mut rt.vm.fr_named_slots, resolved.clone());
+            for ((bus, sig), slot) in &resolved {
+                match old.get(&(*bus, sig.clone())) {
+                    Some(previous) if previous == slot => {}
+                    Some(previous) => Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!("[reload] FR{bus}.{sig} slot {previous} -> {slot}"),
+                    ),
+                    None => Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!("[reload] FR{bus}.{sig} resolved to slot {slot}"),
+                    ),
+                }
+            }
+            for ((bus, sig), slot) in &old {
+                if !resolved.contains_key(&(*bus, sig.clone())) {
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!("[reload] FR{bus}.{sig} unresolved (was slot {slot})"),
+                    );
+                }
+            }
+        }
+        // The named-cluster reads move with the same description: the name
+        // comes from the cluster file, so a replacement can point it at a
+        // different bus/slot or make it unknown.
+        let mut named = HashMap::new();
+        for (bus_name, sig) in rt.vm.fr_bus_refs().to_vec() {
+            if let Ok(bus) = fr_bus_by_name(dbs, &bus_name)
+                && let Some(db) = dbs.get(&bus)
+                && let Ok(slot) = fr_slot_of(db, bus, &sig)
+            {
+                named.insert((bus_name, sig), (bus, slot));
+            }
+        }
+        if rt.vm.fr_bus_named_slots != named {
+            let old_named = std::mem::replace(&mut rt.vm.fr_bus_named_slots, named.clone());
+            for ((bus_name, sig), (bus, slot)) in &named {
+                match old_named.get(&(bus_name.clone(), sig.clone())) {
+                    Some(previous) if previous == &(*bus, *slot) => {}
+                    Some(previous) => Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!(
+                            "[reload] FR.{bus_name}.{sig} FR{} slot {} -> FR{bus} slot {slot}",
+                            previous.0, previous.1
+                        ),
+                    ),
+                    None => Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!("[reload] FR.{bus_name}.{sig} resolved to FR{bus} slot {slot}"),
+                    ),
+                }
+            }
+            for ((bus_name, sig), (bus, slot)) in &old_named {
+                if !named.contains_key(&(bus_name.clone(), sig.clone())) {
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!(
+                            "[reload] FR.{bus_name}.{sig} unresolved (was FR{bus} slot {slot})"
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Re-resolves named-cluster Ethernet reads against replaced matrices.
+    pub fn refresh_eth_named(
+        &mut self,
+        dbs: &std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>,
+    ) {
+        let Some(rt) = self.runtime.as_mut() else {
+            return;
+        };
+        let mut resolved = HashMap::new();
+        for (bus_name, frame, sig) in rt.vm.eth_bus_refs().to_vec() {
+            if let Ok(bus) = eth_bus_by_name(dbs, &bus_name)
+                && let Some(db) = dbs.get(&bus)
+                && eth_signal_check(db, bus, &frame, &sig).is_ok()
+            {
+                resolved.insert((bus_name, frame, sig), bus);
+            }
+        }
+        if rt.vm.eth_bus_named_ids == resolved {
             return;
         }
-        let old = std::mem::replace(&mut rt.vm.fr_named_slots, resolved.clone());
-        for ((bus, sig), slot) in &resolved {
-            match old.get(&(*bus, sig.clone())) {
-                Some(previous) if previous == slot => {}
+        let old = std::mem::replace(&mut rt.vm.eth_bus_named_ids, resolved.clone());
+        for ((bus_name, frame, sig), bus) in &resolved {
+            match old.get(&(bus_name.clone(), frame.clone(), sig.clone())) {
+                Some(previous) if previous == bus => {}
                 Some(previous) => Self::push_log_into(
                     &mut self.log,
                     &mut self.log_dirty,
                     &mut self.pending_lines,
-                    format!("[reload] FR{bus}.{sig} slot {previous} -> {slot}"),
+                    format!("[reload] ETH.{bus_name}.{frame}.{sig} ETH{previous} -> ETH{bus}"),
                 ),
                 None => Self::push_log_into(
                     &mut self.log,
                     &mut self.log_dirty,
                     &mut self.pending_lines,
-                    format!("[reload] FR{bus}.{sig} resolved to slot {slot}"),
+                    format!("[reload] ETH.{bus_name}.{frame}.{sig} resolved to ETH{bus}"),
                 ),
             }
         }
-        for ((bus, sig), slot) in &old {
-            if !resolved.contains_key(&(*bus, sig.clone())) {
+        for ((bus_name, frame, sig), bus) in &old {
+            if !resolved.contains_key(&(bus_name.clone(), frame.clone(), sig.clone())) {
                 Self::push_log_into(
                     &mut self.log,
                     &mut self.log_dirty,
                     &mut self.pending_lines,
-                    format!("[reload] FR{bus}.{sig} unresolved (was slot {slot})"),
+                    format!("[reload] ETH.{bus_name}.{frame}.{sig} unresolved (was ETH{bus})"),
                 );
             }
         }
@@ -604,6 +740,12 @@ impl ScriptNode {
         }
         rt.vm.frame_bytes = data.to_vec();
         rt.vm.frame_id = id;
+        rt.vm.frame_bus = channel;
+        rt.vm.frame_present = true;
+        rt.vm.frame_is_fr = false;
+        // A CAN frame has no cycle; clearing it keeps `fr_cycle()` and
+        // `this.cycle` from reporting the previous FlexRay arrival.
+        rt.vm.fr_cycle = 0;
         // Leftover ops from `on start` arm here if no tick ran first.
         let now_us = (input.now_s.max(0.0) * 1e6) as u64;
         let pending: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
@@ -700,6 +842,9 @@ impl ScriptNode {
         }
         rt.vm.frame_bytes = payload.to_vec();
         rt.vm.frame_id = u32::from(slot);
+        rt.vm.frame_bus = bus;
+        rt.vm.frame_present = true;
+        rt.vm.frame_is_fr = true;
         rt.vm.fr_cycle = cycle;
         let matches: Vec<u16> = rt
             .handlers
@@ -836,6 +981,11 @@ impl ScriptNode {
                 })
             })
             .collect();
+        // Timers are not frame events: `this.*` has no current frame to
+        // describe, and a stale arrival must not leak into the handler.
+        rt.vm.frame_present = false;
+        rt.vm.frame_is_fr = false;
+        rt.vm.fr_cycle = 0;
         for (slot_index, chunk) in due {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
             rt.vm.timer_ops.clear();
@@ -1037,6 +1187,82 @@ fn fr_slot_of(db: &crate::fr_db::FrDb, bus: u8, sig: &str) -> Result<u16, String
             "FlexRay signal \"{sig}\" is declared in several FR{bus} slots ({many:?}); \
              use fr_sig({bus}, slot, \"{sig}\")"
         )),
+    }
+}
+
+/// The FlexRay bus a description name belongs to. Names come from the
+/// cluster file, so re-loading another file can move them; an unknown or
+/// duplicated name falls back to the numeric `FRn` form.
+fn fr_bus_by_name(
+    dbs: &std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>,
+    name: &str,
+) -> Result<u8, String> {
+    let mut hits: Vec<u8> = dbs
+        .iter()
+        .filter(|(_, db)| db.params.name.trim() == name)
+        .map(|(bus, _)| *bus)
+        .collect();
+    hits.sort_unstable();
+    match hits.as_slice() {
+        [bus] => Ok(*bus),
+        [] => Err(format!(
+            "no FlexRay cluster named {name:?}; use the FR index form"
+        )),
+        many => Err(format!(
+            "FlexRay cluster name {name:?} is ambiguous ({many:?}); use the FR index form"
+        )),
+    }
+}
+
+/// The Ethernet bus a cluster name belongs to (the ARXML cluster or a
+/// frame's declared cluster).
+fn eth_bus_by_name(
+    dbs: &std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>,
+    name: &str,
+) -> Result<u8, String> {
+    let mut hits: Vec<u8> = dbs
+        .iter()
+        .filter(|(_, db)| {
+            db.clusters.iter().any(|c| c.name == name)
+                || db.frames.iter().any(|f| f.cluster == name)
+        })
+        .map(|(bus, _)| *bus)
+        .collect();
+    hits.sort_unstable();
+    match hits.as_slice() {
+        [bus] => Ok(*bus),
+        [] => Err(format!(
+            "no Ethernet cluster named {name:?}; use the ETH index form"
+        )),
+        many => Err(format!(
+            "Ethernet cluster name {name:?} is ambiguous ({many:?}); use the ETH index form"
+        )),
+    }
+}
+
+/// Does the ARXML frame declare this signal? The error names the bus so the
+/// same text serves the numeric and named read forms.
+fn eth_signal_check(
+    db: &crate::eth::db::EthDb,
+    bus: u8,
+    frame: &str,
+    sig: &str,
+) -> Result<(), String> {
+    let Some(def) = db.frames.iter().find(|def| def.name == frame) else {
+        return Err(format!(
+            "Ethernet frame \"{frame}\" is not in the ETH{bus} description"
+        ));
+    };
+    if def
+        .pdus
+        .iter()
+        .any(|pdu| pdu.signals.iter().any(|s| s.name == sig))
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Ethernet signal \"{sig}\" is not in frame \"{frame}\" (ETH{bus})"
+        ))
     }
 }
 
@@ -1284,7 +1510,9 @@ mod tests {
     /// A FlexRay cluster with one frame per `(slot, signal)` pair, so two
     /// pairs can declare the same signal in different slots.
     fn fr_dbc(frames: &[(u16, &str)]) -> std::sync::Arc<crate::fr_db::FrDb> {
-        use crate::fr_db::{FrChannel, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering};
+        use crate::fr_db::{
+            FrChannel, FrClusterParams, FrDb, FrFrameDb, FrPdu, FrSignal, FrTriggering,
+        };
         let mut pdus = Vec::new();
         let mut defs = Vec::new();
         for (i, (slot, name)) in frames.iter().enumerate() {
@@ -1317,7 +1545,15 @@ mod tests {
                 comment: String::new(),
             });
         }
-        std::sync::Arc::new(FrDb::assemble(Default::default(), vec![], pdus, defs))
+        std::sync::Arc::new(FrDb::assemble(
+            FrClusterParams {
+                name: "PowerTrain".into(),
+                ..Default::default()
+            },
+            vec![],
+            pdus,
+            defs,
+        ))
     }
 
     /// Two-node mini database: EngineECU transmits 0x100 + 0x101, GearBox
@@ -2120,7 +2356,243 @@ BO_ 256 Real: 2 ECU
         );
     }
 
-    /// Dotted Ethernet reads verify the frame and signal against the ARXML
+    /// `this` is the triggering frame: the bus it arrived on, the id (CAN)
+    /// or slot (FlexRay), its payload, and a signal read that uses that
+    /// frame's own layout. `node.bus` is the script's own CAN channel.
+    #[test]
+    fn this_reads_the_can_triggering_frame() {
+        let mut n = node(
+            r#"
+                on message * {
+                    print(this.bus, this.id, this.len, this[0],
+                          this.signal("RPM"), node.bus);
+                }
+            "#,
+        );
+        n.start(None);
+        let input = HostInput {
+            signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[7, 9], &input);
+        assert_eq!(
+            n.log_snapshot(),
+            ["0 256 2 7 1234.0 0"],
+            "bus, id, length, byte, signal, own bus"
+        );
+
+        let mut fr = node(
+            r#"
+                on fr slot 13 {
+                    print(this.bus, this.slot, this.len, this.cycle,
+                          this.signal("CarSpeed"));
+                }
+            "#,
+        );
+        fr.start(None);
+        let input = HostInput {
+            fr_signals: [((1, 13, "CarSpeed".to_string()), 42.0)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        fr.dispatch_fr_row(1, 13, 5, &[0x2A], &input);
+        assert_eq!(fr.log_snapshot(), ["1 13 1 5 42.0"]);
+    }
+
+    /// `node.bus` names the script's own channel even outside an event.
+    #[test]
+    fn node_bus_is_the_script_own_channel() {
+        let mut n = ScriptNode::new(1, "n".into(), 2);
+        n.source = "on start { print(node.bus); }".to_string();
+        n.start(None);
+        assert_eq!(n.log_snapshot(), ["2"]);
+    }
+
+    /// Frame-only fields fail fast: outside a frame handler there is no
+    /// trigger to describe, and `this.id` must not silently report a slot
+    /// when the trigger was FlexRay.
+    #[test]
+    fn this_is_rejected_without_a_matching_frame_context() {
+        let mut start = node("on start { print(this.bus); }");
+        start.start(None);
+        assert!(start.errored(), "no frame handler was running");
+        assert!(
+            start
+                .log_snapshot()
+                .iter()
+                .any(|l| l.contains("frame handler")),
+            "{:?}",
+            start.log_snapshot()
+        );
+
+        let mut wrong = node("on message 0x100 { print(this.slot); }");
+        wrong.start(None);
+        wrong.dispatch_frame(0, 0x100, false, false, &[1], &HostInput::default());
+        assert!(wrong.errored(), "a CAN trigger has no slot");
+        assert!(
+            wrong.log_snapshot().iter().any(|l| l.contains("this.slot")),
+            "{:?}",
+            wrong.log_snapshot()
+        );
+    }
+
+    /// Naming the cluster instead of its index: the name comes from the
+    /// cluster description, so the read survives renumbering and is easier
+    /// to review. Unknown or duplicated names are start checks.
+    #[test]
+    fn a_named_cluster_read_resolves_through_the_description() {
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0, fr_dbc(&[(13, "CarSpeed")]));
+        let mut n = node("on message 0x100 { print(FR.PowerTrain.CarSpeed); }");
+        n.start_with(None, Some(&dbs), None);
+        assert!(
+            !n.log_snapshot().iter().any(|l| l.contains("[check]")),
+            "{:?}",
+            n.log_snapshot()
+        );
+        let input = HostInput {
+            fr_signals: [((0, 13, "CarSpeed".to_string()), 88.0)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot(), ["88.0"]);
+
+        // Bracket spelling handles a signal name with a space.
+        let mut spaced = std::collections::BTreeMap::new();
+        spaced.insert(0, fr_dbc(&[(13, "Car Speed")]));
+        let mut n2 = node("on message 0x100 { print(FR[\"PowerTrain\"][\"Car Speed\"]); }");
+        n2.start_with(None, Some(&spaced), None);
+        let input = HostInput {
+            fr_signals: [((0, 13, "Car Speed".to_string()), 7.0)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        n2.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n2.log_snapshot(), ["7.0"]);
+
+        let mut unknown = node("on start { print(FR.Nope.CarSpeed); }");
+        unknown.start_with(None, Some(&dbs), None);
+        assert!(
+            unknown
+                .log_snapshot()
+                .iter()
+                .any(|l| l.contains("[check]") && l.contains("Nope")),
+            "{:?}",
+            unknown.log_snapshot()
+        );
+
+        let mut ambiguous_dbs = std::collections::BTreeMap::new();
+        ambiguous_dbs.insert(0, fr_dbc(&[(13, "CarSpeed")]));
+        ambiguous_dbs.insert(1, fr_dbc(&[(14, "CarSpeed")]));
+        let mut ambiguous = node("on start { print(FR.PowerTrain.CarSpeed); }");
+        ambiguous.start_with(None, Some(&ambiguous_dbs), None);
+        assert!(
+            ambiguous
+                .log_snapshot()
+                .iter()
+                .any(|l| l.contains("[check]") && l.contains("ambiguous")),
+            "{:?}",
+            ambiguous.log_snapshot()
+        );
+    }
+
+    /// Replacing the cluster description re-points a named read in place,
+    /// with a `[reload]` line so a moved slot is explainable.
+    #[test]
+    fn a_named_cluster_read_follows_a_reloaded_description() {
+        let mut before = std::collections::BTreeMap::new();
+        before.insert(0, fr_dbc(&[(13, "CarSpeed")]));
+        let mut n = node("on message 0x100 { print(FR.PowerTrain.CarSpeed); }");
+        n.start_with(None, Some(&before), None);
+        let mut after = std::collections::BTreeMap::new();
+        after.insert(0, fr_dbc(&[(20, "CarSpeed")]));
+        n.refresh_fr_named(&after);
+        assert!(
+            n.log_snapshot()
+                .iter()
+                .any(|l| l.contains("[reload]") && l.contains("slot 20")),
+            "{:?}",
+            n.log_snapshot()
+        );
+        let input = HostInput {
+            fr_signals: [((0, 20, "CarSpeed".to_string()), 5.0)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot().last().map(String::as_str), Some("5.0"));
+    }
+
+    /// The Ethernet named form uses the ARXML cluster name and verifies the
+    /// frame and signal on the bus that name resolves to.
+    #[test]
+    fn a_named_ethernet_read_checks_the_arxml_names() {
+        use crate::eth::db::{EthCluster, EthDb, EthFrameDef, EthPdu, EthSignal};
+        let db = EthDb {
+            clusters: vec![EthCluster {
+                name: "Body".into(),
+                vlans: vec![100],
+            }],
+            frames: vec![EthFrameDef {
+                name: "FrameA".into(),
+                cluster: "Body".into(),
+                length: 8,
+                pdus: vec![EthPdu {
+                    name: "P".into(),
+                    length: 8,
+                    start_bit: 0,
+                    signals: vec![EthSignal {
+                        name: "Speed".into(),
+                        size: 8,
+                        factor: 1.0,
+                        ..Default::default()
+                    }],
+                }],
+                ..Default::default()
+            }],
+        };
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0, std::sync::Arc::new(db));
+
+        let mut n = node("on message 0x100 { print(ETH.Body.FrameA.Speed); }");
+        n.start_with(None, None, Some(&dbs));
+        assert!(
+            !n.log_snapshot().iter().any(|l| l.contains("[check]")),
+            "{:?}",
+            n.log_snapshot()
+        );
+        let input = HostInput {
+            eth_signals: [((0, "FrameA".to_string(), "Speed".to_string()), 7.5)]
+                .into_iter()
+                .collect(),
+            ..HostInput::default()
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot(), ["7.5"]);
+
+        for (src, want) in [
+            ("on start { print(ETH.Nope.FrameA.Speed); }", "Nope"),
+            ("on start { print(ETH.Body.FrameB.Speed); }", "FrameB"),
+            ("on start { print(ETH.Body.FrameA.Torque); }", "Torque"),
+        ] {
+            let mut bad = node(src);
+            bad.start_with(None, None, Some(&dbs));
+            assert!(
+                bad.log_snapshot()
+                    .iter()
+                    .any(|l| l.contains("[check]") && l.contains(want)),
+                "{src}: {:?}",
+                bad.log_snapshot()
+            );
+        }
+    }
+
+    /// A dotted Ethernet read verifies the frame and signal against the ARXML
     /// at start; the value itself arrives through the published table.
     #[test]
     fn a_dotted_ethernet_read_checks_the_arxml_names() {

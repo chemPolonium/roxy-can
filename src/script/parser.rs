@@ -323,6 +323,63 @@ impl P {
         Some(name)
     }
 
+    /// `this`: sugar over the triggering frame's context. It never becomes
+    /// a runtime object -- each field compiles to the existing host calls,
+    /// so `this` costs nothing at run time and stays out of the value model.
+    fn this_expr(&mut self) -> Result<Expr, ScriptError> {
+        if self.eat(&Tok::Dot) {
+            let field = self.ident("a `this` field after '.'")?;
+            return match field.as_str() {
+                "bus" => Ok(Expr::Call("frame_bus".to_string(), vec![])),
+                "id" => Ok(Expr::Call("frame_can_id".to_string(), vec![])),
+                "slot" => Ok(Expr::Call("frame_slot".to_string(), vec![])),
+                "len" => Ok(Expr::Call("frame_dlc".to_string(), vec![])),
+                "cycle" => Ok(Expr::Call("frame_cycle".to_string(), vec![])),
+                "signal" => {
+                    self.expect(&Tok::LParen, "'(' after this.signal")?;
+                    let Some(Tok::Str(name)) = self.toks.get(self.pos).map(|t| t.tok.clone())
+                    else {
+                        return self.err("this.signal needs a signal name in quotes");
+                    };
+                    self.advance();
+                    self.expect(&Tok::RParen, "')'")?;
+                    Ok(Expr::Call(
+                        "frame_signal".to_string(),
+                        vec![Expr::Str(name)],
+                    ))
+                }
+                _ => self.err(
+                    "unknown `this` field; use bus, id, slot, len, cycle, \
+                     signal(\"Name\") or this[index]",
+                ),
+            };
+        }
+        // `this[index]` is the payload byte; `this["Name"]` is the signal
+        // with that name, the same literal-name rule the other reads use.
+        if self.eat(&Tok::LBracket) {
+            if let Some(Tok::Str(name)) = self.toks.get(self.pos).map(|t| t.tok.clone())
+                && matches!(
+                    self.toks.get(self.pos + 1).map(|t| &t.tok),
+                    Some(Tok::RBracket)
+                )
+            {
+                self.advance(); // "name"
+                self.advance(); // ]
+                return Ok(Expr::Call(
+                    "frame_signal".to_string(),
+                    vec![Expr::Str(name)],
+                ));
+            }
+            let index = self.expr()?;
+            self.expect(&Tok::RBracket, "']'")?;
+            return Ok(Expr::Call("frame_byte".to_string(), vec![index]));
+        }
+        self.err(
+            "`this` only describes the triggering frame; write this.bus, \
+             this.id, this.signal(\"Name\") or this[index]",
+        )
+    }
+
     /// True when a statement begins with a named signal read of any
     /// spelling (`M.Sig`, `M["Sig"]`, `FR0.Sig`, `ETH0.Frame.Sig`, ...)
     /// followed by an assignment operator. Those reads are read-only.
@@ -1197,6 +1254,48 @@ impl P {
             }
             Some(Tok::Ident(name)) => {
                 self.advance();
+                // `this` / `node` are contexts, not values: they only make
+                // sense with a field behind them. `this` is the triggering
+                // frame, `node` the script itself.
+                if name == "this" {
+                    return self.this_expr();
+                }
+                if name == "node" {
+                    if self.eat(&Tok::Dot) {
+                        let field = self.ident("a `node` field after '.'")?;
+                        return match field.as_str() {
+                            "bus" => Ok(Expr::Call("node_bus".to_string(), vec![])),
+                            _ => self.err("unknown `node` field; node.bus is the script's own bus"),
+                        };
+                    }
+                    if self.at(&Tok::LBracket) {
+                        return self.err(
+                            "`node` has only node.bus; read the triggering frame with `this`",
+                        );
+                    }
+                }
+                // `FR.Name.Signal` / `FR["Name"]["Signal"]`: select the
+                // cluster by the name its description carries. The numeric
+                // `FR0` form stays for disambiguation.
+                if name == "FR" && (self.at(&Tok::Dot) || self.at_literal_bracket()) {
+                    let bus = self.member("a cluster name after 'FR'")?;
+                    let signal = self.member("a signal name after the cluster name")?;
+                    return Ok(Expr::Call(
+                        "fr_sig_bus".to_string(),
+                        vec![Expr::Str(bus), Expr::Str(signal)],
+                    ));
+                }
+                // `ETH.Name.Frame.Signal`, with bracket spellings for names
+                // that are not identifiers.
+                if name == "ETH" && (self.at(&Tok::Dot) || self.at_literal_bracket()) {
+                    let bus = self.member("a cluster name after 'ETH'")?;
+                    let frame = self.member("a frame name after the cluster name")?;
+                    let signal = self.member("a signal name after the frame name")?;
+                    return Ok(Expr::Call(
+                        "eth_sig_bus".to_string(),
+                        vec![Expr::Str(bus), Expr::Str(frame), Expr::Str(signal)],
+                    ));
+                }
                 // `FRn.Signal` / `FRn["Signal Name"]`: the cluster number
                 // carries the bus, the host resolves the name to a slot
                 // against that cluster's description at start.
@@ -1356,6 +1455,56 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn named_cluster_reads_desugar_into_host_calls() {
+        let script = crate::script::compile(
+            r#"
+                on start {
+                    print(FR.PowerTrain.CarSpeed);
+                    print(FR["Power Train"]["Car Speed"]);
+                    print(ETH.Body.FrameA.Speed);
+                    print(ETH["Body"]["Frame A"]["Speed X"]);
+                }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            script.fr_bus_refs,
+            vec![
+                ("PowerTrain".to_string(), "CarSpeed".to_string()),
+                ("Power Train".to_string(), "Car Speed".to_string()),
+            ]
+        );
+        assert_eq!(
+            script.eth_bus_refs,
+            vec![
+                (
+                    "Body".to_string(),
+                    "FrameA".to_string(),
+                    "Speed".to_string()
+                ),
+                (
+                    "Body".to_string(),
+                    "Frame A".to_string(),
+                    "Speed X".to_string()
+                ),
+            ]
+        );
+        let Expr::Call(name, _) = expr_of("FR.PowerTrain.CarSpeed") else {
+            panic!("a named-cluster read must compile to a host call");
+        };
+        assert_eq!(name, "fr_sig_bus");
+        let Expr::Call(name, args) = expr_of("ETH.Body.FrameA.Speed") else {
+            panic!("a named-cluster Ethernet read must compile to a host call");
+        };
+        assert_eq!(name, "eth_sig_bus");
+        assert!(matches!(
+            args.as_slice(),
+            [Expr::Str(bus), Expr::Str(frame), Expr::Str(signal)]
+                if bus == "Body" && frame == "FrameA" && signal == "Speed"
+        ));
+    }
+
     /// `FR0` on its own is a bus qualifier, not a variable: say what to
     /// write instead of failing later at codegen.
     #[test]
@@ -1386,6 +1535,41 @@ mod tests {
                 .to_string();
             assert!(
                 error.contains("read-only") && error.contains("set_fr_sig"),
+                "{src}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn this_describes_the_triggering_frame() {
+        for (src, want) in [
+            ("this.bus", "frame_bus"),
+            ("this.id", "frame_can_id"),
+            ("this.slot", "frame_slot"),
+            ("this.len", "frame_dlc"),
+            ("this.cycle", "frame_cycle"),
+            ("this.signal(\"RPM\")", "frame_signal"),
+            ("this[\"Signal Name\"]", "frame_signal"),
+            ("this[0]", "frame_byte"),
+            ("node.bus", "node_bus"),
+        ] {
+            let Expr::Call(name, _) = expr_of(src) else {
+                panic!("{src} must compile to a host call");
+            };
+            assert_eq!(name, want, "{src}");
+        }
+        for src in [
+            "this",
+            "this.nope",
+            "node.nope",
+            "node[\"x\"]",
+            "this.signal(0)",
+        ] {
+            let error = crate::script::compile(&format!("on start {{ print({src}); }}"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("this") || error.contains("node"),
                 "{src}: {error}"
             );
         }

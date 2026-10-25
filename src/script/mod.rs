@@ -301,6 +301,11 @@ pub struct Script {
     pub fr_named_refs: Vec<(u8, String)>,
     /// Dotted Ethernet reads `ETH{n}.Frame.Signal`, deduped.
     pub eth_named_refs: Vec<(u8, String, String)>,
+    /// Dotted reads that select the bus by its description name:
+    /// `FR.Cluster.Signal` as `(cluster, signal)`, deduped.
+    pub fr_bus_refs: Vec<(String, String)>,
+    /// `ETH.Cluster.Frame.Signal` as `(cluster, frame, signal)`, deduped.
+    pub eth_bus_refs: Vec<(String, String, String)>,
     /// R2 spike: sends whose `(from, id, extended)` the compiler derived
     /// statically. Pure metadata -- the runtime behaviour is unchanged.
     pub send_refs: Vec<(String, u32, bool)>,
@@ -398,7 +403,9 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("sig_named", 2, 2),
     ("fr_sig", 3, 3),
     ("fr_sig_named", 2, 2),
+    ("fr_sig_bus", 2, 2),
     ("eth_sig", 3, 3),
+    ("eth_sig_bus", 3, 3),
     ("derived", 1, 1),
     ("bytes", 1, 1),
     ("len", 1, 1),
@@ -409,7 +416,13 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("frame_byte", 1, 1),
     ("frame_dlc", 0, 0),
     ("frame_id", 0, 0),
+    ("frame_bus", 0, 0),
+    ("frame_can_id", 0, 0),
+    ("frame_slot", 0, 0),
+    ("frame_signal", 1, 1),
+    ("frame_cycle", 0, 0),
     ("fr_cycle", 0, 0),
+    ("node_bus", 0, 0),
     ("random", 2, 2),
     ("srand", 1, 1),
     ("ramp", 3, 3),
@@ -457,7 +470,12 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("sig_named", "sig_named(\"Message\", \"Signal\")"),
     ("fr_sig", "fr_sig(bus, slot, \"Name\")"),
     ("fr_sig_named", "fr_sig_named(bus, \"Name\")"),
+    ("fr_sig_bus", "fr_sig_bus(\"Cluster\", \"Name\")"),
     ("eth_sig", "eth_sig(bus, \"Frame\", \"Signal\")"),
+    (
+        "eth_sig_bus",
+        "eth_sig_bus(\"Cluster\", \"Frame\", \"Signal\")",
+    ),
     ("derived", "derived(\"Name\")"),
     ("bytes", "bytes(length)"),
     ("len", "len(value)"),
@@ -468,7 +486,13 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("frame_byte", "frame_byte(index)"),
     ("frame_dlc", "frame_dlc()"),
     ("frame_id", "frame_id()"),
+    ("frame_bus", "frame_bus()"),
+    ("frame_can_id", "frame_can_id()"),
+    ("frame_slot", "frame_slot()"),
+    ("frame_signal", "frame_signal(\"Name\")"),
+    ("frame_cycle", "frame_cycle()"),
     ("fr_cycle", "fr_cycle()"),
+    ("node_bus", "node_bus()"),
     ("random", "random(lo, hi)"),
     ("srand", "srand(seed)"),
     ("ramp", "ramp(lo, hi, period_us)"),

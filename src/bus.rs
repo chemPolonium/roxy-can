@@ -1700,7 +1700,16 @@ impl BusCore {
                     }
                 }
             }
-            BusCommand::SetEthDbs(dbs) => self.eth_dbs = dbs,
+            BusCommand::SetEthDbs(dbs) => {
+                self.eth_dbs = dbs;
+                // Named-cluster reads store the bus they resolved to; a
+                // replaced matrix can move or lose that name.
+                if self.measuring {
+                    for node in &mut self.nodes {
+                        node.refresh_eth_named(&self.eth_dbs);
+                    }
+                }
+            }
             BusCommand::SetEthLengthIncludesHeader(on) => self.eth_length_includes_header = on,
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:

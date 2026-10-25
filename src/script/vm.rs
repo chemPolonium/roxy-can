@@ -106,6 +106,18 @@ pub struct Vm {
     /// The triggering frame's identifier, set alongside `frame_bytes`.
     /// What `frame_id()` reads; 0 outside of frame events.
     pub frame_id: u32,
+    /// The bus the triggering frame arrived on: the CAN channel for
+    /// `on message` handlers, the cluster index for `on fr slot`. Set with
+    /// `frame_present`; what `this.bus` reads.
+    pub frame_bus: u8,
+    /// True while a frame handler is running. `this.*` outside one is a
+    /// runtime error rather than a stale value from the previous event.
+    pub frame_present: bool,
+    /// True for a FlexRay arrival: `this.signal` then reads the slot's
+    /// decoded table instead of the CAN `(id, name)` one.
+    pub frame_is_fr: bool,
+    /// The script node's own CAN channel: what `node.bus` reads.
+    pub node_channel: u8,
     /// The communication cycle of a FlexRay arrival, set for `on fr slot`
     /// handlers only. What `fr_cycle()` reads; 0 outside those -- a CAN frame
     /// has no cycle number to give it.
@@ -120,6 +132,13 @@ pub struct Vm {
     /// for dotted FlexRay reads (`FR0.CarSpeed`). Missing means the name was
     /// unknown or ambiguous; `fr_sig(bus, slot, name)` is the explicit form.
     pub fr_named_slots: std::collections::HashMap<(u8, String), u16>,
+    /// `(cluster name, signal)` → `(cluster index, slot)` for the named
+    /// FlexRay form (`FR.PowerTrain.CarSpeed`). Filled at node start; names
+    /// that are unknown or ambiguous stay out and read as a runtime error.
+    pub fr_bus_named_slots: std::collections::HashMap<(String, String), (u8, u16)>,
+    /// `(cluster name, frame, signal)` → cluster index for the named
+    /// Ethernet form (`ETH.Body.Frame.Signal`).
+    pub eth_bus_named_ids: std::collections::HashMap<(String, String, String), u8>,
 }
 
 impl Vm {
@@ -143,10 +162,16 @@ impl Vm {
             timer_ops: Vec::new(),
             frame_bytes: Vec::new(),
             frame_id: 0,
+            frame_bus: 0,
+            frame_present: false,
+            frame_is_fr: false,
+            node_channel: 0,
             fr_cycle: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
             named_messages: std::collections::HashMap::new(),
             fr_named_slots: std::collections::HashMap::new(),
+            fr_bus_named_slots: std::collections::HashMap::new(),
+            eth_bus_named_ids: std::collections::HashMap::new(),
         }
     }
 
@@ -168,6 +193,16 @@ impl Vm {
     /// slots at start; re-resolved when the cluster description changes.
     pub fn fr_named_refs(&self) -> &[(u8, String)] {
         &self.script.fr_named_refs
+    }
+
+    /// The named-bus FlexRay reads, re-resolved when a description changes.
+    pub fn fr_bus_refs(&self) -> &[(String, String)] {
+        &self.script.fr_bus_refs
+    }
+
+    /// The named-bus Ethernet reads, re-resolved when a description changes.
+    pub fn eth_bus_refs(&self) -> &[(String, String, String)] {
+        &self.script.eth_bus_refs
     }
 
     pub fn reset_budget(&mut self, budget: u64) {
@@ -684,6 +719,33 @@ impl Vm {
                 }
                 return Ok(());
             }
+            // `fr_sig_bus("Cluster", "Name")`: the named-cluster form.
+            "fr_sig_bus" => {
+                let (Value::Str(bus_name), Value::Str(sig)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "fr_sig_bus(\"Cluster\", \"Name\") needs two strings".into(),
+                    ));
+                };
+                let Some(&(bus, slot)) = self
+                    .fr_bus_named_slots
+                    .get(&(bus_name.clone(), sig.clone()))
+                else {
+                    return Err(VmError(format!(
+                        "fr_sig_bus: cluster {bus_name:?} or signal {sig:?} is unknown or \
+                         ambiguous; use the FR index form (see the node's [check] log)"
+                    )));
+                };
+                match self.host_input.fr_signals.get(&(bus, slot, sig.clone())) {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "fr_sig_bus: no value for {bus_name:?} slot {slot} {sig:?} \
+                             (not seen yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
             // `eth_sig(bus, "Frame", "Signal")`: the dotted Ethernet read.
             "eth_sig" => {
                 let (Value::Int(bus), Value::Str(frame), Value::Str(sig)) =
@@ -704,6 +766,42 @@ impl Vm {
                     None => {
                         return Err(VmError(format!(
                             "eth_sig: no value for ETH{bus} {frame:?} {sig:?} (not seen yet)"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
+            // `eth_sig_bus("Cluster", "Frame", "Signal")`: the named-cluster
+            // Ethernet read.
+            "eth_sig_bus" => {
+                let (Value::Str(bus_name), Value::Str(frame), Value::Str(sig)) =
+                    (&args[0], &args[1], &args[2])
+                else {
+                    return Err(VmError(
+                        "eth_sig_bus(\"Cluster\", \"Frame\", \"Signal\") needs three strings"
+                            .into(),
+                    ));
+                };
+                let Some(&bus) =
+                    self.eth_bus_named_ids
+                        .get(&(bus_name.clone(), frame.clone(), sig.clone()))
+                else {
+                    return Err(VmError(format!(
+                        "eth_sig_bus: cluster {bus_name:?}, frame {frame:?} or signal {sig:?} \
+                         is unknown or ambiguous; use the ETH index form (see the node's \
+                         [check] log)"
+                    )));
+                };
+                match self
+                    .host_input
+                    .eth_signals
+                    .get(&(bus, frame.clone(), sig.clone()))
+                {
+                    Some(v) => self.stack.push(Value::Float(*v)),
+                    None => {
+                        return Err(VmError(format!(
+                            "eth_sig_bus: no value for {bus_name:?} {frame:?} {sig:?} \
+                             (not seen yet)"
                         )));
                     }
                 }
@@ -1120,6 +1218,90 @@ impl Vm {
                 // `on fr slot` handler it is the slot number -- the arrival
                 // that woke the handler, addressed the way FlexRay addresses.
                 self.stack.push(Value::Int(self.frame_id as i64));
+                return Ok(());
+            }
+            "frame_bus" => {
+                if !self.frame_present {
+                    return Err(VmError(
+                        "this.bus is only available inside a frame handler".into(),
+                    ));
+                }
+                self.stack.push(Value::Int(i64::from(self.frame_bus)));
+                return Ok(());
+            }
+            // `this.signal("Name")` / `this["Name"]`: the triggering frame's
+            // own value. CAN reads the (id, name) table; a FlexRay arrival
+            // reads its slot's table, which was decoded with that arrival's
+            // frame layout.
+            "frame_signal" => {
+                let Value::Str(name) = &args[0] else {
+                    return Err(VmError("this.signal needs a signal name".into()));
+                };
+                if !self.frame_present {
+                    return Err(VmError(
+                        "this.signal is only available inside a frame handler".into(),
+                    ));
+                }
+                let name = name.clone();
+                let value = if self.frame_is_fr {
+                    u16::try_from(self.frame_id).ok().and_then(|slot| {
+                        self.host_input
+                            .fr_signals
+                            .get(&(self.frame_bus, slot, name.clone()))
+                            .copied()
+                    })
+                } else {
+                    self.host_input
+                        .signals
+                        .get(&(self.frame_id, name.clone()))
+                        .copied()
+                };
+                match value {
+                    Some(v) => self.stack.push(Value::Float(v)),
+                    None => {
+                        let what = if self.frame_is_fr {
+                            format!("FR{} slot {}", self.frame_bus, self.frame_id)
+                        } else {
+                            format!("0x{:X} on channel {}", self.frame_id, self.frame_bus)
+                        };
+                        return Err(VmError(format!(
+                            "this.signal: the triggering frame ({what}) does not carry {name:?}"
+                        )));
+                    }
+                }
+                return Ok(());
+            }
+            "frame_can_id" => {
+                if !self.frame_present || self.frame_is_fr {
+                    return Err(VmError(
+                        "this.id is a CAN frame id; use this.slot on FlexRay".into(),
+                    ));
+                }
+                self.stack.push(Value::Int(i64::from(self.frame_id)));
+                return Ok(());
+            }
+            "frame_slot" => {
+                if !self.frame_present || !self.frame_is_fr {
+                    return Err(VmError(
+                        "this.slot is a FlexRay slot; use this.id on CAN".into(),
+                    ));
+                }
+                self.stack.push(Value::Int(i64::from(self.frame_id)));
+                return Ok(());
+            }
+            "frame_cycle" => {
+                if !self.frame_present || !self.frame_is_fr {
+                    return Err(VmError(
+                        "this.cycle is the FlexRay communication cycle; it is not \
+                         available on CAN"
+                            .into(),
+                    ));
+                }
+                self.stack.push(Value::Int(i64::from(self.fr_cycle)));
+                return Ok(());
+            }
+            "node_bus" => {
+                self.stack.push(Value::Int(i64::from(self.node_channel)));
                 return Ok(());
             }
             "fr_cycle" => {

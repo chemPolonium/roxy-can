@@ -267,6 +267,43 @@ on timer "resp" {
 
 `set_timer` 指向不存在的处理器时记一条日志告警，不影响运行。
 
+## 触发帧上下文：this / node
+
+在帧处理器里，`this` 指向**这次触发的那一帧**，不用再记住 id、槽号或总线号：
+
+| 写法 | 含义 |
+|------|------|
+| `this.bus` | 触发帧所在的总线：CAN 是通道号，FlexRay 是 cluster 号 |
+| `this.id` | CAN 帧 id（在 FlexRay 处理器里使用会报错） |
+| `this.slot` | FlexRay 槽号（在 CAN 处理器里使用会报错） |
+| `this.cycle` | FlexRay 通信周期号（在 CAN 处理器里使用会报错） |
+| `this.len` | 触发帧的载荷字节数 |
+| `this[i]` | 触发帧载荷的第 i 字节 |
+| `this.signal("Name")` / `this["Name"]` | 触发帧自己的信号物理值，按这一帧的布局解码 |
+
+`node.bus` 是**脚本节点自己**的 CAN 通道号，与触发帧无关，因此在 `on start` 和定时器里也能读。绑定脚本的总线是它绑定的 DBC 节点所在通道；未绑定脚本是创建时选的通道。
+
+```c
+on message * {
+    // 原样转发，不需要先知道 id
+    send(frame_id(), this[0]);
+}
+
+on fr slot 13 {
+    // 听 FlexRay、答到节点自己的 CAN 通道
+    send(0x320, this.signal("CarSpeed") * 0.075, this.cycle);
+}
+
+on timer 100 {
+    // 定时器没有触发帧：this.* 会报错，node.bus 仍然可用
+    print("node bus", node.bus);
+}
+```
+
+`this.signal` 读的是触发帧自己的解码表：CAN 用 `(id, name)`，FlexRay 用 `(cluster, slot, name)`，所以同一槽按周期轮流承载不同帧时，读到的仍是实际到达那一帧。信号不在这一帧里是运行时错误，不会静默给 0。`this` 和 `node` 是保留前缀。
+
+原有的 `frame_id()` / `frame_byte()` / `fr_cycle()` 等函数保留不变，`this` 只是更清楚的写法。
+
 ## 总线内建
 
 ### send(id, byte0, byte1, ...) / send(id, buffer)
@@ -303,7 +340,7 @@ let temp = EngineStatus["Engine Temp"];   // 名字不是标识符时用下标
 - 节点启动时用它所在通道的 DBC 把 `Message` 解析成 id；报文名或信号名拼错会在启动日志里以 `[check]` 报出，不会静默读到 0。
 - 只读。写信号仍走 `set_sig(buffer, id, "Name", value)`，因为写入需要先有一帧的原始字节。
 - 点号要求报文名、信号名都是标识符（字母/数字/下划线）；下标里的字符串可以是任意 DBC 名字。
-- `FR` + 数字、`ETH` + 数字（如 `FR2`、`ETH0`）是保留的路号前缀，不能作为报文名或变量名。
+- `FR` / `ETH` 开头、后接数字或点号的形式（如 `FR2`、`ETH0`、`FR.PowerTrain`）是保留的总线选择器，不能作为报文名或变量名。
 
 ### FRn.Signal / FRn["Signal Name"]
 
@@ -320,6 +357,7 @@ on fr slot 13 {
 - 同一个信号名声明在**多个不同槽**时无法判断该读哪一个，会报歧义；改用落槽号的 `fr_sig(bus, slot, "Name")`。同一槽被多帧按周期相位轮流占用不算歧义——它们读的是同一个线上槽。
 - 换集群描述（含测量中重载）会就地重解析，日志写 `[reload] FR0.CarSpeed slot 13 -> 20`。
 - 读到的值属于该槽**实际到达的那一帧**；信号尚未出现仍是运行时错误。
+- 不想记编号时，可以用集群描述里的名字选中该路：`FR.PowerTrain.CarSpeed`，非标识符名字用 `FR["Power Train"]["Car Speed"]`。名字在节点启动时解析；找不到或同名多路会报 `[check]`，此时回退编号写法。`fr_sig_bus("PowerTrain", "CarSpeed")` 是等价函数形式。
 
 ### ETHn.Frame.Signal / ETHn["Frame"]["Signal Name"]
 
@@ -335,6 +373,7 @@ on message 0x100 {
 - 启动时用该路的 ARXML 核对帧名和信号名；帧不存在或该帧不声明这个信号，都会报 `[check]`。
 - 值来自与曲线 / Data 相同的按流解码表，只对 ARXML 能**唯一匹配**的流有效；没匹配上的流读值是运行时错误，不会猜成某个帧。
 - 目前只读：Ethernet 发送仍走生成器条目。
+- 命名形式：`ETH.Body.FrameA.Speed` / `ETH["Body"]["Frame A"]["Speed X"]`，`Body` 是 ARXML 的 cluster 名；函数形式 `eth_sig_bus("Body", "FrameA", "Speed")`。名字找不到或多路同名同样报 `[check]`，编号形式始终可用。
 
 ### fr_sig(cluster, slot, "Name")
 
@@ -470,7 +509,7 @@ let target = sys_get("Demo::Setpoint");       // 系统变量仍用函数
 sys_set("Demo::Setpoint", target * 0.9);      // 写入受定义的界限钳位
 ```
 
-信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义（FlexRay 用 `set_fr_sig`），`Message.Signal`、`FRn.Signal`、`ETHn.Frame.Signal` 及下标形式都只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对 CAN 报文名/信号名；FlexRay 与 Ethernet 的名字在节点启动时核对对应描述。
+信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义（FlexRay 用 `set_fr_sig`），`Message.Signal`、`FRn.Signal`、`FR.Cluster.Signal`、`ETHn.Frame.Signal`、`ETH.Cluster.Frame.Signal` 及下标形式都只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对 CAN 报文名/信号名；FlexRay 与 Ethernet 的名字在节点启动时核对对应描述。
 
 ## 波形内建
 

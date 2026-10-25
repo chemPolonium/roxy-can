@@ -3735,6 +3735,10 @@ struct WebCatalogChannel {
     kind: String,
     index: u8,
     name: String,
+    /// Cluster names the description carries, so the editor can offer the
+    /// named FlexRay/Ethernet spellings (`FR.PowerTrain...`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    aliases: Vec<String>,
     messages: Vec<WebCatalogMessage>,
 }
 
@@ -3813,6 +3817,7 @@ fn build_catalog(app: &App) -> WebCatalog {
             kind: "can".to_string(),
             index: ch as u8,
             name: channel.name.clone(),
+            aliases: Vec::new(),
             messages: channel
                 .dbc
                 .as_ref()
@@ -3878,10 +3883,30 @@ fn build_catalog(app: &App) -> WebCatalog {
             kind: "fr".to_string(),
             index: *bus,
             name: app.fr_bus_name(*bus),
+            aliases: if cfg.db.params.name.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![cfg.db.params.name.clone()]
+            },
             messages,
         });
     }
     for (bus, cfg) in &app.eth_buses {
+        let aliases = {
+            let mut names: Vec<String> = cfg
+                .db
+                .clusters
+                .iter()
+                .map(|c| c.name.clone())
+                .filter(|name| !name.is_empty())
+                .collect();
+            for frame in &cfg.db.frames {
+                if !frame.cluster.is_empty() && !names.contains(&frame.cluster) {
+                    names.push(frame.cluster.clone());
+                }
+            }
+            names
+        };
         let messages = cfg
             .db
             .frames
@@ -3910,6 +3935,7 @@ fn build_catalog(app: &App) -> WebCatalog {
             kind: "eth".to_string(),
             index: *bus,
             name: app.eth_bus_label(*bus),
+            aliases,
             messages,
         });
     }
