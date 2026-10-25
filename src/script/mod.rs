@@ -427,6 +427,61 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("set_fr_sig", 4, 4),
 ];
 
+/// Human-facing call shapes for the editor's completion popup. Kept beside
+/// [`HOST_FNS`] so the language and the editor cannot drift; the node-level
+/// builtins `set_sig`/`get_sig` are listed here too.
+pub const SCRIPT_HELP: &[(&str, &str)] = &[
+    ("print", "print(value, …)"),
+    ("format", "format(\"text\", …)"),
+    ("send", "send(id, byte, …)"),
+    ("send_ext", "send_ext(id, byte, …)"),
+    ("emit_value", "emit_value(\"Name\", value)"),
+    ("sys_get", "sys_get(\"ns::name\")"),
+    ("sys_set", "sys_set(\"ns::name\", value)"),
+    ("now", "now()"),
+    ("sig", "sig(id, \"Name\")"),
+    ("sig_named", "sig_named(\"Message\", \"Signal\")"),
+    ("fr_sig", "fr_sig(bus, slot, \"Name\")"),
+    ("derived", "derived(\"Name\")"),
+    ("bytes", "bytes(length)"),
+    ("len", "len(value)"),
+    ("set_period", "set_period(milliseconds)"),
+    ("stop_timer", "stop_timer()"),
+    ("set_timer", "set_timer(\"name\", milliseconds)"),
+    ("cancel_timer", "cancel_timer(\"name\")"),
+    ("frame_byte", "frame_byte(index)"),
+    ("frame_dlc", "frame_dlc()"),
+    ("frame_id", "frame_id()"),
+    ("fr_cycle", "fr_cycle()"),
+    ("random", "random(lo, hi)"),
+    ("srand", "srand(seed)"),
+    ("ramp", "ramp(lo, hi, period_us)"),
+    ("sine_wave", "sine_wave(center, amplitude, period_us)"),
+    ("triangle", "triangle(lo, hi, period_us)"),
+    ("square", "square(lo, hi, period_us)"),
+    ("counter", "counter(lo, hi, period_us)"),
+    ("bit_and", "bit_and(a, b)"),
+    ("bit_or", "bit_or(a, b)"),
+    ("bit_xor", "bit_xor(a, b)"),
+    ("bit_not", "bit_not(a)"),
+    ("bit_shl", "bit_shl(value, bits)"),
+    ("bit_shr", "bit_shr(value, bits)"),
+    ("abs", "abs(x)"),
+    ("floor", "floor(x)"),
+    ("ceil", "ceil(x)"),
+    ("round", "round(x)"),
+    ("sin", "sin(radians)"),
+    ("cos", "cos(radians)"),
+    ("min", "min(a, b)"),
+    ("max", "max(a, b)"),
+    ("clamp", "clamp(value, lo, hi)"),
+    ("array", "array(length)"),
+    ("fr_send", "fr_send(bus, slot, byte, …)"),
+    ("set_fr_sig", "set_fr_sig(bus, slot, \"Name\", value)"),
+    ("set_sig", "set_sig(buffer, id, \"Name\", value)"),
+    ("get_sig", "get_sig(buffer, id, \"Name\")"),
+];
+
 /// One external simulation function, callable from any script once
 /// registered under its script-visible name. Arguments arrive as
 /// [`Value`]s; the function validates their count and types itself (the
@@ -1065,5 +1120,26 @@ mod tests {
             HandlerKind::Message { id: 0x7FF },
             "the top of the standard id range"
         );
+    }
+
+    /// The editor's completion list is generated from this table, so every
+    /// callable the compiler accepts must be described here (and nothing
+    /// stale may remain).
+    #[test]
+    fn completion_help_covers_every_callable() {
+        for (name, _, _) in HOST_FNS {
+            assert!(
+                SCRIPT_HELP.iter().any(|(candidate, _)| candidate == name),
+                "missing completion help for {name}"
+            );
+        }
+        for (name, usage) in SCRIPT_HELP {
+            assert!(!usage.trim().is_empty(), "{name} has no usage text");
+            let host = HOST_FNS.iter().any(|(candidate, _, _)| candidate == name);
+            assert!(
+                host || matches!(*name, "set_sig" | "get_sig"),
+                "stale completion help for {name}"
+            );
+        }
     }
 }

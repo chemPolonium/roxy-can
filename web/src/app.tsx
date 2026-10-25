@@ -3519,6 +3519,8 @@ export function App() {
       {scriptsOpen && (
         <ScriptsModal
           buses={state?.buses ?? []}
+          derived={derivedDefs}
+          sysvars={state?.sysvars ?? []}
           onCommand={(command) => void run(command)}
           onClose={() => setScriptsOpen(false)}
         />

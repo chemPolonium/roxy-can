@@ -472,6 +472,20 @@
   background: #eef2f7;
 }
 
+[data-theme="light"] .script-complete {
+  background: #ffffff;
+  border-color: #cdd8e4;
+  box-shadow: 0 8px 22px rgb(15 31 51 / 18%);
+}
+
+[data-theme="light"] .script-complete-item {
+  color: #243244;
+}
+
+[data-theme="light"] .script-complete-item.on {
+  background: #e3eefc;
+}
+
 [data-theme="light"] .script-chips em {
   border-color: #d4dbe4;
 }

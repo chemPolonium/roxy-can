@@ -222,6 +222,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             .route("/catalog", get(catalog_handler))
             .route("/hardware", get(hardware_handler))
             .route("/nodes", get(scripts_handler))
+            .route("/script-help", get(script_help_handler))
             .route("/command", post(command))
             .route(
                 "/upload",
@@ -517,6 +518,26 @@ async fn scripts_handler(State(api): State<ApiState>) -> Json<Vec<WebScript>> {
             .map(|scripts| scripts.clone())
             .unwrap_or_default(),
     )
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebScriptFunction {
+    name: &'static str,
+    usage: &'static str,
+}
+
+fn script_help_items() -> Vec<WebScriptFunction> {
+    crate::script::SCRIPT_HELP
+        .iter()
+        .map(|(name, usage)| WebScriptFunction { name, usage })
+        .collect()
+}
+
+/// The script editor's completion vocabulary. Names and call shapes live in
+/// the language module, so a new builtin cannot be documented twice.
+async fn script_help_handler() -> Json<Vec<WebScriptFunction>> {
+    Json(script_help_items())
 }
 
 /// Fingerprint of everything the scripts dialog shows. Source edits are
@@ -5608,6 +5629,16 @@ mod tests {
         let bus = state.buses.iter().find(|bus| bus.index == 0).unwrap();
         let row = bus.nodes.iter().find(|row| row.name == node).unwrap();
         assert!(!row.simulated);
+    }
+
+    /// The help endpoint serves the language table verbatim.
+    #[test]
+    fn the_script_help_lists_every_callable() {
+        let items = script_help_items();
+        assert_eq!(items.len(), crate::script::SCRIPT_HELP.len());
+        assert!(items.iter().any(|item| item.name == "derived"));
+        assert!(items.iter().any(|item| item.name == "set_sig"));
+        assert!(items.iter().all(|item| !item.usage.trim().is_empty()));
     }
 
     /// Node scripts reach the web with their source, binding and summary;

@@ -1,12 +1,267 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { fetchScripts } from "../api";
-import type { Bus, Command, Script } from "../types";
+import { fetchScriptHelp, fetchScripts } from "../api";
+import type {
+  Bus,
+  Command,
+  DerivedDef,
+  Script,
+  ScriptFunctionHelp,
+  SysVar,
+} from "../types";
 import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
+  derived: DerivedDef[];
+  sysvars: SysVar[];
   onCommand: (command: Command) => void;
   onClose: () => void;
+}
+
+const INDENT = "    ";
+
+interface CompletionItem {
+  label: string;
+  detail: string;
+  insert: string;
+  /// Caret offset from the start of the inserted text.
+  caret: number;
+  rank: number;
+}
+
+interface Completion {
+  start: number;
+  end: number;
+  items: CompletionItem[];
+  active: number;
+  left: number;
+  top: number;
+}
+
+function lineStartOf(text: string, position: number): number {
+  return text.lastIndexOf("\n", Math.max(0, position - 1)) + 1;
+}
+
+function lineEndOf(text: string, position: number): number {
+  const end = text.indexOf("\n", position);
+  return end < 0 ? text.length : end;
+}
+
+function leadingSpace(text: string): string {
+  return /^[ \t]*/.exec(text)?.[0] ?? "";
+}
+
+/// Replaces a range through the browser's own insertion command so typing
+/// remains one undo step. Falls back to `setRangeText` if the command is
+/// unavailable (e.g. an embedded webview).
+function replaceRange(
+  textarea: HTMLTextAreaElement,
+  start: number,
+  end: number,
+  text: string,
+  caret: number,
+  selectionEnd = caret,
+) {
+  textarea.focus();
+  textarea.setSelectionRange(start, end);
+  let inserted = false;
+  try {
+    inserted = document.execCommand("insertText", false, text);
+  } catch {
+    inserted = false;
+  }
+  if (!inserted) {
+    textarea.setRangeText(text, start, end, "end");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  textarea.setSelectionRange(caret, selectionEnd);
+}
+
+function quoted(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+let measureCanvas: HTMLCanvasElement | null = null;
+
+function characterWidth(style: CSSStyleDeclaration): number {
+  measureCanvas ??= document.createElement("canvas");
+  const context = measureCanvas.getContext("2d");
+  if (!context) return 7;
+  context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  return context.measureText("M").width || 7;
+}
+
+/// The editor uses a monospace font and `white-space: pre`, so the caret's
+/// pixel position is line/column arithmetic plus a character-width measure.
+/// The popup is clamped inside the editor and flips above near the bottom.
+function completionPlacement(
+  textarea: HTMLTextAreaElement,
+  position: number,
+  itemCount: number,
+): { left: number; top: number } {
+  const style = getComputedStyle(textarea);
+  const padLeft = Number.parseFloat(style.paddingLeft) || 0;
+  const padTop = Number.parseFloat(style.paddingTop) || 0;
+  const lineHeight =
+    Number.parseFloat(style.lineHeight) ||
+    (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
+  const before = textarea.value.slice(0, position);
+  const line = before.split("\n").length - 1;
+  const lineText = before.slice(before.lastIndexOf("\n") + 1);
+  let column = 0;
+  for (const char of lineText) {
+    column += char === "\t" ? 4 - (column % 4) : 1;
+  }
+  const charWidth = characterWidth(style);
+  const editor = textarea.parentElement;
+  const width = editor?.clientWidth ?? 0;
+  const height = editor?.clientHeight ?? 0;
+  const x = padLeft + column * charWidth - textarea.scrollLeft;
+  const y = padTop + (line + 1) * lineHeight - textarea.scrollTop;
+  const popupWidth = 300;
+  const popupHeight = Math.min(190, 8 + Math.min(itemCount, 8) * 22);
+  const left = Math.max(4, Math.min(x, Math.max(4, width - popupWidth - 6)));
+  const top =
+    y + 2 + popupHeight <= height - 4
+      ? y + 2
+      : Math.max(4, y - popupHeight - 2);
+  return { left, top };
+}
+
+/// Completion is deliberately context-light: a word prefix matches keywords,
+/// builtins and derived/sysvar call templates; inside `derived("…")` (or
+/// `sys_get`/`sys_set`) only the matching names are offered.
+function buildCandidates(
+  value: string,
+  caret: number,
+  allowEmpty: boolean,
+  functions: ScriptFunctionHelp[],
+  derived: DerivedDef[],
+  sysvars: SysVar[],
+): { start: number; end: number; items: CompletionItem[] } | null {
+  const lineStart = lineStartOf(value, caret);
+  const lineBefore = value.slice(lineStart, caret);
+  if (lineBefore.includes("//")) return null;
+
+  let inString = false;
+  let quoteAt = -1;
+  for (let i = 0; i < lineBefore.length; i += 1) {
+    if (lineBefore[i] === '"' && (i === 0 || lineBefore[i - 1] !== "\\")) {
+      if (!inString) {
+        inString = true;
+        quoteAt = i;
+      } else {
+        inString = false;
+      }
+    }
+  }
+
+  let start = caret;
+  let end = caret;
+  let prefix = "";
+  let stringFn: string | null = null;
+  if (inString) {
+    const beforeQuote = lineBefore.slice(0, quoteAt).trimEnd();
+    const fn =
+      /([A-Za-z_]\w*)\s*\([^()]*$/.exec(beforeQuote)?.[1] ?? null;
+    if (fn !== "derived" && fn !== "sys_get" && fn !== "sys_set") return null;
+    stringFn = fn;
+    start = lineStart + quoteAt + 1;
+    end = caret;
+    prefix = value.slice(start, caret);
+    if (prefix.length === 0 && !allowEmpty) return null;
+  } else {
+    const word = /[A-Za-z_]\w*$/.exec(lineBefore)?.[0] ?? "";
+    if (word.length < 2 && !allowEmpty) return null;
+    start = caret - word.length;
+    end = caret;
+    prefix = word;
+  }
+
+  const items: CompletionItem[] = [];
+  if (stringFn) {
+    if (stringFn === "derived") {
+      for (const definition of derived) {
+        items.push({
+          label: definition.name,
+          detail: "derived channel",
+          insert: definition.name,
+          caret: definition.name.length,
+          rank: 0,
+        });
+      }
+    } else {
+      for (const variable of sysvars) {
+        const key = `${variable.namespace}::${variable.name}`;
+        items.push({
+          label: key,
+          detail: "system variable",
+          insert: key,
+          caret: key.length,
+          rank: 0,
+        });
+      }
+    }
+  } else {
+    for (const fn of functions) {
+      const insert = `${fn.name}()`;
+      items.push({
+        label: fn.name,
+        detail: fn.usage,
+        insert,
+        caret: fn.name.length + 1,
+        rank: 0,
+      });
+    }
+    for (const keyword of KEYWORDS) {
+      items.push({
+        label: keyword,
+        detail: "keyword",
+        insert: keyword,
+        caret: keyword.length,
+        rank: 1,
+      });
+    }
+    for (const definition of derived) {
+      const insert = `derived("${quoted(definition.name)}")`;
+      items.push({
+        label: definition.name,
+        detail: "derived channel",
+        insert,
+        caret: insert.length,
+        rank: 2,
+      });
+    }
+    for (const variable of sysvars) {
+      const key = `${variable.namespace}::${variable.name}`;
+      const insert = `sys_get("${quoted(key)}")`;
+      items.push({
+        label: key,
+        detail: "system variable",
+        insert,
+        caret: insert.length,
+        rank: 3,
+      });
+    }
+  }
+
+  const query = prefix.toLowerCase();
+  const matches = items
+    .filter(
+      (item) => query === "" || item.label.toLowerCase().includes(query),
+    )
+    .sort((left, right) => {
+      const a = left.label.toLowerCase();
+      const b = right.label.toLowerCase();
+      const aq = a === query ? 0 : a.startsWith(query) ? 1 : 2;
+      const bq = b === query ? 0 : b.startsWith(query) ? 1 : 2;
+      // Stable sort: equal candidates keep the language table's order, which
+      // puts the everyday functions (print, send, sig, …) first.
+      return aq - bq || left.rank - right.rank;
+    })
+    .slice(0, 12);
+  if (matches.length === 0) return null;
+  return { start, end, items: matches };
 }
 
 const TEMPLATE = `on start {
@@ -78,7 +333,13 @@ function busName(buses: Bus[], channel: number): string {
   return buses[channel]?.name ?? `CAN${channel + 1}`;
 }
 
-export function ScriptsModal({ buses, onCommand, onClose }: Props) {
+export function ScriptsModal({
+  buses,
+  derived,
+  sysvars,
+  onCommand,
+  onClose,
+}: Props) {
   const [scripts, setScripts] = useState<Script[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [dirty, setDirty] = useState<Set<number>>(new Set());
@@ -87,6 +348,9 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
   const [error, setError] = useState("");
   const [composing, setComposing] = useState(false);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [functions, setFunctions] = useState<ScriptFunctionHelp[]>([]);
+  const [completion, setCompletion] = useState<Completion | null>(null);
   const [reload, setReload] = useState(0);
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
@@ -96,6 +360,21 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
   const [newName, setNewName] = useState("");
   const [newChannel, setNewChannel] = useState(0);
   const [newAttach, setNewAttach] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    void fetchScriptHelp().then((items) => {
+      if (alive) setFunctions(items);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    // A different script has a different caret context.
+    setCompletion(null);
+  }, [selected]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -161,8 +440,207 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
   const edit = (value: string) => {
     if (selected == null) return;
     editing.current.add(selected);
+    setCompletion(null);
     setDrafts((currentDrafts) => ({ ...currentDrafts, [selected]: value }));
     setDirty((currentDirty) => new Set(currentDirty).add(selected));
+  };
+
+  const refreshCompletion = (
+    textarea: HTMLTextAreaElement,
+    allowEmpty: boolean,
+  ) => {
+    if (composing) {
+      setCompletion(null);
+      return;
+    }
+    const caret = textarea.selectionStart ?? 0;
+    const candidates = buildCandidates(
+      textarea.value,
+      caret,
+      allowEmpty,
+      functions,
+      derived,
+      sysvars,
+    );
+    if (!candidates) {
+      setCompletion(null);
+      return;
+    }
+    const placement = completionPlacement(
+      textarea,
+      caret,
+      candidates.items.length,
+    );
+    setCompletion({ ...candidates, active: 0, ...placement });
+  };
+
+  const applyCompletion = (item: CompletionItem) => {
+    const textarea = textareaRef.current;
+    if (!textarea || !completion) return;
+    replaceRange(
+      textarea,
+      completion.start,
+      completion.end,
+      item.insert,
+      completion.start + item.caret,
+    );
+    setCompletion(null);
+  };
+
+  const handleEnter = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    event.preventDefault();
+    const value = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const from = lineStartOf(value, start);
+    const before = value.slice(from, start);
+    const after = value.slice(start, lineEndOf(value, start));
+    let indent = leadingSpace(value.slice(from));
+    if (before.trimEnd().endsWith("{")) {
+      indent += INDENT;
+    } else if (/^[ \t]*\}/.test(after)) {
+      indent = indent.slice(0, Math.max(0, indent.length - INDENT.length));
+    }
+    const insert = `\n${indent}`;
+    replaceRange(textarea, start, end, insert, start + insert.length);
+  };
+
+  const handleTab = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    event.preventDefault();
+    const value = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    if (start !== end) {
+      const from = lineStartOf(value, start);
+      const to = lineEndOf(value, end);
+      const lines = value.slice(from, to).split("\n");
+      const shifted = lines.map((line) =>
+        event.shiftKey ? line.replace(/^\t|^ {1,4}/, "") : `${INDENT}${line}`,
+      );
+      const next = shifted.join("\n");
+      if (next !== value.slice(from, to)) {
+        replaceRange(textarea, from, to, next, from, from + next.length);
+      }
+      return;
+    }
+
+    if (event.shiftKey) {
+      const from = lineStartOf(value, start);
+      const to = lineEndOf(value, start);
+      const line = value.slice(from, to);
+      const next = line.replace(/^\t|^ {1,4}/, "");
+      if (next !== line) {
+        replaceRange(
+          textarea,
+          from,
+          to,
+          next,
+          Math.max(from, start - (line.length - next.length)),
+        );
+      }
+      return;
+    }
+
+    replaceRange(textarea, start, end, INDENT, start + INDENT.length);
+  };
+
+  /// Typing `}` on an auto-indented line moves it out one level instead of
+  /// leaving the closing brace at the block's inner indentation.
+  const handleClosingBrace = (event: KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    if (start !== textarea.selectionEnd) return;
+    const from = lineStartOf(textarea.value, start);
+    const prefix = textarea.value.slice(from, start);
+    if (prefix.length < INDENT.length || !/^ +$/.test(prefix)) return;
+    event.preventDefault();
+    const shortened = prefix.slice(0, -INDENT.length);
+    replaceRange(
+      textarea,
+      from,
+      start,
+      `${shortened}}`,
+      from + shortened.length + 1,
+    );
+  };
+
+  const handleEditorKeyDown = (event: KeyboardEvent) => {
+    const textarea = event.currentTarget as HTMLTextAreaElement | null;
+    if (!textarea) return;
+    if (composing || event.isComposing || event.keyCode === 229) return;
+
+    if ((event.ctrlKey || event.metaKey) && event.key === " ") {
+      event.preventDefault();
+      refreshCompletion(textarea, true);
+      return;
+    }
+
+    if (completion) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setCompletion((current) =>
+          current
+            ? {
+                ...current,
+                active:
+                  (current.active + delta + current.items.length) %
+                  current.items.length,
+              }
+            : current,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        applyCompletion(completion.items[completion.active]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setCompletion(null);
+        return;
+      }
+      if (
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowRight" ||
+        event.key === "Home" ||
+        event.key === "End"
+      ) {
+        setCompletion(null);
+      }
+    }
+
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      handleEnter(event);
+      return;
+    }
+    if (event.key === "Tab") {
+      handleTab(event);
+      return;
+    }
+    if (
+      event.key === "}" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      handleClosingBrace(event);
+    }
   };
 
   const apply = () => {
@@ -370,15 +848,24 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
                     dangerouslySetInnerHTML={{ __html: highlight(`${draft}\n`) }}
                   />
                   <textarea
+                    ref={textareaRef}
                     class={`script-textarea ${composing ? "composing" : ""}`}
                     spellcheck={false}
                     value={draft}
                     placeholder="on start { … }"
-                    onCompositionStart={() => setComposing(true)}
+                    onKeyDown={handleEditorKeyDown}
+                    onCompositionStart={() => {
+                      setComposing(true);
+                      setCompletion(null);
+                    }}
                     onCompositionEnd={() => setComposing(false)}
-                    onInput={(event) =>
-                      edit((event.target as HTMLTextAreaElement).value)
-                    }
+                    onInput={(event) => {
+                      const area = event.currentTarget as HTMLTextAreaElement;
+                      edit(area.value);
+                      if (!(event as InputEvent).isComposing) {
+                        refreshCompletion(area, false);
+                      }
+                    }}
                     onScroll={(event) => {
                       const area = event.target as HTMLTextAreaElement;
                       const pre = highlightRef.current;
@@ -386,8 +873,44 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
                         pre.scrollTop = area.scrollTop;
                         pre.scrollLeft = area.scrollLeft;
                       }
+                      setCompletion(null);
                     }}
+                    onClick={() => setCompletion(null)}
+                    onBlur={() => setCompletion(null)}
                   />
+                  {completion && (
+                    <div
+                      class="script-complete"
+                      role="listbox"
+                      style={{
+                        left: `${completion.left}px`,
+                        top: `${completion.top}px`,
+                      }}
+                    >
+                      {completion.items.map((item, index) => (
+                        <div
+                          key={`${item.label}:${index}`}
+                          role="option"
+                          aria-selected={index === completion.active}
+                          class={`script-complete-item ${
+                            index === completion.active ? "on" : ""
+                          }`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            applyCompletion(item);
+                          }}
+                          onMouseEnter={() =>
+                            setCompletion((current) =>
+                              current ? { ...current, active: index } : current,
+                            )
+                          }
+                        >
+                          <strong>{item.label}</strong>
+                          <small>{item.detail}</small>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div class="script-actions">
                   <button
@@ -469,8 +992,9 @@ export function ScriptsModal({ buses, onCommand, onClose }: Props) {
                 </div>
                 <p class="hint">
                   Scripts are C-like and recompile on every start; Apply while
-                  measuring restarts the node. Comments, strings, numbers,
-                  keywords and calls are colored as you type.
+                  measuring restarts the node. Tab indents, Shift+Tab outdents,
+                  Ctrl+Space completes; comments, strings, numbers, keywords
+                  and calls are colored as you type.
                 </p>
               </>
             ) : (

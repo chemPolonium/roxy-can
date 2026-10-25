@@ -1,4 +1,11 @@
-import type { Catalog, Command, Hardware, Script, Snapshot } from "./types";
+import type {
+  Catalog,
+  Command,
+  Hardware,
+  Script,
+  ScriptFunctionHelp,
+  Snapshot,
+} from "./types";
 
 /// Browser fetch failures surface as bare TypeErrors; translate the common
 /// ones so the UI can offer a reason instead of a stack-trace fragment.
@@ -64,6 +71,23 @@ export async function fetchScripts(): Promise<Script[]> {
     throw new Error(`nodes: ${response.status}`);
   }
   return (await response.json()) as Script[];
+}
+
+let scriptHelp: Promise<ScriptFunctionHelp[]> | null = null;
+
+/// The language's callable names and call shapes, served from the core so the
+/// completion list cannot drift from the compiler.
+export function fetchScriptHelp(): Promise<ScriptFunctionHelp[]> {
+  scriptHelp ??= fetch("/api/script-help", { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`script help: ${response.status}`);
+      return (await response.json()) as ScriptFunctionHelp[];
+    })
+    .catch(() => {
+      scriptHelp = null;
+      return [];
+    });
+  return scriptHelp;
 }
 
 export async function uploadFile(file: File): Promise<string> {

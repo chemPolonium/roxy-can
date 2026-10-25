@@ -219,6 +219,11 @@ export interface TriggerEntry {
   sendId: number;
 }
 
+export interface ScriptFunctionHelp {
+  name: string;
+  usage: string;
+}
+
 export interface SysVar {
   namespace: string;
   name: string;
