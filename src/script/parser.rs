@@ -213,6 +213,20 @@ fn bus_qualifier(name: &str, prefix: &str) -> Option<u32> {
     rest.parse().ok()
 }
 
+/// Why a name cannot be a variable/function/parameter. The dot reads are
+/// resolved by looking at the name on the left of the dot, so those names
+/// must stay unambiguous in every scope.
+fn reserved_identifier(name: &str) -> Option<&'static str> {
+    match name {
+        "this" => Some("`this` is the triggering frame context"),
+        "node" => Some("`node` is the script's own context"),
+        "FR" | "ETH" => Some("`FR` / `ETH` start a bus selector"),
+        _ if bus_qualifier(name, "FR").is_some() => Some("`FRn` is a FlexRay bus selector"),
+        _ if bus_qualifier(name, "ETH").is_some() => Some("`ETHn` is an Ethernet bus selector"),
+        _ => None,
+    }
+}
+
 /// What can follow an identifier at statement position.
 #[derive(Clone, Copy, PartialEq)]
 enum AssignAhead {
@@ -281,6 +295,17 @@ impl P {
             }
             _ => self.err(&format!("expected {what}")),
         }
+    }
+
+    /// A name the script itself introduces: a variable, function or
+    /// parameter. Reserved context/bus names are refused here so a later
+    /// `name.member` read can never be shadowed by them.
+    fn var_ident(&mut self, what: &str) -> Result<String, ScriptError> {
+        let name = self.ident(what)?;
+        if let Some(why) = reserved_identifier(&name) {
+            return self.err(&format!("`{name}` cannot be used as {what}: {why}"));
+        }
+        Ok(name)
     }
 
     /// One name after a bus qualifier: `.Signal` or `["Signal Name"]`.
@@ -427,12 +452,12 @@ impl P {
 
     fn fn_decl(&mut self) -> Result<FnDecl, ScriptError> {
         self.expect(&Tok::Fn, "'fn'")?;
-        let name = self.ident("function name")?;
+        let name = self.var_ident("function name")?;
         self.expect(&Tok::LParen, "'('")?;
         let mut params = Vec::new();
         if !self.at(&Tok::RParen) {
             loop {
-                params.push(self.ident("parameter name")?);
+                params.push(self.var_ident("parameter name")?);
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -710,7 +735,7 @@ impl P {
             );
         }
         if self.eat(&Tok::Let) {
-            let name = self.ident("variable name")?;
+            let name = self.var_ident("variable name")?;
             self.expect(&Tok::Assign, "'=' in a let")?;
             let expr = self.expr()?;
             self.expect(&Tok::Semi, "';'")?;
@@ -803,7 +828,7 @@ impl P {
         let Some((shape, op)) = self.assign_ahead() else {
             return self.err("expected an assignment");
         };
-        let name = self.ident("variable name")?;
+        let name = self.var_ident("variable name")?;
         if shape == AssignAhead::Index {
             self.advance();
             let idx = self.expr()?;
@@ -1008,7 +1033,7 @@ impl P {
 
     fn simple_stmt_inner(&mut self) -> Result<Stmt, ScriptError> {
         if self.eat(&Tok::Let) {
-            let name = self.ident("variable name")?;
+            let name = self.var_ident("variable name")?;
             self.expect(&Tok::Assign, "'=' in a let")?;
             return Ok(Stmt::Let(name, self.expr()?));
         }
@@ -1221,6 +1246,21 @@ impl P {
                     let idx = self.expr()?;
                     self.expect(&Tok::RBracket, "']'")?;
                     e = Expr::Index(Box::new(e), Box::new(idx));
+                }
+                // A path separator in the Rust/C++ sense would make the
+                // read look like a type/module path; this language has one
+                // read path, and `::` stays inside sysvar keys.
+                Some(Tok::Colon)
+                    if matches!(
+                        self.toks.get(self.pos + 1).map(|t| &t.tok),
+                        Some(Tok::Colon)
+                    ) =>
+                {
+                    return self.err(
+                        "`::` is not an operator; use a dot read such as \
+                         Message.Signal — `::` only appears inside system-variable \
+                         keys like \"ns::name\"",
+                    );
                 }
                 _ => break,
             }
@@ -1573,6 +1613,38 @@ mod tests {
                 "{src}: {error}"
             );
         }
+    }
+
+    /// `.` resolves its left name against a context or a database, so those
+    /// names must not be shadowed by the script's own declarations.
+    #[test]
+    fn context_and_bus_names_cannot_be_declared() {
+        for (src, want) in [
+            ("let this = 1;", "`this`"),
+            ("let node = 1;", "`node`"),
+            ("let FR = 1;", "`FR`"),
+            ("let FR0 = 1;", "`FR0`"),
+            ("let ETH2 = 1;", "`ETH2`"),
+            ("fn ETH() {}", "`ETH`"),
+            ("fn f(FR0) {}", "`FR0`"),
+        ] {
+            let error = crate::script::compile(src).unwrap_err().to_string();
+            assert!(error.contains(want), "{src}: {error}");
+        }
+        assert!(
+            crate::script::compile(
+                "let Frame = 1; let Ethernet = 2; fn f(Frame) { return Frame; }"
+            )
+            .is_ok(),
+            "only the exact qualifier shapes are reserved"
+        );
+        let error = crate::script::compile("on start { print(EngineStatus::RPM); }")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("`::` is not an operator") && error.contains("Message.Signal"),
+            "{error}"
+        );
     }
 
     #[test]
