@@ -686,6 +686,8 @@ pub struct NodeView {
     pub running: bool,
     /// A handler failed: the node is stopped until restart or edit.
     pub errored: bool,
+    /// Last compile failure, with its source position.
+    pub issue: Option<crate::node::ScriptIssue>,
     /// Oldest-first log lines (print output and errors).
     pub log: Vec<String>,
 }
@@ -2275,6 +2277,7 @@ impl BusCore {
                 attached: n.attached.clone(),
                 running: n.running(),
                 errored: n.errored(),
+                issue: n.issue().cloned(),
                 log: n.log_snapshot(),
             })
             .collect();

@@ -329,9 +329,16 @@ export interface ScriptInfo {
   lastLog: string;
 }
 
+export interface ScriptIssue {
+  line: number;
+  col: number | null;
+  message: string;
+}
+
 export interface Script extends ScriptInfo {
   source: string;
   log: string[];
+  issue: ScriptIssue | null;
 }
 
 export interface BusStatRow {

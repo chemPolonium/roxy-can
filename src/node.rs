@@ -44,9 +44,20 @@ pub struct ScriptNode {
     /// Set when a handler failed: the node stops executing until the next
     /// start or source edit, so one bad loop cannot spam the log.
     errored: bool,
+    /// The last compile failure, kept structured for the editor's inline
+    /// diagnostic. Cleared on source edits, restarts and stops.
+    issue: Option<ScriptIssue>,
     /// Lines pushed to `log` and not yet mirrored into the bus's Write
     /// ring. Drained by the bus on the same step.
     pending_lines: Vec<String>,
+}
+
+/// A positioned compile failure, mirrored to the web editor.
+#[derive(Clone, Debug)]
+pub struct ScriptIssue {
+    pub line: u32,
+    pub col: Option<u32>,
+    pub message: String,
 }
 
 struct NodeRuntime {
@@ -99,6 +110,7 @@ impl ScriptNode {
             log: VecDeque::new(),
             log_dirty: false,
             errored: false,
+            issue: None,
             pending_lines: Vec::new(),
         }
     }
@@ -109,6 +121,10 @@ impl ScriptNode {
 
     pub fn errored(&self) -> bool {
         self.errored
+    }
+
+    pub fn issue(&self) -> Option<&ScriptIssue> {
+        self.issue.as_ref()
     }
 
     /// Oldest-first copy of the log, for the snapshot.
@@ -173,11 +189,17 @@ impl ScriptNode {
         eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
     ) {
         self.errored = false;
+        self.issue = None;
         let script = match compile(&self.source) {
             Ok(s) => s,
             Err(e) => {
                 self.push_log(format!("[compile] {e}"));
                 self.errored = true;
+                self.issue = Some(ScriptIssue {
+                    line: e.line,
+                    col: e.col,
+                    message: e.msg,
+                });
                 return;
             }
         };
@@ -409,6 +431,7 @@ impl ScriptNode {
     pub fn stop(&mut self) {
         self.runtime = None;
         self.errored = false;
+        self.issue = None;
     }
 
     /// Applies a source edit. While measuring a running node recompiles
@@ -423,6 +446,7 @@ impl ScriptNode {
         measuring: bool,
     ) {
         self.source = source;
+        self.issue = None;
         if measuring && self.enabled {
             self.start_with(dbc, fr_dbs, eth_dbs);
         } else if self.runtime.is_some() {
@@ -1798,11 +1822,17 @@ BO_ 512 GearInfo: 8 GearBox
     }
 
     #[test]
-    fn compile_errors_land_in_the_log() {
+    fn compile_errors_land_in_the_log_and_the_editor_diagnostic() {
         let mut n = node("on start { print(; }");
         n.start(None);
         assert!(!n.running());
         assert!(n.log_snapshot()[0].contains("[compile]"));
+        let issue = n.issue().expect("compile error reaches the editor");
+        assert_eq!(issue.line, 1);
+        assert!(issue.col.is_some(), "the token column is kept");
+        assert!(!issue.message.is_empty());
+        n.set_source("on start { }".into(), None, None, None, false);
+        assert!(n.issue().is_none(), "an edit clears the stale diagnostic");
     }
 
     /// Literal `sig` / `set_sig` references are checked against the

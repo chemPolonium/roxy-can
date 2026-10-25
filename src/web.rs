@@ -540,6 +540,13 @@ fn scripts_signature(app: &App) -> u64 {
         node.enabled.hash(&mut hasher);
         node.running.hash(&mut hasher);
         node.errored.hash(&mut hasher);
+        if let Some(issue) = &node.issue {
+            issue.line.hash(&mut hasher);
+            issue.col.hash(&mut hasher);
+            issue.message.hash(&mut hasher);
+        } else {
+            0u8.hash(&mut hasher);
+        }
         node.attached.hash(&mut hasher);
         node.log.len().hash(&mut hasher);
         node.log.last().hash(&mut hasher);
@@ -560,6 +567,11 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
             enabled: node.enabled,
             running: node.running,
             errored: node.errored,
+            issue: node.issue.as_ref().map(|issue| WebScriptIssue {
+                line: issue.line,
+                col: issue.col,
+                message: issue.message.clone(),
+            }),
             file_path: node.file_path.clone().unwrap_or_default(),
             source: node.source.clone(),
             log: node.log.clone(),
@@ -4324,6 +4336,14 @@ struct WebStateRow {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebScriptIssue {
+    line: u32,
+    col: Option<u32>,
+    message: String,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebScript {
     id: u64,
     name: String,
@@ -4333,6 +4353,7 @@ struct WebScript {
     enabled: bool,
     running: bool,
     errored: bool,
+    issue: Option<WebScriptIssue>,
     file_path: String,
     source: String,
     log: Vec<String>,
