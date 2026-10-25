@@ -1774,6 +1774,29 @@ BO_ 256 Real: 2 ECU
         assert_eq!(n.log_snapshot(), ["1234.0"]);
     }
 
+    /// The dotted spelling resolves exactly like `$Message::Signal`: the node
+    /// reads its channel's database at start, then the published value.
+    #[test]
+    fn the_dotted_read_resolves_the_message_name() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    print(EngineStatus.RPM);
+                }
+            "#,
+        );
+        n.start(Some(engine_dbc()));
+        let input = HostInput {
+            now_s: 0.0,
+            signals: [((0x100, "RPM".to_string()), 1234.0)].into_iter().collect(),
+            fr_signals: HashMap::new(),
+            sysvars: HashMap::new(),
+            derived_signals: HashMap::new(),
+        };
+        n.dispatch_frame(0, 0x100, false, false, &[], &input);
+        assert_eq!(n.log_snapshot(), ["1234.0"]);
+    }
+
     /// Wrong message / signal names in `$` reads are assembly errors:
     /// named at start as `[check]`, shared with `--check-script --dbc`.
     #[test]
@@ -1793,6 +1816,15 @@ BO_ 256 Real: 2 ECU
         assert!(
             n.log_snapshot().iter().any(|l| l.contains("Ghost")),
             "the unknown message is named: {:?}",
+            n.log_snapshot()
+        );
+
+        let mut n = node("on start { print(EngineStatus.Nope); }");
+        n.attached = Some((0, "EngineECU".to_string()));
+        n.start(Some(engine_dbc()));
+        assert!(
+            n.log_snapshot().iter().any(|l| l.contains("Nope")),
+            "the dotted form gets the same assembly check: {:?}",
             n.log_snapshot()
         );
     }

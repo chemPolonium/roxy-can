@@ -503,6 +503,37 @@ impl P {
                  $Message::Signal is read-only",
             );
         }
+        // `Message.Signal = v;` is read-only for the same reason as the `$`
+        // form: writes carry a frame's raw bytes, which only `set_sig` can
+        // shape. Point at the real form instead of a generic lvalue error.
+        if matches!(self.toks.get(self.pos).map(|t| &t.tok), Some(Tok::Ident(_)))
+            && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Dot))
+            && matches!(
+                self.toks.get(self.pos + 2).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+            && matches!(
+                self.toks.get(self.pos + 3).map(|t| &t.tok),
+                Some(
+                    Tok::Assign
+                        | Tok::AssignAdd
+                        | Tok::AssignSub
+                        | Tok::AssignMul
+                        | Tok::AssignDiv
+                        | Tok::AssignMod
+                        | Tok::AssignBitAnd
+                        | Tok::AssignBitOr
+                        | Tok::AssignBitXor
+                        | Tok::AssignShl
+                        | Tok::AssignShr
+                )
+            )
+        {
+            return self.err(
+                "signal writes go through set_sig(buffer, id, \"Name\", value); \
+                 Message.Signal is read-only",
+            );
+        }
         // `@sysvar::ns::name = v;` -- the write form, desugared into
         // `sys_set("ns::name", v)`. Reads fall through to the expression
         // parser below.
@@ -1074,6 +1105,16 @@ impl P {
             }
             Some(Tok::Ident(name)) => {
                 self.advance();
+                // `Message.Signal` is the dotted spelling of the same read as
+                // `$Message::Signal`; both keep their names as literals so the
+                // host can resolve and check them at node start.
+                if self.eat(&Tok::Dot) {
+                    let signal = self.ident("a signal name after '.'")?;
+                    return Ok(Expr::Call(
+                        "sig_named".to_string(),
+                        vec![Expr::Str(name), Expr::Str(signal)],
+                    ));
+                }
                 Ok(Expr::Ident(name))
             }
             Some(Tok::LParen) => {
@@ -1137,6 +1178,39 @@ mod tests {
             switch_temps: 0,
         };
         p.expr().unwrap()
+    }
+
+    #[test]
+    fn a_dotted_read_desugars_into_the_named_signal_form() {
+        let script = crate::script::compile("on start { print(EngineStatus.RPM); }").unwrap();
+        assert_eq!(
+            script.named_signal_refs,
+            vec![("EngineStatus".to_string(), "RPM".to_string())],
+            "the host resolves the pair against the node's DBC"
+        );
+        let Expr::Call(name, args) = expr_of("EngineStatus.RPM") else {
+            panic!("a dotted read must compile to a host call");
+        };
+        assert_eq!(name, "sig_named");
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Expr::Str(message), Expr::Str(signal)]
+                    if message == "EngineStatus" && signal == "RPM"
+            ),
+            "the names stay literal for the host's DBC resolution"
+        );
+    }
+
+    #[test]
+    fn a_dotted_write_points_at_set_sig() {
+        let error = crate::script::compile("on start { EngineStatus.RPM = 1; }")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("set_sig") && error.contains("read-only"),
+            "{error}"
+        );
     }
 
     #[test]

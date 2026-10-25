@@ -39,6 +39,9 @@ pub enum Tok {
     Comma,
     Semi,
     Colon,
+    /// `Message.Signal` -- the dotted read. A decimal point inside a number
+    /// is consumed by the number lexer, so this only appears between names.
+    Dot,
     /// `$Message::Signal` -- the CANoe-style signal read.
     Dollar,
     /// `@sysvar::ns::name` -- the CANoe-style system variable access.
@@ -304,6 +307,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ScriptError> {
                     ',' => (Tok::Comma, 1),
                     ';' => (Tok::Semi, 1),
                     ':' => (Tok::Colon, 1),
+                    '.' => (Tok::Dot, 1),
                     '$' => (Tok::Dollar, 1),
                     '@' => (Tok::At, 1),
                     '=' => {

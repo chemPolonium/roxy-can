@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { fetchScriptHelp, fetchScripts } from "../api";
 import type {
   Bus,
+  Catalog,
   Command,
   DerivedDef,
   Script,
@@ -12,6 +13,7 @@ import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
+  catalog: Catalog | null;
   derived: DerivedDef[];
   sysvars: SysVar[];
   onCommand: (command: Command) => void;
@@ -138,6 +140,8 @@ function buildCandidates(
   functions: ScriptFunctionHelp[],
   derived: DerivedDef[],
   sysvars: SysVar[],
+  catalog: Catalog | null,
+  channel: number,
 ): { start: number; end: number; items: CompletionItem[] } | null {
   const lineStart = lineStartOf(value, caret);
   const lineBefore = value.slice(lineStart, caret);
@@ -153,6 +157,40 @@ function buildCandidates(
       } else {
         inString = false;
       }
+    }
+  }
+
+  // `Message.` is a DBC context: only that message's signals make sense.
+  if (!inString) {
+    const dotted = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (dotted) {
+      const [, messageName, partial = ""] = dotted;
+      const dbcChannel = catalog?.channels.find(
+        (candidate) =>
+          candidate.kind === "can" && candidate.index === channel,
+      );
+      const message = dbcChannel?.messages.find(
+        (candidate) => candidate.name === messageName,
+      );
+      if (!message) return null;
+      const query = partial.toLowerCase();
+      const items = message.signals
+        .filter(
+          (signal) =>
+            query === "" || signal.name.toLowerCase().includes(query),
+        )
+        .slice(0, 12)
+        .map((signal) => ({
+          label: signal.name,
+          detail: signal.unit
+            ? `${messageName} · ${signal.unit}`
+            : messageName,
+          insert: signal.name,
+          caret: signal.name.length,
+          rank: 0,
+        }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
     }
   }
 
@@ -335,6 +373,7 @@ function busName(buses: Bus[], channel: number): string {
 
 export function ScriptsModal({
   buses,
+  catalog,
   derived,
   sysvars,
   onCommand,
@@ -461,6 +500,8 @@ export function ScriptsModal({
       functions,
       derived,
       sysvars,
+      catalog,
+      current?.channel ?? 0,
     );
     if (!candidates) {
       setCompletion(null);

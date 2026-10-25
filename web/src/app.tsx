@@ -1375,6 +1375,12 @@ export function App() {
     }
   };
 
+  // The script editor's `Message.Signal` completion needs the DBC tree even
+  // when the signal picker was never opened.
+  useEffect(() => {
+    if (scriptsOpen && !catalog && !catalogLoading) void loadCatalog();
+  }, [scriptsOpen, catalog, catalogLoading]);
+
   const openPicker = () => {
     setSessionOpen(false);
     setScriptsOpen(false);
@@ -3519,6 +3525,7 @@ export function App() {
       {scriptsOpen && (
         <ScriptsModal
           buses={state?.buses ?? []}
+          catalog={catalog}
           derived={derivedDefs}
           sysvars={state?.sysvars ?? []}
           onCommand={(command) => void run(command)}

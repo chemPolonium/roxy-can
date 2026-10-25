@@ -260,6 +260,19 @@ send(0x200, buf);
 let rpm = sig(0x100, "EngineSpeed");
 ```
 
+### Message.Signal / $Message::Signal
+
+按 DBC 报文名和信号名读取最新物理值，不需要记 id：
+
+```c
+let rpm = EngineStatus.EngineSpeed;
+let temp = $EngineStatus::EngineTemp;   // 两种写法等价
+```
+
+- 节点启动时用它所在通道的 DBC 把 `Message` 解析成 id；报文名或信号名拼错会在启动日志里以 `[check]` 报出，不会静默读到 0。
+- 只读。写信号仍走 `set_sig(buffer, id, "Name", value)`，因为写入需要先有一帧的原始字节。
+- 点号形式要求报文名、信号名都是标识符（字母/数字/下划线）。名字里有空格或连字符时用 `sig_named("Message", "Signal")`。
+
 ### fr_sig(cluster, slot, "Name")
 
 FlexRay 侧的同一种读数：该路（Buses 表里行末的 `#n`）上，槽 `slot` 最近一帧解出的信号 `Name` 物理值。信号尚未出现时同样是运行时错误。
