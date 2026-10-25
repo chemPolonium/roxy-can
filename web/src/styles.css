@@ -2800,6 +2800,15 @@ button.mini.on {
   flex: 1;
 }
 
+/* Keep the three limits and their Apply action on one line: when the add
+   buttons fill the row, the whole group wraps together instead of splitting. */
+.trig-limits {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
 .trig-limit {
   display: flex;
   align-items: center;

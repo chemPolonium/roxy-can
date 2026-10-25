@@ -533,51 +533,53 @@ export function TriggersModal({
             </button>
           ))}
           <span class="spacer" />
-          <label class="trig-limit">
-            pre
-            <input
-              type="number"
-              min="0"
-              value={pre}
-              onInput={(event) =>
-                setPre((event.target as HTMLInputElement).value)
+          <div class="trig-limits">
+            <label class="trig-limit">
+              pre
+              <input
+                type="number"
+                min="0"
+                value={pre}
+                onInput={(event) =>
+                  setPre((event.target as HTMLInputElement).value)
+                }
+              />
+            </label>
+            <label class="trig-limit">
+              post
+              <input
+                type="number"
+                min="0"
+                value={post}
+                onInput={(event) =>
+                  setPost((event.target as HTMLInputElement).value)
+                }
+              />
+            </label>
+            <label class="trig-limit">
+              markers
+              <input
+                type="number"
+                min="8"
+                value={cap}
+                onInput={(event) =>
+                  setCap((event.target as HTMLInputElement).value)
+                }
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                onLimits({
+                  preFrames: Math.max(0, Number(pre) || 0),
+                  postFrames: Math.max(0, Number(post) || 0),
+                  markerCap: Math.max(8, Number(cap) || 8),
+                })
               }
-            />
-          </label>
-          <label class="trig-limit">
-            post
-            <input
-              type="number"
-              min="0"
-              value={post}
-              onInput={(event) =>
-                setPost((event.target as HTMLInputElement).value)
-              }
-            />
-          </label>
-          <label class="trig-limit">
-            markers
-            <input
-              type="number"
-              min="8"
-              value={cap}
-              onInput={(event) =>
-                setCap((event.target as HTMLInputElement).value)
-              }
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() =>
-              onLimits({
-                preFrames: Math.max(0, Number(pre) || 0),
-                postFrames: Math.max(0, Number(post) || 0),
-                markerCap: Math.max(8, Number(cap) || 8),
-              })
-            }
-          >
-            Apply limits
-          </button>
+            >
+              Apply limits
+            </button>
+          </div>
         </div>
 
         <div class="trig-body">
