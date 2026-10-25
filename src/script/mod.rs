@@ -71,10 +71,8 @@
 //! Architecture seam for external libraries: host functions live in one
 //! table ([`HOST_FNS`]) that the compiler resolves to `Op::CallHost(id)`
 //! and the VM dispatches by the same index; anything else resolves at
-//! runtime, first through the [`register_extern`] registry (in-process
-//! external simulation components) and then through the [`HostExternFn`]
-//! hook the embedder sets per node. Neither seam changes the bytecode
-//! format.
+//! runtime through the [`HostExternFn`] hook the embedder sets per node.
+//! The seam does not change the bytecode format.
 
 // S2 (the node runtime) is what calls into this module from the product
 // path; until it lands the module is reachable only from tests, which is
@@ -519,49 +517,6 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("get_sig", "get_sig(buffer, id, \"Name\")"),
 ];
 
-/// One external simulation function, callable from any script once
-/// registered under its script-visible name. Arguments arrive as
-/// [`Value`]s; the function validates their count and types itself (the
-/// pattern `set_sig`/`get_sig` follow). Returning `Ok(None)` pushes nil:
-/// procedures that act rather than answer need no wrapper.
-pub type ExternFn = fn(&[Value]) -> Result<Option<Value>, String>;
-
-/// The in-process registry behind [`register_extern`] -- S4's seam: an
-/// external simulation component (a battery model, a diagnostic stack,
-/// a plant simulator) registers its script-callable entry points at
-/// startup and every script in the process can call them. Dynamic
-/// libraries will register through the same table.
-fn extern_registry() -> &'static std::sync::Mutex<HashMap<String, ExternFn>> {
-    static REG: std::sync::OnceLock<std::sync::Mutex<HashMap<String, ExternFn>>> =
-        std::sync::OnceLock::new();
-    REG.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-}
-
-/// Registers `name` as callable from scripts. Errors when the name
-/// collides with a builtin; re-registering an existing extern name
-/// replaces it, so a component can reload its models.
-#[cfg(test)]
-pub fn register_extern(name: &str, f: ExternFn) -> Result<(), String> {
-    if HOST_FNS.iter().any(|(n, _, _)| *n == name) {
-        return Err(format!("'{name}' is a builtin and cannot be replaced"));
-    }
-    extern_registry()
-        .lock()
-        .expect("extern registry poisoned")
-        .insert(name.to_string(), f);
-    Ok(())
-}
-
-/// The registered extern function for `name`, if any. Called by the VM
-/// before the per-node [`HostExternFn`] hook.
-pub(crate) fn extern_lookup(name: &str) -> Option<ExternFn> {
-    extern_registry()
-        .lock()
-        .expect("extern registry poisoned")
-        .get(name)
-        .copied()
-}
-
 /// What the host publishes for a script to read between events: the bus
 /// clock in seconds, the latest physical value of every decoded
 /// signal on the node's channel keyed by `(message id, signal name)`, the
@@ -621,22 +576,6 @@ pub(crate) fn run_for_output(src: &str) -> Result<Vec<String>, String> {
     let mut vm = vm::Vm::new(script);
     vm.run().map_err(|e| e.to_string())?;
     Ok(vm.output)
-}
-
-/// A stand-in external component: doubles its numeric argument.
-#[cfg(test)]
-fn regtest_double(args: &[Value]) -> Result<Option<Value>, String> {
-    match args.first() {
-        Some(Value::Int(n)) => Ok(Some(Value::Int(n * 2))),
-        Some(Value::Float(f)) => Ok(Some(Value::Float(f * 2.0))),
-        _ => Err("regtest_double(n) needs a number".into()),
-    }
-}
-
-/// A stand-in external procedure: acts, answers nothing.
-#[cfg(test)]
-fn regtest_noop(_args: &[Value]) -> Result<Option<Value>, String> {
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -779,41 +718,10 @@ mod tests {
         assert_eq!(out(src2), ["fallback"]);
     }
 
-    /// S4: an external component registers at startup, every script
-    /// calls it -- no per-node hook needed, no bytecode change.
+    /// A per-node hook that returns `Ok(None)` is declining the name, so
+    /// the call errors; with no hook at all the verdict is the same.
     #[test]
-    fn registered_externs_are_callable_from_scripts() {
-        register_extern("regtest_double", regtest_double).expect("fresh name");
-        assert_eq!(out("print(regtest_double(21));"), ["42"]);
-        assert_eq!(out("print(regtest_double(1.5));"), ["3.0"]);
-
-        // A procedure that returns nothing lands as nil...
-        register_extern("regtest_noop", regtest_noop).expect("fresh name");
-        let e = err("let r = regtest_noop(); print(r + 1);");
-        assert!(e.contains("nil"), "{e}");
-        // ...and an unclaimed name is a runtime error naming it.
-        let e = err("print(never_registered());");
-        assert!(e.contains("never_registered"), "{e}");
-    }
-
-    #[test]
-    fn builtin_names_are_reserved_for_the_language() {
-        assert!(
-            register_extern("print", regtest_noop)
-                .err()
-                .is_some_and(|e| e.contains("builtin"))
-        );
-    }
-
-    /// The two seams answer differently for Ok(None): a registered
-    /// extern owns the name, so its Ok(None) is nil; a per-node hook
-    /// that returns Ok(None) is declining the name, so the call errors.
-    #[test]
-    fn hook_and_registry_disagree_on_none() {
-        // Registry: the name is owned, Ok(None) lands as nil.
-        register_extern("regtest_noop", regtest_noop).expect("fresh name");
-        assert_eq!(out("print(regtest_noop());"), ["nil"]);
-        // Hook: Ok(None) means "not mine" -- the name is unknown.
+    fn a_host_hook_declines_unknown_names() {
         let script = compile("print(hooked_nothing());").unwrap();
         let mut vm = Vm::new(script);
         vm.host_extern = Some(Box::new(|_name, _args| Ok(None)));

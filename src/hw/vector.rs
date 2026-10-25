@@ -1173,6 +1173,7 @@ pub mod flexray {
     /// the cluster configuration the driver currently holds. When `status`
     /// carries `VALID_CLUSTER_CFG` (0x04), the `cluster` copy is the real
     /// network's parameters -- read them instead of asking the user.
+    #[repr(C)]
     pub struct XLfrChannelConfig {
         pub status: u32,
         pub _cfg_mode: u32,
@@ -1797,6 +1798,18 @@ mod tests {
         assert_eq!(std::mem::size_of::<XLfrClusterConfig>(), 316);
         let cfg = XLfrClusterConfig::default();
         assert_eq!(cfg.baudrate, 0);
+    }
+
+    /// The channel config struct is the status header followed by the
+    /// 316-byte cluster block; `#[repr(C)]` plus these offsets pin the ABI
+    /// the driver writes into.
+    #[test]
+    fn fr_channel_config_layout_matches_the_driver_header() {
+        assert_eq!(std::mem::size_of::<XLfrChannelConfig>(), 348);
+        assert_eq!(std::mem::offset_of!(XLfrChannelConfig, status), 0);
+        assert_eq!(std::mem::offset_of!(XLfrChannelConfig, _cfg_mode), 4);
+        assert_eq!(std::mem::offset_of!(XLfrChannelConfig, _reserved), 8);
+        assert_eq!(std::mem::offset_of!(XLfrChannelConfig, _cluster), 32);
     }
 
     /// The database → driver-config derivation, on the demo cluster's
