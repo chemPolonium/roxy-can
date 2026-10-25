@@ -9,7 +9,7 @@
 //! an outbox that the core drains onto the bus as real frames.
 
 use crate::script::{Handler, HandlerKind, HostInput, Value, Vm, compile};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 /// Log lines kept per node, oldest first.
 const LOG_CAP: usize = 200;
@@ -52,6 +52,10 @@ pub struct ScriptNode {
 struct NodeRuntime {
     vm: Vm,
     handlers: Vec<Handler>,
+    /// DBC-named handlers resolved to `(id, extended)`. Kept separate from the
+    /// handler kind so a database reload can re-point a name without rebuilding
+    /// the compiled script.
+    named_handler_ids: HashMap<String, (u32, bool)>,
     /// Derived-signal samples queued by `emit_value` and not yet taken by
     /// the bus. Drained from the VM after every handler run.
     emitted: Vec<(String, f64)>,
@@ -204,6 +208,49 @@ impl ScriptNode {
                 }
             }
         }
+        let mut named_handler_ids: HashMap<String, (u32, bool)> = HashMap::new();
+        let named_handlers: Vec<&str> = handlers
+            .iter()
+            .filter_map(|handler| match &handler.kind {
+                HandlerKind::NamedMessage { name } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !named_handlers.is_empty() {
+            match &dbc {
+                Some(db) => {
+                    // Numeric handlers own their ids first; a named handler
+                    // resolving onto one of them is a duplicate, not a second
+                    // consumer.
+                    let mut taken: std::collections::HashSet<(u32, bool)> = handlers
+                        .iter()
+                        .filter_map(|handler| match handler.kind {
+                            HandlerKind::Message { id } => Some((id, false)),
+                            HandlerKind::ExtendedMessage { id } => Some((id, true)),
+                            _ => None,
+                        })
+                        .collect();
+                    for name in named_handlers {
+                        let Some(key) = db.message_key_by_name(name) else {
+                            continue; // dbc_checks reports the unknown name
+                        };
+                        if taken.insert(key) {
+                            named_handler_ids.insert(name.to_string(), key);
+                        } else {
+                            self.push_log(format!(
+                                "[check] duplicate handler for message \"{name}\" (0x{:X}{})",
+                                key.0,
+                                if key.1 { "x" } else { "" }
+                            ));
+                        }
+                    }
+                }
+                None => self.push_log(
+                    "[check] named message handlers need a database on this node's channel"
+                        .to_string(),
+                ),
+            }
+        }
         let mut vm = Vm::new(script);
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.named_messages = named_messages;
@@ -240,6 +287,7 @@ impl ScriptNode {
         let mut rt = NodeRuntime {
             vm,
             handlers,
+            named_handler_ids,
             emitted: Vec::new(),
             pending_sys: Vec::new(),
             fr_out: Vec::new(),
@@ -343,12 +391,12 @@ impl ScriptNode {
                     }
                     let what = match (old, new) {
                         (Some(o), Some(n)) => {
-                            format!("$\"{msg}\"::{sig} id 0x{o:X} -> 0x{n:X}")
+                            format!("\"{msg}\".{sig} id 0x{o:X} -> 0x{n:X}")
                         }
                         (Some(o), None) => {
-                            format!("$\"{msg}\" (0x{o:X}) was removed from the database")
+                            format!("\"{msg}\".{sig} (0x{o:X}) was removed from the database")
                         }
-                        (None, Some(n)) => format!("$\"{msg}\" added (0x{n:X})"),
+                        (None, Some(n)) => format!("\"{msg}\".{sig} added (0x{n:X})"),
                         (None, None) => continue,
                     };
                     Self::push_log_into(
@@ -360,6 +408,63 @@ impl ScriptNode {
                 }
             }
         }
+        // Handlers named after a DBC message follow the same reload: a name
+        // that moved to another id (or its frame class) re-points in place.
+        let mut taken: std::collections::HashSet<(u32, bool)> = rt
+            .handlers
+            .iter()
+            .filter_map(|handler| match handler.kind {
+                HandlerKind::Message { id } => Some((id, false)),
+                HandlerKind::ExtendedMessage { id } => Some((id, true)),
+                _ => None,
+            })
+            .collect();
+        let mut names: Vec<String> = Vec::new();
+        for handler in &rt.handlers {
+            if let HandlerKind::NamedMessage { name } = &handler.kind
+                && !names.contains(name)
+            {
+                names.push(name.clone());
+            }
+        }
+        let mut resolved = HashMap::new();
+        for name in &names {
+            if let Some(key) = db.message_key_by_name(name)
+                && taken.insert(key)
+            {
+                resolved.insert(name.clone(), key);
+            }
+        }
+        for name in &names {
+            let old = rt.named_handler_ids.get(name).copied();
+            let new = resolved.get(name).copied();
+            if old == new {
+                continue;
+            }
+            let what = match (old, new) {
+                (Some((o, oe)), Some((n, ne))) => format!(
+                    "handler \"{name}\" 0x{o:X}{} -> 0x{n:X}{}",
+                    if oe { "x" } else { "" },
+                    if ne { "x" } else { "" }
+                ),
+                (Some((o, oe)), None) => format!(
+                    "handler \"{name}\" (0x{o:X}{}) lost its message in the database",
+                    if oe { "x" } else { "" }
+                ),
+                (None, Some((n, ne))) => format!(
+                    "handler \"{name}\" added at 0x{n:X}{}",
+                    if ne { "x" } else { "" }
+                ),
+                (None, None) => continue,
+            };
+            Self::push_log_into(
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+                format!("[reload] {what}"),
+            );
+        }
+        rt.named_handler_ids = resolved;
     }
 
     /// Delivers one bus frame: handlers for this id on this channel run,
@@ -401,6 +506,7 @@ impl ScriptNode {
                 );
             }
         }
+        let named = &rt.named_handler_ids;
         let matches: Vec<u16> = rt
             .handlers
             .iter()
@@ -413,6 +519,12 @@ impl ScriptNode {
                 HandlerKind::AnyMessage => !is_error,
                 HandlerKind::Message { id: mid } => {
                     !is_error && *mid == id && extended == (*mid > 0x7FF)
+                }
+                HandlerKind::NamedMessage { name } => {
+                    !is_error
+                        && named
+                            .get(name)
+                            .is_some_and(|(mid, m_ext)| *mid == id && *m_ext == extended)
                 }
                 HandlerKind::ExtendedMessage { id: mid } => !is_error && extended && *mid == id,
                 _ => false,
@@ -830,6 +942,17 @@ pub fn dbc_checks(
         if !known {
             lines.push(format!(
                 "[check] signal not found in DBC: \"{msg}\" \"{sig}\""
+            ));
+        }
+    }
+    // `on message Name` handlers resolve through the same name index; an
+    // unknown name would otherwise just never fire.
+    for handler in &script.handlers {
+        if let HandlerKind::NamedMessage { name } = &handler.kind
+            && db.message_key_by_name(name).is_none()
+        {
+            lines.push(format!(
+                "[check] message name not found in DBC: \"{name}\" (handler)"
             ));
         }
     }
@@ -1772,6 +1895,44 @@ BO_ 256 Real: 2 ECU
         };
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1234.0"]);
+    }
+
+    /// A named handler resolves its DBC message at start: it wakes on that
+    /// id only, and `frame_id()` forwards the resolved id.
+    #[test]
+    fn a_named_handler_resolves_its_dbc_message() {
+        let mut n = node(
+            r#"
+                on message EngineStatus {
+                    print(frame_byte(0));
+                    send(frame_id(), 9);
+                }
+            "#,
+        );
+        n.start(Some(engine_dbc()));
+        let out = n.dispatch_frame(0, 0x100, false, false, &[7], &HostInput::default());
+        assert_eq!(n.log_snapshot(), ["7"]);
+        assert_eq!(out, vec![(0x100, false, vec![9])]);
+        assert!(
+            n.dispatch_frame(0, 0x101, false, false, &[8], &HostInput::default())
+                .is_empty(),
+            "another id does not wake the named handler"
+        );
+        assert_eq!(n.log_snapshot(), ["7"]);
+    }
+
+    /// An unknown handler name is an assembly error; the handler never fires.
+    #[test]
+    fn a_named_handler_is_checked_against_the_dbc() {
+        let mut n = node("on message Ghost { print(1); }");
+        n.start(Some(engine_dbc()));
+        assert!(
+            n.log_snapshot()
+                .iter()
+                .any(|line| line.contains("Ghost") && line.contains("not found")),
+            "the unknown message is named: {:?}",
+            n.log_snapshot()
+        );
     }
 
     /// Wrong message / signal names in named reads (dot or bracket) are

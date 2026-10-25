@@ -231,6 +231,12 @@ pub enum HandlerKind {
     Message {
         id: u32,
     },
+    /// A DBC-named message (`on message EngineStatus`). The node runtime
+    /// resolves the name, id and frame class against its channel database at
+    /// start, and refreshes the resolution when that database reloads.
+    NamedMessage {
+        name: String,
+    },
     /// An extended frame with this numeric id (`on extended message`).
     /// Addresses extended frames whose numeric id sits inside the
     /// standard range, where plain `on message` cannot reach.
@@ -446,9 +452,9 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("derived", "derived(\"Name\")"),
     ("bytes", "bytes(length)"),
     ("len", "len(value)"),
-    ("set_period", "set_period(milliseconds)"),
+    ("set_period", "set_period(100ms)"),
     ("stop_timer", "stop_timer()"),
-    ("set_timer", "set_timer(\"name\", milliseconds)"),
+    ("set_timer", "set_timer(\"name\", 200ms)"),
     ("cancel_timer", "cancel_timer(\"name\")"),
     ("frame_byte", "frame_byte(index)"),
     ("frame_dlc", "frame_dlc()"),

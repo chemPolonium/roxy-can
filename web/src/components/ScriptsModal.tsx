@@ -130,18 +130,31 @@ function completionPlacement(
   return { left, top };
 }
 
+function catalogMessages(
+  catalog: Catalog | null,
+  channel: number,
+) {
+  return (
+    catalog?.channels.find(
+      (candidate) => candidate.kind === "can" && candidate.index === channel,
+    )?.messages ?? []
+  );
+}
+
 function catalogMessage(
   catalog: Catalog | null,
   channel: number,
   name: string,
 ) {
   return (
-    catalog?.channels
-      .find(
-        (candidate) => candidate.kind === "can" && candidate.index === channel,
-      )
-      ?.messages.find((candidate) => candidate.name === name) ?? null
+    catalogMessages(catalog, channel).find(
+      (candidate) => candidate.name === name,
+    ) ?? null
   );
+}
+
+function messageDetail(message: { id: number; extended: boolean }) {
+  return `0x${message.id.toString(16).toUpperCase()}${message.extended ? "x" : ""}`;
 }
 
 /// Completion is deliberately context-light: a word prefix matches keywords,
@@ -172,6 +185,30 @@ function buildCandidates(
       } else {
         inString = false;
       }
+    }
+  }
+
+  // `on message ` is a DBC context: list the channel's message names.
+  if (!inString) {
+    const handler = /^\s*on\s+message\s+([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (handler) {
+      const partial = handler[1] ?? "";
+      const query = partial.toLowerCase();
+      const items = catalogMessages(catalog, channel)
+        .filter(
+          (message) =>
+            query === "" || message.name.toLowerCase().includes(query),
+        )
+        .slice(0, 12)
+        .map((message) => ({
+          label: message.name,
+          detail: messageDetail(message),
+          insert: message.name,
+          caret: message.name.length,
+          rank: 0,
+        }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
     }
   }
 
@@ -211,7 +248,9 @@ function buildCandidates(
   if (inString) {
     const beforeQuote = lineBefore.slice(0, quoteAt).trimEnd();
     const bracket = /([A-Za-z_]\w*)\s*\[\s*$/.exec(beforeQuote);
-    if (bracket) {
+    if (/^\s*on\s+message\s*$/.test(beforeQuote)) {
+      stringFn = "message";
+    } else if (bracket) {
       stringFn = "signal";
       stringMessage = bracket[1];
     } else {
@@ -226,7 +265,8 @@ function buildCandidates(
     if (
       prefix.length === 0 &&
       !allowEmpty &&
-      stringFn !== "signal"
+      stringFn !== "signal" &&
+      stringFn !== "message"
     ) {
       return null;
     }
@@ -240,7 +280,17 @@ function buildCandidates(
 
   const items: CompletionItem[] = [];
   if (stringFn) {
-    if (stringFn === "signal") {
+    if (stringFn === "message") {
+      for (const message of catalogMessages(catalog, channel)) {
+        items.push({
+          label: message.name,
+          detail: messageDetail(message),
+          insert: message.name,
+          caret: message.name.length,
+          rank: 0,
+        });
+      }
+    } else if (stringFn === "signal") {
       const message = catalogMessage(
         catalog,
         channel,

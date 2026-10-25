@@ -25,6 +25,10 @@ on message 0x100 {
     print("rpm:", rpm);
 }
 
+on message EngineStatus {            // 按 DBC 报文名
+    print(EngineStatus.RPM);
+}
+
 on extended message 0x50 { }    // 显式扩展帧（数值可 ≤ 0x7FF）
 
 on message * { }        // 任意帧（嗅探/网关）
@@ -35,7 +39,7 @@ on fr 0 slot 13 { }     // 只有 FR0 的槽 13
 
 on errorFrame { }       // 错误帧
 
-on timer 100 { }        // 周期定时器
+on timer 100 { }        // 周期定时器（也可写 100ms / 1s）
 
 on timer "name" { }     // 命名一次性定时器（配合 set_timer）
 
@@ -145,6 +149,23 @@ on message 0x1C3D1E5 {
 }
 ```
 
+### on message \<名称\>
+
+按 DBC 报文名注册处理器，启动时用节点所在通道的库解析出 id 和帧类型（标准/扩展）；名字不存在会在启动日志报 `[check]`：
+
+```c
+on message EngineStatus {
+    print("rpm", EngineStatus.RPM);
+}
+
+on message "Engine Cmd" {   // 名字含空格时用字符串
+}
+```
+
+- 重载 DBC 后名称会自动跟随新的 id/帧类型，日志里有一条 `[reload] handler ...`。
+- 同一报文名只能有一个处理器；与数字 id 处理器撞上同一个报文会在启动时报重复。
+- `frame_id()` 在命名处理器里仍返回解析后的数字 id，可用于原样转发。
+
 ### on message \*
 
 收到本信道**任何数据帧**时触发（错误帧只走 `on errorFrame`），配合 `frame_byte` / `frame_id` 可写网关、记录器、协议嗅探节点。
@@ -209,9 +230,17 @@ on errorFrame {
 }
 ```
 
-### on timer \<ms\>
+### on timer \<period\>
 
-周期定时器，每 N 毫秒触发一次。
+周期定时器。周期可以写裸数字（毫秒），也可以带 `ms` / `s` 单位：
+
+```c
+on timer 100 { }       // 100 ms
+on timer 250ms { }     // 同样 250 ms
+on timer 1s { }        // 1000 ms
+```
+
+带单位的周期必须是整毫秒；`1.5s` 可以，`0.5ms` 会报错。
 
 ### on timer "\<名称\>"
 
@@ -231,9 +260,9 @@ on timer "resp" {
 
 | 内建 | 说明 |
 |------|------|
-| `set_period(ms)` | 修改当前定时器的周期（一次性定时器中等价于重新武装） |
+| `set_period(100ms)` | 修改当前定时器的周期（一次性定时器中等价于重新武装）；也接受裸毫秒数 |
 | `stop_timer()` | 停止当前定时器 |
-| `set_timer("名称", ms)` | 武装命名一次性定时器，ms 毫秒后触发一次；可在任意回调中调用 |
+| `set_timer("名称", 200ms)` | 武装命名一次性定时器，延迟后触发一次；也接受裸毫秒数 |
 | `cancel_timer("名称")` | 取消已武装的一次性定时器 |
 
 `set_timer` 指向不存在的处理器时记一条日志告警，不影响运行。
@@ -249,6 +278,8 @@ on timer "resp" {
 send(0x123, 0x01, 0x02);
 send(0x200, buf);
 ```
+
+节点发出的帧会在同一个 step 内继续分发；如果一个处理器发送的就是它收到的帧，会形成自激循环。每一步的反应帧上限为 1024，超出后丢弃并在 Write 记一条警告，不会卡住 core。
 
 **id 必须可静态推导**（编译期规则）：字面量（`0x123`）、字面量的常量算术（`0x100 + 0x20`）、或 `frame_id()`。写变量 id 会**编译报错**——工具需要静态知道"这个节点可能发哪些报文"，才能与 DBC 声明对账、进 CI 门禁。动态转发场景写成 `on message *` + `send(frame_id(), ...)`。
 

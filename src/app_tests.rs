@@ -4702,6 +4702,88 @@ fn a_named_read_follows_a_reload_that_moves_the_message_id() {
     app.stop();
 }
 
+/// A named handler follows a DBC reload too: the name re-points to the new
+/// id without recompiling the script, and the old id stops waking it.
+#[test]
+fn a_named_handler_follows_a_reload_that_moves_the_message_id() {
+    let a = std::env::temp_dir().join("roxy_can_reload_handler.dbc");
+    let dbc = |id: u32| {
+        format!(
+            "VERSION \"named\"\n\nNS_ :\n\nBS_:\n\nBU_: EngineECU\n\nBO_ {id} EngineStatus: 8 EngineECU\n SG_ RPM : 0|16@1+ (1,0) [0|8000] \"rpm\" EngineECU\n"
+        )
+    };
+    std::fs::write(&a, dbc(0x100)).unwrap();
+    let mut app = App::headless();
+    app.open_dbc_for(0, a.to_string_lossy().into_owned());
+    app.settle();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "listener".to_string(),
+        channel: 0,
+        attached: Some((0, "EngineECU".to_string())),
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on message EngineStatus { print(\"hit\", frame_byte(0)); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    app.settle();
+
+    let frame = |t: u64, fid: u32| CanFrame {
+        t_us: t,
+        channel: 0,
+        id: fid,
+        extended: false,
+        len: 1,
+        data: {
+            let mut d = [0; MAX_CAN_FD_LEN];
+            d[0] = 7;
+            d
+        },
+        dir: Direction::Rx,
+        flags: FrameFlags::NONE,
+    };
+    receive(&mut app, 1_000, vec![frame(1_000, 0x100)]);
+    assert!(
+        app.snap.nodes[0].log.iter().any(|l| l.starts_with("hit")),
+        "the named handler fired before the reload: {:?}",
+        app.snap.nodes[0].log
+    );
+
+    std::fs::write(&a, dbc(0x103)).unwrap();
+    assert!(app.maybe_reload_changed_dbcs().is_some());
+    app.settle();
+    let before = app.snap.nodes[0].log.len();
+    receive(&mut app, 2_000, vec![frame(2_000, 0x100)]);
+    assert!(
+        !app.snap.nodes[0]
+            .log
+            .iter()
+            .skip(before)
+            .any(|line| line.starts_with("hit")),
+        "the old id no longer wakes the handler: {:?}",
+        app.snap.nodes[0].log
+    );
+    receive(&mut app, 3_000, vec![frame(3_000, 0x103)]);
+    assert!(
+        app.snap.nodes[0].log.iter().any(|l| l.starts_with("hit")),
+        "the renamed id wakes it after the reload: {:?}",
+        app.snap.nodes[0].log
+    );
+    assert!(
+        app.snap.nodes[0]
+            .log
+            .iter()
+            .any(|l| l.contains("[reload]") && l.contains("handler")),
+        "the handler re-point is explained: {:?}",
+        app.snap.nodes[0].log
+    );
+    std::fs::remove_file(&a).ok();
+    app.stop();
+}
+
 /// A simulated node whose database gains a message gets the new entry at
 /// reload time -- but **inactive**: an external DBC edit must not begin
 /// transmitting on its own.
@@ -6523,6 +6605,46 @@ fn sysvars_survive_a_project_roundtrip() {
     assert_eq!(v.def.unit, "Hz");
     assert_eq!(v.def.init, 2.5);
     assert_eq!(v.value, 2.5, "value starts at init");
+}
+
+/// A handler that sends the frame it receives re-enters itself. The step's
+/// reaction budget stops that from wedging the core and leaves one warning.
+#[test]
+fn a_self_echoing_node_cannot_wedge_a_step() {
+    let mut app = quiet_app();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "echo".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on message 0x100 { send(frame_id(), 1); }".to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    app.settle();
+    receive(
+        &mut app,
+        1_000,
+        vec![rx_frame(1_000, 0x100, 1, FrameFlags::NONE)],
+    );
+    assert!(
+        app.frame_counter < 5_000,
+        "the same-step echo loop is bounded, got {} frames",
+        app.frame_counter
+    );
+    assert!(
+        app.snap
+            .write
+            .iter()
+            .any(|line| line.text.contains("reaction limit")),
+        "the limit is explained in Write: {:?}",
+        app.snap.write
+    );
+    app.stop();
 }
 
 /// A script reads the core's old math channels through `derived("Name")`:

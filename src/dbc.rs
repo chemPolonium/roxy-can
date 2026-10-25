@@ -465,10 +465,18 @@ impl SymbolTable {
     /// Message name → id, declaration order. Named signal reads
     /// and their start checks resolve through this.
     pub fn message_id_by_name(&self, name: &str) -> Option<u32> {
+        self.message_key_by_name(name).map(|(id, _)| id)
+    }
+
+    /// The `(id, extended)` key behind a message name. Named handlers need the
+    /// frame class as well: an extended message can carry a numeric id inside
+    /// the standard range, and `on message Name` must still match only its own
+    /// class.
+    pub fn message_key_by_name(&self, name: &str) -> Option<(u32, bool)> {
         self.order
             .iter()
-            .find(|&&key| self.message_name_of(key) == Some(name))
-            .map(|&(id, _)| id)
+            .copied()
+            .find(|&key| self.message_name_of(key) == Some(name))
     }
 
     /// Packs a physical signal value into the frame data bytes.

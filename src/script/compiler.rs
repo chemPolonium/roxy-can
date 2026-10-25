@@ -68,6 +68,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     // handler per one-shot timer name, one wildcard.
     let mut seen_start = false;
     let mut seen_ids: HashSet<u32> = HashSet::new();
+    let mut seen_named_messages: HashSet<String> = HashSet::new();
     let mut seen_named: HashSet<String> = HashSet::new();
     let mut seen_wildcard = false;
     let mut seen_error = false;
@@ -88,6 +89,15 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                             on.line,
                             on.col,
                             &format!("duplicate handler for id {id:#x}"),
+                        );
+                    }
+                }
+                OnKind::NamedMessage { name } => {
+                    if !seen_named_messages.insert(name.clone()) {
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for message \"{name}\""),
                         );
                     }
                 }
@@ -238,6 +248,7 @@ fn handler_label(kind: &HandlerKind) -> String {
     match kind {
         HandlerKind::Start => "<on start>".to_string(),
         HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+        HandlerKind::NamedMessage { name } => format!("<on message {name}>"),
         HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
         HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
         HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
@@ -695,6 +706,11 @@ impl Comp {
                                 HandlerKind::AnyMessage => self.opaque_sends.push(format!(
                                     "{from}: wildcard forward (frame_id), set = received set"
                                 )),
+                                HandlerKind::NamedMessage { .. } => self.opaque_sends.push(
+                                    format!(
+                                        "{from}: named-message forward (frame_id), id resolved at start"
+                                    ),
+                                ),
                                 // `frame_id()` here is a slot number. Deriving a
                                 // CAN send from it would put a frame on the
                                 // node's CAN channel whose id happens to be the
@@ -874,6 +890,7 @@ impl Comp {
         let kind = match &on.kind {
             OnKind::Start => HandlerKind::Start,
             OnKind::Message { id } => HandlerKind::Message { id: *id },
+            OnKind::NamedMessage { name } => HandlerKind::NamedMessage { name: name.clone() },
             OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
             OnKind::AnyMessage => HandlerKind::AnyMessage,
             OnKind::ErrorFrame => HandlerKind::ErrorFrame,

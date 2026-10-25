@@ -54,6 +54,11 @@ pub(crate) const POST_ROLL_FRAMES: u32 = 32;
 /// ignored for the rest of the session -- a guard against a script
 /// minting names in a loop, not a real limit.
 pub(crate) const MAX_EMITTED_STREAMS: usize = 256;
+/// Frames a node may inject into the current step's walk. A handler that
+/// sends the frame it receives re-enters itself; without a bound that is an
+/// infinite same-step loop that freezes the core. 1024 keeps legitimate
+/// reaction chains intact and turns a runaway script into one warning.
+pub(crate) const MAX_NODE_REACTIONS_PER_STEP: usize = 1024;
 
 /// One replay block as the frontend sees it this frame: the declaration
 /// plus what the runtime made of it (queue size, load failure).
@@ -5098,6 +5103,8 @@ impl BusCore {
         // pushing onto `buf` mid-loop must be processed by this same step,
         // not wiped by the next one.
         let mut i = 0;
+        let mut node_reactions = 0usize;
+        let mut reaction_limit_noted = false;
         while i < self.buf.len() {
             let f = self.buf[i];
             i += 1;
@@ -5139,6 +5146,20 @@ impl BusCore {
             let input = node_inputs.get(&f.channel).cloned().unwrap_or_default();
             let queued = self.dispatch_node_frame(&f, &input);
             for (id, ext, data) in queued {
+                if node_reactions >= MAX_NODE_REACTIONS_PER_STEP {
+                    if !reaction_limit_noted {
+                        reaction_limit_noted = true;
+                        self.write_push(
+                            WriteKind::Warning,
+                            format!(
+                                "node reaction limit ({MAX_NODE_REACTIONS_PER_STEP}/step) reached; \
+                                 extra frames were dropped — a handler is probably sending the frame it receives"
+                            ),
+                        );
+                    }
+                    continue;
+                }
+                node_reactions += 1;
                 self.buf
                     .push(Self::node_frame(f.channel, id, ext, &data, f.t_us));
             }

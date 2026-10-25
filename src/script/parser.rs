@@ -43,6 +43,10 @@ pub enum OnKind {
     Start,
     /// A frame with this identifier arrived on the node's channel.
     Message { id: u32 },
+    /// A frame whose DBC message name is `name` arrived. The node resolves
+    /// the name (and its standard/extended class) from its channel's
+    /// database at start, so the script does not repeat the numeric id.
+    NamedMessage { name: String },
     /// An **extended** frame with this identifier arrived. Numeric ids
     /// inside the standard range can be extended frames too (rare but
     /// legal); this form addresses them where plain `on message` cannot.
@@ -312,11 +316,27 @@ impl P {
             }
             "message" => {
                 // `on message *`: every frame, whatever its id.
+                // `on message 0x100`: by numeric id.
+                // `on message EngineStatus` / `on message "Engine Status"`:
+                // by DBC name; the node resolves id and frame class at start.
                 if self.eat(&Tok::Star) {
                     OnKind::AnyMessage
                 } else {
-                    let id = self.id_literal()?;
-                    OnKind::Message { id }
+                    match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+                        Some(Tok::Int(_)) => OnKind::Message {
+                            id: self.id_literal()?,
+                        },
+                        Some(Tok::Ident(name)) => {
+                            self.advance();
+                            OnKind::NamedMessage { name }
+                        }
+                        Some(Tok::Str(_)) => OnKind::NamedMessage {
+                            name: self.string_literal()?,
+                        },
+                        _ => {
+                            return self.err("expected a message id, a DBC message name, or '*'");
+                        }
+                    }
                 }
             }
             "timer" => {
@@ -417,23 +437,75 @@ impl P {
         }
     }
 
-    /// A timer period in milliseconds: a positive integer.
+    /// A timer period: a positive integer in milliseconds, or a duration
+    /// literal (`250ms`, `1s`, `1.5s`).
     fn period_literal(&mut self) -> Result<u64, ScriptError> {
         let at = self.toks.get(self.pos);
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
         match self.toks.get(self.pos).map(|t| t.tok.clone()) {
-            Some(Tok::Int(n)) if n > 0 => {
+            Some(Tok::Int(n)) => {
                 self.advance();
+                if let Some(ms) = self.duration_tail(n as f64, line, col)? {
+                    return Ok(ms);
+                }
+                if n <= 0 {
+                    return Err(ScriptError {
+                        line,
+                        col: Some(col),
+                        msg: "timer period must be positive".to_string(),
+                    });
+                }
                 Ok(n as u64)
             }
-            Some(Tok::Int(0)) => Err(ScriptError {
+            Some(Tok::Float(x)) => {
+                self.advance();
+                match self.duration_tail(x, line, col)? {
+                    Some(ms) => Ok(ms),
+                    None => self.err("expected 'ms' or 's' after a fractional timer period"),
+                }
+            }
+            _ => self.err("expected a timer period (milliseconds, 250ms or 1s)"),
+        }
+    }
+
+    /// A `ms`/`s` suffix outside a timer-period position is not a value; say
+    /// where duration literals are accepted instead of "expected ')'"-style
+    /// noise.
+    fn reject_stray_duration(&self) -> Result<(), ScriptError> {
+        if let Some(Tok::Ident(unit)) = self.toks.get(self.pos).map(|t| t.tok.clone())
+            && (unit == "ms" || unit == "s")
+        {
+            return self.err(
+                "duration literals are only valid for timer periods \
+                 (on timer, set_timer, set_period)",
+            );
+        }
+        Ok(())
+    }
+
+    /// Consumes an optional `ms`/`s` suffix after a duration number and
+    /// returns whole milliseconds. `None` means no suffix was present.
+    fn duration_tail(
+        &mut self,
+        number: f64,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<u64>, ScriptError> {
+        let unit = match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+            Some(Tok::Ident(unit)) if unit == "ms" || unit == "s" => unit,
+            _ => return Ok(None),
+        };
+        self.advance();
+        let ms = if unit == "s" { number * 1000.0 } else { number };
+        if !ms.is_finite() || ms < 1.0 || ms.fract() != 0.0 {
+            return Err(ScriptError {
                 line,
                 col: Some(col),
-                msg: "timer period must be positive".to_string(),
-            }),
-            _ => self.err("expected a timer period in milliseconds"),
+                msg: "timer periods are whole milliseconds (e.g. 250ms, 1s)".to_string(),
+            });
         }
+        Ok(Some(ms as u64))
     }
 
     /// A string literal: a one-shot timer's name.
@@ -1005,7 +1077,32 @@ impl P {
                     let mut args = Vec::new();
                     if !self.at(&Tok::RParen) {
                         loop {
-                            args.push(self.expr()?);
+                            // `set_timer("name", 1s)` / `set_period(250ms)`:
+                            // a duration literal becomes whole milliseconds
+                            // before the VM sees it, so those builtins keep
+                            // their integer contract.
+                            let duration_position = (name == "set_timer" && args.len() == 1)
+                                || (name == "set_period" && args.is_empty());
+                            let at = self.toks.get(self.pos);
+                            let (line, col) =
+                                at.map(|token| (token.line, token.col)).unwrap_or((1, 1));
+                            match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+                                Some(Tok::Int(n)) if duration_position => {
+                                    self.advance();
+                                    args.push(match self.duration_tail(n as f64, line, col)? {
+                                        Some(ms) => Expr::Int(ms as i64),
+                                        None => Expr::Int(n),
+                                    });
+                                }
+                                Some(Tok::Float(x)) if duration_position => {
+                                    self.advance();
+                                    args.push(match self.duration_tail(x, line, col)? {
+                                        Some(ms) => Expr::Int(ms as i64),
+                                        None => Expr::Float(x),
+                                    });
+                                }
+                                _ => args.push(self.expr()?),
+                            }
                             if !self.eat(&Tok::Comma) {
                                 break;
                             }
@@ -1030,10 +1127,12 @@ impl P {
         match self.toks.get(self.pos).map(|t| t.tok.clone()) {
             Some(Tok::Int(n)) => {
                 self.advance();
+                self.reject_stray_duration()?;
                 Ok(Expr::Int(n))
             }
             Some(Tok::Float(x)) => {
                 self.advance();
+                self.reject_stray_duration()?;
                 Ok(Expr::Float(x))
             }
             Some(Tok::Str(s)) => {
@@ -1384,6 +1483,66 @@ mod tests {
             error.contains("set_sig") && error.contains("read-only"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn timer_units_compile_to_whole_milliseconds() {
+        let script =
+            crate::script::compile("on timer 1s { } on timer 250ms { } on timer 1.5s { }").unwrap();
+        let periods: Vec<u64> = script
+            .handlers
+            .iter()
+            .filter_map(|handler| match handler.kind {
+                crate::script::HandlerKind::Timer { period_ms } => Some(period_ms),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(periods, vec![1_000, 250, 1_500]);
+
+        let Expr::Call(_, args) = expr_of("set_timer(\"resp\", 1.5s)") else {
+            panic!("a call");
+        };
+        assert!(matches!(&args[1], Expr::Int(1_500)));
+        let Expr::Call(_, args) = expr_of("set_period(500ms)") else {
+            panic!("a call");
+        };
+        assert!(matches!(&args[0], Expr::Int(500)));
+
+        for source in [
+            "on timer 0.5ms { }",
+            "on start { set_timer(\"x\", 0.5ms); }",
+            "on start { let t = 1s; }",
+            "on start { print(ramp(0, 1, 1s)); }",
+        ] {
+            assert!(
+                crate::script::compile(source).is_err(),
+                "{source} must not compile"
+            );
+        }
+    }
+
+    #[test]
+    fn a_named_message_handler_takes_an_identifier_or_a_string() {
+        let script =
+            crate::script::compile("on message EngineStatus { } on message \"Engine Cmd\" { }")
+                .unwrap();
+        assert_eq!(
+            script.handlers[0].kind,
+            crate::script::HandlerKind::NamedMessage {
+                name: "EngineStatus".to_string()
+            }
+        );
+        assert_eq!(
+            script.handlers[1].kind,
+            crate::script::HandlerKind::NamedMessage {
+                name: "Engine Cmd".to_string()
+            }
+        );
+        let error =
+            crate::script::compile("on message EngineStatus { } on message EngineStatus { }")
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("duplicate handler"), "{error}");
     }
 
     /// The CAPL-style spellings are gone; the errors name the modern forms.
