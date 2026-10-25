@@ -52,12 +52,25 @@ pub struct ScriptNode {
     pending_lines: Vec<String>,
 }
 
-/// A positioned compile failure, mirrored to the web editor.
+/// A positioned compile or runtime failure, mirrored to the web editor.
 #[derive(Clone, Debug)]
 pub struct ScriptIssue {
     pub line: u32,
     pub col: Option<u32>,
     pub message: String,
+}
+
+/// Runtime failures are formatted by the VM as `line N: message`; the
+/// editor can mark that line even though there is no token column.
+fn runtime_issue(message: &str) -> Option<ScriptIssue> {
+    let rest = message.strip_prefix("line ")?;
+    let (line, text) = rest.split_once(':')?;
+    let line = line.trim().parse().ok()?;
+    Some(ScriptIssue {
+        line,
+        col: None,
+        message: text.trim().to_string(),
+    })
 }
 
 struct NodeRuntime {
@@ -373,8 +386,10 @@ impl ScriptNode {
             node_extern(dbc.as_deref(), name, args)
         }));
         if let Err(e) = vm.run() {
-            self.push_log(format!("[start] {e}"));
+            let message = e.to_string();
+            self.push_log(format!("[start] {message}"));
             self.errored = true;
+            self.issue = runtime_issue(&message);
             return;
         }
         let timers = handlers
@@ -817,8 +832,9 @@ impl ScriptNode {
                 input,
                 &mut out,
             );
-            if r.is_err() {
+            if let Err(error) = r {
                 self.errored = true;
+                self.issue = runtime_issue(&error);
                 return out;
             }
         }
@@ -894,8 +910,9 @@ impl ScriptNode {
                 input,
                 &mut out,
             );
-            if r.is_err() {
+            if let Err(error) = r {
                 self.errored = true;
+                self.issue = runtime_issue(&error);
                 return out;
             }
         }
@@ -915,15 +932,16 @@ impl ScriptNode {
         chunk: u16,
         input: &HostInput,
         out: &mut Vec<(u32, bool, Vec<u8>)>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), String> {
         // The handler's clock is the input's, not the step's: both deliveries
         // publish `now_s` from the same value they stamp their frames with.
         let now_us = (input.now_s.max(0.0) * 1e6) as u64;
         rt.vm.reset_budget(NODE_HANDLER_BUDGET);
         rt.vm.host_input = input.clone();
         if let Err(e) = rt.vm.run_handler(chunk) {
-            Self::push_log_into(log, log_dirty, pending_lines, format!("[error] {e}"));
-            return Err(());
+            let message = e.to_string();
+            Self::push_log_into(log, log_dirty, pending_lines, format!("[error] {message}"));
+            return Err(message);
         }
         Self::drain_vm(rt, log, log_dirty, pending_lines);
         // Named one-shot ops stay meaningful from any handler. The
@@ -1013,13 +1031,15 @@ impl ScriptNode {
             rt.vm.reset_budget(NODE_HANDLER_BUDGET);
             rt.vm.timer_ops.clear();
             if let Err(e) = rt.vm.run_handler(chunk) {
+                let message = e.to_string();
                 Self::push_log_into(
                     &mut self.log,
                     &mut self.log_dirty,
                     &mut self.pending_lines,
-                    format!("[error] {e}"),
+                    format!("[error] {message}"),
                 );
                 self.errored = true;
+                self.issue = runtime_issue(&message);
                 return out;
             }
             // Apply timer control the handler queued: a new period takes
@@ -1177,6 +1197,7 @@ impl ScriptNode {
 
     fn fail(&mut self, msg: &str) {
         self.errored = true;
+        self.issue = runtime_issue(msg);
         self.push_log(format!("[error] {msg}"));
     }
 
@@ -1812,6 +1833,9 @@ BO_ 512 GearInfo: 8 GearBox
         bad.start(None);
         bad.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
         assert!(bad.errored());
+        let issue = bad.issue().expect("runtime error reaches the editor");
+        assert_eq!(issue.line, 1);
+        assert!(issue.message.contains("division"), "{:?}", issue.message);
         assert!(
             bad.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default())
                 .is_empty(),
@@ -1819,6 +1843,17 @@ BO_ 512 GearInfo: 8 GearBox
         );
         bad.start(None);
         assert!(bad.running(), "a restart clears the error");
+        assert!(bad.issue().is_none(), "a restart clears the diagnostic");
+    }
+
+    #[test]
+    fn runtime_errors_in_start_handlers_keep_their_line() {
+        let mut n = node("on start {\n    print(1 / 0);\n}");
+        n.start(None);
+        assert!(n.errored());
+        let issue = n.issue().expect("start error reaches the editor");
+        assert_eq!(issue.line, 2);
+        assert!(issue.message.contains("division"), "{:?}", issue.message);
     }
 
     #[test]
@@ -2264,11 +2299,29 @@ BO_ 256 Real: 2 ECU
         n.dispatch_frame(0, 0x100, false, false, &[], &input);
         assert_eq!(n.log_snapshot(), ["1.5", "2400.0"]);
 
-        // An unseen signal is a runtime error, not a silent zero.
-        let mut n2 = node(r#"on message 0x100 { print(sig(0x100, "Nope")); }"#);
+        // An unseen signal reads nil; defined() is the explicit guard.
+        let mut n2 = node(
+            r#"
+                on message 0x100 {
+                    let v = sig(0x100, "Nope");
+                    print(v, defined(v));
+                }
+            "#,
+        );
         n2.start(None);
         n2.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
-        assert!(n2.errored(), "a missing signal must not read as zero");
+        assert_eq!(n2.log_snapshot(), ["nil false"]);
+        assert!(!n2.errored(), "an unseen read must not park the node");
+    }
+
+    #[test]
+    fn unseen_signal_arithmetic_is_an_explicit_error() {
+        let mut n = node("on start {\n    print(sig(0x100, \"RPM\") + 1);\n}");
+        n.start(None);
+        assert!(n.errored());
+        let issue = n.issue().expect("runtime error reaches the editor");
+        assert_eq!(issue.line, 2);
+        assert!(issue.message.contains("nil"), "{:?}", issue.message);
     }
 
     /// `fr_sig(cluster, slot, "Name")` reads the FlexRay side of the same
@@ -2307,13 +2360,18 @@ BO_ 256 Real: 2 ECU
             "the cluster index selects which bus the slot number means"
         );
 
-        let mut n2 = node(r#"on message 0x100 { print(fr_sig(0, 9, "Never")); }"#);
+        let mut n2 = node(
+            r#"
+                on message 0x100 {
+                    let v = fr_sig(0, 9, "Never");
+                    print(v, defined(v));
+                }
+            "#,
+        );
         n2.start(None);
         n2.dispatch_frame(0, 0x100, false, false, &[], &input);
-        assert!(
-            n2.errored(),
-            "a slot that never arrived must not read as zero"
-        );
+        assert_eq!(n2.log_snapshot(), ["nil false"]);
+        assert!(!n2.errored(), "an unseen FR slot reads nil");
     }
 
     /// A named read resolves against the node channel's database at start,
@@ -2853,7 +2911,7 @@ BO_ 256 Real: 2 ECU
         let mut n = node(
             r#"
                 let hits = 0;
-                on fr slot 5 { hits = hits + 1; print(fr_sig(0, 5, "Nope")); }
+                on fr slot 5 { hits = hits + 1; print(1 / 0); }
             "#,
         );
         n.start(None);
@@ -2861,7 +2919,7 @@ BO_ 256 Real: 2 ECU
         let log = n.log_snapshot();
         assert!(
             log.last().is_some_and(|l| l.starts_with("[error]")),
-            "an unseen signal is a runtime error, not a silent zero: {log:?}"
+            "a failing FR handler parks the node: {log:?}"
         );
         assert!(n.errored());
         assert!(

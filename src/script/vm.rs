@@ -338,13 +338,19 @@ impl Vm {
                     }
                 }
             }
-            Op::Eq => {
+            Op::Eq | Op::Ne => {
                 let (b, a) = self.pop2()?;
-                self.stack.push(Value::Bool(values_eq(&a, &b)));
-            }
-            Op::Ne => {
-                let (b, a) = self.pop2()?;
-                self.stack.push(Value::Bool(!values_eq(&a, &b)));
+                if matches!(a, Value::Nil) || matches!(b, Value::Nil) {
+                    return Err(VmError(
+                        "cannot compare nil; check the read with defined(...)".into(),
+                    ));
+                }
+                let equal = values_eq(&a, &b);
+                self.stack.push(Value::Bool(if matches!(op, Op::Eq) {
+                    equal
+                } else {
+                    !equal
+                }));
             }
             Op::Lt => self.compare(|o| o == std::cmp::Ordering::Less)?,
             Op::Le => self.compare(|o| o != std::cmp::Ordering::Greater)?,
@@ -590,11 +596,7 @@ impl Vm {
                 };
                 match self.host_input.signals.get(&(*id as u32, sig.clone())) {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "sig: no value for {id:#x} {sig:?} (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
@@ -613,11 +615,7 @@ impl Vm {
                 };
                 match self.host_input.signals.get(&(id, sig.clone())) {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "sig_named: no value for {msg}::{sig} (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
@@ -638,31 +636,23 @@ impl Vm {
                 let key = (*bus as u8, *slot as u16, sig.clone());
                 match self.host_input.fr_signals.get(&key) {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "fr_sig: no value for FR{bus} slot {slot} {sig:?} (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
             // `derived("Name")`: a core-sampled math channel, addressed by
             // its definition name. There is no id to type and no bus to
             // guess, which is why it does not overload `sig`. A lane that has
-            // not produced its first sample reads 0 -- a script that runs on
-            // `on start` or on the first frame must not be killed by "not
-            // sampled yet"; `sys_get` treats undefined keys the same way.
+            // not produced its first sample reads nil, the same as an unseen
+            // bus signal; `defined()` is the explicit guard.
             "derived" => {
                 let Value::Str(name) = &args[0] else {
                     return Err(VmError("derived(\"Name\") needs a string".into()));
                 };
-                let value = self
-                    .host_input
-                    .derived_signals
-                    .get(name)
-                    .copied()
-                    .unwrap_or(0.0);
-                self.stack.push(Value::Float(value));
+                match self.host_input.derived_signals.get(name) {
+                    Some(value) => self.stack.push(Value::Float(*value)),
+                    None => self.stack.push(Value::Nil),
+                }
                 return Ok(());
             }
             // `fr_sig_named(cluster, "Name")`: the dotted FlexRay read. The
@@ -684,11 +674,7 @@ impl Vm {
                 };
                 match self.host_input.fr_signals.get(&(bus, slot, sig.clone())) {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "fr_sig_named: no value for FR{bus} slot {slot} {sig:?} (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
@@ -710,12 +696,7 @@ impl Vm {
                 };
                 match self.host_input.fr_signals.get(&(bus, slot, sig.clone())) {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "fr_sig_bus: no value for {bus_name:?} slot {slot} {sig:?} \
-                             (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
@@ -736,11 +717,7 @@ impl Vm {
                     .get(&(bus, frame.clone(), sig.clone()))
                 {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "eth_sig: no value for ETH{bus} {frame:?} {sig:?} (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
@@ -771,12 +748,7 @@ impl Vm {
                     .get(&(bus, frame.clone(), sig.clone()))
                 {
                     Some(v) => self.stack.push(Value::Float(*v)),
-                    None => {
-                        return Err(VmError(format!(
-                            "eth_sig_bus: no value for {bus_name:?} {frame:?} {sig:?} \
-                             (not seen yet)"
-                        )));
-                    }
+                    None => self.stack.push(Value::Nil),
                 }
                 return Ok(());
             }
@@ -980,20 +952,17 @@ impl Vm {
                 self.emitted.push((name.clone(), v));
             }
             "sys_get" => {
-                // sys_get("ns::name"): reads the live system variable.
-                // An undefined key reads 0.0 -- the host reports unknown
-                // keys at node start, so a silent zero here only happens
-                // to a variable deleted mid-run.
+                // sys_get("ns::name"): reads the live system variable. An
+                // undefined key reads nil -- the host reports unknown keys at
+                // node start, so this only happens for a variable deleted
+                // mid-run; `defined()` keeps the script explicit about it.
                 let Value::Str(key) = &args[0] else {
                     return Err(VmError("sys_get(\"ns::name\") needs a string".into()));
                 };
-                let v = self
-                    .host_input
-                    .sysvars
-                    .get(key.as_str())
-                    .copied()
-                    .unwrap_or(0.0);
-                self.stack.push(Value::Float(v));
+                match self.host_input.sysvars.get(key.as_str()) {
+                    Some(value) => self.stack.push(Value::Float(*value)),
+                    None => self.stack.push(Value::Nil),
+                }
                 return Ok(());
             }
             "sys_set" => {
@@ -1101,6 +1070,13 @@ impl Vm {
                     .push(Value::Array(std::sync::Arc::new(std::sync::Mutex::new(
                         vec![Value::Nil; *n as usize],
                     ))));
+                return Ok(());
+            }
+            // `defined(x)`: the explicit presence check for a read that may
+            // not have produced a value yet. It tests any value, so the same
+            // guard works for signals, derived lanes and sysvars.
+            "defined" => {
+                self.stack.push(Value::Bool(!matches!(args[0], Value::Nil)));
                 return Ok(());
             }
             "len" => match &args[0] {
@@ -1856,12 +1832,12 @@ mod tests {
     /// `sys_get` reads the host-published variable table; an undefined
     /// key reads 0.0 (the host reports unknown keys at node start).
     #[test]
-    fn sys_get_reads_the_host_table_and_defaults_to_zero() {
+    fn sys_get_reads_the_host_table_and_reads_missing_as_nil() {
         let script = compile(
             r#"
                 let a = sys_get("Demo::Speed");
                 let b = sys_get("Demo::Missing");
-                print(a, b);
+                print(a, b, defined(a), defined(b));
             "#,
         )
         .unwrap();
@@ -1870,19 +1846,18 @@ mod tests {
             .sysvars
             .insert("Demo::Speed".to_string(), 42.5);
         vm.run().unwrap();
-        assert_eq!(vm.output, ["42.5 0.0"], "undefined keys read zero");
+        assert_eq!(vm.output, ["42.5 nil true false"]);
     }
 
     /// `derived("Name")` reads the core's sampled math channels by definition
-    /// name. Before the first sample it reads 0, so a handler that runs at
-    /// start is not killed by a lane that simply has not ticked yet.
+    /// name. Before the first sample it reads nil, like an unseen bus signal.
     #[test]
-    fn derived_reads_the_core_sampled_lane_and_defaults_to_zero() {
+    fn derived_reads_the_core_sampled_lane_and_reads_missing_as_nil() {
         let script = compile(
             r#"
                 let v = derived("Speed error");
                 let missing = derived("Missing");
-                print(v, missing);
+                print(v, missing, defined(v), defined(missing));
             "#,
         )
         .unwrap();
@@ -1891,7 +1866,7 @@ mod tests {
             .derived_signals
             .insert("Speed error".to_string(), 7.5);
         vm.run().unwrap();
-        assert_eq!(vm.output, ["7.5 0.0"]);
+        assert_eq!(vm.output, ["7.5 nil true false"]);
     }
 
     /// `sys_set` queues a write for the host; the queue drains like the
@@ -2109,7 +2084,7 @@ mod tests {
 
     /// `ETH0.FrameA.Speed`: both names are checked against the ARXML at
     /// start; the runtime value comes from the same decoded flow table the
-    /// observers use. An unseen signal is an error, not a zero.
+    /// observers use. An unseen signal reads nil.
     #[test]
     fn a_dotted_ethernet_read_uses_the_host_signal_table() {
         let script = compile("print(ETH1.FrameA.Speed);").unwrap();
@@ -2125,8 +2100,8 @@ mod tests {
         assert_eq!(vm.output, ["7.5"]);
 
         let mut vm = Vm::new(compile("print(ETH0.FrameA[\"Vehicle Speed\"]);").unwrap());
-        let e = vm.run().unwrap_err().to_string();
-        assert!(e.contains("not seen yet"), "{e}");
+        vm.run().unwrap();
+        assert_eq!(vm.output, ["nil"]);
     }
 
     /// `set_fr_sig(路, 槽, "Name", 值)` queues the write for the host, which is

@@ -334,10 +334,13 @@ send(0x200, buf);
 
 ### sig(id, "Name")
 
-读取信号 `Name` 在报文 `id` 上的最新物理值。信号尚未出现时产生运行时错误，不会静默给 0。
+读取信号 `Name` 在报文 `id` 上的最新物理值。信号尚未出现时读到 `nil`，用 `defined(...)` 判断；直接把 `nil` 用于算术、比较或条件会产生明确的运行时错误，不会静默给 0。
 
 ```c
 let rpm = sig(0x100, "EngineSpeed");
+if (defined(rpm)) {
+    print(rpm);
+}
 ```
 
 ### Message.Signal / Message["Signal Name"]
@@ -368,7 +371,7 @@ on fr slot 13 {
 - 启动时在该路的集群描述里把信号名解析成**唯一槽号**；名字不存在、或这一路没有描述，会在日志里报 `[check]`。
 - 同一个信号名声明在**多个不同槽**时无法判断该读哪一个，会报歧义；改用落槽号的 `fr_sig(bus, slot, "Name")`。同一槽被多帧按周期相位轮流占用不算歧义——它们读的是同一个线上槽。
 - 换集群描述（含测量中重载）会就地重解析，日志写 `[reload] FR0.CarSpeed slot 13 -> 20`。
-- 读到的值属于该槽**实际到达的那一帧**；信号尚未出现仍是运行时错误。
+- 读到的值属于该槽**实际到达的那一帧**；信号尚未出现时读到 `nil`，用 `defined(...)` 判断。
 - 不想记编号时，可以用集群描述里的名字选中该路：`FR.PowerTrain.CarSpeed`，非标识符名字用 `FR["Power Train"]["Car Speed"]`。名字在节点启动时解析；找不到或同名多路会报 `[check]`，此时回退编号写法。`fr_sig_bus("PowerTrain", "CarSpeed")` 是等价函数形式。
 
 ### ETHn.Frame.Signal / ETHn["Frame"]["Signal Name"]
@@ -383,13 +386,13 @@ on message 0x100 {
 ```
 
 - 启动时用该路的 ARXML 核对帧名和信号名；帧不存在或该帧不声明这个信号，都会报 `[check]`。
-- 值来自与曲线 / Data 相同的按流解码表，只对 ARXML 能**唯一匹配**的流有效；没匹配上的流读值是运行时错误，不会猜成某个帧。
+- 值来自与曲线 / Data 相同的按流解码表，只对 ARXML 能**唯一匹配**的流有效；没匹配上的流读 `nil`，用 `defined(...)` 判断。
 - 目前只读：Ethernet 发送仍走生成器条目。
 - 命名形式：`ETH.Body.FrameA.Speed` / `ETH["Body"]["Frame A"]["Speed X"]`，`Body` 是 ARXML 的 cluster 名；函数形式 `eth_sig_bus("Body", "FrameA", "Speed")`。名字找不到或多路同名同样报 `[check]`，编号形式始终可用。
 
 ### fr_sig(cluster, slot, "Name")
 
-FlexRay 侧的同一种读数：该路（Buses 表里行末的 `#n`）上，槽 `slot` 最近一帧解出的信号 `Name` 物理值。信号尚未出现时同样是运行时错误。
+FlexRay 侧的同一种读数：该路（Buses 表里行末的 `#n`）上，槽 `slot` 最近一帧解出的信号 `Name` 物理值。信号尚未出现时读到 `nil`，用 `defined(...)` 判断。
 
 ```c
 let speed = fr_sig(0, 13, "CarSpeed");
@@ -407,7 +410,7 @@ let error = derived("Speed error");
 emit_value("ErrorAlarm", error > 5);
 ```
 
-派生通道在每一步结尾采样，因此脚本在这一步读到的是**上一步结束时的值**。尚未采到第一点（`on start`、首个帧处理器，或名字还没有定义）时读 **0**，与 `sys_get` 读取未定义变量一致——脚本不会因此停下。条件没有采样（源信号未选中或历史为空）时，触发器的 `+ Derived` 规则保持原电平。
+派生通道在每一步结尾采样，因此脚本在这一步读到的是**上一步结束时的值**。尚未采到第一点（`on start`、首个帧处理器，或名字还没有定义）时读 `nil`，与总线信号一致；脚本不会因此停下，用 `defined(...)` 判断后再使用。条件没有采样（源信号未选中或历史为空）时，触发器的 `+ Derived` 规则保持原电平。
 
 ### fr_send(cluster, slot, b0, ...) / fr_send(cluster, slot, buffer)
 
@@ -468,12 +471,24 @@ on timer 10 {
 
 ### sys_get("ns::name") / sys_set("ns::name", value)
 
-读写**系统变量**——在 View > System Variables 里定义的命名空间值（namespace + name + 初值 + 可选界限 + 单位/备注，定义随工程保存）。每次测量开始所有变量复位为初值；每个变量同时发布为一条可观测流，Data / Graphics 按 namespace 分组选用。写入被夹到定义的界限内；引用未定义的变量在节点启动时报出来，运行中写未定义变量被丢弃并记日志（节点继续运行）。
+读写**系统变量**——在 View > System Variables 里定义的命名空间值（namespace + name + 初值 + 可选界限 + 单位/备注，定义随工程保存）。每次测量开始所有变量复位为初值；每个变量同时发布为一条可观测流，Data / Graphics 按 namespace 分组选用。写入被夹到定义的界限内；引用未定义的变量在节点启动时报出来，运行中读未定义变量得到 `nil`，写未定义变量被丢弃并记日志（节点继续运行）。
 
 ```c
 on timer 50 {
     let target = sys_get("Demo::Setpoint");
-    sys_set("Demo::Actual", target * 0.9);
+    if (defined(target)) {
+        sys_set("Demo::Actual", target * 0.9);
+    }
+}
+```
+
+### defined(value)
+
+检查一次读取是否已经有值；对总线信号、派生通道、系统变量和数组元素都适用。尚未出现时返回 `false`。`nil` 不能直接参与算术、比较或作为条件，必须先经过 `defined(...)`：
+
+```c
+if (defined(EngineStatus.RPM)) {
+    print("rpm", EngineStatus.RPM);
 }
 ```
 

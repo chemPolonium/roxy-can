@@ -1774,7 +1774,7 @@ fn deleting_a_derived_channel_drops_its_trigger_rules() {
 }
 
 /// A script may read a derived lane at start, before the first sample. The
-/// value reads 0 and the node stays healthy instead of being marked errored.
+/// value reads nil and the node stays healthy instead of being marked errored.
 #[test]
 fn a_script_can_read_derived_at_start() {
     let mut app = App::headless();
@@ -1787,7 +1787,7 @@ fn a_script_can_read_derived_at_start() {
     let id = app.snap.nodes[0].id;
     app.send(crate::bus::BusCommand::SetNodeSource {
         id,
-        source: "on start { print(derived(\"Late\")); }".to_string(),
+        source: "on start { print(defined(derived(\"Late\")), derived(\"Late\")); }".to_string(),
     });
     app.settle();
     app.start_virtual();
@@ -1799,8 +1799,8 @@ fn a_script_can_read_derived_at_start() {
         node.log
     );
     assert!(
-        node.log.iter().any(|line| line.contains("0")),
-        "the lane reads zero: {:?}",
+        node.log.iter().any(|line| line == "false nil"),
+        "the lane reads nil until sampled: {:?}",
         node.log
     );
     app.stop();
@@ -6745,8 +6745,8 @@ fn an_errored_handler_discards_its_emissions() {
     let id = app.snap.nodes[0].id;
     app.send(crate::bus::BusCommand::SetNodeSource {
         id,
-        // Reading an unseen signal is the easiest runtime error.
-        source: "on start { emit_value(\"Ghost\", 1); sig(0x999, \"Nope\"); }".to_string(),
+        // Division by zero is the easiest runtime error.
+        source: "on start { emit_value(\"Ghost\", 1); print(1 / 0); }".to_string(),
     });
     app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
     app.start_virtual();
@@ -6757,7 +6757,7 @@ fn an_errored_handler_discards_its_emissions() {
     }
 
     let node = app.snap.nodes.iter().find(|n| n.id == id).expect("node");
-    assert!(node.errored, "the bad sig() tripped the fuse");
+    assert!(node.errored, "the division tripped the fuse");
     assert!(
         !app.snap.emitted.iter().any(|(k, _)| k.name() == "Ghost"),
         "the partial emission never published"
