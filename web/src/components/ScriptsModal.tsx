@@ -109,6 +109,8 @@ function escapeRegExp(text: string): string {
 export interface LocalSymbol {
   name: string;
   kind: "let" | "fn" | "param";
+  /// Declared parameters for a top-level function.
+  params?: string[];
 }
 
 /// Declarations visible at the caret: top-level `fn` names and `let`
@@ -188,11 +190,11 @@ export function localSymbols(source: string, caret: number): LocalSymbol[] {
       if (isStart(source[at] ?? "")) {
         let nameEnd = at + 1;
         while (nameEnd < source.length && isPart(source[nameEnd])) nameEnd += 1;
-        functions.push({ name: source.slice(at, nameEnd), kind: "fn" });
+        const name = source.slice(at, nameEnd);
+        let params: string[] = [];
         let paren = nameEnd;
         while (paren < source.length && /\s/.test(source[paren])) paren += 1;
         if (source[paren] === "(") {
-          const params: string[] = [];
           let p = paren + 1;
           while (p < source.length && source[p] !== ")") {
             if (isStart(source[p])) {
@@ -206,6 +208,7 @@ export function localSymbols(source: string, caret: number): LocalSymbol[] {
           }
           pending = { params };
         }
+        functions.push({ name, kind: "fn", params });
       }
     }
     i = end;
@@ -223,16 +226,16 @@ export function localSymbols(source: string, caret: number): LocalSymbol[] {
 
   const seen = new Set<string>();
   const out: LocalSymbol[] = [];
-  const push = (name: string, kind: LocalSymbol["kind"]) => {
-    if (seen.has(name)) return;
-    seen.add(name);
-    out.push({ name, kind });
+  const push = (symbol: LocalSymbol) => {
+    if (seen.has(symbol.name)) return;
+    seen.add(symbol.name);
+    out.push(symbol);
   };
-  for (const name of activeParams) push(name, "param");
-  for (const fn of functions) push(fn.name, fn.kind);
+  for (const name of activeParams) push({ name, kind: "param" });
+  for (const fn of functions) push(fn);
   for (const variable of lets) {
     if (variable.block !== -1 && !open.has(variable.block)) continue;
-    push(variable.name, "let");
+    push({ name: variable.name, kind: "let" });
   }
   return out;
 }
@@ -1713,14 +1716,23 @@ export function ScriptsModal({
   const refreshSignature = (textarea: HTMLTextAreaElement) => {
     const caret = textarea.selectionStart ?? 0;
     const call = callAtCaret(textarea.value, caret);
-    const fn = call ? functions.find((item) => item.name === call.name) : null;
-    if (!call || !fn) {
+    if (!call) {
+      setSignature(null);
+      return;
+    }
+    const builtin = functions.find((item) => item.name === call.name);
+    const local = builtin
+      ? null
+      : localSymbols(textarea.value, caret).find(
+          (symbol) => symbol.kind === "fn" && symbol.name === call.name,
+        );
+    if (!builtin && !local) {
       setSignature(null);
       return;
     }
     setSignature({
-      name: fn.name,
-      args: signatureArgs(fn.usage),
+      name: call.name,
+      args: builtin ? signatureArgs(builtin.usage) : (local?.params ?? []),
       active: call.active,
       ...caretPlacement(textarea, caret, 340, 28),
     });

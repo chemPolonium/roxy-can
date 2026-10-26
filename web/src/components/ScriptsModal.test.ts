@@ -140,6 +140,14 @@ describe("local symbols", () => {
     expect(helper?.insert).toBe("helper()");
   });
 
+  it("keeps local function parameters for signature help", () => {
+    const symbols = localSymbols("fn helper(alpha, beta) {\n}", 0);
+    expect(symbols.find((symbol) => symbol.name === "helper")?.params).toEqual([
+      "alpha",
+      "beta",
+    ]);
+  });
+
   it("lets a local shadow a builtin without inserting a call", () => {
     const result = complete("let print = 1;\npri|");
     const prints = result?.items.filter((item) => item.label === "print");
