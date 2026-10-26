@@ -317,6 +317,32 @@ impl App {
         });
     }
 
+    /// Edits a replay block wholesale. An enabled block reloads its queue
+    /// from the log, so the new declaration takes effect immediately.
+    pub fn set_replay_block(
+        &mut self,
+        id: u64,
+        channel: u8,
+        name: String,
+        path: String,
+        node_filter: Option<String>,
+        ids: Vec<(u32, bool)>,
+    ) {
+        if channel as usize >= self.snap.channel_count {
+            return;
+        }
+        let attached = node_filter.clone().map(|node| (channel, node));
+        self.send(crate::bus::BusCommand::SetReplayBlock {
+            id,
+            name,
+            channel,
+            path,
+            node_filter,
+            attached,
+            ids,
+        });
+    }
+
     /// Ticks a replay block. Enabling loads its queue from the log right
     /// away, so a broken path surfaces in the status line.
     pub fn set_replay_block_enabled(&mut self, id: u64, on: bool) {

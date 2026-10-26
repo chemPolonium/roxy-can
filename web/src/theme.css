@@ -363,7 +363,8 @@
 [data-theme="light"] .busstat-row,
 [data-theme="light"] .proto-row,
 [data-theme="light"] .replay-row,
-[data-theme="light"] .gen-block-row {
+[data-theme="light"] .gen-block-row,
+[data-theme="light"] .gen-block-edit {
   border-bottom-color: #e6ebf1;
 }
 

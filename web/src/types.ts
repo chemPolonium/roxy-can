@@ -179,6 +179,7 @@ export interface ReplayBlock {
   channel: number;
   path: string;
   nodeFilter: string | null;
+  ids: [number, boolean][];
   enabled: boolean;
   frames: number;
   error: string | null;
@@ -696,6 +697,15 @@ export type Command =
       name: string;
       path: string;
       node: string | null;
+    }
+  | {
+      type: "set_replay_block";
+      id: number;
+      channel: number;
+      name: string;
+      path: string;
+      node: string | null;
+      ids: [number, boolean][];
     }
   | { type: "set_replay_block_enabled"; id: number; on: boolean }
   | { type: "remove_replay_block"; id: number }

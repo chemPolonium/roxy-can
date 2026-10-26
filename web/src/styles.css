@@ -2562,6 +2562,37 @@ button.mini.on {
   font-size: 9.5px;
 }
 
+.gen-block-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 8px;
+  border-bottom: 1px solid #161d26;
+}
+
+.gen-block-edit > input:first-of-type {
+  width: 120px;
+}
+
+.gen-block-edit > input:nth-of-type(2) {
+  width: 130px;
+}
+
+.gen-block-edit > input:nth-of-type(3) {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+
+.gen-block-edit select {
+  width: 90px;
+}
+
+.gen-block-edit .gen-block-path {
+  max-width: 150px;
+  margin-left: 0;
+}
+
 .gen-block-add {
   display: flex;
   align-items: center;

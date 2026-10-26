@@ -5883,6 +5883,32 @@ fn a_replay_block_streams_its_log_into_the_simulation() {
     std::fs::remove_file(&path).ok();
 }
 
+/// Editing a replay block rewrites its declaration in place, including
+/// the id filter and the DBC node it is attached to.
+#[test]
+fn a_replay_block_can_be_edited_in_place() {
+    let mut app = App::headless();
+    app.add_replay_block(0, "old".to_string(), "old.asc".to_string(), None, None);
+    app.settle();
+    let id = app.snap.blocks[0].id;
+
+    app.set_replay_block(
+        id,
+        0,
+        "new".to_string(),
+        "new.asc".to_string(),
+        Some("EngineECU".to_string()),
+        vec![(0x100, false)],
+    );
+    app.settle();
+    let block = app.snap.blocks.first().expect("block view");
+    assert_eq!(block.name, "new");
+    assert_eq!(block.path, "new.asc");
+    assert_eq!(block.node_filter.as_deref(), Some("EngineECU"));
+    assert_eq!(block.ids, vec![(0x100, false)]);
+    assert_eq!(block.attached, Some((0, "EngineECU".to_string())));
+}
+
 /// In Replay mode the log itself is the source; replay blocks stay
 /// silent so no frame is ever delivered twice.
 #[test]

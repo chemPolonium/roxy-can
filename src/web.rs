@@ -1799,6 +1799,14 @@ enum WebCommand {
         path: String,
         node: Option<String>,
     },
+    SetReplayBlock {
+        id: u64,
+        channel: u8,
+        name: String,
+        path: String,
+        node: Option<String>,
+        ids: Vec<(u32, bool)>,
+    },
     SetReplayBlockEnabled {
         id: u64,
         on: bool,
@@ -2702,6 +2710,27 @@ fn app_loop(
                     };
                     let attached = node.clone().map(|node| (channel, node));
                     app.add_replay_block(channel, name, path, node, attached);
+                }
+                WebCommand::SetReplayBlock {
+                    id,
+                    channel,
+                    name,
+                    path,
+                    node,
+                    ids,
+                } => {
+                    let node = node.filter(|value| !value.trim().is_empty());
+                    let name = if name.trim().is_empty() {
+                        app.snap
+                            .blocks
+                            .iter()
+                            .find(|block| block.id == id)
+                            .map(|block| block.name.clone())
+                            .unwrap_or_else(|| "Block".to_string())
+                    } else {
+                        name
+                    };
+                    app.set_replay_block(id, channel, name, path, node, ids);
                 }
                 WebCommand::SetReplayBlockEnabled { id, on } => {
                     app.set_replay_block_enabled(id, on);
@@ -4037,6 +4066,7 @@ struct WebReplayBlock {
     channel: u8,
     path: String,
     node_filter: Option<String>,
+    ids: Vec<(u32, bool)>,
     enabled: bool,
     frames: usize,
     error: Option<String>,
@@ -4558,6 +4588,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             channel: block.channel,
             path: block.path.clone(),
             node_filter: block.node_filter.clone(),
+            ids: block.ids.clone(),
             enabled: block.enabled,
             frames: block.frames,
             error: block.last_error.clone(),

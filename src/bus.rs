@@ -479,7 +479,6 @@ pub enum BusCommand {
     },
     /// Edit a replay block's declaration wholesale. An enabled block
     /// reloads its queue from the log, so the edit takes effect at once.
-    #[cfg(test)]
     SetReplayBlock {
         id: u64,
         name: String,
@@ -1610,7 +1609,6 @@ impl BusCore {
                 attached,
                 ids,
             } => self.add_replay_block(name, channel, path, node_filter, attached, ids, status),
-            #[cfg(test)]
             BusCommand::SetReplayBlock {
                 id,
                 name,
@@ -4093,7 +4091,6 @@ impl BusCore {
     // The signature mirrors the `SetReplayBlock` command one-to-one; a
     // payload struct would just relocate the field list.
     #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
     fn set_replay_block(
         &mut self,
         id: u64,

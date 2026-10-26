@@ -10,6 +10,7 @@ import type {
   TxSource,
 } from "../types";
 import { FilePick } from "./FilePick";
+import { formatReplayIds, parseReplayIds } from "../replayIds";
 
 interface Props {
   entries: TxEntry[];
@@ -41,6 +42,14 @@ interface Props {
     node: string | null,
   ) => void;
   onBlockToggle: (id: number, on: boolean) => void;
+  onBlockEdit: (
+    id: number,
+    channel: number,
+    name: string,
+    path: string,
+    node: string | null,
+    ids: [number, boolean][],
+  ) => void;
   onBlockRemove: (id: number) => void;
   onClose: () => void;
 }
@@ -757,12 +766,50 @@ export function GeneratorModal({
   onSimulate,
   onBlockAdd,
   onBlockToggle,
+  onBlockEdit,
   onBlockRemove,
   onClose,
 }: Props) {
   const [blockName, setBlockName] = useState("");
   const [blockNode, setBlockNode] = useState("");
   const [blockBus, setBlockBus] = useState(buses[0]?.index ?? 0);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editNode, setEditNode] = useState("");
+  const [editBus, setEditBus] = useState(0);
+  const [editPath, setEditPath] = useState("");
+  const [editIds, setEditIds] = useState("");
+  const [editError, setEditError] = useState("");
+
+  const beginBlockEdit = (block: ReplayBlock) => {
+    setEditId(block.id);
+    setEditName(block.name);
+    setEditNode(block.nodeFilter ?? "");
+    setEditBus(block.channel);
+    setEditPath(block.path);
+    setEditIds(formatReplayIds(block.ids));
+    setEditError("");
+  };
+  const saveBlockEdit = (block: ReplayBlock) => {
+    if (!editPath.trim()) {
+      setEditError("choose a log file");
+      return;
+    }
+    const parsed = parseReplayIds(editIds);
+    if (parsed.error) {
+      setEditError(parsed.error);
+      return;
+    }
+    onBlockEdit(
+      block.id,
+      editBus,
+      editName.trim() || block.name,
+      editPath.trim(),
+      editNode.trim() || null,
+      parsed.ids,
+    );
+    setEditId(null);
+  };
   useEffect(() => {
     if (!buses.some((bus) => bus.index === blockBus)) {
       setBlockBus(buses[0]?.index ?? 0);
@@ -840,48 +887,122 @@ export function GeneratorModal({
               </p>
             ) : (
               blocks.map((block) => (
-                <div
-                  class={`gen-block-row ${block.enabled ? "on" : ""}`}
-                  key={block.id}
-                >
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={block.enabled}
-                      onChange={(event) =>
-                        onBlockToggle(
-                          block.id,
-                          (event.target as HTMLInputElement).checked,
-                        )
-                      }
-                    />
-                    On
-                  </label>
-                  <strong>{block.name}</strong>
-                  <span>
-                    {buses.find((bus) => bus.index === block.channel)?.name ??
-                      `CAN${block.channel + 1}`}
-                    {" · "}
-                    {block.nodeFilter ?? "all ids"}
-                  </span>
-                  <em>
-                    {block.enabled ? `${block.frames} frames` : "off"}
-                  </em>
-                  <span class="gen-block-path" title={block.path}>
-                    {block.path.split(/[\\/]/).pop()}
-                  </span>
-                  {block.error && (
-                    <span class="gen-block-error" title={block.error}>
-                      load failed
+                <div class="gen-block-item" key={block.id}>
+                  <div class={`gen-block-row ${block.enabled ? "on" : ""}`}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={block.enabled}
+                        onChange={(event) =>
+                          onBlockToggle(
+                            block.id,
+                            (event.target as HTMLInputElement).checked,
+                          )
+                        }
+                      />
+                      On
+                    </label>
+                    <strong>{block.name}</strong>
+                    <span>
+                      {buses.find((bus) => bus.index === block.channel)?.name ??
+                        `CAN${block.channel + 1}`}
+                      {" · "}
+                      {block.nodeFilter ?? "all nodes"}
+                      {block.ids.length > 0 &&
+                        ` · ${block.ids.length} id${block.ids.length === 1 ? "" : "s"}`}
                     </span>
+                    <em>
+                      {block.enabled ? `${block.frames} frames` : "off"}
+                    </em>
+                    <span class="gen-block-path" title={block.path}>
+                      {block.path.split(/[\\/]/).pop()}
+                    </span>
+                    {block.error && (
+                      <span class="gen-block-error" title={block.error}>
+                        load failed
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        editId === block.id
+                          ? setEditId(null)
+                          : beginBlockEdit(block)
+                      }
+                    >
+                      {editId === block.id ? "Close" : "Edit"}
+                    </button>
+                    <button
+                      type="button"
+                      class="bus-remove"
+                      onClick={() => onBlockRemove(block.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {editId === block.id && (
+                    <div class="gen-block-edit">
+                      <input
+                        value={editName}
+                        placeholder="Block name"
+                        onInput={(event) =>
+                          setEditName(
+                            (event.target as HTMLInputElement).value,
+                          )
+                        }
+                      />
+                      <select
+                        value={editBus}
+                        onChange={(event) =>
+                          setEditBus(
+                            Number((event.target as HTMLSelectElement).value),
+                          )
+                        }
+                      >
+                        {buses.map((bus) => (
+                          <option key={bus.index} value={bus.index}>
+                            {bus.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={editNode}
+                        placeholder="DBC node (optional)"
+                        onInput={(event) =>
+                          setEditNode(
+                            (event.target as HTMLInputElement).value,
+                          )
+                        }
+                      />
+                      <input
+                        value={editIds}
+                        placeholder="IDs (hex: 100, 3F4x; empty = all)"
+                        title="Filter the block to these CAN ids; a trailing x forces an extended id"
+                        onInput={(event) =>
+                          setEditIds(
+                            (event.target as HTMLInputElement).value,
+                          )
+                        }
+                      />
+                      <span class="gen-block-path" title={editPath}>
+                        {editPath.split(/[\\/]/).pop() || "no log"}
+                      </span>
+                      <FilePick
+                        label="Replace log…"
+                        accept=".asc,.blf"
+                        onPick={(path) => setEditPath(path)}
+                      />
+                      <button type="button" onClick={() => saveBlockEdit(block)}>
+                        Save
+                      </button>
+                      <button type="button" onClick={() => setEditId(null)}>
+                        Cancel
+                      </button>
+                      {editError && (
+                        <span class="gen-block-error">{editError}</span>
+                      )}
+                    </div>
                   )}
-                  <button
-                    type="button"
-                    class="bus-remove"
-                    onClick={() => onBlockRemove(block.id)}
-                  >
-                    Remove
-                  </button>
                 </div>
               ))
             )}

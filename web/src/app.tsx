@@ -3370,6 +3370,17 @@ export function App() {
           onBlockToggle={(id, on) =>
             void run({ type: "set_replay_block_enabled", id, on })
           }
+          onBlockEdit={(id, channel, name, path, node, ids) =>
+            void run({
+              type: "set_replay_block",
+              id,
+              channel,
+              name,
+              path,
+              node,
+              ids,
+            })
+          }
           onBlockRemove={(id) =>
             void run({ type: "remove_replay_block", id })
           }
