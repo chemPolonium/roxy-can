@@ -556,6 +556,138 @@ fn generator_frames_are_spaced_exactly_one_cycle() {
 }
 
 #[test]
+fn generator_brs_is_fd_only_and_reaches_the_wire() {
+    let mut app = App::headless();
+    app.add_tx(0, 0x77B);
+    let brs = |app: &App| {
+        app.snap
+            .tx
+            .iter()
+            .find(|t| t.channel == 0 && t.id == 0x77B)
+            .map(|t| (t.fd, t.brs))
+            .expect("generator row")
+    };
+    app.send(crate::bus::BusCommand::SetEntryFd {
+        ch: 0,
+        id: 0x77B,
+        fd: true,
+    });
+    app.send(crate::bus::BusCommand::SetEntryBrs {
+        ch: 0,
+        id: 0x77B,
+        brs: true,
+    });
+    assert_eq!(brs(&app), (true, true));
+    app.send(crate::bus::BusCommand::SetEntryFd {
+        ch: 0,
+        id: 0x77B,
+        fd: false,
+    });
+    assert_eq!(brs(&app), (false, false), "dropping FD clears BRS");
+    app.send(crate::bus::BusCommand::SetEntryBrs {
+        ch: 0,
+        id: 0x77B,
+        brs: true,
+    });
+    assert_eq!(brs(&app), (false, false), "BRS requires FD");
+
+    app.send(crate::bus::BusCommand::SetEntryFd {
+        ch: 0,
+        id: 0x77B,
+        fd: true,
+    });
+    app.send(crate::bus::BusCommand::SetEntryBrs {
+        ch: 0,
+        id: 0x77B,
+        brs: true,
+    });
+    {
+        let tx = app.tx_list.last_mut().expect("generator row");
+        tx.cycle_us = 20_000;
+        tx.active = true;
+        tx.len = 64;
+    }
+    app.start_virtual();
+    run_sim(&mut app, 2, 20_000);
+    let frame = app
+        .trace
+        .iter()
+        .find(|f| f.id == 0x77B)
+        .expect("emitted frame");
+    assert!(frame.is_fd() && frame.brs());
+    app.stop();
+}
+
+#[test]
+fn on_stop_keeps_aggregated_test_results_and_clears_them_on_restart() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "checks".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: "on start { test(\"started\", true); }\n\
+                 on timer 10 { test(\"tick\", now() < 1.0); test(\"range\", 5 < 3); }\n\
+                 on stop { test(\"finished\", now() > 0.0); }"
+            .to_string(),
+    });
+    app.settle();
+    app.start_virtual();
+    app.settle();
+    for t in 1..=30 {
+        app.advance_clock(t * 1_000);
+        app.tick(t * 1_000);
+    }
+    app.stop();
+    app.settle();
+
+    let node = &app.snap.nodes[0];
+    assert!(
+        !node.tests.is_empty(),
+        "no tests recorded; log={:?} issue={:?}",
+        node.log,
+        node.issue
+    );
+    let test = |name: &str| {
+        node.tests
+            .iter()
+            .find(|test| test.name == name)
+            .unwrap_or_else(|| panic!("missing test {name}"))
+    };
+    assert_eq!((test("started").runs, test("started").failures), (1, 0));
+    assert_eq!(test("tick").runs, 2, "one per due timer beat");
+    assert_eq!(test("tick").failures, 0);
+    assert_eq!((test("range").runs, test("range").failures), (2, 2));
+    assert_eq!((test("finished").runs, test("finished").failures), (1, 0));
+    assert!(test("finished").time_s > 0.0, "the stop event has a clock");
+    assert!(
+        node.log
+            .iter()
+            .any(|line| line == "[tests] 3/4 passed; 1 failed: range"),
+        "the run ends with one verdict line: {:?}",
+        node.log
+    );
+    assert!(
+        app.write_log
+            .iter()
+            .any(|line| line.text.contains("3/4 passed; 1 failed: range")),
+        "the verdict reaches Write"
+    );
+
+    app.start_virtual();
+    app.settle();
+    assert!(
+        app.snap.nodes[0].tests.is_empty(),
+        "a new run does not inherit the previous verdict"
+    );
+    app.stop();
+}
+
+#[test]
 fn a_tick_exactly_on_a_slot_does_not_drop_a_cycle() {
     let mut app = App::headless();
     app.add_tx(0, 0x779);
@@ -2656,6 +2788,18 @@ fn play_after_a_finished_run_restarts_from_the_top() {
     let mut app = App::headless();
     let path = write_timed_asc("roxy_can_replay_restart.asc", 100, 10_000);
     app.load_log(&path.to_string_lossy());
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "replay check".to_string(),
+        channel: 0,
+        attached: None,
+    });
+    app.settle();
+    let node_id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id: node_id,
+        source: "on stop { test(\"replay done\", true); }".to_string(),
+    });
+    app.settle();
     // Run the log out the far end without touching Stop: the infinite speed
     // drains it in two laps.
     app.set_replay_speed(f64::INFINITY);
@@ -2663,6 +2807,15 @@ fn play_after_a_finished_run_restarts_from_the_top() {
     app.update();
     app.update();
     assert!(!app.measuring, "the replay finished on its own");
+    assert_eq!(
+        app.snap.nodes[0]
+            .tests
+            .iter()
+            .find(|test| test.name == "replay done")
+            .map(|test| (test.runs, test.failures)),
+        Some((1, 0)),
+        "the end of a replay runs on stop"
+    );
     let (pos_end, dur) = app.replay_position().unwrap();
     assert!(
         pos_end >= dur - 1e-6,

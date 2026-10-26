@@ -17,13 +17,16 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         globals: Vec::new(),
         functions: vec![Function {
             arity: 0,
+            name: "main".to_string(),
             code: Vec::new(),
             lines: Vec::new(),
+            local_marks: Vec::new(),
         }],
         fn_index: HashMap::new(),
         handlers: Vec::new(),
         code: Vec::new(),
         line_marks: Vec::new(),
+        local_marks: Vec::new(),
         cur_line: 0,
         locals: Vec::new(),
         depth: 0,
@@ -60,8 +63,10 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
             }
             c.functions.push(Function {
                 arity: f.params.len(),
+                name: f.name.clone(),
                 code: Vec::new(),
                 lines: Vec::new(),
+                local_marks: Vec::new(),
             });
         }
     }
@@ -69,6 +74,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     // Handler sanity: one on start, one handler per message id, one
     // handler per one-shot timer name, one wildcard.
     let mut seen_start = false;
+    let mut seen_stop = false;
     let mut seen_ids: HashSet<u32> = HashSet::new();
     let mut seen_named_messages: HashSet<String> = HashSet::new();
     let mut seen_named: HashSet<String> = HashSet::new();
@@ -84,6 +90,12 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                         return c.err_at(on.line, on.col, "duplicate 'on start' handler");
                     }
                     seen_start = true;
+                }
+                OnKind::Stop => {
+                    if seen_stop {
+                        return c.err_at(on.line, on.col, "duplicate 'on stop' handler");
+                    }
+                    seen_stop = true;
                 }
                 OnKind::Message { id } => {
                     if !seen_ids.insert(*id) {
@@ -168,6 +180,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     c.emit(Op::Return);
     c.functions[0].code = std::mem::take(&mut c.code);
     c.functions[0].lines = std::mem::take(&mut c.line_marks);
+    c.functions[0].local_marks = std::mem::take(&mut c.local_marks);
     Ok(Script {
         constants: c.constants,
         globals: c.globals,
@@ -201,6 +214,8 @@ struct Comp {
     /// Sparse op-index -> source-line table of the current chunk: the
     /// first op emitted on each new line opens an entry.
     line_marks: Vec<(u16, u32)>,
+    /// Sparse op-index -> active local names, for the debugger.
+    local_marks: Vec<(u16, Vec<String>)>,
     cur_line: u32,
     /// Locals of the function being compiled: name and scope depth.
     locals: Vec<(String, u32)>,
@@ -260,6 +275,7 @@ struct Comp {
 fn handler_label(kind: &HandlerKind) -> String {
     match kind {
         HandlerKind::Start => "<on start>".to_string(),
+        HandlerKind::Stop => "<on stop>".to_string(),
         HandlerKind::Message { id } => format!("<on message {id:#x}>"),
         HandlerKind::NamedMessage { name } => format!("<on message {name}>"),
         HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
@@ -489,7 +505,12 @@ impl Comp {
 
     fn line_mark(&mut self) {
         if self.cur_line != self.line {
-            self.line_marks.push((self.code.len() as u16, self.line));
+            let at = self.code.len() as u16;
+            self.line_marks.push((at, self.line));
+            self.local_marks.push((
+                at,
+                self.locals.iter().map(|(name, _)| name.clone()).collect(),
+            ));
             self.cur_line = self.line;
         }
     }
@@ -848,6 +869,7 @@ impl Comp {
         let idx = self.fn_index[&f.name] as usize;
         let saved_code = std::mem::take(&mut self.code);
         let saved_marks = std::mem::take(&mut self.line_marks);
+        let saved_locals_marks = std::mem::take(&mut self.local_marks);
         let saved_cur = self.cur_line;
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_depth = self.depth;
@@ -870,8 +892,10 @@ impl Comp {
         self.emit(Op::Return);
         self.functions[idx].code = std::mem::take(&mut self.code);
         self.functions[idx].lines = std::mem::take(&mut self.line_marks);
+        self.functions[idx].local_marks = std::mem::take(&mut self.local_marks);
         self.code = saved_code;
         self.line_marks = saved_marks;
+        self.local_marks = saved_locals_marks;
         self.cur_line = saved_cur;
         self.locals = saved_locals;
         self.depth = saved_depth;
@@ -940,6 +964,7 @@ impl Comp {
     fn compile_handler(&mut self, on: OnDecl) -> Result<(), ScriptError> {
         let kind = match &on.kind {
             OnKind::Start => HandlerKind::Start,
+            OnKind::Stop => HandlerKind::Stop,
             OnKind::Message { id } => HandlerKind::Message { id: *id },
             OnKind::NamedMessage { name } => HandlerKind::NamedMessage { name: name.clone() },
             OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
@@ -968,6 +993,7 @@ impl Comp {
         }
         let saved_code = std::mem::take(&mut self.code);
         let saved_marks = std::mem::take(&mut self.line_marks);
+        let saved_locals_marks = std::mem::take(&mut self.local_marks);
         let saved_cur = self.cur_line;
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_depth = self.depth;
@@ -989,13 +1015,16 @@ impl Comp {
         let lines = std::mem::take(&mut self.line_marks);
         self.functions.push(Function {
             arity: 0,
+            name: label,
             code: std::mem::take(&mut self.code),
             lines,
+            local_marks: std::mem::take(&mut self.local_marks),
         });
         self.handlers.push(Handler { kind, chunk });
         self.cur_handler = saved_handler;
         self.code = saved_code;
         self.line_marks = saved_marks;
+        self.local_marks = saved_locals_marks;
         self.cur_line = saved_cur;
         self.locals = saved_locals;
         self.depth = saved_depth;
@@ -1033,9 +1062,31 @@ mod tests {
     }
 
     #[test]
+    fn debug_metadata_names_functions_and_locals() {
+        let script = compile_ok("fn add(a) {\n    let b = a + 1;\n    print(b);\n}\nadd(4);\n");
+        assert_eq!(script.functions[0].name, "main");
+        let add = script
+            .functions
+            .iter()
+            .find(|function| function.name == "add")
+            .expect("add chunk");
+        assert!(add.lines.iter().any(|(_, line)| *line == 2));
+        assert!(add.lines.iter().any(|(_, line)| *line == 3));
+        let names: Vec<Vec<String>> = add
+            .local_marks
+            .iter()
+            .map(|(_, names)| names.clone())
+            .collect();
+        assert!(names.contains(&vec!["a".to_string()]));
+        assert!(names.contains(&vec!["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
     fn rejections() {
         assert!(compile_err("print(nope);").contains("unknown"));
         assert!(compile_err("x = 1;").contains("undeclared"));
+        assert!(compile_err("on stop { } on stop { }").contains("duplicate 'on stop'"));
+        assert!(compile_err("on start { } on start { }").contains("duplicate 'on start'"));
         assert!(compile_err("fn f(a) { } print(f());").contains("argument"));
         assert!(compile_err("fn f() { } fn f() { }").contains("duplicate"));
         assert!(compile_err("fn f() { fn g() { } }").contains("top level"));

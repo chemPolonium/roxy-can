@@ -24,6 +24,7 @@ interface Props {
   onToggle: (entry: TxEntry, on: boolean) => void;
   onCycle: (entry: TxEntry, cycleUs: number) => void;
   onFd: (entry: TxEntry, on: boolean) => void;
+  onBrs: (entry: TxEntry, on: boolean) => void;
   onHex: (entry: TxEntry, text: string) => void;
   onSource: (entry: TxEntry, src: TxSource) => void;
   onClearSource: (entry: TxEntry, name: string) => void;
@@ -305,6 +306,7 @@ function EntryRow({
   onToggle,
   onCycle,
   onFd,
+  onBrs,
   onHex,
   onSource,
   onClearSource,
@@ -315,6 +317,7 @@ function EntryRow({
   onToggle: (entry: TxEntry, on: boolean) => void;
   onCycle: (entry: TxEntry, cycleUs: number) => void;
   onFd: (entry: TxEntry, on: boolean) => void;
+  onBrs: (entry: TxEntry, on: boolean) => void;
   onHex: (entry: TxEntry, text: string) => void;
   onSource: (entry: TxEntry, src: TxSource) => void;
   onClearSource: (entry: TxEntry, name: string) => void;
@@ -411,6 +414,20 @@ function EntryRow({
           />
           FD
         </label>
+        <label
+          class="gen-fd"
+          title="Bit Rate Switch: run the data phase at the bus FD data rate"
+        >
+          <input
+            type="checkbox"
+            checked={entry.brs}
+            disabled={!entry.fd}
+            onChange={(event) =>
+              onBrs(entry, (event.target as HTMLInputElement).checked)
+            }
+          />
+          BRS
+        </label>
         <span class="spacer" />
         <button
           type="button"
@@ -460,6 +477,7 @@ function BusGroup({
   onToggle,
   onCycle,
   onFd,
+  onBrs,
   onHex,
   onSource,
   onClearSource,
@@ -475,6 +493,7 @@ function BusGroup({
   onToggle: (entry: TxEntry, on: boolean) => void;
   onCycle: (entry: TxEntry, cycleUs: number) => void;
   onFd: (entry: TxEntry, on: boolean) => void;
+  onBrs: (entry: TxEntry, on: boolean) => void;
   onHex: (entry: TxEntry, text: string) => void;
   onSource: (entry: TxEntry, src: TxSource) => void;
   onClearSource: (entry: TxEntry, name: string) => void;
@@ -559,6 +578,7 @@ function BusGroup({
             onToggle={onToggle}
             onCycle={onCycle}
             onFd={onFd}
+            onBrs={onBrs}
             onHex={onHex}
             onSource={onSource}
             onClearSource={onClearSource}
@@ -753,6 +773,7 @@ export function GeneratorModal({
   onToggle,
   onCycle,
   onFd,
+  onBrs,
   onHex,
   onSource,
   onClearSource,
@@ -857,6 +878,7 @@ export function GeneratorModal({
               onToggle={onToggle}
               onCycle={onCycle}
               onFd={onFd}
+              onBrs={onBrs}
               onHex={onHex}
               onSource={onSource}
               onClearSource={onClearSource}

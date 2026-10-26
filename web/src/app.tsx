@@ -1642,6 +1642,8 @@ export function App() {
     });
   const setEntryFd = (entry: TxEntry, fd: boolean) =>
     void run({ type: "set_entry_fd", ch: entry.channel, id: entry.id, fd });
+  const setEntryBrs = (entry: TxEntry, brs: boolean) =>
+    void run({ type: "set_entry_brs", ch: entry.channel, id: entry.id, brs });
   const setEntryHex = (entry: TxEntry, text: string) =>
     void run({ type: "set_entry_hex", ch: entry.channel, id: entry.id, text });
   const addEntry = (ch: number, id: number) =>
@@ -3344,6 +3346,7 @@ export function App() {
           onToggle={setEntryActive}
           onCycle={setEntryCycle}
           onFd={setEntryFd}
+          onBrs={setEntryBrs}
           onHex={setEntryHex}
           onSource={(entry, src) =>
             void run({

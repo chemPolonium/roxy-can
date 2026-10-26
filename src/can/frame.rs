@@ -33,6 +33,9 @@ impl FrameFlags {
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
+    pub const fn remove(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
     /// The raw bit pattern, for storage formats (trace archive).
     pub const fn bits(self) -> u32 {
         self.0

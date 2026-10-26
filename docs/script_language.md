@@ -20,6 +20,10 @@ on start {
     print("node up");
 }
 
+on stop {
+    test("engine seen", defined(EngineStatus.EngineSpeed));
+}
+
 on message 0x100 {
     let rpm = sig(0x100, "RPM");
     print("rpm:", rpm);
@@ -146,6 +150,19 @@ on start {
     print("ready");
 }
 ```
+
+### on stop
+
+测量停止时执行一次：手动 Stop，或回放到文件末尾。用来对整段运行下结论、读最后的信号/系统变量/派生值：
+
+```c
+on stop {
+    test("rpm seen", defined(EngineStatus.RPM));
+}
+```
+
+停止事件没有触发帧，`this.*` 与 `frame_*()` 不可用；停在这里的 `send` / `fr_send`
+不会再发到总线。
 
 ### on message \<id\>
 
@@ -482,6 +499,23 @@ on timer 50 {
 }
 ```
 
+### test("name", condition)
+
+记录一条测试断言。名字相同的调用聚合成一条结果：执行次数、失败次数、最后一次
+调用的源码行与总线时间。`condition` 必须是 bool；还没采到值时先用 `defined(...)`，
+否则 nil 参与比较会按运行时错误处理（`on stop` 里只记 `[stop]` 日志，不产生结果）。
+
+```c
+on stop {
+    test("rpm seen", defined(EngineStatus.RPM));
+    test("vehicle speed seen", defined(VehicleState.VehicleSpeed));
+}
+```
+
+测量开始会清空结果；停止后 Scripts 左侧显示 `x/y tests`，编辑区的 **Tests**
+面板列出 PASS/FAIL、次数、最后一次行号与时间，点击行可跳转；Write 里同时出现
+一行 `[tests] 3/4 passed; 1 failed: name`。测试结果保留到下一次 Start/Apply。
+
 ### defined(value)
 
 检查一次读取是否已经有值；对总线信号、派生通道、系统变量和数组元素都适用。尚未出现时返回 `false`。`nil` 不能直接参与算术、比较或作为条件，必须先经过 `defined(...)`：
@@ -556,10 +590,25 @@ sys_set("Demo::Setpoint", target * 0.9);      // 写入受定义的界限钳位
 |------|------|
 | `print(v0, v1, ...)` | 输出到节点日志 |
 | `format(fmt, v0, ...)` | printf 风格格式化为字符串：`%d` `%u` `%x` `%X` `%f`（默认 6 位小数）、`%.Nf`、`%e` `%g`、`%s`，宽度和 `-`/`0` 标志可用（`%05d`、`%-8s`），`%%` 为字面百分号 |
+| `test("name", condition)` | 记一条通过/失败断言，结果在停止后汇总到 Scripts |
 | `now()` | 总线时钟（秒，浮点） |
 | `bytes(n)` | 分配 n 字节缓冲（零填充） |
 | `array(n)` | 分配 n 元定长数组（nil 填充，元素任意值，引用语义） |
 | `len(v)` | 缓冲 / 数组长度或字符串字符数 |
+
+## 调试
+
+Scripts 编辑器内置行级调试器，由 Web 主机直接驱动：
+
+- **F9** 或点击行号栏切换当前行的断点；断点在每次重新进入该行时触发。
+- **Debug** 绑定当前节点并等待断点；**Restart** 应用编辑器并重跑节点，因此
+  主程序和 `on start` 里的断点也能命中。
+- 命中后 **Continue** 放行、**Step** 执行到下一源码行；下方显示调用栈、当前帧
+  局部变量和全局变量。切换脚本或关闭窗口会自动放行节点。
+- 暂停期间节点所在 core 线程被挡住，采集与回放会一起停住；浏览器 30 秒不轮询
+  （标签页关闭）时自动解除，避免测量长期停住。
+- 目前只有行断点与行级单步：条件断点、监视表达式、step over/out 尚未实现；
+  断点只对可执行行生效，空行和注释行不会触发。
 
 ## 编译错误 vs 运行时错误
 

@@ -336,8 +336,17 @@ export interface ScriptIssue {
   message: string;
 }
 
+export interface ScriptTest {
+  name: string;
+  runs: number;
+  failures: number;
+  line: number;
+  timeS: number;
+}
+
 export interface Script extends ScriptInfo {
   source: string;
+  tests: ScriptTest[];
   log: string[];
   issue: ScriptIssue | null;
 }
@@ -426,6 +435,7 @@ export interface TxEntry {
   active: boolean;
   gateOpen: boolean;
   fd: boolean;
+  brs: boolean;
   cycleUs: number;
   dataText: string;
   sentText: string;
@@ -471,6 +481,7 @@ export interface Frame {
   len: number;
   data: string;
   fd: boolean;
+  brs: boolean;
 }
 
 export interface Message {
@@ -688,6 +699,7 @@ export type Command =
   | { type: "set_entry_active"; ch: number; id: number; on: boolean }
   | { type: "set_entry_cycle"; ch: number; id: number; cycle_us: number }
   | { type: "set_entry_fd"; ch: number; id: number; fd: boolean }
+  | { type: "set_entry_brs"; ch: number; id: number; brs: boolean }
   | { type: "set_entry_hex"; ch: number; id: number; text: string }
   | { type: "set_entry_source"; ch: number; id: number; src: TxSource }
   | { type: "clear_entry_source"; ch: number; id: number; name: string }
@@ -749,3 +761,34 @@ export type Command =
   | { type: "load_reference"; path: string }
   | { type: "clear_reference" }
   | { type: "set_derived"; defs: DerivedDef[] };
+
+export interface DebugValue {
+  name: string;
+  value: string;
+}
+
+export interface DebugFrame {
+  function: string;
+  line: number;
+}
+
+export interface DebugView {
+  enabled: boolean;
+  node: number | null;
+  paused: boolean;
+  line: number | null;
+  function: string | null;
+  breakpoints: number[];
+  locals: DebugValue[];
+  globals: DebugValue[];
+  stack: DebugFrame[];
+  note: string | null;
+}
+
+export type DebugCommand =
+  | { action: "arm"; node_id: number; lines: number[] }
+  | { action: "set_breakpoints"; lines: number[] }
+  | { action: "continue" }
+  | { action: "step" }
+  | { action: "pause" }
+  | { action: "stop" };

@@ -133,7 +133,9 @@ function TraceRow({
             return (
               <td key={id} class="mono">
                 {frame.addr || hexId(frame)}
-                {frame.fd && <span class="badge">FD</span>}
+                {frame.fd && (
+                  <span class="badge">{frame.brs ? "FD·B" : "FD"}</span>
+                )}
               </td>
             );
           case "name":

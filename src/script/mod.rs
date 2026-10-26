@@ -77,11 +77,24 @@
 use std::collections::HashMap;
 
 mod compiler;
+pub mod debug;
 mod lexer;
 mod parser;
 mod vm;
 
 pub use vm::{TimerOp, Vm};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TestResult {
+    pub name: String,
+    /// How many times `test` evaluated this name.
+    pub runs: u64,
+    pub failures: u64,
+    /// Source line of the latest call, for the editor's jump-to-line.
+    pub line: u32,
+    /// Simulation time of the latest call.
+    pub time_s: f64,
+}
 
 /// A runtime value of the script language.
 #[derive(Clone, Debug)]
@@ -201,10 +214,14 @@ pub enum Op {
 #[derive(Debug)]
 pub struct Function {
     pub arity: usize,
+    /// Function name, or the handler label for an event chunk.
+    pub name: String,
     pub code: Vec<Op>,
     /// Sparse op-index -> source-line table (first op on each new line).
     /// Runtime errors resolve their line through this.
     pub lines: Vec<(u16, u32)>,
+    /// Sparse op-index -> active local names, for debugger snapshots.
+    pub local_marks: Vec<(u16, Vec<String>)>,
 }
 
 /// One compiled event handler: what triggers it and which chunk runs.
@@ -219,6 +236,9 @@ pub struct Handler {
 #[derive(Clone, Debug, PartialEq)]
 pub enum HandlerKind {
     Start,
+    /// Measurement finished (manual Stop or the end of a replay). Checks
+    /// that need the whole run belong here.
+    Stop,
     Message {
         id: u32,
     },
@@ -384,6 +404,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     // (name, min_args, max_args)
     ("print", 1, 16),
     ("format", 1, 16),
+    ("test", 2, 2),
     ("send", 1, 9),
     ("send_ext", 1, 9),
     ("emit_value", 2, 2),
@@ -452,6 +473,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
 pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("print", "print(value, …)"),
     ("format", "format(\"text\", …)"),
+    ("test", "test(\"name\", condition)"),
     ("send", "send(id, byte, …)"),
     ("send_ext", "send_ext(id, byte, …)"),
     ("emit_value", "emit_value(\"Name\", value)"),

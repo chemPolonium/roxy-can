@@ -223,6 +223,10 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             .route("/hardware", get(hardware_handler))
             .route("/nodes", get(scripts_handler))
             .route("/script-help", get(script_help_handler))
+            .route(
+                "/debug",
+                get(debug_view_handler).post(debug_command_handler),
+            )
             .route("/command", post(command))
             .route(
                 "/upload",
@@ -527,6 +531,100 @@ async fn script_help_handler() -> Json<Vec<WebScriptFunction>> {
     Json(script_help_items())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDebugValue {
+    name: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDebugFrame {
+    function: String,
+    line: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDebug {
+    enabled: bool,
+    node: Option<u64>,
+    paused: bool,
+    line: Option<u32>,
+    function: Option<String>,
+    breakpoints: Vec<u32>,
+    locals: Vec<WebDebugValue>,
+    globals: Vec<WebDebugValue>,
+    stack: Vec<WebDebugFrame>,
+    note: Option<String>,
+}
+
+impl From<crate::script::debug::DebugView> for WebDebug {
+    fn from(view: crate::script::debug::DebugView) -> Self {
+        Self {
+            enabled: view.enabled,
+            node: view.node,
+            paused: view.paused,
+            line: view.line,
+            function: view.function,
+            breakpoints: view.breakpoints,
+            locals: view
+                .locals
+                .into_iter()
+                .map(|value| WebDebugValue {
+                    name: value.name,
+                    value: value.value,
+                })
+                .collect(),
+            globals: view
+                .globals
+                .into_iter()
+                .map(|value| WebDebugValue {
+                    name: value.name,
+                    value: value.value,
+                })
+                .collect(),
+            stack: view
+                .stack
+                .into_iter()
+                .map(|frame| WebDebugFrame {
+                    function: frame.function,
+                    line: frame.line,
+                })
+                .collect(),
+            note: view.note,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum WebDebugCommand {
+    Arm { node_id: u64, lines: Vec<u32> },
+    SetBreakpoints { lines: Vec<u32> },
+    Continue,
+    Step,
+    Pause,
+    Stop,
+}
+
+async fn debug_view_handler() -> Json<WebDebug> {
+    Json(crate::script::debug::view().into())
+}
+
+async fn debug_command_handler(Json(command): Json<WebDebugCommand>) -> Json<WebDebug> {
+    let view = match command {
+        WebDebugCommand::Arm { node_id, lines } => crate::script::debug::arm(node_id, lines),
+        WebDebugCommand::SetBreakpoints { lines } => crate::script::debug::set_breakpoints(lines),
+        WebDebugCommand::Continue => crate::script::debug::resume(false),
+        WebDebugCommand::Step => crate::script::debug::resume(true),
+        WebDebugCommand::Pause => crate::script::debug::pause(),
+        WebDebugCommand::Stop => crate::script::debug::stop(),
+    };
+    Json(view.into())
+}
+
 /// Fingerprint of everything the scripts dialog shows. Source edits are
 /// infrequent, but they must reach the editor without shipping every
 /// script on every 10 Hz state poll; `/api/nodes` is refreshed only when
@@ -550,6 +648,12 @@ fn scripts_signature(app: &App) -> u64 {
         node.attached.hash(&mut hasher);
         node.log.len().hash(&mut hasher);
         node.log.last().hash(&mut hasher);
+        for test in &node.tests {
+            test.name.hash(&mut hasher);
+            test.runs.hash(&mut hasher);
+            test.failures.hash(&mut hasher);
+            test.line.hash(&mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -574,6 +678,17 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
             }),
             file_path: node.file_path.clone().unwrap_or_default(),
             source: node.source.clone(),
+            tests: node
+                .tests
+                .iter()
+                .map(|test| WebScriptTest {
+                    name: test.name.clone(),
+                    runs: test.runs,
+                    failures: test.failures,
+                    line: test.line,
+                    time_s: test.time_s,
+                })
+                .collect(),
             log: node.log.clone(),
         })
         .collect()
@@ -1783,6 +1898,11 @@ enum WebCommand {
         id: u32,
         fd: bool,
     },
+    SetEntryBrs {
+        ch: u8,
+        id: u32,
+        brs: bool,
+    },
     SetEntryHex {
         ch: u8,
         id: u32,
@@ -2621,6 +2741,9 @@ fn app_loop(
                 WebCommand::SetEntryFd { ch, id, fd } => {
                     app.send(BusCommand::SetEntryFd { ch, id, fd });
                 }
+                WebCommand::SetEntryBrs { ch, id, brs } => {
+                    app.send(BusCommand::SetEntryBrs { ch, id, brs });
+                }
                 WebCommand::SetEntryHex { ch, id, text } => {
                     app.send(BusCommand::SetEntryHex { ch, id, text });
                 }
@@ -3238,6 +3361,7 @@ fn frame_dto(app: &App, frame: &CanFrame) -> WebFrame {
         len: frame.len,
         data: hex(frame.payload()),
         fd: frame.is_fd(),
+        brs: frame.brs(),
     }
 }
 
@@ -3255,6 +3379,7 @@ fn fr_frame_dto(app: &App, row: &crate::trace::FrRow) -> WebFrame {
         len: row.payload.len().min(u8::MAX as usize) as u8,
         data: hex(&row.payload),
         fd: false,
+        brs: false,
     }
 }
 
@@ -3281,6 +3406,7 @@ fn eth_frame_dto(app: &App, frame: &crate::eth::EthFrame) -> WebFrame {
         len: frame.payload.len().min(u8::MAX as usize) as u8,
         data,
         fd: false,
+        brs: false,
     }
 }
 
@@ -4187,6 +4313,7 @@ struct WebTx {
     active: bool,
     gate_open: bool,
     fd: bool,
+    brs: bool,
     cycle_us: u64,
     data_text: String,
     sent_text: String,
@@ -4374,6 +4501,16 @@ struct WebScriptIssue {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebScriptTest {
+    name: String,
+    runs: u64,
+    failures: u64,
+    line: u32,
+    time_s: f64,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebScript {
     id: u64,
     name: String,
@@ -4386,6 +4523,7 @@ struct WebScript {
     issue: Option<WebScriptIssue>,
     file_path: String,
     source: String,
+    tests: Vec<WebScriptTest>,
     log: Vec<String>,
 }
 
@@ -4466,6 +4604,7 @@ struct WebFrame {
     len: u8,
     data: String,
     fd: bool,
+    brs: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4556,6 +4695,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             active: entry.active,
             gate_open: entry.gate_open,
             fd: entry.fd,
+            brs: entry.brs,
             cycle_us: entry.cycle_us,
             data_text: entry.data_text.clone(),
             sent_text: entry.sent_text.clone(),

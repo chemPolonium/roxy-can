@@ -1,6 +1,8 @@
 import type {
   Catalog,
   Command,
+  DebugCommand,
+  DebugView,
   Hardware,
   Script,
   ScriptFunctionHelp,
@@ -113,4 +115,20 @@ export async function sendCommand(command: Command): Promise<void> {
   if (!response.ok) {
     throw new Error(`command: ${response.status}`);
   }
+}
+
+export async function fetchDebug(): Promise<DebugView> {
+  const response = await fetch("/api/debug", { cache: "no-store" });
+  if (!response.ok) throw new Error(`debug: ${response.status}`);
+  return (await response.json()) as DebugView;
+}
+
+export async function sendDebug(command: DebugCommand): Promise<DebugView> {
+  const response = await fetch("/api/debug", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(command),
+  });
+  if (!response.ok) throw new Error(`debug: ${response.status}`);
+  return (await response.json()) as DebugView;
 }

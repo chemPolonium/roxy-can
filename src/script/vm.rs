@@ -117,6 +117,10 @@ pub struct Vm {
     pub frame_is_fr: bool,
     /// The script node's own CAN channel: what `node.bus` reads.
     pub node_channel: u8,
+    /// The owning script node, used to match debugger breakpoints.
+    pub node_id: u64,
+    /// Assertions recorded by `test(...)` since the node started.
+    pub tests: Vec<crate::script::TestResult>,
     /// The communication cycle of a FlexRay arrival, set for `on fr slot`
     /// handlers only. What `fr_cycle()` reads; 0 outside those -- a CAN frame
     /// has no cycle number to give it.
@@ -165,6 +169,8 @@ impl Vm {
             frame_present: false,
             frame_is_fr: false,
             node_channel: 0,
+            node_id: 0,
+            tests: Vec::new(),
             fr_cycle: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
             named_messages: std::collections::HashMap::new(),
@@ -235,6 +241,13 @@ impl Vm {
             }
             let frame = self.frames.last().expect("run without a frame");
             let (chunk, ip) = (frame.chunk, frame.ip);
+            if crate::script::debug::enabled_for(self.node_id)
+                && let Some(line) = self.line_at(chunk, ip)
+                && crate::script::debug::should_pause(self.node_id, line)
+            {
+                let view = self.debug_view(line);
+                crate::script::debug::wait_paused(view);
+            }
             let Some(op) = self.script.functions[chunk].code.get(ip) else {
                 return Err(VmError("code ran off its chunk".into()));
             };
@@ -264,6 +277,92 @@ impl Vm {
             .rev()
             .find(|(op, _)| *op as usize <= ip)
             .map(|(_, line)| *line)
+    }
+
+    /// The line of the call currently executing: `ip` already points past
+    /// its `CallHost`, exactly like runtime errors read it.
+    fn call_line(&self) -> u32 {
+        self.frames
+            .last()
+            .and_then(|frame| self.line_at(frame.chunk, frame.ip.saturating_sub(1)))
+            .unwrap_or(0)
+    }
+
+    /// A debugger snapshot at the current instruction. The paused line is
+    /// passed explicitly because `ip` points at the instruction *about* to
+    /// run; caller frames point just past their `Call`.
+    fn debug_view(&self, line: u32) -> crate::script::debug::DebugView {
+        use crate::script::debug::{DebugFrame, DebugValue, DebugView};
+        let functions = &self.script.functions;
+        let mut stack = Vec::new();
+        for (index, frame) in self.frames.iter().enumerate() {
+            let function = functions
+                .get(frame.chunk)
+                .map(|function| function.name.clone())
+                .unwrap_or_default();
+            let frame_line = if index + 1 == self.frames.len() {
+                line
+            } else {
+                self.line_at(frame.chunk, frame.ip.saturating_sub(1))
+                    .unwrap_or(0)
+            };
+            stack.push(DebugFrame {
+                function,
+                line: frame_line,
+            });
+        }
+
+        let mut locals = Vec::new();
+        if let Some(frame) = self.frames.last()
+            && let Some(function) = functions.get(frame.chunk)
+            && let Some((_, names)) = function
+                .local_marks
+                .iter()
+                .rev()
+                .find(|(at, _)| *at as usize <= frame.ip)
+        {
+            for (index, name) in names.iter().enumerate() {
+                locals.push(DebugValue {
+                    name: name.clone(),
+                    value: self
+                        .stack
+                        .get(frame.base + index)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<not set>".to_string()),
+                });
+            }
+        }
+        let globals = self
+            .script
+            .globals
+            .iter()
+            .enumerate()
+            .map(|(index, name)| DebugValue {
+                name: name.clone(),
+                value: self
+                    .globals
+                    .get(index)
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            })
+            .collect();
+
+        DebugView {
+            enabled: true,
+            node: Some(self.node_id),
+            paused: true,
+            line: Some(line),
+            function: self
+                .frames
+                .last()
+                .and_then(|frame| functions.get(frame.chunk))
+                .map(|function| function.name.clone()),
+            breakpoints: Vec::new(),
+            locals,
+            globals,
+            stack,
+            note: None,
+        }
     }
 
     fn exec_op(&mut self, op: Op) -> Result<(), VmError> {
@@ -578,6 +677,38 @@ impl Vm {
                 };
                 let line = render_format(fmt, &args[1..]).map_err(VmError)?;
                 self.stack.push(Value::Str(line));
+                return Ok(());
+            }
+            "test" => {
+                // test("name", condition): one assertion, aggregated by
+                // name. A request without a bool is a script bug, not a
+                // silent failure -- `defined(x) && x > 0` is the explicit
+                // "not seen yet" form.
+                let (Value::Str(name), Value::Bool(ok)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "test(\"name\", condition) needs a string and a bool".into(),
+                    ));
+                };
+                let line = self.call_line();
+                let time_s = self.host_input.now_s;
+                match self.tests.iter_mut().find(|result| result.name == *name) {
+                    Some(result) => {
+                        result.runs += 1;
+                        if !ok {
+                            result.failures += 1;
+                        }
+                        result.line = line;
+                        result.time_s = time_s;
+                    }
+                    None => self.tests.push(crate::script::TestResult {
+                        name: name.clone(),
+                        runs: 1,
+                        failures: u64::from(!ok),
+                        line,
+                        time_s,
+                    }),
+                }
+                self.stack.push(Value::Nil);
                 return Ok(());
             }
             "now" => {

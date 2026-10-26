@@ -577,6 +577,97 @@
   color: #9a5b00;
 }
 
+[data-theme="light"] .script-gutter {
+  background: #eef2f7;
+  border-color: #d4dbe4;
+  color: #8a95a5;
+}
+
+[data-theme="light"] .script-gutter .bp {
+  background: #d64545;
+}
+
+[data-theme="light"] .script-gutter .cur {
+  background: rgb(154 107 0 / 12%);
+}
+
+[data-theme="light"] .script-debug-line {
+  background: rgb(154 107 0 / 10%);
+  border-bottom-color: rgb(154 107 0 / 40%);
+}
+
+[data-theme="light"] .script-debug-bar {
+  background: #f5f7fa;
+  border-color: #d4dbe4;
+}
+
+[data-theme="light"] .script-debug-bar.on {
+  background: #eef6ee;
+  border-color: #b7d5b9;
+}
+
+[data-theme="light"] .script-debug-status {
+  color: #647184;
+}
+
+[data-theme="light"] .script-debug-status.bad {
+  color: #b42318;
+}
+
+[data-theme="light"] .script-debug-panel {
+  background: #f5f7fa;
+  border-color: #d4dbe4;
+}
+
+[data-theme="light"] .script-debug-panel h4 {
+  color: #647184;
+}
+
+[data-theme="light"] .script-debug-rows button,
+[data-theme="light"] .script-debug-row {
+  color: #26313f;
+}
+
+[data-theme="light"] .script-debug-rows span,
+[data-theme="light"] .script-debug-empty {
+  color: #647184;
+}
+
+[data-theme="light"] .script-debug-rows button:hover,
+[data-theme="light"] .script-debug-row:hover {
+  background: rgb(15 23 42 / 5%);
+}
+
+[data-theme="light"] .script-debug-rows button.on {
+  color: #8a5b00;
+}
+
+[data-theme="light"] .script-tests {
+  background: #f5f7fa;
+  border-color: #d4dbe4;
+}
+
+[data-theme="light"] .script-tests header.bad span,
+[data-theme="light"] .script-test.bad .script-test-state {
+  color: #b42318;
+}
+
+[data-theme="light"] .script-test {
+  color: #26313f;
+}
+
+[data-theme="light"] .script-test strong {
+  color: #26313f;
+}
+
+[data-theme="light"] .script-test.bad {
+  background: rgb(180 35 24 / 8%);
+}
+
+[data-theme="light"] .script-test:hover {
+  background: rgb(15 23 42 / 5%);
+}
+
 [data-theme="light"] .tok-keyword {
   color: #1f5fbf;
 }

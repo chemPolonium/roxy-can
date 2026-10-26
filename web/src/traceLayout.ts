@@ -27,7 +27,9 @@ export interface TraceColumnDef {
 export const TRACE_COLUMNS: TraceColumnDef[] = [
   { id: "time", label: "Time", width: 92, min: 72, max: 220, locked: true },
   { id: "bus", label: "Bus", width: 54, min: 40, max: 140 },
-  { id: "id", label: "ID", width: 80, min: 56, max: 180 },
+  // Wide enough for a standard CAN id plus the FD·B badge; narrower
+  // columns clip the badge into the ellipsis.
+  { id: "id", label: "ID", width: 92, min: 84, max: 180 },
   { id: "name", label: "Name", width: 150, min: 80, max: 420 },
   { id: "dir", label: "Dir", width: 40, min: 34, max: 90 },
   { id: "len", label: "Len", width: 46, min: 38, max: 120 },

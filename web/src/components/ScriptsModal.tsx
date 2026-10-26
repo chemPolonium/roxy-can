@@ -1,10 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { fetchScriptHelp, fetchScripts } from "../api";
+import {
+  fetchDebug,
+  fetchScriptHelp,
+  fetchScripts,
+  sendDebug,
+} from "../api";
 import type {
   Bus,
   Catalog,
   CatalogMessage,
   Command,
+  DebugView,
   DerivedDef,
   Script,
   ScriptFunctionHelp,
@@ -1319,6 +1325,7 @@ on timer 1000 {
 /// they stay out of KEYWORDS (and its highlighter) and only appear here.
 const EVENTS: [string, string][] = [
   ["start", "runs once when the measurement starts"],
+  ["stop", "runs once when the measurement stops"],
   ["message", "frame by id, name or *"],
   ["extended", "29-bit frame by id"],
   ["timer", "periodic tick or named one-shot"],
@@ -1476,6 +1483,16 @@ export function ScriptsModal({
   const [newName, setNewName] = useState("");
   const [newChannel, setNewChannel] = useState(0);
   const [newAttach, setNewAttach] = useState("");
+  const [debugArmed, setDebugArmed] = useState(false);
+  const [debugView, setDebugView] = useState<DebugView | null>(null);
+  const [breakpointMap, setBreakpointMap] = useState<Record<number, number[]>>(
+    {},
+  );
+  const [debugError, setDebugError] = useState("");
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const gutterNumsRef = useRef<HTMLPreElement>(null);
+  const debugLineRef = useRef<HTMLDivElement>(null);
+  const debugArmedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -1494,7 +1511,48 @@ export function ScriptsModal({
     setFindOpen(false);
     setFindText("");
     setReplaceText("");
+    if (debugArmedRef.current) {
+      void sendDebug({ action: "stop" }).catch(() => {});
+    }
+    setDebugArmed(false);
+    setDebugView(null);
+    setDebugError("");
   }, [selected]);
+
+  useEffect(() => {
+    debugArmedRef.current = debugArmed;
+  }, [debugArmed]);
+
+  useEffect(
+    () => () => {
+      if (debugArmedRef.current) {
+        void sendDebug({ action: "stop" }).catch(() => {});
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!debugArmed) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const view = await fetchDebug();
+        if (!alive) return;
+        setDebugView(view);
+        if (view.note) setDebugError(view.note);
+        if (!view.enabled) setDebugArmed(false);
+      } catch (e) {
+        if (alive) setDebugError(String(e));
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 400);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [debugArmed]);
 
   useEffect(() => {
     if (findOpen) {
@@ -1555,11 +1613,22 @@ export function ScriptsModal({
 
   const current = scripts.find((script) => script.id === selected) ?? null;
   const draft = selected != null ? (drafts[selected] ?? current?.source ?? "") : "";
+  const breakpoints = selected != null ? (breakpointMap[selected] ?? []) : [];
+  const debugPaused =
+    debugArmed && debugView?.paused === true && debugView.node === current?.id;
+  const debugLine = debugPaused ? (debugView?.line ?? null) : null;
 
   useLayoutEffect(() => {
     const pre = highlightRef.current;
     if (!pre) return;
     const lines = draft.split("\n");
+    const gutter = gutterNumsRef.current;
+    if (gutter && gutter.dataset.lines !== String(lines.length)) {
+      const numbers: string[] = [];
+      for (let i = 1; i <= lines.length; i += 1) numbers.push(String(i));
+      gutter.textContent = numbers.join("\n");
+      gutter.dataset.lines = String(lines.length);
+    }
     const previous =
       hlStateRef.current?.script === selected ? hlStateRef.current : null;
     const cache = new Map<string, HighlightLine>();
@@ -1645,25 +1714,119 @@ export function ScriptsModal({
     hlStateRef.current = { script: selected, entries, nodes, cache };
   }, [draft, selected]);
 
-  const syncIssueMarker = (textarea: HTMLTextAreaElement | null) => {
-    const marker = issueLineRef.current;
-    const issue = current?.issue;
-    if (!textarea || !marker || !issue) return;
+  /// Both the compile-error stripe and the paused line share the textarea's
+  /// geometry, so they are placed together on every edit, scroll and pause.
+  const syncEditorOverlays = (textarea: HTMLTextAreaElement | null) => {
+    if (!textarea) return;
     const style = getComputedStyle(textarea);
     const lineHeight =
       Number.parseFloat(style.lineHeight) ||
       (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
     const padTop = Number.parseFloat(style.paddingTop) || 0;
-    const top = padTop + (issue.line - 1) * lineHeight - textarea.scrollTop;
-    marker.style.top = `${top}px`;
-    marker.style.height = `${lineHeight}px`;
-    marker.style.display =
-      top + lineHeight < 0 || top > textarea.clientHeight ? "none" : "block";
+    const place = (marker: HTMLDivElement | null, line: number | null) => {
+      if (!marker) return;
+      if (line == null) {
+        marker.style.display = "none";
+        return;
+      }
+      const top = padTop + (line - 1) * lineHeight - textarea.scrollTop;
+      marker.style.top = `${top}px`;
+      marker.style.height = `${lineHeight}px`;
+      marker.style.display =
+        top + lineHeight < 0 || top > textarea.clientHeight ? "none" : "block";
+    };
+    const issueLine =
+      current?.issue && selected != null && !dirty.has(selected)
+        ? current.issue.line
+        : null;
+    place(issueLineRef.current, issueLine);
+    place(debugLineRef.current, debugLine);
   };
 
   useEffect(() => {
-    syncIssueMarker(textareaRef.current);
-  }, [current?.issue, selected, dirty]);
+    syncEditorOverlays(textareaRef.current);
+  }, [current?.issue, selected, dirty, debugLine]);
+
+  /// A new paused line scrolls into view without stealing the caret from
+  /// an edit the user may be making while the node is parked.
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || debugLine == null) return;
+    revealPosition(textarea, lineOffset(textarea.value, debugLine));
+    const pre = highlightRef.current;
+    if (pre) {
+      pre.scrollTop = textarea.scrollTop;
+      pre.scrollLeft = textarea.scrollLeft;
+    }
+    if (gutterRef.current) gutterRef.current.scrollTop = textarea.scrollTop;
+    syncEditorOverlays(textarea);
+  }, [debugLine]);
+
+  const lineAtCaret = (textarea: HTMLTextAreaElement | null) =>
+    textarea
+      ? textarea.value.slice(0, textarea.selectionStart).split("\n").length
+      : 1;
+
+  const revealLine = (line: number) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const at = lineOffset(textarea.value, line);
+    textarea.focus();
+    textarea.setSelectionRange(at, at);
+    revealPosition(textarea, at);
+    syncEditorOverlays(textarea);
+  };
+
+  const toggleBreakpoint = (line: number) => {
+    if (selected == null) return;
+    const key = selected;
+    const next = breakpoints.includes(line)
+      ? breakpoints.filter((item) => item !== line)
+      : [...breakpoints, line].sort((a, b) => a - b);
+    setBreakpointMap((map) => ({ ...map, [key]: next }));
+    if (debugArmedRef.current) {
+      void sendDebug({ action: "set_breakpoints", lines: next }).catch((e) =>
+        setDebugError(String(e)),
+      );
+    }
+  };
+
+  const toggleBreakpointAtCaret = () =>
+    toggleBreakpoint(lineAtCaret(textareaRef.current));
+
+  const armDebugger = async () => {
+    if (!current) return;
+    setDebugError("");
+    try {
+      const view = await sendDebug({
+        action: "arm",
+        node_id: current.id,
+        lines: breakpoints,
+      });
+      setDebugView(view);
+      setDebugArmed(true);
+    } catch (e) {
+      setDebugError(String(e));
+    }
+  };
+
+  const stopDebugger = async () => {
+    setDebugArmed(false);
+    setDebugError("");
+    try {
+      setDebugView(await sendDebug({ action: "stop" }));
+    } catch (e) {
+      setDebugError(String(e));
+    }
+  };
+
+  const runDebug = async (action: "continue" | "step" | "pause") => {
+    try {
+      setDebugView(await sendDebug({ action }));
+    } catch (e) {
+      setDebugError(String(e));
+    }
+  };
 
   useEffect(() => {
     setName(current?.name ?? "");
@@ -2175,6 +2338,12 @@ export function ScriptsModal({
     if (!textarea) return;
     if (composing || event.isComposing || event.keyCode === 229) return;
 
+    if (event.key === "F9") {
+      event.preventDefault();
+      toggleBreakpointAtCaret();
+      return;
+    }
+
     if (
       event.key === "Backspace" &&
       !event.ctrlKey &&
@@ -2367,6 +2536,21 @@ export function ScriptsModal({
   const issue = current?.issue ?? null;
   const showIssue = !!issue && selected != null && !dirty.has(selected);
   const findCount = findOpen && findText ? findMatches(draft, findText).length : 0;
+  const debugStatus = debugError
+    ? debugError
+    : debugPaused
+      ? `Paused at line ${debugLine}${
+          debugView?.function ? ` in ${debugView.function}` : ""
+        }. The node is blocked until Continue, Step or Stop.`
+      : debugArmed
+        ? "Armed — waiting for a breakpoint. Start or restart the measurement."
+        : current && !current.enabled
+          ? "Enable the script to debug it."
+          : current && dirty.has(current.id)
+            ? "Apply changes before debugging."
+            : "F9 toggles a breakpoint on the caret line.";
+  const scriptTests = current?.tests ?? [];
+  const failedTests = scriptTests.filter((test) => test.failures > 0).length;
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -2464,6 +2648,18 @@ export function ScriptsModal({
                   {!script.enabled && <em>disabled</em>}
                   {script.running && <em class="ok">running</em>}
                   {script.errored && <em class="bad">error</em>}
+                  {script.tests.length > 0 && (
+                    <em
+                      class={
+                        script.tests.some((test) => test.failures > 0)
+                          ? "bad"
+                          : "ok"
+                      }
+                    >
+                      {script.tests.filter((test) => test.failures === 0).length}
+                      /{script.tests.length} tests
+                    </em>
+                  )}
                 </span>
               </button>
             ))}
@@ -2580,7 +2776,119 @@ export function ScriptsModal({
                     </button>
                   </div>
                 )}
-                <div class="script-editor">
+                <div class={`script-debug-bar ${debugArmed ? "on" : ""}`}>
+                  {debugArmed ? (
+                    <>
+                      <button
+                        type="button"
+                        class="primary"
+                        disabled={!debugPaused}
+                        onClick={() => void runDebug("continue")}
+                      >
+                        Continue
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!debugPaused}
+                        onClick={() => void runDebug("step")}
+                      >
+                        Step
+                      </button>
+                      <button
+                        type="button"
+                        disabled={debugPaused}
+                        onClick={() => void runDebug("pause")}
+                      >
+                        Pause
+                      </button>
+                      <button
+                        type="button"
+                        disabled={debugPaused}
+                        title={
+                          debugPaused
+                            ? "Continue or stop before restarting"
+                            : "Apply the editor and restart this node"
+                        }
+                        onClick={apply}
+                      >
+                        Restart
+                      </button>
+                      <button type="button" onClick={() => void stopDebugger()}>
+                        Stop
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      class="primary"
+                      disabled={!current.enabled || dirty.has(current.id)}
+                      title={
+                        !current.enabled
+                          ? "Enable the script first"
+                          : dirty.has(current.id)
+                            ? "Apply changes before debugging"
+                            : "Pause on breakpoints; F9 toggles one"
+                      }
+                      onClick={() => void armDebugger()}
+                    >
+                      Debug
+                    </button>
+                  )}
+                  <span class={`script-debug-status ${debugError ? "bad" : ""}`}>
+                    {debugStatus}
+                  </span>
+                </div>
+                <div class="script-code">
+                  <div
+                    ref={gutterRef}
+                    class="script-gutter"
+                    title="Click a line to toggle a breakpoint"
+                    onClick={(event) => {
+                      const area = textareaRef.current;
+                      if (!area) return;
+                      const gutter = event.currentTarget as HTMLDivElement;
+                      const style = getComputedStyle(area);
+                      const lineHeight =
+                        Number.parseFloat(style.lineHeight) ||
+                        (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
+                      const padTop =
+                        Number.parseFloat(style.paddingTop) || 8;
+                      const border =
+                        Number.parseFloat(
+                          getComputedStyle(gutter).borderTopWidth,
+                        ) || 0;
+                      const rect = gutter.getBoundingClientRect();
+                      const y =
+                        event.clientY -
+                        rect.top -
+                        border +
+                        gutter.scrollTop -
+                        padTop;
+                      toggleBreakpoint(
+                        Math.max(1, Math.floor(y / lineHeight) + 1),
+                      );
+                    }}
+                  >
+                    <pre ref={gutterNumsRef} class="script-gutter-nums" />
+                    {breakpoints.map((line) => (
+                      <span
+                        key={`bp:${line}`}
+                        class="bp"
+                        style={{
+                          top: `calc(8px + ${((line - 0.5) * 1.45).toFixed(2)}em)`,
+                        }}
+                      />
+                    ))}
+                    {debugLine != null && (
+                      <span
+                        class="cur"
+                        style={{
+                          top: `calc(8px + ${((debugLine - 1) * 1.45).toFixed(2)}em)`,
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div class="script-editor">
                   <pre
                     ref={highlightRef}
                     class="script-highlight"
@@ -2588,6 +2896,9 @@ export function ScriptsModal({
                   />
                   {showIssue && issue && (
                     <div ref={issueLineRef} class="script-issue-line" />
+                  )}
+                  {debugLine != null && (
+                    <div ref={debugLineRef} class="script-debug-line" />
                   )}
                   <textarea
                     ref={textareaRef}
@@ -2616,9 +2927,12 @@ export function ScriptsModal({
                         pre.scrollTop = area.scrollTop;
                         pre.scrollLeft = area.scrollLeft;
                       }
+                      if (gutterRef.current) {
+                        gutterRef.current.scrollTop = area.scrollTop;
+                      }
                       setCompletion(null);
                       setSignature(null);
-                      syncIssueMarker(area);
+                      syncEditorOverlays(area);
                     }}
                     onClick={(event) => {
                       setCompletion(null);
@@ -2705,7 +3019,64 @@ export function ScriptsModal({
                       )
                     </div>
                   )}
+                  </div>
                 </div>
+                {debugPaused && debugView && (
+                  <div class="script-debug-panel">
+                    <section>
+                      <h4>Call stack</h4>
+                      <div class="script-debug-rows">
+                        {[...debugView.stack].reverse().map((frame, index) => (
+                          <button
+                            type="button"
+                            key={`${frame.function}:${index}`}
+                            class={index === 0 ? "on" : ""}
+                            onClick={() => revealLine(frame.line)}
+                          >
+                            <strong>{frame.function}</strong>
+                            <span>line {frame.line}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                    <section>
+                      <h4>Locals</h4>
+                      <div class="script-debug-rows">
+                        {debugView.locals.length === 0 ? (
+                          <span class="script-debug-empty">None</span>
+                        ) : (
+                          debugView.locals.map((value, index) => (
+                            <div
+                              key={`${value.name}:${index}`}
+                              class="script-debug-row"
+                            >
+                              <strong>{value.name}</strong>
+                              <span>{value.value}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </section>
+                    <section>
+                      <h4>Globals</h4>
+                      <div class="script-debug-rows">
+                        {debugView.globals.length === 0 ? (
+                          <span class="script-debug-empty">None</span>
+                        ) : (
+                          debugView.globals.map((value, index) => (
+                            <div
+                              key={`${value.name}:${index}`}
+                              class="script-debug-row"
+                            >
+                              <strong>{value.name}</strong>
+                              <span>{value.value}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                )}
                 {showIssue && issue && (
                   <button type="button" class="script-issue" onClick={jumpToIssue}>
                     <strong>
@@ -2719,7 +3090,12 @@ export function ScriptsModal({
                   <button
                     type="button"
                     class="primary"
-                    disabled={!dirty.has(current.id)}
+                    disabled={!dirty.has(current.id) || debugPaused}
+                    title={
+                      debugPaused
+                        ? "Continue or stop the debugger first"
+                        : undefined
+                    }
                     onClick={apply}
                   >
                     Apply
@@ -2749,6 +3125,12 @@ export function ScriptsModal({
                   <button
                     type="button"
                     class="danger"
+                    disabled={debugPaused}
+                    title={
+                      debugPaused
+                        ? "Continue or stop the debugger first"
+                        : undefined
+                    }
                     onClick={() => {
                       if (window.confirm(`Remove ${current.name}?`)) {
                         onCommand({ type: "remove_script", id: current.id });
@@ -2782,6 +3164,49 @@ export function ScriptsModal({
                     Save file
                   </button>
                 </div>
+                {scriptTests.length > 0 && (
+                  <div class="script-tests">
+                    <header class={failedTests > 0 ? "bad" : "ok"}>
+                      <strong>Tests</strong>
+                      <span>
+                        {scriptTests.length - failedTests}/{scriptTests.length}{" "}
+                        passed
+                        {failedTests > 0
+                          ? ` · ${failedTests} failed`
+                          : ""}
+                      </span>
+                    </header>
+                    <div class="script-test-rows">
+                      {scriptTests.map((test) => (
+                        <button
+                          type="button"
+                          key={test.name}
+                          class={`script-test ${
+                            test.failures > 0 ? "bad" : "ok"
+                          }`}
+                          title={
+                            test.line > 0
+                              ? `Jump to line ${test.line}`
+                              : undefined
+                          }
+                          onClick={() => {
+                            if (test.line > 0) revealLine(test.line);
+                          }}
+                        >
+                          <span class="script-test-state">
+                            {test.failures > 0 ? "FAIL" : "PASS"}
+                          </span>
+                          <strong>{test.name}</strong>
+                          <span class="script-test-meta">
+                            {test.runs} run{test.runs === 1 ? "" : "s"}
+                            {test.line > 0 ? ` · line ${test.line}` : ""}
+                            {` · ${test.timeS.toFixed(3)} s`}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div class={`script-log ${current.errored ? "bad" : ""}`}>
                   {current.log.length === 0 ? (
                     <span class="script-empty-line">
@@ -2801,6 +3226,8 @@ export function ScriptsModal({
                   parameters. Brackets and double quotes pair automatically, and
                   Backspace removes a whole indent. Ctrl+/ comments lines,
                   Alt+↑/↓ moves them, Shift+Alt+↓ duplicates, Ctrl+F finds.
+                  F9 toggles a breakpoint; Debug parks the node so you can
+                  inspect locals and the call stack.
                 </p>
               </>
             ) : (

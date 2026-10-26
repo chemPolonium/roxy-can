@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::{
     App, DataWindow, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin, YMode,
 };
+use crate::can::frame::FrameFlags;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 use crate::trigger::{TriggerAction, TriggerCond};
@@ -438,6 +439,9 @@ pub struct TxCfg {
     pub cycle_us: u64,
     #[serde(default)]
     pub fd: bool,
+    /// FD data phase at the bus's data bitrate; ignored without `fd`.
+    #[serde(default)]
+    pub brs: bool,
     /// Value sources layered over `data` at emit time. Absent in projects
     /// saved before the stimulus engine, which then behave exactly as before.
     #[serde(default)]
@@ -1075,6 +1079,7 @@ impl Config {
                     data: crate::generator::parse_hex_bytes(&t.data_text).unwrap_or_default(),
                     cycle_us: t.cycle_us,
                     fd: t.fd,
+                    brs: t.brs,
                     srcs: t.srcs.iter().map(src_cfg).collect(),
                 })
                 .collect(),
@@ -1317,7 +1322,16 @@ impl Config {
                 active: t.active,
                 cycle_us,
                 fd: t.fd,
-                flags: None,
+                flags: Some(if t.fd {
+                    let flags = FrameFlags::FD;
+                    if t.brs {
+                        flags.union(FrameFlags::BRS)
+                    } else {
+                        flags
+                    }
+                } else {
+                    FrameFlags::NONE
+                }),
                 data_text,
                 srcs: t.srcs.into_iter().filter_map(value_src).collect(),
             });
@@ -1762,6 +1776,7 @@ mod tests {
         app.stats_windows[0].scope = SigScope::FrBus(2);
         app.tx_list[0].active = true;
         app.tx_list[0].cycle_us = 50_000;
+        app.tx_list[0].flags = FrameFlags::FD.union(FrameFlags::BRS);
         app.refresh_snapshot();
 
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
@@ -1786,6 +1801,8 @@ mod tests {
         );
         assert!(restored.tx_list[0].active);
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
+        assert!(restored.tx_list[0].flags.contains(FrameFlags::FD));
+        assert!(restored.tx_list[0].flags.contains(FrameFlags::BRS));
         assert_eq!(restored.channels.len(), app.channels.len());
     }
 

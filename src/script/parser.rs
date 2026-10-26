@@ -41,6 +41,8 @@ pub struct OnDecl {
 pub enum OnKind {
     /// Measurement start, once.
     Start,
+    /// Measurement stop, once: manual Stop or the end of a replay.
+    Stop,
     /// A frame with this identifier arrived on the node's channel.
     Message { id: u32 },
     /// A frame whose DBC message name is `name` arrived. The node resolves
@@ -458,9 +460,11 @@ impl P {
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::On, "'on'")?;
-        let word = self.ident("'start', 'message', 'timer', 'extended', 'errorFrame' or 'fr'")?;
+        let word =
+            self.ident("'start', 'stop', 'message', 'timer', 'extended', 'errorFrame' or 'fr'")?;
         let kind = match word.as_str() {
             "start" => OnKind::Start,
+            "stop" => OnKind::Stop,
             "extended" => {
                 // `on extended message <id>`: an extended frame with this
                 // numeric id. The word after must be `message`.
@@ -538,7 +542,7 @@ impl P {
             }
             other => {
                 return self.err(&format!(
-                    "unknown event '{other}' (start, message, extended message, timer, errorFrame, fr slot)"
+                    "unknown event '{other}' (start, stop, message, extended message, timer, errorFrame, fr slot)"
                 ));
             }
         };

@@ -215,6 +215,13 @@ pub enum BusCommand {
         id: u32,
         fd: bool,
     },
+    /// Run the entry's FD data phase at the bus's data rate. Only
+    /// meaningful while the entry is FD; dropping FD clears it.
+    SetEntryBrs {
+        ch: u8,
+        id: u32,
+        brs: bool,
+    },
     /// Set the send period in µs (0 = event-triggered); the schedule
     /// restarts now rather than at the end of the old one.
     SetEntryCycle {
@@ -687,6 +694,8 @@ pub struct NodeView {
     pub errored: bool,
     /// Last compile failure, with its source position.
     pub issue: Option<crate::node::ScriptIssue>,
+    /// `test(...)` results from the last stopped run.
+    pub tests: Vec<crate::script::TestResult>,
     /// Oldest-first log lines (print output and errors).
     pub log: Vec<String>,
 }
@@ -899,6 +908,8 @@ pub struct TxView {
     /// 开关关闭时即便 active 也不发送——UI 用它区分「条目自己关着」与「所属节点的角色不是模拟」。
     pub gate_open: bool,
     pub fd: bool,
+    /// FD data phase runs at the bus's data bitrate.
+    pub brs: bool,
     pub cycle_us: u64,
     /// Base payload as hex text -- also the no-DBC message's editable box.
     pub data_text: String,
@@ -1698,9 +1709,21 @@ impl BusCore {
             BusCommand::SetEntryFd { ch, id, fd } => {
                 if let Some(tx) = self.entry_mut(ch, id) {
                     tx.flags = if fd {
-                        crate::can::frame::FrameFlags::FD
+                        tx.flags.union(crate::can::frame::FrameFlags::FD)
                     } else {
-                        crate::can::frame::FrameFlags::NONE
+                        tx.flags
+                            .remove(crate::can::frame::FrameFlags::FD)
+                            .remove(crate::can::frame::FrameFlags::BRS)
+                    };
+                }
+            }
+            BusCommand::SetEntryBrs { ch, id, brs } => {
+                if let Some(tx) = self.entry_mut(ch, id) {
+                    let fd = tx.flags.contains(crate::can::frame::FrameFlags::FD);
+                    tx.flags = if brs && fd {
+                        tx.flags.union(crate::can::frame::FrameFlags::BRS)
+                    } else {
+                        tx.flags.remove(crate::can::frame::FrameFlags::BRS)
                     };
                 }
             }
@@ -2276,6 +2299,7 @@ impl BusCore {
                 running: n.running(),
                 errored: n.errored(),
                 issue: n.issue().cloned(),
+                tests: n.tests.clone(),
                 log: n.log_snapshot(),
             })
             .collect();
@@ -2325,6 +2349,7 @@ impl BusCore {
             || line.starts_with("[sysvar]")
             || line.starts_with("[compile]")
             || line.starts_with("[start]")
+            || line.starts_with("[tests]")
         {
             WriteKind::Warning
         } else {
@@ -3104,6 +3129,7 @@ impl BusCore {
                             || self.channels[t.channel as usize].role_of(&t.node)
                                 == crate::app::NodeRole::Simulated,
                         fd: t.flags.contains(crate::can::frame::FrameFlags::FD),
+                        brs: t.flags.contains(crate::can::frame::FrameFlags::BRS),
                         cycle_us: t.cycle_us,
                         data_text: t.data_text.clone(),
                         sent_text: crate::generator::hex_text(&sent_data, sent_len),
@@ -4529,11 +4555,31 @@ impl BusCore {
         self.replay_stop_at = None;
         self.source.set_poll_limit(None);
         self.recorder.close();
-        for node in &mut self.nodes {
-            node.stop();
-        }
+        self.finish_nodes();
         self.nodes_dirty = true;
         *status = "stopped".to_string();
+    }
+
+    /// Gives every live node its `on stop` run with the final inputs, keeps
+    /// the test results and mirrors the new log lines into Write. Safe to
+    /// call when nothing is running (all nodes have no runtime).
+    fn finish_nodes(&mut self) {
+        let inputs = self.build_node_inputs(self.sim_t_us);
+        let mut node_lines: Vec<(String, String)> = Vec::new();
+        for node in &mut self.nodes {
+            let input = inputs.get(&node.channel).cloned().unwrap_or_default();
+            node.stop_with(&input);
+            let name = node.name.clone();
+            for line in node.take_new_lines() {
+                node_lines.push((name.clone(), line));
+            }
+            if node.take_log_if_dirty().is_some() {
+                self.nodes_dirty = true;
+            }
+        }
+        for (name, line) in node_lines {
+            self.write_node_line(&name, &line);
+        }
     }
 
     fn toggle_record(&mut self, status: &mut String) {
@@ -5161,6 +5207,8 @@ impl BusCore {
             self.replay_stop_at = None;
             self.source.set_poll_limit(None);
             self.recorder.close();
+            self.finish_nodes();
+            self.nodes_dirty = true;
             let dur = self.source.duration().unwrap_or(0) as f64 / 1e6;
             *status = format!("replay finished at {dur:.2}s");
         } else if self.measuring

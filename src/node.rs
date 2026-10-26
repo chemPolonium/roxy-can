@@ -47,6 +47,9 @@ pub struct ScriptNode {
     /// The last compile failure, kept structured for the editor's inline
     /// diagnostic. Cleared on source edits, restarts and stops.
     issue: Option<ScriptIssue>,
+    /// `test(...)` results from the last run, filled by `on stop` when
+    /// the measurement ends. Cleared by the next start.
+    pub tests: Vec<crate::script::TestResult>,
     /// Lines pushed to `log` and not yet mirrored into the bus's Write
     /// ring. Drained by the bus on the same step.
     pending_lines: Vec<String>,
@@ -124,6 +127,7 @@ impl ScriptNode {
             log_dirty: false,
             errored: false,
             issue: None,
+            tests: Vec::new(),
             pending_lines: Vec::new(),
         }
     }
@@ -203,6 +207,7 @@ impl ScriptNode {
     ) {
         self.errored = false;
         self.issue = None;
+        self.tests.clear();
         let script = match compile(&self.source) {
             Ok(s) => s,
             Err(e) => {
@@ -376,6 +381,7 @@ impl ScriptNode {
             eth_bus_named_ids.insert((bus_name.clone(), frame.clone(), sig.clone()), bus);
         }
         let mut vm = Vm::new(script);
+        vm.node_id = self.id;
         vm.reset_budget(NODE_HANDLER_BUDGET);
         vm.named_messages = named_messages;
         vm.fr_named_slots = fr_named_slots;
@@ -442,11 +448,67 @@ impl ScriptNode {
         self.runtime = Some(rt);
     }
 
-    /// Tears the runtime down; the source and log stay.
-    pub fn stop(&mut self) {
+    /// Ends a measurement: runs `on stop` with the final host input, keeps
+    /// its `test(...)` results and then drops the runtime. A no-op when the
+    /// node was not running, so Stop can be repeated safely.
+    pub fn stop_with(&mut self, input: &HostInput) {
+        let Some(mut rt) = self.runtime.take() else {
+            return;
+        };
+        if self.enabled && !self.errored {
+            rt.vm.host_input = input.clone();
+            // The stop event has no frame context; a stale arrival must
+            // not leak into frame_*() or this.signal.
+            rt.vm.frame_present = false;
+            rt.vm.frame_is_fr = false;
+            rt.vm.fr_cycle = 0;
+            for handler in rt.handlers.clone() {
+                if !matches!(handler.kind, HandlerKind::Stop) {
+                    continue;
+                }
+                rt.vm.reset_budget(NODE_HANDLER_BUDGET);
+                rt.vm.timer_ops.clear();
+                if let Err(e) = rt.vm.run_handler(handler.chunk) {
+                    Self::push_log_into(
+                        &mut self.log,
+                        &mut self.log_dirty,
+                        &mut self.pending_lines,
+                        format!("[stop] {e}"),
+                    );
+                    break;
+                }
+                Self::drain_vm(
+                    &mut rt,
+                    &mut self.log,
+                    &mut self.log_dirty,
+                    &mut self.pending_lines,
+                );
+            }
+        }
+        self.tests = std::mem::take(&mut rt.vm.tests);
         self.runtime = None;
         self.errored = false;
         self.issue = None;
+        if !self.tests.is_empty() {
+            let failed = self.tests.iter().filter(|test| test.failures > 0).count();
+            let total = self.tests.len();
+            let summary = if failed == 0 {
+                format!("[tests] {total}/{total} passed")
+            } else {
+                let names: Vec<&str> = self
+                    .tests
+                    .iter()
+                    .filter(|test| test.failures > 0)
+                    .map(|test| test.name.as_str())
+                    .collect();
+                format!(
+                    "[tests] {}/{total} passed; {failed} failed: {}",
+                    total - failed,
+                    names.join(", ")
+                )
+            };
+            self.push_log(summary);
+        }
     }
 
     /// Applies a source edit. While measuring a running node recompiles
@@ -462,6 +524,7 @@ impl ScriptNode {
     ) {
         self.source = source;
         self.issue = None;
+        self.tests.clear();
         if measuring && self.enabled {
             self.start_with(dbc, fr_dbs, eth_dbs);
         } else if self.runtime.is_some() {

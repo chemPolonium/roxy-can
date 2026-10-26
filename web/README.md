@@ -101,7 +101,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   immediately and are saved with the project. It uses the same core commands
   as the core Buses/Network models.
 - **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
-  cycle, FD and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
+  cycle, FD, BRS and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
   action, and FR slots added by number to a loaded cluster description. The
   Write tab shows the bus Write ring (command results, node errors, trigger
   events). **Sources** opens the CAN waveform editor per entry: add/remove a
@@ -135,8 +135,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   template, load a local `.rxcan` file into the draft, save the source to a
   host `.rxcan` path, or remove it. Nodes run through the same
   `AddNode`/`SetNodeSource` commands as the core node model. The editor
-  colors comments, strings, numbers, keywords and calls; it is not a full
-  language server.
+  colors comments, strings, numbers, keywords and calls, completes
+  context-aware names, shows call signatures and inline compile errors,
+  and supports find/replace. F9 toggles line breakpoints; a paused node
+  shows locals, globals and its call stack. `on stop` plus
+  `test("name", condition)` leaves a pass/fail list in the editor and a
+  `[tests]` verdict in Write.
 - **SysVars…** manages system variables through the real core: add/edit
   definitions (namespace, name, init, clamped min/max, unit, comment), edit
   live values in place (writes clamp), rename by deleting the old key, and

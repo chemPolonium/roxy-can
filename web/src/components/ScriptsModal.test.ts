@@ -79,6 +79,7 @@ describe("completion contexts", () => {
     const items = labels("on |");
     expect(items).toEqual([
       "start",
+      "stop",
       "message",
       "extended",
       "timer",
