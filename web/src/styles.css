@@ -2414,7 +2414,8 @@ button.mini.on {
   font-size: 10.5px;
 }
 
-.bus-dbc-row button {
+.bus-dbc-row button,
+.proto-add button {
   padding: 2px 7px;
   font-size: 10.5px;
 }
