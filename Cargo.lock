@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "roxy-can"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "axum",
  "can-dbc",
