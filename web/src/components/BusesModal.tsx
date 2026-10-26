@@ -234,7 +234,7 @@ function BusCard({
         <span>Database</span>
         <input
           value={dbc}
-          placeholder="Host path to a .dbc or ARXML"
+          placeholder="Host path to a CAN database (.dbc / ARXML)"
           onInput={(event) => setDbc((event.target as HTMLInputElement).value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && dbc.trim()) {
@@ -247,7 +247,7 @@ function BusCard({
           disabled={!dbc.trim()}
           onClick={() => onLoadDbc(bus.index, dbc.trim())}
         >
-          Load DBC
+          Load database
         </button>
         <FilePick
           label="Choose…"
@@ -587,13 +587,13 @@ export function BusesModal({
             >
               <input
                 value={frPath}
-                placeholder="Host path to a FIBEX / ARXML cluster"
+                placeholder="Host path to a FlexRay database (FIBEX / ARXML)"
                 onInput={(event) =>
                   setFrPath((event.target as HTMLInputElement).value)
                 }
               />
               <button type="submit" disabled={!frPath.trim()}>
-                Load description
+                Load database
               </button>
               <FilePick
                 label="Choose…"
@@ -639,13 +639,13 @@ export function BusesModal({
             >
               <input
                 value={ethPath}
-                placeholder="Host path to an AUTOSAR ARXML matrix"
+                placeholder="Host path to an Ethernet database (ARXML)"
                 onInput={(event) =>
                   setEthPath((event.target as HTMLInputElement).value)
                 }
               />
               <button type="submit" disabled={!ethPath.trim()}>
-                Load matrix
+                Load database
               </button>
               <FilePick
                 label="Choose…"
@@ -759,7 +759,7 @@ export function BusesModal({
         </div>
 
         <p class="hint picker-hint">
-          Add/remove, names, rates and DBC paths are host-side edits. Removing a
+          Add/remove, names, rates and database paths are host-side edits. Removing a
           bus stops measurement and remaps the remaining channels.
         </p>
       </div>
