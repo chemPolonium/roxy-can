@@ -24,6 +24,10 @@ on stop {
     test("engine seen", defined(EngineStatus.EngineSpeed));
 }
 
+on panel_action("Start sequence") {
+    print("panel button");
+}
+
 on message 0x100 {
     let rpm = sig(0x100, "RPM");
     print("rpm:", rpm);
@@ -163,6 +167,22 @@ on stop {
 
 停止事件没有触发帧，`this.*` 与 `frame_*()` 不可用；停在这里的 `send` / `fr_send`
 不会再发到总线。
+
+### on panel_action
+
+Panel 页面的按钮可以绑定一个脚本动作名；点击后 core 在测量步内执行所有同名的
+`on panel_action("…")`。它不是直接调用某个函数，所以仍然受 10 万条指令预算约束，
+`send` / `emit_value` / `sys_set` / `print` 走与定时器处理器相同的输出路径。动作只在
+测量运行中生效；没有运行中的同名处理器时状态栏会提示。
+
+```c
+on panel_action("Start sequence") {
+    print("sequence started");
+    sys_set("bench::state", 1);
+}
+```
+
+面板按钮编辑时把 Action 选为 **Script action**，再填动作名即可。
 
 ### on message \<id\>
 

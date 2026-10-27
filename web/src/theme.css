@@ -705,3 +705,114 @@
 [data-theme="light"] .tok-fn {
   color: #7b3fbf;
 }
+
+[data-theme="light"] .view-switch {
+  border-color: #d4dbe4;
+  background: #ffffff;
+}
+
+[data-theme="light"] .view-switch button {
+  color: #526174;
+}
+
+[data-theme="light"] .view-switch button:hover:not(:disabled):not(.on) {
+  background: rgb(15 23 42 / 5%);
+  color: #1f2937;
+}
+
+[data-theme="light"] .view-switch button.on {
+  background: #e3eefc;
+  color: #1557a8;
+}
+
+[data-theme="light"] .page-viewport {
+  background: #edf1f6;
+}
+
+[data-theme="light"] .page-tab {
+  color: #526174;
+}
+
+[data-theme="light"] .page-tab:hover:not(:disabled):not(.on) {
+  background: rgb(15 23 42 / 5%);
+  color: #1f2937;
+}
+
+[data-theme="light"] .page-tab.on {
+  background: #e3eefc;
+  color: #1557a8;
+}
+
+[data-theme="light"] .page-canvas {
+  --page-grid-minor: rgb(15 23 42 / 6%);
+  --page-grid-major: rgb(15 23 42 / 12%);
+  background-color: #ffffff;
+  border-color: #d4dbe4;
+}
+
+[data-theme="light"] .page-canvas.editing {
+  --page-grid-minor: rgb(15 23 42 / 11%);
+  --page-grid-major: rgb(15 23 42 / 20%);
+}
+
+[data-theme="light"] .page-button {
+  border-color: #c8d1dc;
+  background: #ffffff;
+  color: #26313f;
+}
+
+[data-theme="light"] .page-button:hover:not(:disabled) {
+  border-color: #9fb4cc;
+  background: #eef4fb;
+}
+
+[data-theme="light"] .page-value {
+  border-color: #d4dbe4;
+  background: #ffffff;
+}
+
+[data-theme="light"] .page-value strong {
+  color: #26313f;
+}
+
+[data-theme="light"] .page-numeric {
+  border-color: #d4dbe4;
+  background: #ffffff;
+}
+
+[data-theme="light"] .page-toggle {
+  border-color: #c8d1dc;
+  background: #ffffff;
+  color: #26313f;
+}
+
+[data-theme="light"] .page-toggle:hover:not(:disabled) {
+  border-color: #9fb4cc;
+  background: #eef4fb;
+}
+
+[data-theme="light"] .page-toggle.on {
+  border-color: #1f6fd0;
+  background: #e8f1fd;
+  color: #1557a8;
+}
+
+[data-theme="light"] .page-toggle.on .page-toggle-state {
+  color: #1557a8;
+}
+
+[data-theme="light"] .page-empty strong,
+[data-theme="light"] .page-inspector-title {
+  color: #26313f;
+}
+
+[data-theme="light"] .page-inspector {
+  background: #f5f7fa;
+}
+
+[data-theme="light"] .page-toast {
+  border-color: #d4dbe4;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgb(31 45 61 / 18%);
+  color: #26313f;
+}

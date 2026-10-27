@@ -75,6 +75,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     // handler per one-shot timer name, one wildcard.
     let mut seen_start = false;
     let mut seen_stop = false;
+    let mut seen_panel_actions: HashSet<String> = HashSet::new();
     let mut seen_ids: HashSet<u32> = HashSet::new();
     let mut seen_named_messages: HashSet<String> = HashSet::new();
     let mut seen_named: HashSet<String> = HashSet::new();
@@ -96,6 +97,15 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                         return c.err_at(on.line, on.col, "duplicate 'on stop' handler");
                     }
                     seen_stop = true;
+                }
+                OnKind::PanelAction { name } => {
+                    if !seen_panel_actions.insert(name.clone()) {
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for panel action \"{name}\""),
+                        );
+                    }
                 }
                 OnKind::Message { id } => {
                     if !seen_ids.insert(*id) {
@@ -276,6 +286,7 @@ fn handler_label(kind: &HandlerKind) -> String {
     match kind {
         HandlerKind::Start => "<on start>".to_string(),
         HandlerKind::Stop => "<on stop>".to_string(),
+        HandlerKind::PanelAction { name } => format!("<on panel_action \"{name}\">"),
         HandlerKind::Message { id } => format!("<on message {id:#x}>"),
         HandlerKind::NamedMessage { name } => format!("<on message {name}>"),
         HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
@@ -965,6 +976,7 @@ impl Comp {
         let kind = match &on.kind {
             OnKind::Start => HandlerKind::Start,
             OnKind::Stop => HandlerKind::Stop,
+            OnKind::PanelAction { name } => HandlerKind::PanelAction { name: name.clone() },
             OnKind::Message { id } => HandlerKind::Message { id: *id },
             OnKind::NamedMessage { name } => HandlerKind::NamedMessage { name: name.clone() },
             OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
@@ -1086,6 +1098,11 @@ mod tests {
         assert!(compile_err("print(nope);").contains("unknown"));
         assert!(compile_err("x = 1;").contains("undeclared"));
         assert!(compile_err("on stop { } on stop { }").contains("duplicate 'on stop'"));
+        assert!(
+            compile_err("on panel_action(\"Go\") { } on panel_action(\"Go\") { }")
+                .contains("duplicate handler for panel action")
+        );
+        assert!(compile_err("on panel_action(\"\") { }").contains("cannot be empty"));
         assert!(compile_err("on start { } on start { }").contains("duplicate 'on start'"));
         assert!(compile_err("fn f(a) { } print(f());").contains("argument"));
         assert!(compile_err("fn f() { } fn f() { }").contains("duplicate"));

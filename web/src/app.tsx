@@ -50,6 +50,7 @@ import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
 import type { MonitorPatch } from "./components/MonitorPanel";
+import { PagePanel } from "./components/PagePanel";
 import { RateChart } from "./components/RateChart";
 import {
   ReferenceModal,
@@ -102,9 +103,27 @@ import {
   parseTraceColumns,
   saveTraceColumns,
 } from "./traceLayout";
+import {
+  defaultPanelBook,
+  panelActionCommand,
+  parsePanelBook,
+  type PanelBook,
+  type PanelButton,
+  type PanelNumeric,
+  type PanelPage,
+  type PanelToggle,
+} from "./panelPage";
+import {
+  clampPanelNumber,
+  findPanelSysVar,
+  panelSourceOptions,
+  runningPanelActions,
+  type PanelActionContext,
+  type PanelView,
+} from "./panelBinding";
 
 type RightTab = "statistics" | "bus" | "spec" | "activity";
-type MainView = "trace" | "messages";
+type MainView = "trace" | "messages" | "panel";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
 type Drag = "main" | "right" | null;
 
@@ -129,6 +148,8 @@ interface SavedView {
   overlay: boolean;
   signalView: SignalView;
   cursors: ChartCursor[];
+  panelPage?: PanelPage;
+  panelBook?: PanelBook;
 }
 
 interface SavedWorkspace extends Partial<SavedView> {
@@ -167,7 +188,9 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
   return {
     tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
     mainView:
-      saved.mainView === "trace" || saved.mainView === "messages"
+      saved.mainView === "trace" ||
+      saved.mainView === "messages" ||
+      saved.mainView === "panel"
         ? saved.mainView
         : undefined,
     chartTab:
@@ -183,6 +206,8 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
     signalView: { windowS, endS },
     cursors,
+    panelBook:
+      parsePanelBook(saved.panelBook, saved.panelPage) ?? defaultPanelBook(),
   };
 }
 
@@ -346,6 +371,12 @@ export function App() {
   const [mainView, setMainView] = useState<MainView>(
     savedView.mainView ?? "messages",
   );
+  const [panelBook, setPanelBook] = useState<PanelBook>(
+    savedView.panelBook ?? defaultPanelBook(),
+  );
+  const standardView = useRef<"trace" | "messages">(
+    savedView.mainView === "trace" ? "trace" : "messages",
+  );
   const [chartTab, setChartTab] = useState<ChartTab>(
     savedView.chartTab ?? "rate",
   );
@@ -455,6 +486,7 @@ export function App() {
       setReadSignals([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
       setLayout(DEFAULT_LAYOUT);
+      setPanelBook(defaultPanelBook());
       chartCursorSeq.current = 1;
       return;
     }
@@ -479,6 +511,7 @@ export function App() {
     if (nextLayout) setLayout(nextLayout);
     const savedReads = parseReadSignals(saved.readSignals);
     setReadSignals(savedReads);
+    setPanelBook(view.panelBook ?? defaultPanelBook());
     for (const spec of savedReads) void run(readSpecCommand(spec));
   };
 
@@ -527,6 +560,7 @@ export function App() {
           traceColumns,
           layout,
           readSignals,
+          panelBook,
         },
       }).catch(() => {});
     }, 350);
@@ -545,6 +579,7 @@ export function App() {
     traceColumns,
     layout,
     readSignals,
+    panelBook,
     state?.workspaceRev,
   ]);
 
@@ -692,6 +727,7 @@ export function App() {
           overlay: signalOverlay,
           signalView,
           cursors: chartCursors,
+          panelBook,
         }),
       );
     } catch {
@@ -707,6 +743,7 @@ export function App() {
     signalOverlay,
     signalView,
     chartCursors,
+    panelBook,
   ]);
 
   useEffect(() => {
@@ -1397,6 +1434,7 @@ export function App() {
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       if (event.altKey && !mod && /^[1-5]$/.test(event.key)) {
+        if (mainView === "panel") return;
         event.preventDefault();
         const tabs: ChartTab[] = [
           "rate",
@@ -1423,7 +1461,9 @@ export function App() {
         setSessionOpen(true);
       } else if (mod && key === "e") {
         event.preventDefault();
-        openExport(mainView === "messages" ? "messages" : "trace");
+        if (mainView !== "panel") {
+          openExport(mainView === "messages" ? "messages" : "trace");
+        }
       } else if (mod && key === "k") {
         event.preventDefault();
         setPaletteOpen(true);
@@ -2294,19 +2334,102 @@ export function App() {
     );
   };
 
+  const switchMainView = (view: MainView) => {
+    if (view !== "panel") standardView.current = view;
+    if (view === "panel") {
+      setChartFullscreen(false);
+      setExplorerOpen(false);
+    }
+    setMainView(view);
+  };
+
+  const showStandard = () => switchMainView(standardView.current);
+
+  const runPanelAction = (widget: PanelButton) => {
+    if (widget.action === "script") {
+      const name = widget.script?.trim() ?? "";
+      if (!name) {
+        showToast("This button has no script action");
+        return;
+      }
+      void run({ type: "run_panel_action", name });
+      return;
+    }
+    const command = panelActionCommand(widget.action);
+    if (command) void run(command);
+  };
+
+  const pageView = useMemo<PanelView>(
+    () => ({ signals, sysvars: state?.sysvars ?? [] }),
+    [signals, state?.sysvars],
+  );
+
+  const pageActionContext = useMemo<PanelActionContext>(
+    () => ({
+      online,
+      measuring: state?.measuring ?? false,
+      paused: state?.tracePaused ?? false,
+      scriptActions: runningPanelActions(state?.scripts ?? []),
+    }),
+    [online, state?.measuring, state?.tracePaused, state?.scripts],
+  );
+
+  const pageSourceOptions = useMemo(
+    () => panelSourceOptions(pageView, derivedDefs.map((def) => def.name)),
+    [pageView, derivedDefs],
+  );
+
+  const pageSysVarOptions = useMemo(
+    () =>
+      pageView.sysvars.map(
+        (variable) => `${variable.namespace}::${variable.name}`,
+      ),
+    [pageView],
+  );
+
+  const togglePageSysVar = (widget: PanelToggle, on: boolean) => {
+    const known = findPanelSysVar(widget.sysvar, pageView);
+    if (!known) {
+      showToast(`Undefined sysvar ${widget.sysvar}`);
+      return;
+    }
+    void run({
+      type: "set_sys_var",
+      namespace: known.namespace,
+      name: known.name,
+      value: on ? 1 : 0,
+    });
+  };
+
+  const setPageNumber = (widget: PanelNumeric, value: number) => {
+    const known = findPanelSysVar(widget.sysvar, pageView);
+    if (!known) {
+      showToast(`Undefined sysvar ${widget.sysvar}`);
+      return;
+    }
+    let next = clampPanelNumber(value, known.min, known.max);
+    if (next === known.value) return;
+    void run({
+      type: "set_sys_var",
+      namespace: known.namespace,
+      name: known.name,
+      value: next,
+    });
+  };
+
   const mainTabs = (
     <div class="tabs main-tabs">
       <button
         type="button"
         class={mainView === "trace" ? "on" : ""}
-        onClick={() => setMainView("trace")}
+        onClick={() => switchMainView("trace")}
       >
         Trace
       </button>
       <button
         type="button"
         class={mainView === "messages" ? "on" : ""}
-        onClick={() => setMainView("messages")}
+        onClick={() => switchMainView("messages")}
       >
         Messages
       </button>
@@ -2384,6 +2507,22 @@ export function App() {
           </div>
         </div>
         <div class="actions">
+          <div class="view-switch" role="group" aria-label="Main view">
+            <button
+              type="button"
+              class={mainView !== "panel" ? "on" : ""}
+              onClick={showStandard}
+            >
+              Standard
+            </button>
+            <button
+              type="button"
+              class={mainView === "panel" ? "on" : ""}
+              onClick={() => switchMainView("panel")}
+            >
+              Panel
+            </button>
+          </div>
           <button
             type="button"
             disabled={!online}
@@ -2671,9 +2810,29 @@ export function App() {
         class="workspace"
         ref={workspaceRef}
         style={{
-          gridTemplateColumns: `calc((100% - 3px) * ${layout.main}) 3px minmax(0, 1fr)`,
+          gridTemplateColumns:
+            mainView === "panel"
+              ? "minmax(0, 1fr)"
+              : `calc((100% - 3px) * ${layout.main}) 3px minmax(0, 1fr)`,
         }}
       >
+        {mainView === "panel" ? (
+          <PagePanel
+            book={panelBook}
+            revision={state?.workspaceRev ?? 0}
+            toast={toast}
+            sourceOptions={pageSourceOptions}
+            sysvarOptions={pageSysVarOptions}
+            view={pageView}
+            actionContext={pageActionContext}
+            onBook={setPanelBook}
+            onRun={runPanelAction}
+            onToggle={togglePageSysVar}
+            onSetNumber={setPageNumber}
+            onNotice={showToast}
+          />
+        ) : (
+          <>
         <section class={`panel trace-panel ${mainView}`}>
           {mainView === "trace" ? (
           <TraceTable
@@ -3334,6 +3493,8 @@ export function App() {
             )}
           </section>
         </div>
+          </>
+        )}
       </main>
 
       <footer class="statusbar">

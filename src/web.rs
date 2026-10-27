@@ -654,6 +654,9 @@ fn scripts_signature(app: &App) -> u64 {
             test.failures.hash(&mut hasher);
             test.line.hash(&mut hasher);
         }
+        for name in &node.panel_actions {
+            name.hash(&mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -690,6 +693,7 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
                 })
                 .collect(),
             log: node.log.clone(),
+            panel_actions: node.panel_actions.clone(),
         })
         .collect()
 }
@@ -1656,6 +1660,10 @@ enum WebCommand {
         key: String,
         on: bool,
     },
+    /// Fire `on panel_action` handlers by name on the next measurement step.
+    RunPanelAction {
+        name: String,
+    },
     OpenProject {
         path: String,
     },
@@ -2207,6 +2215,16 @@ fn app_loop(
                 }
                 WebCommand::SetMessageExpanded { key, on } => {
                     app.set_message_expanded(&key, on);
+                }
+                WebCommand::RunPanelAction { name } => {
+                    let name = name.trim().to_string();
+                    if name.is_empty() {
+                        app.status = "[panel] action name is empty".to_string();
+                    } else if name.chars().count() > 80 {
+                        app.status = "[panel] action name is too long".to_string();
+                    } else {
+                        app.send(BusCommand::PanelAction { name });
+                    }
                 }
                 WebCommand::OpenProject { path } => {
                     if app.snap.measuring {
@@ -4640,6 +4658,8 @@ struct WebScript {
     file_path: String,
     source: String,
     tests: Vec<WebScriptTest>,
+    /// `on panel_action("…")` names this script declares.
+    panel_actions: Vec<String>,
     log: Vec<String>,
 }
 
@@ -4657,6 +4677,8 @@ struct WebScriptInfo {
     file_path: String,
     log_len: usize,
     last_log: String,
+    /// `on panel_action("…")` names this script declares.
+    panel_actions: Vec<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5410,6 +5432,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             file_path: node.file_path.clone().unwrap_or_default(),
             log_len: node.log.len(),
             last_log: node.log.last().cloned().unwrap_or_default(),
+            panel_actions: node.panel_actions.clone(),
         })
         .collect();
 
@@ -5775,6 +5798,19 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_action_commands_deserialize_for_the_core() {
+        let cmd: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "run_panel_action",
+            "name": "Start sequence",
+        }))
+        .expect("panel action command");
+        match cmd {
+            WebCommand::RunPanelAction { name } => assert_eq!(name, "Start sequence"),
+            _ => panic!("wrong command variant"),
+        }
+    }
 
     /// The demo path must produce real frames through the headless App; a
     /// broken seed would otherwise leave the web UI looking connected but
@@ -6171,7 +6207,7 @@ mod tests {
         let before = scripts_signature(&app);
         app.send(BusCommand::SetNodeSource {
             id,
-            source: "on start { print(\"hi\"); }".to_string(),
+            source: "on start { print(\"hi\"); } on panel_action(\"Go\") { }".to_string(),
         });
         app.settle();
         assert_ne!(
@@ -6184,10 +6220,16 @@ mod tests {
         assert_eq!(snapshots[0].name, "Node A");
         assert!(snapshots[0].source.contains("print"));
         assert_eq!(snapshots[0].attached_node.as_deref(), Some("EngineECU"));
+        assert_eq!(
+            snapshots[0].panel_actions,
+            ["Go"],
+            "declared panel actions reach the editor"
+        );
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert_eq!(state.scripts.len(), 1);
         assert_eq!(state.scripts[0].id, id);
         assert!(state.scripts[0].enabled);
+        assert_eq!(state.scripts[0].panel_actions, ["Go"]);
     }
 
     /// The web export paths write the established formats: ASC for trace and

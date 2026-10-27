@@ -43,6 +43,8 @@ pub enum OnKind {
     Start,
     /// Measurement stop, once: manual Stop or the end of a replay.
     Stop,
+    /// A Panel button or other web control dispatched this named action.
+    PanelAction { name: String },
     /// A frame with this identifier arrived on the node's channel.
     Message { id: u32 },
     /// A frame whose DBC message name is `name` arrived. The node resolves
@@ -460,11 +462,21 @@ impl P {
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
         self.expect(&Tok::On, "'on'")?;
-        let word =
-            self.ident("'start', 'stop', 'message', 'timer', 'extended', 'errorFrame' or 'fr'")?;
+        let word = self.ident(
+            "'start', 'stop', 'panel_action', 'message', 'timer', 'extended', 'errorFrame' or 'fr'",
+        )?;
         let kind = match word.as_str() {
             "start" => OnKind::Start,
             "stop" => OnKind::Stop,
+            "panel_action" => {
+                self.expect(&Tok::LParen, "'(' after panel_action")?;
+                let name = self.string_literal()?;
+                if name.trim().is_empty() {
+                    return self.err("panel_action name cannot be empty");
+                }
+                self.expect(&Tok::RParen, "')' after the panel_action name")?;
+                OnKind::PanelAction { name }
+            }
             "extended" => {
                 // `on extended message <id>`: an extended frame with this
                 // numeric id. The word after must be `message`.
@@ -542,7 +554,7 @@ impl P {
             }
             other => {
                 return self.err(&format!(
-                    "unknown event '{other}' (start, stop, message, extended message, timer, errorFrame, fr slot)"
+                    "unknown event '{other}' (start, stop, panel_action, message, extended message, timer, errorFrame, fr slot)"
                 ));
             }
         };

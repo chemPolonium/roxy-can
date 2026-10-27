@@ -353,6 +353,84 @@ fn the_threaded_core_runs_script_nodes() {
     app.stop();
 }
 
+/// Panel actions cross the web command -> bus command -> node handler path
+/// on the threaded drive; the handler's send joins the normal trace walk.
+#[test]
+fn the_threaded_core_runs_panel_actions() {
+    let mut app = App::new();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "panel".into(),
+        channel: 0,
+        attached: None,
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.snap.nodes.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.update();
+    }
+    assert!(!app.snap.nodes.is_empty(), "node never appeared");
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            on panel_action("Go") {
+                print("panel go");
+                send(0x123, 0x5A);
+            }
+        "#
+        .to_string(),
+    });
+    app.start_virtual();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.update();
+        if app.snap.nodes.iter().any(|node| node.running) {
+            break;
+        }
+    }
+    app.send(crate::bus::BusCommand::PanelAction { name: "Go".into() });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.update();
+        let logged = app
+            .snap
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .is_some_and(|node| node.log.iter().any(|line| line == "panel go"));
+        let sent = app
+            .snap
+            .trace
+            .iter()
+            .any(|frame| frame.id == 0x123 && matches!(frame.dir, Direction::Tx));
+        if logged && sent {
+            break;
+        }
+    }
+    let node = app
+        .snap
+        .nodes
+        .iter()
+        .find(|node| node.id == id)
+        .expect("node");
+    assert!(
+        node.log.iter().any(|line| line == "panel go"),
+        "panel handler did not run: {:?}",
+        node.log
+    );
+    assert!(
+        app.snap
+            .trace
+            .iter()
+            .any(|frame| frame.id == 0x123 && matches!(frame.dir, Direction::Tx)),
+        "panel handler's send never reached the trace"
+    );
+    app.stop();
+}
+
 /// The script node end to end, headless: add, edit source, start, and
 /// watch `print` land in the log and `send` land on the bus -- including
 /// the node reacting to its own frame.

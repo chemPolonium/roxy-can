@@ -158,6 +158,32 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   in Cycle, and its unit or enum label sits in Data; only open rows are
   decoded, so the collapsed list stays cheap.
   Both tabs have a search box matching bus, name or address.
+  The topbar **Standard / Panel** switch opens the **Panel** view: a fixed
+  canvas with an always-visible 8px grid and a page tab bar. Each page keeps
+  its own canvas size and controls; **Edit** adds pages (`+`), duplicates or
+  deletes the active page and renames it by double-clicking the tab. Switching
+  pages clears the selection, undo history and clipboard but stays in Edit.
+  **Edit** adds buttons, value tiles
+  and toggles and numeric setpoints from a widget registry, drags and resizes
+  them with live grid snapping (per-kind minimum sizes), refuses overlaps, and
+  changes the canvas width/height in 8px steps; shrinking is refused while any
+  control would fall outside. The inspector is generated from each kind's field
+  schema and stays visible for the whole Edit session: a selected control shows
+  its properties, a blank click shows the **Panel** properties (canvas W×H and
+  control count), so changing the selection never shifts the canvas. It edits a
+  button command or **Script action** name
+  (`on panel_action("…")` in every running node), a value source (signal key,
+  `derived:Name` or `sysvar:ns::name`) with decimals, a toggle's sysvar, or a
+  numeric setpoint (sysvar, decimals, step; committed on Enter/blur and clamped
+  into the variable's min/max). Editing has
+  Ctrl+C/Ctrl+V copy-paste, Ctrl+Z / Ctrl+Shift+Z undo-redo, Delete and a
+  Duplicate action. Controls expose availability: disabled buttons and
+  toggles carry the reason in their tooltip (not measuring, no running script
+  handler, unknown sysvar), and unresolved sources show a placeholder.
+  The canvas scrolls when the viewport is smaller; it never scales or
+  reflows. **Fullscreen**
+  covers the app chrome but keeps the browser window, centers the fixed canvas,
+  and exits with its button or Esc; the page is saved with the web workspace.
   Statistics shows aggregate count, min/avg/max/jitter and share; Jitter
   folds away below 1280 px and the row tooltip keeps the full values. Bus
   shows per-bus load, send distance, bursts and per-class frame rates with a

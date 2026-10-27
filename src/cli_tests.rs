@@ -38,7 +38,7 @@ fn help_wins_over_the_rest_of_the_line() {
 }
 
 #[test]
-fn a_full_flag_set_parses() {
+fn run_flags_parse_default_and_reject() {
     let cli = parse_args(&flag_set(&[
         "--replay",
         "run.asc",
@@ -55,6 +55,48 @@ fn a_full_flag_set_parses() {
     assert_eq!(o.speed, 2.5);
     assert_eq!(o.duration_s, Some(10.0));
     assert_eq!(o.stats_csv.as_deref(), Some("out.csv"));
+
+    let defaults = parse_args(&flag_set(&["--replay", "x.blf"])).unwrap();
+    let o = opts_of(&defaults);
+    assert_eq!(o.speed, 1.0);
+    assert_eq!(o.duration_s, None);
+    assert_eq!(o.stats_csv, None);
+
+    let cases: &[(&[&str], &str)] = &[
+        (&["--nonsense"], "unknown flag `--nonsense`"),
+        (&["--replay"], "--replay needs a value"),
+        (&["--speed"], "--speed needs a value"),
+        (&["--speed", "abc"], "--speed wants a number"),
+        (&["--speed", "0"], "--speed must be a positive number"),
+        (&["--duration", "-1"], "--duration must be a positive"),
+        (&["--replay", "a.asc", "--nope"], "unknown flag `--nope`"),
+        (
+            &["--replay", "a.asc", "--speed", "0"],
+            "--speed must be a positive number",
+        ),
+        (&["--speed", "2"], "--replay"), // run needs its log
+        (
+            &["--check-script", "a.rxcan", "--replay", "a.asc"],
+            "drop `--replay`",
+        ),
+        (
+            &["--replay", "a.asc", "--profile", "ci"],
+            "--profile` overlays a `--project`",
+        ),
+        (&["--fibex"], "--fibex needs a value"),
+        (
+            &["--fibex", "cluster.arxml"],
+            "--fibex` belongs to `--vector-probe`",
+        ),
+        (
+            &["--replay", "a.asc", "--fibex", "cluster.arxml"],
+            "--fibex` belongs to `--vector-probe`",
+        ),
+    ];
+    for (args, needle) in cases {
+        let err = parse_args(&flag_set(args)).unwrap_err();
+        assert!(err.contains(needle), "`{err}` should mention `{needle}`");
+    }
 }
 
 /// The shipped `examples/` folder doubles as the language's living
@@ -79,9 +121,10 @@ fn every_shipped_example_compiles() {
     assert!(failures.is_empty(), "examples must compile: {failures:?}");
 }
 
-/// `--dbc` / `--node` only mean something alongside `--check-script`.
+/// `--dbc` / `--node` only mean something alongside `--check-script`; a
+/// valid line collects scripts, databases and the node together.
 #[test]
-fn dbc_and_node_flags_require_check_script() {
+fn check_script_flags_parse_collect_and_reject() {
     for args in [
         vec!["--dbc", "a.dbc"],
         vec!["--node", "EngineECU"],
@@ -90,10 +133,7 @@ fn dbc_and_node_flags_require_check_script() {
         let err = parse_args(&flag_set(&args)).unwrap_err();
         assert!(err.contains("--check-script"), "{args:?}: {err}");
     }
-}
 
-#[test]
-fn check_script_flag_set_parses_with_dbc_and_node() {
     let cli = parse_args(&flag_set(&[
         "--check-script",
         "a.rxcan",
@@ -111,6 +151,12 @@ fn check_script_flag_set_parses_with_dbc_and_node() {
     assert_eq!(check.scripts, ["a.rxcan", "b.rxcan"]);
     assert_eq!(check.dbcs, ["sample.dbc"]);
     assert_eq!(check.node.as_deref(), Some("EngineECU"));
+
+    let single = parse_args(&flag_set(&["--check-script", "a.rxcan"])).unwrap();
+    match single {
+        Cli::CheckScripts(check) => assert_eq!(check.scripts, ["a.rxcan"]),
+        other => panic!("expected CheckScripts, got {other:?}"),
+    }
 }
 
 /// End to end: the headless gate runs the same assembly checks the GUI
@@ -167,54 +213,6 @@ on start {
     assert!(report.contains("sends: 0x100"), "the send set is printed");
     std::fs::remove_file(&dbc_path).ok();
     std::fs::remove_file(&script_path).ok();
-}
-
-#[test]
-fn defaults_apply_when_flags_are_absent() {
-    let cli = parse_args(&flag_set(&["--replay", "x.blf"])).unwrap();
-    let o = opts_of(&cli);
-    assert_eq!(o.speed, 1.0);
-    assert_eq!(o.duration_s, None);
-    assert_eq!(o.stats_csv, None);
-}
-
-#[test]
-fn usage_errors_name_their_flag() {
-    let cases: &[(&[&str], &str)] = &[
-        (&["--nonsense"], "unknown flag `--nonsense`"),
-        (&["--replay"], "--replay needs a value"),
-        (&["--speed"], "--speed needs a value"),
-        (&["--speed", "abc"], "--speed wants a number"),
-        (&["--speed", "0"], "--speed must be a positive number"),
-        (&["--duration", "-1"], "--duration must be a positive"),
-        (&["--replay", "a.asc", "--nope"], "unknown flag `--nope`"),
-        (
-            &["--replay", "a.asc", "--speed", "0"],
-            "--speed must be a positive number",
-        ),
-        (&["--speed", "2"], "--replay"), // run needs its log
-        (
-            &["--check-script", "a.rxcan", "--replay", "a.asc"],
-            "drop `--replay`",
-        ),
-        (
-            &["--replay", "a.asc", "--profile", "ci"],
-            "--profile` overlays a `--project`",
-        ),
-        (&["--fibex"], "--fibex needs a value"),
-        (
-            &["--fibex", "cluster.arxml"],
-            "--fibex` belongs to `--vector-probe`",
-        ),
-        (
-            &["--replay", "a.asc", "--fibex", "cluster.arxml"],
-            "--fibex` belongs to `--vector-probe`",
-        ),
-    ];
-    for (args, needle) in cases {
-        let err = parse_args(&flag_set(args)).unwrap_err();
-        assert!(err.contains(needle), "`{err}` should mention `{needle}`");
-    }
 }
 
 /// `--fibex` rides on `--vector-probe`: accepted there, carried into the
@@ -283,26 +281,6 @@ fn the_profile_flag_travels_with_the_project() {
     let o = opts_of(&cli);
     assert_eq!(o.profile.as_deref(), Some("ci"));
     assert_eq!(o.project.as_deref(), Some("net.rxproj"));
-}
-
-#[test]
-fn check_script_flags_collect_files() {
-    let cli = parse_args(&flag_set(&["--check-script", "a.rxcan"])).unwrap();
-    match cli {
-        Cli::CheckScripts(check) => assert_eq!(check.scripts, ["a.rxcan"]),
-        other => panic!("expected CheckScripts, got {other:?}"),
-    }
-    let cli = parse_args(&flag_set(&[
-        "--check-script",
-        "a.rxcan",
-        "--check-script",
-        "b.rxcan",
-    ]))
-    .unwrap();
-    match cli {
-        Cli::CheckScripts(check) => assert_eq!(check.scripts, ["a.rxcan", "b.rxcan"]),
-        other => panic!("expected CheckScripts, got {other:?}"),
-    }
 }
 
 /// The checker is the automation story for `.rxcan` files: a broken script
@@ -631,9 +609,11 @@ fn convert_carries_flexray_rows_across() {
     std::fs::remove_file(&out).ok();
 }
 
-/// A missing input names the failure instead of writing an empty file.
+/// Broken inputs are refused before anything is written: a missing log
+/// names the failure, and same-file conversion never truncates its own
+/// input under the reader.
 #[test]
-fn convert_reports_a_broken_input() {
+fn convert_refuses_broken_inputs() {
     let out = tmp("roxy_can_convert_broken.asc");
     let err = convert_log(tmp("roxy_can_convert_missing.blf").as_str(), &out).unwrap_err();
     assert!(err.contains("log load failed"), "{err}");
@@ -641,12 +621,7 @@ fn convert_reports_a_broken_input() {
         !std::path::Path::new(&out).exists(),
         "no output file for a failed load"
     );
-}
 
-/// Same-file conversion is refused before anything is opened: truncating
-/// the input under its own mmap reader would corrupt the data.
-#[test]
-fn convert_refuses_input_equal_to_output() {
     let src = write_log("roxy_can_convert_same.asc", 3, 1_000);
     let err = convert_log(
         src.to_string_lossy().as_ref(),
@@ -809,8 +784,11 @@ fn a_bad_profile_aborts_the_run_before_traffic() {
 /// `--export-csv <log> --out <csv> --dbc <f>`: accepted, and every input
 /// travels into the export options -- `--dbc` and `--fibex` both keep their
 /// order, since the Nth `--fibex` is the description for FlexRay bus N.
+/// `--export-csv` parses its definitions and is self-contained: it needs
+/// `--out`, at least one signal definition, and refuses to share the line
+/// with a run or probe.
 #[test]
-fn export_csv_flag_set_parses_and_collects_definitions() {
+fn export_csv_flags_parse_and_validate() {
     let cli = parse_args(&flag_set(&[
         "--export-csv",
         "run.blf",
@@ -833,12 +811,7 @@ fn export_csv_flag_set_parses_and_collects_definitions() {
     assert_eq!(o.out, "out.csv");
     assert_eq!(o.dbcs, ["a.dbc", "b.dbc"]);
     assert_eq!(o.fibex, ["cluster.arxml", "other.arxml"]);
-}
 
-/// `--export-csv` is self-contained: it needs `--out`, at least one signal
-/// definition, and refuses to share the line with a run or probe.
-#[test]
-fn export_csv_validates_its_inputs() {
     let cases: &[(&[&str], &str)] = &[
         (&["--export-csv", "a.blf"], "--out"),
         (

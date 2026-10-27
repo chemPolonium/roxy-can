@@ -153,6 +153,11 @@ pub enum BusCommand {
     /// Blanks the trace view: the ring and its disk archive are dropped,
     /// everything else (recording, aggregates, triggers) keeps running.
     ClearTrace,
+    /// Fires `on panel_action("name")` handlers on the next step. Queued so
+    /// the handler's sends join a normal step instead of the command path.
+    PanelAction {
+        name: String,
+    },
     /// Resets the per-message counters the Messages / Statistics windows
     /// read. Load, spec memory and the trace are untouched.
     ClearAggregates,
@@ -696,6 +701,8 @@ pub struct NodeView {
     pub issue: Option<crate::node::ScriptIssue>,
     /// `test(...)` results from the last stopped run.
     pub tests: Vec<crate::script::TestResult>,
+    /// `on panel_action("…")` names the compiled script declares.
+    pub panel_actions: Vec<String>,
     /// Oldest-first log lines (print output and errors).
     pub log: Vec<String>,
 }
@@ -1182,6 +1189,8 @@ pub struct BusCore {
     /// frames. Runtime state lives here in the core; the frontend sees
     /// [`NodeView`]s through the snapshot.
     pub(crate) nodes: Vec<crate::node::ScriptNode>,
+    /// Panel button actions waiting for the next step, in click order.
+    pub(crate) pending_panel_actions: Vec<String>,
     /// Counter minting stable node ids; never resets.
     pub(crate) node_counter: u64,
     /// The node views as of the last publish. Rebuilt only when a command
@@ -1369,6 +1378,7 @@ impl BusCore {
             spec: crate::spec::Spec::default(),
             laps: 0,
             nodes: Vec::new(),
+            pending_panel_actions: Vec::new(),
             node_counter: 0,
             published_nodes: Arc::new(Vec::new()),
             published_blocks: Arc::new(Vec::new()),
@@ -1395,8 +1405,14 @@ impl BusCore {
     pub(crate) fn handle(&mut self, cmd: BusCommand, status: &mut String) {
         self.laps += 1;
         match cmd {
-            BusCommand::StartVirtual => self.start_virtual(status),
-            BusCommand::Stop => self.stop_bus(status),
+            BusCommand::StartVirtual => {
+                self.pending_panel_actions.clear();
+                self.start_virtual(status)
+            }
+            BusCommand::Stop => {
+                self.pending_panel_actions.clear();
+                self.stop_bus(status)
+            }
             BusCommand::SetTracePaused(on) => {
                 self.trace_paused = on;
                 // A manual pause/resume abandons a pending play-to target.
@@ -1409,6 +1425,15 @@ impl BusCore {
             BusCommand::ToggleRecord => self.toggle_record(status),
             BusCommand::RearmTriggers => self.rearm_latched_triggers(status),
             BusCommand::ClearTrace => self.clear_trace_view(status),
+            BusCommand::PanelAction { name } => {
+                if !self.measuring {
+                    *status = format!("[panel] \"{name}\" needs a running measurement");
+                } else if self.pending_panel_actions.len() < 32 {
+                    self.pending_panel_actions.push(name);
+                } else {
+                    *status = "[panel] too many queued actions".to_string();
+                }
+            }
             BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
@@ -2300,6 +2325,7 @@ impl BusCore {
                 errored: n.errored(),
                 issue: n.issue().cloned(),
                 tests: n.tests.clone(),
+                panel_actions: n.panel_actions().to_vec(),
                 log: n.log_snapshot(),
             })
             .collect();
@@ -2447,6 +2473,83 @@ impl BusCore {
         self.apply_fr_sig_writes(fr_sig_writes);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
+        }
+    }
+
+    /// Panel button actions queued since the last step. Each handler runs in
+    /// its node's VM with the normal budget; its sends, emits and writes are
+    /// collected exactly like a timer handler so they join this same step.
+    fn run_panel_actions(&mut self, inputs: &HashMap<u8, HostInput>, status: &mut String) {
+        let actions = std::mem::take(&mut self.pending_panel_actions);
+        if actions.is_empty() {
+            return;
+        }
+        let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
+        let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
+        let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
+        let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
+        let mut node_lines: Vec<(String, String)> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
+        for action in actions {
+            let mut ran = 0usize;
+            for node in &mut self.nodes {
+                let input = inputs.get(&node.channel).cloned().unwrap_or_default();
+                let (count, node_out) = node.dispatch_panel_action(&action, &input);
+                if count == 0 {
+                    continue;
+                }
+                ran += count;
+                let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
+                    self.channels
+                        .get(*ach as usize)
+                        .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                });
+                if script_allowed {
+                    for (id, ext, data) in &node_out {
+                        let frame = Self::node_frame(node.channel, *id, *ext, data, self.sim_t_us);
+                        self.hw.write_if_live(node.channel, &frame);
+                        self.buf.push(frame);
+                    }
+                }
+                Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
+                for (name, v) in node.take_emitted() {
+                    derived.push((node.channel, node.id, node.name.clone(), name, v));
+                }
+                for (key, v) in node.take_sys_sets() {
+                    sys_writes.push((node.id, key, v));
+                }
+                let node_name = node.name.clone();
+                for line in node.take_new_lines() {
+                    node_lines.push((node_name.clone(), line));
+                }
+                if node.take_log_if_dirty().is_some() {
+                    self.nodes_dirty = true;
+                }
+            }
+            if ran == 0 {
+                missing.push(action);
+            }
+        }
+        for (ch, node_id, node_name, name, v) in derived {
+            self.ingest_emitted(ch, node_id, &node_name, &name, v);
+        }
+        self.apply_sys_writes(sys_writes);
+        self.fr_from_scripts.append(&mut fr_sends);
+        self.apply_fr_sig_writes(fr_sig_writes);
+        for (node_name, line) in node_lines {
+            self.write_node_line(&node_name, &line);
+        }
+        if !missing.is_empty() {
+            let list = missing
+                .iter()
+                .take(3)
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            *status = format!(
+                "[panel] no running script handles {list}{}",
+                if missing.len() > 3 { ", …" } else { "" }
+            );
         }
     }
 
@@ -5090,6 +5193,7 @@ impl BusCore {
         // clock: periodic node behaviour keeps its cadence in replay too.
         let node_inputs = self.build_node_inputs(now_us);
         self.run_node_timers(now_us, &node_inputs);
+        self.run_panel_actions(&node_inputs, status);
 
         let replay_done =
             matches!(self.mode, Mode::Replay) && source_empty && self.source.is_done();

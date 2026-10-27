@@ -28,6 +28,10 @@ pub struct ScriptNode {
     /// the user saves or loads a node script from disk. Persisted with
     /// the project so the user can find their files again.
     pub file_path: Option<String>,
+    /// `on panel_action("…")` names declared by the last successful compile.
+    /// Kept after stop so the editor can still offer them; cleared when the
+    /// source changes or fails to compile.
+    pub panel_actions: Vec<String>,
     /// 绑定的 DBC 节点（总线, 节点名）。绑定脚本的发帧受该节点角色
     /// 角色开关控制——节点离线或仅监听时脚本同样不发送。None = 独立脚本。
     pub attached: Option<(u8, String)>,
@@ -76,6 +80,19 @@ fn runtime_issue(message: &str) -> Option<ScriptIssue> {
     })
 }
 
+/// Declared `on panel_action` names, in declaration order, deduped.
+fn panel_action_names(handlers: &[Handler]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for handler in handlers {
+        if let HandlerKind::PanelAction { name } = &handler.kind
+            && !names.contains(name)
+        {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
 struct NodeRuntime {
     vm: Vm,
     handlers: Vec<Handler>,
@@ -118,6 +135,7 @@ impl ScriptNode {
             name,
             channel,
             source: String::new(),
+            panel_actions: Vec::new(),
             enabled: true,
             file_path: None,
             attached: None,
@@ -134,6 +152,11 @@ impl ScriptNode {
 
     pub fn running(&self) -> bool {
         self.runtime.is_some() && !self.errored
+    }
+
+    /// Panel action names declared by the last successful compile.
+    pub fn panel_actions(&self) -> &[String] {
+        &self.panel_actions
     }
 
     pub fn errored(&self) -> bool {
@@ -211,6 +234,7 @@ impl ScriptNode {
         let script = match compile(&self.source) {
             Ok(s) => s,
             Err(e) => {
+                self.panel_actions.clear();
                 self.push_log(format!("[compile] {e}"));
                 self.errored = true;
                 self.issue = Some(ScriptIssue {
@@ -222,6 +246,7 @@ impl ScriptNode {
             }
         };
         let handlers = script.handlers.clone();
+        self.panel_actions = panel_action_names(&handlers);
         // 装配层校验（DBC 部分）：信号引用、发送集对照、反向漏实现、
         // set_sig 字面量范围。GUI 与 `--check-script --dbc` 共用同一套。
         if let Some(db) = &dbc {
@@ -523,10 +548,15 @@ impl ScriptNode {
         measuring: bool,
     ) {
         self.source = source;
+        self.panel_actions.clear();
         self.issue = None;
         self.tests.clear();
         if measuring && self.enabled {
             self.start_with(dbc, fr_dbs, eth_dbs);
+        } else if let Ok(script) = compile(&self.source) {
+            // Stopped nodes still publish their declared panel actions so
+            // the Panel editor can offer them before the first start.
+            self.panel_actions = panel_action_names(&script.handlers);
         } else if self.runtime.is_some() {
             self.runtime = None;
             self.errored = false;
@@ -902,6 +932,56 @@ impl ScriptNode {
             }
         }
         out
+    }
+
+    /// Runs every `on panel_action("name")` handler in declaration order.
+    /// The web button path uses this instead of calling a user function
+    /// directly, so the handler still runs inside the node's step budget and
+    /// its sends/emits/log lines follow the normal outbox path.
+    pub fn dispatch_panel_action(
+        &mut self,
+        name: &str,
+        input: &HostInput,
+    ) -> (usize, Vec<(u32, bool, Vec<u8>)>) {
+        let mut out = Vec::new();
+        let Some(rt) = self.runtime.as_mut() else {
+            return (0, out);
+        };
+        if !self.enabled || self.errored {
+            return (0, out);
+        }
+        rt.vm.host_input = input.clone();
+        rt.vm.frame_present = false;
+        rt.vm.frame_is_fr = false;
+        rt.vm.fr_cycle = 0;
+        rt.vm.frame_bytes.clear();
+        let matches: Vec<u16> = rt
+            .handlers
+            .iter()
+            .filter(|handler| {
+                matches!(&handler.kind, HandlerKind::PanelAction { name: action } if action == name)
+            })
+            .map(|handler| handler.chunk)
+            .collect();
+        let mut ran = 0;
+        for chunk in matches {
+            ran += 1;
+            let result = Self::run_chunk(
+                rt,
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+                chunk,
+                input,
+                &mut out,
+            );
+            if let Err(error) = result {
+                self.errored = true;
+                self.issue = runtime_issue(&error);
+                break;
+            }
+        }
+        (ran, out)
     }
 
     /// Does this node listen for any FlexRay arrival? The bus asks once per
@@ -1686,6 +1766,32 @@ BO_ 512 GearInfo: 8 GearBox
             )
             .expect("test dbc parses"),
         )
+    }
+
+    /// Panel buttons run a named event handler, not a user function, so the
+    /// VM budget, outbox and log stay on the normal node path.
+    #[test]
+    fn panel_actions_dispatch_by_name_and_queue_their_sends() {
+        let mut n = node(
+            r#"
+                on panel_action("Go") {
+                    print("panel go");
+                    send(0x123, 7);
+                }
+            "#,
+        );
+        n.start(None);
+        assert_eq!(n.panel_actions(), ["Go"]);
+        let (ran, out) = n.dispatch_panel_action("Go", &HostInput::default());
+        assert_eq!(ran, 1);
+        assert_eq!(out, vec![(0x123, false, vec![7])]);
+        assert!(
+            n.take_new_lines().iter().any(|line| line == "panel go"),
+            "handler log reaches the node output"
+        );
+        let (ran, out) = n.dispatch_panel_action("Missing", &HostInput::default());
+        assert_eq!(ran, 0);
+        assert!(out.is_empty());
     }
 
     /// R2 reverse check: DBC traffic the bound node declares but the

@@ -239,6 +239,10 @@ pub enum HandlerKind {
     /// Measurement finished (manual Stop or the end of a replay). Checks
     /// that need the whole run belong here.
     Stop,
+    /// A named action dispatched by a Panel button (`on panel_action`).
+    PanelAction {
+        name: String,
+    },
     Message {
         id: u32,
     },
@@ -942,6 +946,25 @@ mod tests {
             vm.run_handler(chunk).unwrap();
         }
         assert_eq!(vm.output, ["start", "eng", "tick"]);
+    }
+
+    #[test]
+    fn panel_action_handlers_compile_and_run() {
+        let script = compile(
+            r#"
+                on panel_action("Start sequence") { print("go"); }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            script.handlers[0].kind,
+            HandlerKind::PanelAction {
+                name: "Start sequence".into()
+            }
+        );
+        let mut vm = Vm::new(script);
+        vm.run_handler(1).unwrap();
+        assert_eq!(vm.output, ["go"]);
     }
 
     /// `on fr slot` is the receiving half of FlexRay programmability, and the

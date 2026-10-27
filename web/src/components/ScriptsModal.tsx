@@ -1326,6 +1326,7 @@ on timer 1000 {
 const EVENTS: [string, string][] = [
   ["start", "runs once when the measurement starts"],
   ["stop", "runs once when the measurement stops"],
+  ["panel_action", "Panel button action by name"],
   ["message", "frame by id, name or *"],
   ["extended", "29-bit frame by id"],
   ["timer", "periodic tick or named one-shot"],

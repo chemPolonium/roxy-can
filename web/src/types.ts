@@ -330,6 +330,7 @@ export interface ScriptInfo {
   filePath: string;
   logLen: number;
   lastLog: string;
+  panelActions: string[];
 }
 
 export interface ScriptIssue {
@@ -556,6 +557,7 @@ export type Command =
       to_us?: number;
     }
   | { type: "clear_trace" }
+  | { type: "run_panel_action"; name: string }
   | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
