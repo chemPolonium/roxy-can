@@ -72,9 +72,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   rows. The server seeds the buffer once and then sends only new frames, so
   the 100 ms poll stays small as the table grows. A scrolled-away reader keeps
   the same frame in view when rows are prepended; the live edge follows new
-  frames. Click a row to select it, move with ↑/↓, copy with Ctrl+C, and use
-  **Set A** / **Set B** for a Δt readout (the row's left edge marks each
-  cursor). Right-click a row to filter its ID or copy it. The search box also
+  frames. Click a row to select it, move with ↑/↓, and copy with Ctrl+C.
+  Right-click a row to filter its ID, set cursor A/B for a Δt readout (the
+  row's left edge marks each cursor), or copy it. The search box also
   matches the address column (`0x100`, `slot 13`, EtherType). Click a column
   header to sort ascending, again for descending, and a third time to restore
   the live newest-first order.
@@ -147,10 +147,16 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   delete. The core applies the same validation rules on the host;
   definitions are saved with the project. Values reset to Init when a
   measurement starts, and scripts reach them through `sys_get` / `sys_set`.
-- The lower panel has **Messages / Statistics / Bus / Spec / Write**.
+- The lower panel has **Statistics / Bus / Spec / Write**. Messages shares
+  the main pane with Trace through the **Trace / Messages** switch, and both
+  the switch and the selected view are saved in the web workspace.
   Messages and Statistics include CAN, FlexRay and Ethernet rows when the
   session carries them: FR addresses read `slot N` and use the loaded
   cluster description, Ethernet rows use EtherType and the matched flow name.
+  A Messages row with decoded signals expands from its chevron into signal
+  children: the name is indented in the Name column, the physical value sits
+  in Cycle, and its unit or enum label sits in Data; only open rows are
+  decoded, so the collapsed list stays cheap.
   Both tabs have a search box matching bus, name or address.
   Statistics shows aggregate count, min/avg/max/jitter and share; Jitter
   folds away below 1280 px and the row tooltip keeps the full values. Bus
@@ -186,7 +192,15 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   canvas reduces them to one min/max span per pixel column. Wheel zoom and
   drag pan freeze the view; double-click returns to live. With eight full
   series and continuous wheel zoom, 1024x768 and 1200x800 both hold ~60 UI
-  fps.
+  fps. Each row has a **Plot / Read** mode switch (click the active segment
+  to clear; Ctrl-click the name toggles Read): Read keeps the signal sampled
+  and listed in the cursor table without drawing a lane. The table is always
+  present: without a cursor it shows **Live values** under a `Now` column;
+  one cursor switches to **Cursor values**, and A/B adds Δ and interval
+  stats. The read set is saved in the web workspace, and an empty plot still
+  accepts a cursor when Read signals exist. Fullscreen moves this table into
+  a left rail with names and values adjacent; the chart takes the remaining
+  width.
 - The **Monitor** tab watches selected CAN, FlexRay or Ethernet signals as
   large live values with an optional coloring rule (`>=`/`<=` a threshold), decimal places and a
   rule color; rows are project state, so the rule survives a save. Selection

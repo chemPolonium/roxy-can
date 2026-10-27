@@ -1,4 +1,5 @@
-import { useEffect, useState } from "preact/hooks";
+import { Fragment } from "preact";
+import { useState } from "preact/hooks";
 import type { Message } from "../types";
 
 function hexId(message: Message): string {
@@ -6,28 +7,16 @@ function hexId(message: Message): string {
   return `0x${message.id.toString(16).toUpperCase().padStart(width, "0")}`;
 }
 
-/// Below 1280px the payload column squeezes both itself and the name into
-/// ellipses; the Trace still carries the bytes, so drop it there.
-function useWideColumns(): boolean {
-  const query = "(min-width: 1280px)";
-  const [wide, setWide] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const update = () => setWide(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return wide;
-}
-
 export function MessageTable({
   rows,
   filtered = false,
+  onExpand,
 }: {
   rows: Message[];
   filtered?: boolean;
+  onExpand?: (key: string, on: boolean) => void;
 }) {
-  const wide = useWideColumns();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   if (rows.length === 0) {
     return (
       <div class="empty">
@@ -40,15 +29,28 @@ export function MessageTable({
       </div>
     );
   }
+
+  const toggle = (message: Message) => {
+    if (message.signalCount === 0) return;
+    const open = !expanded.has(message.key);
+    setExpanded((old) => {
+      const next = new Set(old);
+      if (open) next.add(message.key);
+      else next.delete(message.key);
+      return next;
+    });
+    onExpand?.(message.key, open);
+  };
+
   return (
     <div class="table-scroll">
       <table class="data-table message-table">
         <colgroup>
           <col style={{ width: "46px" }} />
           <col style={{ width: "70px" }} />
-          <col style={{ width: wide ? "118px" : undefined }} />
-          <col style={{ width: "62px" }} />
-          {wide && <col />}
+          <col />
+          <col style={{ width: "80px" }} />
+          <col />
         </colgroup>
         <thead>
           <tr>
@@ -56,27 +58,90 @@ export function MessageTable({
             <th>ID</th>
             <th>Name</th>
             <th class="num">Cycle</th>
-            {wide && <th>Data</th>}
+            <th class="num" title="Raw payload on a message row; decoded values on its signal rows">Data</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((message) => (
-            <tr key={`${message.kind}-${message.bus}-${message.id}-${message.extended}`}>
-              <td>{message.busName}</td>
-              <td class="mono">{message.addr || hexId(message)}</td>
-              <td class="name" title={message.name}>
-                {message.name || <span class="dash">—</span>}
-              </td>
-              <td class="num mono">
-                {message.cycleMs > 0 ? `${message.cycleMs.toFixed(1)} ms` : "event"}
-              </td>
-              {wide && (
-                <td class="mono data" title={message.data}>
-                  {message.data || <span class="dash">—</span>}
-                </td>
-              )}
-            </tr>
-          ))}
+          {rows.map((message) => {
+            const open = expanded.has(message.key);
+            const expandable = message.signalCount > 0;
+            return (
+              <Fragment key={message.key}>
+                <tr
+                  class={`message-row ${expandable ? "expandable" : ""}`}
+                  onClick={() => toggle(message)}
+                >
+                  <td>{message.busName}</td>
+                  <td class="mono">{message.addr || hexId(message)}</td>
+                  <td class="name" title={message.name}>
+                    {expandable ? (
+                      <button
+                        type="button"
+                        class="msg-expand"
+                        aria-expanded={open}
+                        title={
+                          open ? "Hide decoded signals" : "Show decoded signals"
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggle(message);
+                        }}
+                      >
+                        {open ? "▾" : "▸"}
+                      </button>
+                    ) : (
+                      <span class="msg-expand-space" />
+                    )}
+                    <span class="msg-name">
+                      {message.name || <span class="dash">—</span>}
+                    </span>
+                  </td>
+                  <td class="num mono">
+                    {message.cycleMs > 0
+                      ? `${message.cycleMs.toFixed(1)} ms`
+                      : "event"}
+                  </td>
+                  <td class="num mono data" title={message.data}>
+                    {message.data || <span class="dash">—</span>}
+                  </td>
+                </tr>
+                {open && message.signalCount > 0 && (
+                  <>
+                    {(message.signals?.length ?? 0) === 0 ? (
+                      <tr class="message-signal-row" key={`${message.key}:loading`}>
+                        <td colSpan={5} class="message-signal-empty">
+                          Loading signals…
+                        </td>
+                      </tr>
+                    ) : (
+                      message.signals?.map((signal, index) => (
+                        <tr
+                          class="message-signal-row"
+                          key={`${message.key}:${signal.name}:${index}`}
+                        >
+                          <td />
+                          <td />
+                          <td class="name message-signal-name">
+                            <span>↳ {signal.name}</span>
+                          </td>
+                          <td
+                            class="num mono message-signal-value"
+                            title={`raw ${signal.raw}`}
+                          >
+                            {signal.value}
+                          </td>
+                          <td class="mono data message-signal-unit">
+                            {signal.unit && <em>{signal.unit}</em>}
+                            {signal.label && <small>{signal.label}</small>}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>

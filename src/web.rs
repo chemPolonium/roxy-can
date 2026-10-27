@@ -751,6 +751,7 @@ fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
 /// Selecting a chart lane also records it on the first Graphics window, so
 /// project save/load carries the selection. The panel stays the source of
 /// truth for lane colors; `store` is updated by the caller.
+#[cfg(test)]
 fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
     chart_select_key(app, SigKey::can(ch, id, ext, name));
 }
@@ -788,6 +789,35 @@ fn chart_unselect(app: &mut App, key: &SigKey) {
     app.prune_signal(key);
 }
 
+/// Selects a signal as a plotted lane or a cursor-only read signal. Both
+/// keep the bus subscription; only the lane state differs. Switching a
+/// plotted signal to read removes its Graphics row but the refreshed chart
+/// keep set protects the subscription from the prune.
+fn set_signal_mode(app: &mut App, store: &mut SignalStore, key: SigKey, read: bool) {
+    let known = store.is_selected(&key);
+    if known && store.is_read(&key) == read {
+        return;
+    }
+    if !known {
+        store.select_key_mode(app, key.clone(), read);
+        if read {
+            app.subscribe(key);
+        } else {
+            chart_select_key(app, key);
+        }
+        app.set_session_chart_keep(store.keys());
+        return;
+    }
+    store.select_key_mode(app, key.clone(), read);
+    if read {
+        app.set_session_chart_keep(store.keys());
+        chart_unselect(app, &key);
+    } else {
+        chart_select_key(app, key);
+        app.set_session_chart_keep(store.keys());
+    }
+}
+
 /// Applies a Signals context-menu action. Watching only adds a reader;
 /// removing a chart lane leaves any observer that already watches it alone.
 fn chart_signal_action(app: &mut App, store: &mut SignalStore, key: &SigKey, action: &str) -> bool {
@@ -822,7 +852,7 @@ fn chart_move(app: &mut App, store: &mut SignalStore, key: &SigKey, to: usize) {
     if !store.move_selected(key, to) {
         return;
     }
-    let order = store.keys();
+    let order = store.chart_keys();
     let Some(window) = app.graphics.first_mut() else {
         return;
     };
@@ -1621,6 +1651,11 @@ enum WebCommand {
         text: String,
     },
     ClearTrace,
+    /// Open or close one Messages row's signal children.
+    SetMessageExpanded {
+        key: String,
+        on: bool,
+    },
     OpenProject {
         path: String,
     },
@@ -1632,6 +1667,9 @@ enum WebCommand {
         id: u32,
         ext: bool,
         name: String,
+        /// Read-only selection: subscribe and show at cursors, no lane.
+        #[serde(default)]
+        read: bool,
     },
     UnselectSignal {
         ch: u8,
@@ -1643,6 +1681,8 @@ enum WebCommand {
         bus: u8,
         slot: u16,
         name: String,
+        #[serde(default)]
+        read: bool,
     },
     UnselectFrSignal {
         bus: u8,
@@ -1653,6 +1693,8 @@ enum WebCommand {
         bus: u8,
         frame: String,
         name: String,
+        #[serde(default)]
+        read: bool,
     },
     UnselectEthSignal {
         bus: u8,
@@ -2163,6 +2205,9 @@ fn app_loop(
                 WebCommand::ClearTrace => {
                     app.send(BusCommand::ClearTrace);
                 }
+                WebCommand::SetMessageExpanded { key, on } => {
+                    app.set_message_expanded(&key, on);
+                }
                 WebCommand::OpenProject { path } => {
                     if app.snap.measuring {
                         app.stop();
@@ -2176,6 +2221,7 @@ fn app_loop(
                     }
                     app.send(BusCommand::ClearTrace);
                     app.send(BusCommand::ClearAggregates);
+                    app.expanded_messages.clear();
                     app.open_project_path(std::path::Path::new(&path));
                     // Same as the bootstrap load: applying the live layout
                     // is part of opening the project, not an unsaved edit.
@@ -2194,6 +2240,7 @@ fn app_loop(
                     }
                     app.load_log(&path);
                     if app.log_path == path && !app.status.contains("failed") {
+                        app.expanded_messages.clear();
                         let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
                         for key in &keys {
                             app.subscribe(key.clone());
@@ -2208,17 +2255,16 @@ fn app_loop(
                         app.start_selected();
                     }
                 }
-                WebCommand::SelectSignal { ch, id, ext, name } => {
-                    let key = SigKey::can(ch, id, ext, name.clone());
-                    let already = signals
-                        .lock()
-                        .map(|store| store.is_selected(&key))
-                        .unwrap_or(false);
-                    if !already {
-                        chart_select(&mut app, ch, id, ext, &name);
-                        if let Ok(mut store) = signals.lock() {
-                            store.select(&app, ch, id, ext, &name);
-                        }
+                WebCommand::SelectSignal {
+                    ch,
+                    id,
+                    ext,
+                    name,
+                    read,
+                } => {
+                    let key = SigKey::can(ch, id, ext, name);
+                    if let Ok(mut store) = signals.lock() {
+                        set_signal_mode(&mut app, &mut store, key, read);
                     }
                 }
                 WebCommand::UnselectSignal { ch, id, ext, name } => {
@@ -2233,17 +2279,15 @@ fn app_loop(
                         chart_unselect(&mut app, &key);
                     }
                 }
-                WebCommand::SelectFrSignal { bus, slot, name } => {
+                WebCommand::SelectFrSignal {
+                    bus,
+                    slot,
+                    name,
+                    read,
+                } => {
                     let key = SigKey::fr(bus, slot, name);
-                    let already = signals
-                        .lock()
-                        .map(|store| store.is_selected(&key))
-                        .unwrap_or(false);
-                    if !already {
-                        chart_select_key(&mut app, key.clone());
-                        if let Ok(mut store) = signals.lock() {
-                            store.select_key(&app, key);
-                        }
+                    if let Ok(mut store) = signals.lock() {
+                        set_signal_mode(&mut app, &mut store, key, read);
                     }
                 }
                 WebCommand::UnselectFrSignal { bus, slot, name } => {
@@ -2258,17 +2302,15 @@ fn app_loop(
                         chart_unselect(&mut app, &key);
                     }
                 }
-                WebCommand::SelectEthSignal { bus, frame, name } => {
+                WebCommand::SelectEthSignal {
+                    bus,
+                    frame,
+                    name,
+                    read,
+                } => {
                     let key = SigKey::eth(bus, frame, name);
-                    let already = signals
-                        .lock()
-                        .map(|store| store.is_selected(&key))
-                        .unwrap_or(false);
-                    if !already {
-                        chart_select_key(&mut app, key.clone());
-                        if let Ok(mut store) = signals.lock() {
-                            store.select_key(&app, key);
-                        }
+                    if let Ok(mut store) = signals.lock() {
+                        set_signal_mode(&mut app, &mut store, key, read);
                     }
                 }
                 WebCommand::UnselectEthSignal { bus, frame, name } => {
@@ -2286,7 +2328,7 @@ fn app_loop(
                 WebCommand::MoveSignal { key, to } => {
                     let target = signals.lock().ok().and_then(|store| {
                         store
-                            .keys()
+                            .chart_keys()
                             .into_iter()
                             .find(|candidate| series_key(candidate) == key)
                     });
@@ -3418,6 +3460,9 @@ struct SignalSeries {
     bus: String,
     unit: String,
     color: usize,
+    /// True for a signal subscribed only for cursor readout: no lane, but
+    /// its history participates in the A/B table.
+    read: bool,
     /// `[seconds, value]`, oldest first.
     points: Vec<[f64; 2]>,
 }
@@ -3434,6 +3479,8 @@ struct SelectedSignal {
     bus: String,
     unit: String,
     color: usize,
+    /// Read-only signal: subscribed and shown at cursors, never drawn.
+    read: bool,
 }
 
 const SIGNAL_PALETTE: usize = 8;
@@ -3459,9 +3506,25 @@ impl SignalStore {
         self.selected.iter().any(|signal| &signal.key == key)
     }
 
+    fn is_read(&self, key: &SigKey) -> bool {
+        self.selected
+            .iter()
+            .any(|signal| &signal.key == key && signal.read)
+    }
+
+    /// Every subscribed key: plotted lanes and read-only signals alike.
     fn keys(&self) -> Vec<SigKey> {
         self.selected
             .iter()
+            .map(|signal| signal.key.clone())
+            .collect()
+    }
+
+    /// Plotted lanes only, in lane order. Read-only signals never draw.
+    fn chart_keys(&self) -> Vec<SigKey> {
+        self.selected
+            .iter()
+            .filter(|signal| !signal.read)
             .map(|signal| signal.key.clone())
             .collect()
     }
@@ -3486,7 +3549,34 @@ impl SignalStore {
     }
 
     fn select_key(&mut self, app: &App, key: SigKey) {
-        if self.is_selected(&key) {
+        self.select_key_mode(app, key, false);
+    }
+
+    /// Selects a signal as a plotted lane (`read = false`) or a cursor-only
+    /// read signal. Changing the mode keeps the entry and its history; only
+    /// the lane/readout placement changes.
+    fn select_key_mode(&mut self, app: &App, key: SigKey, read: bool) {
+        if let Some(pos) = self.selected.iter().position(|signal| signal.key == key) {
+            if self.selected[pos].read == read {
+                return;
+            }
+            let mut signal = self.selected.remove(pos);
+            signal.read = read;
+            if !read {
+                // A signal coming back to the chart gets a lane colour that
+                // is not already in use.
+                signal.color = self.free_chart_color();
+            }
+            let at = if read {
+                self.selected.len()
+            } else {
+                self.selected
+                    .iter()
+                    .position(|signal| signal.read)
+                    .unwrap_or(self.selected.len())
+            };
+            self.selected.insert(at, signal);
+            self.primed = false;
             return;
         }
         let name = match &key {
@@ -3507,17 +3597,37 @@ impl SignalStore {
             // FR/Eth units arrive with the first subscription publish.
             SigKey::Fr { .. } | SigKey::Eth { .. } => String::new(),
         };
-        let color = (0..SIGNAL_PALETTE)
-            .find(|color| !self.selected.iter().any(|signal| signal.color == *color))
-            .unwrap_or(self.selected.len() % SIGNAL_PALETTE);
-        self.selected.push(SelectedSignal {
+        let color = if read { 0 } else { self.free_chart_color() };
+        let signal = SelectedSignal {
             key,
             name,
             bus,
             unit,
             color,
-        });
+            read,
+        };
+        if read {
+            self.selected.push(signal);
+        } else {
+            let at = self
+                .selected
+                .iter()
+                .position(|signal| signal.read)
+                .unwrap_or(self.selected.len());
+            self.selected.insert(at, signal);
+        }
         self.primed = false;
+    }
+
+    fn free_chart_color(&self) -> usize {
+        (0..SIGNAL_PALETTE)
+            .find(|color| {
+                !self
+                    .selected
+                    .iter()
+                    .any(|signal| !signal.read && signal.color == *color)
+            })
+            .unwrap_or(self.selected.len() % SIGNAL_PALETTE)
     }
 
     fn unselect(&mut self, key: &SigKey) {
@@ -3534,7 +3644,11 @@ impl SignalStore {
         let Some(from) = self.selected.iter().position(|signal| &signal.key == key) else {
             return false;
         };
-        let to = to.min(self.selected.len().saturating_sub(1));
+        if self.selected[from].read {
+            return false;
+        }
+        let charted = self.selected.iter().filter(|signal| !signal.read).count();
+        let to = to.min(charted.saturating_sub(1));
         if from == to {
             return false;
         }
@@ -3626,6 +3740,7 @@ impl SignalStore {
                 bus: "Derived".to_string(),
                 unit: def.unit.clone(),
                 color: 100 + index,
+                read: false,
             });
         }
         let derived_meta = app
@@ -3861,6 +3976,7 @@ fn signal_meta(signal: &SelectedSignal) -> SignalSeries {
         bus: signal.bus.clone(),
         unit: signal.unit.clone(),
         color: signal.color,
+        read: signal.read,
         points: Vec::new(),
     }
 }
@@ -4609,7 +4725,21 @@ struct WebFrame {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebMessageSignal {
+    name: String,
+    /// Formatted physical value.
+    value: String,
+    raw: i64,
+    unit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebMessage {
+    /// Stable identity for expansion and tree keys.
+    key: String,
     kind: String,
     addr: String,
     bus: u8,
@@ -4621,6 +4751,11 @@ struct WebMessage {
     cycle_ms: f64,
     len: u8,
     data: String,
+    /// How many DBC/description signals this row carries.
+    signal_count: usize,
+    /// Decoded children, present only while the row is expanded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    signals: Vec<WebMessageSignal>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4629,6 +4764,65 @@ struct WebLine {
     wall_us: u64,
     kind: &'static str,
     text: String,
+}
+
+fn message_signal_dto(signal: crate::dbc::DecodedSignal) -> WebMessageSignal {
+    WebMessageSignal {
+        value: crate::dbc::fmt_decoded(&signal.type_tag, signal.phys),
+        name: signal.name,
+        raw: signal.raw,
+        unit: signal.unit,
+        label: signal.label,
+    }
+}
+
+fn can_message_signals(
+    db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
+    m: &crate::aggregate::MessageAgg,
+) -> Vec<WebMessageSignal> {
+    use crate::can::frame::FrameFlags;
+    if m.flags.contains(FrameFlags::ERROR) || m.flags.contains(FrameFlags::RTR) {
+        return Vec::new();
+    }
+    let Some(db) = db else {
+        return Vec::new();
+    };
+    let frame = CanFrame {
+        t_us: m.last_t_us,
+        channel: m.channel,
+        id: m.id,
+        extended: m.extended,
+        len: m.len,
+        data: m.data,
+        dir: m.dir,
+        flags: m.flags,
+    };
+    db.decode_signals(&frame)
+        .into_iter()
+        .map(message_signal_dto)
+        .collect()
+}
+
+fn eth_message_key(key: &crate::aggregate::EthFlowKey) -> String {
+    let vlan = key
+        .vlan
+        .map(|vlan| vlan.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let mac = |address: &[u8; 6]| {
+        address
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>()
+    };
+    format!(
+        "eth:{}:{}:{}:{}:{}:{}",
+        key.bus,
+        key.ethertype,
+        vlan,
+        mac(&key.dst),
+        mac(&key.src),
+        key.len
+    )
 }
 
 fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
@@ -5282,14 +5476,32 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             } else {
                 format!("0x{:03X}", m.id)
             };
+            let key = format!("can:{}:{}:{}", m.channel, m.id, m.extended);
+            let channel_db = db(m.channel);
+            let signal_count = if m.flags.contains(crate::can::frame::FrameFlags::ERROR)
+                || m.flags.contains(crate::can::frame::FrameFlags::RTR)
+            {
+                0
+            } else {
+                channel_db
+                    .and_then(|d| d.messages.get(&(m.id, m.extended)))
+                    .map(|message| message.signals.len())
+                    .unwrap_or(0)
+            };
+            let signals = if app.expanded_messages.contains(&key) {
+                can_message_signals(channel_db, m)
+            } else {
+                Vec::new()
+            };
             WebMessage {
+                key,
                 kind: "can".to_string(),
                 addr,
                 bus: m.channel,
                 bus_name: bus_name(m.channel),
                 id: m.id,
                 extended: m.extended,
-                name: db(m.channel)
+                name: channel_db
                     .and_then(|d| d.message_name(m.id))
                     .unwrap_or("")
                     .to_string(),
@@ -5297,12 +5509,36 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 cycle_ms: m.cycle_us / 1000.0,
                 len: m.len,
                 data: hex(m.payload()),
+                signal_count,
+                signals,
             }
         })
         .collect();
     for m in &snap.fr_aggs {
         let name = App::fr_frame_name(m).to_string();
+        let occupant = match &m.occupant {
+            crate::aggregate::FrOccupant::Frame(index) => format!("f{index}"),
+            crate::aggregate::FrOccupant::Logged(name) => format!("l:{name}"),
+            crate::aggregate::FrOccupant::Unknown => "u".to_string(),
+        };
+        let key = format!("fr:{}:{}:{}", m.bus, m.slot, occupant);
+        let frame_ix = app.fr_described_frame(m);
+        let frame_db = app.fr_db(m.bus);
+        let signal_count = frame_ix
+            .and_then(|ix| frame_db.map(|db| db.signal_names(ix).len()))
+            .unwrap_or(0);
+        let signals = if app.expanded_messages.contains(&key) {
+            frame_ix
+                .and_then(|ix| frame_db.map(|db| db.decode_signals(ix, &m.payload)))
+                .unwrap_or_default()
+                .into_iter()
+                .map(message_signal_dto)
+                .collect()
+        } else {
+            Vec::new()
+        };
         messages.push(WebMessage {
+            key,
             kind: "fr".to_string(),
             addr: format!("slot {}", m.slot),
             bus: m.bus,
@@ -5318,6 +5554,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             cycle_ms: m.cycle_us / 1000.0,
             len: m.payload.len().min(u8::MAX as usize) as u8,
             data: hex(&m.payload),
+            signal_count,
+            signals,
         });
     }
     for a in &snap.eth_aggs {
@@ -5326,7 +5564,50 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             .vlan
             .map(|vlan| format!("VLAN {vlan}  "))
             .unwrap_or_default();
+        let key = eth_message_key(&a.key);
+        let flow = a.key.flow();
+        let (signal_count, signals) = app
+            .eth_buses
+            .get(&a.key.bus)
+            .map(|config| {
+                let count = match config.db.match_flow(&flow, app.eth_length_includes_header) {
+                    crate::eth::db::EthMatch::Unique(index) => config
+                        .db
+                        .frames
+                        .get(index)
+                        .map(|frame| frame.pdus.iter().map(|pdu| pdu.signals.len()).sum())
+                        .unwrap_or(0),
+                    _ => 0,
+                };
+                let signals = if app.expanded_messages.contains(&key) {
+                    config
+                        .db
+                        .decode(&flow, &a.payload, app.eth_length_includes_header)
+                        .map(|decoded| {
+                            decoded
+                                .signals
+                                .into_iter()
+                                .map(|signal| {
+                                    message_signal_dto(crate::dbc::DecodedSignal {
+                                        name: signal.name,
+                                        phys: signal.physical,
+                                        raw: signal.raw,
+                                        unit: signal.unit,
+                                        type_tag: signal.type_tag,
+                                        label: signal.label,
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                (count, signals)
+            })
+            .unwrap_or_default();
         messages.push(WebMessage {
+            key,
             kind: "eth".to_string(),
             addr: format!("0x{:04X}", a.key.ethertype),
             bus: a.key.bus,
@@ -5338,6 +5619,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             cycle_ms: a.cycle_us / 1000.0,
             len: a.key.len.min(u8::MAX as usize) as u8,
             data: String::new(),
+            signal_count,
+            signals,
         });
     }
     messages.sort_by_key(|m| {
@@ -5520,6 +5803,47 @@ mod tests {
             app.web_workspace,
             Some(serde_json::json!({ "tab": "signals" }))
         );
+    }
+
+    /// Messages expand into decoded signal children only while open: the
+    /// collapsed snapshot pays nothing for a DBC with hundreds of signals.
+    #[test]
+    fn expanded_messages_carry_decoded_signal_children() {
+        let mut app = App::headless();
+        seed_demo(&mut app);
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(5));
+            app.update();
+        }
+        let series = VecDeque::new();
+        let find = |app: &App| {
+            build_state(app, &series, app.frame_rate)
+                .messages
+                .into_iter()
+                .find(|message| message.kind == "can" && message.name == "EngineStatus")
+                .expect("EngineStatus aggregate")
+        };
+        let collapsed = find(&app);
+        assert!(collapsed.key.starts_with("can:"));
+        assert!(collapsed.signal_count >= 2, "EngineStatus declares signals");
+        assert!(
+            collapsed.signals.is_empty(),
+            "a collapsed row must not decode its signals"
+        );
+
+        app.set_message_expanded(&collapsed.key, true);
+        let expanded = find(&app);
+        assert_eq!(expanded.signals.len(), expanded.signal_count);
+        assert!(
+            expanded
+                .signals
+                .iter()
+                .any(|signal| signal.name == "EngineSpeed" && !signal.value.is_empty()),
+            "the child carries the decoded physical value"
+        );
+
+        app.set_message_expanded(&collapsed.key, false);
+        assert!(find(&app).signals.is_empty(), "closing drops the children");
     }
 
     #[test]
@@ -6423,6 +6747,60 @@ mod tests {
         store.unselect(&key);
         store.sync(&app);
         assert!(store.seed().is_empty());
+    }
+
+    /// A read-only signal stays subscribed and sampled without creating a
+    /// lane; plotting it later only flips the mode.
+    #[test]
+    fn read_signals_subscribe_without_a_lane() {
+        let mut app = App::headless();
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let mut store = SignalStore::default();
+        set_signal_mode(&mut app, &mut store, key.clone(), true);
+        app.settle();
+        assert!(store.is_selected(&key) && store.is_read(&key));
+        assert!(store.chart_keys().is_empty(), "read is not a lane");
+        assert!(app.subs.contains_key(&key), "read signals still sample");
+        assert!(
+            app.graphics
+                .first()
+                .is_none_or(|window| window.signals.iter().all(|row| row.key != key)),
+            "read does not enter the Graphics window"
+        );
+        store.sync(&app);
+        let seeded = store.seed();
+        assert_eq!(seeded.len(), 1);
+        assert!(seeded[0].read, "the series tells the frontend not to draw");
+
+        set_signal_mode(&mut app, &mut store, key.clone(), false);
+        assert!(!store.is_read(&key));
+        assert_eq!(store.chart_keys(), vec![key.clone()]);
+        assert!(
+            app.graphics
+                .first()
+                .is_some_and(|window| window.signals.iter().any(|row| row.key == key)),
+            "switching to plot restores the Graphics row"
+        );
+        assert!(app.subs.contains_key(&key));
+        store.sync(&app);
+        assert!(!store.seed()[0].read);
+
+        set_signal_mode(&mut app, &mut store, key.clone(), true);
+        assert!(
+            app.graphics
+                .first()
+                .is_none_or(|window| window.signals.iter().all(|row| row.key != key)),
+            "switching back removes the lane"
+        );
+        assert!(app.subs.contains_key(&key), "but keeps sampling");
+
+        store.unselect(&key);
+        app.set_session_chart_keep(store.keys());
+        chart_unselect(&mut app, &key);
+        assert!(
+            !app.subs.contains_key(&key),
+            "unselect drops the read subscription"
+        );
     }
 
     /// The Triggers panel reads the live rule list and its fire state.

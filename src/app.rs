@@ -226,6 +226,10 @@ pub struct App {
     /// Data/Monitor/State clear never unmounts a live chart lane. Session
     /// state: the project's Graphics rows are what persist real picks.
     pub(crate) session_chart_keep: std::collections::HashSet<crate::observe::SigKey>,
+    /// Message rows whose signal children the web Messages table has open.
+    /// Session state: only open rows pay for signal decoding in the state
+    /// snapshot, so an idle Messages view adds no per-poll work.
+    pub expanded_messages: std::collections::HashSet<String>,
     /// Last Windows PnP signature for Vector USB devices and when it was
     /// polled. A transition to/from "no Vector USB at all" reopens the XL
     /// driver automatically (USB replug without pressing Refresh).
@@ -437,6 +441,7 @@ impl App {
             reference_rev: 0,
             derived_defs: Vec::new(),
             session_chart_keep: std::collections::HashSet::new(),
+            expanded_messages: std::collections::HashSet::new(),
             pnp_signature,
             last_pnp_poll: Instant::now(),
             baseline: String::new(),
@@ -771,6 +776,16 @@ impl App {
         keys: impl IntoIterator<Item = crate::observe::SigKey>,
     ) {
         self.session_chart_keep = keys.into_iter().collect();
+    }
+
+    /// Opens or closes one Messages row's signal children. The web layer
+    /// owns the expansion UI; the core only decides what to include.
+    pub fn set_message_expanded(&mut self, key: &str, on: bool) {
+        if on {
+            self.expanded_messages.insert(key.to_string());
+        } else {
+            self.expanded_messages.remove(key);
+        }
     }
 
     /// The State bands a derived channel carries, if its definition names any.

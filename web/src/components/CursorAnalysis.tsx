@@ -66,20 +66,45 @@ export function CursorAnalysis({
   const labels = cursorLabels(cursors);
   const aIndex = labels.indexOf("A");
   const bIndex = labels.indexOf("B");
-  if (aIndex < 0 || bIndex < 0) return null;
-  const a = cursors[aIndex];
-  const b = cursors[bIndex];
-  const from = Math.min(a.t, b.t);
-  const to = Math.max(a.t, b.t);
+  const live = cursors.length === 0;
+  const paired = !live && aIndex >= 0 && bIndex >= 0;
+  const primaryIndex = aIndex >= 0 ? aIndex : bIndex >= 0 ? bIndex : 0;
+  const primary = live ? null : cursors[primaryIndex];
+  const a = paired ? cursors[aIndex] : primary;
+  const b = paired ? cursors[bIndex] : null;
+  const from = a && b ? Math.min(a.t, b.t) : (primary?.t ?? 0);
+  const to = a && b ? Math.max(a.t, b.t) : (primary?.t ?? 0);
+  let latest = 0;
+  for (const signal of series) {
+    const last = signal.points[signal.points.length - 1];
+    if (last) latest = Math.max(latest, last[0]);
+  }
 
   return (
-    <section class="cursor-analysis" aria-label="A/B cursor analysis">
+    <section
+      class={`cursor-analysis ${paired ? "" : "single"}`}
+      aria-label={
+        paired
+          ? "A/B cursor analysis"
+          : live
+            ? "Live signal values"
+            : "Cursor values"
+      }
+    >
       <header class="cursor-analysis-head">
-        <strong>A/B analysis</strong>
+        <strong>
+          {paired ? "A/B analysis" : live ? "Live values" : "Cursor values"}
+        </strong>
         <span class="hint">
-          {from.toFixed(3)} – {to.toFixed(3)} s
+          {paired
+            ? `${from.toFixed(3)} – ${to.toFixed(3)} s`
+            : live
+              ? latest > 0
+                ? `latest ${latest.toFixed(3)} s`
+                : "no samples"
+              : `${primary!.t.toFixed(3)} s`}
         </span>
-        {onDownloadRange && (
+        {paired && onDownloadRange && (
           <button
             type="button"
             class="mini"
@@ -89,7 +114,7 @@ export function CursorAnalysis({
             CSV ↓
           </button>
         )}
-        {onExportRange && (
+        {paired && onExportRange && (
           <button
             type="button"
             class="mini"
@@ -102,29 +127,42 @@ export function CursorAnalysis({
       </header>
       <div class="cursor-analysis-labels" aria-hidden="true">
         <span>Signal</span>
-        <span>A</span>
-        <span>B</span>
-        <span>Δ</span>
+        <span>{live ? "Now" : labels[primaryIndex]}</span>
+        {paired && (
+          <>
+            <span>B</span>
+            <span>Δ</span>
+          </>
+        )}
       </div>
       <div class="cursor-analysis-body">
+        {series.length === 0 && (
+          <div class="cursor-analysis-empty">No signals selected</div>
+        )}
         {series.map((signal) => {
-          const valueA = valueAt(signal.points, a.t);
-          const valueB = valueAt(signal.points, b.t);
-          const stats = rangeStats(signal.points, from, to);
+          const last = signal.points[signal.points.length - 1];
+          const valueA = live
+            ? (last?.[1] ?? null)
+            : valueAt(signal.points, a!.t);
+          const valueB = b ? valueAt(signal.points, b.t) : null;
+          const stats = b ? rangeStats(signal.points, from, to) : null;
           return (
             <div class="cursor-analysis-row" key={signal.key}>
               <div class="cursor-analysis-main">
                 <span class="cursor-analysis-name" title={signal.name}>
                   {signal.name}
                   {signal.unit && <em>{signal.unit}</em>}
+                  {signal.read && <em class="cursor-analysis-read">read</em>}
                 </span>
                 <span>{formatValue(valueA)}</span>
-                <span>{formatValue(valueB)}</span>
-                <span class="cursor-analysis-delta">
-                  {valueA !== null && valueB !== null
-                    ? `${valueB - valueA >= 0 ? "+" : ""}${formatValue(valueB - valueA)}`
-                    : "—"}
-                </span>
+                {paired && <span>{formatValue(valueB)}</span>}
+                {paired && (
+                  <span class="cursor-analysis-delta">
+                    {valueA !== null && valueB !== null
+                      ? `${valueB - valueA >= 0 ? "+" : ""}${formatValue(valueB - valueA)}`
+                      : "—"}
+                  </span>
+                )}
               </div>
               {stats && (
                 <div class="cursor-analysis-sub">

@@ -71,6 +71,8 @@ export interface SignalSeries {
   bus: string;
   unit: string;
   color: number;
+  /** Read-only: subscribe and show at cursors without drawing a lane. */
+  read: boolean;
   /** `[seconds, value]`, oldest first. */
   points: [number, number][];
 }
@@ -484,7 +486,16 @@ export interface Frame {
   brs: boolean;
 }
 
+export interface MessageSignal {
+  name: string;
+  value: string;
+  raw: number;
+  unit: string;
+  label?: string | null;
+}
+
 export interface Message {
+  key: string;
   kind: string;
   addr: string;
   bus: number;
@@ -496,6 +507,8 @@ export interface Message {
   cycleMs: number;
   len: number;
   data: string;
+  signalCount: number;
+  signals?: MessageSignal[];
 }
 
 export interface WriteLine {
@@ -543,6 +556,7 @@ export type Command =
       to_us?: number;
     }
   | { type: "clear_trace" }
+  | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }
   | { type: "save_project"; path: string | null }
@@ -662,11 +676,30 @@ export type Command =
       frame?: string;
       name: string;
     }
-  | { type: "select_signal"; ch: number; id: number; ext: boolean; name: string }
+  | {
+      type: "select_signal";
+      ch: number;
+      id: number;
+      ext: boolean;
+      name: string;
+      read?: boolean;
+    }
   | { type: "unselect_signal"; ch: number; id: number; ext: boolean; name: string }
-  | { type: "select_fr_signal"; bus: number; slot: number; name: string }
+  | {
+      type: "select_fr_signal";
+      bus: number;
+      slot: number;
+      name: string;
+      read?: boolean;
+    }
   | { type: "unselect_fr_signal"; bus: number; slot: number; name: string }
-  | { type: "select_eth_signal"; bus: number; frame: string; name: string }
+  | {
+      type: "select_eth_signal";
+      bus: number;
+      frame: string;
+      name: string;
+      read?: boolean;
+    }
   | { type: "unselect_eth_signal"; bus: number; frame: string; name: string }
   | { type: "move_signal"; key: string; to: number }
   | {

@@ -190,6 +190,25 @@
   color: #9aa5b4;
 }
 
+[data-theme="light"] .message-table tbody tr.message-signal-row td {
+  background: #f4f7fa;
+  border-bottom-color: #e3e9f0;
+  color: #526174;
+}
+
+[data-theme="light"] .message-signal-name {
+  color: #3a4655;
+}
+
+[data-theme="light"] .message-signal-value {
+  color: #26313f;
+}
+
+[data-theme="light"] .msg-expand:hover:not(:disabled) {
+  background: #e3ebf5;
+  color: #26313f;
+}
+
 [data-theme="light"] .badge,
 [data-theme="light"] .gen-badge,
 [data-theme="light"] .trig-action {
@@ -265,6 +284,17 @@
 
 [data-theme="light"] .picker-signal.on {
   color: #1f2937;
+}
+
+[data-theme="light"] .picker-name:hover,
+[data-theme="light"] .picker-modes button:hover:not(:disabled):not(.on) {
+  color: #1f2937;
+  background: rgb(15 23 42 / 5%);
+}
+
+[data-theme="light"] .picker-modes button.on {
+  background: #e3eefc;
+  color: #1557a8;
 }
 
 [data-theme="light"] button.mini.on,

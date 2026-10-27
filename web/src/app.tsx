@@ -83,6 +83,13 @@ import {
 import type { TraceFilter } from "./components/TraceFilterModal";
 import type { StateRow } from "./types";
 import {
+  catalogSignalCommand,
+  catalogSignalSpec,
+  parseReadSignals,
+  readSpecCommand,
+  type ReadSignalSpec,
+} from "./readSignals";
+import {
   applyTheme,
   loadTheme,
   palette,
@@ -96,7 +103,8 @@ import {
   saveTraceColumns,
 } from "./traceLayout";
 
-type RightTab = "messages" | "statistics" | "bus" | "spec" | "activity";
+type RightTab = "statistics" | "bus" | "spec" | "activity";
+type MainView = "trace" | "messages";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
 type Drag = "main" | "right" | null;
 
@@ -113,6 +121,7 @@ const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
 
 interface SavedView {
   tab: RightTab;
+  mainView: MainView;
   chartTab: ChartTab;
   chartTab2: ChartTab;
   chartSplit: boolean;
@@ -125,16 +134,12 @@ interface SavedView {
 interface SavedWorkspace extends Partial<SavedView> {
   traceColumns?: unknown;
   layout?: unknown;
+  readSignals?: unknown;
 }
 
+
 function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
-  const tabs: RightTab[] = [
-    "messages",
-    "statistics",
-    "bus",
-    "spec",
-    "activity",
-  ];
+  const tabs: RightTab[] = ["statistics", "bus", "spec", "activity"];
   const chartTabs: ChartTab[] = [
     "rate",
     "signals",
@@ -161,6 +166,10 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
   }
   return {
     tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
+    mainView:
+      saved.mainView === "trace" || saved.mainView === "messages"
+        ? saved.mainView
+        : undefined,
     chartTab:
       saved.chartTab && chartTabs.includes(saved.chartTab)
         ? saved.chartTab
@@ -315,6 +324,7 @@ export function App() {
     rows: Frame[];
   }>({ epoch: null, seq: 0, rows: [] });
   const [signals, setSignals] = useState<SignalSeries[]>([]);
+  const [readSignals, setReadSignals] = useState<ReadSignalSpec[]>([]);
   const signalRef = useRef<{
     epoch: number | null;
     since: number;
@@ -328,10 +338,14 @@ export function App() {
   const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
   const [traceFilterOpen, setTraceFilterOpen] = useState(false);
   const [panelQuery, setPanelQuery] = useState("");
+  const [messageQuery, setMessageQuery] = useState("");
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
   const [savedView] = useState(loadView);
-  const [tab, setTab] = useState<RightTab>(savedView.tab ?? "messages");
+  const [tab, setTab] = useState<RightTab>(savedView.tab ?? "statistics");
+  const [mainView, setMainView] = useState<MainView>(
+    savedView.mainView ?? "messages",
+  );
   const [chartTab, setChartTab] = useState<ChartTab>(
     savedView.chartTab ?? "rate",
   );
@@ -403,7 +417,6 @@ export function App() {
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
-  const chartPanelRef = useRef<HTMLElement>(null);
   const chartSplitRef = useRef<HTMLDivElement>(null);
   const preSplitRight = useRef<number | null>(null);
   const chartCursorSeq = useRef(
@@ -430,7 +443,8 @@ export function App() {
 
   const applyWorkspace = (raw: unknown) => {
     if (!raw || typeof raw !== "object") {
-      setTab("messages");
+      setTab("statistics");
+      setMainView("messages");
       setChartTab("rate");
       setChartTab2("monitor");
       setChartSplit(false);
@@ -438,6 +452,7 @@ export function App() {
       setSignalOverlay(false);
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
+      setReadSignals([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
       setLayout(DEFAULT_LAYOUT);
       chartCursorSeq.current = 1;
@@ -446,6 +461,7 @@ export function App() {
     const saved = raw as SavedWorkspace;
     const view = normalizeView(saved);
     if (view.tab) setTab(view.tab);
+    if (view.mainView) setMainView(view.mainView);
     if (view.chartTab) setChartTab(view.chartTab);
     if (view.chartTab2) setChartTab2(view.chartTab2);
     if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
@@ -461,6 +477,9 @@ export function App() {
     if (columns) setTraceColumns(columns);
     const nextLayout = parseLayout(saved.layout);
     if (nextLayout) setLayout(nextLayout);
+    const savedReads = parseReadSignals(saved.readSignals);
+    setReadSignals(savedReads);
+    for (const spec of savedReads) void run(readSpecCommand(spec));
   };
 
   // A project load bumps the revision once; adopt its workspace then, but
@@ -497,6 +516,7 @@ export function App() {
         rev: state.workspaceRev ?? 0,
         workspace: {
           tab,
+          mainView,
           chartTab,
           chartTab2,
           chartSplit,
@@ -506,6 +526,7 @@ export function App() {
           cursors: chartCursors,
           traceColumns,
           layout,
+          readSignals,
         },
       }).catch(() => {});
     }, 350);
@@ -513,6 +534,7 @@ export function App() {
   }, [
     workspaceHydrated,
     tab,
+    mainView,
     chartTab,
     chartTab2,
     chartSplit,
@@ -522,6 +544,7 @@ export function App() {
     chartCursors,
     traceColumns,
     layout,
+    readSignals,
     state?.workspaceRev,
   ]);
 
@@ -630,27 +653,6 @@ export function App() {
   }, [menuOpen]);
 
   useEffect(() => {
-    const panel = chartPanelRef.current;
-    if (!panel) return;
-    const sync = () => {
-      if (document.fullscreenElement === panel) {
-        setChartFullscreen(true);
-        return;
-      }
-      panel.classList.remove("chart-fullscreen");
-      setChartFullscreen(false);
-    };
-    document.addEventListener("fullscreenchange", sync);
-    return () => {
-      document.removeEventListener("fullscreenchange", sync);
-      panel.classList.remove("chart-fullscreen");
-      if (document.fullscreenElement === panel) {
-        void document.exitFullscreen();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (!chartFullscreen) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -658,13 +660,7 @@ export function App() {
       if (document.querySelector(".signal-menu, .trace-menu, .modal-backdrop")) {
         return;
       }
-      const panel = chartPanelRef.current;
-      if (!panel) return;
-      panel.classList.remove("chart-fullscreen");
       setChartFullscreen(false);
-      if (document.fullscreenElement === panel) {
-        void document.exitFullscreen();
-      }
     };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
@@ -688,6 +684,7 @@ export function App() {
         VIEW_KEY,
         JSON.stringify({
           tab,
+          mainView,
           chartTab,
           chartTab2,
           chartSplit,
@@ -702,6 +699,7 @@ export function App() {
     }
   }, [
     tab,
+    mainView,
     chartTab,
     chartTab2,
     chartSplit,
@@ -922,9 +920,9 @@ export function App() {
     target: "monitor" | "data" | "state",
   ) => {
     setPickerOpen(false);
-    const keys = signals.map((signal) => signal.key);
+    const keys = chartSeries.map((signal) => signal.key);
     if (keys.length === 0) {
-      showToast("No chart signals to copy");
+      showToast("No plotted signals to copy");
       return;
     }
     setBusy(true);
@@ -1026,7 +1024,7 @@ export function App() {
       }
       const existing = new Set(
         target === "chart"
-          ? signals.map((signal) => signal.key)
+          ? chartSeries.map((signal) => signal.key)
           : (state?.monitor ?? []).map(rowKey),
       );
       const pending = message.signals.filter(
@@ -1065,7 +1063,7 @@ export function App() {
     traceJumpSeq.current += 1;
     setTraceJump({ tUs: target, nonce: traceJumpSeq.current });
     setSignalView((old) => ({ ...old, endS: target / 1e6 + old.windowS / 2 }));
-    setChartTab(signals.length > 0 ? "signals" : "rate");
+    setChartTab(cursorSeries.length > 0 ? "signals" : "rate");
     return target;
   };
 
@@ -1130,17 +1128,20 @@ export function App() {
     if (preset === "trace") {
       setLayout({ main: 0.78, right: 0.5 });
       setChartTab("rate");
-      setTab("messages");
+      setMainView("trace");
+      setTab("statistics");
       showToast("Layout: Trace focus");
     } else if (preset === "analysis") {
       setLayout({ main: 0.52, right: 0.62 });
       setChartTab("signals");
+      setMainView("trace");
       setTab("statistics");
       showToast("Layout: Analysis");
     } else {
       setLayout({ main: 0.64, right: 0.55 });
       setChartTab("rate");
-      setTab("messages");
+      setMainView("trace");
+      setTab("statistics");
       showToast("Layout: Replay");
     }
   };
@@ -1178,19 +1179,7 @@ export function App() {
   };
 
   const toggleChartFullscreen = () => {
-    const panel = chartPanelRef.current;
-    if (!panel) return;
-    if (chartFullscreen) {
-      panel.classList.remove("chart-fullscreen");
-      setChartFullscreen(false);
-      if (document.fullscreenElement === panel) {
-        void document.exitFullscreen();
-      }
-      return;
-    }
-    panel.classList.add("chart-fullscreen");
-    setChartFullscreen(true);
-    void panel.requestFullscreen().catch(() => {});
+    setChartFullscreen((old) => !old);
   };
 
   const toggleChartSplit = () => {
@@ -1263,6 +1252,7 @@ export function App() {
       rev: state?.workspaceRev ?? 0,
       workspace: {
         tab,
+        mainView,
         chartTab,
         chartTab2,
         chartSplit,
@@ -1272,6 +1262,7 @@ export function App() {
         cursors: chartCursors,
         traceColumns,
         layout,
+        readSignals,
       },
     });
 
@@ -1432,7 +1423,7 @@ export function App() {
         setSessionOpen(true);
       } else if (mod && key === "e") {
         event.preventDefault();
-        openExport("trace");
+        openExport(mainView === "messages" ? "messages" : "trace");
       } else if (mod && key === "k") {
         event.preventDefault();
         setPaletteOpen(true);
@@ -1445,7 +1436,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state?.measuring, state?.projectPath]);
+  }, [state?.measuring, state?.projectPath, mainView]);
 
   const openDataPicker = () => {    setSessionOpen(false);
     setScriptsOpen(false);
@@ -1558,50 +1549,43 @@ export function App() {
     signal: CatalogSignal,
     selected: boolean,
   ) => {
-    if (channel.kind === "fr") {
-      void run({
-        type: selected ? "select_fr_signal" : "unselect_fr_signal",
-        bus: channel.index,
-        slot: message.id,
-        name: signal.name,
-      });
+    if (!selected) {
+      void run(catalogSignalCommand(channel, message, signal, null));
       return;
     }
-    if (channel.kind === "eth") {
-      void run({
-        type: selected ? "select_eth_signal" : "unselect_eth_signal",
-        bus: channel.index,
-        frame: message.frame ?? message.name,
-        name: signal.name,
-      });
+    if (readKeys.has(signal.key)) {
+      setReadSignals((old) => old.filter((spec) => spec.key !== signal.key));
+    }
+    void run(catalogSignalCommand(channel, message, signal, false));
+  };
+
+  const toggleReadSignal = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+    on: boolean,
+  ) => {
+    if (on) {
+      const spec = catalogSignalSpec(channel, message, signal);
+      setReadSignals((old) => [
+        ...old.filter((candidate) => candidate.key !== spec.key),
+        spec,
+      ]);
+      void run(catalogSignalCommand(channel, message, signal, true));
       return;
     }
-    void run(
-      selected
-        ? {
-            type: "select_signal",
-            ch: channel.index,
-            id: message.id,
-            ext: message.extended,
-            name: signal.name,
-          }
-        : {
-            type: "unselect_signal",
-            ch: channel.index,
-            id: message.id,
-            ext: message.extended,
-            name: signal.name,
-          },
-    );
+    setReadSignals((old) => old.filter((spec) => spec.key !== signal.key));
+    void run(catalogSignalCommand(channel, message, signal, null));
   };
 
   const moveSignal = (key: string, to: number) => {
-    const from = signals.findIndex((signal) => signal.key === key);
-    const target = clamp(to, 0, signals.length - 1);
+    const from = chartSeries.findIndex((signal) => signal.key === key);
+    const target = clamp(to, 0, chartSeries.length - 1);
     if (from < 0 || from === target) return;
-    const next = [...signals];
-    const [moved] = next.splice(from, 1);
-    next.splice(target, 0, moved);
+    const nextChart = [...chartSeries];
+    const [moved] = nextChart.splice(from, 1);
+    nextChart.splice(target, 0, moved);
+    const next = [...nextChart, ...readSeries];
     signalRef.current = { ...signalRef.current, series: next };
     setSignals(next);
     void run({ type: "move_signal", key, to: target });
@@ -1704,9 +1688,9 @@ export function App() {
       </div>
     );
 
-  const lowerMessages = useMemo(() => {
+  const mainMessages = useMemo(() => {
     const rows = state?.messages ?? [];
-    const needle = panelQuery.trim().toLowerCase();
+    const needle = messageQuery.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter(
       (row) =>
@@ -1714,7 +1698,7 @@ export function App() {
         row.addr.toLowerCase().includes(needle) ||
         row.busName.toLowerCase().includes(needle),
     );
-  }, [state?.messages, panelQuery]);
+  }, [state?.messages, messageQuery]);
 
   const writeRows = useMemo(() => {
     const rows = state?.write ?? [];
@@ -1770,7 +1754,31 @@ export function App() {
     state?.replayPosUs != null && state?.replayTotalUs != null
       ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
       : "";
-  const selectedKeys = new Set(signals.map((signal) => signal.key));
+  const chartSeries = useMemo(
+    () => signals.filter((signal) => !signal.read),
+    [signals],
+  );
+  const readSeries = useMemo(
+    () => signals.filter((signal) => signal.read),
+    [signals],
+  );
+  const cursorSeries = useMemo(
+    () => [...chartSeries, ...readSeries],
+    [chartSeries, readSeries],
+  );
+  const readRange = useMemo(() => {
+    let first = Number.POSITIVE_INFINITY;
+    let last = 0;
+    for (const signal of readSeries) {
+      const start = signal.points[0]?.[0];
+      const end = signal.points[signal.points.length - 1]?.[0];
+      if (typeof start === "number") first = Math.min(first, start);
+      if (typeof end === "number") last = Math.max(last, end);
+    }
+    return Number.isFinite(first) && last > first ? { first, last } : null;
+  }, [readSeries]);
+  const selectedKeys = new Set(chartSeries.map((signal) => signal.key));
+  const readKeys = new Set(readSeries.map((signal) => signal.key));
   const monitorKeys = new Set((state?.monitor ?? []).map(rowKey));
   const exportRange = useMemo(() => {
     const labels = cursorLabels(chartCursors);
@@ -1787,7 +1795,6 @@ export function App() {
   const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
   // Derived channels are ordinary core subscriptions now, so the chart
   // series and every observer row include them without synthesis here.
-  const chartSeries = signals;
   const chartLatestS = useMemo(
     () =>
       signals.reduce((latest, signal) => {
@@ -1805,7 +1812,7 @@ export function App() {
       : chartLatestS;
 
   const downloadChartCsv = (fromS: number, toS: number) => {
-    const csv = buildAlignedCsv(chartSeries, fromS, toS);
+    const csv = buildAlignedCsv(cursorSeries, fromS, toS);
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     triggerDownload(
       url,
@@ -1851,7 +1858,7 @@ export function App() {
   };
 
   const applyReference = (data: ReferenceData) => {
-    const mapped = mapReferenceColumns(data.columns, signals);
+    const mapped = mapReferenceColumns(data.columns, chartSeries);
     const count = Object.keys(mapped).length;
     if (count === 0) {
       showToast("Reference has no columns matching the chart signals");
@@ -1869,25 +1876,25 @@ export function App() {
     showToast("Reference removed");
   };
 
-  const signalSignature = signals.map((signal) => signal.key).join("|");
+  const signalSignature = chartSeries.map((signal) => signal.key).join("|");
 
   useEffect(() => {
     if (!reference) return;
     setReference((old) =>
       old
-        ? { ...old, series: mapReferenceColumns(old.columns, signals) }
+        ? { ...old, series: mapReferenceColumns(old.columns, chartSeries) }
         : old,
     );
     // Only a lane set change needs remapping; sample updates do not.
   }, [signalSignature]);
 
   const addPaletteCursor = () => {
-    if (signals.length === 0) {
-      showToast("No chart signals to measure");
+    if (cursorSeries.length === 0) {
+      showToast("No signals to measure");
       return;
     }
     let last = 0;
-    for (const signal of signals) {
+    for (const signal of cursorSeries) {
       const point = signal.points[signal.points.length - 1];
       if (point) last = Math.max(last, point[0]);
     }
@@ -2068,10 +2075,16 @@ export function App() {
         ]
       : []),
     {
-      id: "tab-messages",
+      id: "view-trace",
+      label: "Show Trace",
+      group: "Main view",
+      run: () => setMainView("trace"),
+    },
+    {
+      id: "view-messages",
       label: "Show Messages",
-      group: "Lower panel",
-      run: () => setTab("messages"),
+      group: "Main view",
+      run: () => setMainView("messages"),
     },
     {
       id: "tab-statistics",
@@ -2280,6 +2293,25 @@ export function App() {
       />
     );
   };
+
+  const mainTabs = (
+    <div class="tabs main-tabs">
+      <button
+        type="button"
+        class={mainView === "trace" ? "on" : ""}
+        onClick={() => setMainView("trace")}
+      >
+        Trace
+      </button>
+      <button
+        type="button"
+        class={mainView === "messages" ? "on" : ""}
+        onClick={() => setMainView("messages")}
+      >
+        Messages
+      </button>
+    </div>
+  );
 
   return (
     <div class={`app ${state && !online ? "offline" : ""}`}>
@@ -2639,10 +2671,11 @@ export function App() {
         class="workspace"
         ref={workspaceRef}
         style={{
-          gridTemplateColumns: `calc((100% - 5px) * ${layout.main}) 5px minmax(0, 1fr)`,
+          gridTemplateColumns: `calc((100% - 3px) * ${layout.main}) 3px minmax(0, 1fr)`,
         }}
       >
-        <section class="panel trace-panel">
+        <section class={`panel trace-panel ${mainView}`}>
+          {mainView === "trace" ? (
           <TraceTable
             key={`${bus}:${query}:${traceEpoch}`}
             rows={visibleRows}
@@ -2650,14 +2683,12 @@ export function App() {
             onColumnsChange={setTraceColumns}
             jump={traceJump}
             onJumpDone={() => setTraceJump(null)}
+            leading={mainTabs}
             title={
-              <>
-                <h2>Trace</h2>
-                <span class="meta">
-                  {visibleRows.length.toLocaleString()} shown /{" "}
-                  {traceRows.length.toLocaleString()} rows
-                </span>
-              </>
+              <span class="meta">
+                {visibleRows.length.toLocaleString()} shown /{" "}
+                {traceRows.length.toLocaleString()} rows
+              </span>
             }
             tools={
               <>
@@ -2729,7 +2760,44 @@ export function App() {
             onWatch={(frame) => void addFrameSignals(frame, "monitor")}
             onShowTime={(tUs) => goToTimeUs(tUs, false)}
           />
-          {explorerOpen && (
+          ) : (
+            <>
+              <div class="panel-head">
+                {mainTabs}
+                <span class="meta">{mainMessages.length} ids</span>
+                <div class="panel-tools">
+                  <input
+                    class="panel-filter"
+                    type="search"
+                    value={messageQuery}
+                    placeholder="Filter bus, name or id…"
+                    onInput={(event) =>
+                      setMessageQuery(
+                        (event.target as HTMLInputElement).value,
+                      )
+                    }
+                  />
+                  <button
+                    type="button"
+                    class="mini"
+                    onClick={() => openExport("messages")}
+                    title="Export messages to a host CSV file"
+                  >
+                    Export…
+                  </button>
+                </div>
+              </div>
+              <MessageTable
+                key={state?.log ?? state?.projectPath ?? "untitled"}
+                rows={mainMessages}
+                filtered={messageQuery.trim() !== ""}
+                onExpand={(key, on) =>
+                  void run({ type: "set_message_expanded", key, on })
+                }
+              />
+            </>
+          )}
+          {mainView === "trace" && explorerOpen && (
             <DbcExplorer
               catalog={catalog}
               loading={catalogLoading}
@@ -2755,10 +2823,12 @@ export function App() {
           class="right-column"
           ref={rightRef}
           style={{
-            gridTemplateRows: `minmax(0, ${layout.right}fr) 5px minmax(0, ${1 - layout.right}fr)`,
+            gridTemplateRows: `minmax(0, ${layout.right}fr) 3px minmax(0, ${1 - layout.right}fr)`,
           }}
         >
-          <section class="panel chart-panel" ref={chartPanelRef}>
+          <section
+            class={`panel chart-panel ${chartFullscreen ? "chart-fullscreen" : ""}`}
+          >
             <div class="panel-head">
               <div class="tabs chart-tabs">
                 <button
@@ -2801,7 +2871,7 @@ export function App() {
                 <button
                   type="button"
                   class="mini"
-                  title="Choose the signals to plot"
+                  title="Choose signals to plot or read at cursors"
                   onClick={() => void openPicker()}
                 >
                   + Signals
@@ -2871,9 +2941,9 @@ export function App() {
                 <span class="meta">
                   {chartTab === "rate"
                     ? "solid f/s · dashed load"
-                    : signalOverlay
-                      ? `${chartSeries.length} channels · overlay`
-                      : `${chartSeries.length} channels · wheel zoom`}
+                    : `${chartSeries.length} channels${
+                        readSeries.length ? ` · ${readSeries.length} read` : ""
+                      }${signalOverlay ? " · overlay" : " · wheel zoom"}`}
                 </span>
               )}
               {chartTab === "rate" && (
@@ -3000,10 +3070,13 @@ export function App() {
                   onOpenDerived={() => setDerivedOpen(true)}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
+                  hasReadout={readSeries.length > 0}
+                  readRange={readRange}
+                  readCount={readSeries.length}
                 />
-                {chartCursors.length >= 2 && !chartSplit && (
+                {!chartSplit && (
                   <CursorAnalysis
-                    series={chartSeries}
+                    series={cursorSeries}
                     cursors={chartCursors}
                     onDownloadRange={downloadChartCsv}
                     onExportRange={
@@ -3125,13 +3198,6 @@ export function App() {
               <div class="tabs">
                 <button
                   type="button"
-                  class={tab === "messages" ? "on" : ""}
-                  onClick={() => setTab("messages")}
-                >
-                  Messages
-                </button>
-                <button
-                  type="button"
                   class={tab === "statistics" ? "on" : ""}
                   onClick={() => setTab("statistics")}
                 >
@@ -3160,28 +3226,20 @@ export function App() {
                 </button>
               </div>
               <span class="meta">
-                {tab === "messages"
-                  ? `${lowerMessages.length} ids`
-                  : tab === "statistics"
-                    ? `${lowerStats.length} rows`
-                    : tab === "bus"
-                      ? `${state?.busStats.length ?? 0} buses`
-                      : tab === "spec"
-                        ? `${state?.specRows.length ?? 0} violations`
-                        : `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`}
+                {tab === "statistics"
+                  ? `${lowerStats.length} rows`
+                  : tab === "bus"
+                    ? `${state?.busStats.length ?? 0} buses`
+                    : tab === "spec"
+                      ? `${state?.specRows.length ?? 0} violations`
+                      : `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`}
               </span>
               {tab !== "bus" && tab !== "spec" && (
                 <button
                   type="button"
                   class="mini"
                   onClick={() =>
-                    openExport(
-                      tab === "messages"
-                        ? "messages"
-                        : tab === "statistics"
-                          ? "stats"
-                          : "write",
-                    )
+                    openExport(tab === "statistics" ? "stats" : "write")
                   }
                   title="Export this panel to a host file"
                 >
@@ -3189,7 +3247,7 @@ export function App() {
                 </button>
               )}
             </div>
-            {tab === "messages" || tab === "statistics" ? (
+            {tab === "statistics" ? (
               <div class="panel-list">
                 <div class="panel-filter-row">
                   <input
@@ -3211,17 +3269,10 @@ export function App() {
                     </button>
                   )}
                 </div>
-                {tab === "messages" ? (
-                  <MessageTable
-                    rows={lowerMessages}
-                    filtered={panelQuery.trim() !== ""}
-                  />
-                ) : (
-                  <StatsTable
-                    rows={lowerStats}
-                    filtered={panelQuery.trim() !== ""}
-                  />
-                )}
+                <StatsTable
+                  rows={lowerStats}
+                  filtered={panelQuery.trim() !== ""}
+                />
               </div>
             ) : tab === "bus" ? (
               <BusStatsPanel buses={state?.busStats ?? []} theme={theme} />
@@ -3505,8 +3556,10 @@ export function App() {
           selected={selectedKeys}
           charted={selectedKeys}
           watched={monitorKeys}
+          read={readKeys}
           kinds={["can", "fr", "eth"]}
           onToggle={toggleSignal}
+          onReadToggle={toggleReadSignal}
           onCopyTo={copyChartSelection}
           onClose={() => setPickerOpen(false)}
         />

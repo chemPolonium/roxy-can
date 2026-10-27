@@ -182,6 +182,7 @@ export function TraceTable({
   onColumnsChange,
   jump,
   onJumpDone,
+  leading,
   title,
   tools,
   onQuery,
@@ -196,6 +197,8 @@ export function TraceTable({
   onColumnsChange: (next: TraceColumnPrefs) => void;
   jump?: TraceJump | null;
   onJumpDone?: () => void;
+  /// View switch rendered before the title (Trace / Messages).
+  leading?: ComponentChildren;
   title?: ComponentChildren;
   tools?: ComponentChildren;
   onQuery?: (text: string) => void;
@@ -350,46 +353,9 @@ export function TraceTable({
   });
   const head = (
     <div class="panel-head">
+      {leading}
       <div class="panel-title">{title}</div>
-      <div class="panel-tools">
-        {tools}
-        <span class="panel-tools-sep" />
-        <button
-          type="button"
-          class="mini"
-          disabled={!selectedFrame}
-          title="Set cursor A on the selected row"
-          onClick={() => {
-            if (!selectedFrame) return;
-            setCursorA(mark(selectedFrame));
-            onSetChartCursor?.("A", selectedFrame.tUs);
-          }}
-        >
-          Set A
-        </button>
-        <button
-          type="button"
-          class="mini"
-          disabled={!selectedFrame}
-          title="Set cursor B on the selected row"
-          onClick={() => {
-            if (!selectedFrame) return;
-            setCursorB(mark(selectedFrame));
-            onSetChartCursor?.("B", selectedFrame.tUs);
-          }}
-        >
-          Set B
-        </button>
-        <button
-          type="button"
-          class="mini"
-          disabled={!selectedFrame}
-          title="Copy the selected row"
-          onClick={() => selectedFrame && copyText(rowText(selectedFrame))}
-        >
-          Copy
-        </button>
-      </div>
+      <div class="panel-tools">{tools}</div>
     </div>
   );
 

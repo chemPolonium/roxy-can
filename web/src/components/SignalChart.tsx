@@ -251,6 +251,9 @@ export function SignalChart({
   onOpenDerived,
   overlay = false,
   onToggleOverlay,
+  hasReadout = false,
+  readRange = null,
+  readCount = 0,
 }: {
   series: SignalSeries[];
   markers?: number[];
@@ -271,6 +274,11 @@ export function SignalChart({
   onOpenDerived?: () => void;
   overlay?: boolean;
   onToggleOverlay?: () => void;
+  /// Read-only signals exist: keep a cursor usable on an otherwise empty
+  /// chart and follow their newest sample.
+  hasReadout?: boolean;
+  readRange?: { first: number; last: number } | null;
+  readCount?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -289,7 +297,8 @@ export function SignalChart({
   } | null>(null);
   const cursorDragRef = useRef<number | null>(null);
   const binCacheRef = useRef(new Map<string, BinCache>());
-  const timeBounds = bounds(series);
+  const timeBounds =
+    series.length > 0 ? bounds(series) : (readRange ?? bounds(series));
   const liveEnd = view.endS ?? timeBounds.last;
 
   /// Which lane is under the pointer. Reorder drags clamp above/below the
@@ -309,16 +318,24 @@ export function SignalChart({
   };
 
   const viewWindow = () => {
-    const range = bounds(series);
     const end =
       view.endS === null
-        ? range.last
-        : clamp(view.endS, range.first + view.windowS, range.last);
-    return { first: range.first, last: range.last, start: end - view.windowS, end };
+        ? timeBounds.last
+        : clamp(
+            view.endS,
+            timeBounds.first + view.windowS,
+            timeBounds.last,
+          );
+    return {
+      first: timeBounds.first,
+      last: timeBounds.last,
+      start: end - view.windowS,
+      end,
+    };
   };
 
   const addCursor = () => {
-    if (series.length === 0) return;
+    if (series.length === 0 && !hasReadout) return;
     const { start, end } = viewWindow();
     // Keep successive cursors apart; dropping every one at the exact centre
     // would stack their lines and labels.
@@ -329,7 +346,13 @@ export function SignalChart({
 
   const cursorAt = (clientX: number, clientY: number): number | null => {
     const canvas = canvasRef.current;
-    if (!canvas || series.length === 0 || cursors.length === 0) return null;
+    if (
+      !canvas ||
+      (series.length === 0 && !hasReadout) ||
+      cursors.length === 0
+    ) {
+      return null;
+    }
     const rect = canvas.getBoundingClientRect();
     if (clientY < rect.top + TOP || clientY > rect.bottom - AXIS_H) {
       return null;
@@ -401,7 +424,7 @@ export function SignalChart({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
 
-      if (series.length === 0) {
+      if (series.length === 0 && !hasReadout) {
         binCacheRef.current.clear();
         ctx.fillStyle = colors.signalEmpty;
         ctx.font = "11px 'Segoe UI', sans-serif";
@@ -423,7 +446,7 @@ export function SignalChart({
       }
 
       const live = view.endS === null;
-      const range = bounds(series);
+      const range = timeBounds;
       const end = live
         ? range.last
         : clamp(
@@ -854,6 +877,27 @@ export function SignalChart({
         ctx.fillText(entry.text, labelX + 4, TOP + 10);
       }
 
+      if (series.length === 0) {
+        ctx.fillStyle = colors.signalEmpty;
+        ctx.font = "11px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          readCount === 1
+            ? "1 read-only signal"
+            : `${readCount} read-only signals`,
+          width / 2,
+          TOP + laneH / 2 - 2,
+        );
+        ctx.fillStyle = colors.signalHint;
+        ctx.font = "9px 'Segoe UI', sans-serif";
+        ctx.fillText(
+          "Values follow the cursor below",
+          width / 2,
+          TOP + laneH / 2 + 14,
+        );
+        ctx.textAlign = "left";
+      }
+
       if (reorder) {
         const top = TOP + reorder.from * laneH;
         ctx.fillStyle = colors.signalDrag;
@@ -906,6 +950,9 @@ export function SignalChart({
     reference,
     overlay,
     overlayHidden,
+    hasReadout,
+    readRange,
+    readCount,
   ]);
 
   const plotWidth = () => {
@@ -1098,7 +1145,7 @@ export function SignalChart({
       <div class="chart-cursor-tools">
         <button
           type="button"
-          disabled={series.length === 0}
+          disabled={series.length === 0 && !hasReadout}
           title="Add a time cursor at the middle of the view"
           onClick={addCursor}
         >

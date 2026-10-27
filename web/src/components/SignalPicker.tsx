@@ -13,9 +13,17 @@ interface Props {
   selected: Set<string>;
   charted?: Set<string>;
   watched?: Set<string>;
+  /// Read-only signal set: sampled for cursor values, never drawn.
+  read?: Set<string>;
   title?: string;
   kinds?: string[];
   onToggle: (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+    on: boolean,
+  ) => void;
+  onReadToggle?: (
     channel: CatalogChannel,
     message: CatalogMessage,
     signal: CatalogSignal,
@@ -39,9 +47,11 @@ export function SignalPicker({
   selected,
   charted,
   watched,
+  read,
   title = "Signals",
   kinds,
   onToggle,
+  onReadToggle,
   onCopyTo,
   onClose,
 }: Props) {
@@ -96,7 +106,11 @@ export function SignalPicker({
         <header class="modal-head">
           <h2>{title}</h2>
           <div class="picker-head-right">
-            <span>{selected.size} selected</span>
+            <span>
+              {read
+                ? `${selected.size} plotted · ${read.size} read`
+                : `${selected.size} selected`}
+            </span>
             <button type="button" onClick={onClose}>
               Close
             </button>
@@ -154,19 +168,48 @@ export function SignalPicker({
                     </div>
                     {signals.map((signal) => {
                       const on = selected.has(signal.key);
+                      const reading = !!read?.has(signal.key);
                       return (
-                        <label
-                          class={`picker-signal ${on ? "on" : ""}`}
+                        <div
+                          class={`picker-signal ${on ? "on" : ""} ${
+                            reading ? "read" : ""
+                          }`}
                           key={signal.key}
                         >
-                          <input
-                            type="checkbox"
-                            checked={on}
-                            onChange={() =>
-                              onToggle(channel, message, signal, !on)
-                            }
-                          />
-                          <span>{signal.name}</span>
+                          {onReadToggle ? (
+                            <button
+                              type="button"
+                              class="picker-name"
+                              title="Click to plot · Ctrl-click to toggle Read"
+                              onClick={(event) => {
+                                if (event.ctrlKey || event.metaKey) {
+                                  if (!on) {
+                                    onReadToggle(
+                                      channel,
+                                      message,
+                                      signal,
+                                      !reading,
+                                    );
+                                  }
+                                  return;
+                                }
+                                onToggle(channel, message, signal, !on);
+                              }}
+                            >
+                              <span>{signal.name}</span>
+                            </button>
+                          ) : (
+                            <label class="picker-plot">
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={() =>
+                                  onToggle(channel, message, signal, !on)
+                                }
+                              />
+                              <span>{signal.name}</span>
+                            </label>
+                          )}
                           {charted?.has(signal.key) && (
                             <small class="picker-mark">chart</small>
                           )}
@@ -176,7 +219,48 @@ export function SignalPicker({
                           <em>
                             {signal.unit || "no unit"} · {signal.min}..{signal.max}
                           </em>
-                        </label>
+                          {onReadToggle && (
+                            <div
+                              class="picker-modes"
+                              role="group"
+                              aria-label="Signal mode"
+                            >
+                              <button
+                                type="button"
+                                class={`picker-mode ${on ? "on" : ""}`}
+                                aria-pressed={on}
+                                title={on ? "Stop plotting" : "Plot this signal"}
+                                onClick={() =>
+                                  onToggle(channel, message, signal, !on)
+                                }
+                              >
+                                Plot
+                              </button>
+                              <button
+                                type="button"
+                                class={`picker-mode ${reading ? "on" : ""}`}
+                                aria-pressed={reading}
+                                title={
+                                  reading
+                                    ? "Remove from the cursor readout"
+                                    : on
+                                      ? "Switch to Read-only (stop plotting)"
+                                      : "Read at cursors without plotting"
+                                }
+                                onClick={() =>
+                                  onReadToggle(
+                                    channel,
+                                    message,
+                                    signal,
+                                    !reading,
+                                  )
+                                }
+                              >
+                                Read
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -211,8 +295,9 @@ export function SignalPicker({
           </div>
         )}
         <p class="hint picker-hint">
-          Selection is session-only for now. Unselecting removes the bus
-          subscription and its curve.
+          {read
+            ? "Plot / Read sets each signal's role; click the active one to clear. Plotted signals also appear at cursors; Ctrl-click a name to toggle Read."
+            : "Selection is session-only for now. Unselecting removes the bus subscription and its curve."}
         </p>
       </div>
     </div>

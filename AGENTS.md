@@ -6,8 +6,8 @@
 宿主；Rust 核心（`bus` / `app` / `observe`）不依赖任何 UI 库。不要在 Rust 里
 再加桌面窗口或第二套界面。
 
-- 固定外壳：Trace 主表、右侧 Rate/Signals/Monitor/Data/State、下栏
-  Messages/Statistics/Bus/Spec/Write；不要为单个面板引入窗口管理器。
+- 固定外壳：Trace / Messages 共用主视图并可切换、右侧 Rate/Signals/Monitor/Data/State、下栏
+  Statistics/Bus/Spec/Write；不要为单个面板引入窗口管理器。
 - 大表手写固定行高虚拟化（`TraceTable.tsx`）；曲线用 canvas 手写抽稀，
   不要引入表格/图表组件库。
 - 浏览器文件交换走 `/api/upload`、`/api/download` 与 per-user 数据目录；

@@ -473,7 +473,7 @@ input::placeholder {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  padding: 8px;
+  padding: 4px;
 }
 
 .panel {
@@ -700,14 +700,6 @@ input::placeholder {
   max-width: 220px;
 }
 
-.panel-tools-sep {
-  flex: 0 0 auto;
-  width: 1px;
-  height: 16px;
-  margin: 0 2px;
-  background: var(--line-soft);
-}
-
 .columns-menu {
   position: relative;
   display: flex;
@@ -868,7 +860,7 @@ body.col-resizing {
 .splitter::after {
   content: "";
   position: absolute;
-  background: var(--line);
+  background: transparent;
   transition: background 90ms linear;
 }
 
@@ -879,7 +871,7 @@ body.col-resizing {
 .splitter.vertical::after {
   top: 0;
   bottom: 0;
-  left: 2px;
+  left: 1px;
   width: 1px;
 }
 
@@ -890,7 +882,7 @@ body.col-resizing {
 .splitter.horizontal::after {
   left: 0;
   right: 0;
-  top: 2px;
+  top: 1px;
   height: 1px;
 }
 
@@ -1191,6 +1183,72 @@ body.col-resizing {
   color: #4e5a68;
 }
 
+/* Messages tree rows: a message expands into its decoded signal children. */
+.message-row.expandable {
+  cursor: pointer;
+}
+
+.msg-expand {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.msg-expand:hover:not(:disabled) {
+  background: #1a222c;
+  color: #d9e3ef;
+}
+
+.msg-expand-space {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+}
+
+.message-signal-row td {
+  height: 19px;
+  background: #0b1118;
+  border-bottom: 1px solid #141b24;
+  color: #93a4b8;
+}
+
+.message-signal-name {
+  padding-left: 20px;
+  color: #aebccd;
+}
+
+.message-signal-value {
+  color: #cdd8e4;
+}
+
+.message-signal-unit em {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.message-signal-unit small {
+  margin-left: 5px;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.message-signal-empty {
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .badge {
   display: inline-block;
   margin-left: 5px;
@@ -1235,9 +1293,9 @@ body.col-resizing {
 }
 
 .chart-splitter {
-  flex: 0 0 5px;
+  flex: 0 0 3px;
   cursor: row-resize;
-  background: var(--line-soft);
+  background: transparent;
 }
 
 .chart-splitter:hover {
@@ -1285,6 +1343,33 @@ body.row-resizing {
   min-height: 80px;
 }
 
+/* Fullscreen gives the cursor table a real left rail instead of a short
+   bottom strip: names and values stay close together and the list scrolls
+   the full height. */
+.chart-panel.chart-fullscreen .signal-stack {
+  flex-direction: row;
+}
+
+.chart-panel.chart-fullscreen .signal-stack > .signal-chart-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+.chart-panel.chart-fullscreen .cursor-analysis {
+  order: -1;
+  flex: 0 0 330px;
+  height: 100%;
+  max-height: none;
+  border-top: 0;
+  border-right: 1px solid var(--line);
+}
+
+.chart-panel.chart-fullscreen .cursor-analysis-head {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+
 .cursor-analysis {
   display: flex;
   flex: 0 0 auto;
@@ -1319,9 +1404,18 @@ body.row-resizing {
 .cursor-analysis-labels,
 .cursor-analysis-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 58px 58px 58px;
+  /* Cap the name column so the values stay next to it instead of being
+     pushed to the far right on wide panels; the name shrinks on narrow
+     panels. */
+  grid-template-columns: minmax(0, 120px) 58px 58px 58px;
+  justify-content: start;
   gap: 6px;
-  text-align: right;
+  text-align: left;
+}
+
+.cursor-analysis.single .cursor-analysis-labels,
+.cursor-analysis.single .cursor-analysis-main {
+  grid-template-columns: minmax(0, 120px) 64px;
 }
 
 .cursor-analysis-labels {
@@ -1339,6 +1433,12 @@ body.row-resizing {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+.cursor-analysis-empty {
+  padding: 8px;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .cursor-analysis-row {
@@ -1373,6 +1473,12 @@ body.row-resizing {
   color: var(--muted);
   font-size: 9px;
   font-style: normal;
+}
+
+.cursor-analysis-name .cursor-analysis-read {
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .cursor-analysis-delta {
@@ -1524,8 +1630,9 @@ body.row-resizing {
   cursor: ew-resize;
 }
 
-.chart-panel.chart-fullscreen,
-.chart-panel:fullscreen {
+/* 应用内固定层而非浏览器全屏：全屏 API 只渲染该元素子树，挂在
+   DOM 其他位置的弹窗会被隐藏。 */
+.chart-panel.chart-fullscreen {
   position: fixed;
   inset: 0;
   z-index: 95;
@@ -1660,7 +1767,7 @@ body.row-resizing {
    buttons (the Node Scripts list) are exempt: they size to their content. */
 .modal-backdrop
   > :not(.palette)
-  button:not(.script-item):not(.script-issue),
+  button:not(.script-item):not(.script-issue):not(.picker-mode),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
@@ -1832,7 +1939,6 @@ body.row-resizing {
   padding: 3px 8px;
   color: #aebccd;
   font-size: 11px;
-  cursor: pointer;
 }
 
 .picker-signal:hover {
@@ -1841,6 +1947,19 @@ body.row-resizing {
 
 .picker-signal.on {
   color: #e0e9f5;
+}
+
+.picker-signal.read {
+  background: rgb(76 157 255 / 7%);
+}
+
+.picker-plot {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
 }
 
 .picker-signal input {
@@ -1854,6 +1973,64 @@ body.row-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.picker-name {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-name:hover {
+  color: #e0e9f5;
+}
+
+.picker-modes {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.picker-modes button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.picker-modes button + button {
+  border-left: 1px solid var(--line);
+}
+
+.picker-modes button:hover:not(:disabled):not(.on) {
+  background: rgb(255 255 255 / 6%);
+  color: #d9e3ef;
+}
+
+.picker-modes button.on {
+  background: rgb(76 157 255 / 24%);
+  color: #cfe7ff;
+  font-weight: 600;
 }
 
 .picker-signal em {
@@ -4114,6 +4291,15 @@ button.danger:hover:not(:disabled) {
   font-size: 9.5px;
 }
 
+.monitor-host {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  container-type: inline-size;
+}
+
 /* Monitor: big live values with an optional coloring rule. Each row stacks
    its value line over a compact rule line. */
 .monitor-list {
@@ -4124,6 +4310,17 @@ button.danger:hover:not(:disabled) {
   min-height: 0;
   overflow: auto;
   padding: 6px 10px;
+}
+
+/* Wide chart panes pair the cards so the value stays near its label
+   instead of sitting at the far edge of one very long row. */
+@container (min-width: 720px) {
+  .monitor-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    align-items: start;
+  }
 }
 
 .monitor-row {
@@ -5152,6 +5349,27 @@ button.danger:hover:not(:disabled) {
      before the filter box has to shrink below usability. */
   .trace-panel .panel-head .meta {
     display: none;
+  }
+
+  /* The main-view tabs share the Trace header with every trace tool. Below
+     this width the tools get their own wrapping row instead of clipping. */
+  .trace-panel.trace .panel-head {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 30px;
+    padding: 3px 8px;
+    row-gap: 4px;
+  }
+
+  .trace-panel.trace .panel-head .panel-tools {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  .trace-panel.trace .panel-head .panel-tools > input {
+    max-width: none;
   }
 }
 

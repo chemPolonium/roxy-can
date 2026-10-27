@@ -8,15 +8,15 @@
 
 ## 功能
 
-界面是固定的 Web 外壳：Trace 主表、右侧 Rate/Signals/Monitor/Data/State
-标签页、下栏 Messages/Statistics/Bus/Spec/Write，入口与操作见
-[web/README.md](web/README.md)。下文的“窗口”指 core 的观测模型，Web 用
-对应标签页呈现。
+界面是固定的 Web 外壳：Trace / Messages 主视图切换、右侧
+Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
+入口与操作见 [web/README.md](web/README.md)。下文的“窗口”指 core 的
+观测模型，Web 用对应标签页呈现。
 
 - **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记。
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧。Trace 的 Flags 列统一给帧类型，错误行与远程行有底色。
-- **观测面板**：Trace、Messages、Statistics、Signals、Data、State、Monitor 各有独立过滤与选择；Data/Signals 可跨总线勾选信号。
+- **观测面板**：Trace、Messages、Statistics、Signals、Data、State、Monitor 各有独立过滤与选择；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数），Messages 行可展开查看解码信号（按需解码）。
 - **Trace**：虚拟滚动（几十万行的过滤结果照样流畅），payload 字节搜索、信号值条件（`Name>10`）、精确地址（`id:1AB` / `slot:13`）、时间范围、列头排序、右键"Filter this ID"、行游标 A/B 与 Δt 读数、点一行选中后用 ↑/↓ 走行、Ctrl+C 复制。
 - **总线负载与规格监视**：按总线给线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；Specification 把实测流量与数据库声明逐条对账——Unknown / Dlc / Cycle / Missing 四类判定，容差与宽限可调，可导出 CSV。
 - **Interactive Generator（节点中心）**：DBC 报文按声明周期发送，按信号拖物理值或直接改 hex；每个信号可添加 Ramp / Sine / Step / Random / Triangle / Counter 激励。条目都在 Network 的节点详情里，新建默认不发送，发不发逐条由你决定。
@@ -78,7 +78,7 @@ cargo run -- --web --replay <path.asc|blf>      # 载入并开始回放
 `cargo build --release` 产出的 exe 已内嵌前端资源，可以单独拷走运行。双击会
 保留一个终端窗口，服务地址和启动失败原因都打印在那里；`--port <n>` 可换端口。
 
-当前已有 Trace（50k 行虚拟化增量，合并 CAN/FlexRay/Ethernet 行，方向/仅解码/Payload/时间范围/ID 包含与排除过滤）、Messages、总线/帧率/负载曲线、真实 DBC 信号选择与多泳道曲线（缩放/拖动）、Start/Stop/Pause/Clear；回放载入后第二条工具栏提供播放头、**Speed**（0.5x/1x/2x/4x/Fast）、**Step**（10ms–5s）、**Play for**（1–60s）与 **Play to**（绝对日志时间，向前播放并在目标暂停），工具栏 **Session…** 可按主机路径或最近列表切换工程/回放，并用 **Save / Save as** 保存工程（保留工作区与 Graphics 配置，标记未保存改动），Recording 区可按名称与 ASC/BLF 格式开始/停止录制，并可填 `100, 3F4x, FR0:13` 白名单（相对路径写入工程旁 Record/，停止状态下勾选会在下次 Start 时建文件），**Buses…** 可增删/改名/改速率/按路径加载 DBC，刷新、挂载/卸载 Kvaser/Vector 通道并切换 Simulated/Real bus，每个 DBC 节点以带条目数的 chip 列出、可单独切换 Simulated/Absent（等同 Network 的节点角色），并可加载 FIBEX/ARXML FlexRay cluster 与 AUTOSAR Ethernet matrix（仅列出总线/簇/帧数，FR/Eth 观测与生成仍在迁移）；Buses 里的 **Scripts…** 可新建/绑定节点脚本、编辑并应用（运行中重编译重启）、启停/删除、查看日志、插入模板与保存 `.rxcan`（高亮、补全、签名提示、查找替换、行内诊断、文件加载；F9 断点、单步、局部/全局变量与调用栈调试；`on stop` + `test()` 断言与通过/失败列表），**Generator…** 可启停/改周期/FD/BRS/hex/增删报文并一键模拟节点，FR 总线可加载描述后按 slot 增删/启停/改周期与 hex，**Sources** 可给报文里的 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter，含 Lo/Hi、周期、相位、Step 序列与 Random 重绘间隔），**Triggers…** 可加默认规则、启停、删除、重新武装，并编辑条件/动作与 pre/post/marker limits，**SysVars…** 可增删改变量定义并就地编辑实时值（写入按 min/max 夹取），右侧面板的 **Monitor** 页用大字号实时显示所选 CAN 信号并按阈值着色，**Data** 页显示实时值/原始值/min-avg-max 与按 DBC 量程缩放的条，**State** 页用状态带显示 5s–30min 窗口内的取值变化（少量状态分色标注，模拟量收为单色带；**bands** 可编辑自定义分档与名称）；Trace 与下栏的 **Export…** 可导出 ASC/PCAP 与 Messages/Statistics/Data/State/Write 的 CSV/TXT，下栏有 **Messages / Statistics / Bus / Spec / Write**（Messages/Statistics 同时列出 CAN、FlexRay slot 与 Ethernet flow，Statistics 显示计数、周期、抖动与占比，Bus 显示负载/发送间隔/burst/分类帧率与负载曲线，Spec 显示 tolerance/grace 下的 Unknown/DLC/Cycle/Dropped 违规，Write 显示总线日志）。信号选择目前是 CAN，曲线选择写回工程的第一个 Graphics 窗口并随保存恢复（Monitor/Data/State 的行也随工程保存）；硬件是 CAN 挂载，原生文件选择与其余面板仍在迁移，细节见 [web/README.md](web/README.md)。
+当前已有 Trace（50k 行虚拟化增量，合并 CAN/FlexRay/Ethernet 行，方向/仅解码/Payload/时间范围/ID 包含与排除过滤）/ Messages 主视图（报文行可展开为解码信号子行）、总线/帧率/负载曲线、真实 DBC 信号选择与多泳道曲线（缩放/拖动）、Start/Stop/Pause/Clear；回放载入后第二条工具栏提供播放头、**Speed**（0.5x/1x/2x/4x/Fast）、**Step**（10ms–5s）、**Play for**（1–60s）与 **Play to**（绝对日志时间，向前播放并在目标暂停），工具栏 **Session…** 可按主机路径或最近列表切换工程/回放，并用 **Save / Save as** 保存工程（保留工作区与 Graphics 配置，标记未保存改动），Recording 区可按名称与 ASC/BLF 格式开始/停止录制，并可填 `100, 3F4x, FR0:13` 白名单（相对路径写入工程旁 Record/，停止状态下勾选会在下次 Start 时建文件），**Buses…** 可增删/改名/改速率/按路径加载 DBC，刷新、挂载/卸载 Kvaser/Vector 通道并切换 Simulated/Real bus，每个 DBC 节点以带条目数的 chip 列出、可单独切换 Simulated/Absent（等同 Network 的节点角色），并可加载 FIBEX/ARXML FlexRay cluster 与 AUTOSAR Ethernet matrix（仅列出总线/簇/帧数，FR/Eth 观测与生成仍在迁移）；Buses 里的 **Scripts…** 可新建/绑定节点脚本、编辑并应用（运行中重编译重启）、启停/删除、查看日志、插入模板与保存 `.rxcan`（高亮、补全、签名提示、查找替换、行内诊断、文件加载；F9 断点、单步、局部/全局变量与调用栈调试；`on stop` + `test()` 断言与通过/失败列表），**Generator…** 可启停/改周期/FD/BRS/hex/增删报文并一键模拟节点，FR 总线可加载描述后按 slot 增删/启停/改周期与 hex，**Sources** 可给报文里的 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter，含 Lo/Hi、周期、相位、Step 序列与 Random 重绘间隔），**Triggers…** 可加默认规则、启停、删除、重新武装，并编辑条件/动作与 pre/post/marker limits，**SysVars…** 可增删改变量定义并就地编辑实时值（写入按 min/max 夹取），右侧面板的 **Monitor** 页用大字号实时显示所选 CAN 信号并按阈值着色，**Data** 页显示实时值/原始值/min-avg-max 与按 DBC 量程缩放的条，**State** 页用状态带显示 5s–30min 窗口内的取值变化（少量状态分色标注，模拟量收为单色带；**bands** 可编辑自定义分档与名称）；Trace / Messages 主视图与下栏的 **Export…** 可导出 ASC/PCAP 与 Messages/Statistics/Data/State/Write 的 CSV/TXT，下栏有 **Statistics / Bus / Spec / Write**（Statistics 同时列出 CAN、FlexRay slot 与 Ethernet flow，显示计数、周期、抖动与占比，Bus 显示负载/发送间隔/burst/分类帧率与负载曲线，Spec 显示 tolerance/grace 下的 Unknown/DLC/Cycle/Dropped 违规，Write 显示总线日志）。信号选择目前是 CAN，曲线选择写回工程的第一个 Graphics 窗口并随保存恢复（Monitor/Data/State 的行也随工程保存）；硬件是 CAN 挂载，原生文件选择与其余面板仍在迁移，细节见 [web/README.md](web/README.md)。
 
 ## 上手
 
