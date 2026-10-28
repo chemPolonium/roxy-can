@@ -163,8 +163,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   its own canvas size and controls; **Edit** adds pages (`+`), duplicates or
   deletes the active page and renames it by double-clicking the tab. Switching
   pages clears the selection, undo history and clipboard but stays in Edit.
-  **Edit** adds buttons, value tiles
-  and toggles and numeric setpoints from a widget registry, drags and resizes
+  **Edit** adds controls from the **+ Add** menu (button, value, bar, gauge,
+  lamp, toggle, numeric), drags and resizes
   them with live grid snapping (per-kind minimum sizes), refuses overlaps, and
   changes the canvas width/height in 8px steps; shrinking is refused while any
   control would fall outside. The inspector is generated from each kind's field
@@ -173,13 +173,21 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   control count), so changing the selection never shifts the canvas. It edits a
   button command or **Script action** name
   (`on panel_action("…")` in every running node), a value source (signal key,
-  `derived:Name` or `sysvar:ns::name`) with decimals, a toggle's sysvar, or a
+  `derived:Name` or `sysvar:ns::name`) with decimals, a bar/gauge range, a lamp
+  source with its lit threshold and colour, a toggle's sysvar, or a
   numeric setpoint (sysvar, decimals, step; committed on Enter/blur and clamped
-  into the variable's min/max). Editing has
+  into the variable's min/max). Value, bar and gauge tiles can carry **colour
+  bands**: ascending `≤` limits coloured Neutral/OK/Warning/Critical plus an
+  optional `above` band; only the number or fill is tinted, and values outside
+  every band keep the normal colour. Editing has
   Ctrl+C/Ctrl+V copy-paste, Ctrl+Z / Ctrl+Shift+Z undo-redo, Delete and a
   Duplicate action. Controls expose availability: disabled buttons and
   toggles carry the reason in their tooltip (not measuring, no running script
   handler, unknown sysvar), and unresolved sources show a placeholder.
+  **Export** downloads the current page as a versioned `.rxpanel` file without
+  widget ids; **Import** reads one in the browser and appends it as a new page,
+  rejecting unknown types, out-of-bounds or overlapping controls instead of
+  dropping them.
   The canvas scrolls when the viewport is smaller; it never scales or
   reflows. **Fullscreen**
   covers the app chrome but keeps the browser window, centers the fixed canvas,

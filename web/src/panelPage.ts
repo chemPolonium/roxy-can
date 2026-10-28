@@ -29,7 +29,14 @@ export const PANEL_ACTIONS: { value: PanelAction; label: string }[] = [
   { value: "rearm_triggers", label: "Rearm triggers" },
 ];
 
-export type PanelWidgetKind = "button" | "value" | "toggle" | "numeric";
+export type PanelWidgetKind =
+  | "button"
+  | "value"
+  | "toggle"
+  | "numeric"
+  | "lamp"
+  | "bar"
+  | "gauge";
 
 interface Geometry {
   x: number;
@@ -47,6 +54,14 @@ export interface PanelButton extends Geometry {
   script?: string;
 }
 
+export type PanelBandColor = "neutral" | "ok" | "warn" | "crit";
+
+/// Ascending "up to" thresholds; null colours everything above the last one.
+export interface PanelBand {
+  upTo: number | null;
+  color: PanelBandColor;
+}
+
 /// Read-only value tile: signal key, `derived:Name` or `sysvar:ns::name`.
 export interface PanelValue extends Geometry {
   id: string;
@@ -54,6 +69,7 @@ export interface PanelValue extends Geometry {
   label: string;
   source: string;
   digits: number;
+  bands?: PanelBand[];
 }
 
 /// Boolean tile bound to a system variable (0/1).
@@ -74,7 +90,44 @@ export interface PanelNumeric extends Geometry {
   step: number;
 }
 
-export type PanelWidget = PanelButton | PanelValue | PanelToggle | PanelNumeric;
+/// Read-only indicator: lit when the source is at or above `threshold`.
+export interface PanelLamp extends Geometry {
+  id: string;
+  kind: "lamp";
+  label: string;
+  source: string;
+  threshold: number;
+  color: PanelBandColor;
+}
+
+interface PanelMeter extends Geometry {
+  id: string;
+  label: string;
+  source: string;
+  min: number;
+  max: number;
+  digits: number;
+  bands?: PanelBand[];
+}
+
+/// Horizontal fill over a fixed range.
+export interface PanelBar extends PanelMeter {
+  kind: "bar";
+}
+
+/// Semicircular arc over a fixed range.
+export interface PanelGauge extends PanelMeter {
+  kind: "gauge";
+}
+
+export type PanelWidget =
+  | PanelButton
+  | PanelValue
+  | PanelToggle
+  | PanelNumeric
+  | PanelLamp
+  | PanelBar
+  | PanelGauge;
 
 export interface PanelPage {
   version: 1;
@@ -99,6 +152,11 @@ export interface PanelWidgetPatch {
   digits?: number;
   sysvar?: string;
   step?: number;
+  bands?: PanelBand[];
+  threshold?: number;
+  color?: PanelBandColor;
+  min?: number;
+  max?: number;
 }
 
 export type PanelFieldKey = keyof PanelWidgetPatch;
@@ -106,7 +164,7 @@ export type PanelFieldKey = keyof PanelWidgetPatch;
 export interface PanelFieldSpec {
   key: PanelFieldKey;
   label: string;
-  kind: "text" | "select" | "list" | "digits" | "number";
+  kind: "text" | "select" | "list" | "digits" | "number" | "bands";
   options?: { value: string; label: string }[];
   placeholder?: string;
   maxLength?: number;
@@ -163,6 +221,52 @@ export function formatPanelValue(value: number | null, digits: number): string {
   return value.toFixed(clamp(Math.round(digits), 0, 3));
 }
 
+export const PANEL_BAND_COLORS: { value: PanelBandColor; label: string }[] = [
+  { value: "neutral", label: "Neutral" },
+  { value: "ok", label: "OK" },
+  { value: "warn", label: "Warning" },
+  { value: "crit", label: "Critical" },
+];
+
+export const PANEL_MAX_BANDS = 8;
+
+function isBandColor(value: unknown): value is PanelBandColor {
+  return PANEL_BAND_COLORS.some((entry) => entry.value === value);
+}
+
+function isPanelKind(value: unknown): value is PanelWidgetKind {
+  return (
+    value === "button" ||
+    value === "value" ||
+    value === "toggle" ||
+    value === "numeric" ||
+    value === "lamp" ||
+    value === "bar" ||
+    value === "gauge"
+  );
+}
+
+/// Keeps valid bands, sorts them by threshold and drops duplicate limits.
+export function normalisePanelBands(raw: unknown): PanelBand[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const bands: PanelBand[] = [];
+  for (const entry of raw.slice(0, PANEL_MAX_BANDS)) {
+    if (!entry || typeof entry !== "object") continue;
+    const value = entry as Record<string, unknown>;
+    if (!isBandColor(value.color)) continue;
+    const upTo = value.upTo === null ? null : Number(value.upTo);
+    if (upTo !== null && !Number.isFinite(upTo)) continue;
+    if (bands.some((band) => band.upTo === upTo)) continue;
+    bands.push({ upTo, color: value.color });
+  }
+  bands.sort((a, b) => {
+    if (a.upTo === null) return b.upTo === null ? 0 : 1;
+    if (b.upTo === null) return -1;
+    return a.upTo - b.upTo;
+  });
+  return bands.length > 0 ? bands : undefined;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -206,17 +310,20 @@ const BUTTON_FIELDS: PanelFieldSpec[] = [
   },
 ];
 
+const SOURCE_FIELD: PanelFieldSpec = {
+  key: "source",
+  label: "Source",
+  kind: "list",
+  maxLength: 120,
+  listId: "page-sources",
+  placeholder: "signal key / derived:Name / sysvar:ns::name",
+};
+
 const VALUE_FIELDS: PanelFieldSpec[] = [
   { key: "label", label: "Label", kind: "text", maxLength: 80 },
-  {
-    key: "source",
-    label: "Source",
-    kind: "list",
-    maxLength: 120,
-    listId: "page-sources",
-    placeholder: "signal key / derived:Name / sysvar:ns::name",
-  },
+  SOURCE_FIELD,
   { key: "digits", label: "Decimals", kind: "digits" },
+  { key: "bands", label: "Color bands", kind: "bands" },
 ];
 
 const TOGGLE_FIELDS: PanelFieldSpec[] = [
@@ -248,6 +355,35 @@ const NUMERIC_FIELDS: PanelFieldSpec[] = [
     kind: "number",
     placeholder: "1",
   },
+];
+
+const LAMP_FIELDS: PanelFieldSpec[] = [
+  { key: "label", label: "Label", kind: "text", maxLength: 80 },
+  SOURCE_FIELD,
+  {
+    key: "threshold",
+    label: "Lit at or above",
+    kind: "number",
+    placeholder: "0.5",
+  },
+  {
+    key: "color",
+    label: "Lit color",
+    kind: "select",
+    options: PANEL_BAND_COLORS.map((entry) => ({
+      value: entry.value as string,
+      label: entry.label,
+    })),
+  },
+];
+
+const METER_FIELDS: PanelFieldSpec[] = [
+  { key: "label", label: "Label", kind: "text", maxLength: 80 },
+  SOURCE_FIELD,
+  { key: "min", label: "Minimum", kind: "number", placeholder: "0" },
+  { key: "max", label: "Maximum", kind: "number", placeholder: "100" },
+  { key: "digits", label: "Decimals", kind: "digits" },
+  { key: "bands", label: "Color bands", kind: "bands" },
 ];
 
 const BUTTON_SPEC: PanelWidgetSpec = {
@@ -331,6 +467,10 @@ const VALUE_SPEC: PanelWidgetSpec = {
         patch.digits === undefined
           ? widget.digits
           : clamp(Math.round(patch.digits), 0, 3),
+      bands:
+        patch.bands === undefined
+          ? widget.bands
+          : normalisePanelBands(patch.bands),
     };
   },
 };
@@ -422,16 +562,160 @@ const NUMERIC_SPEC: PanelWidgetSpec = {
   },
 };
 
+const LAMP_SPEC: PanelWidgetSpec = {
+  kind: "lamp",
+  label: "Lamp",
+  minW: 10,
+  minH: 3,
+  defaultW: 14,
+  defaultH: 4,
+  fields: LAMP_FIELDS,
+  create: (id, x, y, w, h) => ({
+    id,
+    kind: "lamp",
+    label: "Lamp",
+    source: "",
+    threshold: 0.5,
+    color: "ok",
+    x,
+    y,
+    w,
+    h,
+  }),
+  fieldValue: (widget, key) => {
+    if (widget.kind !== "lamp") return "";
+    if (key === "source") return widget.source;
+    if (key === "threshold") return widget.threshold;
+    if (key === "color") return widget.color;
+    if (key === "label") return widget.label;
+    return "";
+  },
+  applyPatch: (widget, patch) => {
+    if (widget.kind !== "lamp") return widget;
+    const threshold = Number(patch.threshold);
+    return {
+      ...widget,
+      label: patch.label === undefined ? widget.label : patch.label.slice(0, 80),
+      source:
+        patch.source === undefined
+          ? widget.source
+          : patch.source.slice(0, 120),
+      threshold:
+        patch.threshold === undefined || !Number.isFinite(threshold)
+          ? widget.threshold
+          : threshold,
+      color:
+        patch.color !== undefined && isBandColor(patch.color)
+          ? patch.color
+          : widget.color,
+    };
+  },
+};
+
+function meterFieldValue(
+  widget: PanelBar | PanelGauge,
+  key: PanelFieldKey,
+): string | number {
+  if (key === "source") return widget.source;
+  if (key === "min") return widget.min;
+  if (key === "max") return widget.max;
+  if (key === "digits") return widget.digits;
+  if (key === "label") return widget.label;
+  return "";
+}
+
+function meterPatch(widget: PanelBar | PanelGauge, patch: PanelWidgetPatch) {
+  const min = Number(patch.min);
+  const max = Number(patch.max);
+  return {
+    label: patch.label === undefined ? widget.label : patch.label.slice(0, 80),
+    source:
+      patch.source === undefined ? widget.source : patch.source.slice(0, 120),
+    min: patch.min === undefined || !Number.isFinite(min) ? widget.min : min,
+    max: patch.max === undefined || !Number.isFinite(max) ? widget.max : max,
+    digits:
+      patch.digits === undefined
+        ? widget.digits
+        : clamp(Math.round(patch.digits), 0, 3),
+    bands:
+      patch.bands === undefined
+        ? widget.bands
+        : normalisePanelBands(patch.bands),
+  };
+}
+
+const BAR_SPEC: PanelWidgetSpec = {
+  kind: "bar",
+  label: "Bar",
+  minW: 14,
+  minH: 5,
+  defaultW: 20,
+  defaultH: 7,
+  fields: METER_FIELDS,
+  create: (id, x, y, w, h) => ({
+    id,
+    kind: "bar",
+    label: "Bar",
+    source: "",
+    min: 0,
+    max: 100,
+    digits: 1,
+    x,
+    y,
+    w,
+    h,
+  }),
+  fieldValue: (widget, key) =>
+    widget.kind === "bar" ? meterFieldValue(widget, key) : "",
+  applyPatch: (widget, patch) =>
+    widget.kind === "bar" ? { ...widget, ...meterPatch(widget, patch) } : widget,
+};
+
+const GAUGE_SPEC: PanelWidgetSpec = {
+  kind: "gauge",
+  label: "Gauge",
+  minW: 12,
+  minH: 8,
+  defaultW: 18,
+  defaultH: 11,
+  fields: METER_FIELDS,
+  create: (id, x, y, w, h) => ({
+    id,
+    kind: "gauge",
+    label: "Gauge",
+    source: "",
+    min: 0,
+    max: 100,
+    digits: 1,
+    x,
+    y,
+    w,
+    h,
+  }),
+  fieldValue: (widget, key) =>
+    widget.kind === "gauge" ? meterFieldValue(widget, key) : "",
+  applyPatch: (widget, patch) =>
+    widget.kind === "gauge"
+      ? { ...widget, ...meterPatch(widget, patch) }
+      : widget,
+};
+
 export const PANEL_WIDGET_SPECS: Record<PanelWidgetKind, PanelWidgetSpec> = {
   button: BUTTON_SPEC,
   value: VALUE_SPEC,
   toggle: TOGGLE_SPEC,
   numeric: NUMERIC_SPEC,
+  lamp: LAMP_SPEC,
+  bar: BAR_SPEC,
+  gauge: GAUGE_SPEC,
 };
 
 export const PANEL_WIDGET_KINDS: { kind: PanelWidgetKind; label: string }[] = [
   { kind: "button", label: BUTTON_SPEC.label },
   { kind: "value", label: VALUE_SPEC.label },
+  { kind: "bar", label: BAR_SPEC.label },
+  { kind: "gauge", label: GAUGE_SPEC.label },
+  { kind: "lamp", label: LAMP_SPEC.label },
   { kind: "toggle", label: TOGGLE_SPEC.label },
   { kind: "numeric", label: NUMERIC_SPEC.label },
 ];
@@ -565,6 +849,67 @@ export function removePanelPage(book: PanelBook, id: string): PanelBook {
   return { ...book, activeId, pages };
 }
 
+function widgetPatch(value: Record<string, unknown>): PanelWidgetPatch {
+  const kind = value.kind as PanelWidgetKind;
+  return {
+    label: text(value.label, 80),
+    ...(kind === "button"
+      ? {
+          action: value.action as PanelActionKind,
+          script: text(value.script, 80),
+        }
+      : {}),
+    ...(kind === "value"
+      ? {
+          source: text(value.source, 120),
+          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          bands: normalisePanelBands(value.bands),
+        }
+      : {}),
+    ...(kind === "toggle" ? { sysvar: text(value.sysvar, 120) } : {}),
+    ...(kind === "numeric"
+      ? {
+          sysvar: text(value.sysvar, 120),
+          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          step: Number(value.step),
+        }
+      : {}),
+    ...(kind === "lamp"
+      ? {
+          source: text(value.source, 120),
+          threshold: Number(value.threshold),
+          ...(isBandColor(value.color) ? { color: value.color } : {}),
+        }
+      : {}),
+    ...(kind === "bar" || kind === "gauge"
+      ? {
+          source: text(value.source, 120),
+          min: Number(value.min),
+          max: Number(value.max),
+          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          bands: normalisePanelBands(value.bands),
+        }
+      : {}),
+  };
+}
+
+function buildWidget(
+  kind: PanelWidgetKind,
+  id: string,
+  geometry: Geometry,
+  value: Record<string, unknown>,
+): PanelWidget {
+  const spec = panelWidgetSpec(kind);
+  const widget = spec.create(
+    id,
+    geometry.x,
+    geometry.y,
+    geometry.w,
+    geometry.h,
+  );
+  return spec.applyPatch(widget, widgetPatch(value));
+}
+
 function sanitise(
   raw: unknown,
   width: number,
@@ -574,14 +919,7 @@ function sanitise(
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   const kind = value.kind;
-  if (
-    kind !== "button" &&
-    kind !== "value" &&
-    kind !== "toggle" &&
-    kind !== "numeric"
-  ) {
-    return null;
-  }
+  if (!isPanelKind(kind)) return null;
   if (typeof value.id !== "string" || value.id.length === 0) return null;
   if (used.has(value.id)) return null;
   const x = Math.round(Number(value.x));
@@ -599,30 +937,7 @@ function sanitise(
     h,
   };
   if (kind === "button" && !isActionKind(value.action)) return null;
-  const widget = spec.create(value.id, geometry.x, geometry.y, w, h);
-  return spec.applyPatch(widget, {
-    label: text(value.label, 80),
-    ...(kind === "button"
-      ? {
-          action: value.action as PanelActionKind,
-          script: text(value.script, 80),
-        }
-      : {}),
-    ...(kind === "value"
-      ? {
-          source: text(value.source, 120),
-          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
-        }
-      : {}),
-    ...(kind === "toggle" ? { sysvar: text(value.sysvar, 120) } : {}),
-    ...(kind === "numeric"
-      ? {
-          sysvar: text(value.sysvar, 120),
-          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
-          step: Number(value.step),
-        }
-      : {}),
-  });
+  return buildWidget(kind, value.id, geometry, value);
 }
 
 export function parsePanelPage(raw: unknown): PanelPage | null {
@@ -694,6 +1009,166 @@ export function parsePanelBook(
     ? wanted
     : pages[0].id;
   return { version: 1, activeId, pages };
+}
+
+export const PANEL_FILE_FORMAT = "roxy-can.panel-page";
+export const PANEL_FILE_VERSION = 1;
+
+export function panelFileName(name: string): string {
+  const base = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${base || "panel"}.rxpanel`;
+}
+
+/// Page as a portable, versioned file; widget ids stay page-local.
+export function exportPanelFile(page: PanelPage): string {
+  return JSON.stringify(
+    {
+      format: PANEL_FILE_FORMAT,
+      version: PANEL_FILE_VERSION,
+      page: {
+        name: page.name,
+        width: page.width,
+        height: page.height,
+        widgets: page.widgets.map((widget) => {
+          const copy: Record<string, unknown> = { ...widget };
+          delete copy.id;
+          return copy;
+        }),
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function strictWidget(
+  raw: unknown,
+  index: number,
+  width: number,
+  height: number,
+  placed: Geometry[],
+  id: string,
+): PanelWidget | { error: string } {
+  const where = `Control ${index + 1}`;
+  if (!raw || typeof raw !== "object") {
+    return { error: `${where}: not an object` };
+  }
+  const value = raw as Record<string, unknown>;
+  if (!isPanelKind(value.kind)) {
+    return { error: `${where}: unknown type "${String(value.kind ?? "")}"` };
+  }
+  const kind = value.kind;
+  const x = Math.round(Number(value.x));
+  const y = Math.round(Number(value.y));
+  const w = Math.round(Number(value.w));
+  const h = Math.round(Number(value.h));
+  if (![x, y, w, h].every(Number.isFinite)) {
+    return { error: `${where}: position and size must be numbers` };
+  }
+  const spec = panelWidgetSpec(kind);
+  if (w < spec.minW || h < spec.minH) {
+    return {
+      error: `${where}: ${spec.label} needs at least ${spec.minW} × ${spec.minH} cells`,
+    };
+  }
+  if (x < 0 || y < 0 || x + w > width || y + h > height) {
+    return {
+      error: `${where}: outside the ${width * PAGE_GRID} × ${height * PAGE_GRID} canvas`,
+    };
+  }
+  if (placed.some((other) => overlaps({ x, y, w, h }, other))) {
+    return { error: `${where}: overlaps another control` };
+  }
+  if (kind === "button" && !isActionKind(value.action)) {
+    return { error: `${where}: unknown action` };
+  }
+  return buildWidget(kind, id, { x, y, w, h }, value);
+}
+
+/// Reads an exported page strictly: unknown types, bad geometry and overlaps
+/// are errors instead of being dropped.
+export function importPanelFile(
+  raw: unknown,
+): { page: PanelPage } | { error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: "Not a Panel file" };
+  }
+  const file = raw as Record<string, unknown>;
+  if (file.format !== PANEL_FILE_FORMAT) return { error: "Not a Panel file" };
+  if (file.version !== PANEL_FILE_VERSION) {
+    return {
+      error: `Unsupported Panel file version ${String(file.version ?? "")}`,
+    };
+  }
+  const rawPage = file.page;
+  if (!rawPage || typeof rawPage !== "object") {
+    return { error: "No page in this file" };
+  }
+  const value = rawPage as Record<string, unknown>;
+  const width = Number(value.width);
+  const height = Number(value.height);
+  if (
+    !Number.isInteger(width) ||
+    width < PAGE_MIN_W ||
+    width > PAGE_MAX_W ||
+    !Number.isInteger(height) ||
+    height < PAGE_MIN_H ||
+    height > PAGE_MAX_H
+  ) {
+    return {
+      error: `Canvas must be ${PAGE_MIN_W * PAGE_GRID}–${PAGE_MAX_W * PAGE_GRID} wide and ${PAGE_MIN_H * PAGE_GRID}–${PAGE_MAX_H * PAGE_GRID} tall in 8px steps`,
+    };
+  }
+  const source = value.widgets;
+  if (!Array.isArray(source)) return { error: "No controls in this file" };
+  const widgets: PanelWidget[] = [];
+  const placed: Geometry[] = [];
+  const counts: Partial<Record<PanelWidgetKind, number>> = {};
+  for (let index = 0; index < source.length; index += 1) {
+    if (index >= 100) return { error: "Too many controls (100 max)" };
+    const kind = (source[index] as Record<string, unknown> | null)?.kind;
+    let id = `widget${index + 1}`;
+    if (isPanelKind(kind)) {
+      const n = (counts[kind] ?? 0) + 1;
+      counts[kind] = n;
+      id = `${kind}${n}`;
+    }
+    const widget = strictWidget(source[index], index, width, height, placed, id);
+    if ("error" in widget) return { error: widget.error };
+    placed.push({ x: widget.x, y: widget.y, w: widget.w, h: widget.h });
+    widgets.push(widget);
+  }
+  return {
+    page: {
+      version: 1,
+      id: "imported",
+      name: text(value.name, 40).trim() || "Imported page",
+      width,
+      height,
+      widgets,
+    },
+  };
+}
+
+/// Appends an imported page under a fresh id and unique name.
+export function addPanelPageFromFile(
+  book: PanelBook,
+  page: PanelPage,
+): { book: PanelBook; page: PanelPage } {
+  const id = pageId(book);
+  const stored: PanelPage = {
+    ...page,
+    id,
+    name: uniquePageName(book, page.name || "Imported page"),
+  };
+  return {
+    book: { ...book, activeId: id, pages: [...book.pages, stored] },
+    page: stored,
+  };
 }
 
 export function updatePanelWidget(
@@ -820,11 +1295,27 @@ export function pastePanelWidget(
       ? { action: widget.action, script: widget.script }
       : {}),
     ...(widget.kind === "value"
-      ? { source: widget.source, digits: widget.digits }
+      ? { source: widget.source, digits: widget.digits, bands: widget.bands }
       : {}),
     ...(widget.kind === "toggle" ? { sysvar: widget.sysvar } : {}),
     ...(widget.kind === "numeric"
       ? { sysvar: widget.sysvar, digits: widget.digits, step: widget.step }
+      : {}),
+    ...(widget.kind === "lamp"
+      ? {
+          source: widget.source,
+          threshold: widget.threshold,
+          color: widget.color,
+        }
+      : {}),
+    ...(widget.kind === "bar" || widget.kind === "gauge"
+      ? {
+          source: widget.source,
+          min: widget.min,
+          max: widget.max,
+          digits: widget.digits,
+          bands: widget.bands,
+        }
       : {}),
   });
   return { page: { ...page, widgets: [...page.widgets, merged] }, id };

@@ -36,14 +36,14 @@ export function HelpModal({ onClose }: Props) {
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header class="modal-head">
-          <h2>roxy-can web</h2>
+          <h2>Roxy CAN</h2>
           <button type="button" onClick={onClose}>
             Close
           </button>
         </header>
         <div class="help-body">
           <p class="hint">
-            roxy-can is a CAN / FlexRay / Ethernet simulation and analysis tool
+            Roxy CAN is a CAN / FlexRay / Ethernet simulation and analysis tool
             running entirely in this local web UI. Files and hardware live on
             the host.
           </p>

@@ -156,8 +156,9 @@ roxy-can -h                               完整帮助
 
 - 画布上方是页面标签栏：点击切换页面；Edit 下 `+` 新建空页、**Duplicate** 复制当前页、**Delete** 删除当前页（至少保留一页），双击页名就地重命名。每页有自己的画幅尺寸和控件，切换页面会清空选区、撤销历史和剪贴板，但保留 Edit 模式。
 - 顶栏 **Standard / Panel** 进入操作页：固定画布默认 **1280×720**，始终显示 **8px 网格线**；画幅 W×H 在未选中控件时显示于右侧 Panel 属性，按 8px 取整，缩小到会把控件挤出画布时会拒绝；窗口不够大时画布出现滚动条，不缩放、不重排。
-- **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。`+ Button` / `+ Value` / `+ Toggle` / `+ Numeric` 添加控件，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。
-- 选中控件后右侧属性栏按类型编辑：**Button** 选 Action（已有命令或 **Script action** + 动作名）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Numeric** 填系统变量名、小数位与步进（Step），输入后按 Enter/失焦写入，按 SysVar 的 min/max 夹取。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。
+- **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Numeric，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。
+- 选中控件后右侧属性栏按类型编辑：**Button** 选 Action（已有命令或 **Script action** + 动作名）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Numeric** 填系统变量名、小数位与步进（Step），输入后按 Enter/失焦写入，按 SysVar 的 min/max 夹取。**Color bands** 在所有只读控件上一致：按升序添加上限（`≤`）并为每段选 Neutral / OK / Warning / Critical，可再加一条 `above` 兜底最高段，只改数字/填充颜色、不改卡片底色。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。
+- 页面文件：Edit 下 **Export** 把当前页下载成 `.rxpanel`（带格式与版本，不含控件 id），**Import** 在浏览器里读取文件并作为新页面追加（名称自动去重）。导入严格校验画幅、控件类型、最小尺寸与重叠，任何一条不合格都给出提示且不改动现有页面。
 - 编辑快捷键：**Ctrl+C / Ctrl+V** 复制粘贴（自动找空位并选中副本），**Ctrl+Z** 撤销、**Ctrl+Shift+Z** 或 **Ctrl+Y** 重做（工具条也有 Undo/Redo），**Delete** 删除选中控件。不做手动微调与对齐工具——位置、尺寸一律吸附网格。
 - 控件会表达可用性：未测量时 Start/Stop 等按钮自动禁用并在悬停提示原因；脚本动作只在有运行中的同名处理器时可用；未绑定或指向未知对象的 Value/Toggle 显示占位并提示原因。
 - **Fullscreen** 让 Panel 盖住顶栏和状态栏，但仍保持浏览器窗口；画布按当前尺寸居中，不缩放。`Exit` 或 Esc 返回；编辑时 Esc 先清选中/退出编辑。

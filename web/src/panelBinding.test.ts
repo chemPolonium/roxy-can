@@ -2,17 +2,30 @@ import { describe, expect, it } from "vitest";
 import type { ScriptInfo, SignalSeries, SysVar } from "./types";
 import {
   clampPanelNumber,
+  filterPanelOptions,
   findPanelSysVar,
   panelButtonCapability,
+  panelGaugeArc,
   panelNumberCapability,
   panelSourceOptions,
   panelToggleCapability,
+  panelLampLit,
+  panelMeterRatio,
+  panelValueBand,
   panelValueCapability,
+  panelWidgetCapability,
   resolvePanelSource,
   runningPanelActions,
   type PanelActionContext,
 } from "./panelBinding";
-import type { PanelNumeric, PanelToggle, PanelValue } from "./panelPage";
+import type {
+  PanelBand,
+  PanelBar,
+  PanelLamp,
+  PanelNumeric,
+  PanelToggle,
+  PanelValue,
+} from "./panelPage";
 
 const series = (key: string, name: string, points: [number, number][]): SignalSeries => ({
   key,
@@ -213,5 +226,105 @@ describe("panel bindings", () => {
     expect(clampPanelNumber(9000, 0, 500)).toBe(500);
     expect(clampPanelNumber(-5, 0, 500)).toBe(0);
     expect(clampPanelNumber(12.5, null, null)).toBe(12.5);
+  });
+
+  it("picks the first colour band the value fits", () => {
+    const bands: PanelBand[] = [
+      { upTo: 0, color: "neutral" },
+      { upTo: 40, color: "ok" },
+      { upTo: 80, color: "warn" },
+      { upTo: null, color: "crit" },
+    ];
+    expect(panelValueBand(-5, bands)).toBe("neutral");
+    expect(panelValueBand(0, bands)).toBe("neutral");
+    expect(panelValueBand(12, bands)).toBe("ok");
+    expect(panelValueBand(40, bands)).toBe("ok");
+    expect(panelValueBand(40.5, bands)).toBe("warn");
+    expect(panelValueBand(80, bands)).toBe("warn");
+    expect(panelValueBand(120, bands)).toBe("crit");
+    expect(panelValueBand(12, [{ upTo: 10, color: "ok" }])).toBeNull();
+    expect(panelValueBand(12, [])).toBeNull();
+    expect(panelValueBand(null, bands)).toBeNull();
+    expect(panelValueBand(Number.NaN, bands)).toBeNull();
+  });
+
+  it("fills meters and lights lamps from their range", () => {
+    expect(panelMeterRatio(50, 0, 100)).toBe(0.5);
+    expect(panelMeterRatio(-5, 0, 100)).toBe(0);
+    expect(panelMeterRatio(150, 0, 100)).toBe(1);
+    expect(panelMeterRatio(null, 0, 100)).toBeNull();
+    expect(panelMeterRatio(Number.NaN, 0, 100)).toBeNull();
+    expect(panelMeterRatio(50, 100, 100)).toBeNull();
+
+    const lamp: PanelLamp = {
+      id: "lamp1",
+      kind: "lamp",
+      label: "Ready",
+      source: "sysvar:Bench::Ready",
+      threshold: 0.5,
+      color: "ok",
+      x: 0,
+      y: 0,
+      w: 14,
+      h: 4,
+    };
+    expect(panelLampLit(lamp, 1)).toBe(true);
+    expect(panelLampLit(lamp, 0.5)).toBe(true);
+    expect(panelLampLit(lamp, 0.4)).toBe(false);
+    expect(panelLampLit(lamp, null)).toBe(false);
+
+    const bar: PanelBar = {
+      id: "bar1",
+      kind: "bar",
+      label: "Speed",
+      source: "0:512:VehicleSpeed",
+      min: 0,
+      max: 100,
+      digits: 1,
+      x: 0,
+      y: 0,
+      w: 20,
+      h: 7,
+    };
+    const view = { signals: [], sysvars: [] };
+    const ctx: PanelActionContext = {
+      online: true,
+      measuring: true,
+      paused: false,
+      scriptActions: new Set(),
+    };
+    expect(panelWidgetCapability(bar, view, ctx).reason).toContain(
+      "Unknown source",
+    );
+    expect(
+      panelWidgetCapability({ ...lamp, source: "" }, view, ctx).reason,
+    ).toBe("No source bound");
+  });
+
+  it("filters source suggestions by substring", () => {
+    const options = [
+      "0:256:EngineSpeed",
+      "0:800:BrakePressure",
+      "sysvar:Bench::Pressure",
+      "derived:WheelSlip",
+    ];
+    expect(filterPanelOptions(options, "")).toEqual(options);
+    expect(filterPanelOptions(options, "  PRESSURE ")).toEqual([
+      "0:800:BrakePressure",
+      "sysvar:Bench::Pressure",
+    ]);
+    expect(filterPanelOptions(options, "0:2")).toEqual(["0:256:EngineSpeed"]);
+    expect(filterPanelOptions(options, "nothing")).toEqual([]);
+    expect(filterPanelOptions(options, "", 2)).toHaveLength(2);
+  });
+
+  it("draws the gauge fill as a short arc", () => {
+    expect(panelGaugeArc(0)).toBe("M6 50 A44 44 0 0 1 6.00 50.00");
+    expect(panelGaugeArc(0.25)).toBe("M6 50 A44 44 0 0 1 18.89 18.89");
+    expect(panelGaugeArc(0.5)).toBe("M6 50 A44 44 0 0 1 50.00 6.00");
+    expect(panelGaugeArc(0.8)).toBe("M6 50 A44 44 0 0 1 85.60 24.14");
+    expect(panelGaugeArc(1)).toBe("M6 50 A44 44 0 0 1 94.00 50.00");
+    expect(panelGaugeArc(2)).toBe(panelGaugeArc(1));
+    expect(panelGaugeArc(-1)).toBe(panelGaugeArc(0));
   });
 });

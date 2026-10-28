@@ -995,6 +995,80 @@ body.col-resizing {
   gap: 4px;
 }
 
+.page-suggest {
+  width: 100%;
+}
+
+/* Fixed so the inspector's own scroll area cannot clip the list or grow a
+   scrollbar for it. */
+.page-suggest-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--head);
+  box-shadow: 0 10px 26px rgb(0 0 0 / 45%);
+}
+
+.page-suggest-menu button {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-suggest-menu button:hover,
+.page-suggest-menu button.active {
+  background: var(--accent-soft);
+}
+
+.page-add {
+  position: relative;
+  display: flex;
+}
+
+.page-add-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 104px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--head);
+  box-shadow: 0 10px 26px rgb(0 0 0 / 45%);
+}
+
+.page-add-menu button {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  text-align: left;
+}
+
+.page-add-menu button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
 @media (max-width: 1100px) {
   .page-panel .panel-head.editing .meta {
     display: none;
@@ -1170,6 +1244,20 @@ body.col-resizing {
   font-variant-numeric: tabular-nums;
 }
 
+/* Colour bands only tint the number; the tile keeps one flat surface so a
+   wall of values stays readable. */
+.page-value .page-value-line strong.band-ok {
+  color: var(--ok);
+}
+
+.page-value .page-value-line strong.band-warn {
+  color: var(--warn);
+}
+
+.page-value .page-value-line strong.band-crit {
+  color: var(--error);
+}
+
 .page-value em {
   flex: 0 0 auto;
   margin-left: auto;
@@ -1177,6 +1265,226 @@ body.col-resizing {
   font-size: 10px;
   font-style: normal;
   line-height: 1.2;
+}
+
+.page-lamp {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+  background: #121923;
+}
+
+.page-lamp-dot {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2a3542;
+  box-shadow: inset 0 0 0 1px #3a4757;
+}
+
+.page-lamp-label {
+  min-width: 0;
+  overflow: hidden;
+  color: #cdd8e4;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-lamp.on.tone-neutral .page-lamp-dot {
+  background: var(--accent);
+  box-shadow: 0 0 7px var(--accent);
+}
+
+.page-lamp.on.tone-ok .page-lamp-dot {
+  background: var(--ok);
+  box-shadow: 0 0 7px var(--ok);
+}
+
+.page-lamp.on.tone-warn .page-lamp-dot {
+  background: var(--warn);
+  box-shadow: 0 0 7px var(--warn);
+}
+
+.page-lamp.on.tone-crit .page-lamp-dot {
+  background: var(--error);
+  box-shadow: 0 0 7px var(--error);
+}
+
+.page-lamp.missing .page-lamp-label {
+  color: var(--muted);
+}
+
+.page-bar {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 10px;
+  overflow: hidden;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+  background: #121923;
+}
+
+.page-bar-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.page-bar-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-bar-value {
+  flex: 0 0 auto;
+  color: #cdd8e4;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-bar-value em {
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.page-bar-track {
+  display: block;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #1b232d;
+}
+
+.page-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.page-bar-fill.band-ok {
+  background: var(--ok);
+}
+
+.page-bar-fill.band-warn {
+  background: var(--warn);
+}
+
+.page-bar-fill.band-crit {
+  background: var(--error);
+}
+
+.page-bar.missing .page-bar-value {
+  color: var(--muted);
+}
+
+.page-gauge {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 2px;
+  overflow: hidden;
+  border: 1px solid #202a36;
+  border-radius: 4px;
+  background: #121923;
+}
+
+.page-gauge-label {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  max-width: 68%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-gauge-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.page-gauge-track {
+  fill: none;
+  stroke: #232e3b;
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.page-gauge-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.page-gauge-fill.band-ok {
+  stroke: var(--ok);
+}
+
+.page-gauge-fill.band-warn {
+  stroke: var(--warn);
+}
+
+.page-gauge-fill.band-crit {
+  stroke: var(--error);
+}
+
+.page-gauge-value {
+  fill: #cdd8e4;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 15px;
+  font-weight: 600;
+  text-anchor: middle;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-gauge-unit {
+  fill: var(--muted);
+  font-size: 7px;
+  text-anchor: middle;
+}
+
+.page-gauge-range {
+  fill: var(--muted);
+  font-size: 7px;
+}
+
+.page-gauge-range.end {
+  text-anchor: end;
+}
+
+.page-gauge.missing .page-gauge-value {
+  fill: var(--muted);
 }
 
 .page-toggle {
@@ -1343,6 +1651,95 @@ body.col-resizing {
 .page-inspector-meta {
   color: var(--muted);
   font-size: 9.5px;
+}
+
+.page-bands {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-bands-title {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-bands-empty {
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.page-band-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.page-band-up {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-band-row .page-band-limit {
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.page-band-above {
+  flex: 1 1 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-band-row .page-band-color {
+  flex: 0 0 68px;
+  width: 68px;
+  height: 22px;
+  padding: 0 2px;
+  font-size: 9.5px;
+}
+
+/* Wins over button.mini's padding and block display, which would squeeze the
+   glyph out of an 18px box. */
+.page-band-row button.page-band-remove {
+  display: inline-flex;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.page-band-remove svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.page-band-remove:hover {
+  color: #d8e0ea;
+}
+
+.page-band-add {
+  display: flex;
+  gap: 4px;
 }
 
 .trace-body {

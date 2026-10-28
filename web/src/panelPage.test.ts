@@ -3,17 +3,22 @@ import {
   PAGE_HEIGHT,
   PAGE_MAX_W,
   PAGE_WIDTH,
+  PANEL_FILE_FORMAT,
   PANEL_WIDGET_KINDS,
   addPanelButton,
   addPanelPage,
+  addPanelPageFromFile,
   addPanelWidget,
   defaultPanelBook,
   defaultPanelPage,
   duplicatePanelPage,
   duplicatePanelWidget,
+  exportPanelFile,
   formatPanelValue,
+  importPanelFile,
   movePanelWidget,
   panelActionCommand,
+  panelFileName,
   panelWidgetSpec,
   parsePanelBook,
   parsePanelPage,
@@ -272,6 +277,57 @@ describe("panel page", () => {
     expect(formatPanelValue(Number.NaN, 1)).toBe("—");
   });
 
+  it("normalises value colour bands", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "value1",
+          kind: "value",
+          label: "Temp",
+          source: "0:256:EngineTemp",
+          digits: 1,
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+          bands: [
+            { upTo: 80, color: "ok" },
+            { upTo: null, color: "crit" },
+            { upTo: 40, color: "warn" },
+            { upTo: 40, color: "ok" },
+            { upTo: "hot", color: "ok" },
+            { upTo: 10, color: "nope" },
+          ],
+        },
+      ],
+    });
+    const widget = page?.widgets[0];
+    expect(widget?.kind === "value" ? widget.bands : null).toEqual([
+      { upTo: 40, color: "warn" },
+      { upTo: 80, color: "ok" },
+      { upTo: null, color: "crit" },
+    ]);
+    const copied = pastePanelWidget(page!, widget!);
+    const clone = copied?.page.widgets.find((entry) => entry.id === copied.id);
+    expect(clone?.kind === "value" ? clone.bands : null).toEqual(
+      widget?.kind === "value" ? widget.bands : null,
+    );
+    const capped = updatePanelWidget(page!, "value1", {
+      bands: Array.from({ length: 12 }, (_, index) => ({
+        upTo: index,
+        color: "ok" as const,
+      })),
+    });
+    const cappedWidget = capped.widgets[0];
+    expect(cappedWidget.kind === "value" ? cappedWidget.bands : null).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({ upTo: index, color: "ok" })),
+    );
+    const cleared = updatePanelWidget(page!, "value1", { bands: [] });
+    expect((cleared.widgets[0] as { bands?: unknown }).bands).toBeUndefined();
+  });
+
   it("drives palette and inspector from the widget registry", () => {
     for (const entry of PANEL_WIDGET_KINDS) {
       const spec = panelWidgetSpec(entry.kind);
@@ -416,5 +472,138 @@ describe("panel page", () => {
     expect(panelActionCommand("rearm_triggers")).toEqual({
       type: "rearm_triggers",
     });
+  });
+
+  it("round-trips lamp, bar and gauge widgets", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "bar1",
+          kind: "bar",
+          label: "Speed",
+          source: "0:512:VehicleSpeed",
+          min: -10,
+          max: 120,
+          digits: 2,
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 7,
+          bands: [
+            { upTo: 0, color: "warn" },
+            { upTo: null, color: "ok" },
+          ],
+        },
+        {
+          id: "gauge1",
+          kind: "gauge",
+          label: "Temp",
+          source: "0:256:EngineTemp",
+          min: 0,
+          max: 100,
+          digits: 1,
+          x: 0,
+          y: 7,
+          w: 18,
+          h: 11,
+        },
+        {
+          id: "lamp1",
+          kind: "lamp",
+          label: "Ready",
+          source: "sysvar:Bench::Ready",
+          threshold: 0.5,
+          color: "warn",
+          x: 20,
+          y: 0,
+          w: 14,
+          h: 4,
+        },
+      ],
+    });
+    expect(page?.widgets).toHaveLength(3);
+    expect(page?.widgets[0]).toMatchObject({
+      kind: "bar",
+      min: -10,
+      max: 120,
+      digits: 2,
+    });
+    expect(
+      page?.widgets[0].kind === "bar" ? page.widgets[0].bands : null,
+    ).toEqual([
+      { upTo: 0, color: "warn" },
+      { upTo: null, color: "ok" },
+    ]);
+    expect(page?.widgets[1]).toMatchObject({ kind: "gauge", max: 100 });
+    expect(page?.widgets[2]).toMatchObject({
+      kind: "lamp",
+      threshold: 0.5,
+      color: "warn",
+    });
+    const copy = pastePanelWidget(page!, page!.widgets[0]);
+    expect(copy?.page.widgets.find((widget) => widget.id === copy.id)).toMatchObject(
+      { kind: "bar", min: -10, max: 120 },
+    );
+    expect(
+      addPanelWidget(page!, "gauge")?.page.widgets.some(
+        (widget) => widget.kind === "gauge",
+      ),
+    ).toBe(true);
+  });
+
+  it("exports and imports page files strictly", () => {
+    const page = defaultPanelPage();
+    const file = JSON.parse(exportPanelFile(page));
+    expect(file).toMatchObject({ format: PANEL_FILE_FORMAT, version: 1 });
+    expect(file.page.widgets[0]).not.toHaveProperty("id");
+    const result = importPanelFile(file);
+    const imported = "page" in result ? result.page : null;
+    expect(imported?.widgets).toHaveLength(3);
+    expect(imported?.width).toBe(PAGE_WIDTH);
+    const added = addPanelPageFromFile(defaultPanelBook(), imported!);
+    expect(added.book.pages).toHaveLength(2);
+    expect(added.book.activeId).toBe(added.page.id);
+    expect(added.page.name).toBe("Overview 2");
+    expect(panelFileName("Brake / Lamp")).toBe("brake-lamp.rxpanel");
+    expect(panelFileName("  ")).toBe("panel.rxpanel");
+
+    const errorOf = (raw: unknown) => {
+      const parsed = importPanelFile(raw);
+      return "error" in parsed ? parsed.error : "";
+    };
+    const fileOf = (widgets: unknown[], width = 160, height = 90) => ({
+      format: PANEL_FILE_FORMAT,
+      version: 1,
+      page: { name: "P", width, height, widgets },
+    });
+    expect(errorOf(null)).toBe("Not a Panel file");
+    expect(errorOf({ format: "x", version: 1 })).toBe("Not a Panel file");
+    expect(
+      errorOf({ format: PANEL_FILE_FORMAT, version: 9, page: {} }),
+    ).toBe("Unsupported Panel file version 9");
+    expect(
+      errorOf(fileOf([{ kind: "hologram", x: 0, y: 0, w: 10, h: 5 }])),
+    ).toBe('Control 1: unknown type "hologram"');
+    expect(
+      errorOf(fileOf([{ kind: "lamp", x: 150, y: 0, w: 14, h: 4 }])),
+    ).toContain("outside");
+    expect(
+      errorOf(fileOf([{ kind: "lamp", x: 0, y: 0, w: 8, h: 4 }])),
+    ).toContain("at least 10 × 3");
+    expect(
+      errorOf(
+        fileOf([
+          { kind: "button", action: "start", x: 0, y: 0, w: 20, h: 6 },
+          { kind: "lamp", x: 0, y: 0, w: 14, h: 4 },
+        ]),
+      ),
+    ).toContain("overlaps");
+    expect(
+      errorOf(fileOf([{ kind: "button", action: "launch", x: 0, y: 0, w: 20, h: 6 }])),
+    ).toContain("unknown action");
+    expect(errorOf(fileOf([], 1000, 90))).toContain("Canvas must be");
+    expect("error" in importPanelFile(fileOf([]))).toBe(false);
   });
 });

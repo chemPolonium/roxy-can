@@ -2,10 +2,12 @@ import type { ScriptInfo, SignalSeries, SysVar } from "./types";
 import {
   parseSysVarRef,
   type PanelActionKind,
+  type PanelBand,
+  type PanelBandColor,
   type PanelButton,
+  type PanelLamp,
   type PanelNumeric,
   type PanelToggle,
-  type PanelValue,
   type PanelWidget,
 } from "./panelPage";
 
@@ -59,6 +61,44 @@ export function resolvePanelSource(
   };
 }
 
+/// Colour band the value falls into: the first "up to" it fits, or null.
+export function panelValueBand(
+  value: number | null,
+  bands?: PanelBand[],
+): PanelBandColor | null {
+  if (value === null || !Number.isFinite(value) || !bands?.length) return null;
+  for (const band of bands) {
+    if (band.upTo === null || value <= band.upTo) return band.color;
+  }
+  return null;
+}
+
+/// 0..1 fill for a meter; null when the range is empty or the value is absent.
+export function panelMeterRatio(
+  value: number | null,
+  min: number,
+  max: number,
+): number | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  return Math.min(1, Math.max(0, (value - min) / (max - min)));
+}
+
+/// Whether a lamp is lit: source value at or above its threshold.
+export function panelLampLit(widget: PanelLamp, value: number | null): boolean {
+  return value !== null && Number.isFinite(value) && value >= widget.threshold;
+}
+
+/// Fill path for the gauge's 100 × 64 viewBox, from the left end clockwise.
+/// The arc never exceeds 180°, so the large-arc flag stays 0.
+export function panelGaugeArc(ratio: number): string {
+  const clamped = Math.min(1, Math.max(0, ratio));
+  const angle = Math.PI + Math.PI * clamped;
+  const x = 50 + 44 * Math.cos(angle);
+  const y = 50 + 44 * Math.sin(angle);
+  return `M6 50 A44 44 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)}`;
+}
+
 export function findPanelSysVar(ref: string, view: PanelView): SysVar | undefined {
   const parts = parseSysVarRef(ref);
   if (!parts) return undefined;
@@ -90,6 +130,19 @@ export function panelSourceOptions(
     options.push(`sysvar:${variable.namespace}::${variable.name}`);
   }
   return options;
+}
+
+/// Case-insensitive substring match for the source/sysvar suggestion list.
+export function filterPanelOptions(
+  options: string[],
+  query: string,
+  limit = 100,
+): string[] {
+  const needle = query.trim().toLowerCase();
+  const matches = needle
+    ? options.filter((option) => option.toLowerCase().includes(needle))
+    : options;
+  return matches.slice(0, limit);
 }
 
 /// Names declared by every running, enabled, error-free script.
@@ -150,7 +203,7 @@ export function panelButtonCapability(
 }
 
 export function panelValueCapability(
-  widget: PanelValue,
+  widget: { source: string },
   value: PanelSourceValue,
 ): PanelCapability {
   if (!widget.source.trim()) {
@@ -192,7 +245,12 @@ export function panelWidgetCapability(
   ctx: PanelActionContext,
 ): PanelCapability {
   if (widget.kind === "button") return panelButtonCapability(widget, ctx);
-  if (widget.kind === "value") {
+  if (
+    widget.kind === "value" ||
+    widget.kind === "lamp" ||
+    widget.kind === "bar" ||
+    widget.kind === "gauge"
+  ) {
     return panelValueCapability(widget, resolvePanelSource(widget.source, view));
   }
   if (widget.kind === "numeric") return panelNumberCapability(widget, view);

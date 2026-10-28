@@ -2444,7 +2444,7 @@ export function App() {
             <button
               type="button"
               class="logo"
-              aria-label="roxy-can menu"
+              aria-label="Roxy CAN menu"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               aria-controls="brand-menu-panel"
@@ -2491,7 +2491,7 @@ export function App() {
           </div>
           <div class="brand-text">
             <h1>
-              roxy-can
+              Roxy CAN
               <span class={`presence ${online ? "on" : "off"}`}>
                 <span class="dot" />
                 {online ? "live" : "reconnecting"}
