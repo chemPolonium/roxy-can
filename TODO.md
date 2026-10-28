@@ -32,19 +32,18 @@
 - **回放通道映射**：CAN / FlexRay / 以太网三套日志编号都能在 Buses 映射到本工程的路；以太网帧先映射再解码，静音与计数按文件编号。
 - **Trace/作用域**：CAN/FlexRay/Ethernet 已合并在同一张按时间排序的表；作用域提供 `Ethernet: ETHn`，Manual 以 L2 flow 为选择键并随工程保存。Trace 导出按扩展名选格式：`.asc` 写 CAN/FlexRay，`.pcap` 写以太网；Messages/Statistics CSV 同样包含以太网 flow。
 - **导出保真**：PCAP 为经典格式，不写 FCS，也不带方向位（Rx/Tx 都按线上帧导出）；S-VLAN/C-VLAN 的 TPID 从 BLF 保留。
-- **只收不发**：以太网帧与 flow 在 Trace / Messages / Statistics 中可见并可解码，但没有以太网发送路径/生成器（与 FlexRay 的只收端口同一边界）。
+- **只收不发**：以太网帧与 flow 在 Trace / Messages / Statistics 中可见并可解码；没有以太网硬件发送路径/生成器（与 FlexRay 的只收端口同一边界）。Panel Setpoint 可会话内注入一帧（矩阵 VLAN、EtherType 或 `0x88B5`、固定本机管理 MAC），不录制、不出端口。
 - **后续**：Container/Multiplexed/Secured 以太网解码；SoAd/socket/SOME-IP；TSN/交换机拓扑；ARXML 写回与完整矩阵往返。
 
 ## ARXML 通信层（审计见 `docs/arxml-communication-audit.md`）
 
-- FlexRay 现有缺口的代码修复：`PDU-TRIGGERING` 周期、ECU 端口/连接器、Signal Group、update bit、SystemSignal 扇出、min/max、cluster 引用。
-- CAN ARXML 的 Container/Multiplexed/Secured PDU、Signal Group、update bit；当前只读普通 `I-SIGNAL-I-PDU`。
+- FlexRay 现有缺口的代码修复：`PDU-TRIGGERING` 周期、ECU 端口/连接器、Signal Group、update bit、SystemSignal 扇出、min/max（CompuMethod 限值已读，`DATA-CONSTR` 未读）、cluster 引用。
+- CAN ARXML 的 Container/Multiplexed/Secured PDU、Signal Group、update bit、PDU 组/端口方向（目前只认 `FRAME-PORT-REF`）；当前只读普通 `I-SIGNAL-I-PDU`。
 - 以太网必需的子集随以太网功能实现；其余只记录，不在本次补。
 
 ## Panel 操作页
 
-- **Setpoint 回读**：写入后显示该信号在总线上的实际值（订阅它），并在值被节点覆盖、总线未运行时明确区分“已写入 / 实际”。目前只显示最后写入值。
-- **组写**：一个 Setpoint 或 Button 写一组信号/整帧预设，用于测试步骤；当前一次只写一个信号。
+- **Setpoint 组写**：一个 Setpoint 或 Button 写一组信号/整帧预设，用于测试步骤；当前一次只写一个信号（回读、CAN 发送帧、FR 会话内注入与 ETH 会话内注入已完成；真实 FR/ETH 端口发送待硬件/地址语义）。
 - **动作返回值**：`on panel_action` 目前只有输入参数，没有把脚本结果送回按钮/提示的通道；要不要加、怎么与“效果集可静态推导”共存，先决策再加。
 - 页面模板库（内置示例页）价值低，低优先级。
 

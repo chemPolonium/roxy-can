@@ -379,3 +379,26 @@ fn top_level_triggerings_are_attributed_by_their_cluster_path() {
     let b = parse_cluster(TOP_LEVEL_TRIGGERS, "C2").expect("C2");
     assert_eq!(b.db.order, [(2, false)]);
 }
+
+/// The base type's declared encoding decides signedness, not the short name:
+/// a `uint16` declared two's complement is signed, and a `sint16` declared
+/// NONE is not.
+#[test]
+fn base_type_encoding_beats_the_type_name() {
+    let text = SAMPLE.replace(
+        "</ELEMENTS>",
+        "<SW-BASE-TYPE><SHORT-NAME>uint16</SHORT-NAME><BASE-TYPE-SIZE>16</BASE-TYPE-SIZE>\
+           <BASE-TYPE-ENCODING>2C</BASE-TYPE-ENCODING></SW-BASE-TYPE>\
+         <SW-BASE-TYPE><SHORT-NAME>sint16</SHORT-NAME><BASE-TYPE-SIZE>12</BASE-TYPE-SIZE>\
+           <BASE-TYPE-ENCODING>NONE</BASE-TYPE-ENCODING></SW-BASE-TYPE>\
+         </ELEMENTS>",
+    );
+    let a = parse_cluster(&text, "CanA").expect("CanA");
+    let speed = &a.db.messages[&(0x123, false)].signals[0];
+    assert_eq!(speed.name, "Speed");
+    assert!(speed.signed, "2C wins over the uint16 name");
+    let b = parse_cluster(&text, "CanB").expect("CanB");
+    let torque = &b.db.messages[&(0x456, true)].signals[0];
+    assert_eq!(torque.name, "Torque");
+    assert!(!torque.signed, "NONE wins over the sint16 name");
+}

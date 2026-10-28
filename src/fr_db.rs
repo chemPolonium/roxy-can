@@ -654,6 +654,49 @@ impl FrDb {
         out
     }
 
+    /// Encodes `phys` into a zero-filled payload for the occupant of `slot`
+    /// that carries `name`, sized to that frame's declared length. The cycle
+    /// names the moment of the write: an occupant the schedule does not fire
+    /// at `cycle` is sent on its base cycle instead, so the arrival resolves
+    /// back to this frame and its signals decode. `None` when no occupant has
+    /// the signal or its bytes do not fit.
+    pub fn encode_slot_signal(
+        &self,
+        slot: u16,
+        name: &str,
+        phys: f64,
+        cycle: u8,
+    ) -> Option<(Vec<u8>, u8)> {
+        let cands = self.slot_ix.get(&(slot as u32))?;
+        // The occupant the schedule fires at the write moment wins; frames
+        // sharing the slot out of phase are only a fallback.
+        for active in [true, false] {
+            for &ix in cands {
+                let Some(frame) = self.frames.get(ix) else {
+                    continue;
+                };
+                let fires = frame.triggering.is_active_at_cycle(u32::from(cycle));
+                if fires != active {
+                    continue;
+                }
+                let len = frame.length as usize;
+                if len == 0 || len > crate::generator::MAX_FR_PAYLOAD_LEN {
+                    continue;
+                }
+                let mut payload = vec![0u8; len];
+                if self.encode_signal(ix, name, phys, &mut payload) {
+                    let at = if fires {
+                        cycle
+                    } else {
+                        frame.triggering.base_cycle as u8
+                    };
+                    return Some((payload, at));
+                }
+            }
+        }
+        None
+    }
+
     /// The frame a slot holds as its first occupant. The generator edits one
     /// slot's payload against this frame's signals; which occupant is actually
     /// there at a given cycle is resolved again when the frame goes out.
@@ -1614,6 +1657,10 @@ fn default_cluster_params() -> FrClusterParams {
 struct CompuMethod {
     factor: f64,
     offset: f64,
+    /// Physical bounds the method states on its linear scale. `None` when the
+    /// method carries no usable pair (missing, infinite, or only one side).
+    min: Option<f64>,
+    max: Option<f64>,
     unit: String,
     value_descriptions: Vec<(i64, String)>,
 }
@@ -1625,6 +1672,8 @@ fn parse_compu_method(
     let mut cm = CompuMethod {
         factor: 1.0,
         offset: 0.0,
+        min: None,
+        max: None,
         unit: String::new(),
         value_descriptions: Vec::new(),
     };
@@ -1644,6 +1693,28 @@ fn parse_compu_method(
         } else if values.len() == 1 {
             cm.factor = values[0];
         }
+    }
+    // Physical range: the limits sit on the scale that carries the linear
+    // coefficients, in internal units, so they scale like the decoded raw.
+    // `-INF`/`INF` fail to parse and simply mean that side is unbounded.
+    let mut limit_scales = Vec::new();
+    collect(node, "COMPU-SCALE", &mut limit_scales);
+    for sc in &limit_scales {
+        if !sc
+            .children()
+            .any(|child| child.has_tag_name("COMPU-RATIONAL-COEFFS"))
+        {
+            continue;
+        }
+        let lo = text_of(sc, &["LOWER-LIMIT"]).and_then(|t| parse_f64(&t));
+        let hi = text_of(sc, &["UPPER-LIMIT"]).and_then(|t| parse_f64(&t));
+        if let (Some(lo), Some(hi)) = (lo, hi) {
+            let a = cm.offset + cm.factor * lo;
+            let b = cm.offset + cm.factor * hi;
+            cm.min = Some(a.min(b));
+            cm.max = Some(a.max(b));
+        }
+        break;
     }
     // Enumeration: a COMPU-SCALE carrying a COMPU-CONST/VT, keyed by its
     // internal LOWER-LIMIT. Linear scales (no COMPU-CONST) are skipped.
@@ -1716,6 +1787,8 @@ fn parse_arxml_doc_cluster(
         comment: String,
         factor: f64,
         offset: f64,
+        min: Option<f64>,
+        max: Option<f64>,
         unit: String,
         value_descriptions: Vec<(i64, String)>,
     }
@@ -1752,6 +1825,8 @@ fn parse_arxml_doc_cluster(
                 if let Some(cm) = compu {
                     existing.factor = cm.factor;
                     existing.offset = cm.offset;
+                    existing.min = cm.min;
+                    existing.max = cm.max;
                     if existing.unit.is_empty() {
                         existing.unit = cm.unit.clone();
                     }
@@ -1769,6 +1844,8 @@ fn parse_arxml_doc_cluster(
                         comment,
                         factor: compu.map(|c| c.factor).unwrap_or(1.0),
                         offset: compu.map(|c| c.offset).unwrap_or(0.0),
+                        min: compu.and_then(|c| c.min),
+                        max: compu.and_then(|c| c.max),
                         unit: compu.map(|c| c.unit.clone()).unwrap_or_default(),
                         value_descriptions: compu
                             .map(|c| c.value_descriptions.clone())
@@ -2093,6 +2170,7 @@ fn parse_arxml_doc_cluster(
                 continue;
             };
             let def = signal_defs.get(signal_name);
+            let range = def.and_then(|d| d.min.zip(d.max));
             signals.push(FrSignal {
                 name: signal_name.clone(),
                 start_bit: m.start_bit,
@@ -2101,8 +2179,8 @@ fn parse_arxml_doc_cluster(
                 signed: def.map(|d| d.signed).unwrap_or(false),
                 factor: def.map(|d| d.factor).unwrap_or(1.0),
                 offset: def.map(|d| d.offset).unwrap_or(0.0),
-                min: 0.0,
-                max: 0.0,
+                min: range.map(|(min, _)| min).unwrap_or(0.0),
+                max: range.map(|(_, max)| max).unwrap_or(0.0),
                 unit: def.map(|d| d.unit.clone()).unwrap_or_default(),
                 comment: def.map(|d| d.comment.clone()).unwrap_or_default(),
                 value_descriptions: def
@@ -2655,6 +2733,72 @@ mod tests {
         };
         assert_eq!(names(&one), names(&all));
         assert!(FrDb::parse_cluster(&text, "NoSuchCluster").is_err());
+    }
+
+    /// A COMPU-METHOD's limits are internal raw values; the physical range the
+    /// catalog shows is offset + factor * limit, swapped when the factor is
+    /// negative. Without this every ARXML signal reported 0..0 and setpoints
+    /// lost their declared bounds.
+    #[test]
+    fn arxml_compu_limits_become_the_physical_range() {
+        const DOC: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
+ <COMPU-METHOD><SHORT-NAME>CM_Temp</SHORT-NAME>
+  <COMPU-INTERNAL-TO-PHYS><COMPU-SCALES><COMPU-SCALE>
+   <COMPU-RATIONAL-COEFFS><COMPU-NUMERATOR><V>-50</V><V>2</V></COMPU-NUMERATOR>
+    <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR></COMPU-RATIONAL-COEFFS>
+   <LOWER-LIMIT>0</LOWER-LIMIT><UPPER-LIMIT>255</UPPER-LIMIT>
+  </COMPU-SCALE></COMPU-SCALES></COMPU-INTERNAL-TO-PHYS>
+ </COMPU-METHOD>
+ <I-SIGNAL><SHORT-NAME>Temp</SHORT-NAME><LENGTH>8</LENGTH>
+  <NETWORK-REPRESENTATION-PROPS><SW-DATA-DEF-PROPS-VARIANTS><SW-DATA-DEF-PROPS-CONDITIONAL>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/P/CM_Temp</COMPU-METHOD-REF>
+  </SW-DATA-DEF-PROPS-CONDITIONAL></SW-DATA-DEF-PROPS-VARIANTS></NETWORK-REPRESENTATION-PROPS>
+ </I-SIGNAL>
+ <I-SIGNAL-I-PDU><SHORT-NAME>Pdu</SHORT-NAME><LENGTH>2</LENGTH>
+  <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>M</SHORT-NAME><START-POSITION>0</START-POSITION>
+   <I-SIGNAL-REF DEST="I-SIGNAL">/P/Temp</I-SIGNAL-REF>
+  </I-SIGNAL-TO-I-PDU-MAPPING>
+ </I-SIGNAL-I-PDU>
+ <FLEXRAY-FRAME><SHORT-NAME>Frame1</SHORT-NAME><FRAME-LENGTH>2</FRAME-LENGTH>
+  <PDU-TO-FRAME-MAPPING><SHORT-NAME>FM</SHORT-NAME><START-POSITION>0</START-POSITION>
+   <PDU-REF DEST="I-SIGNAL-I-PDU">/P/Pdu</PDU-REF>
+  </PDU-TO-FRAME-MAPPING>
+ </FLEXRAY-FRAME>
+ <FLEXRAY-CLUSTER><SHORT-NAME>C</SHORT-NAME><FLEXRAY-PHYSICAL-CHANNEL><SHORT-NAME>ChA</SHORT-NAME>
+  <FLEXRAY-FRAME-TRIGGERING><SHORT-NAME>FT</SHORT-NAME>
+   <FRAME-REF DEST="FLEXRAY-FRAME">/P/Frame1</FRAME-REF><SLOT-ID>1</SLOT-ID>
+  </FLEXRAY-FRAME-TRIGGERING>
+ </FLEXRAY-PHYSICAL-CHANNEL></FLEXRAY-CLUSTER>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+        let db = FrDb::parse(DOC).expect("the range document parses");
+        let sig = db
+            .pdus
+            .iter()
+            .flat_map(|pdu| pdu.signals.iter())
+            .find(|signal| signal.name == "Temp")
+            .expect("Temp");
+        assert!((sig.factor - 2.0).abs() < 1e-9);
+        assert!((sig.offset + 50.0).abs() < 1e-9);
+        assert!((sig.min + 50.0).abs() < 1e-9, "min = -50 + 2*0");
+        assert!((sig.max - 460.0).abs() < 1e-9, "max = -50 + 2*255");
+
+        // A negative factor mirrors the limits: raw 10..20 becomes -20..-10.
+        const NEG: &str = r#"<AUTOSAR><COMPU-METHOD><SHORT-NAME>CM</SHORT-NAME>
+ <COMPU-INTERNAL-TO-PHYS><COMPU-SCALES><COMPU-SCALE>
+  <COMPU-RATIONAL-COEFFS><COMPU-NUMERATOR><V>0</V><V>-1</V></COMPU-NUMERATOR>
+   <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR></COMPU-RATIONAL-COEFFS>
+  <LOWER-LIMIT>10</LOWER-LIMIT><UPPER-LIMIT>20</UPPER-LIMIT>
+ </COMPU-SCALE></COMPU-SCALES></COMPU-INTERNAL-TO-PHYS>
+</COMPU-METHOD></AUTOSAR>"#;
+        let doc = roxmltree::Document::parse(NEG).expect("negative-factor document");
+        let node = doc
+            .descendants()
+            .find(|n| n.has_tag_name("COMPU-METHOD"))
+            .expect("COMPU-METHOD");
+        let cm = parse_compu_method(&node, &HashMap::new());
+        assert_eq!(cm.min, Some(-20.0));
+        assert_eq!(cm.max, Some(-10.0));
     }
 
     /// Two ARXML parsing regressions that made every FlexRay signal read 0:

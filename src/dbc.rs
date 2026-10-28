@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use can_dbc::{
-    AttributeValue, ByteOrder, MessageId, MultiplexIndicator, NumericValue,
-    SignalExtendedValueType, ValueDescription, ValueType,
+    AttributeDefinition, AttributeValue, AttributeValueType, ByteOrder, Comment, MessageId,
+    MultiplexIndicator, NumericValue, SignalExtendedValueType, ValueDescription, ValueType,
 };
 
 use crate::can::frame::CanFrame;
@@ -167,6 +167,8 @@ pub struct SignalInfo {
     /// Conditions that must all hold for the signal to be present in a frame.
     /// Empty covers the switch signals themselves and ordinary signals.
     pub mux_when: Vec<MuxCondition>,
+    /// `CM_ SG_` text, empty when the database has none.
+    pub comment: String,
 }
 
 /// One gating condition on a multiplexed signal: the named switch signal in
@@ -191,6 +193,11 @@ pub struct MessageInfo {
     /// Names of the signals some condition gates on, deduped, so a decode
     /// reads each switch's bits exactly once.
     pub switch_names: Vec<String>,
+    /// `CM_ BO_` text, empty when the database has none.
+    pub comment: String,
+    /// `VFrameFormat` says this frame is CAN FD even when its DLC is ≤ 8;
+    /// otherwise `dlc > 8` still marks it FD at the catalog.
+    pub fd: bool,
 }
 
 pub struct SymbolTable {
@@ -223,6 +230,53 @@ impl SymbolTable {
             };
             floats.insert((msg_key_of(&v.message_id), v.signal_name.as_str()), width);
         }
+        // `CM_` comments are pure description: they never affect decoding,
+        // but the catalog shows them next to the message/signal name.
+        let mut message_comments: HashMap<MsgKey, String> = HashMap::new();
+        let mut signal_comments: HashMap<(MsgKey, String), String> = HashMap::new();
+        for comment in &db.comments {
+            match comment {
+                Comment::Message { id, comment } => {
+                    message_comments.insert(msg_key_of(id), comment.clone());
+                }
+                Comment::Signal {
+                    message_id,
+                    name,
+                    comment,
+                } => {
+                    signal_comments.insert((msg_key_of(message_id), name.clone()), comment.clone());
+                }
+                _ => {}
+            }
+        }
+        // `VFrameFormat` names the frame class by index into its ENUM
+        // declaration; a short FD frame would otherwise look like classic CAN.
+        let vframe_values: Option<Vec<String>> =
+            db.attribute_definitions
+                .iter()
+                .find_map(|definition| match definition {
+                    AttributeDefinition::Message(name, AttributeValueType::Enum(values))
+                        if name == "VFrameFormat" =>
+                    {
+                        Some(values.clone())
+                    }
+                    _ => None,
+                });
+        let is_fd = |msg: &can_dbc::Message| -> bool {
+            let label = match db.message_attribute(msg.id, "VFrameFormat") {
+                Some(AttributeValue::Uint(index)) => vframe_values
+                    .as_ref()
+                    .and_then(|values| values.get(*index as usize))
+                    .cloned(),
+                Some(AttributeValue::Int(index)) if *index >= 0 => vframe_values
+                    .as_ref()
+                    .and_then(|values| values.get(*index as usize))
+                    .cloned(),
+                Some(AttributeValue::String(label)) => Some(label.clone()),
+                _ => None,
+            };
+            label.is_some_and(|label| label.to_ascii_lowercase().contains("fd"))
+        };
         // `SG_MUL_VAL_` lines state a signal's gating outright: per switch
         // signal, a union of inclusive ranges, and all switches must agree.
         let mut ext_mux: ExtMuxRules = HashMap::new();
@@ -315,6 +369,10 @@ impl SymbolTable {
                         is_float: float_width.is_some(),
                         type_tag,
                         mux_when,
+                        comment: signal_comments
+                            .get(&((id, extended), s.name.clone()))
+                            .cloned()
+                            .unwrap_or_default(),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -381,6 +439,11 @@ impl SymbolTable {
                     cycle_us: cycles.get(&(id, extended)).copied(),
                     signals,
                     switch_names,
+                    comment: message_comments
+                        .get(&(id, extended))
+                        .cloned()
+                        .unwrap_or_default(),
+                    fd: is_fd(msg),
                 },
             );
             order.push((id, extended));
@@ -718,6 +781,36 @@ mod tests {
         let text = text_from_bytes(utf8.as_bytes().to_vec());
         let db = load_dbc_str(&text).expect("the utf-8 DBC parses");
         assert_eq!(db.messages[&(0x64, false)].signals[0].unit, "温度");
+    }
+
+    /// `CM_` descriptions reach the catalog, and `VFrameFormat` marks a short
+    /// frame as CAN FD even though its DLC alone would say classic.
+    #[test]
+    fn comments_and_vframe_format_reach_the_table() {
+        const TEXT: &str = r#"VERSION ""
+NS_ :
+
+BU_: ECU
+
+BO_ 256 WithComments: 8 ECU
+ SG_ Speed : 0|8@1+ (1,0) [0|255] "km/h" ECU
+
+BO_ 257 Plain: 8 ECU
+ SG_ S : 0|8@1+ (1,0) [0|255] "" ECU
+
+CM_ BO_ 256 "Engine status frame";
+CM_ SG_ 256 Speed "Vehicle speed";
+BA_DEF_ BO_ "VFrameFormat" ENUM "StandardCAN","ExtendedCAN","res","StandardCAN_FD";
+BA_ "VFrameFormat" BO_ 256 3;
+"#;
+        let db = load_dbc_str(TEXT).expect("the comment DBC parses");
+        let with = &db.messages[&(256, false)];
+        assert_eq!(with.comment, "Engine status frame");
+        assert!(with.fd, "VFrameFormat names StandardCAN_FD");
+        assert_eq!(with.signals[0].comment, "Vehicle speed");
+        let plain = &db.messages[&(257, false)];
+        assert!(plain.comment.is_empty(), "no CM_ line, no claim");
+        assert!(!plain.fd);
     }
 
     /// Four messages exercising every branch of the cycle lookup: both

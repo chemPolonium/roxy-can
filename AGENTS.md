@@ -15,9 +15,10 @@
   Fullscreen API，画布尺寸保持不变。控件类型先有 Button（命令/脚本动作，脚本动作
   可带一个数值参数）、Value（只读信号/派生/SysVar，可按升序上限分段染数字颜色）、
   Bar / Gauge（按 min/max 填充，复用同一套色段）、Lamp（源值达到阈值时点亮，
-  颜色可选）、Toggle（写 SysVar 0/1）、Numeric（写 SysVar，按 min/max 夹取，
-  可再带值触发脚本动作）与 Setpoint（把输入值写进 DBC 信号的发送帧，按 DBC 范围
-  夹取，只在测量中可用）。
+  颜色可选）、Toggle（写 SysVar 0/1）与 Setpoint（Target 选 SysVar 或信号：
+  SysVar 按 min/max 夹取，CAN/FlexRay/Ethernet 信号按目录声明的范围夹取并回读总线实际值；
+  CAN 写发送帧，FlexRay 与 Ethernet 只在本次测量内注入一帧（FR 端口仍只收、Ethernet 没有
+  发送端口），派生信号拒绝写入；都可带值触发脚本动作，旧的 Numeric/Setpoint 页面在加载时迁移）。
 - 新控件先进入 `panelPage.ts` 的控件注册表（创建/字段/最小尺寸/补丁），
   调色板（Edit 里的 **+ Add** 菜单）与属性栏由注册表生成，不要在 PagePanel
   里加类型分支；绑定解析与可用性判断放 `panelBinding.ts` 的纯选择器，并补

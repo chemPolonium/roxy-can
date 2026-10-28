@@ -19,6 +19,7 @@ import {
   importPanelFile,
   movePanelWidget,
   panelFileName,
+  panelNumericTarget,
   panelWidgetSpec,
   pastePanelWidget,
   removePanelPage,
@@ -34,7 +35,6 @@ import {
   type PanelBook,
   type PanelGauge,
   type PanelPage,
-  type PanelSetpoint,
   type PanelWidget,
   type PanelWidgetKind,
   type PanelWidgetPatch,
@@ -142,6 +142,7 @@ function NumericControl({
 
 function SetpointControl({
   widget,
+  value,
   min,
   max,
   unit,
@@ -149,7 +150,9 @@ function SetpointControl({
   reason,
   onWrite,
 }: {
-  widget: PanelSetpoint;
+  widget: PanelNumeric;
+  /// Live value read back from the bus; falls back to the last write.
+  value: number | null;
   min: number | null;
   max: number | null;
   unit: string;
@@ -165,7 +168,9 @@ function SetpointControl({
     id: widget.id,
     kind: "numeric",
     label: widget.label,
+    target: "signal",
     sysvar: "",
+    source: widget.source,
     digits: widget.digits,
     step: widget.step,
     x: widget.x,
@@ -173,19 +178,29 @@ function SetpointControl({
     w: widget.w,
     h: widget.h,
   };
+  const title = [
+    widget.source,
+    value !== null ? `value ${formatPanelValue(value, widget.digits)}` : "",
+    sent !== null ? `written ${formatPanelValue(sent, widget.digits)}` : "",
+    widget.source.startsWith("fr:") || widget.source.startsWith("eth:")
+      ? "session only"
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <NumericControl
       widget={shape}
-      value={sent}
+      value={value ?? sent}
       min={min}
       max={max}
       unit={unit}
       disabled={disabled}
       reason={reason}
-      title={widget.source}
-      onCommit={(value) => {
-        setSent(value);
-        onWrite(value);
+      title={title}
+      onCommit={(next) => {
+        setSent(next);
+        onWrite(next);
       }}
     />
   );
@@ -587,7 +602,7 @@ export function PagePanel({
   onRun: (widget: PanelButton) => void;
   onToggle: (widget: PanelToggle, on: boolean) => void;
   onSetNumber: (widget: PanelNumeric, value: number) => void;
-  onWrite: (widget: PanelSetpoint, value: number) => void;
+  onWrite: (widget: PanelNumeric, value: number) => void;
   onNotice: (message: string) => void;
 }) {
   const page = activePanelPage(book);
@@ -1003,25 +1018,27 @@ export function PagePanel({
         </div>
       );
     }
-    if (widget.kind === "setpoint") {
-      const target = (view.writeTargets ?? []).find(
-        (entry) => entry.key === widget.source,
-      );
-      return (
-        <SetpointControl
-          widget={widget}
-          min={target?.min ?? null}
-          max={target?.max ?? null}
-          unit={target?.unit ?? ""}
-          disabled={editing || !capability.enabled}
-          reason={capability.reason}
-          onWrite={(value) => {
-            if (!editing && capability.enabled) onWrite(widget, value);
-          }}
-        />
-      );
-    }
     if (widget.kind === "numeric") {
+      if (panelNumericTarget(widget) === "signal") {
+        const target = (view.writeTargets ?? []).find(
+          (entry) => entry.key === widget.source,
+        );
+        const resolved = resolvePanelSource(widget.source, view);
+        return (
+          <SetpointControl
+            widget={widget}
+            value={resolved.value}
+            min={target?.min ?? null}
+            max={target?.max ?? null}
+            unit={target?.unit ?? resolved.unit}
+            disabled={editing || !capability.enabled}
+            reason={capability.reason}
+            onWrite={(value) => {
+              if (!editing && capability.enabled) onWrite(widget, value);
+            }}
+          />
+        );
+      }
       const variable = findPanelSysVar(widget.sysvar, view);
       const disabled = editing || !capability.enabled;
       return (
@@ -1160,6 +1177,20 @@ export function PagePanel({
     if (!fieldSpec) return null;
     if (key === "script" && field(widget, "action") !== "script") return null;
     if (key === "argument" && field(widget, "action") !== "script") return null;
+    if (
+      widget.kind === "numeric" &&
+      key === "sysvar" &&
+      field(widget, "target") === "signal"
+    ) {
+      return null;
+    }
+    if (
+      widget.kind === "numeric" &&
+      key === "source" &&
+      field(widget, "target") !== "signal"
+    ) {
+      return null;
+    }
     const value = field(widget, fieldSpec.key);
     const update = (patch: PanelWidgetPatch) =>
       commit(updatePanelWidget(page, widget.id, patch));

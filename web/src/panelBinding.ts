@@ -1,5 +1,6 @@
 import type { ScriptInfo, SignalSeries, SysVar } from "./types";
 import {
+  panelNumericTarget,
   parseSysVarRef,
   type PanelActionKind,
   type PanelBand,
@@ -21,8 +22,10 @@ export interface PanelView {
 /// One signal a Panel setpoint may write: the catalog key plus its DBC range.
 export interface PanelWriteTarget {
   key: string;
-  min: number;
-  max: number;
+  /// Declared bounds; null when the description names no usable range, which
+  /// the write path treats as unbounded rather than as 0..0.
+  min: number | null;
+  max: number | null;
   unit: string;
 }
 
@@ -233,9 +236,13 @@ export function panelSetpointCapability(
   ctx: PanelActionContext,
 ): PanelCapability {
   if (!ctx.online) return { enabled: false, reason: "No connection to the bus core" };
-  if (!source.trim()) return { enabled: false, reason: "No signal bound" };
-  if (!(view.writeTargets ?? []).some((target) => target.key === source)) {
-    return { enabled: false, reason: `Unknown signal "${source}"` };
+  const trimmed = source.trim();
+  if (!trimmed) return { enabled: false, reason: "No signal bound" };
+  if (trimmed.startsWith("derived:")) {
+    return { enabled: false, reason: "Derived signals are read-only" };
+  }
+  if (!(view.writeTargets ?? []).some((target) => target.key === trimmed)) {
+    return { enabled: false, reason: `Unknown signal "${trimmed}"` };
   }
   if (!ctx.measuring) {
     return { enabled: false, reason: "Start the measurement first" };
@@ -281,9 +288,10 @@ export function panelWidgetCapability(
   ) {
     return panelValueCapability(widget, resolvePanelSource(widget.source, view));
   }
-  if (widget.kind === "setpoint") {
-    return panelSetpointCapability(widget.source, view, ctx);
+  if (widget.kind === "numeric") {
+    return panelNumericTarget(widget) === "signal"
+      ? panelSetpointCapability(widget.source, view, ctx)
+      : panelNumberCapability(widget, view);
   }
-  if (widget.kind === "numeric") return panelNumberCapability(widget, view);
   return panelToggleCapability(widget, view);
 }

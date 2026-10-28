@@ -83,6 +83,8 @@ export interface CatalogSignal {
   unit: string;
   min: number;
   max: number;
+  /// `CM_ SG_` description, when the database carries one.
+  comment?: string;
 }
 
 export interface CatalogMessage {
@@ -90,6 +92,10 @@ export interface CatalogMessage {
   extended: boolean;
   name: string;
   frame?: string;
+  /// `CM_ BO_` description, when the database carries one.
+  comment?: string;
+  /// CAN FD, declared by `VFrameFormat` or implied by a DLC above 8 bytes.
+  fd?: boolean;
   signals: CatalogSignal[];
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   catalogSignalCommand,
   catalogSignalSpec,
+  findCatalogSignal,
   parseReadSignals,
   readSpecCommand,
 } from "./readSignals";
@@ -120,5 +121,16 @@ describe("read signal specs", () => {
     expect(
       catalogSignalCommand(canChannel, canMessage, canSignal, null),
     ).toMatchObject({ type: "unselect_signal" });
+  });
+
+  it("finds the catalog entry behind a stored key", () => {
+    const found = findCatalogSignal(
+      { channels: [canChannel] },
+      "0:256:EngineTemp",
+    );
+    expect(found?.signal.name).toBe("EngineTemp");
+    expect(found?.message.id).toBe(0x100);
+    expect(findCatalogSignal({ channels: [canChannel] }, "0:9:Nope")).toBeNull();
+    expect(findCatalogSignal(null, "0:256:EngineTemp")).toBeNull();
   });
 });

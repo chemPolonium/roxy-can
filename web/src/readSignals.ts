@@ -1,4 +1,5 @@
 import type {
+  Catalog,
   CatalogChannel,
   CatalogMessage,
   CatalogSignal,
@@ -84,6 +85,21 @@ export function readSpecCommand(spec: ReadSignalSpec): Command {
     name: spec.name,
     read: true,
   };
+}
+
+/// The catalog entry behind a series key, for keys produced outside the picker
+/// (Panel setpoints store only the key).
+export function findCatalogSignal(
+  catalog: Catalog | null,
+  key: string,
+): { channel: CatalogChannel; message: CatalogMessage; signal: CatalogSignal } | null {
+  for (const channel of catalog?.channels ?? []) {
+    for (const message of channel.messages) {
+      const signal = message.signals.find((entry) => entry.key === key);
+      if (signal) return { channel, message, signal };
+    }
+  }
+  return null;
 }
 
 export function catalogSignalSpec(

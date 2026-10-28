@@ -2239,21 +2239,25 @@ fn app_loop(
                 }
                 WebCommand::PanelWriteSignal { source, value } => {
                     match crate::observe::SigKey::from_text(source.trim()) {
-                        Some(crate::observe::SigKey::Can { ch, id, name, .. })
-                            if value.is_finite() =>
+                        Some(key)
+                            if value.is_finite()
+                                && matches!(
+                                    key,
+                                    crate::observe::SigKey::Can { .. }
+                                        | crate::observe::SigKey::Fr { .. }
+                                        | crate::observe::SigKey::Eth { .. }
+                                ) =>
                         {
-                            app.send(BusCommand::PanelWriteSignal {
-                                ch,
-                                id,
-                                name,
-                                value,
-                            });
+                            app.send(BusCommand::PanelWriteSignal { key, value });
                         }
-                        Some(crate::observe::SigKey::Can { .. }) => {
+                        Some(crate::observe::SigKey::Derived { .. }) => {
+                            app.status = "[panel] derived signals are read-only".to_string();
+                        }
+                        Some(_) => {
                             app.status = "[panel] setpoint value must be a number".to_string();
                         }
-                        _ => {
-                            app.status = "[panel] setpoint source must be a CAN signal".to_string();
+                        None => {
+                            app.status = "[panel] setpoint source must be a signal key".to_string();
                         }
                     }
                 }
@@ -4061,6 +4065,11 @@ struct WebCatalogMessage {
     /// Ethernet frames are addressed by name, not by their catalog index.
     #[serde(skip_serializing_if = "Option::is_none")]
     frame: Option<String>,
+    /// `CM_ BO_` description; omitted when the database has none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    comment: String,
+    /// CAN FD, either declared by `VFrameFormat` or implied by a long DLC.
+    fd: bool,
     signals: Vec<WebCatalogSignal>,
 }
 
@@ -4072,6 +4081,9 @@ struct WebCatalogSignal {
     unit: String,
     min: f64,
     max: f64,
+    /// `CM_ SG_` description; omitted when the database has none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    comment: String,
 }
 
 fn channel_signature(app: &App) -> String {
@@ -4141,6 +4153,8 @@ fn build_catalog(app: &App) -> WebCatalog {
                                 extended: ext,
                                 name: message.name.clone(),
                                 frame: None,
+                                comment: message.comment.clone(),
+                                fd: message.fd || message.dlc > 8,
                                 signals: message
                                     .signals
                                     .iter()
@@ -4155,6 +4169,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                                         unit: signal.unit.clone(),
                                         min: signal.min,
                                         max: signal.max,
+                                        comment: signal.comment.clone(),
                                     })
                                     .collect(),
                             })
@@ -4174,6 +4189,8 @@ fn build_catalog(app: &App) -> WebCatalog {
                 extended: false,
                 name: frame,
                 frame: None,
+                comment: String::new(),
+                fd: false,
                 signals: names
                     .into_iter()
                     .map(|name| {
@@ -4184,6 +4201,9 @@ fn build_catalog(app: &App) -> WebCatalog {
                             unit: meta.map(|signal| signal.unit.clone()).unwrap_or_default(),
                             min: meta.map(|signal| signal.min).unwrap_or(0.0),
                             max: meta.map(|signal| signal.max).unwrap_or(0.0),
+                            comment: meta
+                                .map(|signal| signal.comment.clone())
+                                .unwrap_or_default(),
                         }
                     })
                     .collect(),
@@ -4227,6 +4247,8 @@ fn build_catalog(app: &App) -> WebCatalog {
                 extended: false,
                 name: frame.name.clone(),
                 frame: Some(frame.name.clone()),
+                comment: String::new(),
+                fd: false,
                 signals: frame
                     .pdus
                     .iter()
@@ -4237,6 +4259,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                         unit: signal.unit.clone(),
                         min: 0.0,
                         max: 0.0,
+                        comment: String::new(),
                     })
                     .collect(),
             })

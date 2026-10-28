@@ -1380,9 +1380,7 @@ fn panel_setpoints_write_a_dbc_signal() {
     );
 
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        ch: 0,
-        id: 0x100,
-        name: "EngineSpeed".into(),
+        key: crate::observe::SigKey::can(0, 0x100, false, "EngineSpeed"),
         value: 1234.5,
     });
     laps(&mut app, 1, &mut now);
@@ -1411,9 +1409,7 @@ fn panel_setpoints_write_a_dbc_signal() {
         .dlc
         .min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8;
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        ch: 0,
-        id: 0x100,
-        name: "EngineSpeed".into(),
+        key: crate::observe::SigKey::can(0, 0x100, false, "EngineSpeed"),
         value: max + 10_000.0,
     });
     laps(&mut app, 1, &mut now);
@@ -1427,15 +1423,148 @@ fn panel_setpoints_write_a_dbc_signal() {
     );
 
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        ch: 0,
-        id: 0x100,
-        name: "NoSuchSignal".into(),
+        key: crate::observe::SigKey::can(0, 0x100, false, "NoSuchSignal"),
         value: 1.0,
     });
     laps(&mut app, 1, &mut now);
     assert!(
         app.status.contains("unknown signal"),
         "an unknown signal reports instead of sending: {}",
+        app.status
+    );
+    app.stop();
+}
+
+/// A Panel setpoint writes a FlexRay signal the same way: the encoded frame
+/// lands in this session's trace, decodes back to the written value, and its
+/// readback subscription owns the live value.
+#[test]
+fn panel_setpoints_write_a_flexray_signal() {
+    let mut app = App::headless();
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
+    assert_eq!(app.load_cluster_description(arxml, Some(0)), Some(0));
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    let key = crate::observe::SigKey::fr(0, 25, "EngSpeed");
+    app.subscribe(key.clone());
+    laps(&mut app, 1, &mut now);
+
+    let rows = app.snap.fr_trace.len();
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: key.clone(),
+        value: 3000.0,
+    });
+    laps(&mut app, 1, &mut now);
+    assert_eq!(app.snap.fr_trace.len(), rows + 1, "one FlexRay frame out");
+    let row = app.snap.fr_trace.last().expect("the written frame");
+    assert_eq!((row.bus, row.slot), (0, 25));
+    let db = app.fr_db(0).expect("cluster description");
+    let frame_ix = db
+        .frame_ix_at(row.slot, row.cycle, row.ab)
+        .expect("the row resolves back to its frame");
+    assert!(
+        db.decode_signals(frame_ix, &row.payload)
+            .iter()
+            .any(|signal| signal.name == "EngSpeed" && (signal.phys - 3000.0).abs() < 1e-9),
+        "the payload decodes to the written value"
+    );
+    assert_eq!(
+        app.sub_view(&key).map(|sub| sub.latest),
+        Some(3000.0),
+        "the readback subscription sees the frame"
+    );
+
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: crate::observe::SigKey::fr(0, 25, "NoSuchSignal"),
+        value: 1.0,
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("unknown FlexRay signal"),
+        "an unknown FlexRay signal reports instead of sending: {}",
+        app.status
+    );
+    app.stop();
+}
+
+/// A Panel setpoint writes an Ethernet signal too: the encoded frame enters
+/// this session's trace, matches the matrix by VLAN/length, and its readback
+/// subscription owns the live value. No port is touched.
+#[test]
+fn panel_setpoints_write_an_ethernet_signal() {
+    let mut app = App::headless();
+    assert_eq!(
+        app.load_eth_description(crate::test_assets::eth_arxml(), Some(0)),
+        Some(0)
+    );
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    let key = crate::observe::SigKey::eth(0, "EthFrame", "Sig");
+    app.subscribe(key.clone());
+    laps(&mut app, 1, &mut now);
+
+    let rows = app.snap.eth_trace.len();
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: key.clone(),
+        value: 5.0,
+    });
+    laps(&mut app, 1, &mut now);
+    assert_eq!(app.snap.eth_trace.len(), rows + 1, "one Ethernet frame out");
+    let row = app.snap.eth_trace.last().expect("the written frame");
+    assert_eq!(row.bus, 0);
+    assert_eq!(row.dir, crate::can::frame::Direction::Tx);
+    assert_eq!(row.vlan, Some(100), "the matrix's VLAN");
+    assert_eq!(
+        row.ethertype,
+        crate::eth::EthFrame::SESSION_ETHERTYPE,
+        "no declared EtherType, so the session value is used"
+    );
+    let db = std::sync::Arc::clone(&app.eth_buses.get(&0).expect("matrix").db);
+    let flow = crate::eth::db::EthFlow {
+        vlan: row.vlan,
+        dst: row.dst,
+        src: row.src,
+        ethertype: row.ethertype,
+        payload_len: row.len(),
+    };
+    let decoded = db
+        .decode(&flow, &row.payload, app.eth_length_includes_header)
+        .expect("the injected flow matches the matrix");
+    assert!(
+        decoded
+            .signals
+            .iter()
+            .any(|signal| signal.name == "Sig" && (signal.physical - 5.0).abs() < 1e-9),
+        "the payload decodes to the written value"
+    );
+    assert_eq!(
+        app.sub_view(&key).map(|sub| sub.latest),
+        Some(5.0),
+        "the readback subscription sees the frame"
+    );
+
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: crate::observe::SigKey::eth(0, "EthFrame", "NoSuchSignal"),
+        value: 1.0,
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("cannot encode"),
+        "an unknown Ethernet signal reports instead of sending: {}",
         app.status
     );
     app.stop();

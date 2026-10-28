@@ -23,7 +23,6 @@ import type {
   PanelBar,
   PanelLamp,
   PanelNumeric,
-  PanelSetpoint,
   PanelToggle,
   PanelValue,
 } from "./panelPage";
@@ -207,7 +206,9 @@ describe("panel bindings", () => {
       id: "n",
       kind: "numeric",
       label: "N",
+      target: "sysvar",
       sysvar: ref,
+      source: "",
       digits: 1,
       step: 1,
       x: 0,
@@ -330,10 +331,12 @@ describe("panel bindings", () => {
   });
 
   it("gates setpoints on a writable signal and a running measurement", () => {
-    const setpoint: PanelSetpoint = {
+    const setpoint: PanelNumeric = {
       id: "s",
-      kind: "setpoint",
+      kind: "numeric",
       label: "Speed",
+      target: "signal",
+      sysvar: "",
       source: "0:256:EngineSpeed",
       digits: 0,
       step: 1,
@@ -365,5 +368,35 @@ describe("panel bindings", () => {
     expect(
       panelWidgetCapability(setpoint, view, { ...ctx, measuring: false }).reason,
     ).toContain("measurement");
+    const frView = {
+      ...view,
+      writeTargets: [
+        { key: "fr:0:13:CarSpeed", min: 0, max: 250, unit: "km/h" },
+      ],
+    };
+    expect(
+      panelWidgetCapability(
+        { ...setpoint, source: "fr:0:13:CarSpeed" },
+        frView,
+        ctx,
+      ).enabled,
+    ).toBe(true);
+    const ethView = {
+      ...view,
+      writeTargets: [
+        { key: "eth:0:Frame:Sig", min: null, max: null, unit: "" },
+      ],
+    };
+    expect(
+      panelWidgetCapability(
+        { ...setpoint, source: "eth:0:Frame:Sig" },
+        ethView,
+        ctx,
+      ).enabled,
+    ).toBe(true);
+    expect(
+      panelWidgetCapability({ ...setpoint, source: "derived:1" }, view, ctx)
+        .reason,
+    ).toContain("read-only");
   });
 });

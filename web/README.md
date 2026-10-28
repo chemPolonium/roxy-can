@@ -164,7 +164,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   deletes the active page and renames it by double-clicking the tab. Switching
   pages clears the selection, undo history and clipboard but stays in Edit.
   **Edit** adds controls from the **+ Add** menu (button, value, bar, gauge,
-  lamp, toggle, numeric), drags and resizes
+  lamp, toggle, setpoint), drags and resizes
   them with live grid snapping (per-kind minimum sizes), refuses overlaps, and
   changes the canvas width/height in 8px steps; shrinking is refused while any
   control would fall outside. The inspector is generated from each kind's field
@@ -174,12 +174,24 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   button command or **Script action** name with an optional argument
   (`on panel_action("…", value)` in every running node), a value source (signal
   key, `derived:Name` or `sysvar:ns::name`) with decimals, a bar/gauge range, a
-  lamp source with its lit threshold and colour, a toggle's sysvar, a
-  numeric setpoint (sysvar, decimals, step; committed on Enter/blur, clamped
-  into the variable's min/max, optional script action fired with the value), or
-  a **Setpoint**: a DBC signal picked from the catalog whose value is written
-  into a one-shot frame (clamped to the DBC range, held by dropping that
-  signal's waveform source; only while measuring). Value, bar and gauge tiles
+  lamp source with its lit threshold and colour, a toggle's sysvar, or a
+  **Setpoint**: choose **Target** = *System variable* (name, decimals, step;
+  committed on Enter/blur and clamped into the variable's min/max) or *Signal*
+  (a CAN, FlexRay or Ethernet catalog signal, only while measuring; clamped to
+  the declared range, or unbounded when the description names none). A CAN
+  write goes into a one-shot frame and is held by dropping that signal's
+  waveform source; a FlexRay write encodes the occupant slot and injects one
+  session frame; an Ethernet write encodes the frame's PDU payload and injects
+  one session TX frame with the matrix VLAN, its EtherType (or `0x88B5`) and
+  synthetic locally-administered MACs. Neither has a transmit port, so the
+  tooltip marks both `session only`. Derived signals are refused with a
+  reason. Both targets take an
+  optional script action fired with the
+  committed value. The signal target also reads the signal back: it subscribes
+  it as a Read signal, shows the live bus value, and releases that subscription
+  when the control is retargeted or deleted (user plot/read selections are
+  never touched). Pages saved with the old Numeric/Setpoint kinds migrate to
+  the matching target on load. Value, bar and gauge tiles
   can carry **colour
   bands**: ascending `≤` limits coloured Neutral/OK/Warning/Critical plus an
   optional `above` band; only the number or fill is tinted, and values outside

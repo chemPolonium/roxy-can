@@ -86,6 +86,7 @@ import type { StateRow } from "./types";
 import {
   catalogSignalCommand,
   catalogSignalSpec,
+  findCatalogSignal,
   parseReadSignals,
   readSpecCommand,
   type ReadSignalSpec,
@@ -106,12 +107,12 @@ import {
 import {
   defaultPanelBook,
   panelActionCommand,
+  panelNumericTarget,
   parsePanelBook,
   type PanelBook,
   type PanelButton,
   type PanelNumeric,
   type PanelPage,
-  type PanelSetpoint,
   type PanelToggle,
 } from "./panelPage";
 import {
@@ -2369,13 +2370,14 @@ export function App() {
   const pageWriteTargets = useMemo<PanelWriteTarget[]>(() => {
     const targets: PanelWriteTarget[] = [];
     for (const channel of catalog?.channels ?? []) {
-      if (channel.kind !== "can") continue;
+      // Every protocol the catalog names can take a setpoint; CAN writes a
+      // frame, FlexRay and Ethernet inject one session frame.
       for (const message of channel.messages) {
         for (const signal of message.signals) {
           targets.push({
             key: signal.key,
-            min: signal.min,
-            max: signal.max,
+            min: signal.max > signal.min ? signal.min : null,
+            max: signal.max > signal.min ? signal.max : null,
             unit: signal.unit,
           });
         }
@@ -2392,6 +2394,63 @@ export function App() {
     }),
     [signals, state?.sysvars, pageWriteTargets],
   );
+
+  // Setpoint readback: subscribe each written signal as a Read signal so its
+  // live value reaches the tile. Keys added here are removed again when the
+  // last setpoint stops using them, unless the user also reads/plots them.
+  const panelReadKeys = useRef(
+    new Map<string, { select: Command; unselect: Command }>(),
+  );
+  useEffect(() => {
+    // A project/log switch resets the core's subscriptions; forget what this
+    // session owned so the next run re-subscribes what the pages reference.
+    panelReadKeys.current.clear();
+  }, [state?.workspaceRev]);
+  const panelSetpointSources = useMemo(() => {
+    const keys = new Set<string>();
+    for (const page of panelBook.pages) {
+      for (const widget of page.widgets) {
+        if (
+          widget.kind === "numeric" &&
+          panelNumericTarget(widget) === "signal" &&
+          widget.source.trim()
+        ) {
+          keys.add(widget.source);
+        }
+      }
+    }
+    return [...keys];
+  }, [panelBook]);
+  useEffect(() => {
+    const wanted = new Set(panelSetpointSources);
+    for (const key of wanted) {
+      if (panelReadKeys.current.has(key)) continue;
+      if (signals.some((series) => series.key === key)) continue;
+      const found = findCatalogSignal(catalog, key);
+      if (!found) continue;
+      const select = catalogSignalCommand(
+        found.channel,
+        found.message,
+        found.signal,
+        true,
+      );
+      const unselect = catalogSignalCommand(
+        found.channel,
+        found.message,
+        found.signal,
+        null,
+      );
+      panelReadKeys.current.set(key, { select, unselect });
+      void run(select);
+    }
+    for (const [key, commands] of [...panelReadKeys.current]) {
+      if (wanted.has(key)) continue;
+      panelReadKeys.current.delete(key);
+      const series = signals.find((entry) => entry.key === key);
+      const userRead = readSignals.some((spec) => spec.key === key);
+      if (series?.read && !userRead) void run(commands.unselect);
+    }
+  }, [panelSetpointSources, catalog, signals, readSignals, run]);
 
   const pageActionContext = useMemo<PanelActionContext>(
     () => ({
@@ -2459,12 +2518,16 @@ export function App() {
     }
   };
 
-  const writePageSignal = (widget: PanelSetpoint, value: number) => {
+  const writePageSignal = (widget: PanelNumeric, value: number) => {
     if (!widget.source) {
       showToast("This setpoint has no signal");
       return;
     }
     void run({ type: "panel_write_signal", source: widget.source, value });
+    const action = widget.panelAction?.trim();
+    if (action) {
+      void run({ type: "run_panel_action", name: action, value });
+    }
   };
 
   const mainTabs = (

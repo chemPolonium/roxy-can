@@ -553,7 +553,7 @@ describe("panel page", () => {
     ).toBe(true);
   });
 
-  it("carries action arguments and setpoint writes", () => {
+  it("carries action arguments and migrates legacy setpoints", () => {
     const page = parsePanelPage({
       width: 160,
       height: 90,
@@ -603,24 +603,71 @@ describe("panel page", () => {
       argument: 42,
     });
     expect(page?.widgets[1]).toMatchObject({
+      target: "sysvar",
       panelAction: "Set speed",
       step: 2,
     });
     expect(page?.widgets[2]).toMatchObject({
-      kind: "setpoint",
+      kind: "numeric",
+      target: "signal",
       source: "0:256:EngineSpeed",
       step: 5,
     });
     const copy = pastePanelWidget(page!, page!.widgets[2]);
     expect(
       copy?.page.widgets.find((widget) => widget.id === copy.id),
-    ).toMatchObject({ kind: "setpoint", source: "0:256:EngineSpeed" });
+    ).toMatchObject({
+      kind: "numeric",
+      target: "signal",
+      source: "0:256:EngineSpeed",
+    });
     expect(updatePanelWidget(page!, "b", { argument: 7.5 }).widgets[0]).toMatchObject(
       { argument: 7.5 },
     );
     expect(
       updatePanelWidget(page!, "n", { panelAction: "Reset" }).widgets[1],
     ).toMatchObject({ panelAction: "Reset" });
+    expect(
+      updatePanelWidget(page!, "n", {
+        target: "signal",
+        source: "0:256:EngineTemp",
+      }).widgets[1],
+    ).toMatchObject({ target: "signal", source: "0:256:EngineTemp" });
+    expect(
+      PANEL_WIDGET_KINDS.map((entry) => String(entry.kind)),
+    ).not.toContain("setpoint");
+    expect(panelWidgetSpec("numeric").label).toBe("Setpoint");
+  });
+
+  it("imports legacy setpoint files as merged setpoints", () => {
+    const result = importPanelFile({
+      format: PANEL_FILE_FORMAT,
+      version: 1,
+      page: {
+        name: "Legacy",
+        width: 160,
+        height: 90,
+        widgets: [
+          {
+            kind: "setpoint",
+            label: "Speed",
+            source: "0:256:EngineSpeed",
+            digits: 1,
+            step: 1,
+            x: 0,
+            y: 0,
+            w: 18,
+            h: 6,
+          },
+        ],
+      },
+    });
+    const page = "page" in result ? result.page : null;
+    expect(page?.widgets[0]).toMatchObject({
+      kind: "numeric",
+      target: "signal",
+      source: "0:256:EngineSpeed",
+    });
   });
 
   it("exports and imports page files strictly", () => {

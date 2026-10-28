@@ -145,6 +145,31 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
         }
     }
 
+    // SW-BASE-TYPE declarations: the encoding says whether the raw bits are
+    // two's complement or IEEE float; the short name is only a label.
+    let mut base_types: HashMap<String, (bool, bool)> = HashMap::new();
+    for base in root
+        .descendants()
+        .filter(|n| n.is_element() && n.has_tag_name("SW-BASE-TYPE"))
+    {
+        let name = short_name(base);
+        if name.is_empty() {
+            continue;
+        }
+        match child_text(base, "BASE-TYPE-ENCODING").as_deref() {
+            Some("2C") => {
+                base_types.insert(name, (true, false));
+            }
+            Some("IEEE754") | Some("IEE754") => {
+                base_types.insert(name, (false, true));
+            }
+            Some("NONE") | Some("BOOLEAN") => {
+                base_types.insert(name, (false, false));
+            }
+            _ => {}
+        }
+    }
+
     let mut signal_map: HashMap<String, SignalDef> = HashMap::new();
     for sig in root
         .descendants()
@@ -155,9 +180,16 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
             continue;
         }
         let base = text_of(sig, "BASE-TYPE-REF").unwrap_or_default();
-        let base = ref_tail(&base).to_ascii_lowercase();
-        let is_float = base.contains("float");
-        let signed = base.contains("sint") || base.starts_with('i');
+        let base_name = base.rsplit('/').next().unwrap_or(&base).to_string();
+        // A declared encoding wins; the name heuristic only covers signals
+        // whose base type the file does not define.
+        let (signed, is_float) = base_types.get(&base_name).copied().unwrap_or_else(|| {
+            let lower = base_name.to_ascii_lowercase();
+            (
+                lower.contains("sint") || lower.starts_with('i'),
+                lower.contains("float"),
+            )
+        });
         let length = number(sig, "LENGTH").unwrap_or(0.0).max(0.0) as u64;
         let compu_name = text_of(sig, "COMPU-METHOD-REF")
             .map(|r| ref_tail(&r).to_string())
@@ -342,6 +374,7 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
                     is_float: sig.is_float,
                     type_tag,
                     mux_when: Vec::new(),
+                    comment: String::new(),
                 });
             }
         }
@@ -354,6 +387,8 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
                 cycle_us,
                 signals,
                 switch_names: Vec::new(),
+                comment: String::new(),
+                fd: false,
             },
         );
         order.push(key);

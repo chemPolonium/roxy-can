@@ -62,13 +62,15 @@ export function DbcExplorer({
             const messageHit =
               channelHit ||
               message.name.toLowerCase().includes(needle) ||
+              (message.comment ?? "").toLowerCase().includes(needle) ||
               messageId(channel, message).toLowerCase().includes(needle);
             const signals = messageHit
               ? message.signals
               : message.signals.filter(
                   (signal) =>
                     signal.name.toLowerCase().includes(needle) ||
-                    signal.unit.toLowerCase().includes(needle),
+                    signal.unit.toLowerCase().includes(needle) ||
+                    (signal.comment ?? "").toLowerCase().includes(needle),
                 );
             return { message, signals };
           })
@@ -135,15 +137,27 @@ export function DbcExplorer({
                     key={`${channel.kind}:${channel.index}:${message.id}`}
                   >
                     <div class="dbc-message-head">
-                      <span>{message.name}</span>
-                      <em>{messageId(channel, message)}</em>
+                      <span title={message.comment || message.name}>
+                        {message.name}
+                      </span>
+                      <em>
+                        {messageId(channel, message)}
+                        {channel.kind === "can" && message.fd ? " · CAN FD" : ""}
+                      </em>
                     </div>
                     {signals.map((signal) => {
                       const onChart = charted.has(signal.key);
                       const onMonitor = watched.has(signal.key);
                       return (
                         <div class="dbc-signal" key={signal.key}>
-                          <span class="dbc-signal-name" title={signal.name}>
+                          <span
+                            class="dbc-signal-name"
+                            title={
+                              signal.comment
+                                ? `${signal.name} — ${signal.comment}`
+                                : signal.name
+                            }
+                          >
                             {signal.name}
                           </span>
                           <em>{signal.unit || "—"}</em>

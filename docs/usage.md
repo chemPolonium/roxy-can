@@ -80,7 +80,7 @@ roxy-can -h                               完整帮助
 - **FlexRay 槽条目跟着它的 ECU**，在 **Generator…** 里按 ECU 分组编辑。下拉只列**描述把这路里哪些帧绑给它发送**的槽；描述没说的槽就没有条目可加（状态行会点明缺的是哪一条：没加载描述 / 没调度这个槽 / 没说这帧由谁发）。本工具不推断归属，所以也没有"手工输入任意槽号"的入口。
 - **FlexRay 的周期按通信周期数计，不按毫秒**：静态槽在调度表排给它的那个周期发送，能改的只有"每几个周期"，弹窗实时显示它等于多少 ms。`0 = 事件触发`在 FlexRay 不存在（填 0 会被拒绝，要它不发用 On 勾选框）。这一路没有描述（或没声明周期时间）时退回按 ms 编辑，行上的悬停说明原因。改周期数不是改调度表——槽号、相位、载荷宽度仍归描述文件。
 - **载荷宽度归描述**：hex 框接受该槽声明的字节数，填少了补 0、填多了**整笔拒绝**并说明差多少（不静默截断）。
-- **FlexRay 发的是本会话的流量，不是总线上的帧**：端口目前仅接收，所以生成的帧从接收侧进入会话——Trace / Messages / Statistics、负载与规格、触发器、脚本、录制全都看得见，但它不出端口、也不会被另一台设备收到。面板标题与行上 chip 就这么写。FlexRay 侧没有 DBC 节点，所以也没有角色开关，条目只有 On 与 MUTE 两态。
+- **FlexRay 发的是本会话的流量，不是总线上的帧**：端口目前仅接收，所以生成的帧与 Panel Setpoint 的写入都从接收侧进入会话——Trace / Messages / Statistics、负载与规格、触发器、脚本、录制全都看得见，但它不出端口、也不会被另一台设备收到。面板标题与行上 chip 就这么写。FlexRay 侧没有 DBC 节点，所以也没有角色开关，条目只有 On 与 MUTE 两态。
 - 回放时该槽若被日志自己带着，条目整个回放期间不发送（chip 显示 MUTE），退出回放照常。
 - 行内 hex 与信号值是**最近一次实际发出的那一帧**；描述被移除后条目照旧存在并发送（行上写明"没有描述，无人解码它"）。
 - 信号行：物理值拖拽编辑（被激励接管的只读，改回 Constant 解除）、激励 Ramp / Sine / Step / Random / Triangle / Counter 带参数弹窗。
@@ -130,7 +130,7 @@ roxy-can -h                               完整帮助
 - **矩阵**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML），显示 cluster/VLAN/帧数。捕获 flow 按 VLAN、payload 长度和 IEEE1722 EtherType 打分匹配；多个候选或无候选都不猜，Name 列退回 MAC 对。`FRAME-LENGTH 含 L2 头` 是项目开关（随工程保存）：打开时按「声明长度 − 14」与捕获 payload 比较。
 - **解码**：`I-SIGNAL-I-PDU` 里的 I-Signal 位偏移、大小、字节序、符号、factor/offset、单位和值表；Container / Multiplexed / Secured PDU 不在当前范围内。
 - **Trace**：以太网帧与 CAN/FlexRay 按时间混排。Bus 列 `ETHn`，ID 列 EtherType，Name 列矩阵帧名（无唯一匹配时是 MAC 对）；右键可把该 L2 flow 加入本窗口的 Manual 选择。作用域多一档 `Ethernet: ETHn`。
-- **以太网目前只收不发**：Buses 的 Ethernet 区只列已加载的路、簇与帧数；帧与 flow 的明细在 Trace / Messages / Statistics 中查看（EtherType、匹配到的帧名、解码信号），信号可订阅画曲线。
+- **以太网目前只收不发**：Buses 的 Ethernet 区只列已加载的路、簇与帧数；帧与 flow 的明细在 Trace / Messages / Statistics 中查看（EtherType、匹配到的帧名、解码信号），信号可订阅画曲线。Panel Setpoint 的 Ethernet 写入只注入本会话：使用矩阵的 VLAN、声明的 EtherType（没有则 `0x88B5`）与固定的本机管理 MAC，不出端口、不录制。
 - **Messages / Statistics**：每个 L2 flow 一行，MAC、VLAN、EtherType、计数与周期；CSV 导出同样包含。
 - **订阅**：以太网信号进 Signals / Data / State / Monitor，身份是 `(ETH 路, 帧名, 信号名)`，随工程保存；作用域为某个 Ethernet 路或 Manual flow 时 Messages/Statistics 也按同一规则收窄。
 - **回放通道映射**：抓包工具的以太网 channel 有单独一张表，先映射到工程的 `ETHn` 再匹配矩阵、解码和聚合。
@@ -156,11 +156,11 @@ roxy-can -h                               完整帮助
 
 - 画布上方是页面标签栏：点击切换页面；Edit 下 `+` 新建空页、**Duplicate** 复制当前页、**Delete** 删除当前页（至少保留一页），双击页名就地重命名。每页有自己的画幅尺寸和控件，切换页面会清空选区、撤销历史和剪贴板，但保留 Edit 模式。
 - 顶栏 **Standard / Panel** 进入操作页：固定画布默认 **1280×720**，始终显示 **8px 网格线**；画幅 W×H 在未选中控件时显示于右侧 Panel 属性，按 8px 取整，缩小到会把控件挤出画布时会拒绝；窗口不够大时画布出现滚动条，不缩放、不重排。
-- **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Numeric / Setpoint，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。
-- 选中控件后右侧属性栏按类型编辑：**Button** 选 Action（已有命令或 **Script action** + 动作名，Script action 还能填 **Argument** 随点击发送）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Numeric** 填系统变量名、小数位与步进（Step），输入后按 Enter/失焦写入，按 SysVar 的 min/max 夹取，可选 **Script action** 在写入后再带值触发脚本；**Setpoint** 填 Signal（目录里的信号 key），输入后写进该信号的发送帧，按 DBC 的 min/max 夹取，信号原来的波形驱动会被摘掉以保持该值。**Color bands** 在所有只读控件上一致：按升序添加上限（`≤`）并为每段选 Neutral / OK / Warning / Critical，可再加一条 `above` 兜底最高段，只改数字/填充颜色、不改卡片底色。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。
+- **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。
+- 选中控件后右侧属性栏按类型编辑：**Button** 选 Action（已有命令或 **Script action** + 动作名，Script action 还能填 **Argument** 随点击发送）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Setpoint** 先选 **Target**：**System variable** 填变量名、小数位与步进（Step），输入后按 Enter/失焦写入并按 SysVar 的 min/max 夹取；**Signal** 填目录里的信号 key（CAN、FlexRay 或 Ethernet），显示该信号**在总线上的实际值**，输入后按声明范围夹取（没有声明范围就不夹取）：CAN 写进该信号的发送帧并摘掉原来的波形驱动以保持该值；FlexRay 与 Ethernet 只在本次测量内注入一帧（FR 端口仍只收、Ethernet 没有发送端口），悬停提示标注 session only；派生信号会提示不可写。两种 Target 都可选 **Script action**，在写入后再带值触发脚本；Signal 的悬停提示同时给出总线实际值与 written 写入值，控件会把该信号以 **Read** 方式订阅用于回读，删除控件或改绑后自动释放它添加的订阅，不影响你手动 Plot/Read 的选择。**Color bands** 在所有只读控件上一致：按升序添加上限（`≤`）并为每段选 Neutral / OK / Warning / Critical，可再加一条 `above` 兜底最高段，只改数字/填充颜色、不改卡片底色。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。旧页面里的 Numeric / Setpoint 会自动迁移为 Target 对应的 Setpoint。
 - 页面文件：Edit 下 **Export** 把当前页下载成 `.rxpanel`（带格式与版本，不含控件 id），**Import** 在浏览器里读取文件并作为新页面追加（名称自动去重）。导入严格校验画幅、控件类型、最小尺寸与重叠，任何一条不合格都给出提示且不改动现有页面。
 - 编辑快捷键：**Ctrl+C / Ctrl+V** 复制粘贴（自动找空位并选中副本），**Ctrl+Z** 撤销、**Ctrl+Shift+Z** 或 **Ctrl+Y** 重做（工具条也有 Undo/Redo），**Delete** 删除选中控件。不做手动微调与对齐工具——位置、尺寸一律吸附网格。
-- 控件会表达可用性：未测量时 Start/Stop 等按钮自动禁用并在悬停提示原因；脚本动作只在有运行中的同名处理器时可用；Setpoint 只在测量中、且绑定目录里存在的信号时可用；未绑定或指向未知对象的 Value/Toggle 显示占位并提示原因。
+- 控件会表达可用性：未测量时 Start/Stop 等按钮自动禁用并在悬停提示原因；脚本动作只在有运行中的同名处理器时可用；Setpoint 的 SysVar target 需要已定义变量，Signal target 只在测量中且信号在目录里时可用（派生信号提示只读）；未绑定或指向未知对象的 Value/Toggle 显示占位并提示原因。
 - **Fullscreen** 让 Panel 盖住顶栏和状态栏，但仍保持浏览器窗口；画布按当前尺寸居中，不缩放。`Exit` 或 Esc 返回；编辑时 Esc 先清选中/退出编辑。
 - 画布尺寸、控件坐标（按格）与绑定随 Web workspace 存进工程；View 模式下按钮直接执行绑定动作。
 

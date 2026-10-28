@@ -161,15 +161,13 @@ pub enum BusCommand {
         name: String,
         value: Option<f64>,
     },
-    /// Writes a physical DBC signal value from a Panel setpoint: the
-    /// generator entry for `(ch, id)` is created when missing, its payload
-    /// is updated (clamped into the DBC range), the signal's waveform source
-    /// is dropped so the value holds, and one frame goes out on the next
-    /// step. Only a running measurement sends.
+    /// Writes one signal from a Panel setpoint, addressed by the observer key
+    /// so every protocol shares the command. CAN updates/creates the generator
+    /// entry and injects one frame; FlexRay encodes the slot's payload and
+    /// injects one session frame (its port stays receive-only); Ethernet
+    /// encodes the frame's PDU payload and injects one session TX frame.
     PanelWriteSignal {
-        ch: u8,
-        id: u32,
-        name: String,
+        key: SigKey,
         value: f64,
     },
     /// Resets the per-message counters the Messages / Statistics windows
@@ -1156,6 +1154,9 @@ pub struct BusCore {
     /// handler woke after it -- taking the queue there (rather than inside the
     /// dispatch) is what caps a self-answering script at one round per step.
     pub(crate) fr_from_scripts: Vec<(u64, u8, u16, Vec<u8>)>,
+    /// Panel setpoint writes for FlexRay slots, encoded at command time and
+    /// landed with the same generator block as script frames.
+    pub(crate) panel_fr_frames: Vec<(u8, u16, Vec<u8>, u8)>,
     /// The load rollups as of the last publish. Rebuilt only when a step
     /// (or a channel add/remove) touched them; the Bus Statistics window
     /// reads this, never the live state. FlexRay's rollups ride the same
@@ -1376,6 +1377,7 @@ impl BusCore {
             fr_loads: Default::default(),
             injected: Vec::new(),
             fr_from_scripts: Vec::new(),
+            panel_fr_frames: Vec::new(),
             published_loads,
             published_fr_loads: Arc::new(Default::default()),
             loads_dirty: false,
@@ -1448,18 +1450,34 @@ impl BusCore {
                     *status = "[panel] too many queued actions".to_string();
                 }
             }
-            BusCommand::PanelWriteSignal {
-                ch,
-                id,
-                name,
-                value,
-            } => {
+            BusCommand::PanelWriteSignal { key, value } => {
                 if !self.measuring {
-                    *status = format!("[panel] writing \"{name}\" needs a running measurement");
+                    *status = "[panel] writing a signal needs a running measurement".to_string();
                 } else {
-                    match self.panel_write_signal(ch, id, &name, value) {
-                        Ok(()) => self.injected.push((ch, id)),
-                        Err(error) => *status = format!("[panel] {error}"),
+                    match key {
+                        SigKey::Can { ch, id, name, .. } => {
+                            match self.panel_write_signal(ch, id, &name, value) {
+                                Ok(()) => self.injected.push((ch, id)),
+                                Err(error) => *status = format!("[panel] {error}"),
+                            }
+                        }
+                        SigKey::Fr { bus, slot, name } => {
+                            match self.panel_write_fr_signal(bus, slot, &name, value) {
+                                Ok((payload, cycle)) => {
+                                    self.panel_fr_frames.push((bus, slot, payload, cycle));
+                                }
+                                Err(error) => *status = format!("[panel] {error}"),
+                            }
+                        }
+                        SigKey::Eth { bus, frame, name } => {
+                            match self.panel_write_eth_signal(bus, &frame, &name, value) {
+                                Ok(()) => {}
+                                Err(error) => *status = format!("[panel] {error}"),
+                            }
+                        }
+                        SigKey::Derived { .. } => {
+                            *status = "[panel] derived signals are read-only".to_string();
+                        }
                     }
                 }
             }
@@ -4410,6 +4428,75 @@ impl BusCore {
         Ok(())
     }
 
+    /// Panel setpoint write into a FlexRay slot: encode the named signal into
+    /// a zeroed payload of the occupant frame's length, clamped to the
+    /// declared range. The frame enters this session only; the FR port stays
+    /// receive-only until the transmit object layout is verified.
+    fn panel_write_fr_signal(
+        &mut self,
+        bus: u8,
+        slot: u16,
+        name: &str,
+        phys: f64,
+    ) -> Result<(Vec<u8>, u8), String> {
+        let Some(db) = self.fr_dbs.get(&bus) else {
+            return Err(format!("FR{bus} has no cluster description"));
+        };
+        let Some(signal) = db.slot_signal(slot, name) else {
+            return Err(format!("unknown FlexRay signal \"{name}\" in slot {slot}"));
+        };
+        let value = if signal.max > signal.min {
+            phys.clamp(signal.min, signal.max)
+        } else {
+            phys
+        };
+        let cycle = crate::generator::fr_cycle_at(db, self.sim_t_us);
+        db.encode_slot_signal(slot, name, value, cycle)
+            .ok_or_else(|| format!("cannot encode \"{name}\" in slot {slot}"))
+    }
+
+    /// Panel setpoint write into an Ethernet signal: encode the value into
+    /// the frame's PDU payload and inject one TX frame into this session.
+    /// There is no Ethernet port on this tool, so nothing leaves the process;
+    /// the injected flow still matches the matrix by VLAN/length/EtherType,
+    /// which is what makes its signals decode and read back.
+    fn panel_write_eth_signal(
+        &mut self,
+        bus: u8,
+        frame_name: &str,
+        name: &str,
+        phys: f64,
+    ) -> Result<(), String> {
+        let Some(db) = self.eth_dbs.get(&bus).cloned() else {
+            return Err(format!("ETH{bus} has no matrix description"));
+        };
+        let Some(ix) = db.frames.iter().position(|frame| frame.name == frame_name) else {
+            return Err(format!("unknown Ethernet frame \"{frame_name}\""));
+        };
+        let def = &db.frames[ix];
+        let len = if self.eth_length_includes_header {
+            def.length.saturating_sub(14)
+        } else {
+            def.length
+        };
+        if len == 0 {
+            return Err(format!("frame \"{frame_name}\" declares no payload"));
+        }
+        let mut payload = vec![0u8; len];
+        if !db.encode_signal(ix, name, phys, &mut payload) {
+            return Err(format!(
+                "cannot encode \"{name}\" in frame \"{frame_name}\""
+            ));
+        }
+        let ethertype = def
+            .ethertype_hint
+            .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE);
+        let vlan = def.vlan;
+        let frame = crate::eth::EthFrame::session(self.sim_t_us, bus, vlan, ethertype, payload);
+        self.ingest_eth(frame);
+        Ok(())
+    }
+
     /// Writes a physical value into the base payload and pins that signal
     /// by dropping only its source: grabbing a moving slider means "hold
     /// here". Returns false when the database cannot encode it.
@@ -4661,6 +4748,7 @@ impl BusCore {
         // belong to it, not to the fresh one.
         self.injected.clear();
         self.fr_from_scripts.clear();
+        self.panel_fr_frames.clear();
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
         }
@@ -5243,6 +5331,19 @@ impl BusCore {
                 .fr_dbs
                 .get(&bus)
                 .map_or(0, |db| crate::generator::fr_cycle_at(db, sim));
+            fr_gen.push(crate::trace::FrRow {
+                bus,
+                t_us: sim,
+                ab: 2,
+                slot,
+                cycle,
+                payload,
+                header_crc: 0,
+                flags: 0,
+                name: None,
+            });
+        }
+        for (bus, slot, payload, cycle) in std::mem::take(&mut self.panel_fr_frames) {
             fr_gen.push(crate::trace::FrRow {
                 bus,
                 t_us: sim,
