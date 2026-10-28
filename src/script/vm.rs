@@ -225,7 +225,18 @@ impl Vm {
     /// their values between events, the value stack starts fresh. The node
     /// runtime delivers events this way.
     pub fn run_handler(&mut self, chunk: u16) -> Result<(), VmError> {
+        self.stack.clear();
         self.run_from(chunk as usize)
+    }
+
+    /// Runs a handler that declares a parameter: the argument sits in
+    /// local slot 0 for the whole run.
+    pub fn run_handler_with(&mut self, chunk: u16, arg: Value) -> Result<(), VmError> {
+        self.stack.clear();
+        self.stack.push(arg);
+        let result = self.run_from(chunk as usize);
+        self.stack.clear();
+        result
     }
 
     fn run_from(&mut self, chunk: usize) -> Result<(), VmError> {

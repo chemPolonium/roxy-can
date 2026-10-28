@@ -389,7 +389,10 @@ fn the_threaded_core_runs_panel_actions() {
             break;
         }
     }
-    app.send(crate::bus::BusCommand::PanelAction { name: "Go".into() });
+    app.send(crate::bus::BusCommand::PanelAction {
+        name: "Go".into(),
+        value: None,
+    });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
@@ -1329,6 +1332,111 @@ fn send_now_fires_exactly_one_frame_off_the_schedule() {
     assert_eq!(
         app.snap.frame_counter, 0,
         "nothing fires into the fresh run either"
+    );
+    app.stop();
+}
+
+/// A Panel setpoint writes a physical signal: the payload changes, the
+/// signal's waveform source is dropped so the value holds, and exactly one
+/// frame goes out even though the generator entry is off.
+#[test]
+fn panel_setpoints_write_a_dbc_signal() {
+    let mut app = App::headless();
+    app.set_node_role(0, "EngineECU", NodeRole::Simulated);
+    app.start_virtual();
+    app.send(crate::bus::BusCommand::SetEntryActive {
+        ch: 0,
+        id: 0x100,
+        on: false,
+    });
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 3, &mut now);
+    let entry = |app: &App| {
+        app.snap
+            .tx
+            .iter()
+            .find(|t| t.channel == 0 && t.id == 0x100)
+            .cloned()
+            .expect("0x100 entry")
+    };
+    let before = entry(&app).data_text.clone();
+    // Drive the signal with a waveform first: the write must pin it.
+    app.send(crate::bus::BusCommand::SetEntrySource {
+        ch: 0,
+        id: 0x100,
+        src: crate::sim::ValueSrc::new("EngineSpeed", crate::sim::SrcKind::Sine, 0.0, 5000.0),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        entry(&app).srcs.iter().any(|src| src.name == "EngineSpeed"),
+        "the waveform drives EngineSpeed before the write"
+    );
+
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        ch: 0,
+        id: 0x100,
+        name: "EngineSpeed".into(),
+        value: 1234.5,
+    });
+    laps(&mut app, 1, &mut now);
+    assert_eq!(app.snap.frame_counter, 1, "one frame from the write");
+    assert_ne!(entry(&app).data_text, before, "the payload changed");
+    assert!(
+        !entry(&app).srcs.iter().any(|src| src.name == "EngineSpeed"),
+        "the written signal is held, not driven by its waveform"
+    );
+
+    // Out-of-range input is clamped into the DBC bounds.
+    let table = crate::dbc::load_dbc_str(crate::sample_data::SAMPLE_DBC).expect("sample database");
+    let max = table
+        .message_of(0x100)
+        .and_then(|message| {
+            message
+                .signals
+                .iter()
+                .find(|signal| signal.name == "EngineSpeed")
+        })
+        .expect("EngineSpeed")
+        .max;
+    let len = table
+        .message_of(0x100)
+        .expect("EngineStatus")
+        .dlc
+        .min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8;
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        ch: 0,
+        id: 0x100,
+        name: "EngineSpeed".into(),
+        value: max + 10_000.0,
+    });
+    laps(&mut app, 1, &mut now);
+    let mut expected = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+    assert!(table.encode_signal(0x100, "EngineSpeed", max, &mut expected));
+    let written = entry(&app);
+    assert_eq!(
+        written.data_text,
+        crate::generator::hex_text(&expected, len),
+        "the write stops at the DBC maximum"
+    );
+
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        ch: 0,
+        id: 0x100,
+        name: "NoSuchSignal".into(),
+        value: 1.0,
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("unknown signal"),
+        "an unknown signal reports instead of sending: {}",
+        app.status
     );
     app.stop();
 }

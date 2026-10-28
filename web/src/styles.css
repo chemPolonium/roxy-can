@@ -1065,8 +1065,10 @@ body.col-resizing {
   text-align: left;
 }
 
-.page-add-menu button:hover:not(:disabled) {
+.page-add-menu button:hover:not(:disabled),
+.page-add-menu button:focus-visible {
   background: var(--accent-soft);
+  outline: none;
 }
 
 @media (max-width: 1100px) {
@@ -1539,8 +1541,10 @@ body.col-resizing {
   height: 100%;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
-  padding: 6px 10px;
+  /* Content must fit the 5-cell floor (40px, 38px inside the border):
+     label + gap + input = 34, plus 4px vertical padding. */
+  gap: 1px;
+  padding: 2px 10px;
   overflow: hidden;
   border: 1px solid #202a36;
   border-radius: 4px;
@@ -1548,10 +1552,11 @@ body.col-resizing {
 }
 
 .page-numeric-label {
+  flex: 0 0 auto;
   overflow: hidden;
   color: var(--muted);
   font-size: 10.5px;
-  line-height: 1.2;
+  line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1567,9 +1572,9 @@ body.col-resizing {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  height: 26px;
+  height: 22px;
   padding: 0 6px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
 

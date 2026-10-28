@@ -553,6 +553,76 @@ describe("panel page", () => {
     ).toBe(true);
   });
 
+  it("carries action arguments and setpoint writes", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "b",
+          kind: "button",
+          label: "Set",
+          action: "script",
+          script: "Set speed",
+          argument: 42,
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+        {
+          id: "n",
+          kind: "numeric",
+          label: "N",
+          sysvar: "Bench::X",
+          digits: 1,
+          step: 2,
+          panelAction: "Set speed",
+          x: 0,
+          y: 6,
+          w: 18,
+          h: 6,
+        },
+        {
+          id: "s",
+          kind: "setpoint",
+          label: "Speed",
+          source: "0:256:EngineSpeed",
+          digits: 0,
+          step: 5,
+          x: 0,
+          y: 12,
+          w: 18,
+          h: 6,
+        },
+      ],
+    });
+    expect(page?.widgets[0]).toMatchObject({
+      action: "script",
+      script: "Set speed",
+      argument: 42,
+    });
+    expect(page?.widgets[1]).toMatchObject({
+      panelAction: "Set speed",
+      step: 2,
+    });
+    expect(page?.widgets[2]).toMatchObject({
+      kind: "setpoint",
+      source: "0:256:EngineSpeed",
+      step: 5,
+    });
+    const copy = pastePanelWidget(page!, page!.widgets[2]);
+    expect(
+      copy?.page.widgets.find((widget) => widget.id === copy.id),
+    ).toMatchObject({ kind: "setpoint", source: "0:256:EngineSpeed" });
+    expect(updatePanelWidget(page!, "b", { argument: 7.5 }).widgets[0]).toMatchObject(
+      { argument: 7.5 },
+    );
+    expect(
+      updatePanelWidget(page!, "n", { panelAction: "Reset" }).widgets[1],
+    ).toMatchObject({ panelAction: "Reset" });
+  });
+
   it("exports and imports page files strictly", () => {
     const page = defaultPanelPage();
     const file = JSON.parse(exportPanelFile(page));

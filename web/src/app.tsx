@@ -111,6 +111,7 @@ import {
   type PanelButton,
   type PanelNumeric,
   type PanelPage,
+  type PanelSetpoint,
   type PanelToggle,
 } from "./panelPage";
 import {
@@ -120,6 +121,7 @@ import {
   runningPanelActions,
   type PanelActionContext,
   type PanelView,
+  type PanelWriteTarget,
 } from "./panelBinding";
 
 type RightTab = "statistics" | "bus" | "spec" | "activity";
@@ -1345,6 +1347,11 @@ export function App() {
     if (scriptsOpen && !catalog && !catalogLoading) void loadCatalog();
   }, [scriptsOpen, catalog, catalogLoading]);
 
+  // Panel setpoints pick from the catalog's writable signals.
+  useEffect(() => {
+    if (mainView === "panel" && !catalog && !catalogLoading) void loadCatalog();
+  }, [mainView, catalog, catalogLoading]);
+
   const openPicker = () => {
     setSessionOpen(false);
     setScriptsOpen(false);
@@ -2352,16 +2359,38 @@ export function App() {
         showToast("This button has no script action");
         return;
       }
-      void run({ type: "run_panel_action", name });
+      void run({ type: "run_panel_action", name, value: widget.argument });
       return;
     }
     const command = panelActionCommand(widget.action);
     if (command) void run(command);
   };
 
+  const pageWriteTargets = useMemo<PanelWriteTarget[]>(() => {
+    const targets: PanelWriteTarget[] = [];
+    for (const channel of catalog?.channels ?? []) {
+      if (channel.kind !== "can") continue;
+      for (const message of channel.messages) {
+        for (const signal of message.signals) {
+          targets.push({
+            key: signal.key,
+            min: signal.min,
+            max: signal.max,
+            unit: signal.unit,
+          });
+        }
+      }
+    }
+    return targets;
+  }, [catalog]);
+
   const pageView = useMemo<PanelView>(
-    () => ({ signals, sysvars: state?.sysvars ?? [] }),
-    [signals, state?.sysvars],
+    () => ({
+      signals,
+      sysvars: state?.sysvars ?? [],
+      writeTargets: pageWriteTargets,
+    }),
+    [signals, state?.sysvars, pageWriteTargets],
   );
 
   const pageActionContext = useMemo<PanelActionContext>(
@@ -2387,6 +2416,14 @@ export function App() {
     [pageView],
   );
 
+  const pageActionNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const script of state?.scripts ?? []) {
+      for (const name of script.panelActions) names.add(name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [state?.scripts]);
+
   const togglePageSysVar = (widget: PanelToggle, on: boolean) => {
     const known = findPanelSysVar(widget.sysvar, pageView);
     if (!known) {
@@ -2407,14 +2444,27 @@ export function App() {
       showToast(`Undefined sysvar ${widget.sysvar}`);
       return;
     }
-    let next = clampPanelNumber(value, known.min, known.max);
-    if (next === known.value) return;
-    void run({
-      type: "set_sys_var",
-      namespace: known.namespace,
-      name: known.name,
-      value: next,
-    });
+    const next = clampPanelNumber(value, known.min, known.max);
+    if (next !== known.value) {
+      void run({
+        type: "set_sys_var",
+        namespace: known.namespace,
+        name: known.name,
+        value: next,
+      });
+    }
+    const action = widget.panelAction?.trim();
+    if (action) {
+      void run({ type: "run_panel_action", name: action, value: next });
+    }
+  };
+
+  const writePageSignal = (widget: PanelSetpoint, value: number) => {
+    if (!widget.source) {
+      showToast("This setpoint has no signal");
+      return;
+    }
+    void run({ type: "panel_write_signal", source: widget.source, value });
   };
 
   const mainTabs = (
@@ -2823,12 +2873,14 @@ export function App() {
             toast={toast}
             sourceOptions={pageSourceOptions}
             sysvarOptions={pageSysVarOptions}
+            actionNames={pageActionNames}
             view={pageView}
             actionContext={pageActionContext}
             onBook={setPanelBook}
             onRun={runPanelAction}
             onToggle={togglePageSysVar}
             onSetNumber={setPageNumber}
+            onWrite={writePageSignal}
             onNotice={showToast}
           />
         ) : (

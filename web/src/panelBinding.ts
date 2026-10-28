@@ -14,6 +14,16 @@ import {
 export interface PanelView {
   signals: SignalSeries[];
   sysvars: SysVar[];
+  /// Writable CAN signals from the catalog, for setpoint controls.
+  writeTargets?: PanelWriteTarget[];
+}
+
+/// One signal a Panel setpoint may write: the catalog key plus its DBC range.
+export interface PanelWriteTarget {
+  key: string;
+  min: number;
+  max: number;
+  unit: string;
 }
 
 export interface PanelSourceValue {
@@ -215,6 +225,24 @@ export function panelValueCapability(
   return { enabled: true, reason: "" };
 }
 
+/// A setpoint writes only while the measurement runs, into a signal the
+/// catalog knows.
+export function panelSetpointCapability(
+  source: string,
+  view: PanelView,
+  ctx: PanelActionContext,
+): PanelCapability {
+  if (!ctx.online) return { enabled: false, reason: "No connection to the bus core" };
+  if (!source.trim()) return { enabled: false, reason: "No signal bound" };
+  if (!(view.writeTargets ?? []).some((target) => target.key === source)) {
+    return { enabled: false, reason: `Unknown signal "${source}"` };
+  }
+  if (!ctx.measuring) {
+    return { enabled: false, reason: "Start the measurement first" };
+  }
+  return { enabled: true, reason: "" };
+}
+
 export function panelToggleCapability(
   widget: PanelToggle,
   view: PanelView,
@@ -252,6 +280,9 @@ export function panelWidgetCapability(
     widget.kind === "gauge"
   ) {
     return panelValueCapability(widget, resolvePanelSource(widget.source, view));
+  }
+  if (widget.kind === "setpoint") {
+    return panelSetpointCapability(widget.source, view, ctx);
   }
   if (widget.kind === "numeric") return panelNumberCapability(widget, view);
   return panelToggleCapability(widget, view);

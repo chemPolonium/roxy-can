@@ -44,7 +44,9 @@ pub enum OnKind {
     /// Measurement stop, once: manual Stop or the end of a replay.
     Stop,
     /// A Panel button or other web control dispatched this named action.
-    PanelAction { name: String },
+    /// The optional second argument names a local that receives the
+    /// numeric value the control sent (`nil` when it sent none).
+    PanelAction { name: String, arg: Option<String> },
     /// A frame with this identifier arrived on the node's channel.
     Message { id: u32 },
     /// A frame whose DBC message name is `name` arrived. The node resolves
@@ -474,8 +476,13 @@ impl P {
                 if name.trim().is_empty() {
                     return self.err("panel_action name cannot be empty");
                 }
+                let arg = if self.eat(&Tok::Comma) {
+                    Some(self.var_ident("parameter name")?)
+                } else {
+                    None
+                };
                 self.expect(&Tok::RParen, "')' after the panel_action name")?;
-                OnKind::PanelAction { name }
+                OnKind::PanelAction { name, arg }
             }
             "extended" => {
                 // `on extended message <id>`: an extended frame with this

@@ -98,7 +98,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                     }
                     seen_stop = true;
                 }
-                OnKind::PanelAction { name } => {
+                OnKind::PanelAction { name, .. } => {
                     if !seen_panel_actions.insert(name.clone()) {
                         return c.err_at(
                             on.line,
@@ -286,7 +286,7 @@ fn handler_label(kind: &HandlerKind) -> String {
     match kind {
         HandlerKind::Start => "<on start>".to_string(),
         HandlerKind::Stop => "<on stop>".to_string(),
-        HandlerKind::PanelAction { name } => format!("<on panel_action \"{name}\">"),
+        HandlerKind::PanelAction { name, .. } => format!("<on panel_action \"{name}\">"),
         HandlerKind::Message { id } => format!("<on message {id:#x}>"),
         HandlerKind::NamedMessage { name } => format!("<on message {name}>"),
         HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
@@ -976,7 +976,10 @@ impl Comp {
         let kind = match &on.kind {
             OnKind::Start => HandlerKind::Start,
             OnKind::Stop => HandlerKind::Stop,
-            OnKind::PanelAction { name } => HandlerKind::PanelAction { name: name.clone() },
+            OnKind::PanelAction { name, arg } => HandlerKind::PanelAction {
+                name: name.clone(),
+                arg: arg.clone(),
+            },
             OnKind::Message { id } => HandlerKind::Message { id: *id },
             OnKind::NamedMessage { name } => HandlerKind::NamedMessage { name: name.clone() },
             OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
@@ -1016,6 +1019,15 @@ impl Comp {
         self.cur_line = 0;
         self.in_fn = true;
         self.depth = 1;
+        // A panel-action parameter is local slot 0: the node pushes the
+        // control's value before running this chunk.
+        self.locals = match &kind {
+            HandlerKind::PanelAction {
+                arg: Some(name), ..
+            } => vec![(name.clone(), 1)],
+            _ => Vec::new(),
+        };
+        let arity = self.locals.len();
         // The handler context must be live while the body compiles: the
         // R2 spike attributes every derived send to this handler.
         self.cur_handler = Some((kind.clone(), label.clone()));
@@ -1026,7 +1038,7 @@ impl Comp {
         let chunk = self.functions.len() as u16;
         let lines = std::mem::take(&mut self.line_marks);
         self.functions.push(Function {
-            arity: 0,
+            arity,
             name: label,
             code: std::mem::take(&mut self.code),
             lines,

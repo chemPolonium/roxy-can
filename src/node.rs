@@ -84,7 +84,7 @@ fn runtime_issue(message: &str) -> Option<ScriptIssue> {
 fn panel_action_names(handlers: &[Handler]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for handler in handlers {
-        if let HandlerKind::PanelAction { name } = &handler.kind
+        if let HandlerKind::PanelAction { name, .. } = &handler.kind
             && !names.contains(name)
         {
             names.push(name.clone());
@@ -126,6 +126,15 @@ struct TimerSlot {
     /// Set by `stop_timer()` inside a periodic handler or by a spent /
     /// cancelled one-shot: the slot never fires again until re-armed.
     stopped: bool,
+}
+
+/// The node's log/outbox side of one handler run, bundled so the three
+/// delivery paths share one call signature.
+struct RunSink<'a> {
+    log: &'a mut VecDeque<String>,
+    log_dirty: &'a mut bool,
+    pending_lines: &'a mut Vec<String>,
+    out: &'a mut Vec<(u32, bool, Vec<u8>)>,
 }
 
 impl ScriptNode {
@@ -916,15 +925,13 @@ impl ScriptNode {
             .map(|h| h.chunk)
             .collect();
         for chunk in matches {
-            let r = Self::run_chunk(
-                rt,
-                &mut self.log,
-                &mut self.log_dirty,
-                &mut self.pending_lines,
-                chunk,
-                input,
-                &mut out,
-            );
+            let mut sink = RunSink {
+                log: &mut self.log,
+                log_dirty: &mut self.log_dirty,
+                pending_lines: &mut self.pending_lines,
+                out: &mut out,
+            };
+            let r = Self::run_chunk(rt, &mut sink, chunk, None, input);
             if let Err(error) = r {
                 self.errored = true;
                 self.issue = runtime_issue(&error);
@@ -937,10 +944,13 @@ impl ScriptNode {
     /// Runs every `on panel_action("name")` handler in declaration order.
     /// The web button path uses this instead of calling a user function
     /// directly, so the handler still runs inside the node's step budget and
-    /// its sends/emits/log lines follow the normal outbox path.
+    /// its sends/emits/log lines follow the normal outbox path. `value` is
+    /// the control's numeric argument; a handler that declares a parameter
+    /// receives it in local slot 0 (`nil` when absent).
     pub fn dispatch_panel_action(
         &mut self,
         name: &str,
+        value: Option<f64>,
         input: &HostInput,
     ) -> (usize, Vec<(u32, bool, Vec<u8>)>) {
         let mut out = Vec::new();
@@ -955,26 +965,31 @@ impl ScriptNode {
         rt.vm.frame_is_fr = false;
         rt.vm.fr_cycle = 0;
         rt.vm.frame_bytes.clear();
-        let matches: Vec<u16> = rt
+        let matches: Vec<(u16, bool)> = rt
             .handlers
             .iter()
             .filter(|handler| {
-                matches!(&handler.kind, HandlerKind::PanelAction { name: action } if action == name)
+                matches!(&handler.kind, HandlerKind::PanelAction { name: action, .. } if action == name)
             })
-            .map(|handler| handler.chunk)
+            .map(|handler| {
+                (
+                    handler.chunk,
+                    matches!(&handler.kind, HandlerKind::PanelAction { arg: Some(_), .. }),
+                )
+            })
             .collect();
         let mut ran = 0;
-        for chunk in matches {
+        for (chunk, with_arg) in matches {
             ran += 1;
-            let result = Self::run_chunk(
-                rt,
-                &mut self.log,
-                &mut self.log_dirty,
-                &mut self.pending_lines,
-                chunk,
-                input,
-                &mut out,
-            );
+            let arg = with_arg
+                .then(|| value.map_or(crate::script::Value::Nil, crate::script::Value::Float));
+            let mut sink = RunSink {
+                log: &mut self.log,
+                log_dirty: &mut self.log_dirty,
+                pending_lines: &mut self.pending_lines,
+                out: &mut out,
+            };
+            let result = Self::run_chunk(rt, &mut sink, chunk, arg, input);
             if let Err(error) = result {
                 self.errored = true;
                 self.issue = runtime_issue(&error);
@@ -1044,15 +1059,13 @@ impl ScriptNode {
             .map(|h| h.chunk)
             .collect();
         for chunk in matches {
-            let r = Self::run_chunk(
-                rt,
-                &mut self.log,
-                &mut self.log_dirty,
-                &mut self.pending_lines,
-                chunk,
-                input,
-                &mut out,
-            );
+            let mut sink = RunSink {
+                log: &mut self.log,
+                log_dirty: &mut self.log_dirty,
+                pending_lines: &mut self.pending_lines,
+                out: &mut out,
+            };
+            let r = Self::run_chunk(rt, &mut sink, chunk, None, input);
             if let Err(error) = r {
                 self.errored = true;
                 self.issue = runtime_issue(&error);
@@ -1069,34 +1082,51 @@ impl ScriptNode {
     /// `Err` is a failed handler; the caller marks the node errored and stops.
     fn run_chunk(
         rt: &mut NodeRuntime,
-        log: &mut VecDeque<String>,
-        log_dirty: &mut bool,
-        pending_lines: &mut Vec<String>,
+        sink: &mut RunSink,
         chunk: u16,
+        arg: Option<crate::script::Value>,
         input: &HostInput,
-        out: &mut Vec<(u32, bool, Vec<u8>)>,
     ) -> Result<(), String> {
         // The handler's clock is the input's, not the step's: both deliveries
         // publish `now_s` from the same value they stamp their frames with.
         let now_us = (input.now_s.max(0.0) * 1e6) as u64;
         rt.vm.reset_budget(NODE_HANDLER_BUDGET);
         rt.vm.host_input = input.clone();
-        if let Err(e) = rt.vm.run_handler(chunk) {
+        let run = match arg {
+            Some(value) => rt.vm.run_handler_with(chunk, value),
+            None => rt.vm.run_handler(chunk),
+        };
+        if let Err(e) = run {
             let message = e.to_string();
-            Self::push_log_into(log, log_dirty, pending_lines, format!("[error] {message}"));
+            Self::push_log_into(
+                &mut *sink.log,
+                &mut *sink.log_dirty,
+                &mut *sink.pending_lines,
+                format!("[error] {message}"),
+            );
             return Err(message);
         }
-        Self::drain_vm(rt, log, log_dirty, pending_lines);
+        Self::drain_vm(
+            rt,
+            &mut *sink.log,
+            &mut *sink.log_dirty,
+            &mut *sink.pending_lines,
+        );
         // Named one-shot ops stay meaningful from any handler. The
         // running-timer ops (`set_period`/`stop_timer`) name no slot
         // here and are dropped.
         let ops: Vec<crate::script::TimerOp> = std::mem::take(&mut rt.vm.timer_ops);
         for op in ops {
             if let Some(warn) = Self::apply_timer_op(rt, op, now_us, None) {
-                Self::push_log_into(log, log_dirty, pending_lines, warn);
+                Self::push_log_into(
+                    &mut *sink.log,
+                    &mut *sink.log_dirty,
+                    &mut *sink.pending_lines,
+                    warn,
+                );
             }
         }
-        out.append(&mut rt.vm.outbox);
+        sink.out.append(&mut rt.vm.outbox);
         Ok(())
     }
 
@@ -1782,16 +1812,43 @@ BO_ 512 GearInfo: 8 GearBox
         );
         n.start(None);
         assert_eq!(n.panel_actions(), ["Go"]);
-        let (ran, out) = n.dispatch_panel_action("Go", &HostInput::default());
+        let (ran, out) = n.dispatch_panel_action("Go", None, &HostInput::default());
         assert_eq!(ran, 1);
         assert_eq!(out, vec![(0x123, false, vec![7])]);
         assert!(
             n.take_new_lines().iter().any(|line| line == "panel go"),
             "handler log reaches the node output"
         );
-        let (ran, out) = n.dispatch_panel_action("Missing", &HostInput::default());
+        let (ran, out) = n.dispatch_panel_action("Missing", None, &HostInput::default());
         assert_eq!(ran, 0);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn panel_action_arguments_reach_the_handler() {
+        let mut n = node(
+            r#"
+                on panel_action("Set", v) {
+                    print(v);
+                }
+            "#,
+        );
+        n.start(None);
+        let (ran, _) = n.dispatch_panel_action("Set", Some(42.0), &HostInput::default());
+        assert_eq!(ran, 1);
+        assert!(
+            n.take_new_lines().iter().any(|line| line == "42.0"),
+            "the control's value is the handler parameter"
+        );
+
+        let mut n = node(r#"on panel_action("Set", v) { print(defined(v)); }"#);
+        n.start(None);
+        let (ran, _) = n.dispatch_panel_action("Set", None, &HostInput::default());
+        assert_eq!(ran, 1);
+        assert!(
+            n.take_new_lines().iter().any(|line| line == "false"),
+            "an action without a value leaves the parameter nil"
+        );
     }
 
     /// R2 reverse check: DBC traffic the bound node declares but the

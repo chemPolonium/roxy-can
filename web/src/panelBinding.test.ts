@@ -23,6 +23,7 @@ import type {
   PanelBar,
   PanelLamp,
   PanelNumeric,
+  PanelSetpoint,
   PanelToggle,
   PanelValue,
 } from "./panelPage";
@@ -326,5 +327,43 @@ describe("panel bindings", () => {
     expect(panelGaugeArc(1)).toBe("M6 50 A44 44 0 0 1 94.00 50.00");
     expect(panelGaugeArc(2)).toBe(panelGaugeArc(1));
     expect(panelGaugeArc(-1)).toBe(panelGaugeArc(0));
+  });
+
+  it("gates setpoints on a writable signal and a running measurement", () => {
+    const setpoint: PanelSetpoint = {
+      id: "s",
+      kind: "setpoint",
+      label: "Speed",
+      source: "0:256:EngineSpeed",
+      digits: 0,
+      step: 1,
+      x: 0,
+      y: 0,
+      w: 18,
+      h: 6,
+    };
+    const view = {
+      signals: [],
+      sysvars: [],
+      writeTargets: [
+        { key: "0:256:EngineSpeed", min: 0, max: 8000, unit: "rpm" },
+      ],
+    };
+    const ctx: PanelActionContext = {
+      online: true,
+      measuring: true,
+      paused: false,
+      scriptActions: new Set(),
+    };
+    expect(panelWidgetCapability(setpoint, view, ctx).enabled).toBe(true);
+    expect(
+      panelWidgetCapability(setpoint, { ...view, writeTargets: [] }, ctx).reason,
+    ).toContain("Unknown signal");
+    expect(
+      panelWidgetCapability({ ...setpoint, source: "" }, view, ctx).reason,
+    ).toBe("No signal bound");
+    expect(
+      panelWidgetCapability(setpoint, view, { ...ctx, measuring: false }).reason,
+    ).toContain("measurement");
   });
 });

@@ -155,8 +155,22 @@ pub enum BusCommand {
     ClearTrace,
     /// Fires `on panel_action("name")` handlers on the next step. Queued so
     /// the handler's sends join a normal step instead of the command path.
+    /// `value` is the control's argument (buttons send theirs, a Numeric
+    /// sends its new setpoint).
     PanelAction {
         name: String,
+        value: Option<f64>,
+    },
+    /// Writes a physical DBC signal value from a Panel setpoint: the
+    /// generator entry for `(ch, id)` is created when missing, its payload
+    /// is updated (clamped into the DBC range), the signal's waveform source
+    /// is dropped so the value holds, and one frame goes out on the next
+    /// step. Only a running measurement sends.
+    PanelWriteSignal {
+        ch: u8,
+        id: u32,
+        name: String,
+        value: f64,
     },
     /// Resets the per-message counters the Messages / Statistics windows
     /// read. Load, spec memory and the trace are untouched.
@@ -1190,7 +1204,7 @@ pub struct BusCore {
     /// [`NodeView`]s through the snapshot.
     pub(crate) nodes: Vec<crate::node::ScriptNode>,
     /// Panel button actions waiting for the next step, in click order.
-    pub(crate) pending_panel_actions: Vec<String>,
+    pub(crate) pending_panel_actions: Vec<(String, Option<f64>)>,
     /// Counter minting stable node ids; never resets.
     pub(crate) node_counter: u64,
     /// The node views as of the last publish. Rebuilt only when a command
@@ -1425,13 +1439,28 @@ impl BusCore {
             BusCommand::ToggleRecord => self.toggle_record(status),
             BusCommand::RearmTriggers => self.rearm_latched_triggers(status),
             BusCommand::ClearTrace => self.clear_trace_view(status),
-            BusCommand::PanelAction { name } => {
+            BusCommand::PanelAction { name, value } => {
                 if !self.measuring {
                     *status = format!("[panel] \"{name}\" needs a running measurement");
                 } else if self.pending_panel_actions.len() < 32 {
-                    self.pending_panel_actions.push(name);
+                    self.pending_panel_actions.push((name, value));
                 } else {
                     *status = "[panel] too many queued actions".to_string();
+                }
+            }
+            BusCommand::PanelWriteSignal {
+                ch,
+                id,
+                name,
+                value,
+            } => {
+                if !self.measuring {
+                    *status = format!("[panel] writing \"{name}\" needs a running measurement");
+                } else {
+                    match self.panel_write_signal(ch, id, &name, value) {
+                        Ok(()) => self.injected.push((ch, id)),
+                        Err(error) => *status = format!("[panel] {error}"),
+                    }
                 }
             }
             BusCommand::ClearAggregates => self.clear_aggregates(status),
@@ -2490,11 +2519,11 @@ impl BusCore {
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
-        for action in actions {
+        for (action, value) in actions {
             let mut ran = 0usize;
             for node in &mut self.nodes {
                 let input = inputs.get(&node.channel).cloned().unwrap_or_default();
-                let (count, node_out) = node.dispatch_panel_action(&action, &input);
+                let (count, node_out) = node.dispatch_panel_action(&action, value, &input);
                 if count == 0 {
                     continue;
                 }
@@ -4329,6 +4358,56 @@ impl BusCore {
             last_sent: [0; crate::can::frame::MAX_CAN_FD_LEN],
             last_len: 0,
         });
+    }
+
+    /// Panel setpoint write: encode `phys` into the generator entry
+    /// `(ch, id)`, creating that entry from the database when absent, drop
+    /// the signal's waveform source so the value holds, and let the next
+    /// step send one frame. Values are clamped into the DBC range.
+    fn panel_write_signal(&mut self, ch: u8, id: u32, name: &str, phys: f64) -> Result<(), String> {
+        let (min, max, msg_size) = {
+            let Some(table) = self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref()) else {
+                return Err(format!("bus {ch} has no database"));
+            };
+            let Some(message) = table.message_of(id) else {
+                return Err(format!("unknown message {id:#x}"));
+            };
+            let Some(signal) = message.signals.iter().find(|s| s.name == name) else {
+                return Err(format!("unknown signal \"{name}\""));
+            };
+            (
+                signal.min,
+                signal.max,
+                message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8,
+            )
+        };
+        let value = if max > min {
+            phys.clamp(min, max)
+        } else {
+            phys
+        };
+        let mut data = self
+            .entry_mut(ch, id)
+            .map(|tx| tx.data)
+            .unwrap_or([0; crate::can::frame::MAX_CAN_FD_LEN]);
+        {
+            let Some(table) = self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref()) else {
+                return Err(format!("bus {ch} has no database"));
+            };
+            if !table.encode_signal(id, name, value, &mut data) {
+                return Err(format!("cannot encode \"{name}\""));
+            }
+        }
+        if self.entry_mut(ch, id).is_none() {
+            self.add_entry(ch, id);
+        }
+        let Some(tx) = self.entry_mut(ch, id) else {
+            return Err(format!("cannot create the generator entry {id:#x}"));
+        };
+        tx.srcs.retain(|src| src.name != name);
+        let len = tx.len.max(msg_size);
+        crate::generator::set_tx_base(tx, data, len);
+        Ok(())
     }
 
     /// Writes a physical value into the base payload and pins that signal

@@ -1661,8 +1661,17 @@ enum WebCommand {
         on: bool,
     },
     /// Fire `on panel_action` handlers by name on the next measurement step.
+    /// `value` is handed to a handler that declares a parameter.
     RunPanelAction {
         name: String,
+        #[serde(default)]
+        value: Option<f64>,
+    },
+    /// Write one DBC signal from a Panel setpoint. `source` is the observer
+    /// key `ch:id:signal` the catalog hands out.
+    PanelWriteSignal {
+        source: String,
+        value: f64,
     },
     OpenProject {
         path: String,
@@ -2216,14 +2225,36 @@ fn app_loop(
                 WebCommand::SetMessageExpanded { key, on } => {
                     app.set_message_expanded(&key, on);
                 }
-                WebCommand::RunPanelAction { name } => {
+                WebCommand::RunPanelAction { name, value } => {
                     let name = name.trim().to_string();
                     if name.is_empty() {
                         app.status = "[panel] action name is empty".to_string();
                     } else if name.chars().count() > 80 {
                         app.status = "[panel] action name is too long".to_string();
+                    } else if value.is_some_and(|value| !value.is_finite()) {
+                        app.status = "[panel] action value must be a number".to_string();
                     } else {
-                        app.send(BusCommand::PanelAction { name });
+                        app.send(BusCommand::PanelAction { name, value });
+                    }
+                }
+                WebCommand::PanelWriteSignal { source, value } => {
+                    match crate::observe::SigKey::from_text(source.trim()) {
+                        Some(crate::observe::SigKey::Can { ch, id, name, .. })
+                            if value.is_finite() =>
+                        {
+                            app.send(BusCommand::PanelWriteSignal {
+                                ch,
+                                id,
+                                name,
+                                value,
+                            });
+                        }
+                        Some(crate::observe::SigKey::Can { .. }) => {
+                            app.status = "[panel] setpoint value must be a number".to_string();
+                        }
+                        _ => {
+                            app.status = "[panel] setpoint source must be a CAN signal".to_string();
+                        }
                     }
                 }
                 WebCommand::OpenProject { path } => {
@@ -5804,10 +5835,40 @@ mod tests {
         let cmd: WebCommand = serde_json::from_value(serde_json::json!({
             "type": "run_panel_action",
             "name": "Start sequence",
+            "value": 42.5,
         }))
         .expect("panel action command");
         match cmd {
-            WebCommand::RunPanelAction { name } => assert_eq!(name, "Start sequence"),
+            WebCommand::RunPanelAction { name, value } => {
+                assert_eq!(name, "Start sequence");
+                assert_eq!(value, Some(42.5));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        let plain: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "run_panel_action",
+            "name": "Reset",
+        }))
+        .expect("panel action without a value");
+        assert!(matches!(
+            plain,
+            WebCommand::RunPanelAction { value: None, .. }
+        ));
+    }
+
+    #[test]
+    fn panel_setpoint_writes_deserialize_for_the_core() {
+        let cmd: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "panel_write_signal",
+            "source": "0:256:EngineSpeed",
+            "value": 1234.5,
+        }))
+        .expect("setpoint command");
+        match cmd {
+            WebCommand::PanelWriteSignal { source, value } => {
+                assert_eq!(source, "0:256:EngineSpeed");
+                assert_eq!(value, 1234.5);
+            }
             _ => panic!("wrong command variant"),
         }
     }

@@ -34,6 +34,7 @@ import {
   type PanelBook,
   type PanelGauge,
   type PanelPage,
+  type PanelSetpoint,
   type PanelWidget,
   type PanelWidgetKind,
   type PanelWidgetPatch,
@@ -82,6 +83,7 @@ function NumericControl({
   unit,
   disabled,
   reason,
+  title,
   onCommit,
 }: {
   widget: PanelNumeric;
@@ -91,6 +93,7 @@ function NumericControl({
   unit: string;
   disabled: boolean;
   reason: string;
+  title?: string;
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -111,7 +114,7 @@ function NumericControl({
     onCommit(next);
   };
   return (
-    <div class="page-numeric" title={disabled ? reason : widget.sysvar}>
+    <div class="page-numeric" title={disabled ? reason : title ?? widget.sysvar}>
       {widget.label && <span class="page-numeric-label">{widget.label}</span>}
       <span class="page-numeric-row">
         <input
@@ -134,6 +137,57 @@ function NumericControl({
         {unit && <em>{unit}</em>}
       </span>
     </div>
+  );
+}
+
+function SetpointControl({
+  widget,
+  min,
+  max,
+  unit,
+  disabled,
+  reason,
+  onWrite,
+}: {
+  widget: PanelSetpoint;
+  min: number | null;
+  max: number | null;
+  unit: string;
+  disabled: boolean;
+  reason: string;
+  onWrite: (value: number) => void;
+}) {
+  const [sent, setSent] = useState<number | null>(null);
+  useEffect(() => {
+    setSent(null);
+  }, [widget.source]);
+  const shape: PanelNumeric = {
+    id: widget.id,
+    kind: "numeric",
+    label: widget.label,
+    sysvar: "",
+    digits: widget.digits,
+    step: widget.step,
+    x: widget.x,
+    y: widget.y,
+    w: widget.w,
+    h: widget.h,
+  };
+  return (
+    <NumericControl
+      widget={shape}
+      value={sent}
+      min={min}
+      max={max}
+      unit={unit}
+      disabled={disabled}
+      reason={reason}
+      title={widget.source}
+      onCommit={(value) => {
+        setSent(value);
+        onWrite(value);
+      }}
+    />
   );
 }
 
@@ -511,12 +565,14 @@ export function PagePanel({
   toast,
   sourceOptions,
   sysvarOptions,
+  actionNames,
   view,
   actionContext,
   onBook,
   onRun,
   onToggle,
   onSetNumber,
+  onWrite,
   onNotice,
 }: {
   book: PanelBook;
@@ -524,12 +580,14 @@ export function PagePanel({
   toast?: string;
   sourceOptions: string[];
   sysvarOptions: string[];
+  actionNames: string[];
   view: PanelView;
   actionContext: PanelActionContext;
   onBook: (book: PanelBook) => void;
   onRun: (widget: PanelButton) => void;
   onToggle: (widget: PanelToggle, on: boolean) => void;
   onSetNumber: (widget: PanelNumeric, value: number) => void;
+  onWrite: (widget: PanelSetpoint, value: number) => void;
   onNotice: (message: string) => void;
 }) {
   const page = activePanelPage(book);
@@ -547,6 +605,8 @@ export function PagePanel({
   const [sizeW, setSizeW] = useState(String(page.width * PAGE_GRID));
   const [sizeH, setSizeH] = useState(String(page.height * PAGE_GRID));
   const [addOpen, setAddOpen] = useState(false);
+  const addTrigger = useRef<HTMLButtonElement>(null);
+  const addMenu = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setSizeW(String(page.width * PAGE_GRID));
@@ -570,6 +630,11 @@ export function PagePanel({
 
   useEffect(() => {
     if (!addOpen) return;
+    addMenu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [addOpen]);
+
+  useEffect(() => {
+    if (!addOpen) return;
     const close = (event: PointerEvent) => {
       if (!(event.target as HTMLElement).closest(".page-add")) {
         setAddOpen(false);
@@ -580,6 +645,7 @@ export function PagePanel({
       // Capture phase: the editor's own Esc handler must not leave Edit too.
       event.stopImmediatePropagation();
       setAddOpen(false);
+      addTrigger.current?.focus();
     };
     window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", onKey, true);
@@ -937,6 +1003,24 @@ export function PagePanel({
         </div>
       );
     }
+    if (widget.kind === "setpoint") {
+      const target = (view.writeTargets ?? []).find(
+        (entry) => entry.key === widget.source,
+      );
+      return (
+        <SetpointControl
+          widget={widget}
+          min={target?.min ?? null}
+          max={target?.max ?? null}
+          unit={target?.unit ?? ""}
+          disabled={editing || !capability.enabled}
+          reason={capability.reason}
+          onWrite={(value) => {
+            if (!editing && capability.enabled) onWrite(widget, value);
+          }}
+        />
+      );
+    }
     if (widget.kind === "numeric") {
       const variable = findPanelSysVar(widget.sysvar, view);
       const disabled = editing || !capability.enabled;
@@ -1075,6 +1159,7 @@ export function PagePanel({
     const fieldSpec = spec.fields.find((field) => field.key === key);
     if (!fieldSpec) return null;
     if (key === "script" && field(widget, "action") !== "script") return null;
+    if (key === "argument" && field(widget, "action") !== "script") return null;
     const value = field(widget, fieldSpec.key);
     const update = (patch: PanelWidgetPatch) =>
       commit(updatePanelWidget(page, widget.id, patch));
@@ -1164,7 +1249,13 @@ export function PagePanel({
           <SuggestionInput
             value={String(value)}
             options={
-              fieldSpec.listId === "page-sysvars" ? sysvarOptions : sourceOptions
+              fieldSpec.listId === "page-sysvars"
+                ? sysvarOptions
+                : fieldSpec.listId === "page-actions"
+                  ? actionNames
+                  : fieldSpec.listId === "page-write"
+                    ? (view.writeTargets ?? []).map((target) => target.key)
+                    : sourceOptions
             }
             placeholder={fieldSpec.placeholder}
             maxLength={fieldSpec.maxLength}
@@ -1299,8 +1390,17 @@ export function PagePanel({
         <div class="panel-tools">
           {editing && (
             <>
-              <div class="page-add">
+              <div
+                class="page-add"
+                onBlur={(event) => {
+                  const next = event.relatedTarget as Node | null;
+                  if (!next || !(event.currentTarget as HTMLElement).contains(next)) {
+                    setAddOpen(false);
+                  }
+                }}
+              >
                 <button
+                  ref={addTrigger}
                   type="button"
                   class="mini"
                   aria-haspopup="menu"
@@ -1311,7 +1411,33 @@ export function PagePanel({
                   + Add
                 </button>
                 {addOpen && (
-                  <div class="page-add-menu" role="menu">
+                  <div
+                    ref={addMenu}
+                    class="page-add-menu"
+                    role="menu"
+                    onKeyDown={(event) => {
+                      const items = [
+                        ...(addMenu.current?.querySelectorAll("button") ?? []),
+                      ];
+                      const index = items.indexOf(
+                        document.activeElement as HTMLButtonElement,
+                      );
+                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        const step = event.key === "ArrowDown" ? 1 : -1;
+                        const next =
+                          index < 0
+                            ? 0
+                            : (index + step + items.length) % items.length;
+                        items[next]?.focus();
+                      } else if (event.key === "Home" || event.key === "End") {
+                        event.preventDefault();
+                        items[event.key === "Home" ? 0 : items.length - 1]?.focus();
+                      } else if (event.key === "Tab") {
+                        setAddOpen(false);
+                      }
+                    }}
+                  >
                     {PANEL_WIDGET_KINDS.map((entry) => (
                       <button
                         type="button"
@@ -1320,6 +1446,7 @@ export function PagePanel({
                         onClick={() => {
                           setAddOpen(false);
                           add(entry.kind);
+                          addTrigger.current?.focus();
                         }}
                       >
                         {entry.label}

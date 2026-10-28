@@ -240,8 +240,11 @@ pub enum HandlerKind {
     /// that need the whole run belong here.
     Stop,
     /// A named action dispatched by a Panel button (`on panel_action`).
+    /// `arg` is the optional local name receiving the control's numeric
+    /// argument.
     PanelAction {
         name: String,
+        arg: Option<String>,
     },
     Message {
         id: u32,
@@ -959,12 +962,34 @@ mod tests {
         assert_eq!(
             script.handlers[0].kind,
             HandlerKind::PanelAction {
-                name: "Start sequence".into()
+                name: "Start sequence".into(),
+                arg: None,
             }
         );
         let mut vm = Vm::new(script);
         vm.run_handler(1).unwrap();
         assert_eq!(vm.output, ["go"]);
+    }
+
+    #[test]
+    fn panel_action_parameter_binds_the_control_value() {
+        let script = compile(
+            r#"
+                on panel_action("Set", v) { print(v); }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            script.handlers[0].kind,
+            HandlerKind::PanelAction {
+                name: "Set".into(),
+                arg: Some("v".into()),
+            }
+        );
+        assert_eq!(script.functions[1].arity, 1);
+        let mut vm = Vm::new(script);
+        vm.run_handler_with(1, Value::Float(7.5)).unwrap();
+        assert_eq!(vm.output, ["7.5"]);
     }
 
     /// `on fr slot` is the receiving half of FlexRay programmability, and the

@@ -557,7 +557,13 @@ export type Command =
       to_us?: number;
     }
   | { type: "clear_trace" }
-  | { type: "run_panel_action"; name: string }
+  | {
+      type: "run_panel_action";
+      name: string;
+      /// Handed to a handler that declares a parameter.
+      value?: number;
+    }
+  | { type: "panel_write_signal"; source: string; value: number }
   | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }

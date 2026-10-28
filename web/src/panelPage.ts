@@ -36,7 +36,8 @@ export type PanelWidgetKind =
   | "numeric"
   | "lamp"
   | "bar"
-  | "gauge";
+  | "gauge"
+  | "setpoint";
 
 interface Geometry {
   x: number;
@@ -52,6 +53,8 @@ export interface PanelButton extends Geometry {
   action: PanelActionKind;
   /// Handler name for `action === "script"`.
   script?: string;
+  /// Value handed to a script handler that declares a parameter.
+  argument?: number;
 }
 
 export type PanelBandColor = "neutral" | "ok" | "warn" | "crit";
@@ -88,6 +91,8 @@ export interface PanelNumeric extends Geometry {
   sysvar: string;
   digits: number;
   step: number;
+  /// Optional script action fired with the committed value.
+  panelAction?: string;
 }
 
 /// Read-only indicator: lit when the source is at or above `threshold`.
@@ -120,6 +125,17 @@ export interface PanelGauge extends PanelMeter {
   kind: "gauge";
 }
 
+/// Writes a physical DBC signal value into a one-shot frame. `source` is the
+/// catalog key `channel:id:signal`.
+export interface PanelSetpoint extends Geometry {
+  id: string;
+  kind: "setpoint";
+  label: string;
+  source: string;
+  digits: number;
+  step: number;
+}
+
 export type PanelWidget =
   | PanelButton
   | PanelValue
@@ -127,7 +143,8 @@ export type PanelWidget =
   | PanelNumeric
   | PanelLamp
   | PanelBar
-  | PanelGauge;
+  | PanelGauge
+  | PanelSetpoint;
 
 export interface PanelPage {
   version: 1;
@@ -148,6 +165,8 @@ export interface PanelWidgetPatch {
   label?: string;
   action?: PanelActionKind;
   script?: string;
+  argument?: number;
+  panelAction?: string;
   source?: string;
   digits?: number;
   sysvar?: string;
@@ -242,7 +261,8 @@ function isPanelKind(value: unknown): value is PanelWidgetKind {
     value === "numeric" ||
     value === "lamp" ||
     value === "bar" ||
-    value === "gauge"
+    value === "gauge" ||
+    value === "setpoint"
   );
 }
 
@@ -304,9 +324,16 @@ const BUTTON_FIELDS: PanelFieldSpec[] = [
   {
     key: "script",
     label: "Script action",
-    kind: "text",
+    kind: "list",
+    listId: "page-actions",
     maxLength: 80,
     placeholder: 'on panel_action("…")',
+  },
+  {
+    key: "argument",
+    label: "Argument",
+    kind: "number",
+    placeholder: "0",
   },
 ];
 
@@ -355,6 +382,14 @@ const NUMERIC_FIELDS: PanelFieldSpec[] = [
     kind: "number",
     placeholder: "1",
   },
+  {
+    key: "panelAction",
+    label: "Script action",
+    kind: "list",
+    listId: "page-actions",
+    maxLength: 80,
+    placeholder: 'on panel_action("…")',
+  },
 ];
 
 const LAMP_FIELDS: PanelFieldSpec[] = [
@@ -386,6 +421,20 @@ const METER_FIELDS: PanelFieldSpec[] = [
   { key: "bands", label: "Color bands", kind: "bands" },
 ];
 
+const SETPOINT_FIELDS: PanelFieldSpec[] = [
+  { key: "label", label: "Label", kind: "text", maxLength: 80 },
+  {
+    key: "source",
+    label: "Signal",
+    kind: "list",
+    maxLength: 120,
+    listId: "page-write",
+    placeholder: "channel:id:signal",
+  },
+  { key: "digits", label: "Decimals", kind: "digits" },
+  { key: "step", label: "Step", kind: "number", placeholder: "1" },
+];
+
 const BUTTON_SPEC: PanelWidgetSpec = {
   kind: "button",
   label: "Button",
@@ -399,6 +448,7 @@ const BUTTON_SPEC: PanelWidgetSpec = {
     kind: "button",
     label: "Button",
     action: "start",
+    argument: 0,
     x,
     y,
     w,
@@ -408,11 +458,13 @@ const BUTTON_SPEC: PanelWidgetSpec = {
     if (widget.kind !== "button") return "";
     if (key === "action") return widget.action;
     if (key === "script") return widget.script ?? "";
+    if (key === "argument") return widget.argument ?? 0;
     if (key === "label") return widget.label;
     return "";
   },
   applyPatch: (widget, patch) => {
     if (widget.kind !== "button") return widget;
+    const argument = Number(patch.argument);
     return {
       ...widget,
       label: patch.label === undefined ? widget.label : patch.label.slice(0, 80),
@@ -424,6 +476,10 @@ const BUTTON_SPEC: PanelWidgetSpec = {
         patch.script === undefined
           ? widget.script
           : patch.script.slice(0, 80),
+      argument:
+        patch.argument === undefined || !Number.isFinite(argument)
+          ? widget.argument
+          : argument,
     };
   },
 };
@@ -527,6 +583,7 @@ const NUMERIC_SPEC: PanelWidgetSpec = {
     sysvar: "",
     digits: 1,
     step: 1,
+    panelAction: "",
     x,
     y,
     w,
@@ -537,6 +594,7 @@ const NUMERIC_SPEC: PanelWidgetSpec = {
     if (key === "sysvar") return widget.sysvar;
     if (key === "digits") return widget.digits;
     if (key === "step") return widget.step;
+    if (key === "panelAction") return widget.panelAction ?? "";
     if (key === "label") return widget.label;
     return "";
   },
@@ -558,6 +616,10 @@ const NUMERIC_SPEC: PanelWidgetSpec = {
         patch.step === undefined || !Number.isFinite(step) || step <= 0
           ? widget.step
           : Math.min(step, 1e9),
+      panelAction:
+        patch.panelAction === undefined
+          ? widget.panelAction
+          : patch.panelAction.slice(0, 80),
     };
   },
 };
@@ -700,6 +762,56 @@ const GAUGE_SPEC: PanelWidgetSpec = {
       : widget,
 };
 
+const SETPOINT_SPEC: PanelWidgetSpec = {
+  kind: "setpoint",
+  label: "Setpoint",
+  minW: 14,
+  minH: 5,
+  defaultW: 18,
+  defaultH: 6,
+  fields: SETPOINT_FIELDS,
+  create: (id, x, y, w, h) => ({
+    id,
+    kind: "setpoint",
+    label: "Signal",
+    source: "",
+    digits: 1,
+    step: 1,
+    x,
+    y,
+    w,
+    h,
+  }),
+  fieldValue: (widget, key) => {
+    if (widget.kind !== "setpoint") return "";
+    if (key === "source") return widget.source;
+    if (key === "digits") return widget.digits;
+    if (key === "step") return widget.step;
+    if (key === "label") return widget.label;
+    return "";
+  },
+  applyPatch: (widget, patch) => {
+    if (widget.kind !== "setpoint") return widget;
+    const step = Number(patch.step);
+    return {
+      ...widget,
+      label: patch.label === undefined ? widget.label : patch.label.slice(0, 80),
+      source:
+        patch.source === undefined
+          ? widget.source
+          : patch.source.slice(0, 120),
+      digits:
+        patch.digits === undefined
+          ? widget.digits
+          : clamp(Math.round(patch.digits), 0, 3),
+      step:
+        patch.step === undefined || !Number.isFinite(step) || step <= 0
+          ? widget.step
+          : Math.min(step, 1e9),
+    };
+  },
+};
+
 export const PANEL_WIDGET_SPECS: Record<PanelWidgetKind, PanelWidgetSpec> = {
   button: BUTTON_SPEC,
   value: VALUE_SPEC,
@@ -708,6 +820,7 @@ export const PANEL_WIDGET_SPECS: Record<PanelWidgetKind, PanelWidgetSpec> = {
   lamp: LAMP_SPEC,
   bar: BAR_SPEC,
   gauge: GAUGE_SPEC,
+  setpoint: SETPOINT_SPEC,
 };
 
 export const PANEL_WIDGET_KINDS: { kind: PanelWidgetKind; label: string }[] = [
@@ -718,6 +831,7 @@ export const PANEL_WIDGET_KINDS: { kind: PanelWidgetKind; label: string }[] = [
   { kind: "lamp", label: LAMP_SPEC.label },
   { kind: "toggle", label: TOGGLE_SPEC.label },
   { kind: "numeric", label: NUMERIC_SPEC.label },
+  { kind: "setpoint", label: SETPOINT_SPEC.label },
 ];
 
 export function panelWidgetSpec(kind: PanelWidgetKind): PanelWidgetSpec {
@@ -857,6 +971,7 @@ function widgetPatch(value: Record<string, unknown>): PanelWidgetPatch {
       ? {
           action: value.action as PanelActionKind,
           script: text(value.script, 80),
+          argument: Number(value.argument),
         }
       : {}),
     ...(kind === "value"
@@ -872,6 +987,7 @@ function widgetPatch(value: Record<string, unknown>): PanelWidgetPatch {
           sysvar: text(value.sysvar, 120),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           step: Number(value.step),
+          panelAction: text(value.panelAction, 80),
         }
       : {}),
     ...(kind === "lamp"
@@ -888,6 +1004,13 @@ function widgetPatch(value: Record<string, unknown>): PanelWidgetPatch {
           max: Number(value.max),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           bands: normalisePanelBands(value.bands),
+        }
+      : {}),
+    ...(kind === "setpoint"
+      ? {
+          source: text(value.source, 120),
+          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          step: Number(value.step),
         }
       : {}),
   };
@@ -1292,14 +1415,23 @@ export function pastePanelWidget(
   const merged = spec.applyPatch(next, {
     label: widget.label,
     ...(widget.kind === "button"
-      ? { action: widget.action, script: widget.script }
+      ? {
+          action: widget.action,
+          script: widget.script,
+          argument: widget.argument,
+        }
       : {}),
     ...(widget.kind === "value"
       ? { source: widget.source, digits: widget.digits, bands: widget.bands }
       : {}),
     ...(widget.kind === "toggle" ? { sysvar: widget.sysvar } : {}),
     ...(widget.kind === "numeric"
-      ? { sysvar: widget.sysvar, digits: widget.digits, step: widget.step }
+      ? {
+          sysvar: widget.sysvar,
+          digits: widget.digits,
+          step: widget.step,
+          panelAction: widget.panelAction,
+        }
       : {}),
     ...(widget.kind === "lamp"
       ? {
@@ -1315,6 +1447,13 @@ export function pastePanelWidget(
           max: widget.max,
           digits: widget.digits,
           bands: widget.bands,
+        }
+      : {}),
+    ...(widget.kind === "setpoint"
+      ? {
+          source: widget.source,
+          digits: widget.digits,
+          step: widget.step,
         }
       : {}),
   });

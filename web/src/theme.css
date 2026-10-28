@@ -808,6 +808,24 @@
   box-shadow: 0 10px 26px rgb(15 23 42 / 16%);
 }
 
+/* Menu rows are flat rows, not buttons: the base light `button` rule would
+   paint each one white with a border and turn the menu into a button stack. */
+[data-theme="light"] .brand-menu-panel button,
+[data-theme="light"] .page-add-menu button,
+[data-theme="light"] .page-suggest-menu button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+[data-theme="light"] .brand-menu-panel button:hover:not(:disabled),
+[data-theme="light"] .page-add-menu button:hover:not(:disabled),
+[data-theme="light"] .page-add-menu button:focus-visible,
+[data-theme="light"] .page-suggest-menu button:hover,
+[data-theme="light"] .page-suggest-menu button.active {
+  background: var(--accent-soft);
+}
+
 [data-theme="light"] .page-suggest-menu {
   box-shadow: 0 10px 26px rgb(15 23 42 / 16%);
 }
