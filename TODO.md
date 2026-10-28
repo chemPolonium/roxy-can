@@ -11,7 +11,7 @@
 ## 硬件
 
 - **Profile 里的通道号会随硬件变**：`profiles/*.toml` 的 `[[hw]]` 存的是裸索引，插上第二台设备就指错口——而 Profile 的卖点正是"同一套工程在仿真 / 台架 / CI 间零修改切换"。改成按设备名匹配（或名字 + 编号双校验、错配整份拒绝）。
-- **Vector CAN FD 真机验收**：VN1610 在启动前插入时已通过 500 kbit/s / 2 Mbit/s 的 FD 配置，USB 插拔已自动重开驱动并刷新列表，拔出后按 Windows PnP 过滤离线通道。2026-10-26 两路 VN1610 对连实测：500 kbit/s 仲裁段下，经典帧双向、FD 64 字节、带 BRS 的 2/5/8 Mbit/s 数据段均能对向正确收到（`txFail` 为空，Trace 的 FD·B/长度/载荷一致）；Generator 已有 FD/BRS 选项。物理拔插后的自动恢复、其他 Vector 型号的 PnP 映射、同型号多台设备的逐台离线判定仍待补。
+- **Vector CAN FD 真机验收**：VN1610 在启动前插入时已通过 500 kbit/s / 2 Mbit/s 的 FD 配置；2026-10-26 两路 VN1610 对连实测：500 kbit/s 仲裁段下，经典帧双向、FD 64 字节、带 BRS 的 2/5/8 Mbit/s 数据段均能对向正确收到（`txFail` 为空，Trace 的 FD·B/长度/载荷一致）；Generator 已有 FD/BRS 选项。Windows PnP 监听已实现（拔出时关闭 Vector 连接、重插后重开 XL 驱动并刷新列表），但**物理拔插的台架复核仍未做**；其他 Vector 型号的 PnP 映射、同型号多台设备的逐台离线判定也待补。
 - **屏幕验收**：FlexRay 行的下拉回显；`发送被拒 ×N` 在真机上亮一次（两设备对发通着时得让对端停掉才会出现）；`断开` 之后端口是不是真关；Vector 设备拔出后刷新是否仍列出。
 
 ## 零散
@@ -32,7 +32,7 @@
 - **回放通道映射**：CAN / FlexRay / 以太网三套日志编号都能在 Buses 映射到本工程的路；以太网帧先映射再解码，静音与计数按文件编号。
 - **Trace/作用域**：CAN/FlexRay/Ethernet 已合并在同一张按时间排序的表；作用域提供 `Ethernet: ETHn`，Manual 以 L2 flow 为选择键并随工程保存。Trace 导出按扩展名选格式：`.asc` 写 CAN/FlexRay，`.pcap` 写以太网；Messages/Statistics CSV 同样包含以太网 flow。
 - **导出保真**：PCAP 为经典格式，不写 FCS，也不带方向位（Rx/Tx 都按线上帧导出）；S-VLAN/C-VLAN 的 TPID 从 BLF 保留。
-- **只收不发**：Network 能列矩阵帧与捕获 flow，但没有以太网发送路径/生成器（与 FlexRay 的只收端口同一边界）。
+- **只收不发**：以太网帧与 flow 在 Trace / Messages / Statistics 中可见并可解码，但没有以太网发送路径/生成器（与 FlexRay 的只收端口同一边界）。
 - **后续**：Container/Multiplexed/Secured 以太网解码；SoAd/socket/SOME-IP；TSN/交换机拓扑；ARXML 写回与完整矩阵往返。
 
 ## ARXML 通信层（审计见 `docs/arxml-communication-audit.md`）
@@ -40,6 +40,13 @@
 - FlexRay 现有缺口的代码修复：`PDU-TRIGGERING` 周期、ECU 端口/连接器、Signal Group、update bit、SystemSignal 扇出、min/max、cluster 引用。
 - CAN ARXML 的 Container/Multiplexed/Secured PDU、Signal Group、update bit；当前只读普通 `I-SIGNAL-I-PDU`。
 - 以太网必需的子集随以太网功能实现；其余只记录，不在本次补。
+
+## Panel 操作页
+
+- **Setpoint 回读**：写入后显示该信号在总线上的实际值（订阅它），并在值被节点覆盖、总线未运行时明确区分“已写入 / 实际”。目前只显示最后写入值。
+- **组写**：一个 Setpoint 或 Button 写一组信号/整帧预设，用于测试步骤；当前一次只写一个信号。
+- **动作返回值**：`on panel_action` 目前只有输入参数，没有把脚本结果送回按钮/提示的通道；要不要加、怎么与“效果集可静态推导”共存，先决策再加。
+- 页面模板库（内置示例页）价值低，低优先级。
 
 ## 脚本调试器
 
@@ -56,7 +63,7 @@
 
 ## 边界外（定位变了才重启，不许逐步混入）
 
-面板设计器 / HMI 控件；换脚本底座（Lua / JS / Python）；工业级测试报告（HTML / XML / PDF）；多机分布式与 PTP / GPS 时间同步；用户与权限、国际化；网关与跨总线路由；诊断层（UDS / CDD / ODX / 刷写）；MF4 读取（缺真实样本，无从验证）；LIN。（以太网已单独立项，见上。）
+面板设计器 / 通用 HMI（任意控件、动态事件模型、Docking）；固定画幅的操作 Panel 已在范围内，不属于这里。换脚本底座（Lua / JS / Python）；工业级测试报告（HTML / XML / PDF）；多机分布式与 PTP / GPS 时间同步；用户与权限、国际化；网关与跨总线路由；诊断层（UDS / CDD / ODX / 刷写）；MF4 读取（缺真实样本，无从验证）；LIN。（以太网已单独立项，见上。）
 
 ## CI 的规矩
 

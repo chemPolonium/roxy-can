@@ -99,7 +99,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   lists the CAN, FlexRay and Ethernet channels the current log carries, their frame
   counts, and maps each to a project bus, as-is, or No replay; choices apply
   immediately and are saved with the project. It uses the same core commands
-  as the core Buses/Network models.
+  as the core node/Buses models.
 - **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
   cycle, FD, BRS and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
   action, and FR slots added by number to a loaded cluster description. The
@@ -171,12 +171,16 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   schema and stays visible for the whole Edit session: a selected control shows
   its properties, a blank click shows the **Panel** properties (canvas W×H and
   control count), so changing the selection never shifts the canvas. It edits a
-  button command or **Script action** name
-  (`on panel_action("…")` in every running node), a value source (signal key,
-  `derived:Name` or `sysvar:ns::name`) with decimals, a bar/gauge range, a lamp
-  source with its lit threshold and colour, a toggle's sysvar, or a
-  numeric setpoint (sysvar, decimals, step; committed on Enter/blur and clamped
-  into the variable's min/max). Value, bar and gauge tiles can carry **colour
+  button command or **Script action** name with an optional argument
+  (`on panel_action("…", value)` in every running node), a value source (signal
+  key, `derived:Name` or `sysvar:ns::name`) with decimals, a bar/gauge range, a
+  lamp source with its lit threshold and colour, a toggle's sysvar, a
+  numeric setpoint (sysvar, decimals, step; committed on Enter/blur, clamped
+  into the variable's min/max, optional script action fired with the value), or
+  a **Setpoint**: a DBC signal picked from the catalog whose value is written
+  into a one-shot frame (clamped to the DBC range, held by dropping that
+  signal's waveform source; only while measuring). Value, bar and gauge tiles
+  can carry **colour
   bands**: ascending `≤` limits coloured Neutral/OK/Warning/Critical plus an
   optional `above` band; only the number or fill is tinted, and values outside
   every band keep the normal colour. Editing has
@@ -220,7 +224,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   are addressed by name). **Pick signals…** opens a searchable
   bus → message → signal catalog fetched from the backend. The demo starts
   with eight auto-selected generator sources,
-  while real projects start from their first Graphics window and save the
+  while real projects start from their first Signals chart and save the
   selection back there, so lanes survive save/reload. The core samples at up
   to 200 Hz; each series keeps 12k points (one minute at that rate), and the
   canvas reduces them to one min/max span per pixel column. Wheel zoom and

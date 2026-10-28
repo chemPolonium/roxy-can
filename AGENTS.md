@@ -12,16 +12,20 @@
 - Panel 操作页是固定画布（默认 1280×720）、8px 网格，不做缩放或流式重排；
   控件坐标按格保存，拖动/缩放必须吸附网格。画幅尺寸也按格保存，缩小前
   必须保证所有控件仍在画布内。全屏用应用内固定层，不调用浏览器原生
-  Fullscreen API，画布尺寸保持不变。控件类型先有 Button（命令/脚本动作）、
-  Value（只读信号/派生/SysVar，可按升序上限分段染数字颜色）、
+  Fullscreen API，画布尺寸保持不变。控件类型先有 Button（命令/脚本动作，脚本动作
+  可带一个数值参数）、Value（只读信号/派生/SysVar，可按升序上限分段染数字颜色）、
   Bar / Gauge（按 min/max 填充，复用同一套色段）、Lamp（源值达到阈值时点亮，
-  颜色可选）、Toggle（写 SysVar 0/1）与 Numeric（写 SysVar，按 min/max 夹取）。
+  颜色可选）、Toggle（写 SysVar 0/1）、Numeric（写 SysVar，按 min/max 夹取，
+  可再带值触发脚本动作）与 Setpoint（把输入值写进 DBC 信号的发送帧，按 DBC 范围
+  夹取，只在测量中可用）。
 - 新控件先进入 `panelPage.ts` 的控件注册表（创建/字段/最小尺寸/补丁），
   调色板（Edit 里的 **+ Add** 菜单）与属性栏由注册表生成，不要在 PagePanel
   里加类型分支；绑定解析与可用性判断放 `panelBinding.ts` 的纯选择器，并补
   单测。Edit 下属性栏常驻，未选中控件时显示 Panel/画幅属性，避免选区切换
   导致画布横移。Panel 是多页面 book：单页 workspace 要能迁移，页面名/画幅/
-  控件按页保存。
+  控件按页保存。自绘菜单（Add / 建议下拉 / 品牌菜单）的行必须显式覆盖亮色
+  主题的全局 `button` 底色与边框，否则每一行都会变成独立按钮；菜单用
+  `role="menu"/"menuitem"`，支持 ↑/↓/Home/End/Esc（Esc 回到触发按钮）。
 - 页面文件 `.rxpanel` 只在前端序列化（format + version + page，无控件 id），
   Export 用 Blob 下载，Import 用 `FilePick` 在浏览器读文本并作为新页面追加。
   导入必须严格校验：未知类型、越界、低于最小尺寸、重叠都报错且不改动现有
