@@ -6904,6 +6904,8 @@ fn e2e_counter_continuity_is_published_per_message() {
             data_id: Some(0x123),
             system_signal: None,
             payload: None,
+            counter_offset: None,
+            counter_length: None,
         },
     );
     comm.frame_pdu_mappings.insert(

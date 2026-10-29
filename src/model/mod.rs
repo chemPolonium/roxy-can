@@ -743,6 +743,12 @@ pub struct E2eProtection {
     pub system_signal: Option<SystemSignalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<PduId>,
+    /// Counter position when the document states it (bit offset inside the
+    /// PDU and bit width). Profiles 1/2 fall back to their fixed layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counter_offset: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counter_length: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

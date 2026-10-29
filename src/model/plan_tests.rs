@@ -369,6 +369,8 @@ fn e2e_protection_structure_is_checked_without_authenticating() {
             data_id: None,
             system_signal: None,
             payload: None,
+            counter_offset: None,
+            counter_length: None,
         },
     );
     let (_, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
@@ -414,6 +416,8 @@ fn profile_1_counter_position_enters_the_plan() {
             data_id: Some(291),
             system_signal: None,
             payload: None,
+            counter_offset: None,
+            counter_length: None,
         },
     );
     let (plan, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
@@ -424,4 +428,12 @@ fn profile_1_counter_position_enters_the_plan() {
     assert_eq!(plan.e2e[0].data_id, Some(291));
     let reading = decode_e2e(&plan, &[0, 0, 0x0B, 0, 0, 0, 0, 0]);
     assert_eq!(reading[0].counter, 11);
+
+    // A document that states the counter position overrides the default.
+    let protection = comm.e2e.get_mut(&E2eProtectionId(1)).unwrap();
+    protection.counter_offset = Some(16);
+    protection.counter_length = Some(8);
+    let (plan, _) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
+    assert_eq!(plan.e2e[0].counter_bit_offset, 24);
+    assert_eq!(plan.e2e[0].counter_bits, 8);
 }

@@ -469,7 +469,9 @@ fn e2e_profile_links_to_system_signal_and_pdu() {
  <CAN-CLUSTER><SHORT-NAME>C</SHORT-NAME></CAN-CLUSTER>
  <E2E-PROFILE-COMPATIBLE-PROTECTION><SHORT-NAME>E2EProt</SHORT-NAME>
   <PROFILE-NAME>Profile1</PROFILE-NAME>
-  <PROFILE-CONFIGURATION><E2E-PROFILE-SETTINGS><DATA-ID>291</DATA-ID></E2E-PROFILE-SETTINGS></PROFILE-CONFIGURATION>
+  <PROFILE-CONFIGURATION><E2E-PROFILE-SETTINGS><DATA-ID>291</DATA-ID>
+   <COUNTER-OFFSET>16</COUNTER-OFFSET><COUNTER-LENGTH>8</COUNTER-LENGTH>
+  </E2E-PROFILE-SETTINGS></PROFILE-CONFIGURATION>
  </E2E-PROFILE-COMPATIBLE-PROTECTION>
  <SYSTEM-SIGNAL><SHORT-NAME>Sys</SHORT-NAME>
   <PROTECTION-HANDLE><PROTECTION-PROPS-REF DEST="E2E-PROFILE-COMPATIBLE-PROTECTION">/P/E2EProt</PROTECTION-PROPS-REF></PROTECTION-HANDLE>
@@ -491,6 +493,8 @@ fn e2e_profile_links_to_system_signal_and_pdu() {
     assert_eq!(protection.profile_name, "Profile1");
     assert_eq!(protection.profile, Some(1));
     assert_eq!(protection.data_id, Some(291));
+    assert_eq!(protection.counter_offset, Some(16));
+    assert_eq!(protection.counter_length, Some(8));
     let pdu = comm.pdus.values().next().unwrap();
     assert_eq!(pdu.e2e, Some(protection.id));
     assert_eq!(protection.payload, Some(pdu.id));

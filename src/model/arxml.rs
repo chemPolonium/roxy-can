@@ -362,6 +362,16 @@ impl<'a> Importer<'a> {
                 .find(|n| n.has_tag_name("DATA-ID"))
                 .and_then(|n| n.text())
                 .and_then(|text| text.trim().parse::<u32>().ok());
+            let counter_offset = node
+                .descendants()
+                .find(|n| n.has_tag_name("COUNTER-OFFSET"))
+                .and_then(|n| n.text())
+                .and_then(|text| text.trim().parse::<u32>().ok());
+            let counter_length = node
+                .descendants()
+                .find(|n| n.has_tag_name("COUNTER-LENGTH"))
+                .and_then(|n| n.text())
+                .and_then(|text| text.trim().parse::<u32>().ok());
             let protection = E2eProtection {
                 id,
                 name: name.clone(),
@@ -370,6 +380,8 @@ impl<'a> Importer<'a> {
                 data_id,
                 system_signal: None,
                 payload: None,
+                counter_offset,
+                counter_length,
             };
             self.e2e_ids.insert(name, id);
             self.e2e_ids.insert(path, id);

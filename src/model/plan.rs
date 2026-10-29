@@ -106,16 +106,22 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
         let base = mapping.start_bit.saturating_sub(frame_base);
         // Profile 1/2 keep the counter in the low nibble of the second
         // header byte; the CRC above it is not verified (no keys in scope).
-        if let Some(protection) = pdu.e2e.and_then(|id| comm.e2e.get(&id))
-            && let Some(profile) = protection.profile
-            && matches!(profile, 1 | 2)
-        {
-            e2e.push(E2ePlan {
-                profile,
-                counter_bit_offset: base.saturating_add(8),
-                counter_bits: 4,
-                data_id: protection.data_id,
-            });
+        if let Some(protection) = pdu.e2e.and_then(|id| comm.e2e.get(&id)) {
+            // A document that states the counter position wins; Profiles 1/2
+            // fall back to their fixed low nibble of the second header byte.
+            let counter = match (protection.counter_offset, protection.counter_length) {
+                (Some(offset), Some(length)) if (1..=8).contains(&length) => Some((offset, length)),
+                _ if matches!(protection.profile, Some(1 | 2)) => Some((8, 4)),
+                _ => None,
+            };
+            if let Some((offset, length)) = counter {
+                e2e.push(E2ePlan {
+                    profile: protection.profile.unwrap_or(0),
+                    counter_bit_offset: base.saturating_add(offset),
+                    counter_bits: length,
+                    data_id: protection.data_id,
+                });
+            }
         }
         match pdu.kind {
             PduKind::Signal => {
