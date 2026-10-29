@@ -9531,4 +9531,120 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
             "a legacy key upgrades to the canonical text when bound"
         );
     }
+
+    #[test]
+    fn flexray_e2e_counters_are_tracked_from_the_plan() {
+        use crate::model::*;
+        let mut core = BusCore::new(Vec::new());
+        let db = fr_db_one_signal(12, "Speed", "km/h");
+        let frame_name = db.frame_index(0).expect("a frame").name.clone();
+        core.fr_dbs.insert(0, db);
+        core.rebuild_fr_models();
+        let mut comm = Comm::default();
+        comm.clusters.insert(
+            ClusterId(1),
+            Cluster {
+                id: ClusterId(1),
+                kind: ClusterKind::FlexRay,
+                name: "FR0".to_string(),
+                aliases: Vec::new(),
+                description: String::new(),
+                sources: Vec::new(),
+                networks: vec![NetworkId(1)],
+            },
+        );
+        comm.networks.insert(
+            NetworkId(1),
+            Network {
+                id: NetworkId(1),
+                cluster: ClusterId(1),
+                name: "FR0".to_string(),
+                params: NetworkParams::FlexRay(FlexRayParams {
+                    speed_kbps: 10_000,
+                    cycle_time_ms: 5.0,
+                    macrotick_us: 0.0,
+                    coldstart_attempts: 0,
+                    action_point_offset: 0,
+                    minislot_action_point_offset: 0,
+                    dynamic_slot_idle_phase: 0,
+                    minor_version: 0,
+                    extra: std::collections::BTreeMap::new(),
+                }),
+            },
+        );
+        comm.pdus.insert(
+            PduId(1),
+            Pdu {
+                id: PduId(1),
+                name: "P".to_string(),
+                length: 8,
+                kind: PduKind::Signal,
+                header_type: ContainerHeaderType::Short,
+                cycle_us: None,
+                selector: None,
+                secured: None,
+                transformation: None,
+                e2e: Some(E2eProtectionId(1)),
+            },
+        );
+        comm.e2e.insert(
+            E2eProtectionId(1),
+            E2eProtection {
+                id: E2eProtectionId(1),
+                name: "E".to_string(),
+                profile_name: "Profile1".to_string(),
+                profile: Some(1),
+                data_id: Some(7),
+                system_signal: None,
+                payload: None,
+                counter_offset: None,
+                counter_length: None,
+            },
+        );
+        comm.frame_pdu_mappings.insert(
+            MappingId(1),
+            FramePduMapping {
+                id: MappingId(1),
+                frame: FrameId(1),
+                pdu: PduId(1),
+                start_bit: 0,
+                byte_order: ByteOrder::LittleEndian,
+            },
+        );
+        comm.frames.insert(
+            FrameId(1),
+            Frame {
+                id: FrameId(1),
+                cluster: ClusterId(1),
+                network: NetworkId(1),
+                name: frame_name,
+                length: 8,
+                address: FrameAddress::FlexRay {
+                    slot: 12,
+                    base_cycle: 0,
+                    repetition: 1,
+                    payload_preamble: false,
+                },
+                timing: FrameTiming::default(),
+                ethernet: None,
+                pdu_mappings: vec![MappingId(1)],
+            },
+        );
+        core.handle(
+            BusCommand::SetFrModel {
+                bus: 0,
+                comm: std::sync::Arc::new(comm),
+            },
+            &mut String::new(),
+        );
+        for (t, counter) in [(1_000u64, 0u8), (2_000, 1), (3_000, 1)] {
+            let mut row = fr_row(t, 12);
+            row.payload[1] = counter;
+            core.ingest_fr_row(row);
+        }
+        let view = core.fr_e2e_tracks.get(&(0, 12)).expect("FR E2E tracked");
+        assert_eq!(view.frames, 3);
+        assert_eq!(view.counter, Some(1));
+        assert_eq!(view.repeats, 1);
+    }
 }
