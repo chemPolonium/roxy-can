@@ -1325,6 +1325,9 @@ fn an_event_triggered_message_is_never_auto_sent() {
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
     ));
+    // Generator metadata comes from the model, so the fixture has to build it
+    // after assigning the table directly.
+    app.rebuild_can_model(0);
     app.tx_list.retain(|t| t.channel != 0);
     app.add_tx(0, 4096);
     app.add_tx(0, 4097);

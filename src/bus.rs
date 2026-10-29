@@ -5853,29 +5853,12 @@ impl BusCore {
                         .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
                 )
             } else {
-                self.channel_dbc(ch)
-                    .and_then(|db| db.message_of(id))
-                    .map(|m| {
-                        (
-                            m.name.clone(),
-                            m.transmitter.clone(),
-                            m.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8,
-                            // A declared 0 is event-triggered, so `unwrap_or` rather
-                            // than `unwrap_or_default` on the Option: only "the DBC
-                            // said nothing" gets our invented period.
-                            m.cycle_us
-                                .or(model_cycle)
-                                .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        (
-                            format!("{id:X}"),
-                            String::new(),
-                            8,
-                            crate::app::DEFAULT_TX_CYCLE_US,
-                        )
-                    })
+                (
+                    format!("{id:X}"),
+                    String::new(),
+                    8,
+                    model_cycle.unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
+                )
             };
         let data_text = vec!["00"; len as usize].join(" ");
         self.tx_list.push(TxMsg {
