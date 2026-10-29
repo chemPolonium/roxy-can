@@ -7676,18 +7676,33 @@ impl BusCore {
         for agg in self.aggs.values() {
             let (ch, id, ext) = (agg.channel, agg.id, agg.extended);
             seen.push(((ch, id, ext), agg.last_t_us));
-            // No database on this bus means no opinion, not a clean bill.
-            let Some(db) = self.channel_dbc(ch) else {
-                continue;
-            };
-            let Some(m) = db.messages.get(&(id, ext)) else {
-                hits.push(((ch, id, ext, Kind::Unknown), 0.0, 0.0));
+            // The model names the frame and states its period/length; the
+            // description table is only consulted for a bus without a model.
+            let model_decl = self.can_codec(ch).and_then(|(comm, _, cluster)| {
+                comm.frame_by_can_id(cluster, id)
+                    .into_iter()
+                    .find(|frame| {
+                        matches!(
+                            frame.address,
+                            crate::model::FrameAddress::Can { extended, .. } if extended == ext
+                        )
+                    })
+                    .map(|frame| (frame.timing.cycle_us, u64::from(frame.length)))
+            });
+            let (declared, dlc) = if let Some((declared, dlc)) = model_decl {
+                (declared, dlc)
+            } else if let Some(db) = self.channel_dbc(ch) {
+                let Some(m) = db.messages.get(&(id, ext)) else {
+                    hits.push(((ch, id, ext, Kind::Unknown), 0.0, 0.0));
+                    continue;
+                };
+                (m.cycle_us, m.dlc)
+            } else {
                 continue;
             };
             // A declaration of 0 is event-triggered, which the two timing
             // predicates below reject on their own; `None` is the database
             // saying nothing, and neither is a period to check against.
-            let declared = m.cycle_us;
             // Our own frames are exempt from the length and period verdicts.
             // Driving a signal that reaches past the base length widens the
             // frame on purpose (see `tx_payload`), so judging a Tx frame by the
@@ -7695,8 +7710,8 @@ impl BusCore {
             // and the generator row already offers to restore a hand-tuned
             // period. Transmitting an id the database lacks is still reported.
             if matches!(agg.dir, Direction::Rx) {
-                if dlc_offender(agg.len, m.dlc) {
-                    hits.push(((ch, id, ext, Kind::Dlc), m.dlc as f64, f64::from(agg.len)));
+                if dlc_offender(agg.len, dlc) {
+                    hits.push(((ch, id, ext, Kind::Dlc), dlc as f64, f64::from(agg.len)));
                 }
                 // The interval since the previous step, never the running
                 // average in `agg.cycle_us`: an EMA reads a five-fold stall as
@@ -7846,6 +7861,20 @@ impl BusCore {
             return None;
         }
         self.model_tx_ids(ch, node)
+    }
+
+    /// The model's name for one CAN frame, if the model knows it.
+    pub(crate) fn model_can_name(&self, ch: u8, id: u32, ext: bool) -> Option<String> {
+        let (comm, _, cluster) = self.can_codec(ch)?;
+        comm.frame_by_can_id(cluster, id)
+            .into_iter()
+            .find(|frame| {
+                matches!(
+                    frame.address,
+                    crate::model::FrameAddress::Can { extended, .. } if extended == ext
+                )
+            })
+            .map(|frame| frame.name.clone())
     }
 
     /// Frame name, sender, length and cycle as the model declares them.

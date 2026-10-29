@@ -1277,9 +1277,13 @@ impl App {
         let mut out = Vec::new();
         for ((ch, id, ext, kind), l) in &self.snap.spec.rows {
             let name = self
-                .channel_dbc(*ch)
-                .and_then(|db| db.message_name_of((*id, *ext)))
-                .unwrap_or("not in database");
+                .model_can_name(*ch, *id, *ext)
+                .or_else(|| {
+                    self.channel_dbc(*ch)
+                        .and_then(|db| db.message_name_of((*id, *ext)))
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| "not in database".to_string());
             out.push(crate::spec::SpecRow {
                 bus: self.channel_name(*ch).to_string(),
                 addr: if *ext {
