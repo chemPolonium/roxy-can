@@ -61,7 +61,7 @@ roxy-can -h                               完整帮助
 ## 总线与数据库（Buses 窗口）
 
 - 一条总线可加载**多个 DBC**：`Open...` 换主库（也接受只含一个 CAN cluster 的 ARXML），拖放或 `+` 附加扩展库。解码按库序进行，重名报文先到先得。
-- **一次导入全部 ARXML cluster**：Buses 顶部的 `Import ARXML...` 扫描文件里的 `CAN-CLUSTER` / `FLEXRAY-CLUSTER` / `ETHERNET-CLUSTER`，每个 cluster 建自己的总线。CAN cluster 读成 CAN 路（标识符/帧类、帧长、帧→PDU、I-Signal、compu/单位、PDU 周期、ECU 端口的发送方），FlexRay/Ethernet 落在各自编号空间的下一个空索引；同一文件与 cluster 再次导入会刷新那一路的数据库，不会重复建路。多个 CAN cluster 可以共享同一份帧/PDU/信号定义，地址以各 cluster 自己的 triggering 为准；triggering 放在 cluster 外时按 `/Cluster/<名>/...` 引用归属。CAN 行的 `Open...` 可换成 DBC 或只含一个 CAN cluster 的 ARXML（会离开当前 ARXML 源）。Container/Multiplexed/Secured PDU 不在此读取范围。
+- **Add cluster**：Buses 顶部只有一个入口，菜单里选 `CAN bus` / `ARXML matrix...` / `FlexRay FIBEX...` / `Ethernet ARXML...`。ARXML 导入扫描文件里的 `CAN-CLUSTER` / `FLEXRAY-CLUSTER` / `ETHERNET-CLUSTER`，每个 cluster 建自己的总线并分配持久化 cluster id。CAN cluster 读成 CAN 路（标识符/帧类、帧长、帧→PDU、I-Signal、compu/单位、PDU 周期、ECU 端口的发送方），FlexRay/Ethernet 落在各自编号空间的下一个空索引；同一文件与 cluster 再次导入会刷新那一路，不会重复建路。多个 CAN cluster 可以共享同一份帧/PDU/信号定义，地址以各 cluster 自己的 triggering 为准。文档里的统一模型（含 Container / Multiplexed / Secured / E2E / Transformation 结构）直接进核心，DBC/FIBEX 只作适配器；CAN 行的 `Open...` 仍可换库。
 - **比特率是选的不是输的**：仲裁段下拉给 `10/50/100/125/250/500/800/1000` kbit/s，FD 数据段给 `0（无 FD 段）/1000/2000/4000/5000/8000`。选错比特率不会报错，只会把整条总线的帧全部解错。工程里已存的值一定在列表里。
 - **DBC 自动重载**：每 2 秒比对校验和，外部修改自动生效（测量停止时同样比对）；库里新增的发送报文会出现为生成器条目，但**不自动发送**。
 - 数据库列表随工程保存（相对工程目录）。
@@ -109,7 +109,7 @@ roxy-can -h                               完整帮助
 - **与其他工具共存**：驱动的仲裁是通道级的——本工具连接期间别的程序可能起不了同一通道，反之亦然。换工具先在这边`断开`。
 - 手动连接是会话状态；要固化就用 Profile 的 `[[hw]]`。
 - **FlexRay 监听**：Buses 的 FlexRay 区与 CAN 那张表同形（一路一行，Name / 描述 / 速率 / 硬件 / 移除）。
-  - `+ FlexRay` = 挑一份集群描述（FIBEX 2.x/3.x 与 AUTOSAR ARXML 都读，GBK 编码无碍），落在第一个没有描述的路索引上；取消则什么都不加。行集合 = 已描述 ∪ 已监听 ∪ 正在回放的日志里真有其流量；最后那种行会灰字标"日志里有这路流量"，`Open...` 就在它自己那一行。
+  - Add cluster → `FlexRay FIBEX...` = 挑一份集群描述（FIBEX 2.x/3.x 与 AUTOSAR ARXML 都读，GBK 编码无碍），落在第一个没有描述的路索引上；取消则什么都不加。行集合 = 已描述 ∪ 已监听 ∪ 正在回放的日志里真有其流量；最后那种行会灰字标"日志里有这路流量"，`Open...` 就在它自己那一行。
   - **名字只是给人看的**：行末灰字 `#n` 才是这路的 cluster 索引，`FR0:13`、`fr_sig(0, ..)`、`on fr 0 slot 13`、触发规则存的数字都是它，所以改名不会影响要输入的那个编号。清空它、或重新输入 `FRn`，都等于没有名字。
   - **速率与周期只读**：FlexRay 的位时就是调度表本身，要改得改描述文件。
   - `断开` 关端口，描述与曲线全留着；行末 `x` **删除这一路**——端口、描述以及引用它槽号的一切（曲线、手动勾选行、发送条目、触发规则、规格判定）一起走，**其他各路的路号一律不动**（索引是身份不是列表位置，把后面的前移会让所有打过的数字在未提示的情况下指向另一条总线）。空出来的号下次 `+ FlexRay` 拿回。
@@ -237,7 +237,7 @@ roxy-can -h                               完整帮助
 
 ## 工程文件
 
-- 工程（`.rxproj`）单文件 JSON，DBC 路径相对工程目录。
+- 工程（`.rxproj`）单文件 JSON（schema v2：cluster 带持久化 id，回放映射、generator 与 trigger 行按 cluster id 记录；旧工程打开时一次性迁移），描述文件路径相对工程目录。
 - 只保留当前格式：旧版本工程里已删除的字段不会再被迁移（例如旧的 dock 布局、`sim_nodes`、单 FIBEX 路径）；未知字段按 serde 规则忽略。
 - 新会话从 Web workspace 恢复：主视图（Trace/Messages/Panel）、右侧标签页、下栏标签页、已选信号与 Read 集、曲线游标、列宽/列显隐、分栏比例与 Panel book 都按保存的状态回来；没有"先加窗口再填内容"的步骤。
 - 坏库容错：复用报文的 mux 条件引用了不存在的开关时按"无条件"处理（显示数据而不是空解码）。

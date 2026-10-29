@@ -896,5 +896,7 @@ v1 工程在打开时一次性迁移到内存 v2，保存时写 v2；原文件�
 | 7 Buses UI 与迁移 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡，v1 视图段真正迁移未完成 |
 | 8 清理与发布 | 未开始 | — |
 
+验证状态（2026-10-29）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（880 通过）、前端 71 测试与 `npm run build` 全绿；release 包在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出。浏览器未在 1024×768 / 1280×800 下重做 Buses 复核（工具视口固定），硬件验收未重跑。
+
 剩余工作按计划顺序：`SigKey` 全链路与 Statistics 切到统一 key；工程 v2 把窗口/触发器/派生定义从兼容 `config` 段迁成显式段；E2E 校验、Transformation 数值执行与真实多协议/SecOC/E2E 语料；最后删除旧运行时路径与兼容层。当前 ARXML 文档模型已直接进核心，但回放/硬件仍以路号路由，`SigKey` 与前端 `signalRef` 也还没换。
 
