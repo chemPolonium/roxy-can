@@ -11,7 +11,6 @@ interface Props {
   loading: boolean;
   error: string;
   selected: Set<string>;
-  charted?: Set<string>;
   watched?: Set<string>;
   /// Read-only signal set: sampled for cursor values, never drawn.
   read?: Set<string>;
@@ -45,7 +44,6 @@ export function SignalPicker({
   loading,
   error,
   selected,
-  charted,
   watched,
   read,
   title = "Signals",
@@ -209,9 +207,6 @@ export function SignalPicker({
                               />
                               <span>{signal.name}</span>
                             </label>
-                          )}
-                          {charted?.has(signal.key) && (
-                            <small class="picker-mark">chart</small>
                           )}
                           {watched?.has(signal.key) && (
                             <small class="picker-mark">mon</small>

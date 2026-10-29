@@ -3973,7 +3973,6 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={selectedKeys}
-          charted={selectedKeys}
           watched={monitorKeys}
           read={readKeys}
           kinds={["can", "fr", "eth"]}
@@ -3990,7 +3989,6 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={monitorKeys}
-          charted={selectedKeys}
           watched={monitorKeys}
           title="Monitor signals"
           kinds={["can", "fr", "eth"]}
@@ -4027,7 +4025,6 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={dataKeys}
-          charted={selectedKeys}
           watched={monitorKeys}
           title="Data signals"
           kinds={["can", "fr", "eth"]}
@@ -4064,7 +4061,6 @@ export function App() {
           loading={catalogLoading}
           error={catalogError}
           selected={stateKeys}
-          charted={selectedKeys}
           watched={monitorKeys}
           title="State signals"
           kinds={["can", "fr", "eth"]}
