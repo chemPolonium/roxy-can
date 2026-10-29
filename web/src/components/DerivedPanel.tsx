@@ -28,48 +28,85 @@ export function DerivedPanel({
     expression.trim() === ""
       ? null
       : validateDerivedExpression(expression, references);
+  const [busKey, setBusKey] = useState("");
+  const [frameKey, setFrameKey] = useState("");
   const counts = new Map<string, number>();
   const busCounts = new Map<string, number>();
   const frameCounts = new Map<string, number>();
+  const busMap = new Map<
+    string,
+    {
+      label: string;
+      frames: Map<string, { label: string; refs: DerivedReference[] }>;
+    }
+  >();
   for (const reference of references) {
     counts.set(reference.name, (counts.get(reference.name) ?? 0) + 1);
-    const busKey = `${reference.bus}:${reference.name}`;
-    busCounts.set(busKey, (busCounts.get(busKey) ?? 0) + 1);
+    const busName = `${reference.bus}:${reference.name}`;
+    busCounts.set(busName, (busCounts.get(busName) ?? 0) + 1);
     if (reference.frame) {
-      const frameKey = `${reference.bus}:${reference.frame}:${reference.name}`;
-      frameCounts.set(frameKey, (frameCounts.get(frameKey) ?? 0) + 1);
+      const frameName = `${reference.bus}:${reference.frame}:${reference.name}`;
+      frameCounts.set(frameName, (frameCounts.get(frameName) ?? 0) + 1);
     }
+    let bus = busMap.get(reference.bus);
+    if (!bus) {
+      bus = {
+        label: reference.bus === "derived" ? "Computed" : reference.bus,
+        frames: new Map(),
+      };
+      busMap.set(reference.bus, bus);
+    }
+    const token =
+      reference.bus === "derived"
+        ? "computed"
+        : (reference.frame ?? reference.frameId ?? "signals");
+    let frame = bus.frames.get(token);
+    if (!frame) {
+      const label =
+        reference.bus === "derived"
+          ? "Computed channels"
+          : token === "signals"
+            ? "Signals"
+            : token.replace(/^slot(\d+)$/i, "Slot $1");
+      frame = { label, refs: [] };
+      bus.frames.set(token, frame);
+    }
+    frame.refs.push(reference);
   }
-  const computedRefs = references.filter(
-    (reference) => reference.bus === "derived",
-  );
-  const picks = [
-    ...computedRefs,
-    ...references
-      .filter((reference) => reference.bus !== "derived")
-      .slice(0, Math.max(0, 80 - computedRefs.length)),
-  ].map((reference) => {
-    const sharedName = (counts.get(reference.name) ?? 0) > 1;
-    const sharedBus =
-      (busCounts.get(`${reference.bus}:${reference.name}`) ?? 0) > 1;
-    let token = reference.frame;
-    if (
-      sharedBus &&
-      reference.frame &&
+  const buses = [...busMap.entries()].map(([key, bus]) => ({
+    key,
+    label: bus.label,
+    frames: [...bus.frames.entries()].map(([frameKey, frame]) => ({
+      key: frameKey,
+      label: frame.label,
+      refs: frame.refs,
+    })),
+  }));
+  const activeBus = buses.find((bus) => bus.key === busKey) ?? buses[0];
+  const activeFrame =
+    activeBus?.frames.find((frame) => frame.key === frameKey) ??
+    activeBus?.frames[0];
+
+  /// The reference text to insert: bare when unique, otherwise qualified by
+  /// bus, frame name or frame id in that order of precision.
+  const insertToken = (reference: DerivedReference): string => {
+    if ((counts.get(reference.name) ?? 0) <= 1) return reference.name;
+    if (reference.bus === "derived") {
+      return (busCounts.get(`derived:${reference.name}`) ?? 0) <= 1
+        ? `derived:${reference.name}`
+        : reference.key;
+    }
+    if ((busCounts.get(`${reference.bus}:${reference.name}`) ?? 0) <= 1) {
+      return `${reference.bus}:${reference.name}`;
+    }
+    const token = reference.frame ?? reference.frameId;
+    if (!token) return `${reference.bus}:${reference.name}`;
+    const sameFrame =
       (frameCounts.get(
         `${reference.bus}:${reference.frame}:${reference.name}`,
-      ) ?? 0) > 1 &&
-      reference.frameId
-    ) {
-      token = reference.frameId;
-    }
-    const label = !sharedName
-      ? reference.name
-      : sharedBus && token
-        ? `${reference.bus}:${token}:${reference.name}`
-        : `${reference.bus}:${reference.name}`;
-    return { key: reference.key, label };
-  });
+      ) ?? 0) > 1;
+    return `${reference.bus}:${sameFrame && reference.frameId ? reference.frameId : token}:${reference.name}`;
+  };
 
   const insert = (reference: string) => {
     setExpression((old) => `${old}${old.trim() ? " " : ""}[${reference}]`);
@@ -166,23 +203,56 @@ export function DerivedPanel({
           {error ??
             "Use [signal], [CAN1:signal] or [CAN2:Message:signal] (id also works) when one bus repeats a name; supports + - * /, abs(), sqrt(), min(), max()."}
         </p>
-        <div class="derived-picks">
-          {picks.map((pick) => (
-            <button
-              type="button"
-              class="mini"
-              key={pick.key}
-              onClick={() => insert(pick.label)}
-            >
-              {pick.label}
-            </button>
-          ))}
-          {references.length === 0 && (
-            <span class="hint">
-              Load a description file to reference signals here.
-            </span>
-          )}
-        </div>
+        {references.length === 0 ? (
+          <span class="hint">
+            Load a description file to reference signals here.
+          </span>
+        ) : (
+          <div class="derived-browser" role="group" aria-label="Signal browser">
+            <div class="derived-browser-col">
+              <div class="derived-browser-head">Bus / cluster</div>
+              {buses.map((bus) => (
+                <button
+                  type="button"
+                  key={bus.key}
+                  class={activeBus?.key === bus.key ? "on" : ""}
+                  onClick={() => {
+                    setBusKey(bus.key);
+                    setFrameKey("");
+                  }}
+                >
+                  {bus.label}
+                </button>
+              ))}
+            </div>
+            <div class="derived-browser-col">
+              <div class="derived-browser-head">Frame / message</div>
+              {activeBus?.frames.map((frame) => (
+                <button
+                  type="button"
+                  key={frame.key}
+                  class={activeFrame?.key === frame.key ? "on" : ""}
+                  onClick={() => setFrameKey(frame.key)}
+                >
+                  {frame.label}
+                </button>
+              ))}
+            </div>
+            <div class="derived-browser-col derived-browser-signals">
+              <div class="derived-browser-head">Signal</div>
+              {activeFrame?.refs.map((reference) => (
+                <button
+                  type="button"
+                  key={reference.key}
+                  title={`Insert [${insertToken(reference)}]`}
+                  onClick={() => insert(insertToken(reference))}
+                >
+                  {reference.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div class="derived-actions">
           <span class="hint">
             The core samples every computed channel; definitions and State
