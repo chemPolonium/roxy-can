@@ -31,7 +31,7 @@
 | ECU 端口/连接器（FRAME-PORT / PDU-PORT / I-SIGNAL-PORT） | 未读取 | 否 | 发送方/接收方判定可先用 PDU group |
 | `SYSTEM-SIGNAL` → 多个 `I-SIGNAL` 扇出 | 按名称合并 | 否 | 以太网单 PDU/信号场景可先按名字 |
 | `I-SIGNAL-GROUP` | 未读取 | 否 | 接口/矩阵编辑需要 |
-| `UPDATE-INDICATION-BIT-POSITION` | 未读取 | 否 | 解码可忽略更新位 |
+| `UPDATE-INDICATION-BIT-POSITION` | 已读取 | 是 | 解码仅在置位时输出该信号；编码写值后置位 |
 | 信号 `min`/`max` | 未读取 | 否 | Signals/DBC 范围可后续 |
 | 多 cluster 引用 | 未解析，取第一个 | 是* | 同一文件多 Ethernet cluster 时需按引用选择 |
 | `CAN-CLUSTER` / `CAN-FRAME` | 已实现（`src/can_arxml.rs`）：CAN 地址/帧类、帧→PDU、I-Signal、compu/单位、PDU 周期、ECU 端口发送方 | — | 多 cluster 文件按 cluster 分别导入 |

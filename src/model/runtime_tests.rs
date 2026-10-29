@@ -436,3 +436,27 @@ fn a_text_table_transformation_is_flagged_and_left_raw() {
     );
     assert!(plan.reads[0].transform.is_none());
 }
+
+/// An update indication bit gates the value on decode and is set by encode:
+/// a frame that did not mark the signal as updated carries no new value.
+#[test]
+fn update_bit_gates_decoding_and_is_set_by_encoding() {
+    let mut comm = base_comm();
+    let mut speed = signal(1, 0, 8);
+    speed.update_bit = Some(8);
+    add_signal(&mut comm, speed);
+    let plan = plan(&comm);
+
+    let stale = decode_payload(&comm, &plan, &[0, 0x11, 0, 0, 0, 0, 0, 0]);
+    assert!(stale.is_empty(), "the update bit is clear");
+    let fresh = decode_payload(&comm, &plan, &[0, 0x11, 1, 0, 0, 0, 0, 0]);
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].raw, 0x11);
+
+    let mut payload = [0u8; 8];
+    assert_eq!(
+        encode_payload(&comm, &plan, &[(SignalId(1), 34.0)], &mut payload),
+        1
+    );
+    assert_eq!(payload[2] & 1, 1, "encode marks the signal as updated");
+}

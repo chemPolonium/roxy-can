@@ -152,6 +152,13 @@ pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<De
                 continue;
             }
         }
+        if let Some(bit) = read.update_bit
+            && (u64::from(bit) >= total_bits || payload[bit as usize / 8] & (1 << (bit % 8)) == 0)
+        {
+            // The sender did not mark this signal as updated in this frame, so
+            // it carries no new value even though its bits are readable.
+            continue;
+        }
         let fits = read.bit_offset as u64 + read.bit_len as u64 <= total_bits;
         let raw = if fits {
             extract_raw(
@@ -242,6 +249,13 @@ pub fn encode_payload(
             write.byte_order == ByteOrder::BigEndian,
             raw,
         );
+        if let Some(bit) = write.update_bit
+            && u64::from(bit) < total_bits
+        {
+            // A written signal flags itself as updated; bit 0 of its byte is
+            // the LSB, the same convention the signal start positions use.
+            pack_raw(payload, u64::from(bit), 1, false, 1);
+        }
         written += 1;
     }
     written

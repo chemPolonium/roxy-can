@@ -904,6 +904,10 @@ pub struct SignalRead {
     pub container: Option<ContainerGate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<LinearTransform>,
+    /// Absolute PDU bit position of this signal's update indication, if the
+    /// document declares one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_bit: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -920,6 +924,8 @@ pub struct SignalWrite {
     pub container: Option<ContainerGate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<LinearTransform>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_bit: Option<u32>,
 }
 
 /// What a reader can check about an E2E-protected PDU without a CRC key:

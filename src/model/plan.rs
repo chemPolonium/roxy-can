@@ -277,6 +277,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             offset: read.offset,
             container: read.container,
             transform: read.transform,
+            update_bit: read.update_bit,
         })
         .collect();
     (
@@ -350,6 +351,7 @@ fn expand_pdu(
             mux,
             container,
             transform,
+            update_bit: signal.update_bit.map(|bit| base.saturating_add(bit)),
         });
     }
 }
