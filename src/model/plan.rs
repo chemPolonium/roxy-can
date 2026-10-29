@@ -69,6 +69,39 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             ));
             continue;
         };
+        // E2E authentication itself is out of scope (no CRC/keys), but a
+        // protection that cannot be interpreted has to be said out loud
+        // rather than silently decoding unprotected-looking data.
+        if let Some(e2e_id) = pdu.e2e {
+            match comm.e2e.get(&e2e_id) {
+                None => issues.push(Issue::error(
+                    IssueKind::DanglingRef,
+                    format!("PDU {} refers to a missing E2E protection", pdu.name),
+                )),
+                Some(protection) => {
+                    if protection.profile.is_none() && protection.profile_name.trim().is_empty() {
+                        issues.push(Issue::warning(
+                            IssueKind::Unsupported,
+                            format!(
+                                "E2E protection {} states no profile; its layout is not checked",
+                                protection.name
+                            ),
+                        ));
+                    }
+                    if matches!(protection.profile, Some(4 | 5 | 7 | 44))
+                        && protection.data_id.is_none()
+                    {
+                        issues.push(Issue::warning(
+                            IssueKind::Unsupported,
+                            format!(
+                                "E2E protection {} ({}) carries a data ID but states none",
+                                protection.name, protection.profile_name
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
         let base = mapping.start_bit.saturating_sub(frame_base);
         match pdu.kind {
             PduKind::Signal => {

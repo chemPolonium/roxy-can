@@ -341,3 +341,48 @@ fn a_secured_pdu_that_cannot_hold_its_payload_is_reported() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn e2e_protection_structure_is_checked_without_authenticating() {
+    let mut comm = Comm::default();
+    let mut pdu = pdu(1, PduKind::Signal);
+    pdu.e2e = Some(E2eProtectionId(1));
+    comm.pdus.insert(PduId(1), pdu);
+    comm.frames.insert(FrameId(1), frame(1, 1));
+    comm.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(1),
+            start_bit: 0,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    comm.e2e.insert(
+        E2eProtectionId(1),
+        E2eProtection {
+            id: E2eProtectionId(1),
+            name: "E".to_string(),
+            profile_name: "Profile7".to_string(),
+            profile: Some(7),
+            data_id: None,
+            system_signal: None,
+            payload: None,
+        },
+    );
+    let (_, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
+    assert!(
+        issues.iter().any(|issue| issue.message.contains("data ID")),
+        "{issues:?}"
+    );
+
+    comm.e2e.clear();
+    let (_, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("missing E2E protection")),
+        "{issues:?}"
+    );
+}
