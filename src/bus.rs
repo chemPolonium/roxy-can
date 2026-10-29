@@ -9411,4 +9411,26 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
         assert_eq!(view.gaps, 1, "delta 3 is within Profile 1's tolerance");
         assert_eq!(view.jumps, 1, "delta 4 is a jump");
     }
+
+    #[test]
+    fn a_canonical_key_binds_its_bus_and_keeps_the_legacy_alias_working() {
+        let mut core = BusCore::new(Vec::new());
+        let db = std::sync::Arc::new(
+            crate::dbc::load_dbc_str(crate::sample_data::SAMPLE_DBC).expect("sample DBC"),
+        );
+        core.add_channel_with_dbc("CAN1".to_string(), db, 500, &mut String::new());
+        let cluster = core.can_cluster_ids[0];
+        let canonical = format!("sig:can:{}:256:false:EngineSpeed", cluster.0);
+        let key = core.resolve_key_text(&canonical).expect("canonical key");
+        assert_eq!(key.text(), canonical, "cluster survives the round trip");
+        assert!(matches!(key, SigKey::Can { ch: 0, .. }));
+        let legacy = core
+            .resolve_key_text("0:256:EngineSpeed")
+            .expect("legacy alias");
+        assert_eq!(
+            legacy.text(),
+            canonical,
+            "a legacy key upgrades to the canonical text when bound"
+        );
+    }
 }
