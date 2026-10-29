@@ -37,7 +37,7 @@
 
 ## ARXML 通信层（审计见 `docs/arxml-communication-audit.md`）
 
-- 统一模型已读：三协议 Frame/PDU/Signal、compu/初始值/量程（含 `DATA-CONSTR`）、PDU 周期、ECU 端口、Signal Group 结构、Container/Multiplexed/Secured PDU（含容器头门控与 SecOC 结构校验）、E2E 结构与 identity/linear Transformation。仍未做：Signal Group 的选择/显示、PDU 组与端口方向的完整 UI、frame-level E2E 校验与真实 SecOC/E2E 语料。
+- 统一模型已读：三协议 Frame/PDU/Signal、compu/初始值/量程（含 `DATA-CONSTR`）、PDU 周期、ECU 端口、Signal Group 结构、Container/Multiplexed/Secured PDU（含容器头门控与 SecOC 结构校验）、E2E 结构与 identity/linear Transformation。仍未做：PDU 组与端口方向的完整 UI、frame-level E2E 校验与真实 SecOC/E2E 语料。
 - FlexRay 仍缺：`PDU-TRIGGERING` 之外的端口/连接器细节、SystemSignal 扇出的 UI 展示。
 - 以太网必需的子集随以太网功能实现；其余只记录，不在本次补。
 

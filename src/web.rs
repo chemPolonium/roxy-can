@@ -4221,6 +4221,9 @@ struct WebCatalogSignal {
     /// `CM_ SG_` description; omitted when the database has none.
     #[serde(skip_serializing_if = "String::is_empty")]
     comment: String,
+    /// The I-SIGNAL-GROUP this signal belongs to, when one names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
 }
 
 fn channel_signature(app: &App) -> String {
@@ -4266,7 +4269,11 @@ fn refresh_catalog(app: &App, catalog: &Arc<Mutex<WebCatalog>>, signature: &mut 
     }
 }
 
-fn catalog_signal(key: String, signal: &crate::model::Signal) -> WebCatalogSignal {
+fn catalog_signal(
+    key: String,
+    signal: &crate::model::Signal,
+    group: Option<String>,
+) -> WebCatalogSignal {
     WebCatalogSignal {
         key,
         name: signal.name.clone(),
@@ -4275,7 +4282,16 @@ fn catalog_signal(key: String, signal: &crate::model::Signal) -> WebCatalogSigna
         max: signal.max.unwrap_or(0.0),
         initial: signal.initial_physical(),
         comment: signal.comment.clone(),
+        group,
     }
+}
+
+/// The name of the I-SIGNAL-GROUP a signal belongs to, from the model.
+fn signal_group_name(comm: &crate::model::Comm, signal: &crate::model::Signal) -> Option<String> {
+    signal
+        .group
+        .and_then(|group| comm.groups.get(&group))
+        .map(|group| group.name.clone())
 }
 
 /// The messages one CAN channel's model declares, in id order. Names,
@@ -4309,6 +4325,7 @@ fn can_catalog_messages(comm: &crate::model::Comm) -> Vec<WebCatalogMessage> {
                         catalog_signal(
                             series_key(&SigKey::can_in(cluster, id, extended, &signal.name)),
                             signal,
+                            signal_group_name(comm, signal),
                         )
                     })
                     .collect(),
@@ -4348,6 +4365,7 @@ fn fr_catalog_messages(comm: &crate::model::Comm) -> Vec<WebCatalogMessage> {
                         catalog_signal(
                             series_key(&SigKey::fr_in(cluster, slot, &signal.name)),
                             signal,
+                            signal_group_name(comm, signal),
                         )
                     })
                     .collect(),
@@ -4391,6 +4409,7 @@ fn eth_catalog_messages(
                     catalog_signal(
                         series_key(&SigKey::eth_in(cluster, &frame.name, &signal.name)),
                         signal,
+                        signal_group_name(comm, signal),
                     )
                 })
                 .collect(),

@@ -88,6 +88,8 @@ export interface CatalogSignal {
   initial?: number;
   /// `CM_ SG_` description, when the database carries one.
   comment?: string;
+  /// I-SIGNAL-GROUP name, when the model declares one.
+  group?: string;
 }
 
 export interface CatalogMessage {

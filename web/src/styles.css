@@ -6696,3 +6696,22 @@ button.danger:hover:not(:disabled) {
   }
 }
 
+
+/* Signal group badge: a compact chip that selects every member on click. */
+.picker-group {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.picker-group:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

@@ -231,6 +231,26 @@ export function SignalPicker({
                               <span>{signal.name}</span>
                             </label>
                           )}
+                          {signal.group && (
+                            <button
+                              type="button"
+                              class="picker-group"
+                              title={`Signal group "${signal.group}": click to select every member`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                for (const member of signals) {
+                                  if (
+                                    member.group === signal.group &&
+                                    !selected.has(member.key)
+                                  ) {
+                                    onToggle(channel, message, member, true);
+                                  }
+                                }
+                              }}
+                            >
+                              {signal.group}
+                            </button>
+                          )}
                           {watched?.has(signal.key) && (
                             <small class="picker-mark">mon</small>
                           )}
