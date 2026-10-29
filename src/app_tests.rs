@@ -364,6 +364,72 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
     );
 }
 
+/// An ARXML CAN cluster must reach the core as the document's unified model,
+/// not as a DBC-shaped table re-derived from it: only the document carries
+/// structure the table cannot express. The model also has to survive a
+/// reopen, where `SetClusterIds` runs after the file load and rebuilds the
+/// adapter models around the restored ids.
+#[test]
+fn arxml_can_import_reaches_the_unified_model_and_survives_reopen() {
+    let dir = std::env::temp_dir().join("roxy_can_arxml_model");
+    std::fs::create_dir_all(&dir).unwrap();
+    let arxml = dir.join("two.arxml");
+    std::fs::write(&arxml, crate::can_arxml_tests::SAMPLE).unwrap();
+    let mut app = App::headless();
+    app.import_arxml_path(arxml.to_string_lossy().as_ref());
+    app.settle();
+    let bus = app
+        .snap
+        .channels
+        .iter()
+        .position(|c| c.name == "CanA")
+        .expect("CanA became a channel");
+    let model = app.model_comms[bus].as_ref().expect("the cluster's model");
+    let cluster = model.clusters.values().next().expect("one cluster");
+    assert!(
+        matches!(
+            cluster.sources.first(),
+            Some(crate::model::ClusterSource::Arxml { .. })
+        ),
+        "the model is read from the document, not the adapter: {:?}",
+        cluster.sources
+    );
+    assert_eq!(
+        cluster.id,
+        crate::model::ClusterId(app.snap.cluster_ids.can[bus]),
+        "the document model is rebound to the channel's global id"
+    );
+    assert!(
+        model.frames.values().any(|f| f.name == "A"),
+        "the document's frame is in the model"
+    );
+
+    let path = dir.join("model.rxproj");
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+    let mut restored = App::headless();
+    restored.open_project_path(&path);
+    restored.settle();
+    let bus = restored
+        .snap
+        .channels
+        .iter()
+        .position(|c| c.name == "CanA")
+        .expect("CanA is still a channel");
+    let model = restored.model_comms[bus]
+        .as_ref()
+        .expect("the ARXML model after reopen");
+    let cluster = model.clusters.values().next().expect("one cluster");
+    assert!(
+        matches!(
+            cluster.sources.first(),
+            Some(crate::model::ClusterSource::Arxml { .. })
+        ),
+        "the reopen restores the document model, not the adapter's: {:?}",
+        cluster.sources
+    );
+    assert_eq!(cluster.id.0, restored.snap.cluster_ids.can[bus]);
+}
+
 #[test]
 fn loading_a_project_points_the_record_draft_at_its_record_folder() {
     let dir = std::env::temp_dir().join("roxy_can_record_home");

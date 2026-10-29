@@ -906,6 +906,38 @@ pub struct Comm {
 }
 
 impl Comm {
+    /// Points a one-cluster import at the id the bus core assigned to the
+    /// channel. The ARXML reader numbers its cluster before the core has
+    /// handed out a global id, so the receiver rewrites the references once,
+    /// on the way in. A model with more than one cluster is left alone: that
+    /// is not the shape `import_cluster` produces, and guessing which cluster
+    /// belongs to the channel would be worse than decoding without it.
+    pub fn rebind_cluster(&mut self, to: ClusterId) {
+        if self.clusters.len() != 1 {
+            return;
+        }
+        let Some(old) = self.clusters.keys().next().copied() else {
+            return;
+        };
+        if old == to {
+            return;
+        }
+        if let Some(mut cluster) = self.clusters.remove(&old) {
+            cluster.id = to;
+            self.clusters.insert(to, cluster);
+        }
+        for network in self.networks.values_mut() {
+            if network.cluster == old {
+                network.cluster = to;
+            }
+        }
+        for frame in self.frames.values_mut() {
+            if frame.cluster == old {
+                frame.cluster = to;
+            }
+        }
+    }
+
     pub fn cluster_by_name(&self, name: &str) -> Option<&Cluster> {
         self.clusters.values().find(|c| c.matches_name(name))
     }

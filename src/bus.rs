@@ -251,6 +251,26 @@ pub enum BusCommand {
     /// capture's payload never does, so this decides how a definition's
     /// stated length compares with an arriving flow.
     SetEthLengthIncludesHeader(bool),
+    /// Replaces one CAN channel's unified model with a matrix read straight
+    /// from ARXML. The legacy table still serves names and the generator, but
+    /// container/mux/E2E structure exists only in the unified model, so the
+    /// reader's output has to reach the core instead of being re-derived from
+    /// the table.
+    SetChannelModel {
+        ch: u8,
+        comm: Arc<crate::model::Comm>,
+    },
+    /// The same for a FlexRay bus, whose document also carries structure the
+    /// FIBEX-shaped database cannot hold.
+    SetFrModel {
+        bus: u8,
+        comm: Arc<crate::model::Comm>,
+    },
+    /// The same for an Ethernet bus.
+    SetEthModel {
+        bus: u8,
+        comm: Arc<crate::model::Comm>,
+    },
     /// Restores the persisted global cluster ids from a project file.
     SetClusterIds {
         next: u32,
@@ -2077,6 +2097,9 @@ impl BusCore {
                 }
             }
             BusCommand::SetEthLengthIncludesHeader(on) => self.eth_length_includes_header = on,
+            BusCommand::SetChannelModel { ch, comm } => self.set_channel_model(ch, comm),
+            BusCommand::SetFrModel { bus, comm } => self.set_fr_model(bus, comm),
+            BusCommand::SetEthModel { bus, comm } => self.set_eth_model(bus, comm),
             BusCommand::SetClusterIds { next, can, fr, eth } => {
                 self.cluster_ids = crate::model::ClusterIds::new(next);
                 self.can_cluster_ids = can.into_iter().map(crate::model::ClusterId).collect();
@@ -4415,6 +4438,74 @@ impl BusCore {
         self.model_comms[ch] = Some(Arc::new(outcome.comm));
         self.model_plans[ch] = Some(Arc::new(plans));
         self.model_dbs[ch] = Some(db);
+    }
+
+    /// Anchors a matrix-read model to a channel. The model's database guard
+    /// is the channel's current table: replacing that table without a new
+    /// model must fall back to the legacy decoder, exactly like the
+    /// adapter-built models.
+    fn set_channel_model(&mut self, ch: u8, comm: Arc<crate::model::Comm>) {
+        let ch = ch as usize;
+        let Some(channel) = self.channels.get(ch) else {
+            return;
+        };
+        if self.model_comms.len() <= ch {
+            self.model_comms.resize(ch + 1, None);
+            self.model_plans.resize(ch + 1, None);
+            self.model_dbs.resize(ch + 1, None);
+        }
+        while self.can_cluster_ids.len() <= ch {
+            let id = self.cluster_ids.allocate();
+            self.can_cluster_ids.push(id);
+        }
+        let mut comm = (*comm).clone();
+        comm.rebind_cluster(self.can_cluster_ids[ch]);
+        let (plans, _) = crate::model::PlanCache::build(&comm, 1);
+        self.model_comms[ch] = Some(Arc::new(comm));
+        self.model_plans[ch] = Some(Arc::new(plans));
+        self.model_dbs[ch] = channel.dbc.clone();
+    }
+
+    fn set_fr_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
+        if !self.fr_dbs.contains_key(&bus) {
+            return;
+        }
+        let id = match self.fr_cluster_ids.get(&bus) {
+            Some(id) => *id,
+            None => {
+                let id = self.cluster_ids.allocate();
+                self.fr_cluster_ids.insert(bus, id);
+                id
+            }
+        };
+        let mut comm = (*comm).clone();
+        comm.rebind_cluster(id);
+        let (plans, _) = crate::model::PlanCache::build(&comm, 1);
+        self.fr_models.insert(bus, Arc::new(comm));
+        self.fr_model_plans.insert(bus, Arc::new(plans));
+        self.fr_model_dbs
+            .insert(bus, Arc::clone(&self.fr_dbs[&bus]));
+    }
+
+    fn set_eth_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
+        if !self.eth_dbs.contains_key(&bus) {
+            return;
+        }
+        let id = match self.eth_cluster_ids.get(&bus) {
+            Some(id) => *id,
+            None => {
+                let id = self.cluster_ids.allocate();
+                self.eth_cluster_ids.insert(bus, id);
+                id
+            }
+        };
+        let mut comm = (*comm).clone();
+        comm.rebind_cluster(id);
+        let (plans, _) = crate::model::PlanCache::build(&comm, 1);
+        self.eth_models.insert(bus, Arc::new(comm));
+        self.eth_model_plans.insert(bus, Arc::new(plans));
+        self.eth_model_dbs
+            .insert(bus, Arc::clone(&self.eth_dbs[&bus]));
     }
 
     fn rebuild_fr_models(&mut self) {

@@ -478,6 +478,9 @@ impl App {
             }
         }
         self.push_eth_db_to_core();
+        if let Some(name) = self.eth_clusters.get(&bus).cloned() {
+            self.apply_eth_arxml_model(bus, &text, path, &name);
+        }
         self.status = format!(
             "Loaded Ethernet matrix ETH{bus} ({cluster_label}, {vlans} VLANs, {frames} frames): {path}"
         );
@@ -506,7 +509,138 @@ impl App {
         });
         self.can_arxml
             .insert(bus, (path.to_string(), cluster.to_string()));
+        self.apply_can_arxml_model(bus, &text, path, cluster);
         Ok(())
+    }
+
+    /// Hands the core a CAN cluster's unified model read straight from ARXML.
+    /// The table just sent keeps names and the generator working; only this
+    /// model carries container/mux/E2E structure, so it has to be rebuilt from
+    /// the document rather than derived from the table. The core rebinds the
+    /// model to the channel's global cluster id.
+    fn apply_can_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
+        let source = crate::model::ClusterSource::Arxml {
+            path: path.to_string(),
+            cluster: cluster.to_string(),
+        };
+        let mut ids = crate::model::ElementIds::new();
+        let outcome = crate::model::import_cluster(
+            text,
+            cluster,
+            crate::model::ClusterId(0),
+            &source,
+            &mut ids,
+        );
+        if outcome.comm.clusters.is_empty() {
+            return;
+        }
+        self.send(crate::bus::BusCommand::SetChannelModel {
+            ch: bus,
+            comm: std::sync::Arc::new(outcome.comm),
+        });
+    }
+
+    fn apply_fr_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
+        let source = crate::model::ClusterSource::Arxml {
+            path: path.to_string(),
+            cluster: cluster.to_string(),
+        };
+        let mut ids = crate::model::ElementIds::new();
+        let outcome = crate::model::import_cluster(
+            text,
+            cluster,
+            crate::model::ClusterId(0),
+            &source,
+            &mut ids,
+        );
+        if outcome.comm.clusters.is_empty() {
+            return;
+        }
+        self.send(crate::bus::BusCommand::SetFrModel {
+            bus,
+            comm: std::sync::Arc::new(outcome.comm),
+        });
+    }
+
+    fn apply_eth_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
+        let source = crate::model::ClusterSource::Arxml {
+            path: path.to_string(),
+            cluster: cluster.to_string(),
+        };
+        let mut ids = crate::model::ElementIds::new();
+        let outcome = crate::model::import_cluster(
+            text,
+            cluster,
+            crate::model::ClusterId(0),
+            &source,
+            &mut ids,
+        );
+        if outcome.comm.clusters.is_empty() {
+            return;
+        }
+        self.send(crate::bus::BusCommand::SetEthModel {
+            bus,
+            comm: std::sync::Arc::new(outcome.comm),
+        });
+    }
+
+    /// Re-reads every ARXML cluster's model, for paths where the cluster ids
+    /// were replaced after the load (project open restores persisted ids and
+    /// rebuilds the adapter models, which drops the document's structure).
+    pub(crate) fn reload_arxml_models(&mut self) {
+        let can: Vec<(u8, String, String)> = self
+            .can_arxml
+            .iter()
+            .map(|(bus, (path, cluster))| (*bus, path.clone(), cluster.clone()))
+            .collect();
+        let fr: Vec<(u8, String, String)> = self
+            .fr_buses
+            .iter()
+            .filter_map(|(bus, cfg)| {
+                self.fr_clusters
+                    .get(bus)
+                    .map(|cluster| (*bus, cfg.path.clone(), cluster.clone()))
+            })
+            .collect();
+        let eth: Vec<(u8, String, String)> = self
+            .eth_buses
+            .iter()
+            .filter_map(|(bus, cfg)| {
+                self.eth_clusters
+                    .get(bus)
+                    .map(|cluster| (*bus, cfg.path.clone(), cluster.clone()))
+            })
+            .collect();
+        for (bus, path, cluster) in can {
+            if let Ok(bytes) = std::fs::read(&path) {
+                self.apply_can_arxml_model(
+                    bus,
+                    &crate::dbc::text_from_bytes(bytes),
+                    &path,
+                    &cluster,
+                );
+            }
+        }
+        for (bus, path, cluster) in fr {
+            if let Ok(bytes) = std::fs::read(&path) {
+                self.apply_fr_arxml_model(
+                    bus,
+                    &crate::dbc::text_from_bytes(bytes),
+                    &path,
+                    &cluster,
+                );
+            }
+        }
+        for (bus, path, cluster) in eth {
+            if let Ok(bytes) = std::fs::read(&path) {
+                self.apply_eth_arxml_model(
+                    bus,
+                    &crate::dbc::text_from_bytes(bytes),
+                    &path,
+                    &cluster,
+                );
+            }
+        }
     }
 
     pub fn import_arxml_path(&mut self, path: &str) {
@@ -600,7 +734,8 @@ impl App {
                                     bus
                                 }
                             };
-                            self.can_arxml.insert(bus, (path.to_string(), name));
+                            self.can_arxml.insert(bus, (path.to_string(), name.clone()));
+                            self.apply_can_arxml_model(bus, &text, path, &name);
                         }
                         Err(e) => errors.push(format!("{} {}: {e}", info.kind.label(), info.name)),
                     }
@@ -826,6 +961,9 @@ impl App {
             }
         }
         self.push_fr_db_to_core();
+        if let Some(name) = self.fr_clusters.get(&bus).cloned() {
+            self.apply_fr_arxml_model(bus, &text, path, &name);
+        }
         Some(bus)
     }
 

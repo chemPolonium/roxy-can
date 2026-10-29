@@ -438,6 +438,10 @@ impl App {
                     }
                     self.send(crate::bus::BusCommand::SetReplayMap(replay));
                 }
+                // `SetClusterIds` rebuilt the adapter models around the
+                // restored ids; the ARXML models have to be read once more
+                // or the document's container/mux structure is lost.
+                self.reload_arxml_models();
                 self.settle();
             }
             self.workspace_rev = self.workspace_rev.wrapping_add(1);

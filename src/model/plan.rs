@@ -40,6 +40,20 @@ impl PlanCache {
 pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePlan, Vec<Issue>) {
     let mut reads = Vec::new();
     let mut issues = Vec::new();
+    // A logged FlexRay payload begins at the frame's first PDU, while AUTOSAR
+    // START-POSITIONs are measured from the frame head. Rebase once here so
+    // the plan's offsets are payload offsets, matching the FIBEX decoder.
+    let frame_base = if matches!(frame.address, FrameAddress::FlexRay { .. }) {
+        frame
+            .pdu_mappings
+            .iter()
+            .filter_map(|id| comm.frame_pdu_mappings.get(id))
+            .map(|mapping| mapping.start_bit)
+            .min()
+            .unwrap_or(0)
+    } else {
+        0
+    };
     for mapping_id in &frame.pdu_mappings {
         let Some(mapping) = comm.frame_pdu_mappings.get(mapping_id) else {
             issues.push(Issue::error(
@@ -55,7 +69,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             ));
             continue;
         };
-        let base = mapping.start_bit;
+        let base = mapping.start_bit.saturating_sub(frame_base);
         match pdu.kind {
             PduKind::Signal => {
                 expand_pdu(comm, pdu.id, base, None, &mut reads);

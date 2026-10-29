@@ -12,7 +12,9 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 > CAN/FR/ETH 订阅、CAN/FR 触发器与脚本节点输入已切到统一模型，第 5 阶段的
 > 三协议 Panel/Generator/脚本发送已切，第 6 阶段 mux/container/secured payload
 > 已进计划，第 7 阶段已实现 v1 总线迁移、`.rxproj` schema v2 保存与 ClusterId
-> 恢复；`SigKey` 全链路、Buses UI 与 v1 视图段迁移仍未完成。逐项状态见
+> 恢复，generator 行也以 cluster id 存入 v2；ARXML 导入现在把三协议的统一
+> 模型直接送进核心（工程重开时按恢复后的 id 重新绑定）。`SigKey` 全链路、
+> Buses UI 与 v1 视图段迁移仍未完成。逐项状态见
 > [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
 
 ## 1. 原则

@@ -1,6 +1,6 @@
 use crate::can_arxml::{parse_cluster, scan};
 
-const SAMPLE: &str = r#"<?xml version="1.0"?>
+pub(crate) const SAMPLE: &str = r#"<?xml version="1.0"?>
 <AUTOSAR>
  <AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
   <CAN-CLUSTER><SHORT-NAME>CanA</SHORT-NAME>
