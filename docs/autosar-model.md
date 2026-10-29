@@ -896,7 +896,7 @@ v1 工程在打开时一次性迁移到内存 v2，保存时写 v2；原文件�
 | 7 Buses UI 与迁移 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source，Name/Source/Frames 优先取模型 cluster 与帧数），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡；窗口/nodes/blocks/sysvars/derived/web 已从兼容 `config` 段迁为 typed v2 字段（保存时不再写回旧键，旧 v2 文件仍可读）；Trace 窗口的 CAN/FR 手选同时以 cluster id 保存，打开时换回路号 |
 | 8 清理与发布 | 进行中（v0.29.0 已发布） | 生产解码已全部走模型（含 Reference、CLI CSV 与脚本 `set_sig/get_sig`）；描述表的旧编码/解码方法只在测试里保留（生产路径没有回退）；`Channel`/`FrBusCfg`/`EthBusCfg` 承载的表格/名称仍在；真实 SecOC/E2E golden 语料与硬件验收仍待补 |
 
-验证状态（2026-10-29）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（892 通过）、前端 71 测试与 `npm run build` 全绿；release 包在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出；远端 CI（windows-latest）在 `4be178a` 上 fmt/build/clippy -D warnings/test 全绿。Buses 已在 headless Chromium + CDP 下按 1024×768 与 1280×800、明暗两套主题复核（统一 Cluster 表、Add cluster、各 kind 详情无横向溢出）；硬件验收未重跑。
+验证状态（2026-10-29）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（892 通过）、前端 71 测试与 `npm run build` 全绿；release 包在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出；远端 CI（windows-latest）在 `e295632` 上 fmt/build/clippy -D warnings/test 全绿。Buses 已在 headless Chromium + CDP 下按 1024×768 与 1280×800、明暗两套主题复核（统一 Cluster 表、Add cluster、各 kind 详情无横向溢出）；硬件验收未重跑。
 
 剩余工作按计划顺序：硬件端口按物理路号寻址（附件跟随通道/簇）并重跑 VN1610 复验；E2E 校验、Transformation 数值执行与真实多协议/SecOC/E2E 语料；最后删除旧运行时路径与兼容层。当前 ARXML 文档模型已直接进核心，`SigKey` 与 Messages/Statistics 聚合都以 cluster 为身份、bus 只按映射解析；回放映射已以 cluster 为目标、硬件端口仍按路号，前端 `signalRef` 也仍可能来自旧文本。
 
