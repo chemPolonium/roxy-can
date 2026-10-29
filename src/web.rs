@@ -5837,9 +5837,15 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         let key = format!("fr:{}:{}:{}", m.bus, m.slot, occupant);
         let frame_ix = app.fr_described_frame(m);
         let frame_db = app.fr_db(m.bus);
-        let signal_count = frame_ix
-            .and_then(|ix| frame_db.map(|db| db.signal_names(ix).len()))
-            .unwrap_or(0);
+        let signal_count = snap
+            .fr_model_frames
+            .get(&(m.bus, m.slot))
+            .map(|frame| frame.signal_count)
+            .unwrap_or_else(|| {
+                frame_ix
+                    .and_then(|ix| frame_db.map(|db| db.signal_names(ix).len()))
+                    .unwrap_or(0)
+            });
         let signals = if app.expanded_messages.contains(&key) {
             snap.expanded_signals
                 .get(&key)
@@ -5893,7 +5899,14 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         .db
                         .frames
                         .get(index)
-                        .map(|frame| frame.pdus.iter().map(|pdu| pdu.signals.len()).sum())
+                        .map(|frame| {
+                            snap.eth_model_frames
+                                .get(&frame.name)
+                                .map(|model| model.signal_count)
+                                .unwrap_or_else(|| {
+                                    frame.pdus.iter().map(|pdu| pdu.signals.len()).sum()
+                                })
+                        })
                         .unwrap_or(0),
                     _ => 0,
                 };

@@ -6856,6 +6856,14 @@ fn fr_and_eth_arxml_models_reach_the_core_and_survive_reopen() {
         "and bound to the bus's global id"
     );
 
+    assert!(
+        app.snap
+            .fr_model_frames
+            .values()
+            .any(|frame| frame.signal_count > 0),
+        "the snapshot carries FR model frame counts"
+    );
+
     let eth_bus = app
         .load_eth_description(crate::test_assets::eth_arxml(), Some(0))
         .expect("Ethernet description");
@@ -6868,6 +6876,13 @@ fn fr_and_eth_arxml_models_reach_the_core_and_survive_reopen() {
     assert_eq!(
         Some(&eth_cluster.id.0),
         app.snap.cluster_ids.eth.get(&eth_bus)
+    );
+    assert!(
+        app.snap
+            .eth_model_frames
+            .get("EthFrame")
+            .is_some_and(|frame| frame.signal_count > 0),
+        "the snapshot carries Ethernet model frame counts"
     );
 
     let path = std::env::temp_dir().join(format!(

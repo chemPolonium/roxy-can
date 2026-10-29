@@ -824,6 +824,10 @@ pub struct Snapshot {
     /// model keeps standard and extended ids apart and counts container
     /// children the table never held.
     pub model_frames: std::collections::BTreeMap<(u8, u32, bool), ModelFrameView>,
+    /// The same for FlexRay slots, keyed by `(bus, slot)`.
+    pub fr_model_frames: std::collections::BTreeMap<(u8, u16), ModelFrameView>,
+    /// The same for Ethernet frames, keyed by frame name.
+    pub eth_model_frames: std::collections::BTreeMap<String, ModelFrameView>,
     /// Decoded children for the Messages rows the frontend has expanded,
     /// keyed by the row's stable message key. CAN only for now; FR/ETH rows
     /// still decode in the frontend.
@@ -3592,6 +3596,56 @@ impl BusCore {
         out
     }
 
+    fn fr_model_frames_view(&self) -> std::collections::BTreeMap<(u8, u16), ModelFrameView> {
+        use crate::model::FrameAddress;
+        let mut out = std::collections::BTreeMap::new();
+        for (bus, comm) in &self.fr_models {
+            let plans = self.fr_model_plans.get(bus);
+            for frame in comm.frames.values() {
+                let FrameAddress::FlexRay { slot, .. } = frame.address else {
+                    continue;
+                };
+                let signal_count = plans
+                    .and_then(|plans| plans.get(frame.id))
+                    .map(|plan| plan.reads.len())
+                    .unwrap_or(0);
+                out.insert(
+                    (*bus, slot),
+                    ModelFrameView {
+                        name: frame.name.clone(),
+                        signal_count,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    fn eth_model_frames_view(&self) -> std::collections::BTreeMap<String, ModelFrameView> {
+        use crate::model::FrameAddress;
+        let mut out = std::collections::BTreeMap::new();
+        for (bus, comm) in &self.eth_models {
+            let plans = self.eth_model_plans.get(bus);
+            for frame in comm.frames.values() {
+                if !matches!(frame.address, FrameAddress::Ethernet { .. }) {
+                    continue;
+                }
+                let signal_count = plans
+                    .and_then(|plans| plans.get(frame.id))
+                    .map(|plan| plan.reads.len())
+                    .unwrap_or(0);
+                out.insert(
+                    frame.name.clone(),
+                    ModelFrameView {
+                        name: frame.name.clone(),
+                        signal_count,
+                    },
+                );
+            }
+        }
+        out
+    }
+
     fn expanded_signals_view(&self) -> std::collections::BTreeMap<String, Vec<ExpandedSignal>> {
         let mut out = std::collections::BTreeMap::new();
         if self.expanded_messages.is_empty() {
@@ -3770,6 +3824,8 @@ impl BusCore {
             channel_count: self.channels.len(),
             cluster_ids: self.cluster_ids_view(),
             model_frames: self.model_frames_view(),
+            fr_model_frames: self.fr_model_frames_view(),
+            eth_model_frames: self.eth_model_frames_view(),
             expanded_signals: self.expanded_signals_view(),
             laps: self.laps,
             hw_refresh: self.hw.refresh_seq,
