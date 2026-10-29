@@ -1892,6 +1892,7 @@ mod tests {
         assert_eq!(app.fr_bus_name(0), "FR0", "another 路 is untouched");
         assert_eq!(
             app.sig_bus_label(&crate::observe::SigKey::Fr {
+                cluster: crate::model::ClusterId(0),
                 bus: 1,
                 slot: 13,
                 name: "DriveTorque".to_string(),

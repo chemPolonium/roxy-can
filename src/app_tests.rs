@@ -11158,6 +11158,7 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     // One reference of each kind, on each 路.
     for bus in [0u8, 1] {
         let key = SigKey::Fr {
+            cluster: crate::model::ClusterId(0),
             bus,
             slot,
             name: "CarSpeed".to_string(),
@@ -11280,6 +11281,7 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
         "FR0's subscription is gone"
     );
     assert!(app.subs.contains_key(&SigKey::Fr {
+        cluster: crate::model::ClusterId(0),
         bus: 1,
         slot,
         name: "CarSpeed".to_string()

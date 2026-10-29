@@ -792,7 +792,10 @@ function SetpointControl({
     widget.source,
     value !== null ? `value ${formatPanelValue(value, widget.digits)}` : "",
     sent !== null ? `written ${formatPanelValue(sent, widget.digits)}` : "",
-    widget.source.startsWith("fr:") || widget.source.startsWith("eth:")
+    widget.source.startsWith("fr:") ||
+    widget.source.startsWith("eth:") ||
+    widget.source.startsWith("sig:fr:") ||
+    widget.source.startsWith("sig:eth:")
       ? "session only"
       : "",
   ]

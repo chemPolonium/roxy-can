@@ -56,7 +56,9 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
     let mut targets = Vec::new();
     for key in keys {
         match key {
-            SigKey::Can { ch, id, ext, name } => {
+            SigKey::Can {
+                ch, id, ext, name, ..
+            } => {
                 let Some(channel) = app.snap.channels.get(*ch as usize) else {
                     continue;
                 };
@@ -83,7 +85,9 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                     last_us: None,
                 });
             }
-            SigKey::Fr { bus, slot, name } => {
+            SigKey::Fr {
+                bus, slot, name, ..
+            } => {
                 let Some(cfg) = app.fr_buses.get(bus) else {
                     continue;
                 };
@@ -103,7 +107,9 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                     last_us: None,
                 });
             }
-            SigKey::Eth { bus, frame, name } => {
+            SigKey::Eth {
+                bus, frame, name, ..
+            } => {
                 let Some(db) = app.eth_db(*bus) else {
                     continue;
                 };

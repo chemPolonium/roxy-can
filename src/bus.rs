@@ -1712,7 +1712,7 @@ impl BusCore {
                 } else {
                     let mut failed: Vec<String> = Vec::new();
                     for (source, value) in writes {
-                        let result = match crate::observe::SigKey::from_text(source.trim()) {
+                        let result = match self.resolve_key_text(source.trim()) {
                             None => Err("unknown signal key".to_string()),
                             Some(_) if !value.is_finite() => {
                                 Err("value must be a number".to_string())
@@ -3289,11 +3289,11 @@ impl BusCore {
     /// never collide with a real frame's signals; the selection tree lists
     /// these streams under the owning node's name.
     fn ingest_emitted(&mut self, ch: u8, node_id: u64, node_name: &str, name: &str, v: f64) {
-        let key = SigKey::can(
+        let key = self.can_key(
             ch,
             crate::app::EMITTED_ID_BASE | node_id as u32,
             false,
-            name,
+            name.to_string(),
         );
         if !self.emitted_streams.iter().any(|(k, _)| k == &key) {
             // A script computing names in a loop would otherwise balloon
@@ -3542,8 +3542,7 @@ impl BusCore {
                     let stride = self.applied_stride_us;
                     let t_us = frame.t_us;
                     for d in values {
-                        let key =
-                            crate::observe::SigKey::eth(frame.bus, frame_name.clone(), d.name);
+                        let key = self.eth_key(frame.bus, frame_name.clone(), d.name);
                         if let Some(entry) = self.subs.get_mut(&key) {
                             entry.latest = d.phys;
                             entry.last_raw = d.raw;
@@ -4067,7 +4066,120 @@ impl BusCore {
     /// Starts caching one signal: a fresh [`Subscription`] gets the next
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
+    /// A CAN key carrying the channel's cluster id, for canonical wire text.
+    pub(crate) fn can_key(&self, ch: u8, id: u32, ext: bool, name: String) -> SigKey {
+        let cluster = self
+            .can_cluster_ids
+            .get(ch as usize)
+            .copied()
+            .unwrap_or(crate::model::ClusterId(0));
+        SigKey::can_in(cluster, ch, id, ext, name)
+    }
+
+    pub(crate) fn fr_key(&self, bus: u8, slot: u16, name: String) -> SigKey {
+        let cluster = self
+            .fr_cluster_ids
+            .get(&bus)
+            .copied()
+            .unwrap_or(crate::model::ClusterId(0));
+        SigKey::fr_in(cluster, bus, slot, name)
+    }
+
+    pub(crate) fn eth_key(&self, bus: u8, frame: String, name: String) -> SigKey {
+        let cluster = self
+            .eth_cluster_ids
+            .get(&bus)
+            .copied()
+            .unwrap_or(crate::model::ClusterId(0));
+        SigKey::eth_in(cluster, bus, frame, name)
+    }
+
+    /// Fills in the bus index a canonical key does not carry. A key with no
+    /// cluster is already complete; one naming a cluster that is gone is
+    /// dropped rather than written to whichever bus happens to be zero.
+    pub(crate) fn bind_key(&self, key: SigKey) -> Option<SigKey> {
+        match key {
+            SigKey::Can {
+                cluster,
+                id,
+                ext,
+                name,
+                ch,
+                ..
+            } => {
+                if cluster.0 == 0 {
+                    return Some(SigKey::can_in(
+                        self.can_cluster_ids
+                            .get(ch as usize)
+                            .copied()
+                            .unwrap_or(cluster),
+                        ch,
+                        id,
+                        ext,
+                        name,
+                    ));
+                }
+                let bus = self.can_cluster_ids.iter().position(|id| *id == cluster)?;
+                Some(SigKey::can_in(cluster, bus as u8, id, ext, name))
+            }
+            SigKey::Fr {
+                cluster,
+                bus,
+                slot,
+                name,
+                ..
+            } => {
+                if cluster.0 == 0 {
+                    return Some(SigKey::fr_in(
+                        self.fr_cluster_ids.get(&bus).copied().unwrap_or(cluster),
+                        bus,
+                        slot,
+                        name,
+                    ));
+                }
+                let bus = self
+                    .fr_cluster_ids
+                    .iter()
+                    .find(|(_, id)| **id == cluster)
+                    .map(|(bus, _)| *bus)?;
+                Some(SigKey::fr_in(cluster, bus, slot, name))
+            }
+            SigKey::Eth {
+                cluster,
+                bus,
+                frame,
+                name,
+                ..
+            } => {
+                if cluster.0 == 0 {
+                    return Some(SigKey::eth_in(
+                        self.eth_cluster_ids.get(&bus).copied().unwrap_or(cluster),
+                        bus,
+                        frame,
+                        name,
+                    ));
+                }
+                let bus = self
+                    .eth_cluster_ids
+                    .iter()
+                    .find(|(_, id)| **id == cluster)
+                    .map(|(bus, _)| *bus)?;
+                Some(SigKey::eth_in(cluster, bus, frame, name))
+            }
+            derived @ SigKey::Derived { .. } => Some(derived),
+        }
+    }
+
+    /// Text from a panel/script/derived source: canonical `sig:` keys and the
+    /// legacy spellings both resolve, the former through its cluster id.
+    pub(crate) fn resolve_key_text(&self, text: &str) -> Option<SigKey> {
+        self.bind_key(SigKey::from_text(text.trim())?)
+    }
+
     pub(crate) fn subscribe_signal(&mut self, key: SigKey) {
+        let Some(key) = self.bind_key(key) else {
+            return;
+        };
         if !self.subs.contains_key(&key) {
             let type_tag = self.signal_meta(&key);
             self.subs.insert(
@@ -4102,7 +4214,9 @@ impl BusCore {
             // `decode_signals` leaves it empty; the Ethernet matrix states
             // signedness and width, the same pair its decoder tags.
             SigKey::Fr { .. } => String::new(),
-            SigKey::Eth { bus, frame, name } => self
+            SigKey::Eth {
+                bus, frame, name, ..
+            } => self
                 .eth_dbs
                 .get(bus)
                 .and_then(|db| db.frames.iter().find(|f| &f.name == frame))
@@ -4114,7 +4228,9 @@ impl BusCore {
                 })
                 .map(|s| format!("{}{}", if s.signed { "i" } else { "u" }, s.size))
                 .unwrap_or_default(),
-            SigKey::Can { ch, id, ext, name } => self
+            SigKey::Can {
+                ch, id, ext, name, ..
+            } => self
                 .channels
                 .get(*ch as usize)
                 .and_then(|c| c.dbc.as_ref())
@@ -4169,7 +4285,7 @@ impl BusCore {
                 .sources
                 .iter()
                 .filter_map(|source| {
-                    let key = SigKey::from_text(&source.key)?;
+                    let key = self.resolve_key_text(&source.key)?;
                     // A derived source's wire form carries only its id; the
                     // definition list supplies the name half of the key.
                     let key = match key {
@@ -4816,7 +4932,7 @@ impl BusCore {
             let Some(signal) = comm.signals.get(&value.signal) else {
                 continue;
             };
-            let key = SigKey::can(f.channel, f.id, f.extended, signal.name.clone());
+            let key = self.can_key(f.channel, f.id, f.extended, signal.name.clone());
             if only_subscribed && !self.subs.contains_key(&key) {
                 continue;
             }
@@ -4904,7 +5020,7 @@ impl BusCore {
             let Some(signal) = comm.signals.get(&value.signal) else {
                 continue;
             };
-            let key = SigKey::fr(row.bus, row.slot, signal.name.clone());
+            let key = self.fr_key(row.bus, row.slot, signal.name.clone());
             if only_subscribed && !self.subs.contains_key(&key) {
                 continue;
             }
@@ -4956,7 +5072,7 @@ impl BusCore {
             let Some(signal) = comm.signals.get(&value.signal) else {
                 continue;
             };
-            let key = SigKey::eth(bus, frame_name, signal.name.clone());
+            let key = self.eth_key(bus, frame_name.to_string(), signal.name.clone());
             if only_subscribed && !self.subs.contains_key(&key) {
                 continue;
             }
@@ -5202,9 +5318,14 @@ impl BusCore {
                 // index is not a CAN channel -- and there is exactly one
                 // FlexRay bus today, which no CAN add/remove renumbers -- so
                 // Fr keys keep their identity untouched.
-                SigKey::Can { ch, id, ext, name } => {
-                    remap(ch).map(|nc| (SigKey::can(nc, id, ext, name), s))
-                }
+                SigKey::Can {
+                    cluster,
+                    ch,
+                    id,
+                    ext,
+                    name,
+                    ..
+                } => remap(ch).map(|nc| (SigKey::can_in(cluster, nc, id, ext, name), s)),
                 k @ (SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. }) => {
                     Some((k, s))
                 }
@@ -6150,14 +6271,16 @@ impl BusCore {
                 self.injected.push((ch, id));
                 Ok(())
             }
-            SigKey::Fr { bus, slot, name } => {
+            SigKey::Fr {
+                bus, slot, name, ..
+            } => {
                 let (payload, cycle) = self.panel_write_fr_signal(bus, slot, &name, value)?;
                 self.panel_fr_frames.push((bus, slot, payload, cycle));
                 Ok(())
             }
-            SigKey::Eth { bus, frame, name } => {
-                self.panel_write_eth_signal(bus, &frame, &name, value)
-            }
+            SigKey::Eth {
+                bus, frame, name, ..
+            } => self.panel_write_eth_signal(bus, &frame, &name, value),
             SigKey::Derived { .. } => Err("derived signals are read-only".to_string()),
         }
     }
@@ -7599,7 +7722,7 @@ impl BusCore {
             .unwrap_or_default()
             .into_iter()
             .map(|d| {
-                let key = SigKey::can(f.channel, f.id, f.extended, d.name.clone());
+                let key = self.can_key(f.channel, f.id, f.extended, d.name.clone());
                 (key, d)
             })
             .collect()

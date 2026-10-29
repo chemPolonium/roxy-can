@@ -3,6 +3,7 @@
 //! window signal lists that pick what to observe.
 
 use crate::app::{HISTORY_SPAN_US, MIN_STRIDE_US, SAMPLE_INTERVAL_US, STRIDE_POINTS_PER_WINDOW};
+use crate::model::ClusterId;
 use std::sync::Arc;
 
 /// Signal samples, kept ascending by timestamp.
@@ -387,36 +388,69 @@ impl Subscription {
 /// cluster unexpressible and made every consumer guess which bus it was on --
 /// including the CAN channel add/remove path, which rewrote that shared field
 /// and so moved FlexRay keys that were never on a CAN channel at all.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// Identity is still the bus address and name: the cluster id is carried for
+/// the wire text, and two keys for one bus always share it. Comparing it would
+/// make a key rebuilt from an old project (no cluster) stop matching the same
+/// signal decoded from the bus, so [`SigKey::cluster`] is display/persistence
+/// metadata rather than part of equality.
+#[derive(Clone, Debug)]
 pub enum SigKey {
     Can {
+        cluster: ClusterId,
         ch: u8,
         id: u32,
         ext: bool,
         name: String,
     },
     Fr {
+        cluster: ClusterId,
         bus: u8,
         slot: u16,
         name: String,
     },
     /// A signal decoded from one ARXML Ethernet frame on an Ethernet bus.
     Eth {
+        cluster: ClusterId,
         bus: u8,
         frame: String,
         name: String,
     },
     /// A channel computed by the core from an expression over other signals.
     /// `id` is the stable definition id; `name` is what every consumer shows.
-    Derived {
-        id: String,
-        name: String,
-    },
+    Derived { id: String, name: String },
+}
+
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum SigOrd<'a> {
+    Can(u8, u32, bool, &'a str),
+    Fr(u8, u16, &'a str),
+    Eth(u8, &'a str, &'a str),
+    Derived(&'a str, &'a str),
 }
 
 impl SigKey {
+    fn order_key(&self) -> SigOrd<'_> {
+        match self {
+            Self::Can {
+                ch, id, ext, name, ..
+            } => SigOrd::Can(*ch, *id, *ext, name),
+            Self::Fr {
+                bus, slot, name, ..
+            } => SigOrd::Fr(*bus, *slot, name),
+            Self::Eth {
+                bus, frame, name, ..
+            } => SigOrd::Eth(*bus, frame, name),
+            Self::Derived { id, name } => SigOrd::Derived(id, name),
+        }
+    }
+
     pub fn can(ch: u8, id: u32, ext: bool, name: impl Into<String>) -> Self {
+        Self::can_in(ClusterId(0), ch, id, ext, name)
+    }
+
+    pub fn can_in(cluster: ClusterId, ch: u8, id: u32, ext: bool, name: impl Into<String>) -> Self {
         Self::Can {
+            cluster,
             ch,
             id,
             ext,
@@ -425,7 +459,12 @@ impl SigKey {
     }
 
     pub fn fr(bus: u8, slot: u16, name: impl Into<String>) -> Self {
+        Self::fr_in(ClusterId(0), bus, slot, name)
+    }
+
+    pub fn fr_in(cluster: ClusterId, bus: u8, slot: u16, name: impl Into<String>) -> Self {
         Self::Fr {
+            cluster,
             bus,
             slot,
             name: name.into(),
@@ -433,7 +472,17 @@ impl SigKey {
     }
 
     pub fn eth(bus: u8, frame: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::eth_in(ClusterId(0), bus, frame, name)
+    }
+
+    pub fn eth_in(
+        cluster: ClusterId,
+        bus: u8,
+        frame: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
         Self::Eth {
+            cluster,
             bus,
             frame: frame.into(),
             name: name.into(),
@@ -456,18 +505,57 @@ impl SigKey {
         }
     }
 
-    /// The wire form the web API, CSV headers and derived sources use.
+    /// The wire form the web API, CSV headers and derived sources use. A key
+    /// built from a model writes the canonical `sig:` form; one rebuilt
+    /// without a model (old project, script text) keeps the legacy form so
+    /// stored workspace text and hand-written scripts stay readable.
     pub fn text(&self) -> String {
         match self {
-            Self::Can { ch, id, name, .. } => format!("{ch}:{id}:{name}"),
-            Self::Fr { bus, slot, name } => format!("fr:{bus}:{slot}:{name}"),
-            Self::Eth { bus, frame, name } => format!("eth:{bus}:{frame}:{name}"),
+            Self::Can {
+                cluster,
+                ch,
+                id,
+                ext,
+                name,
+            } => {
+                if cluster.0 == 0 {
+                    format!("{ch}:{id}:{name}")
+                } else {
+                    format!("sig:can:{}:{id}:{ext}:{name}", cluster.0)
+                }
+            }
+            Self::Fr {
+                cluster,
+                bus,
+                slot,
+                name,
+            } => {
+                if cluster.0 == 0 {
+                    format!("fr:{bus}:{slot}:{name}")
+                } else {
+                    format!("sig:fr:{}:{slot}:{name}", cluster.0)
+                }
+            }
+            Self::Eth {
+                cluster,
+                bus,
+                frame,
+                name,
+            } => {
+                if cluster.0 == 0 {
+                    format!("eth:{bus}:{frame}:{name}")
+                } else {
+                    format!("sig:eth:{}:{frame}:{name}", cluster.0)
+                }
+            }
             Self::Derived { id, .. } => format!("derived:{id}"),
         }
     }
 
-    /// Parses [`Self::text`]. A derived key carries only its id here; callers
-    /// that need the display name resolve it from the definition list.
+    /// Parses [`Self::text`]. Canonical `sig:` keys carry the cluster but no
+    /// bus index; [`crate::bus::BusCore::resolve_key_text`] binds them. A
+    /// derived key carries only its id here; callers that need the display
+    /// name resolve it from the definition list.
     pub fn from_text(text: &str) -> Option<Self> {
         if let Some(rest) = text.strip_prefix("fr:") {
             let mut parts = rest.splitn(3, ':');
@@ -481,13 +569,60 @@ impl SigKey {
             let frame = parts.next()?;
             return Some(Self::eth(bus, frame, parts.next()?));
         }
-        if let Some(id) = text.strip_prefix("derived:") {
-            return (!id.is_empty()).then(|| Self::derived(id, ""));
+        if let Some(rest) = text.strip_prefix("derived:") {
+            return (!rest.is_empty()).then(|| Self::derived(rest, ""));
+        }
+        if let Some(rest) = text.strip_prefix("sig:") {
+            let mut parts = rest.splitn(5, ':');
+            let kind = parts.next()?;
+            let cluster = ClusterId(parts.next()?.parse().ok()?);
+            return match kind {
+                "can" => {
+                    let id = parts.next()?.parse().ok()?;
+                    let ext = parts.next()? == "true";
+                    Some(Self::can_in(cluster, 0, id, ext, parts.next()?))
+                }
+                "fr" => {
+                    let slot = parts.next()?.parse().ok()?;
+                    Some(Self::fr_in(cluster, 0, slot, parts.next()?))
+                }
+                "eth" => {
+                    let frame = parts.next()?;
+                    Some(Self::eth_in(cluster, 0, frame, parts.next()?))
+                }
+                _ => None,
+            };
         }
         let mut parts = text.splitn(3, ':');
         let ch = parts.next()?.parse().ok()?;
         let id = parts.next()?.parse().ok()?;
         Some(Self::can(ch, id, false, parts.next()?))
+    }
+}
+
+impl PartialEq for SigKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.order_key() == other.order_key()
+    }
+}
+
+impl Eq for SigKey {}
+
+impl std::hash::Hash for SigKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.order_key().hash(state);
+    }
+}
+
+impl PartialOrd for SigKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SigKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.order_key().cmp(&other.order_key())
     }
 }
 
@@ -671,7 +806,9 @@ impl App {
         // its arbitration id, a FlexRay one by the slot carrying it -- so the
         // lookup dispatches on the key instead of reading one field as both.
         let (min, max) = match key {
-            SigKey::Can { ch, id, ext, name } => {
+            SigKey::Can {
+                ch, id, ext, name, ..
+            } => {
                 let sig = self
                     .snap
                     .channels
@@ -681,7 +818,9 @@ impl App {
                     .and_then(|m| m.signals.iter().find(|s| &s.name == name))?;
                 (sig.min, sig.max)
             }
-            SigKey::Fr { bus, slot, name } => {
+            SigKey::Fr {
+                bus, slot, name, ..
+            } => {
                 let sig = self
                     .fr_db(*bus)
                     .and_then(|db| db.slot_signal(*slot, name))?;

@@ -757,7 +757,8 @@ fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
 /// truth for lane colors; `store` is updated by the caller.
 #[cfg(test)]
 fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
-    chart_select_key(app, SigKey::can(ch, id, ext, name));
+    let key = app.can_key(ch, id, ext, name.to_string());
+    chart_select_key(app, key);
 }
 
 /// Refreshes the core's chart-keep set from the session selection. Called
@@ -2289,7 +2290,7 @@ fn app_loop(
                     }
                 }
                 WebCommand::PanelWriteSignal { source, value } => {
-                    match crate::observe::SigKey::from_text(source.trim()) {
+                    match app.resolve_key_text(source.trim()) {
                         Some(key)
                             if value.is_finite()
                                 && matches!(
@@ -2430,13 +2431,13 @@ fn app_loop(
                     name,
                     read,
                 } => {
-                    let key = SigKey::can(ch, id, ext, name);
+                    let key = app.can_key(ch, id, ext, name);
                     if let Ok(mut store) = signals.lock() {
                         set_signal_mode(&mut app, &mut store, key, read);
                     }
                 }
                 WebCommand::UnselectSignal { ch, id, ext, name } => {
-                    let key = SigKey::can(ch, id, ext, name);
+                    let key = app.can_key(ch, id, ext, name);
                     let selected = signals
                         .lock()
                         .map(|store| store.is_selected(&key))
@@ -2453,13 +2454,13 @@ fn app_loop(
                     name,
                     read,
                 } => {
-                    let key = SigKey::fr(bus, slot, name);
+                    let key = app.fr_key(bus, slot, name);
                     if let Ok(mut store) = signals.lock() {
                         set_signal_mode(&mut app, &mut store, key, read);
                     }
                 }
                 WebCommand::UnselectFrSignal { bus, slot, name } => {
-                    let key = SigKey::fr(bus, slot, name);
+                    let key = app.fr_key(bus, slot, name);
                     let selected = signals
                         .lock()
                         .map(|store| store.is_selected(&key))
@@ -2476,13 +2477,13 @@ fn app_loop(
                     name,
                     read,
                 } => {
-                    let key = SigKey::eth(bus, frame, name);
+                    let key = app.eth_key(bus, frame, name);
                     if let Ok(mut store) = signals.lock() {
                         set_signal_mode(&mut app, &mut store, key, read);
                     }
                 }
                 WebCommand::UnselectEthSignal { bus, frame, name } => {
-                    let key = SigKey::eth(bus, frame, name);
+                    let key = app.eth_key(bus, frame, name);
                     let selected = signals
                         .lock()
                         .map(|store| store.is_selected(&key))
@@ -3715,7 +3716,7 @@ impl SignalStore {
     /// Adds a selection without subscribing; the command handler owns the
     /// bus subscription so this stays a pure cache operation.
     fn select(&mut self, app: &App, ch: u8, id: u32, ext: bool, name: &str) {
-        self.select_key(app, SigKey::can(ch, id, ext, name));
+        self.select_key(app, app.can_key(ch, id, ext, name.to_string()));
     }
 
     fn select_key(&mut self, app: &App, key: SigKey) {
@@ -3726,6 +3727,9 @@ impl SignalStore {
     /// read signal. Changing the mode keeps the entry and its history; only
     /// the lane/readout placement changes.
     fn select_key_mode(&mut self, app: &App, key: SigKey, read: bool) {
+        let Some(key) = app.bind_key(key) else {
+            return;
+        };
         if let Some(pos) = self.selected.iter().position(|signal| signal.key == key) {
             if self.selected[pos].read == read {
                 return;
@@ -3757,7 +3761,9 @@ impl SignalStore {
         };
         let bus = signal_bus(app, &key);
         let unit = match &key {
-            SigKey::Can { ch, id, ext, name } => signal_unit(app, *ch, *id, *ext, name),
+            SigKey::Can {
+                ch, id, ext, name, ..
+            } => signal_unit(app, *ch, *id, *ext, name),
             SigKey::Derived { id, .. } => app
                 .derived_defs
                 .iter()
@@ -3851,7 +3857,9 @@ impl SignalStore {
         let mut dropped = Vec::new();
         self.selected.retain(|signal| {
             let exists = match &signal.key {
-                SigKey::Can { ch, id, ext, name } => app
+                SigKey::Can {
+                    ch, id, ext, name, ..
+                } => app
                     .snap
                     .channels
                     .get(*ch as usize)
@@ -4279,6 +4287,12 @@ fn can_catalog_messages(
     ch: u8,
     db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
 ) -> Vec<WebCatalogMessage> {
+    let cluster = comm
+        .clusters
+        .keys()
+        .next()
+        .copied()
+        .unwrap_or(crate::model::ClusterId(0));
     let mut out: Vec<WebCatalogMessage> = comm
         .frames
         .values()
@@ -4302,7 +4316,7 @@ fn can_catalog_messages(
                     .into_iter()
                     .map(|signal| {
                         catalog_signal(
-                            series_key(&SigKey::can(ch, id, extended, &signal.name)),
+                            series_key(&SigKey::can_in(cluster, ch, id, extended, &signal.name)),
                             signal,
                         )
                     })
@@ -4315,6 +4329,12 @@ fn can_catalog_messages(
 }
 
 fn fr_catalog_messages(comm: &crate::model::Comm, bus: u8) -> Vec<WebCatalogMessage> {
+    let cluster = comm
+        .clusters
+        .keys()
+        .next()
+        .copied()
+        .unwrap_or(crate::model::ClusterId(0));
     let mut out: Vec<WebCatalogMessage> = comm
         .frames
         .values()
@@ -4334,7 +4354,10 @@ fn fr_catalog_messages(comm: &crate::model::Comm, bus: u8) -> Vec<WebCatalogMess
                     .signals_in_frame(frame)
                     .into_iter()
                     .map(|signal| {
-                        catalog_signal(series_key(&SigKey::fr(bus, slot, &signal.name)), signal)
+                        catalog_signal(
+                            series_key(&SigKey::fr_in(cluster, bus, slot, &signal.name)),
+                            signal,
+                        )
                     })
                     .collect(),
             })
@@ -4349,6 +4372,12 @@ fn eth_catalog_messages(
     bus: u8,
     length_includes_header: bool,
 ) -> Vec<WebCatalogMessage> {
+    let cluster = comm
+        .clusters
+        .keys()
+        .next()
+        .copied()
+        .unwrap_or(crate::model::ClusterId(0));
     comm.frames
         .values()
         .filter(|frame| matches!(frame.address, crate::model::FrameAddress::Ethernet { .. }))
@@ -4370,7 +4399,7 @@ fn eth_catalog_messages(
                 .into_iter()
                 .map(|signal| {
                     catalog_signal(
-                        series_key(&SigKey::eth(bus, &frame.name, &signal.name)),
+                        series_key(&SigKey::eth_in(cluster, bus, &frame.name, &signal.name)),
                         signal,
                     )
                 })
@@ -6934,7 +6963,7 @@ mod tests {
             .find(|message| message.id == 13)
             .expect("slot 13 message");
         let signal = message.signals.first().expect("a signal");
-        assert!(signal.key.starts_with("fr:"));
+        assert!(signal.key.starts_with("sig:fr:"));
 
         let mut store = SignalStore::default();
         let key = SigKey::fr(bus, 13, &signal.name);
@@ -6942,7 +6971,7 @@ mod tests {
         store.select_key(&app, key);
         store.sync(&app);
         let seeded = store.seed();
-        assert!(seeded[0].key.starts_with("fr:"));
+        assert!(seeded[0].key.starts_with("sig:fr:"));
         assert_eq!(seeded[0].bus, fr.name);
     }
 
@@ -6967,7 +6996,10 @@ mod tests {
         assert_eq!(message.name, "EthFrame");
         assert_eq!(message.frame.as_deref(), Some("EthFrame"));
         let signal = message.signals.first().expect("signal");
-        assert_eq!(signal.key, "eth:0:EthFrame:Sig");
+        assert_eq!(
+            signal.key,
+            format!("sig:eth:{}:EthFrame:Sig", app.snap.cluster_ids.eth[&bus])
+        );
 
         let key = SigKey::eth(bus, "EthFrame", "Sig");
         app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
@@ -6989,7 +7021,10 @@ mod tests {
         let mut store = SignalStore::default();
         store.select_key(&app, key.clone());
         store.sync(&app);
-        assert_eq!(store.seed()[0].key, "eth:0:EthFrame:Sig");
+        assert_eq!(
+            store.seed()[0].key,
+            format!("sig:eth:{}:EthFrame:Sig", app.snap.cluster_ids.eth[&bus])
+        );
         assert_eq!(store.seed()[0].bus, "ETH0");
     }
 

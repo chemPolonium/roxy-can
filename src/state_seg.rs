@@ -13,7 +13,10 @@ fn table_label(app: &App, key: &crate::observe::SigKey, v: f64) -> Option<String
     // A FlexRay signal's labels are its own declaration (the description's
     // VALUE table for the I-SIGNAL), so the state row reads the same as the
     // Trace cell for that very signal -- both show `2 (完成)`, neither a bare 2.
-    if let crate::observe::SigKey::Fr { bus, slot, name } = key {
+    if let crate::observe::SigKey::Fr {
+        bus, slot, name, ..
+    } = key
+    {
         let sig = app.fr_db(*bus)?.slot_signal(*slot, name)?;
         let raw = ((v - sig.offset) / sig.factor).round() as i64;
         return sig
@@ -23,7 +26,10 @@ fn table_label(app: &App, key: &crate::observe::SigKey, v: f64) -> Option<String
             .map(|(_, t)| t.clone());
     }
     // A `VAL_` value table is a DBC concept, so only a CAN key can have one.
-    let crate::observe::SigKey::Can { ch, id, ext, name } = key else {
+    let crate::observe::SigKey::Can {
+        ch, id, ext, name, ..
+    } = key
+    else {
         return None;
     };
     let db = app.snap.channels.get(*ch as usize)?.dbc.as_deref()?;
