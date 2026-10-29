@@ -73,12 +73,14 @@ pub enum EthMatch {
     None,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DecodedEth {
     pub frame_name: String,
     pub signals: Vec<DecodedSignal>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedSignal {
     pub name: String,
@@ -308,6 +310,7 @@ impl EthDb {
         false
     }
 
+    #[cfg(test)]
     pub fn decode(
         &self,
         flow: &EthFlow,
@@ -488,6 +491,7 @@ fn read_text_table(compu: Node) -> Vec<(i64, String)> {
 
 /// AUTOSAR bit positions start at the least-significant bit. This mirrors
 /// the DBC little-endian walk; big-endian starts at the signal's MSB.
+#[cfg(test)]
 fn extract_bits(data: &[u8], start: usize, size: usize, big_endian: bool) -> Option<u64> {
     if size == 0 || size > 64 {
         return None;
@@ -509,6 +513,7 @@ fn extract_bits(data: &[u8], start: usize, size: usize, big_endian: bool) -> Opt
     Some(raw)
 }
 
+#[cfg(test)]
 fn sign_extend(raw: u64, size: usize) -> i64 {
     if size >= 64 {
         raw as i64

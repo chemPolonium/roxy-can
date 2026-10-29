@@ -443,6 +443,7 @@ impl FrDb {
     }
 
     /// The declaration of child `child_ix` of `frame_ix`.
+    #[cfg(test)]
     fn child_signal_at(&self, frame_ix: usize, child_ix: u32) -> Option<&FrSignal> {
         self.sig_of(self.children_of(frame_ix).get(child_ix as usize)?)
     }
@@ -464,6 +465,7 @@ impl FrDb {
     /// the arithmetic happens on the way in, where the payload is already in
     /// hand, and the *text* waits for the rows actually drawn -- see
     /// [`Self::child_text`].
+    #[cfg(test)]
     pub(crate) fn frame_values<'d>(
         &'d self,
         frame_ix: usize,
@@ -506,6 +508,7 @@ impl FrDb {
             .map_or(0, |ends| ends.partition_point(|&end| end <= bits))
     }
 
+    #[cfg(test)]
     fn label_of(sig: &FrSignal, phys: f64) -> Option<String> {
         sig.value_descriptions
             .iter()
@@ -565,6 +568,7 @@ impl FrDb {
     /// integer, the unit and any enum label, per signal. This is what feeds
     /// a Graphics/Data/State curve -- the plotting path needs an `f64`, not
     /// the display text `decode` returns.
+    #[cfg(test)]
     pub fn decode_signals(
         &self,
         frame_ix: usize,

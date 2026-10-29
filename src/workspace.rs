@@ -896,11 +896,21 @@ impl App {
             let Some(ix) = db.frame_ix_at(r.slot, r.cycle, r.ab) else {
                 return false;
             };
-            let Some(sig) = db
-                .decode_signals(ix, &r.payload)
-                .into_iter()
-                .find(|s| s.name == cond.signal)
-            else {
+            let row = crate::trace::FrRow {
+                bus: r.bus,
+                t_us: r.t_us,
+                ab: r.ab,
+                slot: r.slot,
+                cycle: r.cycle,
+                payload: r.payload.clone(),
+                header_crc: 0,
+                flags: 0,
+                name: r.name.clone(),
+            };
+            let Some(decoded) = self.model_fr_all_values(&row, ix) else {
+                return false;
+            };
+            let Some(sig) = decoded.iter().find(|s| s.name == cond.signal) else {
                 return false;
             };
             if !cond.op.holds(sig.phys, cond.value) {
@@ -1042,18 +1052,10 @@ impl App {
             else {
                 return false;
             };
-            let Some(decoded) = self
-                .eth_db(f.bus)
-                .and_then(|db| db.decode(&key.flow(), &f.payload, self.eth_length_includes_header))
-            else {
+            let Some(decoded) = self.model_eth_all_values(f.bus, &def.name, &f.payload) else {
                 return false;
             };
-            let Some(v) = decoded
-                .signals
-                .iter()
-                .find(|s| s.name == sig.name)
-                .map(|s| s.physical)
-            else {
+            let Some(v) = decoded.iter().find(|s| s.name == sig.name).map(|s| s.phys) else {
                 return false;
             };
             if !cond.op.holds(v, cond.value) {
