@@ -557,3 +557,37 @@ fn missing_cluster_is_an_error_not_a_panic() {
             .any(|issue| issue.message.contains("not found"))
     );
 }
+
+/// An I-SIGNAL's `DATA-TRANSFORMATIONS` reference is recorded on the signal
+/// and materialised as a transformation object. Its numeric behaviour is not
+/// interpreted (there is no real corpus for the chain), so the decode plan
+/// reports `UnsupportedTransformation` instead of silently showing raw values.
+#[test]
+fn a_signal_transformation_reference_links_to_a_transformation() {
+    let text = CAN_TEXT.replace(
+        "<I-SIGNAL><SHORT-NAME>Speed</SHORT-NAME>",
+        "<DATA-TRANSFORMATION><SHORT-NAME>Scramble</SHORT-NAME>\
+         <TRANSFORMER-CHAIN-REFS><TRANSFORMER-CHAIN-REF DEST=\"TRANSFORMATION-TECHNOLOGY\">\
+         /Pkg/Tech</TRANSFORMER-CHAIN-REF></TRANSFORMER-CHAIN-REFS></DATA-TRANSFORMATION>\
+         <I-SIGNAL><SHORT-NAME>Speed</SHORT-NAME>\
+         <DATA-TRANSFORMATIONS><DATA-TRANSFORMATION-REF-CONDITIONAL>\
+         <DATA-TRANSFORMATION-REF DEST=\"DATA-TRANSFORMATION\">/Pkg/Scramble</DATA-TRANSFORMATION-REF>\
+         </DATA-TRANSFORMATION-REF-CONDITIONAL></DATA-TRANSFORMATIONS>",
+    );
+    let comm = import(&text, "CanCluster", 1);
+    let signal = comm.signals.values().next().expect("signal imported");
+    let transformation = signal.transformation.expect("reference linked");
+    assert_eq!(
+        comm.transformations
+            .get(&transformation)
+            .map(|t| t.name.as_str()),
+        Some("Scramble")
+    );
+    let (_, issues) = PlanCache::build(&comm, 1);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.kind == IssueKind::UnsupportedTransformation),
+        "an unknown chain is reported, not silently ignored: {issues:?}"
+    );
+}

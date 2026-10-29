@@ -573,7 +573,8 @@ impl<'a> Importer<'a> {
                             ElementKind::Signal,
                             &source_key(self.cluster_id, "signal", &signal_path),
                         ));
-                        let signal = self.read_signal(id, signal_node, pdu_id, mapping);
+                        let mut signal = self.read_signal(id, signal_node, pdu_id, mapping);
+                        self.link_signal_transformation(&mut signal, signal_node);
                         self.comm.signals.insert(id, signal);
                         self.signal_ids.insert(signal_path.clone(), id);
                         self.signal_pdus.insert(id, pdu_id);
@@ -633,6 +634,47 @@ impl<'a> Importer<'a> {
                 }
             }
         }
+    }
+
+    /// Links an I-SIGNAL to its declared transformer chain. The chain's
+    /// numeric behaviour is not interpreted here -- only the reference and
+    /// its name are recorded, so the decode plan can report an unsupported
+    /// transformation instead of silently treating the signal as raw.
+    fn link_signal_transformation(&mut self, signal: &mut Signal, node: Node<'a, 'a>) {
+        let Some(reference) = node
+            .descendants()
+            .filter(Node::is_element)
+            .find(|n| n.has_tag_name("DATA-TRANSFORMATION-REF"))
+            .and_then(|n| n.text())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        let name = ref_tail(reference).to_string();
+        let id = TransformationId(self.ids.assign(
+            ElementKind::Transformation,
+            &source_key(self.cluster_id, "transformation", reference),
+        ) as u32);
+        let category = self
+            .root
+            .descendants()
+            .filter(Node::is_element)
+            .find(|n| {
+                n.has_tag_name("DATA-TRANSFORMATION")
+                    && (object_path(*n) == reference || ref_tail(&object_path(*n)) == name)
+            })
+            .and_then(|n| text_of(n, "PROTOCOL"))
+            .unwrap_or_else(|| "custom".to_string());
+        self.comm
+            .transformations
+            .entry(id)
+            .or_insert(Transformation {
+                id,
+                name,
+                kind: TransformationKind::Unknown { category },
+            });
+        signal.transformation = Some(id);
     }
 
     fn read_signal(
