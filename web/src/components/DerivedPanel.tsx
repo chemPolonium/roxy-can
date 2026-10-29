@@ -29,8 +29,11 @@ export function DerivedPanel({
       ? null
       : validateDerivedExpression(expression, references);
   const counts = new Map<string, number>();
+  const busCounts = new Map<string, number>();
   for (const reference of references) {
     counts.set(reference.name, (counts.get(reference.name) ?? 0) + 1);
+    const busKey = `${reference.bus}:${reference.name}`;
+    busCounts.set(busKey, (busCounts.get(busKey) ?? 0) + 1);
   }
   const computedRefs = references.filter(
     (reference) => reference.bus === "derived",
@@ -40,13 +43,17 @@ export function DerivedPanel({
     ...references
       .filter((reference) => reference.bus !== "derived")
       .slice(0, Math.max(0, 80 - computedRefs.length)),
-  ].map((reference) => ({
-    key: reference.key,
-    label:
-      (counts.get(reference.name) ?? 0) > 1
-        ? `${reference.bus}:${reference.name}`
-        : reference.name,
-  }));
+  ].map((reference) => {
+    const sharedName = (counts.get(reference.name) ?? 0) > 1;
+    const sharedBus =
+      (busCounts.get(`${reference.bus}:${reference.name}`) ?? 0) > 1;
+    const label = !sharedName
+      ? reference.name
+      : sharedBus && reference.frame
+        ? `${reference.bus}:${reference.frame}:${reference.name}`
+        : `${reference.bus}:${reference.name}`;
+    return { key: reference.key, label };
+  });
 
   const insert = (reference: string) => {
     setExpression((old) => `${old}${old.trim() ? " " : ""}[${reference}]`);
@@ -141,7 +148,7 @@ export function DerivedPanel({
         </label>
         <p class={`hint ${error ? "derived-error" : ""}`}>
           {error ??
-            "Use [signal], [CAN1:signal] or a computed channel; supports + - * /, abs(), sqrt(), min(), max()."}
+            "Use [signal], [CAN1:signal] or [CAN2:0x0C7:signal] when one bus repeats a name; supports + - * /, abs(), sqrt(), min(), max()."}
         </p>
         <div class="derived-picks">
           {picks.map((pick) => (

@@ -199,6 +199,9 @@ export interface DerivedReference {
   key: string;
   name: string;
   bus: string;
+  /// Optional message/slot qualifier for `[Bus:Message:Signal]` when one bus
+  /// carries the same signal name in two frames.
+  frame?: string;
 }
 
 function resolveRefs<T extends DerivedReference>(
@@ -211,6 +214,8 @@ function resolveRefs<T extends DerivedReference>(
       (signal) =>
         signal.name === name ||
         `${signal.bus}:${signal.name}` === name ||
+        (signal.frame !== undefined &&
+          `${signal.bus}:${signal.frame}:${signal.name}` === name) ||
         signal.key === name,
     );
     if (exact.length === 0) {
@@ -219,7 +224,7 @@ function resolveRefs<T extends DerivedReference>(
     if (exact.length > 1) {
       return {
         refs,
-        error: `[${name}] is ambiguous; use [Bus:Signal]`,
+        error: `[${name}] is ambiguous; use [Bus:Message:Signal]`,
       };
     }
     refs.set(name, exact[0]);

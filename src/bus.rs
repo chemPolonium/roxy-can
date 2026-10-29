@@ -1342,8 +1342,9 @@ fn derived_key_bus(key: &SigKey, channels: &[Channel]) -> String {
 }
 
 /// Resolves one expression reference against the live subscriptions.
-/// `Bus:signal` narrows by label; a name shared by two buses stays
-/// unresolved until the user qualifies it, mirroring the editor's rule.
+/// `Bus:signal` narrows by label; `Bus:Frame:signal` is needed when one bus
+/// carries the same signal name in two frames. A name shared by two buses
+/// stays unresolved until the user qualifies it, mirroring the editor's rule.
 fn resolve_derived_ref(
     text: &str,
     keys: &[SigKey],
@@ -1351,13 +1352,18 @@ fn resolve_derived_ref(
     own: &SigKey,
 ) -> Option<SigKey> {
     // The editor also accepts a full key (`[0:256:RPM]`), so a verbatim
-    // match wins before interpreting the text as `Bus:Name`.
+    // match wins before interpreting the text.
     if let Some(key) = keys.iter().find(|key| key != &own && key.text() == text) {
         return Some(key.clone());
     }
-    let (bus, name) = match text.split_once(':') {
-        Some((bus, name)) if !bus.is_empty() && !name.is_empty() => (Some(bus), name),
-        _ => (None, text),
+    let parts: Vec<&str> = text.split(':').collect();
+    let (bus, frame, name) = match parts.as_slice() {
+        [name] if !name.is_empty() => (None, None, *name),
+        [bus, name] if !bus.is_empty() && !name.is_empty() => (Some(*bus), None, *name),
+        [bus, frame, name] if !bus.is_empty() && !frame.is_empty() && !name.is_empty() => {
+            (Some(*bus), Some(*frame), *name)
+        }
+        _ => return None,
     };
     let mut found: Option<SigKey> = None;
     for key in keys {
@@ -1369,12 +1375,38 @@ fn resolve_derived_ref(
         {
             continue;
         }
+        if let Some(frame) = frame
+            && !derived_ref_frame_matches(key, frame)
+        {
+            continue;
+        }
         if found.is_some() {
             return None;
         }
         found = Some(key.clone());
     }
     found
+}
+
+/// Matches the middle part of `[Bus:Frame:Signal]` against the frame class
+/// the series key came from. CAN accepts the hex id (`0x0C7`), FlexRay a slot
+/// number or `slotN`, Ethernet the frame name.
+fn derived_ref_frame_matches(key: &SigKey, qualifier: &str) -> bool {
+    match key {
+        SigKey::Can { id, .. } => {
+            let digits = qualifier
+                .strip_prefix("0x")
+                .or_else(|| qualifier.strip_prefix("0X"))
+                .unwrap_or(qualifier);
+            u32::from_str_radix(digits, 16).ok() == Some(*id)
+        }
+        SigKey::Fr { slot, .. } => {
+            qualifier.eq_ignore_ascii_case(&format!("slot{slot}"))
+                || qualifier.parse::<u16>().ok() == Some(*slot)
+        }
+        SigKey::Eth { frame, .. } => frame == qualifier,
+        SigKey::Derived { name, .. } => name == qualifier,
+    }
 }
 
 impl BusCore {
@@ -7743,6 +7775,30 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
             out.payload(),
             [0xA0, 0x0F, 20, 0, 0, 0, 0, 0],
             "RPM keeps raw 4000 (physical 1010), Temp is the explicit 20"
+        );
+    }
+
+    /// One CAN bus can carry the same signal name in two messages; the
+    /// `Bus:Frame:Signal` form picks one, while `Bus:Signal` stays ambiguous.
+    #[test]
+    fn frame_qualified_derived_refs_disambiguate_can_ids() {
+        let keys = vec![
+            SigKey::can(1, 0x0c7, false, "WheelSpeedFR"),
+            SigKey::can(1, 0x0c8, false, "WheelSpeedFR"),
+        ];
+        let own = SigKey::derived("x", "self");
+        let channels = Vec::new();
+        assert_eq!(
+            resolve_derived_ref("CAN2:0x0C7:WheelSpeedFR", &keys, &channels, &own),
+            Some(keys[0].clone())
+        );
+        assert_eq!(
+            resolve_derived_ref("CAN2:0x0c8:WheelSpeedFR", &keys, &channels, &own),
+            Some(keys[1].clone())
+        );
+        assert_eq!(
+            resolve_derived_ref("CAN2:WheelSpeedFR", &keys, &channels, &own),
+            None
         );
     }
 }

@@ -560,6 +560,13 @@ export function App() {
             key: signal.key,
             name: signal.name,
             bus: channel.name,
+            frame:
+              channel.kind === "can"
+                ? `0x${message.id
+                    .toString(16)
+                    .toUpperCase()
+                    .padStart(message.extended ? 8 : 3, "0")}`
+                : undefined,
           });
         }
       }

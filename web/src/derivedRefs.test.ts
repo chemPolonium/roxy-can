@@ -24,8 +24,22 @@ describe("global derived references", () => {
 
   it("still refuses an ambiguous bare name", () => {
     expect(validateDerivedExpression("[EngineSpeed] * 2", refs)).toBe(
-      "[EngineSpeed] is ambiguous; use [Bus:Signal]",
+      "[EngineSpeed] is ambiguous; use [Bus:Message:Signal]",
     );
     expect(validateDerivedExpression("[derived:SpeedAvg]", refs)).toBeNull();
+  });
+
+  it("uses the message qualifier when one bus repeats the name", () => {
+    const sameBus: DerivedReference[] = [
+      { key: "1:199:Sig", name: "Sig", bus: "CAN2", frame: "0x0C7" },
+      { key: "1:200:Sig", name: "Sig", bus: "CAN2", frame: "0x0C8" },
+    ];
+    expect(validateDerivedExpression("[CAN2:0x0C7:Sig]", sameBus)).toBeNull();
+    expect(validateDerivedExpression("[CAN2:Sig]", sameBus)).toBe(
+      "[CAN2:Sig] is ambiguous; use [Bus:Message:Signal]",
+    );
+    expect(resolveDerivedSources("[CAN2:0x0C8:Sig]", sameBus)).toEqual([
+      { name: "CAN2:0x0C8:Sig", key: "1:200:Sig" },
+    ]);
   });
 });
