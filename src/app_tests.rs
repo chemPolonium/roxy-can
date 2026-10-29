@@ -6716,6 +6716,84 @@ fn a_step_message_stays_in_the_write_window() {
 /// half that failed used to be written to the bar and then overwritten by the
 /// "project loaded" line two statements later, so the user never saw it at all.
 /// Each problem now stays in the Write ring, and the bar carries the count.
+/// FlexRay and Ethernet ARXML go through FIBEX/EthDb-shaped tables for legacy
+/// decoding, but the core must also hold the document's own model -- and keep
+/// holding it after a reopen, where `SetClusterIds` rebuilds the adapter
+/// models around the restored ids.
+#[test]
+fn fr_and_eth_arxml_models_reach_the_core_and_survive_reopen() {
+    let fr = crate::test_assets::path("PowerTrain.arxml");
+    if !std::path::Path::new(fr).exists() {
+        println!("asset absent -- skipped");
+        return;
+    }
+    let mut app = App::headless();
+    let fr_bus = app
+        .load_cluster_description(fr, Some(0))
+        .expect("FR description");
+    let fr_model = app.fr_models.get(&fr_bus).expect("the FR model");
+    let fr_cluster = fr_model.clusters.values().next().expect("one cluster");
+    assert!(
+        matches!(
+            fr_cluster.sources.first(),
+            Some(crate::model::ClusterSource::Arxml { .. })
+        ),
+        "FR model is read from the document: {:?}",
+        fr_cluster.sources
+    );
+    assert_eq!(
+        Some(&fr_cluster.id.0),
+        app.snap.cluster_ids.fr.get(&fr_bus),
+        "and bound to the bus's global id"
+    );
+
+    let eth_bus = app
+        .load_eth_description(crate::test_assets::eth_arxml(), Some(0))
+        .expect("Ethernet description");
+    let eth_model = app.eth_models.get(&eth_bus).expect("the Ethernet model");
+    let eth_cluster = eth_model.clusters.values().next().expect("one cluster");
+    assert!(matches!(
+        eth_cluster.sources.first(),
+        Some(crate::model::ClusterSource::Arxml { .. })
+    ));
+    assert_eq!(
+        Some(&eth_cluster.id.0),
+        app.snap.cluster_ids.eth.get(&eth_bus)
+    );
+
+    let path = std::env::temp_dir().join(format!(
+        "roxy_can_fr_eth_models_{}.rxproj",
+        std::process::id()
+    ));
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+    let mut restored = App::headless();
+    restored.open_project_path(&path);
+    restored.settle();
+    let fr_model = restored
+        .fr_models
+        .get(&fr_bus)
+        .expect("FR model after reopen");
+    let fr_cluster = fr_model.clusters.values().next().expect("one cluster");
+    assert!(
+        matches!(
+            fr_cluster.sources.first(),
+            Some(crate::model::ClusterSource::Arxml { .. })
+        ),
+        "the reopen restores the FR document model"
+    );
+    assert_eq!(fr_cluster.id.0, restored.snap.cluster_ids.fr[&fr_bus]);
+    let eth_model = restored
+        .eth_models
+        .get(&eth_bus)
+        .expect("Ethernet model after reopen");
+    let eth_cluster = eth_model.clusters.values().next().expect("one cluster");
+    assert!(matches!(
+        eth_cluster.sources.first(),
+        Some(crate::model::ClusterSource::Arxml { .. })
+    ));
+    assert_eq!(eth_cluster.id.0, restored.snap.cluster_ids.eth[&eth_bus]);
+}
+
 #[test]
 fn a_project_load_problem_outlives_the_loaded_line() {
     let asset = crate::test_assets::path("PowerTrain.arxml");
