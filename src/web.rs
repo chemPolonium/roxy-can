@@ -4259,6 +4259,137 @@ fn refresh_catalog(app: &App, catalog: &Arc<Mutex<WebCatalog>>, signature: &mut 
     }
 }
 
+fn catalog_signal(key: String, signal: &crate::model::Signal) -> WebCatalogSignal {
+    WebCatalogSignal {
+        key,
+        name: signal.name.clone(),
+        unit: signal.unit.clone(),
+        min: signal.min.unwrap_or(0.0),
+        max: signal.max.unwrap_or(0.0),
+        initial: signal.initial_physical(),
+        comment: signal.comment.clone(),
+    }
+}
+
+/// The messages one CAN channel's model declares, in id order. The legacy
+/// table still supplies the message comment, which the model does not carry;
+/// names, signals and ranges are the model's.
+fn can_catalog_messages(
+    comm: &crate::model::Comm,
+    ch: u8,
+    db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
+) -> Vec<WebCatalogMessage> {
+    let mut out: Vec<WebCatalogMessage> = comm
+        .frames
+        .values()
+        .filter_map(|frame| {
+            let crate::model::FrameAddress::Can { id, extended, fd } = frame.address else {
+                return None;
+            };
+            Some(WebCatalogMessage {
+                id,
+                extended,
+                name: frame.name.clone(),
+                frame: None,
+                comment: db
+                    .and_then(|db| db.messages.get(&(id, extended)))
+                    .map(|message| message.comment.clone())
+                    .unwrap_or_default(),
+                fd,
+                length: None,
+                signals: comm
+                    .signals_in_frame(frame)
+                    .into_iter()
+                    .map(|signal| {
+                        catalog_signal(
+                            series_key(&SigKey::can(ch, id, extended, &signal.name)),
+                            signal,
+                        )
+                    })
+                    .collect(),
+            })
+        })
+        .collect();
+    out.sort_by_key(|message| (message.id, message.extended));
+    out
+}
+
+fn fr_catalog_messages(comm: &crate::model::Comm, bus: u8) -> Vec<WebCatalogMessage> {
+    let mut out: Vec<WebCatalogMessage> = comm
+        .frames
+        .values()
+        .filter_map(|frame| {
+            let crate::model::FrameAddress::FlexRay { slot, .. } = frame.address else {
+                return None;
+            };
+            Some(WebCatalogMessage {
+                id: u32::from(slot),
+                extended: false,
+                name: frame.name.clone(),
+                frame: None,
+                comment: String::new(),
+                fd: false,
+                length: None,
+                signals: comm
+                    .signals_in_frame(frame)
+                    .into_iter()
+                    .map(|signal| {
+                        catalog_signal(series_key(&SigKey::fr(bus, slot, &signal.name)), signal)
+                    })
+                    .collect(),
+            })
+        })
+        .collect();
+    out.sort_by_key(|message| message.id);
+    out
+}
+
+fn eth_catalog_messages(
+    comm: &crate::model::Comm,
+    bus: u8,
+    length_includes_header: bool,
+) -> Vec<WebCatalogMessage> {
+    comm.frames
+        .values()
+        .filter(|frame| matches!(frame.address, crate::model::FrameAddress::Ethernet { .. }))
+        .enumerate()
+        .map(|(index, frame)| WebCatalogMessage {
+            id: index as u32,
+            extended: false,
+            name: frame.name.clone(),
+            frame: Some(frame.name.clone()),
+            comment: String::new(),
+            fd: false,
+            length: Some(if length_includes_header {
+                frame.length.saturating_sub(14)
+            } else {
+                frame.length
+            }),
+            signals: comm
+                .signals_in_frame(frame)
+                .into_iter()
+                .map(|signal| {
+                    catalog_signal(
+                        series_key(&SigKey::eth(bus, &frame.name, &signal.name)),
+                        signal,
+                    )
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn catalog_aliases(comm: &crate::model::Comm) -> Vec<String> {
+    let mut names: Vec<String> = comm
+        .clusters
+        .values()
+        .map(|cluster| cluster.name.clone())
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.dedup();
+    names
+}
+
 fn build_catalog(app: &App) -> WebCatalog {
     let mut channels: Vec<WebCatalogChannel> = app
         .snap
@@ -4270,140 +4401,44 @@ fn build_catalog(app: &App) -> WebCatalog {
             index: ch as u8,
             name: channel.name.clone(),
             aliases: Vec::new(),
-            messages: channel
-                .dbc
-                .as_ref()
-                .map(|db| {
-                    db.order
-                        .iter()
-                        .filter_map(|&(id, ext)| {
-                            let message = db.messages.get(&(id, ext))?;
-                            Some(WebCatalogMessage {
-                                id,
-                                extended: ext,
-                                name: message.name.clone(),
-                                frame: None,
-                                comment: message.comment.clone(),
-                                fd: message.fd || message.dlc > 8,
-                                length: None,
-                                signals: message
-                                    .signals
-                                    .iter()
-                                    .map(|signal| WebCatalogSignal {
-                                        key: series_key(&SigKey::can(
-                                            ch as u8,
-                                            id,
-                                            ext,
-                                            &signal.name,
-                                        )),
-                                        name: signal.name.clone(),
-                                        unit: signal.unit.clone(),
-                                        min: signal.min,
-                                        max: signal.max,
-                                        initial: signal.initial,
-                                        comment: signal.comment.clone(),
-                                    })
-                                    .collect(),
-                            })
-                        })
-                        .collect()
-                })
+            messages: app
+                .model_comms
+                .get(ch)
+                .and_then(Option::as_ref)
+                .map(|comm| can_catalog_messages(comm, ch as u8, channel.dbc.as_ref()))
                 .unwrap_or_default(),
         })
         .collect();
-    for (bus, cfg) in &app.fr_buses {
-        let messages = cfg
-            .db
-            .slot_signals()
-            .into_iter()
-            .map(|(slot, frame, names)| WebCatalogMessage {
-                id: slot as u32,
-                extended: false,
-                name: frame,
-                frame: None,
-                comment: String::new(),
-                fd: false,
-                length: None,
-                signals: names
-                    .into_iter()
-                    .map(|name| {
-                        let meta = cfg.db.slot_signal(slot, &name);
-                        WebCatalogSignal {
-                            key: series_key(&SigKey::fr(*bus, slot, &name)),
-                            name,
-                            unit: meta.map(|signal| signal.unit.clone()).unwrap_or_default(),
-                            min: meta.map(|signal| signal.min).unwrap_or(0.0),
-                            max: meta.map(|signal| signal.max).unwrap_or(0.0),
-                            initial: None,
-                            comment: meta
-                                .map(|signal| signal.comment.clone())
-                                .unwrap_or_default(),
-                        }
-                    })
-                    .collect(),
-            })
-            .collect();
+    for bus in app.fr_buses.keys() {
+        let messages = app
+            .fr_models
+            .get(bus)
+            .map(|comm| fr_catalog_messages(comm, *bus))
+            .unwrap_or_default();
+        let aliases = app
+            .fr_models
+            .get(bus)
+            .map(|comm| catalog_aliases(comm))
+            .unwrap_or_default();
         channels.push(WebCatalogChannel {
             kind: "fr".to_string(),
             index: *bus,
             name: app.fr_bus_name(*bus),
-            aliases: if cfg.db.params.name.trim().is_empty() {
-                Vec::new()
-            } else {
-                vec![cfg.db.params.name.clone()]
-            },
+            aliases,
             messages,
         });
     }
-    for (bus, cfg) in &app.eth_buses {
-        let aliases = {
-            let mut names: Vec<String> = cfg
-                .db
-                .clusters
-                .iter()
-                .map(|c| c.name.clone())
-                .filter(|name| !name.is_empty())
-                .collect();
-            for frame in &cfg.db.frames {
-                if !frame.cluster.is_empty() && !names.contains(&frame.cluster) {
-                    names.push(frame.cluster.clone());
-                }
-            }
-            names
-        };
-        let messages = cfg
-            .db
-            .frames
-            .iter()
-            .enumerate()
-            .map(|(index, frame)| WebCatalogMessage {
-                id: index as u32,
-                extended: false,
-                name: frame.name.clone(),
-                frame: Some(frame.name.clone()),
-                comment: String::new(),
-                fd: false,
-                length: Some(if app.eth_length_includes_header {
-                    frame.length.saturating_sub(14)
-                } else {
-                    frame.length
-                } as u32),
-                signals: frame
-                    .pdus
-                    .iter()
-                    .flat_map(|pdu| &pdu.signals)
-                    .map(|signal| WebCatalogSignal {
-                        key: series_key(&SigKey::eth(*bus, &frame.name, &signal.name)),
-                        name: signal.name.clone(),
-                        unit: signal.unit.clone(),
-                        min: 0.0,
-                        max: 0.0,
-                        initial: None,
-                        comment: String::new(),
-                    })
-                    .collect(),
-            })
-            .collect();
+    for bus in app.eth_buses.keys() {
+        let messages = app
+            .eth_models
+            .get(bus)
+            .map(|comm| eth_catalog_messages(comm, *bus, app.eth_length_includes_header))
+            .unwrap_or_default();
+        let aliases = app
+            .eth_models
+            .get(bus)
+            .map(|comm| catalog_aliases(comm))
+            .unwrap_or_default();
         channels.push(WebCatalogChannel {
             kind: "eth".to_string(),
             index: *bus,
