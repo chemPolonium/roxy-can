@@ -5439,11 +5439,21 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             name: bus.name.clone(),
             bus: bus.index,
             source: bus.dbc_paths.first().cloned().unwrap_or_default(),
-            frames: snap
-                .channels
-                .get(index)
-                .and_then(|channel| channel.dbc.as_ref())
-                .map_or(0, |db| db.order.len()),
+            frames: {
+                let model = snap
+                    .model_frames
+                    .keys()
+                    .filter(|(ch, _, _)| usize::from(*ch) == index)
+                    .count();
+                if model > 0 {
+                    model
+                } else {
+                    snap.channels
+                        .get(index)
+                        .and_then(|channel| channel.dbc.as_ref())
+                        .map_or(0, |db| db.order.len())
+                }
+            },
         });
     }
     for bus in &fr_buses {
@@ -5453,7 +5463,14 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             name: bus.name.clone(),
             bus: bus.bus,
             source: bus.path.clone(),
-            frames: bus.frames,
+            frames: {
+                let model = snap
+                    .fr_model_frames
+                    .keys()
+                    .filter(|(b, _)| *b == bus.bus)
+                    .count();
+                if model > 0 { model } else { bus.frames }
+            },
         });
     }
     for bus in &eth_buses {
@@ -5463,7 +5480,19 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             name: bus.name.clone(),
             bus: bus.bus,
             source: bus.path.clone(),
-            frames: bus.frames,
+            frames: app
+                .eth_models
+                .get(&bus.bus)
+                .map(|comm| {
+                    comm.frames
+                        .values()
+                        .filter(|frame| {
+                            matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
+                        })
+                        .count()
+                })
+                .filter(|count| *count > 0)
+                .unwrap_or(bus.frames),
         });
     }
     clusters.sort_by_key(|cluster| cluster.id);
