@@ -1118,6 +1118,9 @@ fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App 
     app.channels[0].dbc = Some(std::sync::Arc::new(
         crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
     ));
+    // The generator encodes through the unified model, so the fixture has to
+    // build the model the direct table assignment skipped.
+    app.rebuild_can_model(0);
     app.add_tx(0, 0x300);
     // 测试 DBC 的发送节点 ECU 需要角色开关允许发送。
     app.set_node_role(0, "ECU", NodeRole::Simulated);

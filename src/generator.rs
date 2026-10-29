@@ -2,7 +2,7 @@
 //! sources, and the payload assembly that drives a frame out.
 
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN, dlc2len, len2dlc};
-use crate::channel::{Channel, NodeRole};
+use crate::channel::NodeRole;
 use crate::sim::{ValueSrc, eval_phys};
 
 pub struct TxMsg {
@@ -147,54 +147,9 @@ pub fn fr_cycle_draft(text: &str, cycle_us: u64) -> Result<(u64, u64), &'static 
     Ok((n, n * cycle_us))
 }
 
-/// Payload for one generated frame: `tx`'s base bytes with every driven signal
-/// overwritten by its value at `at_us`. Never mutates `tx`, so `data` and
-/// `len` stay whatever the user set and a save captures the base rather than
-/// wherever the waveform happened to be.
-///
-/// Takes `channels` explicitly rather than `&self` so the generator can call it
-/// while holding a mutable borrow of `tx_list`.
-pub(crate) fn tx_payload(
-    channels: &[Channel],
-    tx: &TxMsg,
-    at_us: u64,
-) -> ([u8; MAX_CAN_FD_LEN], u8, FrameFlags) {
-    let mut data = tx.data;
-    let mut len = tx.len;
-    let mut flags = tx.flags;
-    let Some((table, msg)) = channels
-        .get(tx.channel as usize)
-        .and_then(|c| c.dbc.as_ref())
-        .and_then(|db| db.message_of(tx.id).map(|m| (db, m)))
-    else {
-        return (data, len, flags);
-    };
-    for src in &tx.srcs {
-        let Some(s) = msg.signals.iter().find(|s| s.name == src.name) else {
-            continue;
-        };
-        // The whole 64-byte array goes in: encode_signal skips bits that fall
-        // outside its argument, so a narrowed slice would silently drop them.
-        if !table.encode_signal(tx.id, &src.name, eval_phys(src, at_us), &mut data) {
-            continue;
-        }
-        // A driven signal reaching past the base length must widen the frame,
-        // or decoders -- including our own plots -- read the value as zero.
-        let needed = ((s.start_bit + s.size) as usize)
-            .div_ceil(8)
-            .min(MAX_CAN_FD_LEN);
-        len = len.max(needed as u8);
-    }
-    if len > 8 {
-        // Snap to a length a real FD frame can carry, and say so.
-        len = dlc2len(len2dlc(len));
-        flags = flags.union(FrameFlags::FD);
-    }
-    (data, len, flags)
-}
-
-/// Model-backed variant of [`tx_payload`]. Returns `None` when the frame or
-/// plan is unknown, so the caller keeps the legacy path.
+/// Payload for one generated CAN frame: `tx`'s base bytes with every driven
+/// signal overwritten by its value at `at_us`. Returns `None` when the frame or
+/// plan is unknown; the caller then sends the entry's stored bytes unchanged.
 pub(crate) fn tx_payload_with_model(
     cluster: crate::model::ClusterId,
     comm: &crate::model::Comm,
@@ -247,39 +202,6 @@ pub(crate) fn tx_payload_with_model(
         flags = flags.union(FrameFlags::FD);
     }
     Some((data, len, flags))
-}
-
-/// Encodes `value` into `data` for signal `name` of message `id` and widens
-/// `len` to fit, snapping past-8 lengths to an FD length exactly like
-/// [`tx_payload`] does. Returns false -- leaving payload and length alone --
-/// when the message has no such signal or the value is not representable.
-pub(crate) fn encode_mirror(
-    table: &crate::dbc::SymbolTable,
-    id: u32,
-    name: &str,
-    value: f64,
-    data: &mut [u8; MAX_CAN_FD_LEN],
-    len: &mut u8,
-    flags: &mut FrameFlags,
-) -> bool {
-    let Some(s) = table
-        .message_of(id)
-        .and_then(|m| m.signals.iter().find(|s| s.name == name))
-    else {
-        return false;
-    };
-    if !table.encode_signal(id, name, value, data) {
-        return false;
-    }
-    let needed = ((s.start_bit + s.size) as usize)
-        .div_ceil(8)
-        .min(MAX_CAN_FD_LEN);
-    *len = (*len).max(needed as u8);
-    if *len > 8 {
-        *len = dlc2len(len2dlc(*len));
-        *flags = flags.union(FrameFlags::FD);
-    }
-    true
 }
 
 use crate::app::App;
@@ -663,36 +585,8 @@ pub(crate) fn fr_cycle_at(db: &crate::fr_db::FrDb, at_us: u64) -> u8 {
     ((at_us / cycle_us) % 64) as u8
 }
 
-/// The payload one generated FlexRay frame carries: the base bytes with every
-/// driven signal laid over them at `at_us`, encoded against the frame the
-/// schedule actually puts in this slot at this cycle. Never mutates `tx`.
-///
-/// The frame is resolved rather than assumed because a static slot can hold
-/// several frames by cycle phase -- writing `Amp` where the cycle carries `Bmp`
-/// would put a value the decoder then reads as something else.
-pub(crate) fn fr_tx_payload(
-    fr_dbs: &std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>,
-    tx: &FrTxMsg,
-    at_us: u64,
-) -> Vec<u8> {
-    let mut data = tx.data.clone();
-    let Some(db) = fr_dbs.get(&tx.bus) else {
-        return data;
-    };
-    let Some(frame_ix) = db.frame_ix_at(tx.slot, fr_cycle_at(db, at_us), 2) else {
-        return data;
-    };
-    for src in &tx.srcs {
-        // A signal this frame does not carry, or a payload too short to hold it,
-        // leaves the bytes alone -- the same refusal as the CAN side, where a
-        // value that cannot be encoded must not reach the wire as a partial one.
-        let _ = db.encode_signal(frame_ix, &src.name, eval_phys(src, at_us), &mut data);
-    }
-    data
-}
-
-/// Model-backed variant of [`fr_tx_payload`]; `None` means the caller keeps
-/// the legacy path.
+/// Payload for one generated FlexRay frame; `None` when the slot's frame or
+/// plan is unknown, so the caller sends the entry's stored bytes unchanged.
 pub(crate) fn fr_tx_payload_with_model(
     cluster: crate::model::ClusterId,
     comm: &crate::model::Comm,
@@ -766,6 +660,55 @@ pub(crate) fn fr_tx_set_signal(
             tx.slot
         ));
     }
+    let len = tx.len;
+    set_fr_tx_base(tx, data, len);
+    Ok(())
+}
+
+/// Model-backed [`fr_tx_set_signal`]: the slot's frame and the signal's place
+/// in it come from the unified model, and the write goes through the same
+/// encode plan the bus decodes with.
+pub(crate) fn fr_tx_set_signal_with_model(
+    tx: &mut FrTxMsg,
+    cluster: crate::model::ClusterId,
+    comm: &crate::model::Comm,
+    plans: &crate::model::PlanCache,
+    name: &str,
+    phys: f64,
+) -> Result<(), String> {
+    let frame = comm
+        .frames_in_cluster(cluster)
+        .find(|frame| {
+            matches!(
+                frame.address,
+                crate::model::FrameAddress::FlexRay { slot, .. } if slot == tx.slot
+            )
+        })
+        .ok_or_else(|| {
+            format!(
+                "This bus's description schedules no frame in slot {}: no signal to write",
+                tx.slot
+            )
+        })?;
+    let signal = comm
+        .signals_in_frame(frame)
+        .into_iter()
+        .find(|signal| signal.name == name)
+        .ok_or_else(|| {
+            format!(
+                "The frame in slot {} does not declare signal {name:?}",
+                tx.slot
+            )
+        })?;
+    let plan = plans.get(frame.id).ok_or_else(|| {
+        format!(
+            "The frame in slot {} does not declare signal {name:?} (or its payload is too short)",
+            tx.slot
+        )
+    })?;
+    let mut data = tx.data.clone();
+    let signal_id = signal.id;
+    crate::model::encode_payload(comm, plan, &[(signal_id, phys)], &mut data);
     let len = tx.len;
     set_fr_tx_base(tx, data, len);
     Ok(())
