@@ -386,3 +386,42 @@ fn e2e_protection_structure_is_checked_without_authenticating() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn profile_1_counter_position_enters_the_plan() {
+    let mut comm = Comm::default();
+    let mut pdu = pdu(1, PduKind::Signal);
+    pdu.e2e = Some(E2eProtectionId(1));
+    comm.pdus.insert(PduId(1), pdu);
+    comm.frames.insert(FrameId(1), frame(1, 1));
+    comm.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(1),
+            start_bit: 8,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    comm.e2e.insert(
+        E2eProtectionId(1),
+        E2eProtection {
+            id: E2eProtectionId(1),
+            name: "E".to_string(),
+            profile_name: "Profile1".to_string(),
+            profile: Some(1),
+            data_id: Some(291),
+            system_signal: None,
+            payload: None,
+        },
+    );
+    let (plan, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(plan.e2e.len(), 1);
+    assert_eq!(plan.e2e[0].counter_bit_offset, 16, "PDU base 8 + byte 1");
+    assert_eq!(plan.e2e[0].counter_bits, 4);
+    assert_eq!(plan.e2e[0].data_id, Some(291));
+    let reading = decode_e2e(&plan, &[0, 0, 0x0B, 0, 0, 0, 0, 0]);
+    assert_eq!(reading[0].counter, 11);
+}

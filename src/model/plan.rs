@@ -39,6 +39,7 @@ impl PlanCache {
 
 pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePlan, Vec<Issue>) {
     let mut reads = Vec::new();
+    let mut e2e = Vec::new();
     let mut issues = Vec::new();
     // A logged FlexRay payload begins at the frame's first PDU, while AUTOSAR
     // START-POSITIONs are measured from the frame head. Rebase once here so
@@ -103,6 +104,19 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             }
         }
         let base = mapping.start_bit.saturating_sub(frame_base);
+        // Profile 1/2 keep the counter in the low nibble of the second
+        // header byte; the CRC above it is not verified (no keys in scope).
+        if let Some(protection) = pdu.e2e.and_then(|id| comm.e2e.get(&id))
+            && let Some(profile) = protection.profile
+            && matches!(profile, 1 | 2)
+        {
+            e2e.push(E2ePlan {
+                profile,
+                counter_bit_offset: base.saturating_add(8),
+                counter_bits: 4,
+                data_id: protection.data_id,
+            });
+        }
         match pdu.kind {
             PduKind::Signal => {
                 expand_pdu(comm, pdu.id, base, None, None, &mut issues, &mut reads);
@@ -265,6 +279,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             version,
             reads,
             writes,
+            e2e,
         },
         issues,
     )

@@ -515,6 +515,16 @@ export interface MessageSignal {
   label?: string | null;
 }
 
+export interface MessageE2e {
+  profile: number;
+  dataId?: number | null;
+  counter?: number | null;
+  frames: number;
+  repeats: number;
+  gaps: number;
+  jumps: number;
+}
+
 export interface Message {
   key: string;
   kind: string;
@@ -530,6 +540,7 @@ export interface Message {
   data: string;
   signalCount: number;
   signals?: MessageSignal[];
+  e2e?: MessageE2e;
 }
 
 export interface WriteLine {

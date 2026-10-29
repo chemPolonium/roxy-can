@@ -7,6 +7,39 @@
 use super::*;
 use crate::decode::{extract_raw, from_physical, pack_raw, to_physical};
 
+/// One E2E header reading: the counter the protected PDU carried and the
+/// Data ID the document configured. The CRC is deliberately not evaluated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct E2eReading {
+    pub profile: u32,
+    pub counter: u8,
+    pub data_id: Option<u32>,
+}
+
+pub fn decode_e2e(plan: &DecodePlan, payload: &[u8]) -> Vec<E2eReading> {
+    let total_bits = (payload.len() as u64) * 8;
+    plan.e2e
+        .iter()
+        .filter_map(|spec| {
+            let end = u64::from(spec.counter_bit_offset) + u64::from(spec.counter_bits);
+            if end > total_bits || spec.counter_bits == 0 || spec.counter_bits > 8 {
+                return None;
+            }
+            let raw = extract_raw(
+                payload,
+                u64::from(spec.counter_bit_offset),
+                u64::from(spec.counter_bits),
+                false,
+            );
+            Some(E2eReading {
+                profile: spec.profile,
+                counter: raw as u8,
+                data_id: spec.data_id,
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DecodedSignal {
     pub signal: SignalId,

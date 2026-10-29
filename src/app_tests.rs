@@ -6778,6 +6778,122 @@ fn model_issues_reach_the_write_log_once() {
     assert_eq!(hits, 1, "the warning is written once, not per rebuild");
 }
 
+/// E2E counters are tracked per message from the model plan and published
+/// with the aggregates; the CRC verdict is not claimed.
+#[test]
+fn e2e_counter_continuity_is_published_per_message() {
+    use crate::model::{
+        CanParams, Cluster, ClusterId, ClusterKind, Comm, E2eProtection, E2eProtectionId, Frame,
+        FrameAddress, FrameId, FramePduMapping, FrameTiming, MappingId, Network, NetworkId,
+        NetworkParams, Pdu, PduId, PduKind,
+    };
+    let mut app = App::headless();
+    let mut comm = Comm::default();
+    comm.clusters.insert(
+        ClusterId(1),
+        Cluster {
+            id: ClusterId(1),
+            kind: ClusterKind::Can,
+            name: "CAN1".to_string(),
+            aliases: Vec::new(),
+            description: String::new(),
+            sources: Vec::new(),
+            networks: vec![NetworkId(1)],
+        },
+    );
+    comm.networks.insert(
+        NetworkId(1),
+        Network {
+            id: NetworkId(1),
+            cluster: ClusterId(1),
+            name: "CAN1".to_string(),
+            params: NetworkParams::Can(CanParams::default()),
+        },
+    );
+    comm.pdus.insert(
+        PduId(1),
+        Pdu {
+            id: PduId(1),
+            name: "P".to_string(),
+            length: 8,
+            kind: PduKind::Signal,
+            header_type: crate::model::ContainerHeaderType::Short,
+            cycle_us: None,
+            selector: None,
+            secured: None,
+            transformation: None,
+            e2e: Some(E2eProtectionId(1)),
+        },
+    );
+    comm.e2e.insert(
+        E2eProtectionId(1),
+        E2eProtection {
+            id: E2eProtectionId(1),
+            name: "E".to_string(),
+            profile_name: "Profile1".to_string(),
+            profile: Some(1),
+            data_id: Some(0x123),
+            system_signal: None,
+            payload: None,
+        },
+    );
+    comm.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(1),
+            start_bit: 0,
+            byte_order: crate::model::ByteOrder::LittleEndian,
+        },
+    );
+    comm.frames.insert(
+        FrameId(1),
+        Frame {
+            id: FrameId(1),
+            cluster: ClusterId(1),
+            network: NetworkId(1),
+            name: "Protected".to_string(),
+            length: 8,
+            address: FrameAddress::Can {
+                id: 0x123,
+                extended: false,
+                fd: false,
+            },
+            timing: FrameTiming::default(),
+            ethernet: None,
+            pdu_mappings: vec![MappingId(1)],
+        },
+    );
+    app.send(crate::bus::BusCommand::SetChannelModel {
+        ch: 0,
+        comm: std::sync::Arc::new(comm),
+    });
+    app.settle();
+    let frame = |t: u64, counter: u8| {
+        let mut f = frame_at(t, 0x123, 8, Direction::Rx);
+        f.data[0] = 0xAA;
+        f.data[1] = counter;
+        f
+    };
+    receive(
+        &mut app,
+        10_000,
+        vec![frame(10_000, 0), frame(20_000, 1), frame(30_000, 1)],
+    );
+    let view = app
+        .snap
+        .e2e
+        .get(&(0, 0x123, false))
+        .expect("E2E continuity published");
+    assert_eq!(view.profile, 1);
+    assert_eq!(view.data_id, Some(0x123));
+    assert_eq!(view.frames, 3);
+    assert_eq!(view.counter, Some(1));
+    assert_eq!(view.repeats, 1, "0,1,1 repeats once");
+    assert_eq!(view.jumps, 0);
+}
+
 /// Frame decoding must find the model through the channel's current cluster
 /// id. A project that restored ids like 42 used to fall back to the legacy
 /// decoder because the lookup assumed `channel + 1`.

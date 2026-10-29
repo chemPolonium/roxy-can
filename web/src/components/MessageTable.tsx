@@ -95,6 +95,26 @@ export function MessageTable({
                     <span class="msg-name">
                       {message.name || <span class="dash">—</span>}
                     </span>
+                    {message.e2e && (
+                      <span
+                        class={`e2e-tag ${
+                          message.e2e.repeats + message.e2e.jumps > 0
+                            ? "bad"
+                            : ""
+                        }`}
+                        title={[
+                          `E2E Profile ${message.e2e.profile}${
+                            message.e2e.dataId != null
+                              ? `, Data ID ${message.e2e.dataId}`
+                              : ""
+                          }`,
+                          `Counter ${message.e2e.counter ?? "—"} · repeats ${message.e2e.repeats} · gaps ${message.e2e.gaps} · jumps ${message.e2e.jumps}`,
+                          "Counter continuity only; authentication stays unverified (no CRC key).",
+                        ].join("\n")}
+                      >
+                        E2E P{message.e2e.profile}
+                      </span>
+                    )}
                   </td>
                   <td class="num mono">
                     {message.cycleMs > 0

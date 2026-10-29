@@ -824,6 +824,9 @@ pub struct Snapshot {
     /// model keeps standard and extended ids apart and counts container
     /// children the table never held.
     pub model_frames: std::collections::BTreeMap<(u8, u32, bool), ModelFrameView>,
+    /// E2E counter continuity per CAN message; absent when the message is
+    /// not protected or its profile layout is not checked.
+    pub e2e: std::collections::BTreeMap<(u8, u32, bool), E2eView>,
     /// The same for FlexRay slots, keyed by `(bus, slot)`.
     pub fr_model_frames: std::collections::BTreeMap<(u8, u16), ModelFrameView>,
     /// The same for Ethernet frames, keyed by frame name.
@@ -977,6 +980,35 @@ pub struct ExpandedSignal {
     pub unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// E2E counter continuity for one CAN message. The CRC is not evaluated;
+/// the counter is the part a reader can check without keys.
+#[derive(Clone, Debug, Default)]
+pub struct E2eView {
+    pub profile: u32,
+    pub data_id: Option<u32>,
+    pub counter: Option<u8>,
+    pub frames: u64,
+    pub repeats: u64,
+    pub gaps: u64,
+    pub jumps: u64,
+}
+
+fn note_e2e(entry: &mut E2eView, reading: crate::model::E2eReading) {
+    entry.profile = reading.profile;
+    entry.data_id = reading.data_id;
+    entry.frames += 1;
+    if let Some(last) = entry.counter {
+        let delta = (reading.counter + 16 - last) % 16;
+        match delta {
+            0 => entry.repeats += 1,
+            1 => {}
+            2 | 3 => entry.gaps += 1,
+            _ => entry.jumps += 1,
+        }
+    }
+    entry.counter = Some(reading.counter);
 }
 
 /// What the unified model says about one CAN frame, for the Messages and
@@ -1224,6 +1256,8 @@ pub struct BusCore {
     /// Model/plan issues already written to the Write log. Rebuilding a
     /// cluster must not repeat yesterday's warnings on every edit.
     pub(crate) model_issues_seen: std::collections::HashSet<String>,
+    /// E2E counter continuity per CAN message, updated on every frame.
+    pub(crate) e2e_tracks: std::collections::BTreeMap<(u8, u32, bool), E2eView>,
     /// Counter for naming new buses (CAN3, CAN4, ...).
     pub(crate) bus_counter: usize,
     /// The interactive generator's entries: what this tool transmits as.
@@ -1573,6 +1607,7 @@ impl BusCore {
             fr_dbs: Default::default(),
             eth_dbs: Default::default(),
             model_issues_seen: Default::default(),
+            e2e_tracks: Default::default(),
             eth_length_includes_header: false,
             trace_paused: false,
             paused_at_us: None,
@@ -3828,6 +3863,7 @@ impl BusCore {
             channel_count: self.channels.len(),
             cluster_ids: self.cluster_ids_view(),
             model_frames: self.model_frames_view(),
+            e2e: self.e2e_tracks.clone(),
             fr_model_frames: self.fr_model_frames_view(),
             eth_model_frames: self.eth_model_frames_view(),
             expanded_signals: self.expanded_signals_view(),
@@ -4725,10 +4761,53 @@ impl BusCore {
         }
     }
 
+    /// The model plan for one CAN frame, when the channel's model is still
+    /// the one built from its current table. Used by paths that only need
+    /// the plan's structure (E2E framing) rather than its decoded signals.
+    fn model_can_plan(&self, f: &CanFrame) -> Option<Arc<crate::model::DecodePlan>> {
+        let ch = f.channel as usize;
+        let comm = self.model_comms.get(ch)?.as_ref()?;
+        let plans = self.model_plans.get(ch)?.as_ref()?;
+        let db = self.channels.get(ch)?.dbc.as_ref()?;
+        if !Arc::ptr_eq(self.model_dbs.get(ch)?.as_ref()?, db) {
+            return None;
+        }
+        let cluster = *self.can_cluster_ids.get(ch)?;
+        let frame = comm.frames_in_cluster(cluster).find(|frame| {
+            matches!(
+                frame.address,
+                crate::model::FrameAddress::Can {
+                    id,
+                    extended,
+                    ..
+                } if id == f.id && extended == f.extended
+            )
+        })?;
+        plans.get(frame.id).cloned()
+    }
+
+    fn track_e2e(&mut self, f: &CanFrame) {
+        let Some(plan) = self.model_can_plan(f) else {
+            return;
+        };
+        if plan.e2e.is_empty() {
+            return;
+        }
+        let payload = &f.data[..f.len.min(f.data.len() as u8) as usize];
+        let Some(reading) = crate::model::decode_e2e(&plan, payload).into_iter().next() else {
+            return;
+        };
+        note_e2e(
+            self.e2e_tracks
+                .entry((f.channel, f.id, f.extended))
+                .or_default(),
+            reading,
+        );
+    }
+
     /// Model-side signal values for a CAN frame, in the same shape the
     /// legacy decoder returns. `None` means "use the legacy path": the
-    /// channel has no model, the frame is multiplexed, or the plan does not
-    /// know the frame.
+    /// channel has no model or the model does not know the frame.
     fn model_can_values(&self, f: &CanFrame) -> Option<Vec<crate::dbc::DecodedSignal>> {
         self.model_can_decoded(f, true)
     }
@@ -6578,6 +6657,7 @@ impl BusCore {
         // wherever they were instead of from zero.
         self.fr_aggs.clear();
         self.eth_aggs.clear();
+        self.e2e_tracks.clear();
         *status = format!("cleared {n} message counter(s)");
     }
 
@@ -7444,6 +7524,7 @@ impl BusCore {
             self.trace.enforce_limit(self.trace_limit);
             return;
         }
+        self.track_e2e(&f);
         let agg = self
             .aggs
             .entry((f.channel, f.id, f.extended))
@@ -9208,5 +9289,26 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
             resolve_derived_ref("CAN1:0x100:EngineSpeed", &keys, &core.channels, &own),
             Some(keys[0].clone())
         );
+    }
+
+    #[test]
+    fn e2e_counter_deltas_separate_repeats_gaps_and_jumps() {
+        let mut view = E2eView::default();
+        for counter in [1u8, 2, 2, 5, 9] {
+            note_e2e(
+                &mut view,
+                crate::model::E2eReading {
+                    profile: 1,
+                    counter,
+                    data_id: Some(7),
+                },
+            );
+        }
+        assert_eq!(view.frames, 5);
+        assert_eq!(view.counter, Some(9));
+        assert_eq!(view.data_id, Some(7));
+        assert_eq!(view.repeats, 1, "2 followed by 2 is a repeat");
+        assert_eq!(view.gaps, 1, "delta 3 is within Profile 1's tolerance");
+        assert_eq!(view.jumps, 1, "delta 4 is a jump");
     }
 }

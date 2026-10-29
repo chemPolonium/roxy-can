@@ -5000,6 +5000,22 @@ struct WebMessageSignal {
     label: Option<String>,
 }
 
+/// E2E counter continuity for a protected message. The CRC verdict is not
+/// included: authentication stays unverified.
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebE2e {
+    profile: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    counter: Option<u8>,
+    frames: u64,
+    repeats: u64,
+    gaps: u64,
+    jumps: u64,
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebMessage {
@@ -5021,6 +5037,9 @@ struct WebMessage {
     /// Decoded children, present only while the row is expanded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     signals: Vec<WebMessageSignal>,
+    /// Counter continuity for an E2E-protected message; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e2e: Option<WebE2e>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5853,6 +5872,18 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 data: hex(m.payload()),
                 signal_count,
                 signals,
+                e2e: snap
+                    .e2e
+                    .get(&(m.channel, m.id, m.extended))
+                    .map(|track| WebE2e {
+                        profile: track.profile,
+                        data_id: track.data_id,
+                        counter: track.counter,
+                        frames: track.frames,
+                        repeats: track.repeats,
+                        gaps: track.gaps,
+                        jumps: track.jumps,
+                    }),
             }
         })
         .collect();
@@ -5909,6 +5940,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             data: hex(&m.payload),
             signal_count,
             signals,
+            e2e: None,
         });
     }
     for a in &snap.eth_aggs {
@@ -5986,6 +6018,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             data: String::new(),
             signal_count,
             signals,
+            e2e: None,
         });
     }
     messages.sort_by_key(|m| {

@@ -2241,6 +2241,22 @@ body.col-resizing {
   margin-right: 4px;
 }
 
+.e2e-tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+}
+
+.e2e-tag.bad {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  color: var(--warn);
+}
+
 .message-signal-row td {
   height: 19px;
   background: #0b1118;

@@ -54,7 +54,7 @@ pub use plan::{PlanCache, build_decode_plan};
 #[allow(unused_imports)]
 pub use registry::{ClusterEntry, ClusterRegistry};
 #[allow(unused_imports)]
-pub use runtime::{DecodedSignal, decode_payload, encode_payload};
+pub use runtime::{DecodedSignal, E2eReading, decode_e2e, decode_payload, encode_payload};
 #[allow(unused_imports)]
 pub use schema::{
     CanCfg, ClusterCfg, EtherCfg, FlexRayCfg, FrameOverrideCfg, GeneratorCfg, IdAliasCfg,
@@ -913,12 +913,27 @@ pub struct SignalWrite {
     pub transform: Option<LinearTransform>,
 }
 
+/// What a reader can check about an E2E-protected PDU without a CRC key:
+/// the counter's fixed position for the profiles whose header layout is
+/// fixed, plus the configured Data ID. Profiles with a variable layout stay
+/// structure-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct E2ePlan {
+    pub profile: u32,
+    pub counter_bit_offset: u32,
+    pub counter_bits: u32,
+    pub data_id: Option<u32>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DecodePlan {
     pub frame: Option<FrameId>,
     pub version: u32,
     pub reads: Vec<SignalRead>,
     pub writes: Vec<SignalWrite>,
+    #[serde(default)]
+    pub e2e: Vec<E2ePlan>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
