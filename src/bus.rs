@@ -1221,6 +1221,9 @@ pub struct BusCore {
     pub(crate) eth_models: std::collections::BTreeMap<u8, Arc<crate::model::Comm>>,
     pub(crate) eth_model_plans: std::collections::BTreeMap<u8, Arc<crate::model::PlanCache>>,
     pub(crate) eth_model_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
+    /// Model/plan issues already written to the Write log. Rebuilding a
+    /// cluster must not repeat yesterday's warnings on every edit.
+    pub(crate) model_issues_seen: std::collections::HashSet<String>,
     /// Counter for naming new buses (CAN3, CAN4, ...).
     pub(crate) bus_counter: usize,
     /// The interactive generator's entries: what this tool transmits as.
@@ -1569,6 +1572,7 @@ impl BusCore {
             eth_aggs: HashMap::new(),
             fr_dbs: Default::default(),
             eth_dbs: Default::default(),
+            model_issues_seen: Default::default(),
             eth_length_includes_header: false,
             trace_paused: false,
             paused_at_us: None,
@@ -4534,7 +4538,9 @@ impl BusCore {
         let outcome = crate::model::import_symbol_table(
             &db, &name, cluster_id, &source, &mut ids, bitrate, fd,
         );
-        let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+        let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
+        self.report_model_issues(&name, &outcome.issues);
+        self.report_model_issues(&name, &plan_issues);
         self.model_comms[ch] = Some(Arc::new(outcome.comm));
         self.model_plans[ch] = Some(Arc::new(plans));
         self.model_dbs[ch] = Some(db);
@@ -4544,11 +4550,34 @@ impl BusCore {
     /// is the channel's current table: replacing that table without a new
     /// model must fall back to the legacy decoder, exactly like the
     /// adapter-built models.
+    /// Writes model and plan issues once each into the Write log. The status
+    /// bar is for the action the user just took; an unsupported element in
+    /// the matrix has to stay somewhere they can still read.
+    pub(crate) fn report_model_issues(&mut self, label: &str, issues: &[crate::model::Issue]) {
+        for issue in issues {
+            if issue.severity == crate::model::IssueSeverity::Info {
+                continue;
+            }
+            let text = format!("{label}: {}", issue.message);
+            if !self.model_issues_seen.insert(text.clone()) {
+                continue;
+            }
+            let kind = if issue.severity == crate::model::IssueSeverity::Error {
+                WriteKind::Error
+            } else {
+                WriteKind::Warning
+            };
+            self.write_push(kind, text);
+        }
+    }
+
     fn set_channel_model(&mut self, ch: u8, comm: Arc<crate::model::Comm>) {
         let ch = ch as usize;
         let Some(channel) = self.channels.get(ch) else {
             return;
         };
+        let label = channel.name.clone();
+        let channel_dbc = channel.dbc.clone();
         if self.model_comms.len() <= ch {
             self.model_comms.resize(ch + 1, None);
             self.model_plans.resize(ch + 1, None);
@@ -4560,10 +4589,12 @@ impl BusCore {
         }
         let mut comm = (*comm).clone();
         comm.rebind_cluster(self.can_cluster_ids[ch]);
-        let (plans, _) = crate::model::PlanCache::build(&comm, 1);
+        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
+        self.report_model_issues(&label, &comm.issues);
+        self.report_model_issues(&label, &plan_issues);
         self.model_comms[ch] = Some(Arc::new(comm));
         self.model_plans[ch] = Some(Arc::new(plans));
-        self.model_dbs[ch] = channel.dbc.clone();
+        self.model_dbs[ch] = channel_dbc;
     }
 
     fn set_fr_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
@@ -4580,7 +4611,9 @@ impl BusCore {
         };
         let mut comm = (*comm).clone();
         comm.rebind_cluster(id);
-        let (plans, _) = crate::model::PlanCache::build(&comm, 1);
+        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
+        self.report_model_issues(&format!("FR{bus}"), &comm.issues);
+        self.report_model_issues(&format!("FR{bus}"), &plan_issues);
         self.fr_models.insert(bus, Arc::new(comm));
         self.fr_model_plans.insert(bus, Arc::new(plans));
         self.fr_model_dbs
@@ -4601,7 +4634,9 @@ impl BusCore {
         };
         let mut comm = (*comm).clone();
         comm.rebind_cluster(id);
-        let (plans, _) = crate::model::PlanCache::build(&comm, 1);
+        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
+        self.report_model_issues(&format!("ETH{bus}"), &comm.issues);
+        self.report_model_issues(&format!("ETH{bus}"), &plan_issues);
         self.eth_models.insert(bus, Arc::new(comm));
         self.eth_model_plans.insert(bus, Arc::new(plans));
         self.eth_model_dbs
@@ -4639,7 +4674,10 @@ impl BusCore {
                 &crate::model::ClusterSource::Manual,
                 &mut ids,
             );
-            let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+            let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
+            let label = format!("FR{bus}");
+            self.report_model_issues(&label, &outcome.issues);
+            self.report_model_issues(&label, &plan_issues);
             self.fr_models.insert(bus, Arc::new(outcome.comm));
             self.fr_model_plans.insert(bus, Arc::new(plans));
             self.fr_model_dbs.insert(bus, db);
@@ -4677,7 +4715,10 @@ impl BusCore {
                 &crate::model::ClusterSource::Manual,
                 &mut ids,
             );
-            let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+            let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
+            let label = format!("ETH{bus}");
+            self.report_model_issues(&label, &outcome.issues);
+            self.report_model_issues(&label, &plan_issues);
             self.eth_models.insert(bus, Arc::new(outcome.comm));
             self.eth_model_plans.insert(bus, Arc::new(plans));
             self.eth_model_dbs.insert(bus, db);
@@ -4716,7 +4757,7 @@ impl BusCore {
         if !Arc::ptr_eq(model_db, db) {
             return None;
         }
-        let cluster = crate::model::ClusterId(f.channel as u32 + 1);
+        let cluster = *self.can_cluster_ids.get(f.channel as usize)?;
         let frame = comm
             .frames_in_cluster(cluster)
             .find(|frame| frame.address.can_id() == Some(f.id))?;
@@ -4742,6 +4783,16 @@ impl BusCore {
             out.push(Self::model_signal_decoded(comm, value)?);
         }
         Some(out)
+    }
+
+    /// Test seam: the model decode with no subscription filter, so a test can
+    /// tell "the model found the frame" from "the legacy decoder did".
+    #[cfg(test)]
+    pub(crate) fn model_decoded_for_test(
+        &self,
+        frame: &CanFrame,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_can_decoded(frame, false)
     }
 
     fn model_signal_decoded(

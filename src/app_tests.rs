@@ -6740,6 +6740,58 @@ fn the_snapshot_carries_model_frame_metadata() {
     assert_eq!(meta.signal_count, message.signals.len());
 }
 
+/// Import and plan warnings must be readable after the load; the Write log
+/// carries them once per message even when the model is rebuilt repeatedly.
+#[test]
+fn model_issues_reach_the_write_log_once() {
+    let mut app = App::headless();
+    let issue = crate::model::Issue::warning(
+        crate::model::IssueKind::UnsupportedTransformation,
+        "T1 is shown raw",
+    );
+    app.report_model_issues("CAN1", std::slice::from_ref(&issue));
+    app.report_model_issues("CAN1", std::slice::from_ref(&issue));
+    app.refresh_snapshot();
+    let hits = app
+        .snap
+        .write
+        .iter()
+        .filter(|line| line.text.contains("shown raw"))
+        .count();
+    assert_eq!(hits, 1, "the warning is written once, not per rebuild");
+}
+
+/// Frame decoding must find the model through the channel's current cluster
+/// id. A project that restored ids like 42 used to fall back to the legacy
+/// decoder because the lookup assumed `channel + 1`.
+#[test]
+fn model_decoding_follows_restored_cluster_ids() {
+    let mut app = App::headless();
+    let db = app.snap.channels[0]
+        .dbc
+        .clone()
+        .expect("the sample database");
+    let ((id, extended), message) = db
+        .messages
+        .iter()
+        .find(|(_, message)| !message.signals.is_empty())
+        .expect("a described message");
+    app.send(crate::bus::BusCommand::SetClusterIds {
+        next: 100,
+        can: vec![42, 43],
+        fr: Default::default(),
+        eth: Default::default(),
+    });
+    app.settle();
+    assert_eq!(app.snap.cluster_ids.can[0], 42);
+    let mut frame = frame_at(1_000, *id, message.dlc.max(1) as u8, Direction::Rx);
+    frame.extended = *extended;
+    assert!(
+        app.model_decoded_for_test(&frame).is_some(),
+        "the model is found through the restored cluster id"
+    );
+}
+
 /// A v1 project has no cluster ids; opening it migrates the buses, and the
 /// v2 file written afterwards must reopen with the same ids, generator rows
 /// and trigger rules. This is the migration exit criterion for Phase 7, so it
