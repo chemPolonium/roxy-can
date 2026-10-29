@@ -47,7 +47,7 @@ CAN 的地址是 `(通道, id, 帧类)`，FlexRay 的地址是 `(路/cluster, �
 
 ## 描述文件读取
 
-DBC 与 ARXML 都只读：解析出的事实进 `SymbolTable` / `FrDb` / 以太网矩阵，编辑与写回不在这条路径上。需要补解析时参考同目录的 roxy-arxml / roxy-dbc，但只移植读取侧事实（元数据、布局、约束），不搬序列化/往返保真代码。
+DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Network → Frame → PDU → Signal`），DBC/FIBEX 由适配器转成同一模型，`SymbolTable` / `FrDb` / 以太网矩阵只留给尚未迁移的旧解码路径与表格。核心按 `DecodePlan`/`PlanCache` 解码与编码；ARXML 文档里的 mux、container、linear transformation 直接进计划。编辑与写回不在这条路径上。需要补解析时参考同目录的 roxy-arxml / roxy-dbc，但只移植读取侧事实（元数据、布局、约束），不搬序列化/往返保真代码。
 
 - **DBC**：`CM_` 报文/信号注释、`VFrameFormat`（DLC ≤ 8 的 CAN FD 帧）、`SIG_VALTYPE_`、`SG_MUL_VAL_`、周期属性都进目录；注释与帧类在 DBC explorer 的悬停/标签里显示。
 - **ARXML**：CAN 的 `SW-BASE-TYPE/BASE-TYPE-ENCODING`（`2C`、`IEEE754`）决定符号与浮点，类型名只作缺省回退；FlexRay 的 `COMPU-METHOD` 限值按 factor/offset 换算成物理量程（负 factor 交换上下界），没有可用范围时目录保持 0..0，写 Setpoint 按不夹取处理。
