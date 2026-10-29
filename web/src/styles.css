@@ -98,6 +98,14 @@ input::placeholder {
   color: #5d6b7c;
 }
 
+input:disabled,
+select:disabled {
+  color: var(--muted);
+  background: var(--line-soft);
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
 .app {
   display: flex;
   flex-direction: column;
