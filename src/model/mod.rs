@@ -856,6 +856,29 @@ pub struct ContainerGate {
     pub header_id: u32,
 }
 
+/// A linear signal transformation: `app = scale * net + offset` on decode,
+/// inverted on encode. Identity needs no entry.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearTransform {
+    pub scale: f64,
+    pub offset: f64,
+}
+
+impl LinearTransform {
+    pub fn decode(self, value: f64) -> f64 {
+        self.scale * value + self.offset
+    }
+
+    pub fn encode(self, value: f64) -> f64 {
+        if self.scale == 0.0 {
+            value
+        } else {
+            (value - self.offset) / self.scale
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SignalRead {
     pub signal: SignalId,
@@ -870,6 +893,8 @@ pub struct SignalRead {
     pub mux: Vec<MuxCondition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<ContainerGate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<LinearTransform>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -884,6 +909,8 @@ pub struct SignalWrite {
     pub offset: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<ContainerGate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<LinearTransform>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

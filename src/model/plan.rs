@@ -72,7 +72,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
         let base = mapping.start_bit.saturating_sub(frame_base);
         match pdu.kind {
             PduKind::Signal => {
-                expand_pdu(comm, pdu.id, base, None, None, &mut reads);
+                expand_pdu(comm, pdu.id, base, None, None, &mut issues, &mut reads);
             }
             PduKind::Container => {
                 for contained in comm
@@ -91,13 +91,21 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                             header_id: contained.header_id,
                         });
                     let offset = base + contained.offset.saturating_mul(8);
-                    expand_pdu(comm, contained.pdu, offset, None, gate, &mut reads);
+                    expand_pdu(
+                        comm,
+                        contained.pdu,
+                        offset,
+                        None,
+                        gate,
+                        &mut issues,
+                        &mut reads,
+                    );
                 }
             }
             PduKind::Multiplexed => {
                 // The selector (and any static signal on the mux PDU) is
                 // always decoded; dynamic parts are gated below.
-                expand_pdu(comm, pdu.id, base, None, None, &mut reads);
+                expand_pdu(comm, pdu.id, base, None, None, &mut issues, &mut reads);
                 let selector = pdu.selector.as_ref().map(|field| {
                     if let Some(signal) = field.signal {
                         MuxSelector::Signal { signal }
@@ -112,7 +120,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                 for part in comm.multiplexed_parts.values().filter(|p| p.mux == pdu.id) {
                     let Some(code) = part.selector_code else {
                         // Static part: always present.
-                        expand_pdu(comm, part.part, base, None, None, &mut reads);
+                        expand_pdu(comm, part.part, base, None, None, &mut issues, &mut reads);
                         continue;
                     };
                     let Some(selector) = selector.clone() else {
@@ -134,6 +142,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                             ranges: vec![(code, code)],
                         }),
                         None,
+                        &mut issues,
                         &mut reads,
                     );
                 }
@@ -153,7 +162,15 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                     continue;
                 };
                 let header_bits = secured.header.header_size() * 8;
-                expand_pdu(comm, payload, base + header_bits, None, None, &mut reads);
+                expand_pdu(
+                    comm,
+                    payload,
+                    base + header_bits,
+                    None,
+                    None,
+                    &mut issues,
+                    &mut reads,
+                );
             }
         }
     }
@@ -169,6 +186,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             factor: read.factor,
             offset: read.offset,
             container: read.container,
+            transform: read.transform,
         })
         .collect();
     (
@@ -188,6 +206,7 @@ fn expand_pdu(
     base: u32,
     mux_part: Option<MuxCondition>,
     container: Option<ContainerGate>,
+    issues: &mut Vec<Issue>,
     reads: &mut Vec<SignalRead>,
 ) {
     for signal in comm.signals_in_pdu(pdu) {
@@ -195,6 +214,39 @@ fn expand_pdu(
         if let Some(part) = mux_part.clone() {
             mux.push(part);
         }
+        let transform = match signal.transformation {
+            None => None,
+            Some(id) => match comm.transformations.get(&id) {
+                Some(Transformation {
+                    kind: TransformationKind::Identity,
+                    ..
+                }) => None,
+                Some(Transformation {
+                    kind: TransformationKind::Linear { scale, offset },
+                    ..
+                }) => Some(LinearTransform {
+                    scale: *scale,
+                    offset: *offset,
+                }),
+                Some(transformation) => {
+                    issues.push(Issue::warning(
+                        IssueKind::UnsupportedTransformation,
+                        format!(
+                            "signal {} uses transformation {} of a kind that is shown raw, not converted",
+                            signal.name, transformation.name
+                        ),
+                    ));
+                    None
+                }
+                None => {
+                    issues.push(Issue::error(
+                        IssueKind::DanglingRef,
+                        format!("signal {} refers to a missing transformation", signal.name),
+                    ));
+                    None
+                }
+            },
+        };
         reads.push(SignalRead {
             signal: signal.id,
             bit_offset: base.saturating_add(signal.start_bit),
@@ -206,6 +258,7 @@ fn expand_pdu(
             offset: signal.offset,
             mux,
             container,
+            transform,
         });
     }
 }

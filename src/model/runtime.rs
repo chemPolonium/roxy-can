@@ -125,19 +125,23 @@ pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<De
         let physical = if !fits {
             None
         } else if read.float {
-            match read.bit_len {
+            // Float payloads keep their bit pattern; a transformation still
+            // maps the value the frame carries into the application's units.
+            let value = match read.bit_len {
                 32 => Some(f32::from_bits(raw as u32) as f64),
                 64 => Some(f64::from_bits(raw)),
                 _ => None,
-            }
+            };
+            value.map(|v| read.transform.map_or(v, |t| t.decode(v)))
         } else {
-            Some(to_physical(
+            let value = to_physical(
                 raw,
                 read.bit_len as u64,
                 read.signed,
                 read.factor,
                 read.offset,
-            ))
+            );
+            Some(read.transform.map_or(value, |t| t.decode(value)))
         };
         out.push(DecodedSignal {
             signal: read.signal,
@@ -170,6 +174,7 @@ pub fn encode_payload(
         if write.bit_offset as u64 + write.bit_len as u64 > total_bits {
             continue;
         }
+        let physical = write.transform.map_or(physical, |t| t.encode(physical));
         let raw = if write.float {
             match write.bit_len {
                 32 => (physical as f32).to_bits() as u64,

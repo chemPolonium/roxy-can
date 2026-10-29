@@ -373,3 +373,59 @@ fn a_container_child_is_gated_by_the_header_id() {
     );
     assert_eq!(&payload[4..6], &[0x34, 0x12]);
 }
+
+#[test]
+fn a_linear_transformation_maps_the_application_value_both_ways() {
+    let mut comm = base_comm();
+    comm.transformations.insert(
+        TransformationId(1),
+        Transformation {
+            id: TransformationId(1),
+            name: "T1".to_string(),
+            kind: TransformationKind::Linear {
+                scale: 2.0,
+                offset: -10.0,
+            },
+        },
+    );
+    let mut speed = signal(100, 0, 16);
+    speed.transformation = Some(TransformationId(1));
+    add_signal(&mut comm, speed);
+    let plan = plan(&comm);
+    let decoded = decode_payload(&comm, &plan, &[0, 5, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(decoded[0].physical.unwrap(), 0.0, "app = 2 * net - 10");
+    assert_eq!(decoded[0].raw, 5, "the wire value is still reported raw");
+
+    let mut payload = [0u8; 8];
+    assert_eq!(
+        encode_payload(&comm, &plan, &[(SignalId(100), 10.0)], &mut payload),
+        1
+    );
+    assert_eq!(payload[1], 10, "net = (app + 10) / 2");
+}
+
+#[test]
+fn a_text_table_transformation_is_flagged_and_left_raw() {
+    let mut comm = base_comm();
+    comm.transformations.insert(
+        TransformationId(1),
+        Transformation {
+            id: TransformationId(1),
+            name: "T1".to_string(),
+            kind: TransformationKind::TextTable {
+                values: vec![(0, "off".to_string())],
+            },
+        },
+    );
+    let mut speed = signal(100, 0, 16);
+    speed.transformation = Some(TransformationId(1));
+    add_signal(&mut comm, speed);
+    let (plan, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.kind == IssueKind::UnsupportedTransformation),
+        "the unsupported kind is reported: {issues:?}"
+    );
+    assert!(plan.reads[0].transform.is_none());
+}

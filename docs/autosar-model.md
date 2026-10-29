@@ -892,7 +892,7 @@ v1 工程在打开时一次性迁移到内存 v2，保存时写 v2；原文件�
 | 3 DBC/FIBEX 适配器 | 首版 | DBC、FIBEX、Ethernet DB → Cluster；一条 DBC↔ARXML 等价性测试；大规模等价语料待补 |
 | 4 运行时切换 | 订阅已切 | BusCore 为 CAN/FR/ETH 分配全局 `ClusterId` 并各自构建 `Comm`/`PlanCache`；三类订阅值都走统一展开计划，CAN 复用报文也已按模型 mux 条件解码，三类 Messages 展开行由核心用模型解码后随快照下发；CAN/FR 信号触发器与脚本节点输入改为模型优先，旧解码仅作无模型时回退。`SigKey` 全链路与 Statistics 尚未切换 |
 | 5 发送/硬件/回放 | 首个切片 | Panel 三协议物理值发送、Generator 的 CAN/FR 驱动信号、脚本 `send_frame` 的三协议编码均走统一编码器；回放通道映射以 cluster id 写入 schema v2 并在打开时还原。硬件发送与回放运行时的 cluster 路由未切换 |
-| 6 高级特性执行 | 首个切片 | Multiplexed（ARXML 动态部分 + DBC `mux_when`）、Secured PDU payload 链接、E2E profile 与 SystemSignal/PDU 的结构关联已进模型；Container 展开按短/长头里的 PDU ID 门控 contained PDU 的读取与写入（头未标注 ID 时保持旧行为）；`TRANSFORMATION-PROP-SET` 读取 packing byte order。认证仍为 `Unverified`，E2E 校验/Transformation 数值执行与 golden 位级测试未做 |
+| 6 高级特性执行 | 首个切片 | Multiplexed（ARXML 动态部分 + DBC `mux_when`）、Secured PDU payload 链接、E2E profile 与 SystemSignal/PDU 的结构关联已进模型；Container 展开按短/长头里的 PDU ID 门控 contained PDU 的读取与写入（头未标注 ID 时保持旧行为）；`TRANSFORMATION-PROP-SET` 读取 packing byte order，identity/linear 变换已在解码/编码计划里执行（linear 按 `app = scale·net + offset` 及其逆运算），TextTable/未知类别只报 `UnsupportedTransformation` 并保留原值；ARXML 读取尚未把信号引用接到变换对象。认证仍为 `Unverified`，E2E 校验与 golden 位级测试未做 |
 | 7 Buses UI 与迁移 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡，v1 视图段真正迁移未完成 |
 | 8 清理与发布 | 未开始 | — |
 
