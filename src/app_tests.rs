@@ -6716,6 +6716,30 @@ fn a_step_message_stays_in_the_write_window() {
 /// half that failed used to be written to the bar and then overwritten by the
 /// "project loaded" line two statements later, so the user never saw it at all.
 /// Each problem now stays in the Write ring, and the bar carries the count.
+/// The Messages and Statistics tables read names and counts from the unified
+/// model; this pins that the snapshot actually carries them for every frame
+/// the default workspace's tables declare.
+#[test]
+fn the_snapshot_carries_model_frame_metadata() {
+    let app = App::headless();
+    let db = app.snap.channels[0]
+        .dbc
+        .as_ref()
+        .expect("the sample database");
+    let (id, message) = db
+        .messages
+        .iter()
+        .find(|(_, message)| !message.signals.is_empty())
+        .expect("a described message");
+    let meta = app
+        .snap
+        .model_frames
+        .get(&(0, id.0, id.1))
+        .expect("the model names the frame");
+    assert_eq!(meta.name, message.name);
+    assert_eq!(meta.signal_count, message.signals.len());
+}
+
 /// A v1 project has no cluster ids; opening it migrates the buses, and the
 /// v2 file written afterwards must reopen with the same ids, generator rows
 /// and trigger rules. This is the migration exit criterion for Phase 7, so it

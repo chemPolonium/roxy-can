@@ -5200,10 +5200,15 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .iter()
         .map(|agg| {
             let name = snap
-                .channels
-                .get(agg.channel as usize)
-                .and_then(|channel| channel.dbc.as_ref())
-                .and_then(|db| db.message_name(agg.id))
+                .model_frames
+                .get(&(agg.channel, agg.id, agg.extended))
+                .map(|frame| frame.name.as_str())
+                .or_else(|| {
+                    snap.channels
+                        .get(agg.channel as usize)
+                        .and_then(|channel| channel.dbc.as_ref())
+                        .and_then(|db| db.message_name(agg.id))
+                })
                 .unwrap_or("-");
             let id = if agg.extended {
                 format!("{:08X}x", agg.id)
@@ -5739,15 +5744,20 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             };
             let key = format!("can:{}:{}:{}", m.channel, m.id, m.extended);
             let channel_db = db(m.channel);
+            let model_frame = snap.model_frames.get(&(m.channel, m.id, m.extended));
             let signal_count = if m.flags.contains(crate::can::frame::FrameFlags::ERROR)
                 || m.flags.contains(crate::can::frame::FrameFlags::RTR)
             {
                 0
             } else {
-                channel_db
-                    .and_then(|d| d.messages.get(&(m.id, m.extended)))
-                    .map(|message| message.signals.len())
-                    .unwrap_or(0)
+                model_frame
+                    .map(|frame| frame.signal_count)
+                    .unwrap_or_else(|| {
+                        channel_db
+                            .and_then(|d| d.messages.get(&(m.id, m.extended)))
+                            .map(|message| message.signals.len())
+                            .unwrap_or(0)
+                    })
             };
             let signals = if app.expanded_messages.contains(&key) {
                 snap.expanded_signals
@@ -5765,10 +5775,14 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 bus_name: bus_name(m.channel),
                 id: m.id,
                 extended: m.extended,
-                name: channel_db
-                    .and_then(|d| d.message_name(m.id))
-                    .unwrap_or("")
-                    .to_string(),
+                name: model_frame
+                    .map(|frame| frame.name.clone())
+                    .or_else(|| {
+                        channel_db
+                            .and_then(|d| d.message_name(m.id))
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default(),
                 count: m.count,
                 cycle_ms: m.cycle_us / 1000.0,
                 len: m.len,

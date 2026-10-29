@@ -819,6 +819,11 @@ pub struct Snapshot {
     pub channel_count: usize,
     /// Global cluster ids, written into schema v2 project files.
     pub cluster_ids: WebClusterIds,
+    /// The unified model's own frame names and signal counts, keyed like a
+    /// CAN Messages row. The tables prefer these over the legacy table: the
+    /// model keeps standard and extended ids apart and counts container
+    /// children the table never held.
+    pub model_frames: std::collections::BTreeMap<(u8, u32, bool), ModelFrameView>,
     /// Decoded children for the Messages rows the frontend has expanded,
     /// keyed by the row's stable message key. CAN only for now; FR/ETH rows
     /// still decode in the frontend.
@@ -968,6 +973,14 @@ pub struct ExpandedSignal {
     pub unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// What the unified model says about one CAN frame, for the Messages and
+/// Statistics tables.
+#[derive(Clone, Debug, Default)]
+pub struct ModelFrameView {
+    pub name: String,
+    pub signal_count: usize,
 }
 
 /// The frontend's view of one bus. The database travels as an `Arc` the
@@ -3549,6 +3562,36 @@ impl BusCore {
         }
     }
 
+    fn model_frames_view(&self) -> std::collections::BTreeMap<(u8, u32, bool), ModelFrameView> {
+        use crate::model::FrameAddress;
+        let mut out = std::collections::BTreeMap::new();
+        for (ch, comm) in self.model_comms.iter().enumerate() {
+            let (Some(comm), Some(plans)) = (
+                comm.as_ref(),
+                self.model_plans.get(ch).and_then(Option::as_ref),
+            ) else {
+                continue;
+            };
+            for frame in comm.frames.values() {
+                let FrameAddress::Can { id, extended, .. } = frame.address else {
+                    continue;
+                };
+                let signal_count = plans
+                    .get(frame.id)
+                    .map(|plan| plan.reads.len())
+                    .unwrap_or(0);
+                out.insert(
+                    (ch as u8, id, extended),
+                    ModelFrameView {
+                        name: frame.name.clone(),
+                        signal_count,
+                    },
+                );
+            }
+        }
+        out
+    }
+
     fn expanded_signals_view(&self) -> std::collections::BTreeMap<String, Vec<ExpandedSignal>> {
         let mut out = std::collections::BTreeMap::new();
         if self.expanded_messages.is_empty() {
@@ -3726,6 +3769,7 @@ impl BusCore {
             replay_census_eth: self.log_census.rows(crate::replay_map::LogBusKind::Eth),
             channel_count: self.channels.len(),
             cluster_ids: self.cluster_ids_view(),
+            model_frames: self.model_frames_view(),
             expanded_signals: self.expanded_signals_view(),
             laps: self.laps,
             hw_refresh: self.hw.refresh_seq,
