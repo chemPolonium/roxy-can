@@ -293,6 +293,9 @@ pub struct Frame {
     pub length: u32,
     pub address: FrameAddress,
     pub timing: FrameTiming,
+    /// The document's frame comment; the DBC adapter copies `CM_ BO_`.
+    #[serde(default)]
+    pub comment: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ethernet: Option<EthernetFrameMeta>,
     #[serde(default)]

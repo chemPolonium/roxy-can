@@ -4280,13 +4280,9 @@ fn catalog_signal(key: String, signal: &crate::model::Signal) -> WebCatalogSigna
     }
 }
 
-/// The messages one CAN channel's model declares, in id order. The legacy
-/// table still supplies the message comment, which the model does not carry;
-/// names, signals and ranges are the model's.
-fn can_catalog_messages(
-    comm: &crate::model::Comm,
-    db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
-) -> Vec<WebCatalogMessage> {
+/// The messages one CAN channel's model declares, in id order. Names,
+/// comments, signals and ranges all come from the model.
+fn can_catalog_messages(comm: &crate::model::Comm) -> Vec<WebCatalogMessage> {
     let cluster = comm
         .clusters
         .keys()
@@ -4305,10 +4301,7 @@ fn can_catalog_messages(
                 extended,
                 name: frame.name.clone(),
                 frame: None,
-                comment: db
-                    .and_then(|db| db.messages.get(&(id, extended)))
-                    .map(|message| message.comment.clone())
-                    .unwrap_or_default(),
+                comment: frame.comment.clone(),
                 fd,
                 length: None,
                 signals: comm
@@ -4433,7 +4426,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                 .model_comms
                 .get(ch)
                 .and_then(Option::as_ref)
-                .map(|comm| can_catalog_messages(comm, channel.dbc.as_ref()))
+                .map(|comm| can_catalog_messages(comm))
                 .unwrap_or_default(),
         })
         .collect();

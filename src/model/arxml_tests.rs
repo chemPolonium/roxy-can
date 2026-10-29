@@ -603,3 +603,17 @@ fn frame_ports_name_the_sender_ecu() {
     assert_eq!(sent.len(), 1);
     assert!(comm.frames_sent_by(frame.cluster, "ECU_B").is_empty());
 }
+
+/// A frame's DESC is part of the model now, so the catalog no longer needs
+/// the legacy DBC table just to show the comment.
+#[test]
+fn a_frame_comment_comes_from_the_document() {
+    let text = CAN_TEXT.replace(
+        "<CAN-FRAME><SHORT-NAME>EngineFrame</SHORT-NAME>",
+        "<CAN-FRAME><SHORT-NAME>EngineFrame</SHORT-NAME>\
+         <DESC><L-2 L=\"FOR-ALL\">Engine frame</L-2></DESC>",
+    );
+    let comm = import(&text, "CanCluster", 1);
+    let frame = comm.frames.values().next().expect("frame imported");
+    assert_eq!(frame.comment, "Engine frame");
+}

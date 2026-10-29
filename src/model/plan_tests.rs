@@ -58,6 +58,7 @@ fn frame(id: u64, _pdu: u64) -> Frame {
             fd: false,
         },
         timing: FrameTiming::default(),
+        comment: String::new(),
         ethernet: None,
         pdu_mappings: vec![MappingId(id)],
     }

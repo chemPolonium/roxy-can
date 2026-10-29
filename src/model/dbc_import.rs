@@ -152,6 +152,7 @@ pub fn import_symbol_table(
                     startup: false,
                     event: message.cycle_us == Some(0),
                 },
+                comment: message.comment.clone(),
                 ethernet: None,
                 pdu_mappings: vec![frame_pdu_id],
             },

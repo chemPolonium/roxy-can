@@ -9827,6 +9827,7 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
                     payload_preamble: false,
                 },
                 timing: FrameTiming::default(),
+                comment: String::new(),
                 ethernet: None,
                 pdu_mappings: vec![MappingId(1)],
             },

@@ -7032,6 +7032,7 @@ fn e2e_counter_continuity_is_published_per_message() {
                 fd: false,
             },
             timing: FrameTiming::default(),
+            comment: String::new(),
             ethernet: None,
             pdu_mappings: vec![MappingId(1)],
         },

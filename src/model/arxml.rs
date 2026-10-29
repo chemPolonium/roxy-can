@@ -828,6 +828,7 @@ impl<'a> Importer<'a> {
                 length: child_number(frame_node, "FRAME-LENGTH").unwrap_or(0.0) as u32,
                 address,
                 timing: read_timing(triggering),
+                comment: desc(frame_node).unwrap_or_default(),
                 ethernet: read_ethernet_meta(frame_node),
                 pdu_mappings: Vec::new(),
             };
