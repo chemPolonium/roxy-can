@@ -429,7 +429,6 @@ function FrameField({
                 readdress({ ...current, channel: Number(value) });
               }}
             >
-              <option value="">Select bus</option>
               {canBuses.map((bus) => (
                 <option value={bus.index} key={bus.index}>
                   {bus.name}
@@ -557,7 +556,6 @@ function FrameField({
                 readdress({ ...current, bus: Number(value) });
               }}
             >
-              <option value="">Select bus</option>
               {frBuses.map((bus) => (
                 <option value={bus.index} key={bus.index}>
                   {bus.name}
@@ -610,7 +608,6 @@ function FrameField({
                 });
               }}
             >
-              <option value="">Select bus</option>
               {ethBuses.map((bus) => (
                 <option value={bus.index} key={bus.index}>
                   {bus.name}
